@@ -938,7 +938,7 @@ struct SidebarView: View {
                         sidebarTitlebarCover
                         coordinatorRow
                         if let bucketed {
-                            tasksHeader(needsYouCount: bucketed.needsYouCount)
+                            tasksHeader(needsYouCount: bucketed.needsYouCount, readyToReviewCount: bucketed.readyToReviewCount)
                         }
                     }
                 }
@@ -1067,9 +1067,10 @@ struct SidebarView: View {
         store.window(id: windowID)?.sidebarSegment ?? .all
     }
 
-    private func tasksHeader(needsYouCount: Int) -> some View {
+    private func tasksHeader(needsYouCount: Int, readyToReviewCount: Int) -> some View {
         SidebarTasksHeader(
             needsYouCount: needsYouCount,
+            readyToReviewCount: readyToReviewCount,
             isTasksViewShown: store.window(id: windowID)?.showsTasksView ?? false,
             segment: sidebarSegment,
             openTasksView: { openTasksView(selecting: nil) },
@@ -1187,7 +1188,8 @@ struct SidebarView: View {
         let otherCardSpawns: [String: OtherCardSubspaceSpawn]
         let counts: [SidebarBucket: Int]
         var layout = SidebarBuckets.Layout<CardRow>()
-        var needsYou = SidebarBuckets.NeedsYouList<CardRow>()
+        /// The card's rows in the Needs you segment.
+        var needsYou = SidebarBuckets.Layout<CardRow>()
 
         var id: UUID { workspaceID ?? SidebarView.otherTasksCardID }
         /// Whether the All segment draws any bucket for the card.
@@ -1200,7 +1202,9 @@ struct SidebarView: View {
         /// Tasks whose project is not open in the window, such as one that
         /// waits for its workspace to be picked.
         var other: BucketedCard?
+        /// Rows in Needs you and in Ready to review, for the switcher.
         var needsYouCount = 0
+        var readyToReviewCount = 0
     }
 
     /// Stands in for a workspace ID where the Other tasks card needs one.
@@ -1262,13 +1266,13 @@ struct SidebarView: View {
         let recordItems = SidebarStatusSections.sidebarOrder(
             taskBoardSnapshot.windowItems.filter { item in
                 item.taskSpaceWorkspaceID.map(nestedTaskSpaceIDs.contains) != true
-                    && SidebarBucket(item.stage.group) != nil
+                    && SidebarBucket(item.stage) != nil
             },
             workspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
         )
         func recordCandidates(_ items: [TaskBoardItem]) -> [SidebarBucketCandidate<CardRow>] {
             items.compactMap { item in
-                guard let bucket = SidebarBucket(item.stage.group) else { return nil }
+                guard let bucket = SidebarBucket(item.stage) else { return nil }
                 let parent = parentItem(ofTaskID: item.taskID)
                 return SidebarBucketCandidate(
                     key: rowKey(item), bucket: bucket, parent: parent.map(rowKey),
@@ -1280,6 +1284,7 @@ struct SidebarView: View {
         var displayed: [SidebarRowKey: SidebarBucket] = [:]
         var nextPin: SidebarBucketPin?
         var needsYouCount = 0
+        var readyToReviewCount = 0
         func card(
             workspaceID: UUID?,
             title: String,
@@ -1304,6 +1309,7 @@ struct SidebarView: View {
                 nextPin = card.needsYou.pin ?? nextPin
             }
             needsYouCount += card.counts[.needsYou] ?? 0
+            readyToReviewCount += card.counts[.readyToReview] ?? 0
             return card
         }
 
@@ -1358,6 +1364,7 @@ struct SidebarView: View {
             result.other = card(workspaceID: nil, title: Self.otherTasksCardTitle, candidates: otherCandidates, shown: otherCandidates)
         }
         result.needsYouCount = needsYouCount
+        result.readyToReviewCount = readyToReviewCount
         bucketMemory.pin = nextPin
         bucketMemory.displayed = displayed
         return result
@@ -1429,7 +1436,7 @@ struct SidebarView: View {
     /// its own state is.
     private func bucketHeader(_ bucket: SidebarBucket, count: Int) -> some View {
         SidebarGroupTitle(title: bucket.title, count: count)
-            .foregroundStyle(bucket == .needsYou ? Self.needsYouMarkColor : ToastyTheme.sidebarChildContextText)
+            .foregroundStyle(Self.bucketTitleColor(bucket))
             .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
             .padding(.leading, 8)
             .padding(.top, 6)
@@ -1444,24 +1451,57 @@ struct SidebarView: View {
 
     private static let needsYouMarkColor = Color(hex: 0xF2C46B)
 
+    /// Yellow for Needs you, the review mark's blue for Ready to review,
+    /// gray for the calm buckets.
+    private static func bucketTitleColor(_ bucket: SidebarBucket) -> Color {
+        switch bucket {
+        case .needsYou: needsYouMarkColor
+        case .readyToReview: ToastyTheme.sidebarTaskReviewMark
+        case .running, .idle: ToastyTheme.sidebarChildContextText
+        }
+    }
+
+    /// A count in a card's header, after its bucket's mark.
+    private static func bucketCountMark(_ bucket: SidebarBucket, count: Int) -> some View {
+        HStack(spacing: 3) {
+            switch bucket {
+            case .needsYou:
+                Circle().fill(needsYouMarkColor).frame(width: 6, height: 6)
+            case .readyToReview:
+                RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sidebarTaskReviewMark).frame(width: 6, height: 6)
+            case .running:
+                SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.4)
+            case .idle:
+                Circle().fill(ToastyTheme.sidebarSubspaceQuietMark).frame(width: 6, height: 6)
+            }
+            Text("\(count)")
+                .foregroundStyle(bucket.isListedInNeedsYouSegment ? bucketTitleColor(bucket) : ToastyTheme.inactiveText)
+        }
+    }
+
     /// One row in a bucket, drawn by the row's own kind: a session or
     /// program row, a task space row, or a task without an open task space.
+    /// A compact row takes one line, as the Needs you segment lists rows.
     @ViewBuilder
     private func bucketRow(
         _ entry: SidebarBucketEntry<CardRow>,
         card: BucketedCard,
-        workspace: WorkspaceState?
+        workspace: WorkspaceState?,
+        isCompact: Bool = false
     ) -> some View {
         Group {
             switch entry.payload.kind {
             case .terminal(let row):
                 if let workspace {
-                    terminalStatusRowView(row, workspace: workspace, subspaceRows: card.subspaceRows, otherCardSpawns: card.otherCardSpawns)
+                    terminalStatusRowView(
+                        row, workspace: workspace, subspaceRows: card.subspaceRows,
+                        otherCardSpawns: card.otherCardSpawns, isCompact: isCompact
+                    )
                 }
             case .subspace(let row):
                 let parentWorkspaceID = card.workspaceID ?? row.id
                 subspaceRow(
-                    Self.bucketedSubspaceRow(row, entry: entry),
+                    Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact),
                     parentWorkspaceID: parentWorkspaceID,
                     showsSpawnerTag: SidebarSubspacePresentation.showsSpawnerTag(
                         row,
@@ -1475,12 +1515,16 @@ struct SidebarView: View {
                    let taskSpace = store.state.workspacesByID[taskSpaceID] {
                     // Its task space is open as a workspace of its own.
                     let row = subspaceRowModel(workspace: taskSpace, spawner: nil, projectTag: card.workspaceID == nil ? item.projectTitle : nil)
-                    subspaceRow(Self.bucketedSubspaceRow(row, entry: entry), parentWorkspaceID: taskSpaceID, showsSpawnerTag: false)
+                    subspaceRow(
+                        Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact),
+                        parentWorkspaceID: taskSpaceID, showsSpawnerTag: false
+                    )
                 } else {
                     SidebarTaskRecordRow(
                         item: item,
                         showsProject: card.workspaceID == nil,
-                        parentTaskTitle: entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil
+                        parentTaskTitle: entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil,
+                        isCompact: isCompact
                     ) { openTasksView(selecting: item.id) }
                         .padding(.leading, entry.isLinkedChild ? Self.linkedChildIndent : 0)
                         .overlay(alignment: .topLeading) {
@@ -1500,38 +1544,31 @@ struct SidebarView: View {
 
     private static func bucketedSubspaceRow(
         _ row: SidebarSubspacePresentation.Row,
-        entry: SidebarBucketEntry<CardRow>
+        entry: SidebarBucketEntry<CardRow>,
+        isCompact: Bool
     ) -> SidebarSubspacePresentation.Row {
         var row = row
+        row.isCompact = isCompact
         row.isLinkedChild = entry.isLinkedChild
         row.parentTaskTitle = entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil
         return row
     }
 
     /// The card's counts by bucket, in place of the running-agents chip:
-    /// a yellow dot for Needs you, a spinner for Running, a gray dot for
-    /// Idle. Empty buckets show no count.
+    /// a yellow dot for Needs you, a blue square for Ready to review, a
+    /// spinner for Running, a gray dot for Idle. Empty buckets show no
+    /// count. The Needs you segment passes only its two buckets.
     @ViewBuilder
-    private func bucketCountsBadge(_ counts: [SidebarBucket: Int]) -> some View {
-        let label = Self.bucketCountsLabel(counts)
+    private func bucketCountsBadge(
+        _ counts: [SidebarBucket: Int],
+        buckets: [SidebarBucket] = SidebarBucket.allCases
+    ) -> some View {
+        let label = Self.bucketCountsLabel(counts, buckets: buckets)
         if label.isEmpty == false {
             HStack(spacing: 7) {
-                if let count = counts[.needsYou], count > 0 {
-                    HStack(spacing: 3) {
-                        Circle().fill(Self.needsYouMarkColor).frame(width: 6, height: 6)
-                        Text("\(count)").foregroundStyle(Self.needsYouMarkColor)
-                    }
-                }
-                if let count = counts[.running], count > 0 {
-                    HStack(spacing: 3) {
-                        SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.4)
-                        Text("\(count)")
-                    }
-                }
-                if let count = counts[.idle], count > 0 {
-                    HStack(spacing: 3) {
-                        Circle().fill(ToastyTheme.sidebarSubspaceQuietMark).frame(width: 6, height: 6)
-                        Text("\(count)")
+                ForEach(buckets, id: \.self) { bucket in
+                    if let count = counts[bucket], count > 0 {
+                        Self.bucketCountMark(bucket, count: count)
                     }
                 }
             }
@@ -1549,12 +1586,17 @@ struct SidebarView: View {
         }
     }
 
-    /// "4 need you, 2 running, 3 idle", leaving out empty buckets.
-    static func bucketCountsLabel(_ counts: [SidebarBucket: Int]) -> String {
-        SidebarBucket.allCases.compactMap { bucket -> String? in
+    /// "4 need you, 1 ready for review, 2 running, 3 idle", leaving out
+    /// empty buckets.
+    static func bucketCountsLabel(
+        _ counts: [SidebarBucket: Int],
+        buckets: [SidebarBucket] = SidebarBucket.allCases
+    ) -> String {
+        buckets.compactMap { bucket -> String? in
             guard let count = counts[bucket], count > 0 else { return nil }
             switch bucket {
             case .needsYou: return "\(count) \(count == 1 ? "needs" : "need") you"
+            case .readyToReview: return "\(count) ready for review"
             case .running: return "\(count) running"
             case .idle: return "\(count) idle"
             }
@@ -1681,13 +1723,16 @@ struct SidebarView: View {
         .accessibilityIdentifier("sidebar.needsYou")
     }
 
-    /// A project's rows in the Needs you segment, under its name and count.
-    /// The name selects the project's workspace.
+    /// A project's rows in the Needs you segment, under its name and
+    /// counts: Needs you, then Ready to review, each with its header when
+    /// it has rows. Rows take one line each. The name selects the
+    /// project's workspace.
     private func needsYouCard(_ card: BucketedCard) -> some View {
         let workspace = card.workspaceID.flatMap { store.state.workspacesByID[$0] }
         let isSelected = card.workspaceID.map(workspaceCardContainsSelection) ?? false
-        let count = card.counts[.needsYou] ?? 0
-        let label = "\(card.title), \(count) \(count == 1 ? "needs" : "need") you"
+        let buckets = SidebarBucket.needsYouSegmentBuckets
+        let countsLabel = Self.bucketCountsLabel(card.counts, buckets: buckets)
+        let label = countsLabel.isEmpty ? card.title : "\(card.title), \(countsLabel)"
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text(card.title)
@@ -1696,13 +1741,15 @@ struct SidebarView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
-                if count > 0 {
-                    HStack(spacing: 3) {
-                        Circle().fill(Self.needsYouMarkColor).frame(width: 6, height: 6)
-                        Text("\(count)").foregroundStyle(Self.needsYouMarkColor)
+                HStack(spacing: 7) {
+                    ForEach(buckets, id: \.self) { bucket in
+                        if let count = card.counts[bucket], count > 0 {
+                            Self.bucketCountMark(bucket, count: count)
+                        }
                     }
-                    .font(ToastyTheme.fontWorkspaceAgentCount)
                 }
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+                .fixedSize()
             }
             .padding(.horizontal, 10)
             .padding(.top, 9)
@@ -1722,9 +1769,17 @@ struct SidebarView: View {
             .accessibilityLabel(label)
             .accessibilityAddTraits(card.workspaceID == nil ? .isHeader : [.isHeader, .isButton])
 
-            VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
-                ForEach(card.needsYou.entries) { entry in
-                    bucketRow(entry, card: card, workspace: workspace)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(buckets, id: \.self) { bucket in
+                    let entries = card.needsYou.entries(bucket)
+                    if entries.isEmpty == false {
+                        bucketHeader(bucket, count: card.counts[bucket] ?? 0)
+                        VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
+                            ForEach(entries) { entry in
+                                bucketRow(entry, card: card, workspace: workspace, isCompact: true)
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -2578,7 +2633,7 @@ struct SidebarView: View {
         }.map(\.element)
     }
 
-    private func programStatusContent(_ row: SidebarProgramStatusRow, workspace: WorkspaceState) -> some View {
+    private func programStatusContent(_ row: SidebarProgramStatusRow, workspace: WorkspaceState, isCompact: Bool = false) -> some View {
         SidebarHoverRegion(id: row.panelID, selection: hoverState.panel) { isHovered in
             Button {
                 focusSessionPanel(workspaceID: workspace.id, panelID: row.panelID)
@@ -2592,12 +2647,13 @@ struct SidebarView: View {
                     isActivePanel: workspace.focusedPanelID == row.panelID,
                     isHovered: isHovered, isFlashing: false,
                     childCount: 0, childRowsExpanded: false, collapsedChildNeedsAttention: false,
-                    parentSessionName: nil, onToggleChildRows: {}
+                    parentSessionName: nil, isCompact: isCompact, onToggleChildRows: {}
                 )
             }
             .buttonStyle(.plain)
             .onHover { hoverState.panel.value = $0 ? row.panelID : nil }
-            .help("Terminal: \(row.terminalLabel)")
+            // A one-line row has no summary line, so its tooltip carries it.
+            .help([isCompact ? row.summary : nil, "Terminal: \(row.terminalLabel)"].compactMap { $0 }.joined(separator: "\n"))
             .accessibilityLabel(row.accessibilityLabel)
             .accessibilityIdentifier("sidebar.programStatus.\(row.panelID.uuidString)")
             .background {
@@ -2633,11 +2689,12 @@ struct SidebarView: View {
         _ row: TerminalStatusRow,
         workspace: WorkspaceState,
         subspaceRows: [SidebarSubspacePresentation.Row],
-        otherCardSpawns: [String: OtherCardSubspaceSpawn]
+        otherCardSpawns: [String: OtherCardSubspaceSpawn],
+        isCompact: Bool = false
     ) -> some View {
         switch row {
         case .program(let program):
-            programStatusContent(program, workspace: workspace)
+            programStatusContent(program, workspace: workspace, isCompact: isCompact)
         case .session(let workspaceSessionStatus):
             let sessionID = workspaceSessionStatus.sessionID
             let ownChip = SidebarSubspacePresentation.spawnerChip(
@@ -2664,7 +2721,8 @@ struct SidebarView: View {
                             targetWorkspaceTitle: spawn.parentWorkspaceTitle
                         )
                     },
-                    spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id
+                    spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id,
+                    isCompact: isCompact
                 )
             }
         }
@@ -2695,7 +2753,8 @@ struct SidebarView: View {
         workspace: WorkspaceState,
         isHovered: Bool,
         spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil,
-        spawnerChipParentWorkspaceID: UUID
+        spawnerChipParentWorkspaceID: UUID,
+        isCompact: Bool = false
     ) -> some View {
         let sessionRowID = SidebarSessionPresentation.SidebarSessionRowID(
             workspaceID: workspace.id,
@@ -2827,6 +2886,7 @@ struct SidebarView: View {
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentTagName,
             spawnerChip: spawnerChip,
+            isCompact: isCompact,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             },
@@ -2906,7 +2966,10 @@ struct SidebarView: View {
             }
             .background(sessionRowFrameMeasurement(rowID: sessionRowID))
 
-            if workspaceSessionStatus.children.isEmpty == false && childRowsExpanded {
+            // A compact row has no sub-agent control, so it shows its
+            // sub-agents when one of them is why the row needs the user.
+            if workspaceSessionStatus.children.isEmpty == false
+                && (isCompact ? childRowsNeedAttention : childRowsExpanded) {
                 sessionChildRowsContainer(
                     workspaceSessionStatus.children,
                     parentWorkspaceID: workspace.id,
@@ -3035,6 +3098,7 @@ struct SidebarView: View {
         collapsedChildNeedsAttention: Bool,
         parentSessionName: String?,
         spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil,
+        isCompact: Bool = false,
         onToggleChildRows: @escaping () -> Void,
         onToggleSpawnerFilter: @escaping () -> Void = {},
         onHoverSpawnerChip: @escaping (Bool) -> Void = { _ in }
@@ -3078,21 +3142,34 @@ struct SidebarView: View {
         )
 
         return HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
-            sessionStatusRail(railState, marker: railMarker)
+            // A compact row has one line, so a standing mark such as the
+            // later flag sits after the name instead of under the status.
+            sessionStatusRail(railState, marker: isCompact ? nil : railMarker)
 
             VStack(alignment: .leading, spacing: 1) {
                 sessionRowStateLine(accessories) {
-                    Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
-                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    if isCompact, let railMarker {
+                        HStack(spacing: 4) {
+                            Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
+                                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                            sessionStatusRailMarkerSlot(railMarker)
+                        }
+                    } else {
+                        Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
+                            .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    }
                 }
                 // Reserved even without a summary yet, so every row keeps one
                 // height and the list does not reflow as summaries or names
-                // arrive.
-                sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
-                    if let waitingSummary {
-                        sessionWaitingSummaryLabel(waitingSummary)
-                    } else {
-                        sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
+                // arrive. A compact row leaves the summary, the parent tag
+                // and the sub-agent control to the hover card.
+                if isCompact == false {
+                    sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
+                        if let waitingSummary {
+                            sessionWaitingSummaryLabel(waitingSummary)
+                        } else {
+                            sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
+                        }
                     }
                 }
             }
@@ -4822,7 +4899,8 @@ struct SidebarView: View {
         _ row: SidebarSubspacePresentation.Row,
         isEmphasized: Bool,
         showsAnnotation: Bool,
-        showsWaitingChip: Bool
+        showsWaitingChip: Bool,
+        showsCompactTag: Bool = false
     ) -> some View {
         HStack(spacing: 6) {
             // The ideal width is what the fit check reserves for the title;
@@ -4864,9 +4942,49 @@ struct SidebarView: View {
                         showsLinkGlyph: false
                     )
                 }
+                if showsCompactTag {
+                    subspaceCompactTag(row)
+                }
             }
             .fixedSize(horizontal: true, vertical: false)
             .layoutPriority(1)
+        }
+    }
+
+    /// The one tag a one-line row shows: its pull request, else the task
+    /// that started it, else how many of its child tasks merged.
+    @ViewBuilder
+    private func subspaceCompactTag(_ row: SidebarSubspacePresentation.Row) -> some View {
+        if let pullRequest = row.pullRequestAnnotation {
+            workspaceAnnotationChip(
+                key: pullRequest.key,
+                annotation: pullRequest.annotation,
+                maximumWidth: Self.subspaceRowAnnotationChipMaximumWidth,
+                showsLinkGlyph: false
+            )
+        } else if let parentTaskTitle = row.parentTaskTitle {
+            Self.parentTaskTag(parentTaskTitle, maximumWidth: Self.subspaceSpawnerTagMaximumWidth)
+        } else if let childProgressLabel = row.childProgressLabel {
+            Self.sidebarTaskTag(childProgressLabel)
+        }
+    }
+
+    /// "↖ Parent title", for a row that lists without the task that
+    /// started it.
+    static func parentTaskTag(_ parentTaskTitle: String, maximumWidth: CGFloat) -> some View {
+        SidebarCappedIntrinsicWidthLayout(maximumWidth: maximumWidth) {
+            Text(SidebarSubspacePresentation.spawnerTagLabel(parentTaskTitle))
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+        }
+        .background {
+            SidebarTooltipBridge(text: "Started by \(parentTaskTitle)")
+                .allowsHitTesting(false)
         }
     }
 
@@ -4935,7 +5053,12 @@ struct SidebarView: View {
                 // Status takes priority over the annotation at narrow widths.
                 // Both remain available in the hover card and spoken label.
                 ViewThatFits(in: .horizontal) {
-                    if row.rowAnnotation != nil {
+                    if row.isCompact {
+                        subspaceRowTitleLine(
+                            row, isEmphasized: attentionKind != nil,
+                            showsAnnotation: false, showsWaitingChip: row.isWaiting, showsCompactTag: true
+                        )
+                    } else if row.rowAnnotation != nil {
                         subspaceRowTitleLine(
                             row, isEmphasized: attentionKind != nil,
                             showsAnnotation: true, showsWaitingChip: row.isWaiting
@@ -4954,7 +5077,7 @@ struct SidebarView: View {
                 }
                 .frame(minHeight: Self.sessionRowLineMinHeight)
 
-                if row.summary != nil || (showsSpawnerTag && row.spawnerName != nil)
+                if row.isCompact == false, row.summary != nil || (showsSpawnerTag && row.spawnerName != nil)
                     || row.projectTag != nil || row.childProgressLabel != nil || row.parentTaskTitle != nil {
                     HStack(spacing: 6) {
                         if let summary = row.summary {
@@ -4971,20 +5094,7 @@ struct SidebarView: View {
                             Self.sidebarTaskTag(projectTag)
                         }
                         if let parentTaskTitle = row.parentTaskTitle {
-                            SidebarCappedIntrinsicWidthLayout(maximumWidth: Self.subspaceSpawnerTagMaximumWidth + 30) {
-                                Text(SidebarSubspacePresentation.spawnerTagLabel(parentTaskTitle))
-                                    .font(ToastyTheme.fontWorkspaceSessionChip)
-                                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
-                                    .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
-                            }
-                            .background {
-                                SidebarTooltipBridge(text: "Started by \(parentTaskTitle)")
-                                    .allowsHitTesting(false)
-                            }
+                            Self.parentTaskTag(parentTaskTitle, maximumWidth: Self.subspaceSpawnerTagMaximumWidth + 30)
                         }
                         if showsSpawnerTag, let spawnerName = row.spawnerName {
                             SidebarCappedIntrinsicWidthLayout(maximumWidth: Self.subspaceSpawnerTagMaximumWidth) {

@@ -77,6 +77,9 @@ enum SidebarSubspacePresentation {
         /// How many of the tasks this one started have merged, such as
         /// "1/3 merged".
         var childProgressLabel: String? = nil
+        /// Drawn on one line, as the Needs you segment lists rows: the
+        /// summary is left to the hover card, and one tag shows.
+        var isCompact = false
         /// The workspace's done mark, which `status` shows only while its
         /// sessions are quiet.
         var isDone: Bool { doneAt != nil }
@@ -114,6 +117,13 @@ enum SidebarSubspacePresentation {
             guard status == .working else { return false }
             let workingSessions = sessions.filter { $0.statusKind == .working }
             return workingSessions.isEmpty == false && workingSessions.allSatisfy(\.isWaiting)
+        }
+
+        /// The workspace's `github-pr` annotation, which a one-line row
+        /// shows before any other tag.
+        var pullRequestAnnotation: (key: String, annotation: WorkspaceAnnotation)? {
+            let key = SidebarSubspacePresentation.annotationKeyPullRequest
+            return annotations[key].map { (key, $0) }
         }
 
         /// The one annotation chip the row shows: the workspace's primary annotation,
@@ -520,7 +530,9 @@ enum SidebarSubspacePresentation {
             },
             path: row.path.map(SidebarSessionPresentation.abbreviatedHomePathLabel),
             absolutePath: row.path,
-            spawnerName: row.spawnerName
+            spawnerName: row.spawnerName,
+            rowSummary: row.isCompact ? row.summary : nil,
+            parentTaskTitle: row.isCompact ? row.parentTaskTitle : nil
         )
     }
 

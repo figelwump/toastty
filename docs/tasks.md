@@ -1452,17 +1452,22 @@ are skipped; working agents, approval requests and errors remain reachable.
 
 The Tasks row at the top of the sidebar opens the Tasks view, and its ＋
 creates a task. Below it, a switcher shows **All** or only what **Needs you**.
-The **Needs you** side counts the sessions and tasks that need you. The choice
-is saved for each window.
+The **Needs you** side counts the sessions and tasks that need you: a yellow
+count for what blocks an agent and a blue count for what waits for your
+review. The choice is saved for each window.
 
 - **All** is the workspace list. Each project card lists the project's agent
-  sessions and its task spaces together, in three buckets: **Needs you**,
-  **Running** and **Idle**. An empty bucket does not show, and the card's
-  header counts each bucket. A session needs you when its agent asks for an
-  approval, reports an error, or finished a turn you have not read; a task
-  needs you when its stage does, such as a question, a pull request to
-  review, or a failed setup. A working agent or a starting task is Running,
-  and anything else is Idle. A task with no open task space, such as one
+  sessions and its task spaces together, in four buckets: **Needs you**,
+  **Ready to review**, **Running** and **Idle**. An empty bucket does not
+  show, and the card's header counts each bucket: a yellow dot, a blue
+  square, a spinner and a gray dot. A session needs you when its agent asks
+  for an approval, reports an error, or finished a turn you have not read; a
+  task needs you when its stage does, such as a question, an unread turn or a
+  failed setup. A task is Ready to review when its stage is Needs you for a
+  review: its pull request is open, or its agent marked the work ready. Its
+  row shows the review over an unread turn, so a task that just opened its
+  pull request lists there at once. A working agent or a starting task is
+  Running, and anything else is Idle. A task with no open task space, such as one
   whose task space closed, lists in its project's card as a row of its own.
   Tasks whose project is not open in the window, such as one that waits for
   you to pick its workspace, list in an **Other tasks** card at the end.
@@ -1492,13 +1497,18 @@ is saved for each window.
   as a task space row, the footer counts To ship tasks instead. A parent in
   To ship counts in its project's To ship line with its children.
 - **Needs you** lists only the rows that need you, from every project, under
-  each project's name and count. A project with nothing for you does not
-  show, a collapsed card's rows still list here, and with nothing waiting the
-  segment says **Nothing needs you**. A row lists under its parent task only
-  when the parent needs you too; otherwise a ↖ tag names the parent. Only the
-  selected row stays while you read its turn, and it leaves once you select
-  another row or it starts work again. Running, Idle, To ship and Done stay
-  in **All**.
+  each project's name and counts, in two sections: **Needs you**, then
+  **Ready to review**. Each row takes one line: its mark, its title and one
+  tag, which is its pull request, else the task that started it (↖), else
+  how many of its child tasks merged. The question or summary shows on
+  hover. A project with nothing for you does not show, a collapsed card's
+  rows still list here, and with nothing waiting the segment says **Nothing
+  needs you**. A family lists in the more urgent section, as in All. A row
+  lists under its parent task only when the parent lists too; otherwise its
+  ↖ tag names the parent when the row has no pull request, and its spoken
+  label always does. Only the selected row
+  stays while you read its turn, and it leaves once you select another row
+  or it starts work again. Running, Idle, To ship and Done stay in **All**.
 
 A To ship row opens the Tasks view with the task selected. The task space
 closed at the merge; if you kept it open, the row opens it instead. **Show N more**
