@@ -4236,6 +4236,90 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(coordinatorLabels(), [])
     }
 
+    /// Where the chat can show, the row shows and hides the dock as the
+    /// toolbar's Toasty button does, and says when the dock shows.
+    func testCoordinatorRowShowsAndHidesTheDockAsTheToolbarButtonDoes() throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let store = fixture.store
+        let controller = fixture.controller
+        let location = try XCTUnwrap(store.state.coordinator)
+        let windowID = location.windowID
+        let otherWorkspaceID = try XCTUnwrap(store.state.topLevelWorkspaceIDs(in: windowID).first)
+        XCTAssertTrue(store.selectWorkspace(windowID: windowID, workspaceID: otherWorkspaceID, preferringUnreadSessionPanelIn: nil))
+        XCTAssertTrue(controller.chatIsAvailable)
+
+        let taskCoordinator = TaskCoordinator(
+            records: TaskRecordStore.inMemory(),
+            store: store,
+            launcher: nil,
+            configLoader: { .empty },
+            attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
+            hasActiveSession: { _ in false },
+            grantScope: { _, _ in }
+        )
+        taskCoordinator.coordinatorController = controller
+        let registry = fixture.conversations.terminalRuntimeRegistry
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: fixture.conversations.sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
+            taskCoordinator: taskCoordinator,
+            taskBoard: .disabled,
+            newTask: nil,
+            terminalRuntimeContext: TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        )
+        let root = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        hostWindow.contentView = root
+        hostWindow.makeKeyAndOrderFront(nil)
+        defer { hostWindow.orderOut(nil) }
+        func coordinatorLabels() -> [String] {
+            pumpMainRunLoop(duration: 0.3)
+            root.layoutSubtreeIfNeeded()
+            return renderedTextValues(in: root).filter { $0.hasPrefix("Coordinator") }
+        }
+        func dockShows() -> Bool { controller.dockShows(in: windowID) }
+
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+        try attachSidebarRender(root, name: "coordinator-row-dock-hidden")
+        try writeSidebarEvidence(root, name: "coordinator-row-dock-hidden")
+
+        // A click shows the dock beside the workspace, and the row says so.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertTrue(dockShows())
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), otherWorkspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, dock open"])
+        try attachSidebarRender(root, name: "coordinator-row-dock-open")
+        try writeSidebarEvidence(root, name: "coordinator-row-dock-open")
+
+        // A second click hides it again.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), otherWorkspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+
+        // The toolbar button and Cmd+Shift+K show the dock: the row follows.
+        controller.toggleDock()
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, dock open"])
+
+        // In the full view, a click keeps the full view.
+        controller.openFullView()
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), location.workspaceID)
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+    }
+
     func testCoordinatorRowUnreadMarkFollowsTheSessionRowRule() throws {
         let fixture = try makeCoordinatorSidebarState()
         var workspace = try XCTUnwrap(fixture.state.workspacesByID[fixture.coordinator.workspaceID])

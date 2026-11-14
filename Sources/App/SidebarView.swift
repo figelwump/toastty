@@ -1103,11 +1103,13 @@ struct SidebarView: View {
                 sessionRuntimeStore: sessionRuntimeStore,
                 select: {
                     cancelWorkspaceRename()
-                    // Where the chat can show, a click opens the dock with
-                    // the keyboard in its field. In the full view, the
-                    // field there takes the keyboard.
+                    // Where the chat can show, a click acts as the
+                    // toolbar button does: it hides a dock that shows, and
+                    // otherwise shows the dock with the keyboard in its
+                    // field. In the full view, the field there takes the
+                    // keyboard.
                     if controller.chatIsAvailable, isSelected == false {
-                        controller.showDock(focusComposer: true)
+                        controller.toggleDock()
                     } else if controller.chatIsAvailable {
                         controller.chat?.requestComposerFocus(host: .panel)
                     } else {

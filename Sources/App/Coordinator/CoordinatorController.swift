@@ -524,8 +524,8 @@ final class CoordinatorController: ObservableObject {
         _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: false))
     }
 
-    /// The dock's toolbar button and shortcut: hides a dock that shows, and
-    /// otherwise shows it with the keyboard in its field.
+    /// The dock's toolbar button, shortcut and sidebar row: hides a dock
+    /// that shows, and otherwise shows it with the keyboard in its field.
     func toggleDock() {
         guard let location else { return }
         if dockShows(in: location.windowID) {
