@@ -290,6 +290,11 @@ guess first. Create nothing until the user answers. If no rule and no history
 gives an agent, model or effort, leave it out: the agent's default in Toastty
 applies.
 
+When handing off a task, preserve the user's scope, requested outputs and
+approval boundaries. Keep your added notes separate from the user's words.
+If an action needs approval, name that action. Do not broaden a restriction
+so that it blocks requested reports or mockups.
+
 **A quick entry message.** Its first line is Toastty's, and its parts are
 separated by ` | `:
 
