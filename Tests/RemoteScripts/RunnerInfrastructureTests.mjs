@@ -15,7 +15,7 @@ function isolatedEnvironment(root) {
 
 function wrapperRepository(root) {
   const repo = repository(root);
-  for (const path of ["scripts/remote/test.sh", "scripts/remote/validate.sh", "scripts/remote/computer-use-run.sh", "scripts/remote/run-support.sh", "scripts/remote/live-gateway-test-environment.sh", "scripts/remote/ios-simulator-run.sh", "scripts/automation/runtime-ownership.sh"]) {
+  for (const path of ["scripts/remote/test.sh", "scripts/remote/validate.sh", "scripts/remote/computer-use-run.sh", "scripts/remote/run-support.sh", "scripts/remote/admission.py", "scripts/remote/live-gateway-test-environment.sh", "scripts/remote/ios-simulator-run.sh", "scripts/automation/runtime-ownership.sh"]) {
     mkdirSync(dirname(join(repo, path)), { recursive: true });
     copyFileSync(join(sourceRoot, path), join(repo, path));
   }
@@ -182,7 +182,7 @@ test("default copies retain evidence and nested xcresult bundles while full copi
 });
 
 for (const { script, category, args } of [
-  { script: "validate.sh", category: "remote-gui", args: ["--require-remote", "--smoke-test", "smoke-ui"] },
+  { script: "validate.sh", category: "remote-gui", args: ["--smoke-test", "smoke-ui"] },
   { script: "test.sh", category: "remote-tests", args: [] },
   { script: "computer-use-run.sh", category: "remote-gui", args: [] },
 ]) {

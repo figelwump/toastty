@@ -15,7 +15,7 @@ const fixtureExecution = [
   "set -euo pipefail",
   'test -f "$3/scripts/remote/run-support.sh"',
   'schema_version=2',
-  '[[ "$4" != scripts/remote/validate.sh ]] || schema_version=1',
+  '[[ "$4" != */scripts/remote/validate.sh ]] || schema_version=1',
   'case "${FIXTURE_RESULT_MODE:-valid}" in',
   `  valid) printf '{"schemaVersion":%s,"status":"pass","executionTarget":"remote","cleanupFailureSummary":null}\\n' "$schema_version" >"$2/result.json" ;;`,
   `  malformed) printf '%s' '{"status":' >"$2/result.json" ;;`,
@@ -24,16 +24,22 @@ const fixtureExecution = [
   '  *) exit 78 ;;',
   'esac',
   `printf 'remote evidence\\n' >"$2/evidence.log"`,
+  `printf '%s' '{"state":"finished"}' >"$2/admission.json"`,
   'case "$4" in',
-  '  scripts/remote/test.sh) : >"$2/COMPLETED" ;;',
-  '  scripts/remote/validate.sh) : >"$2/EXECUTION_FINISHED" ;;',
+  '  */scripts/remote/test.sh) : >"$2/COMPLETED" ;;',
+  '  */scripts/remote/validate.sh) : >"$2/EXECUTION_FINISHED"; : >"$2/CLEANUP_CONFIRMED" ;;',
   '  *) exit 78 ;;',
   'esac',
+  'if [[ "${FIXTURE_UNCONFIRMED_GUI:-0}" == 1 ]]; then',
+  '  : >"$2/desktop-active"; : >"$2/CLEANUP_FAILED"',
+  `  printf '%s' '{"state":"blocked"}' >"$2/admission.json"`,
+  '  exit 78',
+  'fi',
 ].join("\n");
 const scripts = [
   "scripts/remote/test.sh",
   "scripts/remote/validate.sh",
-  "scripts/remote/run-support.sh",
+  "scripts/remote/run-support.sh", "scripts/remote/admission.py",
   "scripts/remote/live-gateway-test-environment.sh",
   "scripts/remote/ios-simulator-run.sh",
   "scripts/automation/runtime-ownership.sh",
@@ -177,6 +183,16 @@ process.exit(0);
 }
 
 for (const kind of ["test", "validate"]) {
+  test(`${kind}.sh preserves blocked admission and its marker even when a pass result exists`, (t) => {
+    const context = fixture(t, kind);
+    const result = context.run({ FIXTURE_UNCONFIRMED_GUI: "1" });
+    assert.notEqual(result.status, 0);
+    assert.ok(existsSync(join(context.remoteRun, "desktop-active")));
+    assert.ok(existsSync(context.remoteWorktree));
+    assert.equal(context.metadata().remoteRemoved, false);
+    assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "fail");
+    assert.ok(!context.phases().includes("cleanup"));
+  });
   test(`${kind}.sh retains remote evidence and fails when copying a pass result fails`, (t) => {
     const context = fixture(t, kind);
     const result = context.run({ FIXTURE_FAIL_ARTIFACT_COPY: "1" });
@@ -187,7 +203,7 @@ for (const kind of ["test", "validate"]) {
     assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "fail");
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
     const metadata = context.metadata();
     assert.equal(metadata.status, "fail");
     assert.notEqual(metadata.exitCode, 0);
@@ -233,7 +249,7 @@ for (const kind of ["test", "validate"]) {
     assert.equal(existsSync(context.remoteRun), false);
     assert.equal(existsSync(context.remoteWorktree), false);
     assert.equal(git(context.remoteRepo, "worktree", "list", "--porcelain").includes(context.remoteWorktree), false);
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy", "cleanup"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "cleanup"]);
     assert.equal(context.metadata().status, "pass");
     assert.equal(context.metadata().remoteRemoved, true);
   });
@@ -249,7 +265,7 @@ for (const kind of ["test", "validate"]) {
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
     assert.equal(git(context.remoteRepo, "worktree", "list", "--porcelain").includes(context.remoteWorktree), true);
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy", "cleanup"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "cleanup"]);
     assert.equal(context.metadata().status, "fail");
     assert.equal(context.metadata().remoteRemoved, false);
   });
@@ -266,7 +282,7 @@ for (const [mode, rawResult] of [["malformed", '{"status":'], ["partial", '{"sta
     assert.equal(readFileSync(join(context.remoteRun, "result.json"), "utf8"), rawResult);
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
     assert.equal(context.metadata().status, "fail");
     assert.equal(context.metadata().remoteRemoved, false);
   });
@@ -283,7 +299,7 @@ test("test.sh cannot authorize remote removal from COMPLETED and a synthesized m
   assert.equal(existsSync(join(context.remoteRun, "result.json")), false);
   assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
   assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-  assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy"]);
+  assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
   assert.equal(context.metadata().status, "fail");
   assert.equal(context.metadata().remoteRemoved, false);
 });

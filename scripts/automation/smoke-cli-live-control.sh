@@ -137,7 +137,7 @@ launch_toastty_app() {
     # question whether to start the coordinator, a sheet over the window.
     -toastty.coordinator.startOfferAnswered YES
   )
-  "${launch_command[@]}"
+  exec "${launch_command[@]}"
 }
 
 assert_catalog_contains() {

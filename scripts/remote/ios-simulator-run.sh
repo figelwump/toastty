@@ -469,6 +469,7 @@ toastty_run_paths_have_live_process() {
   local ancestor_pid="$$"
   local ancestor_pids=""
   local parent_pid
+  local process_inventory
 
   [[ -n "$derived_path" && "$derived_path" == /* && "$derived_path" == */Derived ]] || return 0
   [[ -n "$runtime_home" && "$runtime_home" == /* && "$runtime_home" == */runtime-home ]] || return 0
@@ -481,6 +482,8 @@ toastty_run_paths_have_live_process() {
     ancestor_pid="$parent_pid"
   done
 
+  # A failed inventory is unknown ownership, not evidence that the run is idle.
+  process_inventory="$(ps -axww -o pid=,command=)" || return 0
   while read -r pid command_line; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     case " $ancestor_pids " in
@@ -490,6 +493,6 @@ toastty_run_paths_have_live_process() {
       *"$derived_path"/*|*"$derived_path "*|*"$derived_path"|\
       *"$runtime_home"/*|*"$runtime_home "*|*"$runtime_home") return 0 ;;
     esac
-  done < <(ps -axww -o pid=,command=)
+  done <<<"$process_inventory"
   return 1
 }

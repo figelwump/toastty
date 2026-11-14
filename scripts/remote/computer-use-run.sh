@@ -7,11 +7,13 @@ source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 SCRIPT_PATH="scripts/remote/computer-use-run.sh"
 
 REMOTE_PREPARE=0
+REMOTE_SESSION=0
 REMOTE_STOP=0
 RUN_LABEL="${RUN_LABEL:-$(toastty_default_run_label computer-use)}"
 VALIDATION_SCOPE="working-tree"
 REF_SPEC=""
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
+QUEUE_TIMEOUT_SECONDS="${TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS:-3600}"
 KEEP_REMOTE=0
 FULL_ARTIFACTS=0
 PROMPT_FILE=""
@@ -44,6 +46,9 @@ CLEANUP_REMOTE_PREPARED=0
 CLEANUP_REMOTE_STOPPED=0
 CLEANUP_REMOTE_REMOVED=0
 CLEANUP_TUNNEL_PID=""
+CLEANUP_SESSION_PID=""
+CLEANUP_CLIENT_PID=""
+CLEANUP_SESSION_INPUT_OPEN=0
 CLEANUP_REMOTE_WORKTREE_DIR=""
 CLEANUP_REMOTE_RUN_ROOT=""
 CLEANUP_SOCKET_PATH=""
@@ -71,6 +76,7 @@ Options:
   --timeout-seconds <seconds>           Hard timeout for the Codex turn (default: 300)
   --full-artifacts                      Copy build products and caches as well as evidence
   --keep-remote                         Keep the remote worktree and run directory after completion
+  --remote-session                      Internal admitted build, turn, and cleanup session
   --remote-prepare                      Internal mode used on the remote host
   --remote-stop                         Internal mode used on the remote host
   -h, --help                            Show this help
@@ -81,6 +87,7 @@ Required local environment:
 Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and runs
+  TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS Admission wait limit (default: 3600)
   CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-6.1-terra)
   CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: high)
   CODEX_COMPUTER_USE_SERVICE_TIER       Codex service tier for app-server turns (default: fast)
@@ -204,6 +211,7 @@ set -euo pipefail
 remote_repo_root="$1"
 remote_gui_root="$2"
 git -C "$remote_repo_root" rev-parse --is-inside-work-tree >/dev/null
+command -v python3 >/dev/null
 test -x "$3" || test -x "$4" || {
   printf 'No app-bundled Codex CLI found at %s or %s\n' "$3" "$4" >&2
   exit 1
@@ -356,8 +364,23 @@ copy_remote_artifacts_back() {
   toastty_copy_run_artifacts "$REMOTE_HOST:$1" "$LOCAL_ARTIFACTS_DIR/remote" "$FULL_ARTIFACTS"
 }
 
+pid_is_descendant_of() {
+  local candidate="$1"
+  local ancestor="$2"
+  [[ "$candidate" =~ ^[0-9]+$ && "$ancestor" =~ ^[0-9]+$ ]] || return 1
+  local depth=0
+  while (( candidate > 1 && depth < 256 )); do
+    [[ "$candidate" == "$ancestor" ]] && return 0
+    candidate="$(ps -p "$candidate" -o ppid= 2>/dev/null | tr -d '[:space:]')" || return 1
+    [[ "$candidate" =~ ^[0-9]+$ ]] || return 1
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
 run_remote_prepare_mode() {
   require_command xcodebuild
+  require_command jq
   require_command curl
   require_command lsof
   require_command script
@@ -380,7 +403,7 @@ run_remote_prepare_mode() {
   local app_server_log="$remote_run_root/app-server.log"
   local app_server_session_log="$remote_run_root/app-server-session.log"
   local launch_json="$remote_run_root/launch.json"
-  local arch="${ARCH:-$(uname -m)}"
+  local arch="${ARCH:-arm64}"
   local app_bundle="$derived_path/Build/Products/Debug/Toastty.app"
   local app_binary="$app_bundle/Contents/MacOS/Toastty"
   local instance_json="$runtime_home/instance.json"
@@ -389,12 +412,7 @@ run_remote_prepare_mode() {
     codex_cli="$LEGACY_CODEX_APP_CLI"
   fi
   [[ -x "$codex_cli" ]] || fail "No app-bundled Codex CLI found in ChatGPT.app or Codex.app"
-  local codex_version
-  codex_version="$("$codex_cli" --version)" || fail "Codex CLI at $codex_cli failed --version"
-  if [[ "$codex_cli" == "$LEGACY_CODEX_APP_CLI" ]]; then
-    warn "Using the legacy Codex app; its CLI may require overrides for CODEX_COMPUTER_USE_MODEL and CODEX_COMPUTER_USE_SERVICE_TIER"
-  fi
-  log "Using $codex_cli ($codex_version)" >&2
+  local codex_version=""
   local app_server_launchd_label="com.giantthings.toastty.cu-appserver.${run_hash_value}"
   local app_server_plist="$remote_run_root/app-server.plist"
   local app_server_launcher="$remote_run_root/app-server-launch.sh"
@@ -403,49 +421,159 @@ run_remote_prepare_mode() {
   local app_server_pid=""
   local app_server_listener_pid=""
   local app_server_port=""
-  local prepare_succeeded=0
+  local release_marker="$remote_run_root/desktop-active"
+  local app_server_started=0
+  local app_server_ownership_uncertain=0
+  local control_reader_pid=""
+  local session_ready="$remote_run_root/session-ready"
+  local session_control="$remote_run_root/session-control.txt"
+  local control_reader_ready="$remote_run_root/control-reader-ready"
+  local supervisor_pid="${TOASTTY_ADMISSION_SUPERVISOR_PID:-}"
+
+  resolve_app_server_listener() {
+    [[ -n "$app_server_pid" ]] || app_server_pid="$(launchctl print "$gui_domain/$app_server_launchd_label" 2>/dev/null | grep -m 1 'pid =' | grep -Eo '[0-9]+' || true)"
+    [[ "$app_server_pid" =~ ^[0-9]+$ ]] || return 1
+    local candidate
+    candidate="$(lsof -tiTCP:"$app_server_port" -sTCP:LISTEN | sort -u || true)"
+    # A bound port does not establish ownership. The listener must belong to
+    # this run's LaunchAgent before it can be recorded or stopped.
+    if pid_is_descendant_of "$candidate" "$app_server_pid"; then
+      app_server_listener_pid="$candidate"
+      return 0
+    fi
+    return 1
+  }
 
   cleanup_remote_prepare() {
     local cleanup_exit_code=$?
-    if [[ "$prepare_succeeded" == "1" ]]; then
-      return "$cleanup_exit_code"
+    if [[ -n "$control_reader_pid" ]]; then
+      kill "$control_reader_pid" >/dev/null 2>&1 || true
+      wait "$control_reader_pid" >/dev/null 2>&1 || true
     fi
-    launchctl bootout "$gui_domain/$app_server_launchd_label" >/dev/null 2>&1 || true
-    rm -f "$socket_path"
-    if [[ -n "$app_server_listener_pid" ]]; then
-      kill "$app_server_listener_pid" >/dev/null 2>&1 || true
+    if [[ "$app_server_started" == "1" && -z "$app_server_listener_pid" ]]; then
+      if ! resolve_app_server_listener; then
+        app_server_ownership_uncertain=1
+      fi
     fi
-    if [[ -n "$app_server_pid" ]]; then
-      kill "$app_server_pid" >/dev/null 2>&1 || true
-      wait "$app_server_pid" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "$app_pid" ]]; then
-      kill "$app_pid" >/dev/null 2>&1 || true
-      wait "$app_pid" >/dev/null 2>&1 || true
+    SOCKET_PATH_ARG="$socket_path"
+    APP_PID_ARG="$app_pid"
+    APP_SERVER_PID_ARG="$app_server_pid"
+    APP_SERVER_LISTENER_PID_ARG="$app_server_listener_pid"
+    APP_SERVER_LAUNCHD_LABEL_ARG="$app_server_launchd_label"
+    # A signal can land between spawning the app and recording $!; retain the
+    # reservation if that tiny window leaves ownership unconfirmed.
+    if run_remote_stop_mode && [[ "$app_server_ownership_uncertain" == "0" && ( ! -f "$release_marker" || -n "$app_pid" ) ]]; then
+      rm -f "$release_marker"
+    else
+      warn "Owned GUI processes did not stop; desktop admission remains reserved: $release_marker"
+      cleanup_exit_code=1
     fi
     return "$cleanup_exit_code"
   }
   trap cleanup_remote_prepare EXIT
+  trap 'exit 143' TERM HUP
+  trap 'exit 130' INT
 
   mkdir -p "$remote_run_root" "$runtime_home" "$(dirname "$socket_path")"
   rm -f "$socket_path"
   rm -f "$launch_json"
 
-  (
-    cd "$remote_worktree_dir"
-    TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
-  ) >"$bootstrap_log" 2>&1
+  if [[ "$REMOTE_SESSION" == "1" ]]; then
+    [[ "$supervisor_pid" =~ ^[0-9]+$ && "$supervisor_pid" == "$PPID" ]] \
+      || fail "--remote-session requires its admission supervisor"
+    rm -f "$session_ready" "$session_control" "$control_reader_ready"
+    trap 'exit 0' USR1
+    # One reader owns the control stream from before preparation through the
+    # turn. Builds cannot consume it, and an SSH EOF cancels a long build too.
+    exec 8<&0
+    python3 - "$supervisor_pid" "$$" "$control_reader_ready" "$session_control" "$session_ready" "$((3600 + TIMEOUT_SECONDS + 120))" <<'PYCONTROL' &
+import os
+from pathlib import Path
+import select
+import signal
+import sys
+import time
+
+supervisor, session = map(int, sys.argv[1:3])
+reader_ready, control, session_ready = map(Path, sys.argv[3:6])
+deadline = time.monotonic() + int(sys.argv[6])
+
+def finish(command):
+    control.write_text(command + "\n")
+    if command == "STOP" and session_ready.exists():
+        os.kill(session, signal.SIGUSR1)
+    else:
+        # Admission owns the group and escalates if a build ignores TERM.
+        os.kill(supervisor, signal.SIGTERM)
+
+def watch():
+    initial = True
+    pending = b""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            finish("TIMEOUT")
+            return
+        readable, _, _ = select.select([8], [], [], min(1, remaining) if initial else remaining)
+        if not readable:
+            if initial and not pending:
+                # Already-buffered STOP/EOF must cancel before preparation.
+                reader_ready.touch()
+                initial = False
+                continue
+            finish("INVALID_CONTROL" if initial else "TIMEOUT")
+            return
+        chunk = os.read(8, 4096)
+        if not chunk:
+            finish("DISCONNECTED")
+            return
+        pending += chunk
+        if b"\n" in pending:
+            finish("STOP" if pending.partition(b"\n")[0] == b"STOP" else "INVALID_CONTROL")
+            return
+        if len(pending) >= 4096:
+            finish("INVALID_CONTROL")
+            return
+
+try:
+    watch()
+except (OSError, ValueError):
+    # A broken watcher must not leave preparation running unobserved.
+    os.kill(supervisor, signal.SIGTERM)
+    raise
+PYCONTROL
+    control_reader_pid=$!
+    exec 8<&-
+    local control_ready_deadline=$((SECONDS + 10))
+    while [[ ! -f "$control_reader_ready" ]]; do
+      [[ ! -f "$session_control" ]] || fail "Computer Use was cancelled before preparation"
+      kill -0 "$control_reader_pid" >/dev/null 2>&1 || fail "Computer Use control reader exited before preparation"
+      (( SECONDS < control_ready_deadline )) || fail "Computer Use control reader did not start"
+      sleep 0.1
+    done
+  fi
+
+  codex_version="$("$codex_cli" --version </dev/null)" || fail "Codex CLI at $codex_cli failed --version"
+  if [[ "$codex_cli" == "$LEGACY_CODEX_APP_CLI" ]]; then
+    warn "Using the legacy Codex app; its CLI may require overrides for CODEX_COMPUTER_USE_MODEL and CODEX_COMPUTER_USE_SERVICE_TIER"
+  fi
+  log "Using $codex_cli ($codex_version)" >&2
 
   (
     cd "$remote_worktree_dir"
-    xcodebuild \
+    TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh
+  ) </dev/null >"$bootstrap_log" 2>&1
+
+  (
+    cd "$remote_worktree_dir"
+    xcodebuild -jobs 4 \
       -workspace toastty.xcworkspace \
       -scheme ToasttyApp \
       -configuration Debug \
       -destination "platform=macOS,arch=${arch}" \
       -derivedDataPath "$derived_path" \
       build
-  ) >"$build_log" 2>&1
+  ) </dev/null >"$build_log" 2>&1
 
   local app_bundle_id
   app_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_bundle/Contents/Info.plist")" \
@@ -455,12 +583,15 @@ run_remote_prepare_mode() {
   # A new runtime home is a first launch, at which Toastty asks whether to
   # start the coordinator, in a sheet over the window. The session is about
   # something else, so it starts with the question answered.
+  # Admission must stay blocked after an interrupted supervisor until cleanup is confirmed.
+  [[ ! -f "$session_control" ]] || fail "Computer Use was cancelled during preparation"
+  : >"$release_marker"
   TOASTTY_RUNTIME_HOME="$runtime_home" \
   TOASTTY_USER_SKILLS_ROOT="$runtime_home/skills" \
   TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \
-  "$app_binary" -toastty.coordinator.startOfferAnswered YES >"$app_log" 2>&1 &
+  "$app_binary" -toastty.coordinator.startOfferAnswered YES </dev/null >"$app_log" 2>&1 &
   app_pid=$!
 
   for _ in $(seq 1 300); do
@@ -521,6 +652,7 @@ EOF
 EOF
 
   launchctl bootout "$gui_domain/$app_server_launchd_label" >/dev/null 2>&1 || true
+  app_server_started=1
   launchctl bootstrap "$gui_domain" "$app_server_plist" \
     || fail "Failed to bootstrap codex app-server into $gui_domain"
 
@@ -532,10 +664,10 @@ EOF
   done
 
   curl -fsS "http://127.0.0.1:${app_server_port}/readyz" >/dev/null 2>&1 || fail "codex app-server did not become ready"
-  app_server_pid="$(launchctl print "$gui_domain/$app_server_launchd_label" 2>/dev/null | grep -m 1 'pid =' | grep -Eo '[0-9]+' || true)"
-  app_server_listener_pid="$(lsof -tiTCP:"$app_server_port" -sTCP:LISTEN | head -n 1 || true)"
-  [[ -n "$app_server_pid" ]] || app_server_pid="$app_server_listener_pid"
-  [[ -n "$app_server_pid" ]] || fail "Failed to resolve the codex app-server pid"
+  if ! resolve_app_server_listener; then
+    app_server_ownership_uncertain=1
+    fail "The app-server listener does not belong to this run's LaunchAgent"
+  fi
 
   cat >"$launch_json" <<EOF
 {
@@ -565,8 +697,16 @@ EOF
 }
 EOF
 
-  prepare_succeeded=1
-  trap - EXIT
+  if [[ "$REMOTE_SESSION" == "1" ]]; then
+    [[ ! -f "$session_control" ]] || fail "Computer Use was cancelled during startup"
+    : >"$session_ready"
+    printf 'TOASTTY_COMPUTER_USE_READY\n'
+    # The reader sends USR1 for a normal STOP, or cancels the supervisor for
+    # EOF/invalid input. Waiting here remains interruptible by those signals.
+    wait "$control_reader_pid"
+    fail "Computer Use control reader exited without stopping the session"
+  fi
+  trap - EXIT TERM HUP INT USR1
 }
 
 run_remote_stop_mode() {
@@ -584,15 +724,27 @@ run_remote_stop_mode() {
     return 1
   }
 
+  local listener_pid="$APP_SERVER_LISTENER_PID_ARG"
+  if [[ -n "$listener_pid" ]] && kill -0 "$listener_pid" >/dev/null 2>&1; then
+    if ! pid_is_descendant_of "$listener_pid" "$APP_SERVER_PID_ARG"; then
+      warn "Refusing to stop a listener outside the owned LaunchAgent process tree"
+      listener_pid=""
+      stop_failed=1
+    fi
+  fi
+
   rm -f "$SOCKET_PATH_ARG"
 
   if [[ -n "$APP_SERVER_LAUNCHD_LABEL_ARG" ]]; then
     launchctl bootout "gui/$(id -u)/$APP_SERVER_LAUNCHD_LABEL_ARG" >/dev/null 2>&1 || true
+    if launchctl print "gui/$(id -u)/$APP_SERVER_LAUNCHD_LABEL_ARG" >/dev/null 2>&1; then
+      stop_failed=1
+    fi
   fi
 
-  if [[ -n "$APP_SERVER_LISTENER_PID_ARG" ]]; then
-    kill "$APP_SERVER_LISTENER_PID_ARG" >/dev/null 2>&1 || true
-    wait_for_pid_exit "$APP_SERVER_LISTENER_PID_ARG" || stop_failed=1
+  if [[ -n "$listener_pid" ]]; then
+    kill "$listener_pid" >/dev/null 2>&1 || true
+    wait_for_pid_exit "$listener_pid" || stop_failed=1
   fi
 
   if [[ -n "$APP_SERVER_PID_ARG" ]]; then
@@ -605,6 +757,29 @@ run_remote_stop_mode() {
     wait_for_pid_exit "$APP_PID_ARG" || stop_failed=1
   fi
   return "$stop_failed"
+}
+
+stop_remote_session() {
+  if [[ "$CLEANUP_SESSION_INPUT_OPEN" == "1" ]]; then
+    # A failed remote process may already have closed its input.
+    (trap '' PIPE; printf 'STOP\n' >&9) 2>/dev/null || true
+    exec 9>&-
+    CLEANUP_SESSION_INPUT_OPEN=0
+  fi
+  if [[ -n "$CLEANUP_SESSION_PID" ]]; then
+    local session_pid="$CLEANUP_SESSION_PID"
+    CLEANUP_SESSION_PID=""
+    if [[ "${1:-}" == cancel && "$CLEANUP_REMOTE_PREPARED" != "1" ]]; then
+      # Abort a queued/startup SSH session rather than waiting for its full budget.
+      # The remote control reader observes STOP/EOF and cancels its supervisor.
+      kill "$session_pid" >/dev/null 2>&1 || true
+    fi
+    if wait "$session_pid"; then
+      CLEANUP_REMOTE_STOPPED=1
+    else
+      return 1
+    fi
+  fi
 }
 
 run_local_mode() {
@@ -657,45 +832,21 @@ run_local_mode() {
 
   cleanup_local_mode() {
     local cleanup_exit_code=$?
+    trap '' TERM HUP INT
+
+    if [[ -n "$CLEANUP_CLIENT_PID" ]]; then
+      kill "$CLEANUP_CLIENT_PID" >/dev/null 2>&1 || true
+      wait "$CLEANUP_CLIENT_PID" >/dev/null 2>&1 || true
+    fi
 
     if [[ -n "$CLEANUP_TUNNEL_PID" ]]; then
       kill "$CLEANUP_TUNNEL_PID" >/dev/null 2>&1 || true
       wait "$CLEANUP_TUNNEL_PID" >/dev/null 2>&1 || true
     fi
 
-    if [[ "$CLEANUP_REMOTE_PREPARED" == "1" && "$CLEANUP_REMOTE_STOPPED" != "1" ]]; then
-      ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
-        "$CLEANUP_REMOTE_WORKTREE_DIR" \
-        "$SCRIPT_PATH" \
-        "$RUN_LABEL" \
-        "$CLEANUP_SOCKET_PATH" \
-        "$CLEANUP_APP_PID" \
-        "$CLEANUP_APP_SERVER_PID" \
-        "${CLEANUP_APP_SERVER_LISTENER_PID:-}" \
-        "${CLEANUP_APP_SERVER_LAUNCHD_LABEL:-}" <<'EOF' >/dev/null 2>&1 || true
-set -euo pipefail
-remote_worktree_dir="$1"
-script_path="$2"
-run_label="$3"
-socket_path="$4"
-app_pid="$5"
-app_server_pid="$6"
-app_server_listener_pid="${7:-}"
-app_server_launchd_label="${8:-}"
-cd "$remote_worktree_dir"
-stop_args=(
-  --run-label "$run_label"
-  --remote-stop
-  --socket-path "$socket_path"
-  --app-pid "$app_pid"
-  --app-server-pid "$app_server_pid"
-  --app-server-listener-pid "$app_server_listener_pid"
-)
-if [[ -n "$app_server_launchd_label" ]]; then
-  stop_args+=(--app-server-launchd-label "$app_server_launchd_label")
-fi
-/bin/bash "$script_path" "${stop_args[@]}"
-EOF
+    if ! stop_remote_session cancel; then
+      warn "Remote session did not confirm cleanup; retaining evidence and any desktop reservation"
+      [[ "$cleanup_exit_code" != 0 ]] || cleanup_exit_code=1
     fi
 
     if [[ "$CLEANUP_REMOTE_WORKTREE_CREATED" == "1" && "$CLEANUP_REMOTE_REMOVED" != "1" ]]; then
@@ -706,6 +857,8 @@ EOF
     exit "$cleanup_exit_code"
   }
   trap cleanup_local_mode EXIT
+  trap 'exit 143' TERM HUP
+  trap 'exit 130' INT
 
   TOASTTY_METADATA_REMOTE_RUN_ROOT="$remote_run_root"
   TOASTTY_METADATA_REMOTE_WORKTREE="$remote_worktree_dir"
@@ -750,36 +903,39 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     rm -rf "$export_root"
   fi
 
+  # Run the current controller separately from the selected source revision.
+  # An older --scope head/ref export must still use host-wide admission.
+  local controller_root="$remote_run_root/controller"
+  toastty_stage_remote_controller "$remote_run_root"
+
   toastty_run_phase buildAndLaunch
-  log "Building and launching Toastty on the remote host"
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
-      "$remote_worktree_dir" \
-      "$SCRIPT_PATH" \
-      "$RUN_LABEL" \
-      "$remote_run_root" \
-      "$CODEX_COMPUTER_USE_MODEL" \
-      "$CODEX_COMPUTER_USE_REASONING_EFFORT" \
-      "$CODEX_COMPUTER_USE_SERVICE_TIER" \
-      > >(tee "$remote_prepare_stdout") \
-      2> >(tee "$remote_prepare_stderr" >&2) <<'EOF'; then
-set -euo pipefail
-remote_worktree_dir="$1"
-script_path="$2"
-run_label="$3"
-remote_run_root="$4"
-codex_model="$5"
-codex_reasoning_effort="$6"
-codex_service_tier="$7"
-cd "$remote_worktree_dir"
-CODEX_COMPUTER_USE_MODEL="$codex_model" \
-CODEX_COMPUTER_USE_REASONING_EFFORT="$codex_reasoning_effort" \
-CODEX_COMPUTER_USE_SERVICE_TIER="$codex_service_tier" \
-  /bin/bash "$script_path" \
-  --run-label "$run_label" \
-  --remote-prepare \
-  --remote-worktree-dir "$remote_worktree_dir" \
-  --remote-run-root "$remote_run_root"
-EOF
+  log "Queueing remote desktop for build, Computer Use turn, and cleanup"
+  local session_input="$LOCAL_ARTIFACTS_DIR/session-input.fifo"
+  mkfifo "$session_input"
+  local remote_command
+  remote_command="cd $(escape_sh "$remote_worktree_dir") && CODEX_COMPUTER_USE_MODEL=$(escape_sh "$CODEX_COMPUTER_USE_MODEL") CODEX_COMPUTER_USE_REASONING_EFFORT=$(escape_sh "$CODEX_COMPUTER_USE_REASONING_EFFORT") CODEX_COMPUTER_USE_SERVICE_TIER=$(escape_sh "$CODEX_COMPUTER_USE_SERVICE_TIER") python3 $(escape_sh "$controller_root/scripts/remote/admission.py") run --root $(escape_sh "$REMOTE_GUI_ROOT") --resource desktop --label $(escape_sh "$RUN_LABEL") --timeout $(escape_sh "$QUEUE_TIMEOUT_SECONDS") --runtime-timeout $((3600 + TIMEOUT_SECONDS + 120)) --report $(escape_sh "$remote_run_root/admission.json") --release-marker $(escape_sh "$remote_run_root/desktop-active") -- /bin/bash $(escape_sh "$controller_root/$SCRIPT_PATH") --run-label $(escape_sh "$RUN_LABEL") --remote-session --timeout-seconds $(escape_sh "$TIMEOUT_SECONDS") --remote-worktree-dir $(escape_sh "$remote_worktree_dir") --remote-run-root $(escape_sh "$remote_run_root")"
+  ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    "$REMOTE_HOST" "/bin/bash -l -c $(escape_sh "$remote_command")" \
+    <"$session_input" >"$remote_prepare_stdout" 2>"$remote_prepare_stderr" &
+  CLEANUP_SESSION_PID=$!
+  exec 9>"$session_input"
+  CLEANUP_SESSION_INPUT_OPEN=1
+  rm -f "$session_input"
+
+  local ready_deadline=$((SECONDS + QUEUE_TIMEOUT_SECONDS + 3600 + 120))
+  while kill -0 "$CLEANUP_SESSION_PID" >/dev/null 2>&1; do
+    if grep -qx 'TOASTTY_COMPUTER_USE_READY' "$remote_prepare_stdout"; then
+      CLEANUP_REMOTE_PREPARED=1
+      break
+    fi
+    if (( SECONDS >= ready_deadline )); then
+      warn "Remote session did not become ready before its deadline"
+      break
+    fi
+    sleep 0.2
+  done
+  if [[ "$CLEANUP_REMOTE_PREPARED" != "1" ]]; then
+    stop_remote_session cancel || true
     warn "Remote prepare failed"
     toastty_run_phase artifactCopy
     copy_remote_artifacts_back "$remote_run_root" || true
@@ -834,7 +990,7 @@ EOF
     -o ServerAliveCountMax=3 \
     -N \
     -L "127.0.0.1:${local_ws_port}:127.0.0.1:${remote_app_server_port}" \
-    "$REMOTE_HOST" >"$tunnel_log" 2>&1 &
+    "$REMOTE_HOST" >"$tunnel_log" 2>&1 9>&- &
   tunnel_pid=$!
   CLEANUP_TUNNEL_PID="$tunnel_pid"
 
@@ -864,7 +1020,7 @@ EOF
   local client_stderr="$LOCAL_ARTIFACTS_DIR/client.stderr.log"
   local client_exit_code=0
 
-  if node "$ROOT_DIR/scripts/remote/codex-app-server-client.mjs" \
+  node "$ROOT_DIR/scripts/remote/codex-app-server-client.mjs" \
       --ws-url "ws://127.0.0.1:${local_ws_port}" \
       --cwd "$remote_worktree_dir" \
       --app-bundle-id "$app_bundle_id" \
@@ -872,48 +1028,18 @@ EOF
       --transcript-path "$LOCAL_ARTIFACTS_DIR/remote/transcript.jsonl" \
       --summary-path "$client_summary" \
       --timeout-seconds "$TIMEOUT_SECONDS" \
-      >"$client_stdout" 2>"$client_stderr"; then
+      >"$client_stdout" 2>"$client_stderr" 9>&- &
+  CLEANUP_CLIENT_PID=$!
+  if wait "$CLEANUP_CLIENT_PID"; then
     :
   else
     client_exit_code=$?
   fi
+  CLEANUP_CLIENT_PID=""
 
   toastty_run_phase stopRemoteProcesses
   log "Stopping remote Toastty and Codex app-server"
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
-      "$remote_worktree_dir" \
-      "$SCRIPT_PATH" \
-      "$RUN_LABEL" \
-      "$socket_path" \
-      "$app_pid" \
-      "$app_server_pid" \
-      "${app_server_listener_pid:-}" \
-      "${app_server_launchd_label:-}" <<'EOF'; then
-set -euo pipefail
-remote_worktree_dir="$1"
-script_path="$2"
-run_label="$3"
-socket_path="$4"
-app_pid="$5"
-app_server_pid="$6"
-app_server_listener_pid="${7:-}"
-app_server_launchd_label="${8:-}"
-cd "$remote_worktree_dir"
-stop_args=(
-  --run-label "$run_label"
-  --remote-stop
-  --socket-path "$socket_path"
-  --app-pid "$app_pid"
-  --app-server-pid "$app_server_pid"
-  --app-server-listener-pid "$app_server_listener_pid"
-)
-if [[ -n "$app_server_launchd_label" ]]; then
-  stop_args+=(--app-server-launchd-label "$app_server_launchd_label")
-fi
-/bin/bash "$script_path" "${stop_args[@]}"
-EOF
-    CLEANUP_REMOTE_STOPPED=1
-  else
+  if ! stop_remote_session; then
     warn "Remote process cleanup failed"
   fi
 
@@ -1065,6 +1191,10 @@ while [[ $# -gt 0 ]]; do
       KEEP_REMOTE=1
       shift
       ;;
+    --remote-session)
+      REMOTE_SESSION=1
+      shift
+      ;;
     --remote-prepare)
       REMOTE_PREPARE=1
       shift
@@ -1122,11 +1252,13 @@ if [[ -n "$PROMPT_FILE" && -n "$PROMPT_TEXT" ]]; then
   fail "Use either --prompt or --prompt-file, not both"
 fi
 
-if [[ "$REMOTE_PREPARE" == "1" && "$REMOTE_STOP" == "1" ]]; then
-  fail "--remote-prepare and --remote-stop are mutually exclusive"
+if (( REMOTE_PREPARE + REMOTE_STOP + REMOTE_SESSION > 1 )); then
+  fail "--remote-prepare, --remote-session, and --remote-stop are mutually exclusive"
 fi
+[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "--timeout-seconds must be a positive integer"
+[[ "$QUEUE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS must be a positive integer"
 
-if [[ "$REMOTE_PREPARE" == "1" ]]; then
+if [[ "$REMOTE_PREPARE" == "1" || "$REMOTE_SESSION" == "1" ]]; then
   run_remote_prepare_mode
 elif [[ "$REMOTE_STOP" == "1" ]]; then
   run_remote_stop_mode

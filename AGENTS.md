@@ -25,23 +25,21 @@
 - For a fresh worktree, or when `Tuist/Package.swift`, `Tuist/Package.resolved`, or Ghostty artifact state changes, run `./scripts/dev/bootstrap-worktree.sh`. It links local Ghostty artifacts when needed, then runs `tuist install` and `tuist generate --no-open`.
 - In an already-bootstrapped worktree, regenerate the macOS graph from the worktree root after project/build-setting changes, source file additions/renames/deletions, or branch switches. Use `sv exec -- tuist generate --no-open` when `sv` is available so configured manifest-scoped values are forwarded; without `sv`, export the desired generation values and run `tuist generate --no-open`. Optional values may still be unset: without `TUIST_DEVELOPMENT_TEAM`, generation intentionally falls back to ad-hoc signing, and unset diagnostics values omit diagnostics injection. Generated `.xcodeproj` and `.xcworkspace` files are disposable and can otherwise keep stale references; fix generation inputs rather than changing signing or other settings in Xcode.
 - Mac generation requires a configured push relay. For intentional builds without iPhone push, set `TUIST_TOASTTY_DISABLE_PUSH=1` on that generation or bootstrap command. Distribution builds reject this opt-out. See `docs/environment-and-build-flags.md` for the configuration contract.
-- Generate, build, or test the iOS graph through `node ios/scripts/toastty-ios.mjs generate|build|test`. The dispatcher installs and generates the `ios/` graph; build and test select a compatible iPhone Simulator. All commands support `--dry-run`.
-- Build:
-  ```bash
-  ARCH="${ARCH:-$(if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then echo arm64; else uname -m; fi)}"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build
-  ```
-- Full local gate: `./scripts/automation/check.sh` (generate, artifact self-tests, web-panel tests, build, smoke, and app tests; Ghostty-backed unless fallback is explicitly requested).
-- After any code, project, dependency, or merge-related change, ensure the generated Xcode project is current and the app builds cleanly before handoff. This includes branch merges and branch switches that may leave generated project state stale.
+- On the execution host, generate, build, or test the iOS graph through `node ios/scripts/toastty-ios.mjs generate|build|test`. Agent-driven builds and tests use the remote iOS wrapper below. The dispatcher installs and generates the `ios/` graph; build and test select a compatible iPhone Simulator. All commands support `--dry-run`.
+- Agent-driven native builds, macOS test suites, iOS Simulator runs, and GUI checks run on toastty-mini through the remote wrappers. Use `sv exec -- scripts/remote/test.sh --build-only --scope working-tree` for a build, `sv exec -- scripts/remote/test.sh --scope working-tree` for macOS test coverage and `sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree --smoke-test smoke-ui` for smoke coverage. Do not run native validation on the user's Mac unless the user explicitly requests that local run.
+- `./scripts/automation/check.sh` is the full gate for an explicitly requested local run (generate, artifact self-tests, web-panel tests, build, smoke, and app tests; Ghostty-backed unless fallback is explicitly requested).
+- After any code, project, dependency, or merge-related change, ensure the generated Xcode project is current and the app builds cleanly on toastty-mini before handoff. This includes branch merges and branch switches that may leave generated project state stale.
 - Avoid deriving `ARCH` from `uname -m` in translated shells or inside `sv exec`; it may report `x86_64` on arm64 hosts. Set `ARCH=arm64` explicitly for agent/remote runs unless intentionally validating Rosetta. Prefer invocation-scoped overrides such as `ARCHS` and `ONLY_ACTIVE_ARCH=YES` over mutating project settings.
 - Agent-driven iOS simulator tests run on the remote toastty-mini path: `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree`. Do not boot or drive a local simulator unless the user explicitly requests local validation.
 
 ## Validation
 
-Use `.agents/skills/toastty-verify/SKILL.md` as the authoritative workflow for choosing, running, and reporting validation after implementation, build, project, dependency, automation, UI/runtime, menu/shortcut, or agent-instruction changes.
+Read `.agents/skills/toastty-verify/SKILL.md` before the first validation command. It is the authoritative workflow for choosing, running, and reporting validation after implementation, build, project, dependency, automation, UI/runtime, menu/shortcut, or agent-instruction changes.
 
 - Keep detailed smoke, remote, test, and local-helper command semantics in `docs/agents/automation.md`.
 - Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; remote GUI/test env is injected there.
-- In handoffs, say whether validation ran remotely, locally, or through `validate.sh` with local fallback.
+- Cheap source checks and read-only inspection may run locally. If toastty-mini is unavailable, wait or report the blocked native checks; do not switch to local execution. Use `--require-remote` for `validate.sh`.
+- In handoffs, name the execution target and any explicitly requested local run.
 - Artifacts are stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`. Committed planning docs belong in `docs/plans/`, not `artifacts/`.
 
 ## Live App Runs
@@ -51,7 +49,7 @@ Use `.agents/skills/toastty-dev-run/SKILL.md` for live Toastty dev/debug app ins
 - Use runtime isolation and per-run filesystem paths for local dev/debug/test runs.
 - Preserve `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` in the Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes.
 - Treat `instance.json` as authoritative for PID, paths, logs, and socket targeting.
-- Do not drive a local Toastty GUI with Peekaboo (focus, clicks, screenshots) unless the user explicitly asks for local validation. Use `scripts/remote/validate.sh` or `.agents/skills/toastty-computer-use/SKILL.md` instead; local socket-only checks that never focus a window are fine.
+- Do not launch a local Toastty app or drive its GUI for validation unless the user explicitly asks for that local run. Use `sv exec -- scripts/remote/validate.sh --require-remote ...` or `.agents/skills/toastty-computer-use/SKILL.md` instead. Read-only socket inspection of an existing local instance is fine.
 
 ## Release Workflow
 
