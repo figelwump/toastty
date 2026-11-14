@@ -162,6 +162,59 @@ final class ConversationUIRenderTests: XCTestCase {
         return (CGFloat(bottom - top + 1) / scale, CGFloat(top) / scale)
     }
 
+    /// A task the user mentioned shows in the user's own message as the
+    /// chip the coordinator's text gets. The rest of the message, a web
+    /// link and Markdown included, shows as typed; so does a link to a task
+    /// the host does not know.
+    func testAMentionedTaskShowsAsAChipInTheUsersMessage() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let known = "8C2F1D3A-4B5C-4D6E-8F70-1A2B3C4D5E6F"
+        let unknown = "41B7E9C0-1111-4222-8333-444455556666"
+        let chip = ConversationLinkChip(
+            markColor: ConversationChipColor(red: 0.56, green: 0.36, blue: 0.85),
+            title: "Fix the unread dot",
+            detail: "#312"
+        )
+        let presenter = ConversationLinkPresenter(revision: 1) { url in
+            guard url.scheme == "toastty" else { return nil }
+            return url.absoluteString.hasSuffix(known) ? .chip(chip) : .plainText
+        }
+        let rows = [
+            Self.row(1, .userMessage(
+                text: "is [Fix the unread dot](toastty://task/\(known)) blocked on "
+                    + "[Gone](toastty://task/\(unknown))? See [docs](https://example.com), *as typed*.",
+                origin: .local
+            )),
+            Self.row(2, .assistantMessage(
+                text: "Yes: [Fix the unread dot](toastty://task/\(known)) waits for your answer.",
+                phase: .final
+            )),
+        ]
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+        let transcript = ToasttyTranscriptView(
+            state: state,
+            isSubmitting: false,
+            readAcknowledgementEpoch: nil,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false
+        )
+        .environment(\.conversationLinkPresenter, presenter)
+        let (hostingView, window) = Self.host(transcript, size: CGSize(width: 560, height: 360))
+        defer { window.close() }
+
+        let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+        let user = try XCTUnwrap(textViews.first { $0.string.hasPrefix("is ") })
+        XCTAssertTrue(user.string.contains("Fix\u{00A0}the\u{00A0}unread\u{00A0}dot"), user.string)
+        XCTAssertFalse(user.string.contains("toastty://task/\(known)"), user.string)
+        XCTAssertTrue(
+            user.string.contains("blocked on [Gone](toastty://task/\(unknown))? See [docs](https://example.com), *as typed*."),
+            user.string
+        )
+        try keep(Self.snapshot(hostingView), name: "conversation-ui-macos-user-mention-chip")
+    }
+
     private static func host<Content: View>(_ content: Content, size: CGSize) -> (NSHostingView<some View>, NSWindow) {
         let hostingView = NSHostingView(rootView: content
             .frame(width: size.width, height: size.height)

@@ -771,7 +771,8 @@ relaunch resumes does not show it.
   first line, and sent from there it still waits. Toastty's digests and
   messages from `coordinator send` always wait too.
 - **Attach files.** The **+** button next to the field attaches files
-  (**Files…**) or photos from the Photos library (**Photos…**). You can also
+  (**Files…**) or photos from the Photos library (**Photos…**). With 10
+  files attached, only **Mention a Task…** stays on. You can also
   drop files or images on the field or anywhere on the chat, and paste a
   copied file or image. Pasted or dropped text stays text. Each file shows
   above the field, an image with a preview; **×** removes it. A message can
@@ -785,6 +786,19 @@ relaunch resumes does not show it.
   names of its files and counts them. **Edit** puts a waiting message's files back above
   the field; they stay in their folder until the message that names them is
   sent and expires, or is removed.
+- **Mention a task.** Type `@` at the start of a word, or choose **+** ›
+  **Mention a Task…**, and a list of your tasks opens above the field. It
+  shows the tasks that are not archived, by stage, and the done tasks of the
+  last 14 days. Type to search: words match the title and the project's
+  name, and `#331` or `331` matches the pull request number. A search also
+  finds older done and archived tasks. **↑** and **↓** choose, **Return**
+  or **Tab** puts the task in, and **Escape** closes the list. While the
+  list shows, Return does not send. In the field the task shows as a chip,
+  which one Backspace deletes. The message holds the task's link,
+  `[title](toastty://task/<task-id>)`, so the coordinator reads the task by
+  its ID. Copy gives the link, and a pasted link to a task shows as its
+  chip. In the chat, your message shows the task as a chip, as the
+  coordinator's text does.
 - **Stop.** While a turn runs and the field is empty, the button stops the
   turn, as Escape in the terminal does. Messages that waited are
   then **Paused**, so none starts a new turn right after the stop. **Send
@@ -823,7 +837,8 @@ relaunch resumes does not show it.
   the card. It never shows as your message. Wake digests keep their folded
   line.
 - **Task chips.** A link `[title](toastty://task/<id>)` in the coordinator's
-  text shows as a chip with the task's stage color, its current title and its
+  text, or a task you mentioned in your message, shows as a chip with the
+  task's stage color, its current title and its
   pull request number. A click opens the task's space, with the chat beside
   it in [the dock](#the-coordinators-dock): from the full view, the chat
   moves into the dock. A task whose space is closed, such as a done or
