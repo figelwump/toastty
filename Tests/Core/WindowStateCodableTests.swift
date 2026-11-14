@@ -122,7 +122,7 @@ struct WindowStateCodableTests {
         // saved as no width.
         #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: 90), state: &state))
         #expect(state.windows.first?.coordinatorDockWidth == WindowState.minCoordinatorDockWidth)
-        #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: 2_000), state: &state))
+        #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: 9_000), state: &state))
         #expect(state.windows.first?.coordinatorDockWidth == WindowState.maxCoordinatorDockWidth)
         #expect(reducer.send(.setCoordinatorDockWidth(windowID: windowID, width: .nan), state: &state) == false)
         #expect(reducer.send(
@@ -140,6 +140,30 @@ struct WindowStateCodableTests {
         let edited = try JSONDecoder().decode(WindowState.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(edited.coordinatorDockWidth == WindowState.maxCoordinatorDockWidth)
         try StateValidator.validate(state)
+    }
+
+    @Test
+    func coordinatorDockIsAtMostFortyPercentOfTheWindow() {
+        var window = WindowState(
+            id: UUID(),
+            frame: CGRectCodable(x: 0, y: 0, width: 1_600, height: 900),
+            workspaceIDs: [],
+            selectedWorkspaceID: nil,
+            coordinatorDockWidthPointsOverride: 900
+        )
+        // A wide window shows a wide dock, up to 40% of the window.
+        #expect(WindowState.maxCoordinatorDockWidth(windowWidth: 2_000) == 800)
+        #expect(window.coordinatorDockWidth(windowWidth: 2_000) == 800)
+        #expect(window.coordinatorDockWidth(windowWidth: 3_000) == 900)
+        // A narrow window shows it narrower and keeps the saved width.
+        #expect(window.coordinatorDockWidth(windowWidth: 1_000) == 400)
+        #expect(window.coordinatorDockWidthPointsOverride == 900)
+        // The dock never goes under its minimum, and an unknown window
+        // width does not limit it.
+        #expect(window.coordinatorDockWidth(windowWidth: 500) == WindowState.minCoordinatorDockWidth)
+        #expect(window.coordinatorDockWidth(windowWidth: 0) == 900)
+        window.coordinatorDockWidthPointsOverride = nil
+        #expect(window.coordinatorDockWidth(windowWidth: 1_000) == WindowState.defaultCoordinatorDockWidth)
     }
 }
 

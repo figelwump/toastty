@@ -27,6 +27,8 @@ struct AppWindowView: View {
     @State private var codexSkillsUnavailableNotice: ManagedCodexSkillsUnavailableNotice?
     @State private var lastCodexSkillsUnavailableReasonCode: String?
     @State private var appIsActive = true
+    /// The width of the window's content, which limits the dock's width.
+    @State private var windowContentWidth: CGFloat = 0
     @Environment(\.openWindow) private var openWindow
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -69,7 +71,14 @@ struct AppWindowView: View {
     }
 
     private var dockWidth: CGFloat {
-        CGFloat(store.window(id: windowID)?.coordinatorDockWidth ?? WindowState.defaultCoordinatorDockWidth)
+        let width = Double(windowContentWidth)
+        guard let window = store.window(id: windowID) else {
+            return CGFloat(min(
+                WindowState.defaultCoordinatorDockWidth,
+                WindowState.maxCoordinatorDockWidth(windowWidth: width)
+            ))
+        }
+        return CGFloat(window.coordinatorDockWidth(windowWidth: width))
     }
 
     private var columnResizeEdges: [ResizableColumnEdge] {
@@ -111,8 +120,11 @@ struct AppWindowView: View {
                     "windowID": windowID.uuidString,
                     "dockWidth": String(format: "%.1f", dockWidth),
                 ],
-                setWidth: { [store, windowID] width in
-                    _ = store.send(.setCoordinatorDockWidth(windowID: windowID, width: width))
+                setWidth: { [store, windowID, windowContentWidth] width in
+                    // A drag stops at this window's limit, so the saved
+                    // width is one the user saw.
+                    let limit = WindowState.maxCoordinatorDockWidth(windowWidth: Double(windowContentWidth))
+                    _ = store.send(.setCoordinatorDockWidth(windowID: windowID, width: min(width, limit)))
                 }
             ))
         }
@@ -243,6 +255,9 @@ struct AppWindowView: View {
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
             .animation(.easeInOut(duration: 0.15), value: dockShows)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                windowContentWidth = width
+            }
             .overlay(alignment: .topLeading) {
                 GeometryReader { geometry in
                     let edges = columnResizeEdges
