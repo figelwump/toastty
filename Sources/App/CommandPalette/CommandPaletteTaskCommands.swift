@@ -168,6 +168,7 @@ enum CommandPaletteTaskCatalog {
         case .archive: ["close", "discard"]
         case .cleanUp: ["clean", "cleanup", "retry"]
         case .keepAsIs: ["keep", "cleanup"]
+        case .closeTaskSpace: ["close", "clean", "cleanup", "worktree"]
         }
     }
 }

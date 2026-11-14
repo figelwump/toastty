@@ -26,6 +26,10 @@ struct WorkspaceHeaderMergeControl: View {
     var isTask = false
     var mergeWithoutChecks: () -> Void = {}
     var archiveTask: () -> Void = {}
+    /// When Toastty closes a merged task's task space by itself, while it
+    /// holds the cleanup; the menu then closes it now instead of archiving.
+    var cleanupHeldUntil: Date? = nil
+    var closeHeldTaskSpace: () -> Void = {}
 
     private var shortcut: ToasttyKeyboardShortcut { ToasttyKeyboardShortcuts.mergeWorkspacePullRequest }
 
@@ -94,11 +98,16 @@ struct WorkspaceHeaderMergeControl: View {
 
         case .done:
             if isTask {
-                // A task space that stays open after its task merged or was
-                // marked done can still be archived, which also removes its
-                // worktree.
+                // A merged task's task space that Toastty holds open closes
+                // the way the hold ends. Another task space that stays open
+                // after its task merged or was marked done can still be
+                // archived, which also removes its worktree.
                 Menu {
-                    Button("Archive Task…", action: archiveTask)
+                    if cleanupHeldUntil != nil {
+                        Button(TaskBoardPresentation.DetailAction.closeTaskSpace.title, action: closeHeldTaskSpace)
+                    } else {
+                        Button("Archive Task…", action: archiveTask)
+                    }
                 } label: {
                     doneLabel(showsChevron: true)
                 }
@@ -107,7 +116,7 @@ struct WorkspaceHeaderMergeControl: View {
                 .buttonStyle(.plain)
                 // Vertical only, so a long pull request label still truncates.
                 .fixedSize(horizontal: false, vertical: true)
-                .help("Archive the task to close its task space and remove its worktree")
+                .help(doneTaskHelpText)
                 .accessibilityLabel(presentation.title)
                 .accessibilityIdentifier("topbar.workspace.merge.done")
             } else {
@@ -117,6 +126,14 @@ struct WorkspaceHeaderMergeControl: View {
                     .accessibilityIdentifier("topbar.workspace.merge.done")
             }
         }
+    }
+
+    private var doneTaskHelpText: String {
+        guard let until = cleanupHeldUntil else {
+            return "Archive the task to close its task space and remove its worktree"
+        }
+        let phrase = TaskBoardPresentation.heldCleanupPhrase(until: until, now: Date())
+        return "Merged. The \(phrase); Close Task Space closes it now and removes its worktree and branches"
     }
 
     private func doneLabel(showsChevron: Bool) -> some View {

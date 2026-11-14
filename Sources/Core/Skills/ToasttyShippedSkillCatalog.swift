@@ -18,7 +18,7 @@ public enum ToasttyShippedSkillCatalog {
         ),
         ToasttyShippedSkillDescriptor(
             name: "toastty-coordinator",
-            summary: "The coordinator's job: follow your tasks, unblock them, check their proof, and start releases."
+            summary: "The coordinator's job: follow your tasks, unblock them, check their proof, merge what your rules allow, and start releases."
         ),
         ToasttyShippedSkillDescriptor(
             name: "toastty-open-markdown",

@@ -595,6 +595,15 @@ thing. It sends a `tasks` board in the session snapshot and advertises the
 snapshot carries the board. An older Mac omits it, and the phone keeps **All |
 Active**. An older phone ignores the board.
 
+Each task on the board also names the task that started it
+(`parentTaskID` and `parentTaskTitle`), and a parent task carries its
+`childProgress`: how many of its child tasks that are not archived have merged,
+as the Mac's "2/3 merged" label shows. The parent's title travels with its ID
+because a Done parent is not on the board. A To ship lane groups by project
+root, so a client finds a project's To ship tasks by each task's
+`projectWorkspaceID`. The phone decodes these fields but does not show them yet.
+An older Mac omits them, and the phone reads them as absent.
+
 #### Acting on tasks
 
 A session that belongs to a task space shows a task bar under its title: the

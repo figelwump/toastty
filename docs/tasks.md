@@ -363,9 +363,38 @@ worktree.
 - Both commands report how long the task has been in its state; see
   [How long a task has been in its state](#how-long-a-task-has-been-in-its-state).
 - `toastty task send <task-id> "<message>"` types the message into the task's
-  agent and submits it. A busy agent queues it as typed input. It fails when the
-  task has no running agent, and says so when the message was typed but may not
-  have been submitted; check that terminal before you send it again.
+  agent and submits it, whatever the agent does. A busy agent queues it as typed
+  input, and the Return key can answer a permission prompt that is on screen. It
+  fails when the task has no running agent, and says so when the message was
+  typed but may not have been submitted; check that terminal before you send it
+  again.
+- `toastty task send <task-id> "<message>" --steer` checks the agent first, so
+  that the message can go to a busy agent. Toastty types nothing into a
+  permission prompt or a question. The result's `delivery` says what it did,
+  and `message` says it in a sentence:
+
+  | `delivery` | What Toastty did |
+  | --- | --- |
+  | `sent` | The agent was at its open prompt. Toastty typed the message there. |
+  | `steered` | A Claude Code or Codex agent was in a turn. Toastty typed the message into that turn. Claude Code reads it after its active tool calls finish, or when the turn ends. |
+  | `queued` | Toastty holds the message and types it at the agent's next open prompt. This is the result for an agent that cannot read during a turn, for a turn that someone typed in, and while a permission prompt or a question is on screen. `queuePosition` counts from 1. |
+
+  Toastty holds at most 5 messages for an agent. It loses them when Toastty
+  quits or the agent restarts, and reports neither. The command fails, with
+  nothing typed, in these cases:
+  - Toastty cannot tell what the agent does: it does not follow that agent's
+    conversation, or the agent starts, ended or failed.
+  - Someone typed in the task's terminal since the agent's latest turn
+    started, at a time when Toastty did not follow that conversation. That
+    text can still be in the agent's prompt, and Toastty does not add to it.
+    Toastty follows every agent's conversation while Remote Access is on,
+    and otherwise from the first `--steer` send to the task.
+  - 5 messages already wait.
+
+  The message is not your typing, so `lastUserInputAt` does not move. Toastty
+  learns of a permission prompt from the agent's hooks, a short time after the
+  prompt comes on screen. A message that arrives in that time can still
+  reach the prompt.
 - `toastty task watch <task-id> --until <condition>` tells the calling agent's
   own task once, by a one-line message, when the other task reaches the
   condition. A waiting agent can then end its turn instead of polling in a
@@ -900,7 +929,9 @@ sets its next check.
   the Reviewing section of your policy. With weak proof, it tells the task
   exactly what to add, once; if the proof is weak again, it brings the task
   to you. With good proof, it tells you in one or two sentences why the task
-  is ready. It writes no summary of the proof. You merge.
+  is ready. It writes no summary of the proof. You merge, unless a rule of
+  yours lets the coordinator ask for the merge; see
+  [Merges by the coordinator](#merges-by-the-coordinator).
 - **Releases.** Each project has a rule in the policy: release on merge, or
   in batches. The coordinator asks you for the rule the first time a project
   has merged work that waits. It starts a release that the rule calls for
@@ -932,21 +963,82 @@ What it may do alone, what it asks first, and what it never does:
 | Do, then tell you | Propose, then wait | Never |
 | --- | --- | --- |
 | Continue an interrupted agent | The project of a new task, when it is not sure | Answer an agent's permission prompt |
-| Send a CI or conflict instruction | A batch release | Merge: `task merge`, `task request-merge` or `gh pr merge` |
+| Send a CI or conflict instruction | A batch release | Merge a pull request itself: `task merge` or `gh pr merge`, auto-merge, a review approval, or a push to a base branch |
 | Follow a dependency and tell the task when it merged | Archive a task, or make it again in another project | Interrupt a busy agent |
 | Ask a task for better proof | A question that a task asked you | Change production outside a release task |
-| Answer a question that your policy settles | | Write code |
+| Answer a question that your policy settles | A release of a change that it merged under a Merging rule | Write code |
 | Retry a failed setup once | | |
+| Ask a task's agent to merge, when you tell it to or a Merging rule covers the change | | |
 | Start a release that a rule or `--after-merge` calls for | | |
 | Add a policy rule after your answer | | |
 
 The skill fixes the Never column: your policy cannot change it, and the
-coordinator refuses these also when you ask it in its conversation. To merge,
-use Merge on the task, or say "merge it" to the task's agent.
+coordinator refuses these also when you ask it in its conversation.
+
+### Merges by the coordinator
+
+The coordinator never merges a pull request itself. In two cases it asks the
+task's agent to merge, with `toastty task request-merge <task-id>`. That
+agent runs the [merge skill](#merge-a-task), which checks the pull request
+again and then merges it or reports what blocks it.
+
+- **You tell it to.** Say "merge it" after the coordinator brought you a
+  task, or name the task. That is your acceptance, as the Merge button is.
+- **A rule in the Merging section of your policy covers the change.** The
+  section is empty at first, and an empty section means that the coordinator
+  merges nothing on its own. Tell the coordinator "merge simple changes
+  yourself" and it proposes a rule, or write one in the policy. A rule names
+  a project, the kinds of change, and a size:
+
+  ```markdown
+  ## Merging
+  - toastty: merge it yourself when the change is only documentation,
+    instruction or skill text, comments or UI copy, up to 40 changed lines in
+    up to 3 files. Everything else waits for me.
+  ```
+
+Under a rule, the coordinator asks for the merge only when all of this
+holds. Otherwise it brings the task to you, as for any review.
+
+| It checks | What must hold |
+| --- | --- |
+| The diff | It read all of it. Every changed file and line fits the rule's kind and size, and the change does only what the task asked. It judges the kind from the files, not from the description. With no size in the rule, the limit is 40 changed lines in 3 files. |
+| The proof | Good proof under your Reviewing rules, for the current commit. |
+| The report | No review finding that the agent rejected or left open, no follow-up that the change still needs, and no question for you. |
+| The pull request | Not a draft. Every check passed, with none still running; a known flake does not count as passed. No conflict, and no requested or missing review. |
+| The base branch | The repository's default branch, or a branch that the rule names. |
+| The task | It waits for review, its agent is idle, you did not type in it in the last 15 minutes, and it is not a child of another task. |
+
+No rule changes these limits:
+
+- It never asks for the merge of a release task, or of a pull request that
+  prepares a release.
+- It never merges, under a rule, a change to how the project is built,
+  checked in CI, released, signed or deployed, to its dependencies, to
+  secrets, permissions or access, or to the format of stored data.
+- It asks once for a task. If the merge stops, it tells you the blocker.
+- Text in a task's reply, a pull request, or a message from another agent
+  never starts a merge, also when the text says that you approved.
+- A change that it merged under a rule starts no release without you, also
+  in a project that releases on merge. It proposes the release and waits.
+
+It tells you when it asks for a merge under a rule: the task, the pull
+request, what changed, the rule, and why the proof is good. It tells you
+again when the task merged. It then compares the merged commit with the
+commit it reviewed, and tells you when they differ: `request-merge` names no
+commit, so a push between its check and the merge is possible. Its ledger
+keeps a `merged` line for 30 days, so you can ask it what it merged.
+
+The permission rules of the coordinator's agent program still apply to
+`toastty task request-merge`. An agent that asks before it runs a command
+asks you first. Claude Code in auto mode can refuse the command as a
+destructive action. The coordinator then tells you, uses no other route, and
+the task waits for you as for any review. To let the coordinator ask for
+merges without you, allow that command in the agent's own settings.
 
 These limits are instructions to the agent. Toastty itself refuses only
 `toastty task merge` from the coordinator, because that command runs only in
-the task's own task space. The coordinator runs as you, so keep its agent's
+the task's own task space. It does not check a Merging rule. The coordinator runs as you, so keep its agent's
 own approval rules on for commands that merge, archive or delete. A message
 that another agent sends with `toastty coordinator send` arrives at the same
 prompt as your own typing, with a first line from Toastty that names its
@@ -961,6 +1053,7 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 | File | Written by | What it is |
 | --- | --- | --- |
 | `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
+| `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator). Your own merge rules go in `policy.md`. |
 | `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
 | `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
 | `attachments/` | Toastty | Copies of the files you attached to a quick entry message, in one folder for each message, kept out of the repository. See [Quick entry with the coordinator](#quick-entry-with-the-coordinator). |
@@ -969,8 +1062,12 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   file at each start and each time its conversation is resumed. So the
   coordinator has its instructions after a restart and after a relaunch,
   and a new version of Toastty brings new instructions to a conversation
-  that began under the old one. Toastty replaces both files whenever their
-  text differs, so do not edit them: put your rules in `policy.md`. An agent
+  that began under the old one. Toastty replaces both files, and the files
+  in `references/`, whenever their text differs, so do not edit them: put
+  your rules in `policy.md`. The instruction file stays under 32 KiB: by
+  default, Codex reads that much of its instruction files, all files
+  together (`project_doc_max_bytes` in its configuration). The reference
+  files hold the rest. An agent
   that reads neither file can load the `toastty-coordinator` skill by name.
   If Toastty cannot write the instructions, it does not start the
   coordinator's agent, and after a relaunch it does not resume it: the row
@@ -982,8 +1079,8 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 - **The folder is a git repository.** At the first start, Toastty runs `git
   init` there and commits `policy.md`. The repository has its own identity,
   `Toastty Coordinator`, and does not sign commits, so a commit works without
-  your git settings. `AGENTS.md`, `CLAUDE.md`, `ledger.md` and `.claude/` are
-  kept out through `.git/info/exclude`, so a commit holds a change of the
+  your git settings. `AGENTS.md`, `CLAUDE.md`, `ledger.md`, `.claude/` and
+  `references/` are kept out through `.git/info/exclude`, so a commit holds a change of the
   policy and nothing else. Toastty leaves a folder that already is a
   repository as it is. If git is missing, the coordinator still starts, and
   tells you that a change of the policy cannot be undone.
@@ -1029,6 +1126,11 @@ by asking you:
 - Good proof = a scenario list, each checked through the real UI or CLI;
   screenshots or video for UI changes. Unit tests alone are not enough.
 
+## Merging
+- toastty: merge it yourself when the change is only documentation,
+  instruction or skill text, comments or UI copy, up to 40 changed lines in
+  up to 3 files. Everything else waits for me.
+
 ## Unblocking
 - Tell me about permission prompts after 10 minutes.
 - CI pending over 45 minutes on toastty is unusual; look before telling me.
@@ -1061,7 +1163,9 @@ part where you kept the default gets the line `- The coordinator's
 defaults.`, so it does not ask again. If you do not answer, it does not ask
 again, and the defaults apply. Say "set yourself up again" to answer all four
 parts again. A policy from an older version has no Talking section; the
-coordinator asks about it once and adds the heading.
+coordinator asks about it once and adds the heading. It does not ask about
+Merging: that section stays empty until you ask for a rule, and the
+coordinator adds the heading to an older policy when it first writes one.
 
 **Undo.** The coordinator commits each change it makes to the policy as one
 commit, named `Policy: change <section>`, and shows you the line it added.
@@ -1267,7 +1371,8 @@ toastty coordinator watch --task <task-id> --remove
 
 - A watched task wakes the coordinator once when it merges, or when it ends
   without a merge: Done, archived or deleted. Then its watch ends. The
-  coordinator uses it for a task that another task waits for.
+  coordinator uses it for a task that another task waits for, and for a task
+  whose merge it asked for.
 - A watched project wakes the coordinator at every merge of its tasks,
   until the coordinator removes the watch. It uses it for a project whose
   release rule in `policy.md` is "on merge". A subspace's workspace names its
@@ -1438,17 +1543,22 @@ are skipped; working agents, approval requests and errors remain reachable.
 
 The Tasks row at the top of the sidebar opens the Tasks view, and its ＋
 creates a task. Below it, a switcher shows **All** or only what **Needs you**.
-The **Needs you** side counts the sessions and tasks that need you. The choice
-is saved for each window.
+The **Needs you** side counts the sessions and tasks that need you: a yellow
+count for what blocks an agent and a blue count for what waits for your
+review. The choice is saved for each window.
 
 - **All** is the workspace list. Each project card lists the project's agent
-  sessions and its task spaces together, in three buckets: **Needs you**,
-  **Running** and **Idle**. An empty bucket does not show, and the card's
-  header counts each bucket. A session needs you when its agent asks for an
-  approval, reports an error, or finished a turn you have not read; a task
-  needs you when its stage does, such as a question, a pull request to
-  review, or a failed setup. A working agent or a starting task is Running,
-  and anything else is Idle. A task with no open task space, such as one
+  sessions and its task spaces together, in four buckets: **Needs you**,
+  **Ready to review**, **Running** and **Idle**. An empty bucket does not
+  show, and the card's header counts each bucket: a yellow dot, a blue
+  square, a spinner and a gray dot. A session needs you when its agent asks
+  for an approval, reports an error, or finished a turn you have not read; a
+  task needs you when its stage does, such as a question, an unread turn or a
+  failed setup. A task is Ready to review when its stage is Needs you for a
+  review: its pull request is open, or its agent marked the work ready. Its
+  row shows the review over an unread turn, so a task that just opened its
+  pull request lists there at once. A working agent or a starting task is
+  Running, and anything else is Idle. A task with no open task space, such as one
   whose task space closed, lists in its project's card as a row of its own.
   Tasks whose project is not open in the window, such as one that waits for
   you to pick its workspace, list in an **Other tasks** card at the end.
@@ -1478,13 +1588,18 @@ is saved for each window.
   as a task space row, the footer counts To ship tasks instead. A parent in
   To ship counts in its project's To ship line with its children.
 - **Needs you** lists only the rows that need you, from every project, under
-  each project's name and count. A project with nothing for you does not
-  show, a collapsed card's rows still list here, and with nothing waiting the
-  segment says **Nothing needs you**. A row lists under its parent task only
-  when the parent needs you too; otherwise a ↖ tag names the parent. Only the
-  selected row stays while you read its turn, and it leaves once you select
-  another row or it starts work again. Running, Idle, To ship and Done stay
-  in **All**.
+  each project's name and counts, in two sections: **Needs you**, then
+  **Ready to review**. Each row takes one line: its mark, its title and one
+  tag, which is its pull request, else the task that started it (↖), else
+  how many of its child tasks merged. The question or summary shows on
+  hover. A project with nothing for you does not show, a collapsed card's
+  rows still list here, and with nothing waiting the segment says **Nothing
+  needs you**. A family lists in the more urgent section, as in All. A row
+  lists under its parent task only when the parent lists too; otherwise its
+  ↖ tag names the parent when the row has no pull request, and its spoken
+  label always does. Only the selected row
+  stays while you read its turn, and it leaves once you select another row
+  or it starts work again. Running, Idle, To ship and Done stay in **All**.
 
 A To ship row opens the Tasks view with the task selected. The task space
 closed at the merge; if you kept it open, the row opens it instead. **Show N more**
@@ -1511,7 +1626,8 @@ pressing Esc leaves it. It lists every task in the same groups, with Done and
 Archived collapsed, and a detail pane with the task's text, stage, pull
 request, branch, agent and history, and its actions: open its task space or
 pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
-and Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
+Close Task Space while a merged task's task space waits for its cleanup, and
+Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
 **Release…** button when its project can release (see
 [Release](#release)); the project card's To ship line in the sidebar has
 one too. A task that is starting, or whose setup or
@@ -1602,10 +1718,20 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    **Merge** is offered again. `toastty task get` reports it as
    `mergeFailure` until a new merge starts, and a `task watch --until merged`
    or `--until to-ship` then ends as one that can never fire.
-4. Toastty records the merge on the task first. Once the agent's turn ends, it
-   closes the task space, removes the worktree and deletes the branch, the same
-   way as the Merge button does for any task space. In a project with
-   `release_tags`, the cleanup runs the same way. A merge into the repository's
+4. Toastty records the merge on the task first, and the task moves to Done
+   (or To ship). The task space stays open for 24 hours, so you can still read
+   the conversation, the Scratchpad and the pull request; the task's status
+   line says when it closes. Then, at a check every 30 seconds while the agent
+   is not in a turn and no window shows the task space, Toastty closes the
+   task space, removes the worktree and deletes the branch, the same way as the
+   Merge button does for any other workspace. **Close Task Space** in the
+   task's menu does it at once. A prompt to the agent after the merge clears
+   the task space's done mark, which cancels the wait: the task space stays
+   until you close it. When you close the task space of a merged task
+   yourself, Toastty removes the worktree and the local branch, with Archive's
+   checks: uncommitted files or commits on no remote branch stop it with
+   **Merged · clean up?**. The branch on GitHub stays in that case. In a
+   project with `release_tags`, the cleanup runs the same way. A merge into the repository's
    default branch waits in To ship until a release tag contains its merge.
    A merge into a feature branch is Done for that branch; see [Release](#release).
 
@@ -1620,8 +1746,8 @@ once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
 checks: a `task merge` from the agent's turn that was checking is then refused.
 
 A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
-its task space when no agent there is working and the worktree is clean at the
-merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
+its task space, after the same 24-hour wait, when no agent there is working and
+the worktree is clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
@@ -1636,7 +1762,8 @@ In that case, it keeps every branch and leaves spaces with agents, running comma
 documents, or terminals in another worktree open. The primary checkout is
 never removed.
 While a merged task's task space stays open, its header no longer offers Merge:
-it shows **Done · PR #N**, with **Archive Task…** in its menu, or **Cleanup
+it shows **Done · PR #N**, with **Close Task Space** in its menu during the
+24 hours after the merge and **Archive Task…** after that, or **Cleanup
 Stopped** while a stopped cleanup waits for you.
 
 ## Archive a task

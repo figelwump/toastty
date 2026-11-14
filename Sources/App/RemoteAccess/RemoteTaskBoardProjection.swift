@@ -71,8 +71,9 @@ enum RemoteTaskBoardProjection {
             tallies[projectID] = tally
         }
 
+        let family = Family(items: items)
         return RemoteTaskBoard(
-            tasks: tasks.map { summary($0, context: context) },
+            tasks: tasks.map { summary($0, context: context, family: family) },
             needsYou: entries(.needsYou),
             running: entries(.running),
             idle: entries(.idle),
@@ -89,8 +90,41 @@ enum RemoteTaskBoardProjection {
         )
     }
 
-    static func summary(_ item: TaskBoardItem, context: Context) -> RemoteTaskSummary {
+    /// Each task's parent and children among all the Mac's tasks, Done and
+    /// archived ones included, which the board itself leaves out.
+    @MainActor
+    struct Family {
+        var itemsByTaskID: [UUID: TaskBoardItem]
+        var childrenByParentID: [UUID: [TaskBoardItem]]
+
+        init(items: [TaskBoardItem]) {
+            itemsByTaskID = Dictionary(
+                items.compactMap { item in item.taskID.map { ($0, item) } },
+                uniquingKeysWith: { first, _ in first }
+            )
+            childrenByParentID = Dictionary(grouping: items.filter { $0.parentTaskID != nil && $0.parentTaskID != $0.taskID }) {
+                $0.parentTaskID!
+            }
+        }
+
+        /// The task that started this one, while the Mac still has it.
+        func parent(of item: TaskBoardItem) -> TaskBoardItem? {
+            guard let parentID = item.parentTaskID, parentID != item.taskID else { return nil }
+            return itemsByTaskID[parentID]
+        }
+
+        /// The sidebar's "N/M merged" for a parent task.
+        func childProgress(of item: TaskBoardItem) -> RemoteTaskChildProgress? {
+            guard let taskID = item.taskID,
+                  let progress = TaskBoard.childProgress(of: taskID, items: childrenByParentID[taskID] ?? []) else { return nil }
+            return RemoteTaskChildProgress(merged: progress.merged, total: progress.total)
+        }
+    }
+
+    /// Without `family`, the summary names no parent and no child progress.
+    static func summary(_ item: TaskBoardItem, context: Context, family: Family = Family(items: [])) -> RemoteTaskSummary {
         let stage = TaskBoardPresentation.stageDescription(item)
+        let parent = family.parent(of: item)
         return RemoteTaskSummary(
             id: wireID(item.id),
             hasRecord: item.record != nil,
@@ -108,7 +142,10 @@ enum RemoteTaskBoardProjection {
             activityAt: item.activityAt,
             mergeControl: mergeControl(item, context: context),
             actions: actions(item, isTriageConfigured: context.isTriageConfigured()),
-            releaseAfterMergeRequestedAt: TaskBoardPresentation.releaseAfterMergeRequestedAt(item)
+            releaseAfterMergeRequestedAt: TaskBoardPresentation.releaseAfterMergeRequestedAt(item),
+            parentTaskID: parent?.taskID,
+            parentTaskTitle: parent?.title,
+            childProgress: family.childProgress(of: item)
         )
     }
 
@@ -144,6 +181,7 @@ enum RemoteTaskBoardProjection {
         case .archive: .archive
         case .cleanUp: .cleanUp
         case .keepAsIs: .keepAsIs
+        case .closeTaskSpace: nil
         }
     }
 

@@ -215,7 +215,7 @@ struct WorkspaceMergeCoordinatorTests {
 
         #expect(fixture.runner.checkCalls.count == 3)
         #expect(fixture.runner.checkCalls.first == [
-            "gh", "pr", "view", MergeFixture.pullRequest.url, "--json", "state,isDraft,headRefOid,mergeCommit",
+            "gh", "pr", "view", MergeFixture.pullRequest.url, "--json", PullRequestStateCache.viewFields,
         ])
         #expect(fixture.runner.scriptCalls.last == fixture.arguments("clean-up"))
         #expect(fixture.notifications.map(\.title) == ["Cleaned up PR #59"])

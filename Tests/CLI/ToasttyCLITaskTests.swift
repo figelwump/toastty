@@ -224,6 +224,11 @@ struct ToasttyCLITaskTests {
         #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "--text-file", "note.md"], environment: ["PWD": directory.path]).command
             == .appControlRun(kind: .action, id: "task.send", args: ["taskID": .string(taskID), "text": .string("Rebase on main.\nThen push.")]))
 
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "Use the new name", "--steer"], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.send", args: [
+                "taskID": .string(taskID), "text": .string("Use the new name"), "steer": .bool(true),
+            ]))
+
         let notify = try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "idle", "--notify", other], environment: [:])
         #expect(notify.command == .appControlRun(kind: .action, id: "task.watch", args: [
             "taskID": .string(taskID), "until": .string("idle"), "notifyTaskID": .string(other),

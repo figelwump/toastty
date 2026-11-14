@@ -104,6 +104,11 @@ protocol TaskSessionProviding: AnyObject {
     /// Types `text` into the panel and submits it, as `terminal.send-text`
     /// does. A busy agent queues it as typed input.
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult
+    /// Gives `text` to the agent in the panel under Toastty's input checks,
+    /// for `task send --steer`: typed at an open prompt, typed into a
+    /// running turn that can read it, or held for the next open prompt.
+    /// Nothing is typed into a permission prompt or a question.
+    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure>
     /// The session's latest agent message, read from its transcript.
     func lastReply(sessionID: String) -> TaskAgentReply?
     /// The managed session's workspace scope; `nil` when it is unscoped or
@@ -122,6 +127,9 @@ protocol TaskSessionProviding: AnyObject {
 extension TaskSessionProviding {
     func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] { [] }
     func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
+    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+        .failure(.stateUnknown)
+    }
     func lastReply(sessionID: String) -> TaskAgentReply? { nil }
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }
@@ -994,10 +1002,17 @@ final class TaskCoordinator {
     /// one rebuilt from what the workspace shows.
     func reconcileAfterLaunch() {
         // An archive or a release cleanup that a quit interrupted shows as
-        // stopped, so Clean Up continues it from what is still there.
+        // stopped, so Clean Up continues it from what is still there. So
+        // does a merge's cleanup whose task space is gone while its worktree
+        // is still there: no merge request is left to finish it.
         for record in records.records {
-            guard let cleanup = record.cleanup, cleanup.kind != .merge,
+            guard let cleanup = record.cleanup,
                   cleanup.finishedAt == nil, cleanup.problem == nil else { continue }
+            if cleanup.kind == .merge {
+                let taskSpaceClosed = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] == nil } ?? true
+                guard taskSpaceClosed, let worktree = record.worktree, worktree.isDetached == false,
+                      isDirectory(worktree.path) else { continue }
+            }
             records.update(id: record.id) {
                 $0.cleanup?.problem = "Toastty quit before the cleanup finished. Clean Up continues it."
             }

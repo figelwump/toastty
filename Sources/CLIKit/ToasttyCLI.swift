@@ -1131,7 +1131,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>]
       toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>]
-      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>)
+      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer]
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
@@ -2565,7 +2565,7 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.release", args: args))
 
         case "send":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--text", "--text-file"])
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--text", "--text-file"], flagOptions: ["--steer"])
             guard let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
                 throw ToasttyCLIError.usage("task send requires a task ID\n\n\(usage)")
             }
@@ -2580,10 +2580,11 @@ public enum ToasttyCLI {
             if let file = parsed.singleValue("--text-file") {
                 text = try textFileContents(file, environment: environment)
             }
-            return CLIInvocation(
-                options: options,
-                command: .appControlRun(kind: .action, id: "task.send", args: ["taskID": .string(taskID), "text": .string(text)])
-            )
+            var args: [String: AutomationJSONValue] = ["taskID": .string(taskID), "text": .string(text)]
+            if parsed.hasFlag("--steer") {
+                args["steer"] = .bool(true)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.send", args: args))
 
         case "watch":
             let parsed = try parseCommandArguments(remaining, valueOptions: ["--until", "--notify", "--timeout"], flagOptions: ["--wait"])
