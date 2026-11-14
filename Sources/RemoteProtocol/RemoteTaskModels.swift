@@ -58,6 +58,10 @@ public struct RemoteTaskBoardEntry: Codable, Equatable, Sendable {
 
 /// A project's merged tasks that wait for a release.
 public struct RemoteTaskShipLane: Codable, Equatable, Sendable, Identifiable {
+    /// The project's root directory, else its title. A lane groups by
+    /// root, so its tasks can belong to more than one project workspace, or
+    /// to none that is open. A client finds a project's To ship tasks by
+    /// each task's `projectWorkspaceID`, as the Mac's project card does.
     public var id: String
     public var projectTitle: String
     public var count: Int
@@ -128,6 +132,20 @@ public struct RemoteTaskPullRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// How many of a parent task's child tasks have merged, as the Mac's
+/// sidebar labels a parent's row: "2/3 merged". Archived children do not
+/// count.
+public struct RemoteTaskChildProgress: Codable, Equatable, Sendable {
+    /// Children that are To ship or Done.
+    public var merged: Int
+    public var total: Int
+
+    public init(merged: Int, total: Int) {
+        self.merged = merged
+        self.total = total
+    }
+}
+
 public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
     /// Text fields hold at most this many characters.
     public static let maximumTextLength = 280
@@ -168,6 +186,14 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
     /// while the Mac's rows mark it: until the task is Done or archived.
     /// Absent without a request, and from older hosts.
     public var releaseAfterMergeRequestedAt: Date?
+    /// The task that started this one, with its title, while the Mac still
+    /// has it. The title travels with the ID because a Done or archived
+    /// parent is not on the board. Absent from older hosts.
+    public var parentTaskID: UUID?
+    public var parentTaskTitle: String?
+    /// Present on a parent task with child tasks that are not archived.
+    /// Absent from older hosts.
+    public var childProgress: RemoteTaskChildProgress?
 
     public init(
         id: UUID,
@@ -186,7 +212,10 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         activityAt: Date,
         mergeControl: RemoteTaskMergeControl? = nil,
         actions: [RemoteTaskActionItem] = [],
-        releaseAfterMergeRequestedAt: Date? = nil
+        releaseAfterMergeRequestedAt: Date? = nil,
+        parentTaskID: UUID? = nil,
+        parentTaskTitle: String? = nil,
+        childProgress: RemoteTaskChildProgress? = nil
     ) {
         self.id = id
         self.hasRecord = hasRecord
@@ -205,12 +234,15 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         self.mergeControl = mergeControl
         self.actions = actions
         self.releaseAfterMergeRequestedAt = releaseAfterMergeRequestedAt
+        self.parentTaskID = parentTaskID
+        self.parentTaskTitle = parentTaskTitle.map(Self.bounded)
+        self.childProgress = childProgress
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, hasRecord, title, group, mark, statusLine, rowSummary, stageTitle, stageReason
         case projectWorkspaceID, projectTitle, taskSpaceWorkspaceID, pullRequest, activityAt, mergeControl, actions
-        case releaseAfterMergeRequestedAt
+        case releaseAfterMergeRequestedAt, parentTaskID, parentTaskTitle, childProgress
     }
 
     public init(from decoder: any Decoder) throws {
@@ -232,6 +264,9 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         mergeControl = try container.decodeIfPresent(RemoteTaskMergeControl.self, forKey: .mergeControl)
         actions = try container.decodeIfPresent([RemoteTaskActionItem].self, forKey: .actions) ?? []
         releaseAfterMergeRequestedAt = try container.decodeIfPresent(Date.self, forKey: .releaseAfterMergeRequestedAt)
+        parentTaskID = try container.decodeIfPresent(UUID.self, forKey: .parentTaskID)
+        parentTaskTitle = try container.decodeIfPresent(String.self, forKey: .parentTaskTitle)
+        childProgress = try container.decodeIfPresent(RemoteTaskChildProgress.self, forKey: .childProgress)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -253,6 +288,9 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         try container.encodeIfPresent(mergeControl, forKey: .mergeControl)
         if actions.isEmpty == false { try container.encode(actions, forKey: .actions) }
         try container.encodeIfPresent(releaseAfterMergeRequestedAt, forKey: .releaseAfterMergeRequestedAt)
+        try container.encodeIfPresent(parentTaskID, forKey: .parentTaskID)
+        try container.encodeIfPresent(parentTaskTitle, forKey: .parentTaskTitle)
+        try container.encodeIfPresent(childProgress, forKey: .childProgress)
     }
 
     /// Whether the Mac offers `action` for this task now: in its action

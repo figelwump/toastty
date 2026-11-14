@@ -53,6 +53,22 @@ public struct MobileTaskBoard: Equatable, Sendable {
         tallyByProjectID[projectID].flatMap { $0.toShipCount + $0.doneCount > 0 ? $0 : nil }
     }
 
+    /// The task that started this one, while it is on the board. A Done
+    /// parent is not: the task's `parentTaskTitle` still names it.
+    public func parent(of task: RemoteTaskSummary) -> RemoteTaskSummary? {
+        task.parentTaskID.flatMap { $0 == task.id ? nil : tasksByID[$0] }
+    }
+
+    /// A project's latest To ship tasks, as its card lists them, newest
+    /// merge first. Lanes group by project root, not by project workspace,
+    /// so this picks each lane's recent tasks by the project they belong to.
+    /// A lane sends only its newest few tasks, so when two open projects
+    /// share a root, the one with older merges can list fewer tasks here
+    /// than its Mac card does, until the board carries every To ship task.
+    public func toShipTasks(projectID: UUID) -> [RemoteTaskSummary] {
+        toShip.flatMap(\.recentTaskIDs).compactMap { tasksByID[$0] }.filter { $0.projectWorkspaceID == projectID }
+    }
+
     public func entries(_ group: RemoteTaskGroup) -> [RemoteTaskBoardEntry] {
         switch group {
         case .needsYou: needsYou

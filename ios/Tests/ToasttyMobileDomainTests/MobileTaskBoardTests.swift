@@ -43,6 +43,63 @@ final class MobileTaskBoardTests: XCTestCase {
         XCTAssertEqual(board.doneCount, 12)
         XCTAssertEqual(board.finished(projectID: uuid(200)),
                        RemoteTaskProjectTally(projectWorkspaceID: uuid(200), toShipCount: 3, doneCount: 12))
+
+        // Families: a child names its parent, a parent counts its merged
+        // children, and a Done parent that is not on the board still has
+        // its title.
+        let child = try XCTUnwrap(board.task(id: uuid(305)))
+        XCTAssertEqual(child.parentTaskID, uuid(301))
+        XCTAssertEqual(child.parentTaskTitle, "iOS task support")
+        XCTAssertEqual(board.parent(of: child)?.id, uuid(301))
+        XCTAssertEqual(question.childProgress, RemoteTaskChildProgress(merged: 1, total: 2))
+        XCTAssertNil(question.parentTaskID)
+        XCTAssertNil(board.parent(of: question))
+        let shipped = try XCTUnwrap(board.task(id: uuid(306)))
+        XCTAssertEqual(shipped.parentTaskID, uuid(399))
+        XCTAssertEqual(shipped.parentTaskTitle, "Mobile release prep")
+        XCTAssertNil(board.parent(of: shipped))
+        XCTAssertNil(review.parentTaskID)
+        XCTAssertNil(review.childProgress)
+        // The project card's To ship tasks come from the lane by project.
+        XCTAssertEqual(board.toShipTasks(projectID: uuid(200)).map(\.id), [uuid(306)])
+        XCTAssertEqual(board.toShipTasks(projectID: uuid(201)), [])
+    }
+
+    /// An older Mac sends no parent or child progress, and a value this
+    /// phone cannot read reads as none. Neither drops a task.
+    func testParentAndChildProgressAreOptional() throws {
+        let older = UUID(), malformed = UUID(), outOfRange = UUID(), titleOnly = UUID()
+        func task(_ id: UUID, extra: [String: Any] = [:]) -> [String: Any] {
+            [
+                "id": id.uuidString, "hasRecord": true, "title": "Task", "group": "running",
+                "statusLine": "Line", "stageTitle": "Stage", "stageReason": "Why",
+                "activityAt": "2026-11-06T12:00:00.000Z",
+            ].merging(extra) { _, new in new }
+        }
+        let data = try JSONSerialization.data(withJSONObject: ["protocolVersion": "1.0", "snapshot": [
+            "projectionRunID": UUID().uuidString, "conversations": [], "generatedAt": "2026-11-06T12:00:00.000Z",
+            "tasks": [
+                "tasks": [
+                    task(older),
+                    task(malformed, extra: [
+                        "parentTaskID": "not-a-uuid", "parentTaskTitle": "Lost parent",
+                        "childProgress": ["merged": "one", "total": 2],
+                    ]),
+                    task(outOfRange, extra: ["childProgress": ["merged": 3, "total": 2]]),
+                    task(titleOnly, extra: ["parentTaskTitle": 7, "childProgress": "2/3"]),
+                ],
+                "needsYou": [], "running": [older, malformed, outOfRange, titleOnly].map { ["taskID": $0.uuidString] },
+                "idle": [], "toShip": [], "doneCount": 0, "finishedByProject": [],
+            ],
+        ]])
+        let board = try XCTUnwrap(GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation().taskBoard)
+        XCTAssertEqual(board.tasks.map(\.id), [older, malformed, outOfRange, titleOnly])
+        XCTAssertEqual(board.running.count, 4)
+        for task in board.tasks {
+            XCTAssertNil(task.parentTaskID)
+            XCTAssertNil(task.parentTaskTitle)
+            XCTAssertNil(task.childProgress)
+        }
     }
 
     func testAnOlderHostSendsNoBoard() throws {

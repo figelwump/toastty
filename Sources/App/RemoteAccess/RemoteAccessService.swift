@@ -1695,9 +1695,14 @@ final class RemoteAccessService: ObservableObject {
     /// The task as the snapshot would show it now, with the item it comes
     /// from, so an action is checked against the Mac's current list.
     func currentTask(id taskID: UUID) -> (item: TaskBoardItem, summary: RemoteTaskSummary)? {
-        guard let taskBoard, taskBoard.isEnabled,
-              let item = taskBoard.items().first(where: { $0.id == .task(taskID) }) else { return nil }
-        return (item, RemoteTaskBoardProjection.summary(item, context: taskProjectionContext(taskBoard)))
+        guard let taskBoard, taskBoard.isEnabled else { return nil }
+        let items = taskBoard.items()
+        guard let item = items.first(where: { $0.id == .task(taskID) }) else { return nil }
+        return (item, RemoteTaskBoardProjection.summary(
+            item,
+            context: taskProjectionContext(taskBoard),
+            family: RemoteTaskBoardProjection.Family(items: items)
+        ))
     }
 
     /// Maps each managed session to its conversation, limited to the
