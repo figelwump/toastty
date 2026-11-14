@@ -71,7 +71,7 @@ struct CoordinatorChatTextSizeTests {
     /// The app's key handling for the coordinator's window, with the
     /// coordinator attached as the app attaches it.
     @MainActor
-    private struct Keys {
+    struct Keys {
         let interceptor: DisplayShortcutInterceptor
         let windowID: UUID
         let taskCoordinator: TaskCoordinator
@@ -108,6 +108,8 @@ struct CoordinatorChatTextSizeTests {
 
         enum Key {
             case increase, decrease, reset
+            /// Cmd+Shift+K.
+            case dock
         }
 
         /// Presses the key and returns the action the app took for it.
@@ -116,11 +118,12 @@ struct CoordinatorChatTextSizeTests {
             case .increase: ("=", kVK_ANSI_Equal)
             case .decrease: ("-", kVK_ANSI_Minus)
             case .reset: ("0", kVK_ANSI_0)
+            case .dock: ("k", kVK_ANSI_K)
             }
             let event = try #require(NSEvent.keyEvent(
                 with: .keyDown,
                 location: .zero,
-                modifierFlags: [.command],
+                modifierFlags: key == .dock ? [.command, .shift] : [.command],
                 timestamp: 0,
                 windowNumber: 0,
                 context: nil,

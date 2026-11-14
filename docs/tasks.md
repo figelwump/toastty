@@ -858,6 +858,13 @@ It needs the chat, so it is on macOS 15 and later.
   the sidebar button, with `Cmd+Shift+K`, with **View > Show Coordinator
   Dock**, the command palette, or a click on the **Coordinator** row. The
   dock's header has **Open Full View** and **Hide Dock**.
+- **Type to the coordinator with `Cmd+Shift+K`.** The key puts the keyboard
+  in the chat's field first. While the dock shows and you type in a
+  terminal or another panel, the key moves the keyboard to the dock's field;
+  a second press hides the dock. In the full view, the key moves the
+  keyboard to the chat's field. The **View** menu item names what the key
+  does next: **Show Coordinator Dock**, **Focus Coordinator Chat** or
+  **Hide Coordinator Dock**.
 - **Only in the coordinator's window.** The dock and its toolbar button show
   in the window that holds the Coordinator workspace.
 - **The full view.** While the Coordinator workspace is selected, the dock
