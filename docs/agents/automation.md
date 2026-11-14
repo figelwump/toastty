@@ -159,7 +159,9 @@ ship. Then it acts as the phone over HTTP: devices with **Start sessions** or
 `releaseWorkspaceID`, `POST /api/project.release` starts the release task, a
 repeat of the request returns the same task, and a second request is refused
 with `release_under_way`. It checks that the release agent got the release
-prompt and the merged task, and that the lane then names the running release.
+prompt and the merged task in a new worktree on no branch at the remote's
+tip, that the lane then names the running release, and that a repeat of the
+request after the app restarts still returns the same release.
 It writes `remote-project-release-check.json` and the app log under the run's
 artifacts directory. It does not cover the iOS screens.
 

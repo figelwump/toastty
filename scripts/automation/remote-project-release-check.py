@@ -20,7 +20,8 @@ starts the app again. It then acts as three paired phones over HTTP:
   release, gets the same release for a repeat of its request, and is refused a
   second release while the first runs;
 - the release task starts its agent on no branch in a new worktree with the
-  release prompt, and the lane names the running release.
+  release prompt, and the lane names the running release;
+- after the app restarts, a repeat of the request still finds that release.
 The check never selects a workspace or moves focus, and stops its own app.
 """
 
@@ -323,8 +324,10 @@ def main():
                 f'A second release was not refused: {status} {second}')
         require('Release ' in (second.get('message') or ''), f'The refusal does not name the release: {second}')
         step('second release refused', answer=second)
-        releases = [t for t in run_cli('task', 'list')['tasks'] if t['taskID'].upper() == release_id.upper()]
-        require(len(releases) == 1, f'Expected one release task: {releases}')
+        def release_ids():
+            return [t['taskID'].upper() for t in run_cli('task', 'list')['tasks'] if t.get('release') is not None]
+
+        require(release_ids() == [release_id.upper()], f'Expected one release task: {release_ids()}')
 
         # 5. The release task sets up on no branch and its agent gets the
         # release prompt and the task that waits to ship.
@@ -337,17 +340,25 @@ def main():
         require(release['setup']['state'] == 'started', f'Release setup failed: {release["setup"]}')
         # The agent may start under the worktree's session, so find its
         # message by what it says.
-        def release_message():
+        def release_session():
             for path in (fake_bin / 'sessions').glob('*.message'):
                 text = path.read_text()
                 if RELEASE_PROMPT in text:
-                    return text
+                    return text, json.loads(path.with_suffix('.json').read_text())
             return None
 
-        message = wait_for('the release agent to record its message', release_message, timeout=120)
+        message, session = wait_for('the release agent to record its message', release_session, timeout=120)
         evidence['releaseMessage'] = message
+        evidence['releaseAgentCwd'] = session['cwd']
         require(RELEASE_PROMPT in message and TASK_TITLE in message, f'Unexpected release message: {message!r}')
-        step('release agent started', title=release['title'], message=message)
+        # The agent works in a new worktree on no branch, at the remote's tip,
+        # never in the project checkout.
+        agent_cwd = os.path.realpath(session['cwd'])
+        require(agent_cwd != str(user_home), f'The release agent started in the project checkout: {agent_cwd}')
+        detached = subprocess.run(['git', 'symbolic-ref', '-q', 'HEAD'], cwd=agent_cwd, capture_output=True)
+        require(detached.returncode != 0, f'The release worktree is on a branch: {detached.stdout!r}')
+        require(git('rev-parse', 'HEAD', cwd=agent_cwd) == tip, 'The release worktree is not at the remote tip')
+        step('release agent started', title=release['title'], cwd=agent_cwd, message=message)
 
         # 6. The lane names the running release, and the board lists it.
         board = gateway.board(allowed_token)
@@ -357,14 +368,25 @@ def main():
         require(any(t['id'] == release_id.upper() for t in board['tasks']), 'The release task is not on the board')
         step('lane reads releasing', lane=shipping)
 
+        # 7. A repeat after the Mac restarts still finds the same release:
+        # the request ID is saved on the release task.
+        instance.stop()
+        instance = Instance(binary, environment, socket_path, port, app_log)
+        instance.wait_until_ready()
+        wait_for('the gateway after the restart', hello)
+        status, after_restart = gateway.release(allowed_token, release_workspace, 'phone-release-1')
+        require(status == 200 and after_restart == started, f'A repeat after the restart differed: {after_restart}')
+        require(release_ids() == [release_id.upper()], f'The repeat started another release: {release_ids()}')
+        step('repeat after restart returned the same release', answer=after_restart)
+
         audit = json.loads((runtime_home / 'remote-access/audit.json').read_text())
         actions = [(entry['action'], entry.get('detail')) for entry in audit if entry['action'].startswith('project_release')]
         evidence['auditActions'] = actions
         require(actions.count(('project_release_rejected', 'permission_denied')) == 2, f'Audit: {actions}')
-        require(actions.count(('project_release_started', None)) == 2, f'Audit: {actions}')
+        require(actions.count(('project_release_started', None)) == 3, f'Audit: {actions}')
         require(('project_release_rejected', 'release_under_way') in actions, f'Audit: {actions}')
 
-        # 7. Nothing was published.
+        # 8. Nothing was published.
         tags = git('ls-remote', '--tags', str(remote))
         require(tags == '', f'The remote has tags: {tags}')
         step('remote has no tags')
