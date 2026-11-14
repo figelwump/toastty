@@ -416,6 +416,44 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(session))
     }
 
+    /// The Tasks tab's + opens the same New Task sheet as Home's, and the
+    /// tab says that the Mac saved the task. A Mac that takes no new tasks
+    /// from this phone gets no +.
+    func testNewTaskFromTheTasksTabCreatesATask() {
+        var app = launchTaskFixture()
+        app.tabBars.buttons["Tasks"].tap()
+        let newTask = app.buttons["toastty-mobile-tasks-new-task"]
+        XCTAssertTrue(newTask.waitForExistence(timeout: 5))
+        XCTAssertEqual(newTask.label, "New task")
+        attachScreenshot(named: "tasks-tab-new-task-button", of: app)
+        newTask.tap()
+
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertFalse(create.isEnabled, "A task needs its text")
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        text.tap()
+        text.typeText("Add a share extension for links.")
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: create)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 5), .completed)
+        attachScreenshot(named: "tasks-tab-new-task-sheet", of: app)
+        create.tap()
+
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(notice.label, "Task saved on your Mac. It's setting up now.")
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-task-sheet"].waitForNonExistence(timeout: 5))
+        // The Tasks tab still shows: the sheet opened over it.
+        XCTAssertTrue(app.tabBars.buttons["Tasks"].isSelected)
+        attachScreenshot(named: "tasks-tab-new-task-created", of: app)
+        app.terminate()
+
+        app = launchTaskFixture(environment: ["TOASTTY_MOBILE_FIXTURE_TASK_CREATE": "unsupported"])
+        app.tabBars.buttons["Tasks"].tap()
+        XCTAssertTrue(app.collectionViews["toastty-mobile-tasks"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["toastty-mobile-tasks-new-task"].exists)
+    }
+
     /// While the connection is not live, the Tasks tab says that its list
     /// may be out of date, as Home does, and offers no release.
     func testTheTasksTabSaysWhenTheConnectionIsNotLive() {

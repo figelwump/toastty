@@ -15,6 +15,7 @@ struct ToasttyTasksTabView: View {
     @Binding var scrollRequest: ToasttyTasksScrollRequest?
 
     @State private var taskDetail: ToasttyTaskDetailSelection?
+    @State private var newTask: ToasttyNewTaskModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let toShipGroupID = "tasks-group-to-ship"
@@ -66,6 +67,21 @@ struct ToasttyTasksTabView: View {
         .background(ToasttyDesignTokens.background)
         .navigationTitle("Tasks")
         .navigationBarTitleDisplayMode(.inline)
+        // The same New task as Home's +, as the Mac's Tasks view has one.
+        .toolbar {
+            if controller.canCreateTasks {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        newTask = ToasttyNewTaskModel(host: controller)
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("New task")
+                    .accessibilityIdentifier("toastty-mobile-tasks-new-task")
+                }
+            }
+        }
+        .toasttyNewTaskSheet($newTask, controller: controller)
         .toasttyTaskDetailSheet($taskDetail, controller: controller, openWorkspace: openWorkspace)
         // What a release or a task action started, as Home says it.
         .toasttySubspaceDoneNotice(controller)
