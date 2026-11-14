@@ -195,6 +195,8 @@ public enum ToasttyMobileFixture {
     public static let startingTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000004")!
     public static let shippedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000005")!
     public static let otherProjectTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000012")!
+    public static let shareSheetTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000016")!
+    public static let steerChipTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000017")!
 
     /// `home` from a Mac with the task system on. Its task spaces are
     /// tasks: compact-session-rows waits for approval, early-session-titles
@@ -274,6 +276,21 @@ public enum ToasttyMobileFixture {
                     pullRequest: pullRequest(259, .merged), activityAt: now,
                     parentTaskID: questionTaskID, parentTaskTitle: "early-session-titles"
                 ),
+                // Two more merged tasks wait for the same release.
+                RemoteTaskSummary(
+                    id: shareSheetTaskID, title: "Share sheet links", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    pullRequest: pullRequest(330, .merged), activityAt: now.addingTimeInterval(-2 * 3600)
+                ),
+                RemoteTaskSummary(
+                    id: steerChipTaskID, title: "Steer chip fix", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    pullRequest: pullRequest(327, .merged), activityAt: now.addingTimeInterval(-26 * 3600)
+                ),
                 // Its project is not open on the Mac, so Home lists it in
                 // the Other tasks card.
                 RemoteTaskSummary(
@@ -294,7 +311,13 @@ public enum ToasttyMobileFixture {
             ],
             running: [RemoteTaskBoardEntry(taskID: workingSubspaceID), RemoteTaskBoardEntry(taskID: mergingTaskID)],
             idle: [RemoteTaskBoardEntry(taskID: archiveTaskID), RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
-            toShip: [RemoteTaskShipLane(id: "toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [shippedTaskID])],
+            // The project can release from Toastty, and no release runs.
+            toShip: [RemoteTaskShipLane(
+                id: "toastty", projectTitle: "toastty", count: 3,
+                recentTaskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID],
+                taskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID],
+                releaseWorkspaceID: toasttyID
+            )],
             doneCount: 14,
             finishedByProject: [
                 RemoteTaskProjectTally(projectWorkspaceID: toasttyID, toShipCount: 3, doneCount: 12),

@@ -30,8 +30,11 @@ public struct MobileTaskSections: Equatable, Sendable {
         public let id: String
         public let projectTitle: String
         public let count: Int
-        /// The lane's latest tasks, newest merge first.
+        /// The lane's tasks, newest merge first: all of them, or only the
+        /// newest few from an older Mac.
         public let tasks: [RemoteTaskSummary]
+        /// Release… on the lane's line, when its project can release.
+        public let release: MobileProjectRelease?
     }
 
     public var toShip: [Lane] = []
@@ -46,11 +49,13 @@ public struct MobileTaskSections: Equatable, Sendable {
     public static func make(_ board: MobileTaskBoard) -> Self {
         var sections = Self()
         sections.toShip = board.toShip.map { lane in
-            Lane(
+            let tasks = MobileTaskBoard.taskIDs(lane).compactMap(board.task(id:))
+            return Lane(
                 id: lane.id,
                 projectTitle: lane.projectTitle,
                 count: lane.count,
-                tasks: lane.recentTaskIDs.compactMap(board.task(id:))
+                tasks: tasks,
+                release: MobileTaskBoard.release(lane, tasks: tasks)
             )
         }
         func entries(_ group: RemoteTaskGroup) -> [Entry] {

@@ -49,6 +49,9 @@ public final class RemoteGatewayRequestHandler {
         /// with `resolveTaskAction` and `resolveTaskArchiveCheck`.
         case deferredTaskAction(deviceID: UUID, request: RemoteTaskActionRequest)
         case deferredTaskArchiveCheck(deviceID: UUID, request: RemoteTaskArchiveCheckRequest)
+        /// A validated release request from a device allowed to start one.
+        /// The transport resolves it with `resolveProjectRelease`.
+        case deferredProjectRelease(deviceID: UUID, request: RemoteProjectReleaseRequest)
         case deferredTaskCreateAttachments(deviceID: UUID, body: Data)
         /// A validated create request. Saving the task copies files off the
         /// main thread, so the transport resolves it with `resolveTaskCreate`.
@@ -204,6 +207,52 @@ public final class RemoteGatewayRequestHandler {
             result = .rejected(reason: .permissionDenied, message: nil)
         }
         return taskArchiveCheckResponse(result)
+    }
+
+    /// Starts a release. Installing it is what advertises
+    /// `RemoteGatewayCapability.projectRelease`. Invoked only by the
+    /// main-actor transport, after `resolveProjectRelease` reads the
+    /// device's permissions again.
+    public var projectReleaseHandler: (
+        @MainActor (RemoteProjectReleaseRequest, RemoteDeviceRecord) async -> RemoteProjectReleaseResult
+    )?
+
+    /// A release starts an agent that can publish, so the device needs both
+    /// its Task actions switch and its session start permission. Either can
+    /// change between the request and this call, so both are read again.
+    @MainActor
+    public func resolveProjectRelease(deviceID: UUID, request: RemoteProjectReleaseRequest) async -> RemoteGatewayHTTPResponse {
+        let result: RemoteProjectReleaseResult
+        if let device = deviceStore.devices.first(where: { $0.id == deviceID }), Self.mayRelease(device) {
+            if let projectReleaseHandler {
+                result = await projectReleaseHandler(request, device)
+            } else {
+                result = .rejected(reason: .tasksUnavailable, message: nil)
+            }
+        } else {
+            result = .rejected(reason: .permissionDenied, message: nil)
+        }
+        recordProjectRelease(result, deviceID: deviceID, at: Date())
+        return projectReleaseResponse(result)
+    }
+
+    public static func mayRelease(_ device: RemoteDeviceRecord) -> Bool {
+        device.canActOnTasks && device.canStartSessions
+    }
+
+    private func recordProjectRelease(_ result: RemoteProjectReleaseResult, deviceID: UUID, at date: Date) {
+        switch result {
+        case .started:
+            auditLog.record(.init(at: date, action: .projectReleaseStarted, deviceID: deviceID))
+        case .rejected(let reason, _):
+            auditLog.record(.init(at: date, action: .projectReleaseRejected, deviceID: deviceID, detail: reason.rawValue))
+        case .unrecognized:
+            break
+        }
+    }
+
+    private func projectReleaseResponse(_ result: RemoteProjectReleaseResult) -> RemoteGatewayHTTPResponse {
+        .json(body: (try? encoder.encode(RemoteProjectReleaseResponse(result: result))) ?? Data())
     }
 
     private func recordTaskAction(_ result: RemoteTaskActionResult, action: RemoteTaskAction, deviceID: UUID, at date: Date) {
@@ -644,6 +693,11 @@ public final class RemoteGatewayRequestHandler {
                     // As for a start: a typed refusal the client decodes.
                     return .respond(taskCreateRejection(.permissionDenied, deviceID: authenticated.id))
                 }
+                if policy.route == .projectRelease {
+                    let result = RemoteProjectReleaseResult.rejected(reason: .permissionDenied, message: nil)
+                    recordProjectRelease(result, deviceID: authenticated.id, at: date)
+                    return .respond(projectReleaseResponse(result))
+                }
                 if policy.route == .conversationInterrupt {
                     auditLog.record(RemoteAccessAuditEntry(
                         at: date,
@@ -790,6 +844,8 @@ public final class RemoteGatewayRequestHandler {
             return handleTaskAction(request, device: authenticated, at: date)
         case .taskArchiveCheck:
             return handleTaskArchiveCheck(request, device: authenticated)
+        case .projectRelease:
+            return handleProjectRelease(request, device: authenticated, at: date)
         case .hello, .browserPair, .nativePairingExchange:
             assertionFailure("Unauthenticated route reached authenticated dispatch")
             return .respond(errorResponse(status: 500, reason: "Internal Server Error", code: "internal_error", message: "Internal error"))
@@ -802,6 +858,7 @@ public final class RemoteGatewayRequestHandler {
         var response = RemoteGatewayHelloResponse()
         if configuration.pushConfiguration != nil { response.capabilities.append(.pushNotifications) }
         if taskCreateHandler != nil { response.capabilities.append(.taskCreate) }
+        if projectReleaseHandler != nil { response.capabilities.append(.projectRelease) }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))
     }
@@ -1315,6 +1372,33 @@ public final class RemoteGatewayRequestHandler {
             return reject(.invalidRequest)
         }
         return .deferredTaskAction(deviceID: device.id, request: actionRequest)
+    }
+
+    private func handleProjectRelease(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= RemoteProjectReleasePolicy.maximumBodyBytes,
+              let releaseRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteProjectReleaseRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected project release JSON"))
+        }
+        guard releaseRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version"))
+        }
+        func reject(_ reason: RemoteProjectReleaseRejectionReason) -> Outcome {
+            let result = RemoteProjectReleaseResult.rejected(reason: reason, message: nil)
+            recordProjectRelease(result, deviceID: device.id, at: date)
+            return .respond(projectReleaseResponse(result))
+        }
+        guard Self.mayRelease(device) else { return reject(.permissionDenied) }
+        guard RemoteProjectReleasePolicy.isValidClientRequestID(releaseRequest.clientRequestID) else {
+            return reject(.invalidRequest)
+        }
+        return .deferredProjectRelease(deviceID: device.id, request: releaseRequest)
     }
 
     private func handleTaskArchiveCheck(_ request: RemoteGatewayHTTPRequest, device: RemoteDeviceRecord) -> Outcome {

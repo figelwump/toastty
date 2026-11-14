@@ -141,9 +141,14 @@ struct ToasttyProjectCards: View {
         }
     }
 
+    /// The newest To ship tasks an expanded line shows, as on the Mac;
+    /// "Show N more" opens the rest in the Tasks tab.
+    static let shownToShipTasks = 3
+
     /// "› To ship 2" and "Done 14 ›" under the buckets. The chevron shows
-    /// the project's latest To ship tasks in place; the count and Done
-    /// switch to the Tasks tab at their group.
+    /// the project's newest To ship tasks in place, with Release… when the
+    /// project can release; the count and Done switch to the Tasks tab at
+    /// their group.
     @ViewBuilder
     private func toShipLine(_ card: MobileHomeCard) -> some View {
         let isExpanded = expandedToShipCardIDs.contains(card.id)
@@ -186,7 +191,17 @@ struct ToasttyProjectCards: View {
                     .accessibilityHint("Shows the tasks to ship in Tasks")
                     .accessibilityIdentifier("toastty-card-to-ship-\(card.id.uuidString)")
                 }
-                // Slice 4 puts Release… here.
+                // On the expanded line only, so a tap meant for the count
+                // or the chevron does not land on it. A line with nothing
+                // to expand shows it at once.
+                if card.toShipCount > 0, let release = card.release, isExpanded || card.toShipTasks.isEmpty {
+                    ToasttyReleaseButton(
+                        release: release,
+                        controller: controller,
+                        accessibilityIdentifier: "toastty-card-release-\(card.id.uuidString)"
+                    )
+                    .padding(.leading, 4)
+                }
                 Spacer(minLength: 8)
                 if card.doneCount > 0 {
                     Button {
@@ -212,11 +227,28 @@ struct ToasttyProjectCards: View {
             .padding(.trailing, 10)
             .toasttyListRow(vertical: 0)
             if isExpanded {
-                ForEach(card.toShipTasks) { task in
+                ForEach(card.toShipTasks.prefix(Self.shownToShipTasks)) { task in
                     ToasttyTaskRow(task: task, freshness: controller.freshness, controller: controller) {
                         openTask(task)
                     }
                     .toasttyListRow()
+                }
+                let hidden = card.toShipTasks.count - Self.shownToShipTasks
+                if hidden > 0 {
+                    Button {
+                        showTasks(.toShip(projectID: card.workspace?.id))
+                    } label: {
+                        Text("Show \(hidden) more")
+                            .font(.caption)
+                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 34)
+                    .accessibilityLabel("Show \(hidden) more \(hidden == 1 ? "task" : "tasks") to ship in Tasks")
+                    .accessibilityIdentifier("toastty-card-to-ship-more-\(card.id.uuidString)")
+                    .toasttyListRow(vertical: 0)
                 }
             }
         }

@@ -23,6 +23,8 @@ public extension ToasttyMobileFixture {
     static let archiveTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000011")!
     /// A Done task that started Website hero refresh; not on the board.
     static let finishedParentTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000013")!
+    /// The release task the fixture starts when the phone asks for one.
+    static let releaseTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000015")!
 
     /// The Mac's titles, as `TaskBoardPresentation` words them.
     internal static let mergeItem = RemoteTaskActionItem(action: .merge, title: "Merge")
@@ -328,5 +330,41 @@ public extension ToasttyMobileFixture {
         }
         next.tasks[index] = task
         return (.performed, next, closedTaskSpaceID)
+    }
+
+    /// Starts a release the way a Mac would: a release task that sets up,
+    /// listed in Running, and the lane's release under way. A second
+    /// request while it runs is refused.
+    static func applyProjectRelease(
+        _ request: RemoteProjectReleaseRequest,
+        to board: RemoteTaskBoard
+    ) -> (result: RemoteProjectReleaseResult, board: RemoteTaskBoard) {
+        let tasksByID = Dictionary(board.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        guard let laneIndex = board.toShip.firstIndex(where: { lane in
+            lane.releaseWorkspaceID != nil && (lane.releaseWorkspaceID == request.workspaceID
+                || (lane.taskIDs ?? lane.recentTaskIDs).contains { tasksByID[$0]?.projectWorkspaceID == request.workspaceID })
+        }) else {
+            return (.rejected(reason: .notReleasable, message: nil), board)
+        }
+        var lane = board.toShip[laneIndex]
+        let title = "Release \(lane.projectTitle)"
+        if lane.releaseTaskID != nil {
+            return (.rejected(
+                reason: .releaseUnderWay,
+                message: "A release of \(lane.projectTitle) is already under way: \(title)."
+            ), board)
+        }
+        var next = board
+        let status = "Moving to worktree · fetching base"
+        next.tasks.append(RemoteTaskSummary(
+            id: releaseTaskID, title: title, group: .running, mark: .starting,
+            statusLine: status, rowSummary: status, stageTitle: "Starting", stageReason: status,
+            projectWorkspaceID: request.workspaceID, projectTitle: lane.projectTitle, activityAt: Date(),
+            actions: [deleteItem]
+        ))
+        next.running.append(RemoteTaskBoardEntry(taskID: releaseTaskID))
+        lane.releaseTaskID = releaseTaskID
+        next.toShip[laneIndex] = lane
+        return (.started(taskID: releaseTaskID), next)
     }
 }

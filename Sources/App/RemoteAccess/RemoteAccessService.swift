@@ -839,6 +839,11 @@ final class RemoteAccessService: ObservableObject {
                 guard let self, self.isEnabled else { return false }
                 return self.deviceStore.devices.first { $0.id == deviceID }?.canActOnTasks ?? false
             },
+            deviceMayRelease: { [weak self] deviceID in
+                guard let self, self.isEnabled,
+                      let device = self.deviceStore.devices.first(where: { $0.id == deviceID }) else { return false }
+                return RemoteGatewayRequestHandler.mayRelease(device)
+            },
             currentTask: { [weak self] taskID in self?.currentTask(id: taskID) }
         )
         handler.taskActionHandler = { [weak self] request, device in
@@ -876,6 +881,14 @@ final class RemoteAccessService: ObservableObject {
             handler.taskCreateHandler = { [weak self] request, device in
                 guard let creator = self?.taskCreator else { return .rejected(reason: .createFailed, message: nil) }
                 return await creator.create(request, device: device)
+            }
+            // Installed with the coordinator, so only a Mac that can start a
+            // release advertises it.
+            handler.projectReleaseHandler = { [weak self] request, device in
+                guard let self, self.isEnabled, let runner = self.taskActionRunner else {
+                    return .rejected(reason: .tasksUnavailable, message: nil)
+                }
+                return runner.release(request, device: device)
             }
         }
         handler.onDevicePaired = { [weak self] device in
@@ -1695,7 +1708,11 @@ final class RemoteAccessService: ObservableObject {
         RemoteTaskBoardProjection.Context(
             state: store.state,
             mergeRequest: { [sessionRuntimeStore] workspaceID in sessionRuntimeStore.workspaceMergeRequests[workspaceID] },
-            isTriageConfigured: { [weak coordinator = taskBoard.coordinator] in coordinator?.isTriageConfigured ?? false }
+            isTriageConfigured: { [weak coordinator = taskBoard.coordinator] in coordinator?.isTriageConfigured ?? false },
+            canRelease: { [weak taskBoard] item in taskBoard?.canRelease(item) ?? false },
+            releaseUnderWay: { [weak coordinator = taskBoard.coordinator] root in
+                coordinator?.releaseUnderWay(projectRoot: root)?.id
+            }
         )
     }
 

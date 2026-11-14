@@ -599,8 +599,10 @@ in Home.
   blue square, an arc and a gray dot. Tap the name to open the workspace, or
   the chevron to collapse the card to its name line; the phone saves the
   choice for each project. Under the buckets, a To ship line counts the
-  project's To ship and Done tasks. Its chevron shows the latest To ship tasks
-  in place; **To ship N** and **Done N** open the Tasks tab at that group. A
+  project's To ship and Done tasks. Its chevron shows the three newest To ship
+  tasks in place, with **Show N more** for the rest and **Release…** when the
+  project can release (see [Releasing from the phone](#releasing-from-the-phone));
+  **To ship N** and **Done N** open the Tasks tab at that group. A
   finished task leaves the card unless an agent in its task space is still
   busy. Tasks whose project is not open on the Mac list in an **Other tasks**
   card at the end. The question and approval pills, the ⑂ filter, swipe
@@ -624,8 +626,9 @@ in Home.
   progress sits on the row's second line, and a row's pull request chip gives
   way when the title would be cut short.
 - The **Tasks** tab lists every task by where it stands, as the Mac's Tasks
-  view does: **To ship** first, one lane per project with its latest merged
-  tasks, then **Needs you**, **Ready to review**, **Running** and **Idle**,
+  view does: **To ship** first, one lane per project with all of its merged
+  tasks and **Release…** when the project can release, then **Needs you**,
+  **Ready to review**, **Running** and **Idle**,
   then the **Done** count. A family in Needs you whose members only wait for a
   review lists under Ready to review. A task with an open task space shows
   that task space's row. Any other task, such as one whose setup failed, opens
@@ -644,8 +647,11 @@ Each task on the board also names the task that started it
 as the Mac's "2/3 merged" label shows. The parent's title travels with its ID
 because a Done parent is not on the board. A To ship lane groups by project
 root, so a client finds a project's To ship tasks by each task's
-`projectWorkspaceID`. An older Mac omits these fields: the phone then shows no
-families and no child progress.
+`projectWorkspaceID`. Each lane names every task that waits to ship
+(`taskIDs`, newest merge first; the board lists each of them), and keeps
+`recentTaskIDs`, its newest three, for older phones. An older Mac omits these
+fields: the phone then shows no families and no child progress, and lists
+only each lane's newest tasks.
 
 #### Acting on tasks
 
@@ -676,8 +682,8 @@ then shows it: whether the worktree has uncommitted changes, commits that are
 not on the remote, and a switch to also close the pull request on GitHub.
 The Mac keeps a branch whose commits are not on the remote. Uncommitted
 changes, unsaved documents, and commits on no branch block the archive on the
-phone; discarding or deleting them stays on the Mac, as do **Merge Without
-Checks** and **Release**.
+phone; discarding or deleting them stays on the Mac, as does **Merge Without
+Checks**.
 
 Acting on tasks needs a native paired device with send access and its **Task
 actions** switch on under **Paired Devices** in Remote Access settings. The
@@ -699,6 +705,38 @@ on an old state. A repeat of a request with the same `clientRequestID` within
 ten minutes returns the first answer and runs nothing again. The Mac
 advertises these routes with the `task_actions` capability. An older Mac
 omits it, and the phone keeps the read-only detail.
+
+#### Releasing from the phone
+
+**Release…** starts a release of a project's merged tasks, as the Mac's
+Release button does. It shows on a project card's expanded To ship line, and
+on each project's lane in the Tasks tab, when the project can release from
+Toastty: `tasks.toml` gives it a `release_skill` or `release_prompt`, and the
+project is open on the Mac. Unlike the Mac, the phone asks first. The question
+names the project, how many tasks wait to ship, and the newest of them. The
+Mac then makes the same release task as its own button: its agent starts in
+a new worktree at the remote default branch's latest commit. The task shows
+in Home and Tasks like any other task, so you can answer its questions from
+the phone. While a release of the project runs, the button reads
+**Releasing…** and is off. A release task's agent can publish, so a release
+needs a native paired device with send access and both its **Task actions**
+and **Start sessions** switches on. Without them, the Mac refuses each request
+with a message that names both switches.
+
+Protocol: each To ship lane carries `releaseWorkspaceID`, the project
+workspace a release starts in, and `releaseTaskID` while a release of the
+project runs. `POST /api/project.release` takes `RemoteProjectReleaseRequest`
+(`workspaceID`, `clientRequestID`) and returns `started` with the release
+task's `taskID`, or a rejection reason: `permission_denied`,
+`project_not_found`, `not_releasable`, `release_under_way` (the message names
+the release), `failed`, `invalid_request` or `tasks_unavailable`. The Mac
+reads the device's switches when the request arrives and again when it runs,
+and starts one release of a project at a time. The request ID is saved on the
+release task, so a repeat with the same `clientRequestID` returns that task
+and starts nothing, also after the Mac restarts. The Mac advertises the route
+with the `project_release` capability while its task system can start
+releases. An older Mac omits the capability and the lane fields, and the
+phone shows no Release….
 
 #### Task alerts
 
@@ -1032,8 +1070,15 @@ support conversations; update Toastty on the Mac to enable previews.
   task ID, the name of an action the Mac offered, and for an archive whether
   to close the pull request. The Mac reads the switch again when the action
   runs and refuses any action its current list for that task does not offer.
-  Discarding uncommitted changes, deleting unpushed commits, Merge Without
-  Checks, and Release are not available remotely. Each action and refusal is
+  Discarding uncommitted changes, deleting unpushed commits, and Merge
+  Without Checks are not available remotely. Each action and refusal is
+  recorded in the audit log with the device.
+- Starting a release needs a native paired device with send access and both
+  the **Task actions** and **Start sessions** switches on, because the
+  release task's agent can publish. The device sends only a project
+  workspace ID and a request ID; the Mac reads the release settings from
+  `tasks.toml` and builds the release task's prompt itself. It reads both
+  switches again when the request runs. Started and refused releases are
   recorded in the audit log with the device.
 - Creating a task has the same requirements as starting a session. The device
   chooses only an open top-level workspace, an agent profile, a model, an

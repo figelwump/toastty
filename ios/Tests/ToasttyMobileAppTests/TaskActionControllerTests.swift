@@ -205,18 +205,115 @@ final class TaskActionControllerTests: XCTestCase {
         XCTAssertNil(controller.workspace(id: ToasttyMobileFixture.needsApprovalSubspaceID))
     }
 
+    // MARK: - Release
+
+    func testReleaseNeedsALiveMacThatStartsReleases() {
+        let controller = liveController()
+        XCTAssertFalse(controller.canReleaseProjects)
+        controller.update(
+            snapshot: ToasttyMobileFixture.taskHome, connectionState: .live, freshness: .live,
+            hostSupportsProjectRelease: true
+        )
+        XCTAssertTrue(controller.canReleaseProjects)
+        controller.update(snapshot: ToasttyMobileFixture.taskHome, connectionState: .offline, freshness: .stale)
+        XCTAssertFalse(controller.canReleaseProjects)
+    }
+
+    func testAReleaseAsksFirstNamingTheProjectAndWhatShips() throws {
+        let release = try toasttyRelease(liveController())
+        let confirmation = ToasttyTaskActionConfirmation.release(release)
+        XCTAssertEqual(confirmation.title, "Release \u{201C}toastty\u{201D}?")
+        XCTAssertEqual(confirmation.confirmTitle, "Release")
+        XCTAssertFalse(confirmation.isDestructive)
+        XCTAssertTrue(confirmation.message.hasPrefix("Your Mac starts a release task for 3 merged tasks waiting to ship."))
+        XCTAssertTrue(confirmation.message.hasSuffix(
+            "\u{2022} Parent task rollup\n\u{2022} Share sheet links\n\u{2022} Steer chip fix"
+        ))
+    }
+
+    func testALostReleaseAnswerIsRetriedOnceAndASecondTapSendsNothing() async throws {
+        let controller = liveController(supportsRelease: true)
+        let gate = RequestGate()
+        let recorder = ReleaseRecorder(outcomes: [.unconfirmed, .answered(.started(taskID: UUID()))], gate: gate)
+        controller.installProjectRelease(perform: { await recorder.answer($0) })
+        let release = try toasttyRelease(controller)
+
+        let first = Task { await controller.releaseProject(release) }
+        try await waitUntil { controller.isProjectReleaseInFlight(release) }
+        let second = await controller.releaseProject(release)
+        XCTAssertNil(second)
+        await gate.open()
+        let failure = await first.value
+
+        XCTAssertNil(failure)
+        XCTAssertEqual(recorder.requests.count, 2)
+        XCTAssertEqual(Set(recorder.requests.map(\.clientRequestID)).count, 1)
+        XCTAssertEqual(recorder.requests.first?.workspaceID, ToasttyMobileFixture.previewWorkspaceID)
+        XCTAssertEqual(controller.subspaceDoneNotice?.message, "Starting a release of \u{201C}toastty\u{201D} on your Mac.")
+        XCTAssertFalse(controller.isProjectReleaseInFlight(release))
+    }
+
+    func testReleaseRefusalsSayWhatToDo() async throws {
+        let controller = liveController(supportsRelease: true)
+        let underWay = "A release of toastty is already under way: Release toastty."
+        let recorder = ReleaseRecorder(outcomes: [
+            .answered(.rejected(reason: .permissionDenied, message: nil)),
+            .answered(.rejected(reason: .releaseUnderWay, message: underWay)),
+            .answered(.rejected(reason: .notReleasable, message: nil)),
+        ])
+        controller.installProjectRelease(perform: { await recorder.answer($0) })
+        let release = try toasttyRelease(controller)
+
+        let denied = await controller.releaseProject(release)
+        XCTAssertEqual(denied?.title, "Couldn\u{2019}t release \u{201C}toastty\u{201D}")
+        XCTAssertTrue(try XCTUnwrap(denied).message.contains("both Task actions and Start sessions"))
+        let busy = await controller.releaseProject(release)
+        XCTAssertEqual(busy?.message, underWay)
+        let notConfigured = await controller.releaseProject(release)
+        XCTAssertTrue(try XCTUnwrap(notConfigured).message.contains("release_prompt"))
+        // Refusals are not retried.
+        XCTAssertEqual(recorder.requests.count, 3)
+    }
+
+    func testTheFixtureStartsOneReleaseThenTheLaneReadsReleasing() async throws {
+        let controller = HomeScreenController(
+            runtimeMode: .fixture, snapshot: ToasttyMobileFixture.taskHome, connectionState: .live
+        )
+        XCTAssertTrue(controller.canReleaseProjects)
+        let release = try toasttyRelease(controller)
+        XCTAssertFalse(release.isReleasing)
+
+        let failure = await controller.releaseProject(release)
+        XCTAssertNil(failure)
+        let lane = try XCTUnwrap(controller.snapshot.taskBoard.map(MobileTaskSections.make)?.toShip.first)
+        XCTAssertEqual(lane.release?.isReleasing, true)
+        // The release task lists like any other task.
+        let task = try XCTUnwrap(lane.release?.releaseTaskID.flatMap { controller.snapshot.taskBoard?.task(id: $0) })
+        XCTAssertEqual(task.title, "Release toastty")
+        XCTAssertEqual(task.group, .running)
+
+        // A request from a stale screen is refused while it runs.
+        let again = await controller.releaseProject(release)
+        XCTAssertEqual(again?.message, "A release of toastty is already under way: Release toastty.")
+    }
+
     // MARK: - Helpers
 
-    private func liveController(supportsTaskActions: Bool = true) -> HomeScreenController {
+    private func toasttyRelease(_ controller: HomeScreenController) throws -> MobileProjectRelease {
+        try XCTUnwrap(controller.snapshot.taskBoard.map(MobileTaskSections.make)?.toShip.first?.release)
+    }
+
+    private func liveController(supportsTaskActions: Bool = true, supportsRelease: Bool = false) -> HomeScreenController {
         let controller = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.example")!),
             snapshot: ToasttyMobileFixture.taskHome, connectionState: .live
         )
         controller.taskActionRetryDelay = .zero
-        if supportsTaskActions {
+        if supportsTaskActions || supportsRelease {
             controller.update(
                 snapshot: ToasttyMobileFixture.taskHome, connectionState: .live, freshness: .live,
-                hostSupportsTaskActions: true
+                hostSupportsTaskActions: supportsTaskActions,
+                hostSupportsProjectRelease: supportsRelease
             )
         }
         return controller
@@ -254,6 +351,24 @@ private final class RequestRecorder {
     }
 
     func answer(_ request: RemoteTaskActionRequest) async -> ToasttyTaskActionSendOutcome {
+        requests.append(request)
+        await gate?.wait()
+        return outcomes.isEmpty ? .notSent : outcomes.removeFirst()
+    }
+}
+
+@MainActor
+private final class ReleaseRecorder {
+    private var outcomes: [ToasttyProjectReleaseSendOutcome]
+    private let gate: RequestGate?
+    private(set) var requests: [RemoteProjectReleaseRequest] = []
+
+    init(outcomes: [ToasttyProjectReleaseSendOutcome], gate: RequestGate? = nil) {
+        self.outcomes = outcomes
+        self.gate = gate
+    }
+
+    func answer(_ request: RemoteProjectReleaseRequest) async -> ToasttyProjectReleaseSendOutcome {
         requests.append(request)
         await gate?.wait()
         return outcomes.isEmpty ? .notSent : outcomes.removeFirst()

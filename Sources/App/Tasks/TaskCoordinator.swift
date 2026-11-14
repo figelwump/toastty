@@ -208,10 +208,21 @@ struct TaskCreatePreparation {
 }
 
 struct TaskError: LocalizedError, Equatable {
-    let message: String
+    /// What a caller that answers with a code, such as a paired device,
+    /// needs to tell apart. Most errors have none: the message says it all.
+    enum Reason: Equatable {
+        case workspaceNotFound
+        /// The project has no release skill or release prompt.
+        case releaseNotConfigured
+        case releaseUnderWay
+    }
 
-    init(_ message: String) {
+    let message: String
+    var reason: Reason?
+
+    init(_ message: String, reason: Reason? = nil) {
         self.message = message
+        self.reason = reason
     }
 
     var errorDescription: String? { message }
@@ -1710,7 +1721,7 @@ final class TaskCoordinator {
 
     // MARK: - Resolution
 
-    private func validatedClientRequestID(_ raw: String?) throws -> String? {
+    func validatedClientRequestID(_ raw: String?) throws -> String? {
         guard let value = raw.flatMap(taskNonEmpty) else { return nil }
         guard value.count <= TaskRecord.maximumClientRequestIDLength,
               value.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value < 0x7F }) else {

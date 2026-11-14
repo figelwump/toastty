@@ -70,6 +70,12 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// It uses the device's session start permission, which the create
     /// options report.
     case taskCreate = "task_create"
+    /// A native client may start a release of a project's merged tasks, as
+    /// the Mac's Release button does, from a To ship lane that names a
+    /// `releaseWorkspaceID`. The release task's agent can publish, so the
+    /// device needs both its Task actions switch and its session start
+    /// permission; the Mac refuses each request without them.
+    case projectRelease = "project_release"
 }
 
 /// Public compatibility probe used before a client has credentials.

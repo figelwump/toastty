@@ -128,7 +128,15 @@ final class HomeScreenController {
     var sendTaskAction: (@MainActor (RemoteTaskActionRequest) async -> ToasttyTaskActionSendOutcome)?
     @ObservationIgnored
     var loadTaskArchiveCheck: (@MainActor (RemoteTaskArchiveCheckRequest) async -> ToasttyTaskArchiveCheckOutcome)?
-    /// How long a task action waits before its one retry.
+    /// Whether the connected Mac starts releases for this device. The Mac
+    /// checks the device's Task actions switch and start permission per
+    /// request.
+    var hostSupportsProjectRelease: Bool
+    /// To ship lanes, by ID, with a release request on its way to the Mac.
+    var projectReleasesInFlight: Set<String> = []
+    @ObservationIgnored
+    var sendProjectRelease: (@MainActor (RemoteProjectReleaseRequest) async -> ToasttyProjectReleaseSendOutcome)?
+    /// How long a task action or a release waits before its one retry.
     @ObservationIgnored
     var taskActionRetryDelay: Duration = .seconds(1)
     private(set) var closeConfirmation: ConversationCloseConfirmation?
@@ -210,6 +218,7 @@ final class HomeScreenController {
         hostSupportsTaskCreate = runtimeMode == .fixture && Self.fixtureSupportsTaskCreate
         hostSupportsConversationClose = runtimeMode == .fixture
         hostSupportsTaskActions = runtimeMode == .fixture
+        hostSupportsProjectRelease = runtimeMode == .fixture
         self.connectionState = connectionState
         self.freshness = freshness ?? Self.freshness(for: connectionState)
         self.latestTransportFailure = latestTransportFailure
@@ -262,6 +271,7 @@ final class HomeScreenController {
         hostSupportsTaskCreate: Bool? = nil,
         hostSupportsConversationClose: Bool? = nil,
         hostSupportsTaskActions: Bool? = nil,
+        hostSupportsProjectRelease: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
@@ -282,6 +292,9 @@ final class HomeScreenController {
         }
         if let hostSupportsTaskActions {
             self.hostSupportsTaskActions = hostSupportsTaskActions
+        }
+        if let hostSupportsProjectRelease {
+            self.hostSupportsProjectRelease = hostSupportsProjectRelease
         }
         // The same Mac snapshot is presented again whenever the connection
         // state changes, with fresh ages, so equality cannot tell a new one.
