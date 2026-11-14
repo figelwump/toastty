@@ -333,6 +333,9 @@ struct SidebarTaskRecordRow: View {
     /// The task that started this one, named with a ↖ when the list shows
     /// the row without that task.
     var parentTaskTitle: String? = nil
+    /// Drawn on one line, as the Needs you segment lists rows: the status
+    /// line moves to the tooltip, and one tag shows.
+    var isCompact = false
     let open: () -> Void
 
     @State private var isHovered = false
@@ -345,43 +348,25 @@ struct SidebarTaskRecordRow: View {
         return label
     }
 
+    private var markColor: Color {
+        switch item.stage {
+        case .needsYou(.review), .needsYou(.readyForReview): ToastyTheme.sidebarTaskReviewMark
+        case .needsYou: ToastyTheme.sessionNeedsApprovalText
+        default: ToastyTheme.sidebarSubspaceQuietMark
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             RoundedRectangle(cornerRadius: 1.5)
-                .fill(item.stage.needsUser ? ToastyTheme.sessionNeedsApprovalText : ToastyTheme.sidebarSubspaceQuietMark)
+                .fill(markColor)
                 .frame(width: 7, height: 7)
                 .frame(width: 12, height: 17)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    SidebarView.styledSessionNameText(item.title, isEmphasized: false)
-                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                        .lineLimit(1)
-                    if TaskBoardPresentation.releaseAfterMergeRequestedAt(item) != nil {
-                        TaskReleaseAfterMergeMark()
-                    }
-                }
-                .frame(minHeight: 17, alignment: .leading)
-                HStack(spacing: 6) {
-                    SidebarView.styledSessionSummaryText(TaskBoardPresentation.statusLine(item))
-                        .foregroundStyle(ToastyTheme.sidebarSummaryText)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if showsProject, let project = item.projectTitle {
-                        SidebarView.sidebarTaskTag(project)
-                    }
-                    if let parentTaskTitle {
-                        SidebarCappedIntrinsicWidthLayout(maximumWidth: 90) {
-                            Text(SidebarSubspacePresentation.spawnerTagLabel(parentTaskTitle))
-                                .font(ToastyTheme.fontWorkspaceSessionChip)
-                                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
-                        }
-                    }
+                titleLine
+                if isCompact == false {
+                    statusLine
                 }
             }
         }
@@ -392,6 +377,9 @@ struct SidebarTaskRecordRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 5))
         .onTapGesture(perform: open)
         .onHover { isHovered = $0 }
+        // A one-line row has no status line, so its tooltip carries it. An
+        // empty tooltip shows nothing.
+        .help(isCompact ? TaskBoardPresentation.statusLine(item) : "")
         .background {
             SidebarSemanticTextBridge(text: label)
                 .frame(width: 0, height: 0)
@@ -401,6 +389,50 @@ struct SidebarTaskRecordRow: View {
         .accessibilityLabel(label)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, open)
+    }
+
+    private var titleLine: some View {
+        HStack(spacing: 6) {
+            SidebarView.styledSessionNameText(item.title, isEmphasized: false)
+                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                .lineLimit(1)
+            if TaskBoardPresentation.releaseAfterMergeRequestedAt(item) != nil {
+                TaskReleaseAfterMergeMark()
+            }
+            if isCompact {
+                Spacer(minLength: 0)
+                compactTag
+            }
+        }
+        .frame(minHeight: 17, alignment: .leading)
+    }
+
+    /// The one tag a one-line row shows: its pull request, else the task
+    /// that started it, else its project where several share a list.
+    @ViewBuilder
+    private var compactTag: some View {
+        if let pullRequest = item.pullRequest {
+            SidebarView.sidebarTaskTag("#\(pullRequest.number)")
+        } else if let parentTaskTitle {
+            SidebarView.parentTaskTag(parentTaskTitle, maximumWidth: 90)
+        } else if showsProject, let project = item.projectTitle {
+            SidebarView.sidebarTaskTag(project)
+        }
+    }
+
+    private var statusLine: some View {
+        HStack(spacing: 6) {
+            SidebarView.styledSessionSummaryText(TaskBoardPresentation.statusLine(item))
+                .foregroundStyle(ToastyTheme.sidebarSummaryText)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if showsProject, let project = item.projectTitle {
+                SidebarView.sidebarTaskTag(project)
+            }
+            if let parentTaskTitle {
+                SidebarView.parentTaskTag(parentTaskTitle, maximumWidth: 90)
+            }
+        }
     }
 }
 

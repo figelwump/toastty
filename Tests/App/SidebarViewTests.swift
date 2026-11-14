@@ -2213,8 +2213,9 @@ final class SidebarViewTests: XCTestCase {
 
     /// The report behind these rules: a clicked unread task jumped to Idle
     /// from under the pointer, a parent showed apart from its child, and a
-    /// question looked idle once read. The Needs you segment then lists only
-    /// the rows that need the user.
+    /// question looked idle once read. A pull request waits for review apart
+    /// from what blocks an agent. The Needs you segment then lists only the
+    /// rows that need the user, in those two sections.
     func testBucketsKeepQuestionsFamiliesAndTheClickedRowInPlace() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
@@ -2260,8 +2261,8 @@ final class SidebarViewTests: XCTestCase {
         let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
         defer { harness.window.orderOut(nil) }
         harness.sessionRuntimeStore.bind(store: harness.store)
-        // The newest report comes last, but Needs you keeps the order the
-        // task spaces opened in: the family, Thumbnail, then Hostname.
+        // The newest report comes last, but each bucket keeps the order the
+        // task spaces opened in.
         let reports: [(String, SessionStatusKind, TimeInterval)] = [
             ("Public URL warning", .idle, 1), ("Private pages stay private", .idle, 2),
             ("Hostname options", .idle, 3), ("Thumbnail filenames", .ready, 4),
@@ -2292,7 +2293,7 @@ final class SidebarViewTests: XCTestCase {
                 semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
             }
             var frames: [(String, CGRect)] = []
-            for header in ["Needs you", "Running", "Idle"] {
+            for header in ["Needs you", "Ready to review", "Running", "Idle"] {
                 if let found = frame("\(header), ") { frames.append((header.uppercased(), found)) }
             }
             for title in panelByTitle.keys {
@@ -2302,13 +2303,16 @@ final class SidebarViewTests: XCTestCase {
             return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
         }
 
-        // A question waits in Needs you with its text; a family lists with
-        // its child that waits for review.
+        // A question waits in Needs you with its text; a family lists in
+        // Ready to review with its child whose pull request waits there.
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Thumbnail filenames", "Hostname options",
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options",
+            "READY TO REVIEW", "Public URL warning", "Private pages stay private",
         ])
         var textValues = renderedTextValues(in: root)
-        XCTAssertTrue(textValues.contains("Needs you, 3"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Ready to review, 1"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("2 need you, 1 ready for review, 1 idle"), "\(textValues)")
         XCTAssertTrue(textValues.contains {
             $0.hasPrefix("Hostname options, task space, waiting for your reply") && $0.contains("Asks: Pick a hostname option")
         }, "\(textValues)")
@@ -2331,10 +2335,11 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: clicked.workspaceID)))
         XCTAssertTrue(harness.store.send(.focusPanel(workspaceID: clicked.workspaceID, panelID: clicked.panelID)))
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Thumbnail filenames", "Hostname options",
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options",
+            "READY TO REVIEW", "Public URL warning", "Private pages stay private",
         ])
         textValues = renderedTextValues(in: root)
-        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 1"), "\(textValues)")
         try writeSidebarEvidence(root, name: "buckets-2-clicked-row-holds")
         try attachSidebarRender(root, name: "buckets-2-clicked-row-holds")
 
@@ -2344,11 +2349,12 @@ final class SidebarViewTests: XCTestCase {
             at: now.addingTimeInterval(5)
         )
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Hostname options", "RUNNING", "Thumbnail filenames",
+            "NEEDS YOU", "Hostname options", "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+            "RUNNING", "Thumbnail filenames",
         ])
         textValues = renderedTextValues(in: root)
         XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 1"), "\(textValues)")
         try writeSidebarEvidence(root, name: "buckets-3-selected-row-resumes")
         try attachSidebarRender(root, name: "buckets-3-selected-row-resumes")
         harness.sessionRuntimeStore.updateStatus(
@@ -2359,19 +2365,28 @@ final class SidebarViewTests: XCTestCase {
         // Once the selection moves, the read task lists in Idle.
         XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: project.id)))
         XCTAssertEqual(try layout(), [
-            "NEEDS YOU", "Public URL warning", "Private pages stay private", "Hostname options", "IDLE", "Thumbnail filenames",
+            "NEEDS YOU", "Hostname options", "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+            "IDLE", "Thumbnail filenames",
         ])
         try writeSidebarEvidence(root, name: "buckets-4-after-selection-moves")
         try attachSidebarRender(root, name: "buckets-4-after-selection-moves")
 
-        // Needs you lists only what needs the user: the idle parent stays
-        // out, and its child that waits for review names it instead.
+        // Needs you lists only what needs the user, in two sections: the
+        // idle parent stays out, and its child that waits for review names
+        // it instead.
         _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
-        pumpMainRunLoop(duration: 0.6)
-        root.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try layout(), ["NEEDS YOU", "Hostname options", "READY TO REVIEW", "Private pages stay private"])
         textValues = renderedTextValues(in: root)
-        XCTAssertTrue(textValues.contains("Only what needs you, 2"), "\(textValues)")
-        XCTAssertTrue(textValues.contains("emptyos, 2 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Only what needs you, 1, 1 ready for review"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("emptyos, 1 needs you, 1 ready for review"), "\(textValues)")
+        // Rows take one line: the question moves to the row's hover card,
+        // and the child's tag is its pull request, not its parent. A
+        // two-line row would put the next header about 33 points below the
+        // row's center; a one-line row puts it about 25 below.
+        let questionRowInSegment = try semanticTextFrame(in: root, prefix: "Hostname options, task space")
+        let reviewHeader = try semanticTextFrame(in: root, text: "Ready to review, 1", shape: "the Ready to review header")
+        XCTAssertLessThan(abs(reviewHeader.midY - questionRowInSegment.midY), 29, "\(questionRowInSegment) \(reviewHeader)")
+        XCTAssertTrue(textValues.contains("github-pr: PR #322"), "\(textValues)")
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Public URL warning, task space") }, "\(textValues)")
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Thumbnail filenames, task space") }, "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("Hostname options, task space, waiting for your reply") }, "\(textValues)")
