@@ -342,6 +342,9 @@ struct SidebarTaskRecordRow: View {
 
     private var label: String {
         var label = TaskBoardPresentation.addingReleaseAfterMerge(to: "\(item.title), \(TaskBoardPresentation.statusLine(item))", item)
+        if showsProject, let project = item.projectTitle {
+            label += ", in \(project)"
+        }
         if let parentTaskTitle {
             label += ", started by \(parentTaskTitle)"
         }

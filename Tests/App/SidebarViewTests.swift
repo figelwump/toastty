@@ -2653,6 +2653,94 @@ final class SidebarViewTests: XCTestCase {
         try attachSidebarRender(root, name: "task-rows-needs-you")
     }
 
+    /// A closed project's name is repeated on Other tasks rows, including
+    /// rows below the viewport. None may widen the shared scroll view.
+    func testOtherTasksProjectTagsFitAcrossSidebarWidthsAndSegments() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let projectName = "toastty-task-system-coordinator-with-a-long-project-name"
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "Open project")
+        let closedProjectID = UUID()
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        for index in 0..<24 {
+            let spaceID = UUID(), panelID = UUID(), taskID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: "Task \(index)", title: "Task \(index)", slug: "task-\(index)",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: closedProjectID,
+                projectRoot: "/repo/\(index < 12 ? projectName : "short")", setup: .started,
+                operation: TaskOperation(taskSpace: .init(workspaceID: spaceID, panelID: panelID))
+            )
+            if index.isMultiple(of: 2) {
+                record.replyRequest = TaskReplyRequest(askedAt: now, question: "Choose the next step")
+            } else {
+                record.readyForReviewAt = now
+            }
+            records.append(record)
+            // Review tasks retain their spaces; the closed spaces and the
+            // first promoted space supply the attention count.
+            if index == 0 || index.isMultiple(of: 2) == false {
+                var space = WorkspaceState(
+                    id: spaceID, title: "promoted-\(index)",
+                    layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                    panels: [panelID: .terminal(TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/repo"))],
+                    focusedPanelID: panelID
+                )
+                space.taskID = taskID
+                workspaces.append(space)
+            }
+        }
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: 360, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        func scrollView(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+        }
+        for width in [CGFloat(WindowState.minSidebarWidth), 220, 280, 360] {
+            let harness = try makeSidebarHarness(
+                state: state, windowID: windowID, sidebarWidth: width,
+                taskRecords: records, withTaskBoard: true
+            )
+            defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+            harness.sessionRuntimeStore.bind(store: harness.store)
+            let scroll = try XCTUnwrap(scrollView(in: harness.hostingView))
+            for segment in SidebarSegment.allCases {
+                _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: segment))
+                pumpMainRunLoop(duration: 0.3)
+                harness.hostingView.layoutSubtreeIfNeeded()
+                let frame = scroll.convert(scroll.bounds, to: harness.hostingView)
+                XCTAssertGreaterThanOrEqual(frame.minX, -0.5, "\(segment), \(width): \(frame)")
+                XCTAssertLessThanOrEqual(frame.maxX, width + 0.5, "\(segment), \(width): \(frame)")
+                XCTAssertLessThanOrEqual(scroll.documentView?.frame.width ?? 0, width + 0.5)
+                let text = renderedTextValues(in: harness.hostingView)
+                XCTAssertTrue(text.contains { $0.hasPrefix("Only what needs you, 12, 12 ready for review") }, "\(text)")
+                // Both row kinds retain the full project name for assistive
+                // users even when its visible tag truncates.
+                XCTAssertTrue(text.contains { $0.hasPrefix("Task 0, task space") && $0.contains(projectName) }, "\(text)")
+                XCTAssertTrue(text.contains { $0.hasPrefix("Task 2, ") && $0.contains(projectName) }, "\(text)")
+                print("SIDEBAR_TAGS width=\(width) segment=\(segment.rawValue) viewport=\(frame) documentWidth=\(scroll.documentView?.frame.width ?? 0)")
+                if let document = scroll.documentView {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.frame.height - scroll.contentView.bounds.height)))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    pumpMainRunLoop(duration: 0.2)
+                }
+                try attachSidebarRender(harness.hostingView, name: "orphaned-project-\(Int(width))-\(segment.rawValue)")
+
+            }
+            if width == 360 {
+                let tasks = hostTasksView(harness, board: try XCTUnwrap(harness.taskBoard), height: 640)
+                defer { tasks.window.orderOut(nil) }
+                try attachSidebarRender(tasks.hostingView, name: "project-tags-wide-tasks-view")
+            }
+        }
+    }
+
     func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {
         let pickWorkspace = TaskRecord(
             createdAt: Date(),
@@ -3566,6 +3654,14 @@ final class SidebarViewTests: XCTestCase {
         let afterDone = try XCTUnwrap(pill("above"))
         XCTAssertFalse(afterDone.contains("unread"), afterDone)
         XCTAssertTrue(afterDone.contains("working"), afterDone)
+        // A direct clip-view offset does not cancel the SwiftUI target
+        // retained by the pill navigation. End that navigation as a user
+        // would, then restore the same offset as the initial measurement.
+        let wheel = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+            wheel1: 1, wheel2: 0, wheel3: 0
+        ))
+        scrollView.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: wheel)))
         scroll(to: 0)
         pumpMainRunLoop(duration: 0.2)
         XCTAssertEqual(pill("above"), initialAbove)
