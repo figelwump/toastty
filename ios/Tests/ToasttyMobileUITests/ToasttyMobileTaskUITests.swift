@@ -247,7 +247,10 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
     }
 
-    func testEachTabKeepsItsStackAndASessionOpensFromTheTasksTab() {
+    /// A session's screen has no tab bar, as a chat has none: the bar leaves
+    /// when a session opens in either tab, and comes back on the list that
+    /// Back returns to. Each tab keeps its own stack of screens.
+    func testASessionScreenHasNoTabBarAndEachTabKeepsItsStack() {
         let app = launchTaskFixture()
         select(.all, in: app)
         // Home: the toastty workspace, then one of its sessions.
@@ -256,10 +259,19 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         workspace.tap()
         let homeSession = app.buttons["toastty-mobile-workspace-session-\(workingSessionID)"]
         XCTAssertTrue(homeSession.waitForExistence(timeout: 5))
+        // A list screen keeps the tab bar.
+        XCTAssertTrue(waitUntilHittable(app.tabBars.buttons["Tasks"]))
         homeSession.tap()
         let conversationTitle = app.staticTexts["toastty-mobile-conversation-title"]
         XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
         let homeTitle = conversationTitle.label
+        XCTAssertTrue(waitUntilTheTabBarLeaves(app))
+        attachScreenshot(named: "home-session-without-tab-bar", of: app)
+        let back = app.navigationBars.firstMatch.buttons.firstMatch
+        back.tap()
+        XCTAssertTrue(waitUntilHittable(homeSession))
+        XCTAssertTrue(waitUntilHittable(app.tabBars.buttons["Tasks"]))
+        attachScreenshot(named: "home-workspace-with-tab-bar-after-back", of: app)
 
         // Tasks: the question task's session, opened from its row.
         app.tabBars.buttons["Tasks"].tap()
@@ -268,25 +280,16 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         question.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-task-bar"].waitForExistence(timeout: 5))
         XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
-        let tasksTitle = conversationTitle.label
-        XCTAssertNotEqual(tasksTitle, homeTitle)
-        // The tab bar stays on a pushed session.
-        XCTAssertTrue(app.tabBars.buttons["Home"].isHittable)
-        attachScreenshot(named: "tasks-session-with-tab-bar", of: app)
+        XCTAssertNotEqual(conversationTitle.label, homeTitle)
+        XCTAssertTrue(waitUntilTheTabBarLeaves(app))
+        attachScreenshot(named: "tasks-session-without-tab-bar", of: app)
 
-        // Each tab shows its own session again.
-        app.tabBars.buttons["Home"].tap()
-        XCTAssertTrue(waitForLabel(conversationTitle, homeTitle))
-        app.tabBars.buttons["Tasks"].tap()
-        XCTAssertTrue(waitForLabel(conversationTitle, tasksTitle))
-
-        // Back in Tasks returns to its list; Home kept its session and,
-        // under it, its workspace.
-        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        // Back in Tasks returns to its list and the tab bar. Home kept its
+        // workspace screen.
+        back.tap()
         XCTAssertTrue(waitUntilHittable(question))
+        XCTAssertTrue(waitUntilHittable(app.tabBars.buttons["Home"]))
         app.tabBars.buttons["Home"].tap()
-        XCTAssertTrue(waitForLabel(conversationTitle, homeTitle))
-        app.navigationBars.firstMatch.buttons.firstMatch.tap()
         XCTAssertTrue(waitUntilHittable(homeSession))
     }
 
@@ -615,6 +618,17 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         let tabBar = app.tabBars.firstMatch
         if tabBar.exists, element.frame.maxY > tabBar.frame.minY { return false }
         return true
+    }
+
+    /// The tab bar is off the screen: gone, or not reachable by a tap.
+    private func waitUntilTheTabBarLeaves(_ app: XCUIApplication, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let home = app.tabBars.buttons["Home"]
+            if home.exists == false || home.isHittable == false { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return false
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {

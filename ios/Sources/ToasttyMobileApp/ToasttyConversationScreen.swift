@@ -195,6 +195,9 @@ struct ToasttyConversationScreen: View {
         .sensoryFeedback(trigger: sendFeedback) { _, new in new?.sensoryFeedback }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        // A session takes the whole screen, as a chat does. The Home | Tasks
+        // tab bar comes back on the list that Back returns to.
+        .toolbar(.hidden, for: .tabBar)
         .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {

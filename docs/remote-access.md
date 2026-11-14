@@ -578,8 +578,11 @@ checkbox. An older phone ignores them and keeps its flat list.
 When the Mac runs the task system (see [Tasks](tasks.md)), the phone shows a
 tab bar with **Home** and **Tasks**, and Home's **All | Active** switch becomes
 **All | Needs you**, as in the Mac sidebar. Each tab keeps its own stack of
-screens, and the tab bar stays on a pushed screen such as a session. Only the
-tab on screen has an open session: the session of the other tab closes and
+screens. The tab bar stays on list screens, such as a workspace. A session's
+screen has no tab bar, as a chat has none, so the transcript and the composer
+use the whole screen: the bar slides away when a session opens in either tab
+or from a notification, and comes back on the list that Back returns to. Only
+the tab on screen has an open session: the session of the other tab closes and
 opens again when that tab shows again, so a notification for it is not
 silenced while you look at the other tab. A tapped notification or link opens
 in Home.
