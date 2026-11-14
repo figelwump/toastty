@@ -438,23 +438,21 @@ struct TasksView: View {
 
     private func rows(_ entries: [SidebarStatusSections.Entry], selectedID: TaskBoardItem.Subject?) -> some View {
         ForEach(entries) { entry in
-            TasksViewRow(entry: entry, isSelected: entry.id == selectedID) {
-                board.selectionByWindowID[windowID] = entry.id
-            }
+            TasksViewRow(
+                entry: entry,
+                isSelected: entry.id == selectedID,
+                select: { board.selectionByWindowID[windowID] = entry.id },
+                open: entry.item.taskSpaceWorkspaceID.map { workspaceID in
+                    { openTaskSpace(workspaceID) }
+                }
+            )
             .contextMenu {
                 if let coordinator = board.coordinator {
                     TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(
                         entry.item,
                         isTriageConfigured: coordinator.isTriageConfigured
                     )) { menuItem in
-                        TaskActions.runFromMenu(menuItem, coordinator: coordinator) { workspaceID in
-                            TaskActions.openTaskSpace(
-                                workspaceID: workspaceID,
-                                fallbackWindowID: windowID,
-                                store: store,
-                                sessionRuntimeStore: sessionRuntimeStore
-                            )
-                        }
+                        TaskActions.runFromMenu(menuItem, coordinator: coordinator, openTaskSpace: openTaskSpace)
                     }
                 }
             }
@@ -463,6 +461,15 @@ struct TasksView: View {
             // whenever its group or status line changes.
             .id(Self.rowIdentity(entry))
         }
+    }
+
+    private func openTaskSpace(_ workspaceID: UUID) {
+        TaskActions.openTaskSpace(
+            workspaceID: workspaceID,
+            fallbackWindowID: windowID,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     private static func rowIdentity(_ entry: SidebarStatusSections.Entry) -> RowIdentity {
@@ -489,6 +496,9 @@ private struct TasksViewRow: View {
     let entry: SidebarStatusSections.Entry
     let isSelected: Bool
     let select: () -> Void
+    /// Opens the task's space on a double click. Nil when the task has no
+    /// open task space.
+    let open: (() -> Void)?
 
     @State private var isHovered = false
 
@@ -563,7 +573,10 @@ private struct TasksViewRow: View {
             Rectangle().fill(ToastyTheme.hairline).frame(height: 1)
         }
         .contentShape(Rectangle())
+        // The first click selects at once; the second click of a double
+        // click also opens the task space.
         .onTapGesture(perform: select)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { open?() })
         .onHover { isHovered = $0 }
         .background {
             SidebarSemanticTextBridge(text: accessibilityLabel)
@@ -574,6 +587,11 @@ private struct TasksViewRow: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
+        .accessibilityActions {
+            if let open {
+                Button("Open Task Space", action: open)
+            }
+        }
         .accessibilityIdentifier("tasks.view.row")
     }
 
