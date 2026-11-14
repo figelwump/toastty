@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 source "$ROOT_DIR/scripts/remote/run-support.sh"
 source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
+source "$ROOT_DIR/scripts/remote/ios-simulator-run.sh"
 SCRIPT_PATH="scripts/remote/validate.sh"
 
 REMOTE_EXEC=0
@@ -15,7 +16,7 @@ VALIDATION_COMMAND=""
 KEEP_REMOTE=0
 FULL_ARTIFACTS=0
 SYNC_GHOSTTY_ARTIFACTS=0
-REQUIRE_REMOTE=0
+REQUIRE_REMOTE=1
 SETUP_ERROR_EXIT_CODE=78
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
@@ -46,7 +47,7 @@ Options:
   --scope working-tree|head|ref         Local change scope to validate (default: working-tree)
   --ref <git-ref>                       Git ref to export when --scope ref is used
   --run-label <label>                   Stable run label used for local and remote artifacts
-  --require-remote                      Fail instead of falling back to local smoke when remote preflight fails
+  --require-remote                      Compatibility flag; remote execution is always required
   --full-artifacts                      Copy build products and caches as well as evidence
   --keep-remote                         Keep the remote worktree and run directory after completion
   --sync-ghostty-artifacts              Copy this checkout's Dependencies/GhosttyKit.* into the remote worktree,
@@ -55,16 +56,15 @@ Options:
   -h, --help                            Show this help
 
 Required local environment:
-  TOASTTY_REMOTE_GUI_HOST               SSH host for the dedicated remote validation machine when remote execution is desired
+  TOASTTY_REMOTE_GUI_HOST               SSH host for the dedicated remote validation machine
 
 Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and runs
 
 Notes:
-  - If the remote host is unavailable during preflight, smoke tests fall back to
-    a local run by default.
-  - Pass --require-remote to disable that fallback and fail fast instead.
+  - Remote preflight or execution failures fail the check. There is no local fallback.
+  - Native builds and GUI checks never run on the calling Mac through this wrapper.
   - --validation-command is the supported path for foreground-capable remote
     checks (Peekaboo screenshots, menu clicks, focus) after Toastty launches on
     the remote host. It exports TOASTTY_PID, TOASTTY_SOCKET_PATH, TOASTTY_APP_BUNDLE,
@@ -484,110 +484,6 @@ prepare_local_artifacts() {
   write_request_env "$LOCAL_ARTIFACTS_DIR/request.env"
 }
 
-run_smoke_locally() {
-  local smoke_test="$1"
-  local started_at="$2"
-  local fallback_reason="$3"
-
-  local script_relative_path
-  script_relative_path="$(smoke_script_path "$smoke_test")" || fail "Unsupported smoke test: $smoke_test"
-
-  local local_root="$LOCAL_ARTIFACTS_DIR/local"
-  local local_run_root="$local_root/run"
-  local stdout_log="$local_root/validation-stdout.log"
-  local stderr_log="$local_root/validation-stderr.log"
-  local script_exit_code=0
-  local status="pass"
-  local failure_summary=""
-  local run_id
-  run_id="$(smoke_run_id "$smoke_test" "$RUN_LABEL")"
-  local execution_root="$ROOT_DIR"
-  local fallback_worktree=""
-  local fallback_ref=""
-
-  mkdir -p "$local_root"
-
-  case "$VALIDATION_SCOPE" in
-    working-tree)
-      ;;
-    head)
-      fallback_ref="$TOASTTY_SOURCE_COMMIT"
-      ;;
-    ref)
-      [[ -n "$REF_SPEC" ]] || fail "--ref is required when --scope ref is used"
-      fallback_ref="$TOASTTY_SOURCE_COMMIT"
-      ;;
-    *)
-      fail "Unsupported validation scope: $VALIDATION_SCOPE"
-      ;;
-  esac
-
-  if [[ -n "$fallback_ref" ]]; then
-    fallback_worktree="$local_root/fallback-worktree"
-    rm -rf "$fallback_worktree"
-    if git -C "$ROOT_DIR" worktree add --detach "$fallback_worktree" "$fallback_ref" >/dev/null 2>&1; then
-      execution_root="$fallback_worktree"
-    else
-      script_exit_code=1
-      status="fail"
-      failure_summary="Failed to prepare local fallback worktree for scope ${VALIDATION_SCOPE}"
-
-      local ended_at
-      ended_at="$(timestamp_utc)"
-      write_result_json \
-        "$LOCAL_ARTIFACTS_DIR/result.json" \
-        "remote" \
-        "local-fallback" \
-        "$status" \
-        "$smoke_test" \
-        "$started_at" \
-        "$ended_at" \
-        "" \
-        "$fallback_reason" \
-        "$failure_summary"
-      return "$script_exit_code"
-    fi
-  fi
-
-  if (
-    cd "$execution_root"
-    RUN_ID="$run_id" \
-    DEV_RUN_ROOT="$local_run_root" \
-    /bin/bash "$script_relative_path"
-  ) >"$stdout_log" 2>"$stderr_log"; then
-    :
-  else
-    script_exit_code=$?
-    if [[ "$script_exit_code" == "$SETUP_ERROR_EXIT_CODE" ]]; then
-      status="setup_error"
-      failure_summary="Local fallback ${smoke_test} failed setup checks"
-    else
-      status="fail"
-      failure_summary="Local fallback ${smoke_test} exited with status ${script_exit_code}"
-    fi
-  fi
-
-  local ended_at
-  ended_at="$(timestamp_utc)"
-  write_result_json \
-    "$LOCAL_ARTIFACTS_DIR/result.json" \
-    "remote" \
-    "local-fallback" \
-    "$status" \
-    "$smoke_test" \
-    "$started_at" \
-    "$ended_at" \
-    "" \
-    "$fallback_reason" \
-    "$failure_summary"
-
-  if [[ -n "$fallback_worktree" ]]; then
-    git -C "$ROOT_DIR" worktree remove --force "$fallback_worktree" >/dev/null 2>&1 || rm -rf "$fallback_worktree"
-  fi
-
-  return "$script_exit_code"
-}
-
 wait_for_remote_completion() {
   local remote_worktree_dir="$1"
   local remote_run_root="$2"
@@ -606,10 +502,11 @@ wait_for_remote_completion() {
       "$RUN_LABEL" \
       "$remote_run_root" \
       "$remote_worktree_dir" \
-      "$SCRIPT_PATH" \
+      "$remote_run_root/controller/$SCRIPT_PATH" \
       "$smoke_test_arg" \
       "$validation_command_arg" \
       "$smoke_env_arg" \
+      "${TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS:-3600}" \
       > >(tee "$remote_stdout") \
       2> >(tee "$remote_stderr" >&2) <<'EOF'; then
 set -euo pipefail
@@ -620,6 +517,7 @@ script_path="$4"
 smoke_test="$5"
 validation_command_b64="$6"
 smoke_env_b64="$7"
+queue_timeout="$8"
 if [[ "$smoke_test" == "__TOASTTY_EMPTY__" ]]; then
   smoke_test=""
 fi
@@ -635,10 +533,21 @@ export TOASTTY_REMOTE_VALIDATE_REMOTE_WORKTREE_DIR="$remote_worktree_dir"
 export TOASTTY_REMOTE_VALIDATE_SMOKE_TEST="$smoke_test"
 export TOASTTY_REMOTE_VALIDATE_VALIDATION_COMMAND_B64="$validation_command_b64"
 export TOASTTY_REMOTE_VALIDATE_SMOKE_ENV_B64="$smoke_env_b64"
+export TOASTTY_REMOTE_ADMISSION_MARKER="$remote_run_root/desktop-active"
 cd "$remote_worktree_dir"
 remote_exit_code=0
-/bin/bash "$script_path" --remote-exec || remote_exit_code=$?
+/usr/bin/python3 "$remote_run_root/controller/scripts/remote/admission.py" run \
+  --root "$(dirname "$(dirname "$remote_run_root")")" --resource desktop \
+  --label "$run_label" --timeout "$queue_timeout" --report "$remote_run_root/admission.json" \
+  --release-marker "$remote_run_root/desktop-active" \
+  -- /bin/bash "$script_path" --remote-exec || remote_exit_code=$?
 : >"$remote_run_root/EXECUTION_FINISHED"
+if [[ ! -e "$remote_run_root/desktop-active" ]] \
+  && jq -e '.state == "finished"' "$remote_run_root/admission.json" >/dev/null 2>&1; then
+  : >"$remote_run_root/CLEANUP_CONFIRMED"
+else
+  : >"$remote_run_root/CLEANUP_FAILED"
+fi
 exit "$remote_exit_code"
 EOF
     :
@@ -710,8 +619,6 @@ run_local_mode() {
     fi
 
     toastty_run_phase buildAndSmoke
-    run_smoke_locally "$SMOKE_TEST" "$started_at" "$fallback_reason"
-    return $?
   fi
 
   require_command ssh
@@ -761,6 +668,8 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
   if [[ -n "$export_root" && -d "$export_root" ]]; then
     rm -rf "$export_root"
   fi
+
+  toastty_stage_remote_controller "$remote_run_root"
 
   if [[ "$SYNC_GHOSTTY_ARTIFACTS" == "1" ]] || { [[ -n "$SMOKE_TEST" ]] && smoke_test_requires_ghostty "$SMOKE_TEST"; }; then
     log "Syncing local Ghostty artifacts to remote worktree"
@@ -818,12 +727,22 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     remote_validation_exit_code=1
     toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote evidence copy or execution completion was not confirmed; remote run retained"
   fi
+  local cleanup_confirmed=0
+  if [[ -f "$LOCAL_ARTIFACTS_DIR/remote/CLEANUP_CONFIRMED" \
+    && ! -e "$LOCAL_ARTIFACTS_DIR/remote/CLEANUP_FAILED" \
+    && ! -e "$LOCAL_ARTIFACTS_DIR/remote/desktop-active" ]] \
+    && jq -e '.state == "finished"' "$LOCAL_ARTIFACTS_DIR/remote/admission.json" >/dev/null 2>&1; then
+    cleanup_confirmed=1
+  else
+    remote_validation_exit_code=1
+    toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote GUI cleanup or admission release was not confirmed; remote run retained"
+  fi
   if ! jq -e '.status == "pass"' "$LOCAL_ARTIFACTS_DIR/result.json" >/dev/null; then
     remote_validation_exit_code=1
   fi
 
   toastty_run_phase cleanup
-  if [[ "$KEEP_REMOTE" != "1" && "$copy_succeeded" == "1" && "$result_confirmed" == 1 && -f "$LOCAL_ARTIFACTS_DIR/remote/EXECUTION_FINISHED" ]]; then
+  if [[ "$KEEP_REMOTE" != "1" && "$copy_succeeded" == "1" && "$result_confirmed" == 1 && "$cleanup_confirmed" == 1 && -f "$LOCAL_ARTIFACTS_DIR/remote/EXECUTION_FINISHED" ]]; then
     log "Cleaning up remote worktree"
     if remote_shell "
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
@@ -939,7 +858,7 @@ run_remote_custom_mode() {
   local socket_token
   socket_token="$(printf '%s' "$run_label" | shasum | cut -c 1-12)"
   local socket_path="${TMPDIR:-/tmp}/tt-v-${socket_token}.sock"
-  local arch="${ARCH:-$(uname -m)}"
+  local arch="${ARCH:-arm64}"
   local app_binary="$derived_path/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
   local instance_json="$runtime_home/instance.json"
   local app_pid=""
@@ -952,7 +871,7 @@ run_remote_custom_mode() {
 
   REMOTE_CUSTOM_CLEANUP_SOCKET_PATH="$socket_path"
   REMOTE_CUSTOM_CLEANUP_APP_PID=""
-  trap cleanup_remote_custom_mode EXIT
+  trap cleanup_remote_validation_mode EXIT
 
   TUIST_TOASTTY_DISABLE_PUSH=1 ./scripts/dev/bootstrap-worktree.sh >/dev/null
 
@@ -960,6 +879,7 @@ run_remote_custom_mode() {
     -workspace toastty.xcworkspace \
     -scheme ToasttyApp \
     -configuration Debug \
+    -jobs 4 \
     -destination "platform=macOS,arch=${arch}" \
     -derivedDataPath "$derived_path" \
     build >/dev/null
@@ -1058,11 +978,27 @@ run_remote_custom_mode() {
   return "$exit_code"
 }
 
+cleanup_remote_validation_mode() {
+  local cleanup_exit_code=$?
+  cleanup_remote_custom_mode || cleanup_exit_code=1
+  local root="${TOASTTY_REMOTE_VALIDATE_REMOTE_RUN_ROOT:?}"
+  if toastty_run_paths_have_live_process "$root/Derived" "$root/runtime-home" \
+    || toastty_run_paths_have_live_process "$root/run/Derived" "$root/run/runtime-home"; then
+    warn "Owned process cleanup is unconfirmed; retaining desktop reservation"
+    cleanup_exit_code=1
+  else
+    rm -f "$TOASTTY_REMOTE_ADMISSION_MARKER"
+  fi
+  exit "$cleanup_exit_code"
+}
+
 run_remote_mode() {
   local run_label="${TOASTTY_REMOTE_VALIDATE_RUN_LABEL:?TOASTTY_REMOTE_VALIDATE_RUN_LABEL is required}"
   local remote_run_root="${TOASTTY_REMOTE_VALIDATE_REMOTE_RUN_ROOT:?TOASTTY_REMOTE_VALIDATE_REMOTE_RUN_ROOT is required}"
   local remote_worktree_dir="${TOASTTY_REMOTE_VALIDATE_REMOTE_WORKTREE_DIR:?TOASTTY_REMOTE_VALIDATE_REMOTE_WORKTREE_DIR is required}"
   local smoke_test="${TOASTTY_REMOTE_VALIDATE_SMOKE_TEST:-}"
+  : >"$TOASTTY_REMOTE_ADMISSION_MARKER"
+  trap cleanup_remote_validation_mode EXIT
 
   if [[ -n "$smoke_test" ]]; then
     run_remote_smoke_mode "$run_label" "$remote_run_root" "$remote_worktree_dir" "$smoke_test"

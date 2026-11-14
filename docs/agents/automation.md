@@ -24,15 +24,85 @@ Native implementation checks still follow the remote workflows below and `.agent
 
 GitHub jobs use disposable runners and no production host. Manual macOS jobs build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
 
-## Remote Smoke Validation
+## Remote worker capacity
 
-Agent-driven smoke validation should start with:
+Agent-driven native builds, macOS suites, iOS Simulator and GUI checks run on
+toastty-mini. Cheap source checks and read-only inspection may run locally;
+remote failures never authorize local native execution.
+
+The wrappers share two worker slots and one desktop reservation. macOS tests,
+smoke checks and Computer Use reserve the desktop by default. The reservation
+covers the build, check and owned-process cleanup. Compute work can use the
+other slot while the desktop is occupied. Build-only and iOS runs default to
+compute; iOS runs keep separate owned simulators. This bounds resources, not
+performance: full iOS/UI/performance runs may still need a quiet host.
 
 ```bash
-sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui
+# Read-only view of active, waiting and blocked work on the existing mini.
+sv exec -- scripts/remote/status.sh
+
+# Build a disposable source export on the mini without running its tests.
+sv exec -- scripts/remote/test.sh --build-only --scope working-tree
+
+# Eligible logic-only tests can share the host without owning its desktop.
+sv exec -- scripts/remote/test.sh --resource compute --scope working-tree -- \
+  -scheme CoreState -only-testing:CoreStateTests/TaskStageTests
 ```
 
-Use `--require-remote` when the remote path itself must succeed. Supported smoke tests are:
+`--resource compute` is an explicit assertion that the selected macOS tests do
+not depend on shared GUI state, focus, clipboard, or input. Do not infer this
+from a target being called a unit test. Leave the default desktop reservation
+for broad `ToasttyApp` suites. Tests remain responsible for isolated files,
+ports and other process-wide or user-wide state.
+
+`TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS` bounds admission waiting (default 3600).
+It is separate from `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS`, which starts when
+xcodebuild runs. A queue timeout fails without starting native work.
+`TOASTTY_REMOTE_BUILD_JOBS` sets the test/build wrapper's default `-jobs` limit
+(default 4); an explicit `-jobs` after `--` wins. Custom validation and Computer
+Use builds use four build jobs. Keep parallelism bounded when comparing worker
+counts. Status reports elapsed waits and queue positions, not an estimated
+completion time.
+
+The shared `.admission/` directory is outside disposable source exports. Open
+file locks prove that requests are live; stale files alone do not reserve a
+worker. A retained `desktop-active` marker means GUI cleanup is unconfirmed and
+keeps that reservation blocked. Inspect the exact run and confirm its owned
+processes stopped before removing its marker. Never remove a marker, kill an
+unrelated process, or run locally just to bypass waiting.
+
+During migration, status also identifies `unmanaged` native jobs from older
+wrappers whose executable or DerivedData path belongs to the configured remote
+validation root. They consume capacity conservatively as desktop work. Jobs
+outside that root cannot be discovered by this guard; wrappers using another
+root or login need separate coordination. Use the shared status command instead
+of task-specific process-polling scripts.
+
+Each run stages its current controller scripts under the run's `controller/`
+directory, separate from the selected source. `head` and `ref` source exports
+therefore remain unchanged even when checking older code. `run-metadata.json`
+records source and controller identities separately. `admission.json` records
+resource selection, queue time and exit status; it is retained with the evidence.
+
+The remote root can live on an external SSD through the existing
+`TOASTTY_REMOTE_GUI_ROOT` configuration. Its worktrees and per-run DerivedData
+then follow that root. Moving an existing root requires a separate migration:
+wait for active work to finish, preserve ownership/evidence, update the configured
+root and cleanup service together, and validate before removing the old copy.
+The scheduled cleaner handles manifest-owned `test-runs` and legacy simulator
+cleanup; it does not clear arbitrary `runs`, orphan worktrees, Xcode DerivedData,
+ordinary simulator devices or installed runtimes. Review those categories before
+any deletion. More storage does not add CPU/RAM or independent GUI desktops.
+
+## Remote Smoke Validation
+
+Agent-driven smoke validation runs on toastty-mini. Read the verification skill before the first check:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --smoke-test smoke-ui
+```
+
+`validate.sh` requires remote execution and fails on remote setup or execution errors. `--require-remote` remains accepted for compatibility. It never falls back to a local app or build. Supported smoke tests are:
 
 - `smoke-ui`
 - `workspace-tabs`
@@ -81,7 +151,7 @@ For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` 
 
 Other runs link the remote source checkout's shared GhosttyKit. To check a new Ghostty build before it is installed there, install it in the local worktree (replace that worktree's `Dependencies/GhosttyKit*` links first) and pass `--sync-ghostty-artifacts`. The wrapper then copies the local artifacts and sidecars into the run's own remote worktree, so other runs keep using the shared artifacts.
 
-When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
+Use remote `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` for real shortcut tracing and screenshot/state artifacts. Local native or GUI validation needs an explicit user request for that run.
 
 ### Detached Browser Status
 
@@ -666,13 +736,13 @@ delivery. Normal developer generation still requires a configured relay; see
 Tuist manifest evaluation locally without changing the generated project or
 contacting a push service. It also runs in macOS CI and the full local gate.
 
-Agent-driven `xcodebuild test` runs should start with:
+Agent-driven `xcodebuild test` runs use the mini:
 
 ```bash
 sv exec -- scripts/remote/test.sh -- ...
 ```
 
-Pass `xcodebuild` flags after `--`. The wrapper defaults workspace, scheme, configuration, and destination when omitted. It owns the `test` action, `-derivedDataPath`, and `-resultBundlePath`.
+Pass `xcodebuild` flags after `--`. The wrapper defaults workspace, scheme, configuration, and destination when omitted. It owns the action (`test`, or `build` with `--build-only`), `-derivedDataPath`, and `-resultBundlePath`.
 
 Remote macOS tests require Ghostty in the generated project, even when selecting focused tests that omit the coverage canary. The wrapper reports a setup error before xcodebuild if Ghostty is absent or disabled. Native iOS tests do not need Ghostty.
 
@@ -813,7 +883,7 @@ prediction decorations are absent. The screenshot provides the visual evidence.
 
 ## Local Helpers
 
-Use local smoke helpers only when the user explicitly wants a local run, the check is local-only, or the remote wrapper path has already fallen back or failed and you are intentionally continuing locally.
+Use local smoke helpers only for a local run the user explicitly requested. A busy or unavailable mini means wait or report the remote blocker; it does not authorize local validation.
 
 - `smoke-ui.sh`: builds/runs app in automation mode, drives socket actions, emits screenshots/state dumps, and restores the previously frontmost app after Toastty is ready.
 - `smoke-cli-live-control.sh`: builds/runs app in a normal runtime-isolated launch, then validates the CLI's always-on `action`/`query` surface against that exact instance via `instance.json`.
