@@ -109,12 +109,18 @@ struct CoordinatorFolderTests {
         let policy = try read("policy.md", in: directory)
         #expect(policy.split(separator: "\n").filter { $0.isEmpty == false } == [
             "# Coordinator policy", "## Projects", "## Agents", "## Talking", "## Reviewing", "## Merging",
-            "## Unblocking", "## Releases", "## Notes (kept by the coordinator)",
+            "## Improving", "## Unblocking", "## Releases", "## Notes (kept by the coordinator)",
         ])
         #expect(try read("ledger.md", in: directory).hasPrefix("# Coordinator ledger"))
+        // The coordinator's two records: the sections it sorts friction
+        // into, with no review made yet, and the decisions with no line.
+        #expect(try read("friction.md", in: directory).split(separator: "\n").filter { $0.isEmpty == false } == [
+            "# Coordinator friction", "Last review: never", "## Open", "## Sent on", "## Closed",
+        ])
+        #expect(try read("decisions.md", in: directory) == "# Coordinator decisions\n")
 
         // A repository whose one commit is the policy, with nothing left to
-        // commit: Toastty's files and the ledger are kept out.
+        // commit: Toastty's files, the ledger and the records are kept out.
         #expect(try git("log", "--format=%s", in: directory) == "Start the coordinator's policy")
         #expect(try git("show", "--format=", "--name-only", "HEAD", in: directory) == "policy.md")
         #expect(try git("status", "--porcelain", in: directory) == "")
@@ -125,12 +131,13 @@ struct CoordinatorFolderTests {
         try git("add", "policy.md", in: directory)
         try git("commit", "-q", "-m", "Projects: Website copy → toastty.", "--", "policy.md", in: directory)
         try write("# Coordinator ledger\n- a line\n", to: "ledger.md", in: directory)
+        try write("# Coordinator decisions\n\n- a line\n", to: "decisions.md", in: directory)
         try git("revert", "--no-edit", "HEAD", in: directory)
         #expect(try read("policy.md", in: directory) == policy)
         #expect(try git("status", "--porcelain", in: directory) == "")
     }
 
-    @Test func aStartNeverWritesAPolicyOrALedgerThatExists() async throws {
+    @Test func aStartNeverWritesAPolicyALedgerOrARecordThatExists() async throws {
         let fixture = try CoordinatorControllerTests.Fixture()
         let directory = fixture.directory
         try await fixture.controller.open()
@@ -139,12 +146,19 @@ struct CoordinatorFolderTests {
         // The user's rules, and a ledger the coordinator emptied.
         try write("# Coordinator policy\n\n## Projects\n- Mine.\n", to: "policy.md", in: directory)
         try write("", to: "ledger.md", in: directory)
+        // The coordinator's notes and counts, which a start must keep.
+        let friction = "# Coordinator friction\nLast review: 2026-11-13T17:00Z\n\n## Open\n- mini-full · seen 4\n"
+        let decisions = "# Coordinator decisions\n\n- 2026-11-14T08:10Z review task=A kind=docs verdict=yes\n"
+        try write(friction, to: "friction.md", in: directory)
+        try write(decisions, to: "decisions.md", in: directory)
 
         try await fixture.controller.restart()
         _ = relaunchedController(fixture)
 
         #expect(try read("policy.md", in: directory) == "# Coordinator policy\n\n## Projects\n- Mine.\n")
         #expect(try read("ledger.md", in: directory) == "")
+        #expect(try read("friction.md", in: directory) == friction)
+        #expect(try read("decisions.md", in: directory) == decisions)
         // No commit was made for the user: the change is still theirs to commit.
         #expect(try git("rev-parse", "HEAD", in: directory) == commit)
         #expect(try git("status", "--porcelain", in: directory) == "M policy.md")
@@ -316,8 +330,65 @@ struct CoordinatorFolderTests {
         // The app ships every reference file that the instructions name.
         let shipped = CoordinatorFolder.shippedReferences()
         let named = instructions.matches(of: #/`references/([a-z-]+\.md)`/#).map { String($0.output.1) }
-        #expect(named.contains("merging.md"))
+        #expect(Set(named).isSuperset(of: ["merging.md", "first-run.md", "improving.md"]))
         #expect(named.allSatisfy { shipped[$0]?.isEmpty == false })
+    }
+
+    /// The count that a review reads, and that a proposal for a Merging rule
+    /// rests on: the one shell command of the shipped reference, run on a
+    /// `decisions.md` as the coordinator writes it.
+    @Test func theShippedReviewCommandCountsTheMergedReviewsOfEachKind() throws {
+        let reference = try #require(CoordinatorFolder.shippedReferences()["improving.md"])
+        let command = try #require(reference.firstMatch(of: #/```bash\n(?<script>(?:.|\n)*?)\n *```/#)).script
+        #expect(command.contains("since=2026-11-01"))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "toastty-review-count-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pr = "pr=https://github.com/o/r/pull/1"
+        let other = "pr=https://github.com/o/other/pull/2"
+        try write("""
+        # Coordinator decisions
+
+        - 2026-11-10T08:10Z review task=A1 kind=fix-internal verdict=yes lines=74 files=3 base=main head=9d03e7c \(pr) outcome=unchanged wait=3.1h
+        - 2026-11-11T08:10Z review task=A2 kind=fix-internal verdict=yes lines=20 files=1 base=main head=aaaaaaa \(pr) outcome=changed wait=1.0h
+        - 2026-11-12T08:10Z review task=A3 kind=fix-internal verdict=yes lines=20 files=1 base=main head=bbbbbbb \(pr) outcome=unchanged wait=2.0h fix-followed
+        - 2026-11-12T08:20Z review task=B1 kind=fix-internal verdict=yes lines=20 files=1 base=release head=bbbbbb1 \(pr) outcome=unchanged wait=1.5h
+        - 2026-11-12T08:30Z review task=B2 kind=fix-internal verdict=yes lines=20 files=1 base=main head=bbbbbb2 \(other) outcome=unchanged wait=0.5h
+        - 2026-11-12T09:10Z review task=A4 kind=ui verdict=no why=weak-proof lines=210 files=6 base=main head=4f2c1ab \(pr) outcome=unchanged wait=10h
+        - 2026-11-12T09:20Z review task=A5 kind=ui verdict=unjudged lines=900 files=20 base=main head=ccccccc \(pr)
+        - 2026-11-12T09:30Z review task=A6 kind=docs verdict=yes lines=9 files=1 base=main head=ddddddd \(pr) outcome=dropped
+        - 2026-10-01T09:30Z review task=A7 kind=docs verdict=yes lines=9 files=1 base=main head=eeeeeee \(pr) outcome=unchanged wait=4h
+        - 2026-11-14T09:00Z question task=A8 kind=base-branch outcome=same wait=5.2h
+
+        """, to: "decisions.md", in: directory)
+
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", String(command)]
+        process.currentDirectoryURL = directory
+        process.environment = ["PATH": "/usr/bin:/bin", "LC_ALL": "C"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+
+        // A review that waits, a pull request that did not merge, a line
+        // from before the 14 days and a question count for nothing. A
+        // verdict other than yes adds to the merged changes only. Another
+        // base branch or repository is a count of its own, so that a
+        // record in one never supports a rule for the other.
+        #expect(process.terminationStatus == 0)
+        #expect(text == """
+        fix-internal into main of o/other: 1 merged, 0.5 h waited, would merge 1, of those unchanged 1, fix followed 0
+        fix-internal into main of o/r: 3 merged, 6.1 h waited, would merge 3, of those unchanged 2, fix followed 1
+        fix-internal into release of o/r: 1 merged, 1.5 h waited, would merge 1, of those unchanged 1, fix followed 0
+        ui into main of o/r: 1 merged, 10.0 h waited, would merge 0, of those unchanged 0, fix followed 0
+
+        """)
     }
 
     @Test func aSkillWithoutCompleteFrontMatterGivesNoInstructions() {

@@ -949,6 +949,9 @@ sets its next check.
   [`task set-release --after-merge`](#release-one-task-right-after-it-merges)
   gets a release as soon as it merges. Before a release for one task, the
   coordinator says which other merged tasks ship with it.
+- **Improving.** The coordinator notes what slows the work and what waits
+  for you, and brings both to you in a review, with a fix for each. See
+  [How the coordinator improves the work](#how-the-coordinator-improves-the-work).
 
 How it works with your tasks:
 
@@ -976,6 +979,7 @@ What it may do alone, what it asks first, and what it never does:
 | Follow a dependency and tell the task when it merged | Archive a task, or make it again in another project | Interrupt a busy agent |
 | Ask a task for better proof | A question that a task asked you | Change production outside a release task |
 | Answer a question that your policy settles | A release of a change that it merged under a Merging rule | Write code |
+| Note friction and decisions in its own two files | A fix or a rule from its review | |
 | Retry a failed setup once | | |
 | Ask a task's agent to merge, when you tell it to or a Merging rule covers the change | | |
 | Start a release that a rule or `--after-merge` calls for | | |
@@ -1054,6 +1058,74 @@ prompt as your own typing, with a first line from Toastty that names its
 sender. Text that an agent types straight into the coordinator's terminal,
 with `terminal.send-text`, has no such line.
 
+### How the coordinator improves the work
+
+The coordinator sees every task, so it sees what slows the work and where the
+work waits for you. It keeps two records in
+[its folder](#the-coordinators-folder) and brings them to you in a review.
+It notes and counts. It does not look for causes and fixes nothing itself: a
+task does that, after your yes.
+
+- **`friction.md`** has one line for each pattern, not for each event, with
+  a count: tasks that wait for the same shared machine, the same instruction
+  sent to several tasks, a correction from you, work that was lost or
+  happened in the wrong order, a case with no rule, or something left
+  behind. The coordinator writes what it saw in its own words. It never
+  copies a request from a task's text into the file.
+- **`decisions.md`** has one line of fixed fields for each review that the
+  coordinator brought to you, and for each question that it passed on. A
+  review line holds the kind of change, its size, and whether the
+  coordinator would ask for the merge if a rule covered that kind. After
+  your merge, the line gets the result: the change merged as it was reviewed
+  or changed first, and how long it waited. A question line gets whether
+  your answer was the one the coordinator suggested. The file names a task
+  by its ID and holds no text from a task.
+
+**The review.** The coordinator makes one when you ask, such as "what slows
+us down?" or "where am I the bottleneck?", and at the time that the Improving
+section of [your policy](#the-policy-file) names:
+
+```markdown
+## Improving
+- Review once a day at 17:00. Proposals only.
+```
+
+With `- Review only when I ask.`, or with no rule, no review runs on a
+timer. A review tells you, in one short message:
+
+- up to 3 patterns that came back or cost the most, each with the smallest
+  fix that fits: a line in your policy, or a task in the project that owns
+  the cause;
+- where the work waited for you in the last 14 days: how many reviews, how
+  long, and how many you merged with no change;
+- at most one rule that its record supports. It proposes a
+  [Merging rule](#merges-by-the-coordinator) for one kind of change only
+  when it would have asked for the merge of 5 or more such changes, you
+  merged every one of them as it was reviewed, and none needed a fix later.
+  It gives the exact words of the rule. It can instead propose a rule for a
+  kind of question that you answered 3 times as it suggested.
+
+You answer in plain words, such as "1 and 3". When nothing qualifies, the
+review tells you nothing.
+
+What a review cannot do:
+
+- It starts nothing without your yes: no task, no policy line, no rule.
+- A task that came from a review never merges under a Merging rule. You read
+  each change that comes from a review.
+- It proposes no task while 2 tasks from earlier reviews are open.
+- It never proposes a rule for a change to the build, CI, a release,
+  dependencies, secrets or stored data, and never a change to the Never
+  column.
+
+When a fix takes effect depends on where it lands. A line in your policy
+holds from the coordinator's next turn. A change to your own instruction
+files, such as a global `AGENTS.md`, holds for each task that starts after
+it. A change to Toastty's own skills or code needs a new Toastty build and a
+relaunch. For a problem in Toastty itself, the coordinator suggests a report
+to Toastty, not a task, unless your policy names a project for Toastty's own
+code.
+
 ### The coordinator's folder
 
 Each time the coordinator's agent starts, and when Toastty launches with a
@@ -1062,9 +1134,11 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 | File | Written by | What it is |
 | --- | --- | --- |
 | `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
-| `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator). Your own merge rules go in `policy.md`. |
+| `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator), `references/improving.md` the rules for [its two records and its review](#how-the-coordinator-improves-the-work), and `references/first-run.md` the questions of [the first run](#the-policy-file). Your own rules go in `policy.md`. |
 | `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
 | `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
+| `friction.md` | the coordinator | What slows the work: one line for each pattern, with a count. See [How the coordinator improves the work](#how-the-coordinator-improves-the-work). You can edit it. |
+| `decisions.md` | the coordinator | What waited for you: one line for each review and each question, with what you then decided. |
 | `attachments/` | Toastty | Copies of the files you attached to a quick entry message, in one folder for each message, kept out of the repository. See [Quick entry with the coordinator](#quick-entry-with-the-coordinator). |
 
 - **The instructions are Toastty's.** An agent reads its folder's instruction
@@ -1082,16 +1156,19 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   coordinator's agent, and after a relaunch it does not resume it: the row
   says **Not running**, and `toastty coordinator status` gives the reason as
   `startFailure`.
-- **The policy and the ledger are yours.** Toastty creates `policy.md` with
-  its section headings only, and `ledger.md` with its title, when the file
-  is missing. It never writes either file again, also when you emptied it.
+- **The policy, the ledger and the two records are yours.** Toastty creates
+  `policy.md` and `friction.md` with their section headings only, and
+  `ledger.md` and `decisions.md` with their titles, when the file is missing.
+  It never writes one of these files again, also when you emptied it.
 - **The folder is a git repository.** At the first start, Toastty runs `git
   init` there and commits `policy.md`. The repository has its own identity,
   `Toastty Coordinator`, and does not sign commits, so a commit works without
-  your git settings. `AGENTS.md`, `CLAUDE.md`, `ledger.md`, `.claude/` and
-  `references/` are kept out through `.git/info/exclude`, so a commit holds a change of the
+  your git settings. `AGENTS.md`, `CLAUDE.md`, `ledger.md`, `friction.md`,
+  `decisions.md`, `.claude/` and `references/` are kept out through
+  `.git/info/exclude`, so a commit holds a change of the
   policy and nothing else. Toastty leaves a folder that already is a
-  repository as it is. If git is missing, the coordinator still starts, and
+  repository as it is: in a repository from an older version, git shows the
+  two records as untracked files, which changes nothing. If git is missing, the coordinator still starts, and
   tells you that a change of the policy cannot be undone.
 - **Git stops at the folder.** The command that starts the coordinator's
   agent, and the command that resumes it after a relaunch, set
@@ -1140,6 +1217,9 @@ by asking you:
   instruction or skill text, comments or UI copy, up to 40 changed lines in
   up to 3 files. Everything else waits for me.
 
+## Improving
+- Review once a day at 17:00. Proposals only.
+
 ## Unblocking
 - Tell me about permission prompts after 10 minutes.
 - CI pending over 45 minutes on toastty is unusual; look before telling me.
@@ -1153,8 +1233,8 @@ by asking you:
 ```
 
 **The first run.** The first time you write to the coordinator while one
-of Projects, Agents, Talking and Reviewing holds no rule, it asks you how to
-set it up, in one message with a suggested answer for each part. "Yes" takes
+of Projects, Agents, Talking, Reviewing and Improving holds no rule, it asks
+you how to set it up, in one message with a suggested answer for each part. "Yes" takes
 all the suggestions.
 
 - **Agents:** which agent, model and effort for which kind of work, as a
@@ -1166,13 +1246,18 @@ all the suggestions.
 - **Talking:** whether it answers questions itself or makes a task for each
   one, how long its answers are, and what it brings to you.
 - **Reviewing:** how much proof it checks before it brings you a ready task.
+- **Improving:** it explains
+  [how it helps the work get faster](#how-the-coordinator-improves-the-work),
+  and asks when its review runs. It suggests once a day at 17:00, with
+  proposals only.
 
 It writes your answers to the policy in one commit, `Policy: first run`. A
 part where you kept the default gets the line `- The coordinator's
 defaults.`, so it does not ask again. If you do not answer, it does not ask
-again, and the defaults apply. Say "set yourself up again" to answer all four
-parts again. A policy from an older version has no Talking section; the
-coordinator asks about it once and adds the heading. It does not ask about
+again, and the defaults apply: for Improving, a review only when you ask.
+Say "set yourself up again" to answer all five parts again. A policy from an
+older version has no Talking or Improving section; the coordinator asks
+about it once and adds the heading. It does not ask about
 Merging: that section stays empty until you ask for a rule, and the
 coordinator adds the heading to an older policy when it first writes one.
 

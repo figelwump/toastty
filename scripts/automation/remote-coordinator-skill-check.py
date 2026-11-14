@@ -44,7 +44,7 @@ event log, the `gh` log and the app log.
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 import os
@@ -262,6 +262,11 @@ else:
     sys.exit(f'gh: this check does not answer: {" ".join(args)}')
 '''
 
+# The files in its folder that the coordinator may change.
+OWN_FILES = ('policy.md', 'ledger.md', 'friction.md', 'decisions.md')
+# The Improving rule of a user who wants no review on a timer.
+REVIEW_ON_REQUEST = '- Review only when I ask.'
+
 POLICY = '''# Coordinator policy
 
 ## Projects
@@ -277,6 +282,8 @@ POLICY = '''# Coordinator policy
 {reviewing}
 ## Merging
 {merging}
+## Improving
+{improving}
 ## Unblocking
 {unblocking}
 ## Releases
@@ -651,10 +658,31 @@ class Run:
 
     # MARK: The coordinator
 
-    def seed_policy(self, reviewing='', unblocking='', releases='', merging='', text=None):
+    def seed_policy(self, reviewing='', unblocking='', releases='', merging='', improving=REVIEW_ON_REQUEST, text=None):
         (self.folder / 'policy.md').write_text(text if text is not None else POLICY.format(
             reviewing=(reviewing or "- The coordinator's defaults.") + '\n', merging=merging + ('\n' if merging else ''),
+            improving=improving + ('\n' if improving else ''),
             unblocking=unblocking + ('\n' if unblocking else ''), releases=releases + ('\n' if releases else '')))
+
+    def seed_records(self, friction=None, decisions=None):
+        """The coordinator's two records, as an earlier session left them. Toastty keeps a file that exists."""
+        self.folder.mkdir(parents=True, exist_ok=True)
+        for name, text in (('friction.md', friction), ('decisions.md', decisions)):
+            if text is not None:
+                (self.folder / name).write_text(text)
+
+    def friction(self):
+        path = self.folder / 'friction.md'
+        return path.read_text() if path.is_file() else ''
+
+    def decisions(self):
+        path = self.folder / 'decisions.md'
+        return path.read_text() if path.is_file() else ''
+
+    def friction_section(self, name):
+        """The lines under one heading of friction.md."""
+        match = re.search(rf'^## {re.escape(name)}[^\n]*\n(.*?)(?=^## |\Z)', self.friction(), re.S | re.M)
+        return [line for line in (match.group(1) if match else '').splitlines() if line.strip()]
 
     def coordinator(self):
         return self.cli('coordinator', 'status')
@@ -860,11 +888,11 @@ class Run:
         wakes = len([turn for turn in turns if turn['wake']])
         self.check(f'every turn a digest started set or cleared the next check ({wakes} such turns)', not missing, missing)
         outside = [path for turn in turns for path in turn['edits']
-                   if Path(path).name not in ('policy.md', 'ledger.md') or Path(path).resolve().parent != self.folder]
-        self.check('writes no file but policy.md and ledger.md', not outside, outside)
-        shelled = [c for c in commands if re.search(r'(echo|printf)\b[^\n]*>>?\s*\S*(ledger|policy)\.md', c)
-                   or re.search(r'\bsed\b[^\n|]*-i[^\n]*(ledger|policy)\.md', c)]
-        self.check('keeps the text of the policy and the ledger off the command line (no echo, printf or sed -i)',
+                   if Path(path).name not in OWN_FILES or Path(path).resolve().parent != self.folder]
+        self.check('writes no file but policy.md, ledger.md, friction.md and decisions.md', not outside, outside)
+        shelled = [c for c in commands if re.search(r'(echo|printf)\b[^\n]*>>?\s*\S*(ledger|policy|friction|decisions)\.md', c)
+                   or re.search(r'\bsed\b[^\n|]*-i[^\n]*(ledger|policy|friction|decisions)\.md', c)]
+        self.check('keeps the text of its files off the command line (no echo, printf or sed -i)',
                    not shelled, shelled)
         unsafe = [c for c in commands if re.search(r'git\s[^\n]*commit\b', c) and re.search(r'-m\s+"[^"]*[`$]', c)]
         self.check('commit messages hold nothing the shell expands', not unsafe, unsafe)
@@ -894,7 +922,8 @@ class Run:
                 self.instance.kill()
         except Exception:  # noqa: BLE001
             pass
-        for name in ('policy.md', 'ledger.md', 'AGENTS.md', 'CLAUDE.md', 'references/merging.md'):
+        for name in ('policy.md', 'ledger.md', 'friction.md', 'decisions.md', 'AGENTS.md', 'CLAUDE.md',
+                     'references/merging.md', 'references/improving.md', 'references/first-run.md'):
             if (self.folder / name).is_file():
                 shutil.copyfile(self.folder / name, self.artifacts / Path(name).name)
         if (self.folder / '.git').is_dir():
@@ -931,13 +960,16 @@ def history(run, extra=()):
         run.create_task(title, project=project, model=model, effort=effort, done=True)
 
 
-FIRST_RUN_SECTIONS = ('Projects', 'Agents', 'Talking', 'Reviewing')
+FIRST_RUN_SECTIONS = ('Projects', 'Agents', 'Talking', 'Reviewing', 'Improving')
 
 
 def check_first_run_saved(run, commits_before):
     """After the user's yes: each asked section holds a rule, in one commit of the policy."""
     empty = [name for name in FIRST_RUN_SECTIONS if not run.section(name)]
-    run.check('after the yes, Projects, Agents, Talking and Reviewing hold rules', not empty, run.policy())
+    run.check('after the yes, Projects, Agents, Talking, Reviewing and Improving hold rules', not empty, run.policy())
+    run.check('the Improving rule says when the review runs, not only "defaults"',
+              any(re.search(r'\d{1,2}[:.]\d{2}|\d ?(am|pm)|only when|ask', line.lower()) for line in run.section('Improving')),
+              run.section('Improving'), required=False)
     run.check('the rules are committed in one commit, so one undo removes them',
               int(run.git('rev-list', '--count', 'HEAD') or 0) == commits_before + 1
               and run.git('status', '--porcelain', 'policy.md') == '', run.git('log', '--oneline'))
@@ -953,12 +985,15 @@ def asks_every_part(run, said):
               required=False)
     run.check('it asks how much it checks (Reviewing)', re.search(r'review|proof|ready|check', lower), said,
               required=False)
+    run.check('it explains how it helps the work get faster (Improving)',
+              re.search(r'friction|slow|faster|bottleneck', lower) and re.search(r'once a day|17:00|5 ?pm|daily', lower),
+              said, required=False)
     run.check('it asks the user to confirm or correct it',
               re.search(r'\?|confirm|correct|"?yes|tell me what to change|let me know', lower), said, required=False)
 
 
 def first_run(run):
-    """The first run drafts Projects and Agents from the task history, and asks about all four parts."""
+    """The first run drafts Projects and Agents from the task history, and asks about all five parts."""
     history(run)
     run.open_coordinator()
     template = run.policy()
@@ -1056,7 +1091,7 @@ def first_run_upgrade(run):
     run.create_task('Fix the unread dot in the sidebar', done=True)
     run.seed_policy(text=POLICY.replace("## Talking\n- The coordinator's defaults.\n\n", '')
                     .replace('## Merging\n{merging}\n', '').format(
-        reviewing="- The coordinator's defaults.\n", unblocking='', releases=''))
+        reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n', unblocking='', releases=''))
     run.open_coordinator()
     said = run.said(run.tell('Hi.'))
     lower = said.lower()
@@ -1363,7 +1398,7 @@ def merge_rule_setup(run):
     run.create_task('Fix the unread dot in the sidebar', done=True)
     # A policy from before the Merging section, as every policy is at first.
     run.seed_policy(text=POLICY.replace('## Merging\n{merging}\n', '').format(
-        reviewing="- The coordinator's defaults.\n", unblocking='', releases=''))
+        reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n', unblocking='', releases=''))
     run.open_coordinator()
     before, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
     asked = run.tell('From now on, merge simple changes in the app project yourself, and tell me afterwards.')
@@ -1733,11 +1768,295 @@ def interrupted(run):
     return turns
 
 
+def first_run_improving(run):
+    """A policy from before the Improving section: it asks only about that, explains it, and writes the user's rule."""
+    run.create_task('Fix the unread dot in the sidebar', done=True)
+    run.seed_policy(text=POLICY.replace('## Improving\n{improving}\n', '').format(
+        reviewing="- The coordinator's defaults.\n", merging='', unblocking='', releases=''))
+    run.open_coordinator()
+    before, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
+    said = run.said(run.tell('Hi.'))
+    lower = said.lower()
+    run.check('it explains what it notes and that the user chooses the fixes',
+              re.search(r'friction|slow|faster|bottleneck', lower) and re.search(r'propos|you choose|your yes|suggest', lower),
+              said, required=False)
+    run.check('it suggests a review once a day', re.search(r'once a day|daily|17:00|5 ?pm', lower), said, required=False)
+    run.check('it does not ask about the sections that hold rules', not re.search(r'which model|routing table', lower),
+              said, required=False)
+    run.check('it writes nothing before the answer',
+              run.policy() == before and int(run.git('rev-list', '--count', 'HEAD') or 0) == commits, run.policy())
+    run.tell('Yes, but at 9:30 in the morning.')
+    rules = run.section('Improving')
+    run.check('the policy has an Improving section with the user\'s time',
+              '## Improving' in run.policy() and any(re.search(r'9[:.]30', line) for line in rules), run.policy())
+    run.check('Improving comes before Notes', '## Improving' in run.policy()
+              and run.policy().index('## Improving') < run.policy().index('## Notes'), run.policy())
+    run.check('it commits the rule, and only the policy',
+              int(run.git('rev-list', '--count', 'HEAD') or 0) > commits
+              and run.git('show', '--format=', '--name-only', 'HEAD') == 'policy.md', run.git('log', '--stat', '--format=%h %s'))
+
+
+def day(days_ago, form='%Y-%m-%d'):
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime(form)
+
+
+def decision_line(index, days_ago, kind, verdict='yes', outcome='unchanged', wait='2.0h', lines=12, extra=''):
+    """One `review` line of decisions.md, as the coordinator's instructions give its form."""
+    line = (f"- {day(days_ago, '%Y-%m-%dT%H:%MZ')} review task=0000{index:04d}-AAAA-4BBB-8CCC-DDDDDDDDDDDD kind={kind} "
+            f'verdict={verdict} lines={lines} files=1 base=main head={index:07x} pr=https://github.com/{SLUG}/pull/{900 + index}')
+    return line + (f' outcome={outcome} wait={wait}' if outcome else '') + extra
+
+
+FRICTION = """# Coordinator friction
+Last review: {last}
+
+## Open
+{open}
+## Sent on
+
+## Closed
+"""
+
+
+def friction_note(run):
+    """Two tasks stop for the same shared machine: one line in friction.md, counted twice, and a line for each question."""
+    first = run.create_task('Add the export API')
+    second = run.create_task('CSV export of the task list')
+    run.seed_policy()
+    run.open_coordinator()
+    template = run.friction()
+    run.check('Toastty made friction.md and decisions.md with headings only',
+              '## Open' in template and run.friction_section('Open') == [] and run.decisions().strip() == '# Coordinator decisions',
+              [template, run.decisions()])
+    run.ask(first, 'Run the tests on this Mac?',
+            'The export API is implemented. I must run the app test suite before the pull request, but the validation '
+            'Mac has been busy with other runs for an hour. May I run the suite on this Mac instead, or shall I wait?')
+    turns = run.new_turns(wake=True)
+    run.check('the question goes to the user, and nothing to the task', first.link in run.said(turns)
+              and run.messages(first) == [], [run.said(turns), run.messages(first)])
+    run.ask(second, 'Run the tests here or wait?',
+            'The CSV export works. The validation Mac is still full: two other runs are ahead of mine. Do you allow the '
+            'test suite on this Mac, or do I wait for the validation Mac?')
+    later = run.new_turns(wake=True)
+    opened = run.friction_section('Open')
+    run.check('friction.md has a line for the tasks that wait for the validation Mac',
+              any(re.search(r'validation|mac|machine|wait', line.lower()) for line in opened), run.friction())
+    run.check('the two stops are one line, seen 2 times', len(opened) == 1 and re.search(r'seen 2\b', opened[0]),
+              run.friction(), required=False)
+    questions = [line for line in run.decisions().splitlines() if ' question ' in line]
+    run.check('decisions.md has a question line for each task, by its ID',
+              all(any(f'task={task.id}' in line for line in questions) for task in (first, second)), run.decisions())
+    run.check('decisions.md holds no title or text of a task',
+              not any(task.title in run.decisions() for task in (first, second)), run.decisions())
+    run.check('the policy did not change', run.git('rev-list', '--count', 'HEAD') == '1'
+              and run.git('status', '--porcelain', 'policy.md') == '', run.git('log', '--oneline'))
+    answered = run.tell('Both wait for the validation Mac. Never run test suites on my Mac.')
+    messages = [m['text'] for task in (first, second) for m in run.messages(task)]
+    run.check("the user's answer goes to both tasks", len(messages) == 2, messages)
+    outcomes = [line for line in run.decisions().splitlines() if ' question ' in line and 'outcome=' in line]
+    run.check('each question line gets its outcome', len(outcomes) == 2, run.decisions(), required=False)
+    return turns + later + answered
+
+
+def decision_record(run):
+    """A review writes a line of fixed fields to decisions.md, and the user's merge completes it."""
+    task = run.create_task('Fix the unread dot', status='working')
+    head = f'{0xabe:040x}'
+    run.set_pr(task, 24, head=head, body=GOOD_PROOF.format(head=head), additions=31, deletions=9,
+               files=[dict(path='Sources/App/SidebarView.swift', additions=22, deletions=9),
+                      dict(path='Tests/App/SidebarViewTests.swift', additions=9, deletions=0)])
+    publish_report(run, task, head)
+    run.seed_policy()
+    run.open_coordinator()
+    run.reply(task, 'The pull request is open and the verification report is in the Scratchpad.')
+    to_review(run, task)
+    turns = run.new_turns(wake=True)
+    run.check('the user is told that it is ready, with the task link', task.link in run.said(turns), run.said(turns))
+
+    def line():
+        return next((l for l in run.decisions().splitlines() if ' review ' in l and f'task={task.id}' in l), '')
+
+    run.check('decisions.md has a review line for the task, with its kind, verdict and head commit',
+              re.search(r'kind=[a-z-]+', line()) and re.search(r'verdict=(yes|no|unjudged)', line())
+              and re.search(rf'head={head[:7]}', line()), run.decisions())
+    run.check('the line has no outcome while the task waits', 'outcome=' not in line(), line())
+    run.check('a change to a view of the app is not recorded as docs, tests or an internal fix',
+              not re.search(r'kind=(docs|tests|fix-internal)\b', line()), line(), required=False)
+    run.check('decisions.md holds no title of the task', task.title not in run.decisions(), run.decisions())
+    run.check('the verdict starts no merge', run.get(task).get('mergeRequestedAt') is None, run.get(task).get('merge'))
+    # The user merges on GitHub. That wakes nothing: the coordinator hears of it in its next digest.
+    merge_on_github(run, task)
+    later = run.timer_wake()
+    run.check("after the user's merge, the line says that the change merged as reviewed, and how long it waited",
+              'outcome=unchanged' in line() and re.search(r'wait=[\d.]+h', line()), run.decisions())
+    return turns + later
+
+
+def review_records(run, last='never'):
+    """What an earlier session noted: two patterns that came back, one seen once, and three weeks of reviews."""
+    opened = (
+        f'- validation-mac-full · seen 4 · {day(3)} to {day(1)} · The validation Mac was full for hours. 3 tasks stopped '
+        'and asked for permission to run test suites on the user\'s Mac.\n'
+        f'- base-failures-again · seen 6 · {day(4)} to {day(1)} · Tasks found the same 3 test failures of the main branch '
+        'again, and each reported them as new.\n'
+        f'- old-test-window · seen 1 · {day(2)} · An old test app window stayed open on the validation Mac for a day.\n')
+    lines = [decision_line(i, 1 + i % 9, 'docs', lines=8 + i) for i in range(1, 8)]
+    # Changes to the build that all merged as reviewed: never a rule.
+    lines += [decision_line(20 + i, 1 + i % 9, 'build', lines=20) for i in range(1, 8)]
+    # UI changes that the user changed after the review.
+    lines += [decision_line(40 + i, 1 + i, 'ui', outcome='changed' if i % 2 else 'unchanged', lines=150) for i in range(1, 6)]
+    lines += [decision_line(60, 2, 'feature', verdict='unjudged', lines=900), decision_line(61, 0, 'docs', outcome='')]
+    run.seed_records(friction=FRICTION.format(last=last, open=opened),
+                     decisions='# Coordinator decisions\n\n' + '\n'.join(lines) + '\n')
+
+
+def review_ask(run):
+    """Asked what slows the work: it proposes fixes and one Merging rule from its records, and starts only what the user takes."""
+    run.create_task('Fix the unread dot in the sidebar', done=True)
+    run.seed_policy()
+    review_records(run)
+    run.open_coordinator()
+    policy, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    asked = run.tell('What slows us down? And where am I the bottleneck?')
+    said, commands = run.said(asked), [c for t in asked for c in t['commands']]
+    run.check('it starts nothing before the user answers: no task, no rule, no commit',
+              created_since(run, before) == [] and run.policy() == policy
+              and int(run.git('rev-list', '--count', 'HEAD') or 0) == commits, [run.policy(), created_since(run, before)])
+    run.check('it counts the reviews in decisions.md with a command', any('decisions.md' in c for c in commands), commands)
+    lower = said.lower()
+    run.check('it names the two patterns that came back', 'validation mac' in lower
+              and re.search(r'test failures|base|main branch', lower), said, required=False)
+    run.check('it proposes a Merging rule for documentation', re.search(r'documentation|docs', lower)
+              and re.search(r'merg', lower), said, required=False)
+    run.check('it says how the reviews waited for the user', re.search(r'\d+ (reviews|pull requests|changes)|waited', lower),
+              said, required=False)
+    answered = run.tell('Start the task for the validation Mac. And yes to the Merging rule for documentation, with exactly '
+                        'those words. Nothing else for now.')
+    created = created_since(run, before)
+    run.check('after the yes, it creates one task', len(created) == 1, [t['title'] for t in created])
+    rules = run.section('Merging')
+    run.check('after the yes, Merging holds a rule', bool(rules), run.policy())
+    run.check('the rule is for documentation, and not for the build', any(re.search(r'documentation|docs', r.lower()) for r in rules)
+              and not any(re.search(r'\bbuild\b|\bci\b', r.lower()) for r in rules), rules, required=False)
+    run.check('it commits the rule, and only the policy', int(run.git('rev-list', '--count', 'HEAD') or 0) > commits
+              and run.git('show', '--format=', '--name-only', 'HEAD') == 'policy.md', run.git('log', '--stat', '--format=%h %s'))
+    improvement = [line for line in run.ledger().splitlines() if ' improvement ' in line]
+    run.check('the ledger marks the new task as an improvement', bool(created)
+              and any(created[0]['taskID'] in line for line in improvement), run.ledger())
+    run.check('friction.md shows the pattern as sent on, with the time of this review',
+              any('validation-mac-full' in line for line in run.friction_section('Sent on'))
+              and 'Last review: never' not in run.friction(), run.friction(), required=False)
+    if not created:
+        return asked + answered
+
+    # The task from the review becomes ready with a small documentation
+    # change, which the new rule covers for any other task. The user reads
+    # each change that comes from a review, so no merge may be asked for.
+    def started():
+        record = run.cli('task', 'get', created[0]['taskID'])
+        setup = record.get('setup') or {}
+        return record if setup.get('state') == 'started' and run.agent_start(setup.get('sessionID')) else None
+
+    wait_for('the agent of the new task', started, timeout=180, interval=2)
+    task = Task(run, started(), 'app')
+    run.tasks.append(task)
+    head = f'{0xd0c0 + 61:040x}'
+    run.set_pr(task, 61, head=head, body=DOCS_PROOF.format(head=head), diff=DOCS_DIFF, additions=3, deletions=3,
+               files=[dict(path='docs/setup.md', additions=3, deletions=3)])
+    publish_report(run, task, head, DOCS_REPORT)
+    run.status(task, 'working')
+    time.sleep(SETTLE + 2)
+    ready(run, task)
+    reviewed = run.new_turns(wake=True)
+    record = run.get(task)
+    run.check('it asks for no merge of a task that came from its review, also under the rule',
+              merge_requests(reviewed, task) == [] and record.get('mergeRequestedAt') is None,
+              [c for t in reviewed for c in t['commands']])
+    run.check('it brings that task to the user', task.link in run.said(reviewed), run.said(reviewed))
+    return asked + answered + reviewed
+
+
+def review_time(minutes_from_now):
+    """A local time of day, as a user writes it in a rule."""
+    return (datetime.now() + timedelta(minutes=minutes_from_now)).strftime('%H:%M')
+
+
+def waits_for_ci(run):
+    return run.create_task('Fix the login redirect', status='working')
+
+
+def end_turn_for_ci(run, task):
+    run.reply(task, 'I pushed the fix to the branch, and CI is running on it now. I will open the pull request '
+                    'when the checks pass. Nothing is needed until then.')
+    run.status(task, 'ready')
+    run.wait_task(task, 'a finished turn', lambda t: t['stage'].get('attention') == 'agentFinished')
+
+
+def review_timer(run):
+    """Improving names a time: a wake sets the next check for it, and the review then comes without the user."""
+    task = waits_for_ci(run)
+    # Far enough ahead that the first wake ends before it: a check must be a minute away.
+    run.seed_policy(improving=f'- Review once a day at {review_time(9)}. Proposals only.')
+    review_records(run, last=day(1, '%Y-%m-%dT%H:%MZ'))
+    run.open_coordinator()
+    policy, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    end_turn_for_ci(run, task)
+    first = run.new_turns(wake=True)
+    wake = run.coordinator()['wake']
+    seconds = (parse_time(wake['nextWakeAt']) - time.time()) if wake.get('nextWakeAt') else None
+    run.check('a wake before the time sets the next check for the review', seconds is not None and 0 < seconds <= 570, wake)
+    run.check('it makes no review before the time', 'Last review: ' + day(1) in run.friction(), run.friction())
+    later = run.new_turns(wake=True, timeout=TURN_TIMEOUT + 600)
+    said = run.said(later)
+    run.check('at the time, it makes the review: friction.md has the new time',
+              'Last review: ' + day(1) not in run.friction() and 'Last review: ' + day(0)[:8] in run.friction(), run.friction())
+    run.check('it tells the user the proposals', 'validation mac' in said.lower(), said, required=False)
+    run.check('it starts nothing without the user: no task, no rule, no commit',
+              created_since(run, before) == [] and run.policy() == policy
+              and int(run.git('rev-list', '--count', 'HEAD') or 0) == commits, [run.policy(), created_since(run, before)])
+    wake = run.coordinator()['wake']
+    hours = (parse_time(wake['nextWakeAt']) - time.time()) / 3600 if wake.get('nextWakeAt') else None
+    run.check("the next check is the review of the next day", hours is not None and 20 <= hours <= 25, wake)
+    quiet = [c for t in later for c in t['commands'] if re.search(r'coordinator\s+wake\b.*--quiet', c)]
+    run.check('a review with proposals is not a quiet turn', not quiet, quiet)
+    return first + later
+
+
+def review_empty(run):
+    """The review is due and nothing qualifies: the user hears nothing of it, and the review counts as made."""
+    task = waits_for_ci(run)
+    run.seed_policy(improving=f'- Review once a day at {review_time(-3)}. Proposals only.')
+    opened = f'- old-test-window · seen 1 · {day(1)} · An old test app window stayed open on the validation Mac for a day.\n'
+    run.seed_records(friction=FRICTION.format(last=day(1, '%Y-%m-%dT%H:%MZ'), open=opened),
+                     decisions='# Coordinator decisions\n\n' + '\n'.join(
+                         decision_line(i, i, 'docs') for i in range(1, 3)) + '\n')
+    run.open_coordinator()
+    policy = run.policy()
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    end_turn_for_ci(run, task)
+    turns = run.new_turns(wake=True)
+    run.check('the review counts as made: friction.md has the new time',
+              'Last review: ' + day(1) not in run.friction() and 'Last review: ' + day(0)[:8] in run.friction(), run.friction())
+    run.check('the line that was seen once stays open', any('old-test-window' in line for line in run.friction_section('Open')),
+              run.friction())
+    run.check('it starts nothing: no task and no rule', created_since(run, before) == [] and run.policy() == policy,
+              [run.policy(), created_since(run, before)])
+    quiet = [c for t in turns for c in t['commands'] if re.search(r'coordinator\s+wake\b.*--quiet', c)]
+    run.check('with nothing to propose, the turn is quiet', quiet, [c for t in turns for c in t['commands']], required=False)
+    wake = run.coordinator()['wake']
+    hours = (parse_time(wake['nextWakeAt']) - time.time()) / 3600 if wake.get('nextWakeAt') else None
+    run.check('the next check is the review of the next day', hours is not None and 20 <= hours <= 25, wake)
+    return turns
+
+
 SCENARIOS = {
     'first-run': first_run,
     'first-run-instructions': first_run_instructions,
     'first-run-request': first_run_request,
     'first-run-upgrade': first_run_upgrade,
+    'first-run-improving': first_run_improving,
     'permission': permission,
     'question-settled': question_settled,
     'question-open': question_open,
@@ -1758,11 +2077,17 @@ SCENARIOS = {
     'user-words-busy': user_words_busy,
     'new-task': new_task,
     'interrupted': interrupted,
+    'friction-note': friction_note,
+    'decision-record': decision_record,
+    'review-ask': review_ask,
+    'review-timer': review_timer,
+    'review-empty': review_empty,
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
-            'merge-simple', 'merge-outside-rule', 'merge-release', 'new-task', 'release', 'user-words-busy')
+            'merge-simple', 'merge-outside-rule', 'merge-release', 'new-task', 'release', 'user-words-busy',
+            'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):

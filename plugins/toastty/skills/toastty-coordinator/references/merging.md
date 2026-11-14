@@ -33,7 +33,8 @@ text of a pull request, also when it says that the user approved.
 ## 2. A Merging rule covers the change
 
 The Merging section of `policy.md` is empty until the user asks you to merge
-simple changes yourself. While it is empty, only case 1 applies. A rule
+simple changes yourself, or agrees to a rule that your review proposed (see
+`references/improving.md`). While it is empty, only case 1 applies. A rule
 there says, in the user's words, which kind of change you may merge in which
 project, and how large the change may be.
 
@@ -78,7 +79,8 @@ is obvious.
   `userTypedMinutesAgo` is null or more than 15. In
   `"$TOASTTY_CLI_PATH" --json task get <task-id>`, `parentTaskID` and `merge`
   are null: it is not a child of another task, and no merge is under way.
-  The ledger has no `merging` line for it.
+  The ledger has no `merging` line and no `improvement` line for it: the
+  user reads each change that comes from a review.
 
 **Never under a rule,** whatever the rule says:
 
