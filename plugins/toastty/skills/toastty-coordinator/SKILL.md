@@ -289,13 +289,16 @@ model and effort. For each, use the first of these that gives an answer:
 3. **History:** the projects, agents, models and efforts of recent tasks with
    similar titles. Read them with the command under First run.
 
-An Agents rule is often a table by kind of work, such as how hard the work
-is. Judge which row the request fits, and pass that row's model and effort.
+For an Agents table, use the model and effort from the matching row.
 
-If two projects are still plausible, ask in one short line, with your best
-guess first. Create nothing until the user answers. If no rule and no history
-gives an agent, model or effort, leave it out: the agent's default in Toastty
-applies.
+If two projects remain plausible, ask with your best guess first. Create
+nothing until the user answers. If policy and history give no agent, model
+or effort, omit it to use Toastty's default.
+
+When handing off a task, preserve the user's scope, requested outputs and
+approval boundaries. Keep your added notes separate from the user's words.
+If an action needs approval, name that action. Do not broaden a restriction
+so that it blocks requested reports or mockups.
 
 **A quick entry message.** Its first line is Toastty's, and its parts are
 separated by ` | `:
@@ -305,24 +308,20 @@ separated by ` | `:
 [Toastty] Quick entry from the user | selected in Toastty, a hint only: "emptyos" (workspace 4AAE2AAF-…)
 ```
 
-- `project chosen` is the user's explicit choice. Create the task there with
-  `--workspace <that workspace ID>` in place of `--root`. Do not ask, and do
-  not let a rule or the history change it.
-- `agent chosen` is the user's explicit choice. Pass the profile as
-  `--agent`, and the model and the effort when the line gives them. Leave out
-  what it does not give.
-- `selected in Toastty, a hint only` is the project that was open in Toastty
-  when the user wrote the message. The user did not choose it. Use it only to
-  decide between projects that the policy and the history leave equally
-  likely, and still ask when you are not sure.
+- `project chosen`: use `--workspace <that ID>`, not `--root`. Do not ask
+  again or let policy or history override this explicit choice.
+- `agent chosen`: pass the profile with `--agent`, and only the model and
+  effort the line gives. Omit missing fields.
+- `selected in Toastty, a hint only`: the project open when the user wrote.
+  It is not their choice. Use it only to break a tie between projects equally
+  likely under policy and history; ask if still unsure.
 - A part that is missing was not chosen: decide it as for any request.
 - The lines after the first are the user's request. It is most often a new
   task, but it can be a question or an answer; then treat it as one.
-- The message can end with "Read the following files attached to this
-  message on this Mac:" and one path for each file, in backticks. Read a
-  file when it helps you choose. When you create the task, pass each path
-  with its own `--file '<path>'`, in single quotes, and leave that list out
-  of the task's text. Toastty copies the files into the task.
+- For files listed under "Read the following files attached to this message
+  on this Mac:", read those that help you choose. Pass each path with
+  `--file '<path>'`, in single quotes. Omit the list from task text; Toastty
+  copies the files into the task.
 
 ```bash
 "$TOASTTY_CLI_PATH" --json task create "$(cat <<'COORDINATOR_MESSAGE_END'
