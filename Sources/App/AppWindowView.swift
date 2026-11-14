@@ -235,8 +235,7 @@ struct AppWindowView: View {
                             store: store,
                             board: taskBoard,
                             sessionRuntimeStore: sessionRuntimeStore,
-                            newTask: taskBoard.newTask.map { action in { action() } },
-                            newTaskShortcutLabel: taskBoard.newTaskShortcutLabel()
+                            newTask: taskBoard.newTask.map { action in { action() } }
                         )
                     }
                 }

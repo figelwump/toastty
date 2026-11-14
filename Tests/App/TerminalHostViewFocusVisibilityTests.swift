@@ -133,6 +133,65 @@ final class TerminalHostViewFocusVisibilityTests: TerminalHostViewTestCase {
         XCTAssertTrue(hostView.isEffectivelyVisible)
     }
 
+    func testAncestorVisibilityChangesUpdateSurfaceWithoutReattachment() {
+        let window = TestWindow()
+        let ancestor = NSView(frame: window.frame)
+        let hostView = TerminalHostView(frame: ancestor.bounds)
+        let occlusionUpdates = SendableIntBox(0)
+        let refreshCount = SendableIntBox(0)
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in occlusionUpdates.increment() },
+            refresh: { _ in refreshCount.increment() }
+        )
+        window.forcedOcclusionState = [.visible]
+        window.contentView = ancestor
+        ancestor.addSubview(hostView)
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x5151))
+
+        ancestor.isHidden = true
+        XCTAssertFalse(hostView.isEffectivelyVisible)
+        ancestor.isHidden = false
+
+        XCTAssertTrue(hostView.isEffectivelyVisible)
+        XCTAssertEqual(occlusionUpdates.value, 3)
+        XCTAssertEqual(refreshCount.value, 2)
+        XCTAssertTrue(hostView.superview === ancestor)
+
+        hostView.isHidden = true
+        XCTAssertFalse(hostView.isEffectivelyVisible)
+        hostView.isHidden = false
+        XCTAssertTrue(hostView.isEffectivelyVisible)
+        XCTAssertEqual(occlusionUpdates.value, 5)
+        XCTAssertEqual(refreshCount.value, 3)
+    }
+
+    func testRevealingAncestorStartsSurfaceAttachedWhileHidden() {
+        let window = TestWindow()
+        let ancestor = NSView(frame: window.frame)
+        let hostView = TerminalHostView(frame: ancestor.bounds)
+        let occlusionUpdates = SendableIntBox(0)
+        let refreshCount = SendableIntBox(0)
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in occlusionUpdates.increment() },
+            refresh: { _ in refreshCount.increment() }
+        )
+        window.forcedOcclusionState = [.visible]
+        window.contentView = ancestor
+        ancestor.isHidden = true
+        ancestor.addSubview(hostView)
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x5252))
+        XCTAssertFalse(hostView.isEffectivelyVisible)
+
+        ancestor.isHidden = false
+
+        XCTAssertTrue(hostView.isEffectivelyVisible)
+        XCTAssertEqual(occlusionUpdates.value, 2)
+        XCTAssertEqual(refreshCount.value, 1)
+        XCTAssertTrue(hostView.window === window)
+    }
+
     func testSynchronizePresentationVisibilityTracksWindowOcclusionTransition() {
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)

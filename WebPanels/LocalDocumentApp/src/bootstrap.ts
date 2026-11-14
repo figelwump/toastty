@@ -31,6 +31,7 @@ export type LocalDocumentFormat =
   | "xml"
   | "shell"
   | "code";
+export type LocalDocumentMarkdownViewMode = "formatted" | "source";
 
 export interface LocalDocumentPanelBootstrap {
   contractVersion: 7;
@@ -51,6 +52,8 @@ export interface LocalDocumentPanelBootstrap {
   saveErrorMessage: string | null;
   theme: LocalDocumentPanelTheme;
   textScale: number;
+  /** Markdown only. Missing means "formatted", as for the iOS preview. */
+  markdownViewMode?: LocalDocumentMarkdownViewMode;
 }
 
 type BootstrapListener = (bootstrap: LocalDocumentPanelBootstrap | null) => void;

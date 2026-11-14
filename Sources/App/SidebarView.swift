@@ -1075,6 +1075,8 @@ struct SidebarView: View {
             segment: sidebarSegment,
             openTasksView: { openTasksView(selecting: nil) },
             newTask: newTask.map { action in { action() } },
+            newTaskShortcutLabel: taskBoard.newTaskShortcut?.label,
+            showsShortcutBadge: optionKeyPressed,
             selectSegment: { segment in
                 _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
             },
@@ -2573,7 +2575,7 @@ struct SidebarView: View {
                 }
 
                 if optionKeyPressed, let shortcutLabel {
-                    shortcutBadge(shortcutLabel, highlighted: true)
+                    SidebarShortcutBadge(label: shortcutLabel, highlighted: true)
                 }
             }
 
@@ -4564,6 +4566,7 @@ struct SidebarView: View {
             ),
             stage: boardItem?.stage,
             isTask: workspace.taskID != nil,
+            isCleanupHeld: boardItem?.cleanupHeldUntil != nil,
             projectTag: projectTag,
             linkedParentID: taskCoordinator?.records.linkedParentTaskSpaceID(of: workspace, in: store.state),
             isLinkedChild: isLinkedChild,
@@ -4578,7 +4581,8 @@ struct SidebarView: View {
             summary: boardItem.flatMap { item in
                 // The agent's question replaces its last status line.
                 if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
-                return item.stage.isBeforeStart ? TaskBoardPresentation.statusLine(item) : nil
+                // A merged task's held task space says when it closes.
+                return item.stage.isBeforeStart || item.cleanupHeldUntil != nil ? TaskBoardPresentation.statusLine(item) : nil
             } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
             spawningSessionID: workspace.spawningSessionID,
             spawnerName: spawner?.displayTitle,
@@ -5773,19 +5777,6 @@ struct SidebarView: View {
         return isItalic ? base.italic() : base
     }
 
-    private func shortcutBadge(_ label: String, highlighted: Bool) -> some View {
-        Text(label)
-            .font(ToastyTheme.fontShortcutBadge)
-            .foregroundStyle(highlighted ? ToastyTheme.shortcutBadgeText : ToastyTheme.subtleText)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(
-                ToastyTheme.hairline.opacity(highlighted ? 1 : 0.55),
-                in: RoundedRectangle(cornerRadius: 3)
-            )
-            .animation(.easeOut(duration: 0.12), value: highlighted)
-    }
-
     @ViewBuilder
     private func workspaceAgentCountBadge(_ summary: WorkspaceAgentSummary) -> some View {
         workspaceAgentCountBadgeContent(summary)
@@ -5896,5 +5887,25 @@ private struct SidebarSessionGroupFramePreferenceKey: PreferenceKey {
         nextValue: () -> [SidebarSessionPresentation.SidebarSessionRowID: CGRect]
     ) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// A shortcut such as "⌥3" that the sidebar shows beside the control it
+/// opens while Option is held.
+struct SidebarShortcutBadge: View {
+    let label: String
+    var highlighted = true
+
+    var body: some View {
+        Text(label)
+            .font(ToastyTheme.fontShortcutBadge)
+            .foregroundStyle(highlighted ? ToastyTheme.shortcutBadgeText : ToastyTheme.subtleText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(
+                ToastyTheme.hairline.opacity(highlighted ? 1 : 0.55),
+                in: RoundedRectangle(cornerRadius: 3)
+            )
+            .animation(.easeOut(duration: 0.12), value: highlighted)
     }
 }

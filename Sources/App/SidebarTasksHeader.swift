@@ -13,6 +13,12 @@ struct SidebarTasksHeader: View {
     let segment: SidebarSegment
     let openTasksView: () -> Void
     let newTask: (() -> Void)?
+    /// The quick entry shortcut, such as "⌥⇧T", for the ＋'s tooltip and
+    /// badge; nil when the shortcut is off.
+    var newTaskShortcutLabel: String? = nil
+    /// True while Option is held: the ＋ then shows its shortcut, as the
+    /// workspace rows show theirs.
+    var showsShortcutBadge = false
     let selectSegment: (SidebarSegment) -> Void
     /// Shows how many webhooks wait for approval.
     var webhooks: TaskWebhookService? = nil
@@ -37,9 +43,12 @@ struct SidebarTasksHeader: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(ToastyTheme.sidebarSessionPathText)
                         .frame(width: 14)
+                    // In a narrow sidebar the name shortens, as a
+                    // workspace title does.
                     Text("Tasks")
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(ToastyTheme.primaryText)
+                        .lineLimit(1)
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
@@ -58,6 +67,12 @@ struct SidebarTasksHeader: View {
             }
 
             if let newTask {
+                if showsShortcutBadge, let newTaskShortcutLabel {
+                    // The ＋'s tooltip already names the shortcut.
+                    SidebarShortcutBadge(label: newTaskShortcutLabel)
+                        .fixedSize()
+                        .accessibilityHidden(true)
+                }
                 Button(action: newTask) {
                     Image(systemName: "plus")
                         .font(.system(size: 10.5, weight: .semibold))
@@ -70,7 +85,7 @@ struct SidebarTasksHeader: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("New Task")
+                .help(newTaskShortcutLabel.map { "New Task (\($0))" } ?? "New Task")
                 .accessibilityLabel("New Task")
                 .accessibilityIdentifier("sidebar.tasks.new")
             }

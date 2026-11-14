@@ -836,6 +836,21 @@ struct WorkspaceView: View {
                 guard let coordinator = sessionRuntimeStore.taskCoordinator,
                       let taskID = store.state.workspacesByID[workspace.id]?.taskID else { return }
                 TaskActions.archive(taskID: taskID, coordinator: coordinator)
+            },
+            cleanupHeldUntil: {
+                if case .holdingCleanup(let until)? = sessionRuntimeStore.workspaceMergeRequests[workspace.id]?.phase {
+                    return until
+                }
+                return nil
+            }(),
+            closeHeldTaskSpace: {
+                guard let coordinator = sessionRuntimeStore.taskCoordinator,
+                      let taskID = store.state.workspacesByID[workspace.id]?.taskID else { return }
+                TaskActions.runFromMenu(
+                    .action(.closeTaskSpace, taskID: taskID),
+                    coordinator: coordinator,
+                    openTaskSpace: { _ in }
+                )
             }
         )
     }

@@ -125,7 +125,6 @@ struct TasksView: View {
     /// Observed so agent activity redraws the list.
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let newTask: (() -> Void)?
-    var newTaskShortcutLabel: String? = nil
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
@@ -192,10 +191,19 @@ struct TasksView: View {
                     )
                     .id(selected.id)
                 } else {
-                    Text("No tasks yet.")
-                        .font(ToastyTheme.fontBody)
-                        .foregroundStyle(ToastyTheme.mutedText)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 6) {
+                        Text("No tasks yet.")
+                            .font(ToastyTheme.fontBody)
+                        if newTask != nil, let hint = Self.emptyStateShortcutHint(board.newTaskShortcut) {
+                            Text(hint)
+                                .font(.system(size: 12))
+                                .accessibilityIdentifier("tasks.view.empty.shortcut")
+                        }
+                    }
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .frame(width: Self.detailWidth)
@@ -231,6 +239,16 @@ struct TasksView: View {
         .accessibilityIdentifier("tasks.view")
     }
 
+    /// The empty state's second line, which teaches the quick entry
+    /// shortcut. It says "in any app" only when macOS delivers the
+    /// shortcut while another app is active.
+    static func emptyStateShortcutHint(_ shortcut: NewTaskShortcutHint?) -> String? {
+        guard let shortcut else { return nil }
+        return shortcut.isGlobal
+            ? "Press \(shortcut.label) in any app to add a task."
+            : "Press \(shortcut.label) to add a task."
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Text("Tasks")
@@ -241,8 +259,8 @@ struct TasksView: View {
                 Button(action: newTask) {
                     HStack(spacing: 7) {
                         Label("New Task", systemImage: "plus")
-                        if let newTaskShortcutLabel {
-                            Text(newTaskShortcutLabel)
+                        if let label = board.newTaskShortcut?.label {
+                            Text(label)
                                 .font(.system(size: 10.5, weight: .medium))
                                 .padding(.horizontal, 4)
                                 .overlay { RoundedRectangle(cornerRadius: 3).stroke(Color(hex: 0x9A6208), lineWidth: 1) }
