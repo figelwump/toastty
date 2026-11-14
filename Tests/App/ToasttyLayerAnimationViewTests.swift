@@ -2,6 +2,7 @@ import AppKit
 @testable import ConversationUI
 import QuartzCore
 import SwiftUI
+@testable import ToasttyApp
 import XCTest
 
 /// Core Animation draws the working indicators, outside SwiftUI's updates.
@@ -85,28 +86,67 @@ final class ToasttyLayerAnimationViewTests: XCTestCase {
 
     /// A button or a row shows an indicator inside its label. A click on the
     /// indicator must reach that control, and the indicator's own view must
-    /// not take the pointer.
+    /// not take the pointer. The first button's label is plain SwiftUI: it
+    /// shows that the test's clicks arrive at all.
     func testAClickOnAnIndicatorReachesTheButtonThatShowsIt() throws {
         let clicks = Clicks()
-        let size = CGSize(width: 120, height: 80)
+        let size = CGSize(width: 200, height: 80)
         let (hostingView, window) = Self.host(
-            Button { clicks.count += 1 } label: { Self.spinner(animates: true) }
-                .buttonStyle(.plain)
-                .frame(width: size.width, height: size.height),
+            HStack(spacing: 40) {
+                Button { clicks.plain += 1 } label: {
+                    Circle().fill(.orange).frame(width: 40, height: 40)
+                }
+                Button { clicks.indicator += 1 } label: { Self.spinner(animates: true) }
+            }
+            .buttonStyle(.plain),
             size: size
         )
         defer { window.close() }
         let layerView = try Self.layerView(in: hostingView)
-        let center = layerView.convert(CGPoint(x: layerView.bounds.midX, y: layerView.bounds.midY), to: hostingView)
+        let indicatorCenter = layerView.convert(
+            CGPoint(x: layerView.bounds.midX, y: layerView.bounds.midY),
+            to: hostingView
+        )
+        // The plain button is one label and one gap to the left.
+        let plainCenter = CGPoint(x: indicatorCenter.x - 80, y: indicatorCenter.y)
 
-        let hit = hostingView.hitTest(hostingView.convert(center, to: hostingView.superview))
+        let hit = hostingView.hitTest(hostingView.convert(indicatorCenter, to: hostingView.superview))
         XCTAssertFalse(hit is ToasttyLayerAnimationNSView, "The indicator's view took the pointer")
 
-        try Self.send(.leftMouseDown, at: center, in: hostingView)
-        Self.pump(0.05)
-        try Self.send(.leftMouseUp, at: center, in: hostingView)
-        Self.pump(0.3)
-        XCTAssertEqual(clicks.count, 1)
+        try Self.click(at: plainCenter, in: hostingView)
+        try XCTSkipIf(clicks.plain == 0, "This test host does not deliver clicks to SwiftUI buttons")
+        try Self.click(at: indicatorCenter, in: hostingView)
+        XCTAssertEqual(clicks.indicator, 1)
+        XCTAssertEqual(clicks.plain, 1)
+    }
+
+    /// A workspace tab sits in the window's hidden titlebar and shows a
+    /// spinner while its session works. A press on the spinner must stay
+    /// with the tab's own region, which never moves the window.
+    func testAPressOnATabsSpinnerStaysInTheTabsRegion() throws {
+        let size = CGSize(width: 160, height: 40)
+        let (hostingView, window) = Self.host(
+            NonWindowDraggableRegion {
+                HStack(spacing: 5) {
+                    SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.4)
+                    Text("Terminal 1")
+                }
+                .frame(width: 120, height: 28)
+                .contentShape(Rectangle())
+            },
+            size: size
+        )
+        defer { window.close() }
+        let region = try XCTUnwrap(Self.find(NonWindowDraggableContainerView.self, in: hostingView))
+        let layerView = try Self.layerView(in: region)
+        let spinnerCenter = layerView.convert(
+            CGPoint(x: layerView.bounds.midX, y: layerView.bounds.midY),
+            to: region.superview
+        )
+
+        let hit = try XCTUnwrap(region.hitTest(spinnerCenter), "The tab's region did not take a press on its spinner")
+        XCTAssertFalse(hit is ToasttyLayerAnimationNSView, "The indicator's view took the pointer")
+        XCTAssertFalse(hit.mouseDownCanMoveWindow, "A press on a tab's spinner would move the window")
     }
 
     // MARK: - Support
@@ -118,7 +158,8 @@ final class ToasttyLayerAnimationViewTests: XCTestCase {
 
     @MainActor
     private final class Clicks {
-        var count = 0
+        var plain = 0
+        var indicator = 0
     }
 
     private struct MotionHarness: View {
@@ -150,21 +191,24 @@ final class ToasttyLayerAnimationViewTests: XCTestCase {
             defer: false
         )
         window.isReleasedWhenClosed = false
+        window.acceptsMouseMovedEvents = true
         window.contentView = hostingView
-        pump(0.3)
+        window.makeKeyAndOrderFront(nil)
+        pump(0.5)
         hostingView.layoutSubtreeIfNeeded()
         return (hostingView, window)
     }
 
     private static func layerView(in view: NSView) throws -> ToasttyLayerAnimationNSView {
-        func find(_ view: NSView) -> ToasttyLayerAnimationNSView? {
-            if let match = view as? ToasttyLayerAnimationNSView { return match }
-            for subview in view.subviews {
-                if let match = find(subview) { return match }
-            }
-            return nil
+        try XCTUnwrap(find(ToasttyLayerAnimationNSView.self, in: view), "The indicator has no layer view")
+    }
+
+    private static func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+        if let match = view as? T { return match }
+        for subview in view.subviews {
+            if let match = find(type, in: subview) { return match }
         }
-        return try XCTUnwrap(find(view), "The indicator has no layer view")
+        return nil
     }
 
     private static func pump(_ seconds: TimeInterval = 0.15) {
@@ -172,6 +216,13 @@ final class ToasttyLayerAnimationViewTests: XCTestCase {
         while Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))
         }
+    }
+
+    private static func click(at point: CGPoint, in view: NSView) throws {
+        try send(.leftMouseDown, at: point, in: view)
+        pump(0.05)
+        try send(.leftMouseUp, at: point, in: view)
+        pump(0.4)
     }
 
     private static func send(_ type: NSEvent.EventType, at point: CGPoint, in view: NSView) throws {
