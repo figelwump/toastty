@@ -568,9 +568,13 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             }
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt != nil)
 
-            // The turn ends; its state changes used to drop the waiting merge.
+            // The turn ends. The next state change used to drop the waiting
+            // merge; one is made here, since whether the turn's end marks
+            // the panel unread depends on what the window shows.
             scenario.reportAgent(.ready)
-            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.unreadPanelIDs.contains(scenario.taskPanelID) == true)
+            #expect(scenario.store.send(.updateTerminalPanelMetadata(
+                panelID: scenario.taskPanelID, title: "after the turn", cwd: nil
+            )))
             try await Task.sleep(for: .milliseconds(700))
             #expect(scenario.isWaitingForChecks)
             #expect(scenario.boardItem?.merge == .waitingForChecks)
