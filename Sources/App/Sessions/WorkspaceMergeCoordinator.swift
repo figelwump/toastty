@@ -202,7 +202,8 @@ final class WorkspaceMergeCoordinator {
     enum CleanupEvent: Equatable {
         /// The merge stopped without merging: the script refused it, or a
         /// waiting merge could not go on. Nothing waits for the merge now.
-        case mergeFailed(reason: String)
+        /// `head` is the commit that was to merge, when it is known.
+        case mergeFailed(reason: String, cause: TaskMergeFailure.Cause, head: String?)
         /// GitHub reported the merge; cleanup starts next. Sent before
         /// anything is closed, so the merge is recorded first.
         case merged(TaskPullRequestState?)
@@ -216,7 +217,8 @@ final class WorkspaceMergeCoordinator {
     static let pollInterval: Duration = .seconds(30)
     /// How long a task space stays open after its pull request merged.
     static let taskSpaceCleanupHold: TimeInterval = 24 * 60 * 60
-    /// Failed `gh` checks in a row before the request shows as failed.
+    /// Failed runs in a row before the request shows as failed: `gh`
+    /// checks of a merged pull request, or runs of an accepted merge.
     static let maximumPollFailures = 3
     static let pullRequestCheckTimeout: TimeInterval = 30
     static let scriptTimeout: TimeInterval = 300
@@ -457,7 +459,7 @@ final class WorkspaceMergeCoordinator {
                 "reason": "\(reason)",
             ]
         )
-        guard case .awaitingChecks = request.phase else {
+        guard case .awaitingChecks(let acceptedHead, _) = request.phase else {
             report(workspaceID, .dropped)
             return
         }
@@ -468,7 +470,7 @@ final class WorkspaceMergeCoordinator {
         if reason == .pullRequestChanged {
             store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
         }
-        reportUnmergedWait(workspaceID, pullRequest: request.pullRequest, reason: reason)
+        reportUnmergedWait(workspaceID, pullRequest: request.pullRequest, head: acceptedHead, reason: reason)
     }
 
     private func report(_ workspaceID: UUID, _ event: CleanupEvent) {
@@ -482,7 +484,8 @@ final class WorkspaceMergeCoordinator {
     /// Tells the task and the user that an accepted merge will not happen,
     /// and why.
     private func reportUnmergedWait(
-        _ workspaceID: UUID, pullRequest: WorkspacePullRequestLink, reason: WorkspaceMergeRequest.DropReason
+        _ workspaceID: UUID, pullRequest: WorkspacePullRequestLink, head: String,
+        reason: WorkspaceMergeRequest.DropReason
     ) {
         let number = "PR #\(pullRequest.number)"
         let detail = switch reason {
@@ -493,7 +496,7 @@ final class WorkspaceMergeCoordinator {
         case .doneMarkCleared:
             "New work started in the workspace, or its done mark was cleared, after the merge was accepted, so Toastty did not merge \(number). Merge again to accept the current version."
         }
-        report(workspaceID, .mergeFailed(reason: detail))
+        report(workspaceID, .mergeFailed(reason: detail, cause: .acceptanceEnded, head: head))
         notify("\(number) was not merged", detail)
     }
 
@@ -570,16 +573,26 @@ final class WorkspaceMergeCoordinator {
         let annotation = store?.state.workspacesByID[workspaceID]?
             .annotations[SidebarSubspacePresentation.annotationKeyPullRequest]
         let isCurrent = WorkspacePullRequestLink(annotationURL: annotation?.url) == request.pullRequest
-        let isWaiting = outcome.status == "waiting"
+        // GitHub or a command failed after the script accepted a commit and
+        // a target branch, for example GitHub answered the merge call with
+        // "Server Error". Such a failure may pass, so the merge waits and
+        // runs again at that commit, as a merge that waits for checks does.
+        // The failed call may also have merged; the next run reports that.
+        let runsAgain = outcome.status == "failed" && outcome.head != nil && outcome.base?.isEmpty == false
+        let isWaiting = outcome.status == "waiting" || runsAgain
         guard outcome.status == "merged" || isWaiting, let acceptedHead = outcome.head else {
-            mergeFailed(workspaceID, pullRequest: pullRequest, reason: outcome.detail, recordOnTask: isCurrent)
+            mergeFailed(
+                workspaceID, pullRequest: pullRequest, reason: outcome.detail,
+                cause: outcome.status == "refused" ? .refused : .error,
+                head: outcome.head ?? expectedHead, recordOnTask: isCurrent
+            )
             return
         }
         if isWaiting, outcome.base?.isEmpty != false {
             mergeFailed(
                 workspaceID, pullRequest: pullRequest,
                 reason: "The merge did not report its target branch. Check the pull request, then merge again.",
-                recordOnTask: isCurrent
+                cause: .error, head: acceptedHead, recordOnTask: isCurrent
             )
             return
         }
@@ -588,7 +601,7 @@ final class WorkspaceMergeCoordinator {
             if isWaiting {
                 let isClosed = store?.state.workspacesByID[workspaceID] == nil
                 reportUnmergedWait(
-                    workspaceID, pullRequest: request.pullRequest,
+                    workspaceID, pullRequest: request.pullRequest, head: acceptedHead,
                     reason: isClosed ? .workspaceClosed : .pullRequestChanged
                 )
             }
@@ -602,6 +615,19 @@ final class WorkspaceMergeCoordinator {
             next.acceptedBase = outcome.base
             next.phase = .awaitingChecks(acceptedHead: acceptedHead, thenCleanUp: thenCleanUp)
             update(workspaceID, next)
+            if runsAgain {
+                // This run counts toward the limit of failures in a row.
+                pollFailureCounts[workspaceID] = 1
+                ToasttyLog.warning(
+                    "Workspace merge failed and will run again",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "pull_request": String(request.pullRequest.number),
+                        "problem": outcome.detail,
+                    ]
+                )
+            }
         } else if thenCleanUp {
             next.phase = .awaitingMerge
             update(workspaceID, next)
@@ -619,7 +645,11 @@ final class WorkspaceMergeCoordinator {
         thenCleanUp: Bool
     ) async -> Bool {
         guard let acceptedBase = request.acceptedBase, acceptedBase.isEmpty == false else {
-            stopWaitingMerge(workspaceID, pullRequest: "PR #\(request.pullRequest.number)", reason: "The saved merge has no accepted target branch. Check the pull request, then merge again.")
+            stopWaitingMerge(
+                workspaceID, pullRequest: "PR #\(request.pullRequest.number)",
+                reason: "The saved merge has no accepted target branch. Check the pull request, then merge again.",
+                cause: .acceptanceEnded, head: acceptedHead
+            )
             return false
         }
         let outcome = await runScript(
@@ -655,7 +685,7 @@ final class WorkspaceMergeCoordinator {
             notify("Merged \(pullRequest)", outcome.detail)
             return false
         case "refused":
-            stopWaitingMerge(workspaceID, pullRequest: pullRequest, reason: outcome.detail)
+            stopWaitingMerge(workspaceID, pullRequest: pullRequest, reason: outcome.detail, cause: .refused, head: acceptedHead)
             return false
         default:
             // A gh or network failure may pass; give up after a few in a row.
@@ -672,7 +702,7 @@ final class WorkspaceMergeCoordinator {
                 ]
             )
             if failures >= Self.maximumPollFailures {
-                stopWaitingMerge(workspaceID, pullRequest: pullRequest, reason: outcome.detail)
+                stopWaitingMerge(workspaceID, pullRequest: pullRequest, reason: outcome.detail, cause: .error, head: acceptedHead)
                 return false
             }
             return true
@@ -681,21 +711,26 @@ final class WorkspaceMergeCoordinator {
 
     /// Ends a waiting merge that cannot happen. The done mark goes too, so
     /// the Merge button comes back for another try.
-    private func stopWaitingMerge(_ workspaceID: UUID, pullRequest: String, reason: String) {
+    private func stopWaitingMerge(
+        _ workspaceID: UUID, pullRequest: String, reason: String, cause: TaskMergeFailure.Cause, head: String
+    ) {
         pollTasks[workspaceID] = nil
         update(workspaceID, nil)
         store?.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
-        report(workspaceID, .mergeFailed(reason: reason))
+        report(workspaceID, .mergeFailed(reason: reason, cause: cause, head: head))
         notify("\(pullRequest) was not merged", reason)
     }
 
     /// Ends a merge the script refused, before anything changed. The task
     /// records why, unless the workspace moved to another pull request
     /// meanwhile, and the Merge button is back for another try.
-    private func mergeFailed(_ workspaceID: UUID, pullRequest: String, reason: String, recordOnTask: Bool) {
+    private func mergeFailed(
+        _ workspaceID: UUID, pullRequest: String, reason: String, cause: TaskMergeFailure.Cause, head: String?,
+        recordOnTask: Bool
+    ) {
         update(workspaceID, nil)
         if recordOnTask {
-            report(workspaceID, .mergeFailed(reason: reason))
+            report(workspaceID, .mergeFailed(reason: reason, cause: cause, head: head))
         }
         notify("Unable to Merge \(pullRequest)", reason)
     }

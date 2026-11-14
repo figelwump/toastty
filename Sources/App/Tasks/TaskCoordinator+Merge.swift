@@ -265,18 +265,20 @@ extension TaskCoordinator {
     func mergeCleanupEvent(workspaceID: UUID, event: WorkspaceMergeCoordinator.CleanupEvent) {
         guard let record = records.record(taskSpaceWorkspaceID: workspaceID) else { return }
         switch event {
-        case .mergeFailed(let reason):
+        case .mergeFailed(let reason, let cause, let head):
             // The acceptance ends with the merge, as with Cancel Merge, so
             // the task no longer shows a merge under way and offers Merge
             // again. The reason stays for `task get`, the task's row, and
-            // watches until merged.
+            // watches until merged. The cause and the commit let a caller
+            // outside the task decide whether to ask for the same merge again.
             saveOrDefer(taskID: record.id) {
                 $0.mergeRequestedAt = nil
-                $0.mergeFailure = TaskMergeFailure(at: self.now(), reason: reason)
+                $0.mergeFailure = TaskMergeFailure(at: self.now(), reason: reason, cause: cause, head: head)
             }
             ToasttyLog.info("A task's merge stopped without merging", category: .tasks, metadata: [
                 "task_id": record.id.uuidString,
                 "reason": reason,
+                "cause": cause.rawValue,
             ])
         case .merged(let state):
             // Saved before anything closes, so the task keeps its merge if

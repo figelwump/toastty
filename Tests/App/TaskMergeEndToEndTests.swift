@@ -849,6 +849,84 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// GitHub can fail the merge call itself when every check has passed,
+    /// as it did with "Server Error" for a merge the user had accepted.
+    /// Toastty runs the accepted merge again, so one failed call costs the
+    /// user nothing.
+    @Test
+    func aMergeThatGitHubFailsOnceMergesWithoutTheUser() async throws {
+        try await withScenario { scenario in
+            scenario.failMergeCalls(once: true)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the merge and cleanup finish") { scenario.record?.cleanup?.finishedAt != nil }
+
+            #expect(scenario.isFailingMergeCalls == false, "GitHub did not get a failed merge call")
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker))
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+            // Nothing told the user that the merge stopped.
+            #expect(scenario.notifications.contains { $0.contains("not merged") || $0.contains("Unable to Merge") } == false,
+                    "\(scenario.notifications)")
+        }
+    }
+
+    /// While GitHub keeps failing, Toastty stops after a few runs and
+    /// records what a caller outside the task needs to ask for the same
+    /// merge again: that an error stopped it, and the accepted commit.
+    @Test
+    func aMergeThatGitHubKeepsFailingStopsAndCanBeRequestedAgain() async throws {
+        try await withScenario { scenario in
+            scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
+                sessionID: "agent", agent: .claude, panelID: scenario.taskPanelID, workspaceID: scenario.taskSpaceID,
+                cwd: scenario.worktree, isActive: true, isInTurn: false
+            )
+            let taskID = scenario.taskID.uuidString
+            scenario.failMergeCalls(once: false)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            // The accepted merge waits and runs again before it stops.
+            await scenario.waitUntil("the merge waits to run again") { scenario.isWaitingForChecks }
+            #expect(scenario.record?.mergeFailure == nil)
+            await scenario.waitUntil("the merge stops") { scenario.record?.mergeFailure != nil }
+
+            let failure = try #require(scenario.record?.mergeFailure)
+            #expect(failure.cause == .error)
+            #expect(failure.head == scenario.head)
+            #expect(failure.reason.contains("Server Error"), "\(failure.reason)")
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
+            #expect(scenario.notifications == ["PR #7 was not merged: \(failure.reason)"])
+            // The acceptance ended, and the task offers Merge again.
+            #expect(scenario.record?.mergeRequestedAt == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+
+            // A caller outside the task, such as the coordinator, reads the
+            // cause and the commit, and asks for the same merge again.
+            let taskSocketPath = temporarySocketPath()
+            let taskServer = try makeTaskServer(scenario, socketPath: taskSocketPath)
+            defer { withExtendedLifetime(taskServer) {} }
+            try waitForSocket(at: taskSocketPath)
+            scenario.socketPath = taskSocketPath
+            let get = try await scenario.cli(["--json", "task", "get", taskID])
+            #expect(get.status == 0, "\(get.output)")
+            let response = try JSONSerialization.jsonObject(with: Data(get.output.utf8)) as? [String: Any]
+            let reported = (response?["result"] as? [String: Any])?["mergeFailure"] as? [String: Any]
+            #expect(reported?["cause"] as? String == "error", "\(get.output)")
+            #expect(reported?["head"] as? String == scenario.head, "\(get.output)")
+
+            scenario.gitHubWorksAgain()
+            let requested = try await scenario.cli(["--json", "task", "request-merge", taskID])
+            #expect(requested.status == 0, "\(requested.output)")
+            #expect(scenario.record?.mergeFailure == nil)
+            #expect(scenario.fakeSessions.delivered.last?.text.hasPrefix("Use the toastty-task-merge skill.") == true)
+            // The merge skill's task merge, from the task's agent, merges.
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the merge and cleanup finish") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(scenario.record?.mergeFailure == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker))
+        }
+    }
+
     /// An outside coordinator, such as Grok Bot, runs the CLI with no
     /// managed session. It cannot merge directly; request-merge hands the
     /// merge to the task's agent, also in a project with merge = "direct",
@@ -1046,6 +1124,20 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             return false
         }
 
+        /// GitHub answers the merge call with "Server Error": one time, or
+        /// until `gitHubWorksAgain()`.
+        func failMergeCalls(once: Bool) {
+            FileManager.default.createFile(atPath: mergedMarker + (once ? "-github-error-once" : "-github-down"), contents: nil)
+        }
+
+        func gitHubWorksAgain() {
+            try? FileManager.default.removeItem(atPath: mergedMarker + "-github-down")
+        }
+
+        var isFailingMergeCalls: Bool {
+            ["-github-error-once", "-github-down"].contains { FileManager.default.fileExists(atPath: mergedMarker + $0) }
+        }
+
         /// GitHub's checks finish and pass.
         func passChecks() {
             FileManager.default.createFile(atPath: mergedMarker + "-checks-passed", contents: nil)
@@ -1135,11 +1227,16 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         let fakeGh = fakeBin.appendingPathComponent("gh")
         try """
         #!/bin/sh
+        # What `gh api` prints for an HTTP 500 answer.
+        server_error() { echo '{"message":"Server Error"}'; echo 'gh: Server Error (HTTP 500)' >&2; exit 1; }
         case "$1 $2" in
           "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"},"mergeCommitAllowed":true}' ;;
           "pr view") if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; elif [ -e '\(mergedMarker)-retargeted' ]; then echo '\(try json(retargeted))'; elif [ -e '\(mergedMarker)-checks-passed' ]; then echo '\(try json(checksPassed))'; else echo '\(try json(pullRequest))'; fi ;;
           "pr list") echo '[]' ;;
-          "api --method") [ "$3 $4 $6 $8" = 'PUT repos/test/repo/pulls/7/merge sha=\(head) merge_method=merge' ] && touch '\(mergedMarker)' ;;
+          "api --method")
+            [ -e '\(mergedMarker)-github-down' ] && server_error
+            if [ -e '\(mergedMarker)-github-error-once' ]; then rm '\(mergedMarker)-github-error-once'; server_error; fi
+            [ "$3 $4 $6 $8" = 'PUT repos/test/repo/pulls/7/merge sha=\(head) merge_method=merge' ] && touch '\(mergedMarker)' ;;
           *) echo "unexpected gh call: $*" >&2; exit 1 ;;
         esac
         """.write(to: fakeGh, atomically: true, encoding: .utf8)
