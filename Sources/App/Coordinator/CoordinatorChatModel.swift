@@ -140,6 +140,11 @@ final class CoordinatorChatModel: ObservableObject {
     /// The line marks the rows after this time until the user leaves the
     /// chat again. `nil` while the chat draws no line.
     private var newMessagesAfter: Date?
+    /// Older pages are being read so that the line can go where the user
+    /// stopped reading.
+    private var isLoadingOlderForReadPoint = false
+    /// The most older pages read to place the line after a relaunch.
+    static let maximumOlderPagesForReadPoint = 5
     /// Where the text size is saved, or `nil` for a run that saves no
     /// preferences, such as an automation run.
     private let defaults: UserDefaults?
@@ -1040,7 +1045,17 @@ final class CoordinatorChatModel: ObservableObject {
     /// back to the chat.
     private func updateReadPoint() {
         // Only rows that were read to the newest can place the line.
-        guard loaded != nil, isSettled else { return }
+        guard loaded != nil, isSettled, isLoadingOlderForReadPoint == false else { return }
+        if placesNewMessagesLine, let readThrough {
+            // After a relaunch the chat reads only the newest page. The
+            // line goes where the user stopped, so read back to it.
+            isLoadingOlderForReadPoint = true
+            for _ in 0 ..< Self.maximumOlderPagesForReadPoint {
+                guard hasOlder, let oldest = presentation.rows.first?.timestamp, oldest > readThrough else { break }
+                loadOlder()
+            }
+            isLoadingOlderForReadPoint = false
+        }
         let rows = presentation.rows
         if placesNewMessagesLine {
             newMessagesAfter = CoordinatorChatReadPoint.marker(in: rows, after: readThrough) == nil ? nil : readThrough
@@ -1074,7 +1089,13 @@ final class CoordinatorChatModel: ObservableObject {
             placesNewMessagesLine = true
             return
         }
-        updateReadPoint()
+        // Read what the conversation has now, not only what the last
+        // change notice brought: a reply that arrived just before is new.
+        if subscription != nil {
+            refresh()
+        } else {
+            updateReadPoint()
+        }
     }
 
     // MARK: - Text size

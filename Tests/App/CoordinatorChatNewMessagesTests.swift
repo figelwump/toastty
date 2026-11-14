@@ -119,6 +119,37 @@ struct CoordinatorChatNewMessagesTests {
         }
     }
 
+    /// After a relaunch the chat reads only the newest page. The line still
+    /// goes where the user stopped, also when more than a page came since.
+    @MainActor
+    @Test func afterARelaunchTheLineGoesWhereTheUserStoppedAlsoPagesBack() async throws {
+        let suiteName = "toastty.tests.coordinator-new-messages.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let fixture = try CoordinatorChatFixture(chatDefaults: defaults)
+        defer { fixture.tearDown() }
+
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "What is open?")
+        try fixture.recordAgentMessage("Two tasks are open.")
+        try fixture.endTurn(1)
+        _ = try await waitForRow("Two tasks are open.", in: fixture)
+        fixture.chat.hide()
+
+        let unreadCount = CoordinatorChatModel.pageSize + 30
+        try fixture.startTurn(2, userText: "Report each check")
+        for index in 1 ... unreadCount {
+            try fixture.recordAgentMessage("Check \(index) passed.")
+        }
+        try fixture.endTurn(2)
+        try await waitUntilToasttyRead("Check \(unreadCount) passed.", in: fixture)
+        fixture.relaunch()
+        fixture.chat.show(panelID: fixture.panelID)
+        _ = try await waitForRow("Check \(unreadCount) passed.", in: fixture)
+        let first = try #require(row("Check 1 passed.", in: fixture), "The chat did not read back to where the user stopped")
+        #expect(fixture.chat.newMessages == ToasttyNewMessagesMarker(firstRowID: first, count: unreadCount))
+    }
+
     // MARK: - Which rows are new
 
     private static let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
