@@ -8,7 +8,10 @@ struct ToasttyMobileRootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sessionController: AppSessionController
     @State private var appIconBadgeController: AppIconBadgeController?
-    @State private var navigationPath: [ToasttyMobileRoute] = []
+    /// The selected tab and each tab's stack. Without the Mac's task system
+    /// there is no tab bar, and Home's stack is the only one.
+    @State private var tabs = ToasttyMobileTabState()
+    @State private var tasksScrollRequest: ToasttyTasksScrollRequest?
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
     @State private var presentedSheet: ToasttyMobileSheet?
     /// The new-session sheet for content shared from another app, when the
@@ -169,7 +172,7 @@ struct ToasttyMobileRootView: View {
                 resetComposerPresentation()
                 if newState != .restoring, newState != .keychainLocked {
                     pendingDeepLinkDestination = nil
-                    navigationPath.removeAll(keepingCapacity: false)
+                    tabs = ToasttyMobileTabState()
                 }
             } else {
                 routePendingDeepLinkIfAvailable()
@@ -231,33 +234,7 @@ struct ToasttyMobileRootView: View {
     }
 
     private func pairedApp(presentation: PairedConnectionPresentation) -> some View {
-        NavigationStack(path: $navigationPath) {
-            ToasttyHomeView(
-                controller: sessionController.homeController,
-                refresh: sessionController.refreshLiveSessions,
-                onSettings: { presentedSheet = .settings },
-                openWorkspace: openWorkspace,
-                // Reinstall advice outlasts the relay cooldown error that usually follows it.
-                notificationError: sessionController.pushController?.configuration == nil
-                    ? nil : sessionController.pushController.flatMap { $0.deliveryHint ?? $0.errorMessage },
-                retryNotifications: sessionController.pushController?.deliveryHint != nil
-                    ? nil : { sessionController.pushController?.retry() }
-            )
-                .navigationDestination(for: ToasttyMobileRoute.self) { route in
-                    switch route {
-                    case .workspace(let workspaceID):
-                        ToasttyWorkspaceView(
-                            workspaceID: workspaceID,
-                            controller: sessionController.homeController,
-                            openWorkspace: openWorkspace
-                        )
-                    case .conversation(let conversationID):
-                        conversationScreen(for: conversationID)
-                    case .panelPreview(let workspaceID, let panelID):
-                        workspacePreview(workspaceID: workspaceID, panelID: panelID)
-                    }
-                }
-        }
+        tabContent
         .tint(ToasttyDesignTokens.amber)
         .background(ToasttyDesignTokens.background.ignoresSafeArea())
         // Once for the whole stack: Home stays in it under a pushed
@@ -276,6 +253,14 @@ struct ToasttyMobileRootView: View {
         .onChange(of: sessionController.homeController.selectedConversationPresentation) { _, selection in
             syncNavigationPath(with: selection)
         }
+        // Leaving the task system closes the Tasks tab and its stack.
+        .onChange(of: showsTasksTab) { _, showsTasksTab in
+            guard showsTasksTab == false else { return }
+            selectTab(.home)
+            tabs.paths[.tasks] = nil
+        }
+        // Also when the tab changes: only the tab on screen has an open
+        // conversation.
         .onChange(of: navigationPath) { _, newPath in
             sessionController.pushController?.setOpenConversation(newPath.last?.conversationID)
             presentNotificationIntroIfNeeded()
@@ -330,6 +315,112 @@ struct ToasttyMobileRootView: View {
         )
     }
 
+    /// Home and Tasks tabs while the Mac sends a task board; otherwise Home
+    /// alone, with no tab bar.
+    @ViewBuilder
+    private var tabContent: some View {
+        if showsTasksTab {
+            TabView(selection: Binding(get: { tabs.selected }, set: selectTab)) {
+                Tab("Home", systemImage: "house", value: ToasttyMobileTab.home) {
+                    navigationStack(.home) { homeView }
+                }
+                Tab("Tasks", systemImage: "checklist", value: ToasttyMobileTab.tasks) {
+                    navigationStack(.tasks) {
+                        ToasttyTasksTabView(
+                            controller: sessionController.homeController,
+                            refresh: sessionController.refreshLiveSessions,
+                            openWorkspace: openWorkspace,
+                            scrollRequest: $tasksScrollRequest
+                        )
+                    }
+                }
+            }
+        } else {
+            navigationStack(.home) { homeView }
+        }
+    }
+
+    private var showsTasksTab: Bool {
+        sessionController.homeController.snapshot.taskBoard != nil
+    }
+
+    private var homeView: some View {
+        ToasttyHomeView(
+            controller: sessionController.homeController,
+            refresh: sessionController.refreshLiveSessions,
+            onSettings: { presentedSheet = .settings },
+            openWorkspace: openWorkspace,
+            // Reinstall advice outlasts the relay cooldown error that usually follows it.
+            notificationError: sessionController.pushController?.configuration == nil
+                ? nil : sessionController.pushController.flatMap { $0.deliveryHint ?? $0.errorMessage },
+            retryNotifications: sessionController.pushController?.deliveryHint != nil
+                ? nil : { sessionController.pushController?.retry() },
+            showTasks: showTasks
+        )
+    }
+
+    private func navigationStack<Root: View>(_ tab: ToasttyMobileTab, @ViewBuilder root: () -> Root) -> some View {
+        NavigationStack(path: Binding(get: { tabs.paths[tab] ?? [] }, set: { tabs.paths[tab] = $0 })) {
+            root()
+                .navigationDestination(for: ToasttyMobileRoute.self) { route in
+                    switch route {
+                    case .workspace(let workspaceID):
+                        ToasttyWorkspaceView(
+                            workspaceID: workspaceID,
+                            controller: sessionController.homeController,
+                            openWorkspace: openWorkspace
+                        )
+                    case .conversation(let conversationID):
+                        conversationScreen(for: conversationID)
+                    case .panelPreview(let workspaceID, let panelID):
+                        workspacePreview(workspaceID: workspaceID, panelID: panelID)
+                    }
+                }
+        }
+    }
+
+    /// The stack of the tab on screen. Routing, deep links and the selected
+    /// conversation all act on it.
+    private var navigationPath: [ToasttyMobileRoute] {
+        get { tabs.selectedPath }
+        nonmutating set { tabs.selectedPath = newValue }
+    }
+
+    /// Shows a tab with its stack as the user left it. The open conversation
+    /// follows the tab on screen: a conversation on top of the new tab's
+    /// stack opens again, and one left behind in the other tab closes until
+    /// that tab shows again.
+    private func selectTab(_ tab: ToasttyMobileTab) {
+        guard tabs.selected != tab else { return }
+        tabs.selected = tab
+        let home = sessionController.homeController
+        if let conversationID = navigationPath.last?.conversationID {
+            if home.selectedConversationPresentation?.id != conversationID,
+               home.openConversation(id: conversationID) == false {
+                navigationPath = navigationPath.synchronized(with: nil)
+            }
+        } else if home.selectedConversationPresentation != nil {
+            home.dismissConversation()
+        }
+    }
+
+    /// From a card's To ship line or Done count: the Tasks tab's list, at
+    /// that group.
+    private func showTasks(_ target: ToasttyTasksTabTarget) {
+        tabs.paths[.tasks] = []
+        selectTab(.tasks)
+        tasksScrollRequest = ToasttyTasksScrollRequest(target: target)
+    }
+
+    /// A link or a notification opens its conversation in Home's stack,
+    /// also when the Tasks tab already shows it, which leaves the selection
+    /// as it was.
+    private func openInHome(conversationID: UUID) {
+        tabs.selected = .home
+        sessionController.homeController.openConversation(id: conversationID)
+        syncNavigationPath(with: sessionController.homeController.selectedConversationPresentation)
+    }
+
     /// Pushes a workspace from a row or menu, which cannot use a
     /// navigation link. Subspaces open from their parent this way.
     private func openWorkspace(_ workspaceID: UUID) {
@@ -359,10 +450,11 @@ struct ToasttyMobileRootView: View {
 
         switch destination {
         case .conversation(let conversationID):
-            guard sessionController.homeController.openConversation(id: conversationID) else {
+            guard sessionController.homeController.conversation(id: conversationID) != nil else {
                 discardPendingDeepLinkAfterLiveSnapshot()
                 return
             }
+            openInHome(conversationID: conversationID)
             pendingDeepLinkDestination = nil
             presentedSheet = nil
             routedDestinationSinceActivation = true
@@ -372,6 +464,7 @@ struct ToasttyMobileRootView: View {
                 return
             }
             pendingDeepLinkDestination = nil
+            tabs.selected = .home
             sessionController.homeController.dismissConversation()
             navigationPath = [.workspace(workspaceID)]
             presentedSheet = nil
@@ -389,12 +482,14 @@ struct ToasttyMobileRootView: View {
         let home = sessionController.homeController
         switch home.taskAlertRoute(taskID: taskID, conversationID: conversationID) {
         case .conversation(let id):
-            guard home.openConversation(id: id) else { return }
+            guard home.conversation(id: id) != nil else { return }
+            openInHome(conversationID: id)
             pendingDeepLinkDestination = nil
             presentedSheet = nil
             routedDestinationSinceActivation = true
         case .taskDetail(let id):
             pendingDeepLinkDestination = nil
+            tabs.selected = .home
             home.dismissConversation()
             navigationPath = []
             presentedSheet = nil

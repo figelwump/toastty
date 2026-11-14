@@ -137,8 +137,7 @@ final class ToasttyMobileTaskActionUITests: XCTestCase {
         goBackToHome(in: app)
 
         // A task whose setup failed offers Retry and Delete; Delete asks.
-        let segment = app.segmentedControls["toastty-mobile-home-segment"]
-        segment.buttons.element(boundBy: 1).tap()
+        app.buttons["toastty-mobile-home-segment-needsYou"].tap()
         let failed = app.buttons["toastty-task-row-\(setupFailedTaskID)"]
         XCTAssertTrue(scrollTo(failed, in: app))
         failed.tap()
@@ -176,15 +175,16 @@ final class ToasttyMobileTaskActionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        // Every project card expanded, whatever an earlier test saved.
+        app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
         app.launch()
-        let segment = app.segmentedControls["toastty-mobile-home-segment"]
-        XCTAssertTrue(segment.waitForExistence(timeout: 10))
-        let projects = segment.buttons["Projects"]
-        if projects.isSelected == false { projects.tap() }
+        let all = app.buttons["toastty-mobile-home-segment-all"]
+        XCTAssertTrue(all.waitForExistence(timeout: 10))
+        if all.isSelected == false { all.tap() }
         return app
     }
 
-    /// Opens the task space's session from Projects.
+    /// Opens the task space's session from All.
     private func openSession(of state: ControlState, in app: XCUIApplication) {
         let row = app.buttons["toastty-subspace-row-\(state.subspaceID)"]
         XCTAssertTrue(scrollTo(row, in: app), state.name)

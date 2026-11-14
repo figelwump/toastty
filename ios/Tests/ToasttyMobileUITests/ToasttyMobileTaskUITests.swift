@@ -1,93 +1,176 @@
 import XCTest
 
-/// Home from a fixture Mac that runs the task system: Projects | Status
-/// segments, task marks and pills, project footers, and task detail.
+/// Home from a fixture Mac that runs the task system: All | Needs you, the
+/// project cards and their buckets, the Home | Tasks tab bar, the Tasks
+/// tab, and task detail.
 final class ToasttyMobileTaskUITests: XCTestCase {
     private let toasttyWorkspaceID = "A1000000-0000-0000-0000-000000000001"
+    private let emptyosWorkspaceID = "A1000000-0000-0000-0000-000000000005"
     private let needsApprovalSubspaceID = "A1000000-0000-0000-0000-000000000011"
     private let questionSubspaceID = "A1000000-0000-0000-0000-000000000012"
     private let workingSubspaceID = "A1000000-0000-0000-0000-000000000013"
     private let doneSubspaceID = "A1000000-0000-0000-0000-000000000014"
+    private let reviewSubspaceID = "A1000000-0000-0000-0000-000000000022"
+    private let archiveSubspaceID = "A1000000-0000-0000-0000-000000000026"
     private let setupFailedTaskID = "D1000000-0000-0000-0000-000000000003"
     private let startingTaskID = "D1000000-0000-0000-0000-000000000004"
     private let shippedTaskID = "D1000000-0000-0000-0000-000000000005"
+    private let otherProjectTaskID = "D1000000-0000-0000-0000-000000000012"
+    /// The fixture's session in the question task's task space.
+    private let questionSessionID = "B1000000-0000-0000-0000-000000000010"
 
     override func setUp() {
         continueAfterFailure = false
     }
 
-    func testProjectsShowTaskMarksAndFinishedCounts() {
+    func testAllListsEachProjectAsACardWithBuckets() {
         let app = launchTaskFixture()
-        let segment = app.segmentedControls["toastty-mobile-home-segment"]
-        XCTAssertTrue(segment.waitForExistence(timeout: 10))
-        // The Mac's segments replace All | Active, and Status counts the
+        // The Mac's switcher replaces All | Active, and Needs you counts the
         // tasks that need the user.
         XCTAssertFalse(app.segmentedControls["toastty-mobile-workspace-session-filter"].exists)
-        XCTAssertTrue(segment.buttons["Status 5"].exists)
-        select("Projects", in: segment)
+        XCTAssertEqual(app.buttons["toastty-mobile-home-segment-needsYou"].label, "Needs you, 5")
+        select(.all, in: app)
 
-        let group = app.buttons["toastty-subspaces-group-\(toasttyWorkspaceID)"]
-        XCTAssertTrue(scrollTo(group, in: app))
-        // The done task left the list; the footer counts it.
-        XCTAssertEqual(group.label, "Task Spaces, 3, 1 asks a question, 1 needs approval")
+        let toastty = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(toastty.waitForExistence(timeout: 5))
+        XCTAssertTrue(toastty.label.hasSuffix("6 need you, 3 running"), toastty.label)
+        // Sessions, task spaces and tasks without a task space share the
+        // buckets; the done task space left the card.
+        let needsYou = app.descendants(matching: .any)["toastty-card-bucket-\(toasttyWorkspaceID)-needsYou"]
+        XCTAssertTrue(needsYou.exists)
+        XCTAssertEqual(needsYou.label, "Needs you, 6")
+        XCTAssertTrue(app.buttons["toastty-mobile-grouped-card-B1000000-0000-0000-0000-000000000001"].exists)
+        let approval = app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"]
+        XCTAssertTrue(scrollTo(approval, in: app))
+        // An approval beats the task's own stage.
+        XCTAssertTrue(approval.label.contains("task space, needs approval"))
         XCTAssertFalse(app.buttons["toastty-subspace-row-\(doneSubspaceID)"].exists)
-
+        // A parent shows its child progress, and the task it started lists
+        // under it in the parent's bucket although it is starting.
         let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
         XCTAssertTrue(scrollTo(question, in: app))
-        // The agent's question replaces its last status line.
-        XCTAssertTrue(question.label.hasPrefix(
-            "early-session-titles, task space, asks a question, Asks: Should the badge count tasks or sessions?"
-        ))
-        // An approval wins over the task's own stage, as on the Mac.
-        let approval = app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"]
-        XCTAssertTrue(approval.label.contains("task space, needs approval"))
-        XCTAssertTrue(approval.label.hasSuffix("github-pr: PR #36"))
-        attachScreenshot(named: "tasks-projects", of: app)
+        XCTAssertTrue(question.label.hasSuffix("1/2 merged"), question.label)
+        let child = app.buttons["toastty-task-row-\(startingTaskID)"]
+        XCTAssertTrue(scrollTo(child, in: app))
+        XCTAssertGreaterThan(child.frame.minY, question.frame.minY)
+        XCTAssertLessThan(child.frame.minY, app.descendants(matching: .any)["toastty-card-bucket-\(toasttyWorkspaceID)-running"].frame.minY)
+        attachScreenshot(named: "home-all", of: app)
 
-        let footer = app.buttons["toastty-project-finished-\(toasttyWorkspaceID)"]
-        XCTAssertTrue(scrollTo(footer, in: app))
-        XCTAssertTrue(footer.label.contains("To ship 3"))
-        XCTAssertTrue(footer.label.contains("Done 12"))
-        attachScreenshot(named: "tasks-projects-footer", of: app)
-        // The footer shows the finished tasks in Status.
-        footer.tap()
-        XCTAssertTrue(segment.buttons["Status 5"].waitForSelection())
+        // The To ship line shows the project's latest To ship tasks in place.
+        let toShip = app.buttons["toastty-card-to-ship-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(scrollTo(toShip, in: app))
+        XCTAssertEqual(toShip.label, "To ship 3")
+        XCTAssertEqual(app.buttons["toastty-card-done-\(toasttyWorkspaceID)"].label, "Done 12")
+        XCTAssertFalse(app.buttons["toastty-task-row-\(shippedTaskID)"].exists)
+        app.buttons["toastty-card-to-ship-toggle-\(toasttyWorkspaceID)"].tap()
+        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(shippedTaskID)"], in: app))
+        attachScreenshot(named: "home-all-to-ship", of: app)
+
+        // Ready to review is apart from Needs you.
+        let emptyos = app.buttons["toastty-mobile-workspace-\(emptyosWorkspaceID)"]
+        XCTAssertTrue(scrollTo(emptyos, in: app))
+        XCTAssertTrue(emptyos.label.hasSuffix("1 needs you, 1 ready for review, 3 running, 2 idle"), emptyos.label)
+        XCTAssertTrue(scrollTo(app.buttons["toastty-subspace-row-\(reviewSubspaceID)"], in: app))
+        XCTAssertEqual(
+            app.descendants(matching: .any)["toastty-card-bucket-\(emptyosWorkspaceID)-readyToReview"].label,
+            "Ready to review, 1"
+        )
+        // A task whose project is not open lists in Other tasks, last.
+        let other = app.descendants(matching: .any)["toastty-card-other-tasks"]
+        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(otherProjectTaskID)"], in: app))
+        XCTAssertEqual(other.label, "Other tasks, 1 idle")
+        attachScreenshot(named: "home-all-other-tasks", of: app)
+
+        // Needs you lists the tasks that need the user.
+        select(.needsYou, in: app)
+        XCTAssertTrue(app.buttons["toastty-subspace-row-\(questionSubspaceID)"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["toastty-task-row-\(setupFailedTaskID)"].exists)
+        XCTAssertFalse(app.buttons["toastty-subspace-row-\(workingSubspaceID)"].exists)
+        attachScreenshot(named: "home-needs-you", of: app)
     }
 
-    func testStatusGroupsTasksAndATaskWithoutATaskSpaceOpensItsDetail() {
+    func testACollapsedCardStaysCollapsedAfterARelaunch() {
+        var app = launchTaskFixture(keepsCollapsedCards: true)
+        select(.all, in: app)
+        let collapse = app.buttons["toastty-card-collapse-\(emptyosWorkspaceID)"]
+        XCTAssertTrue(scrollTo(collapse, in: app))
+        // Left over from a run that failed before it cleaned up.
+        if collapse.value as? String == "Collapsed" { collapse.tap() }
+        let row = app.buttons["toastty-subspace-row-\(archiveSubspaceID)"]
+        XCTAssertTrue(scrollTo(row, in: app))
+        XCTAssertTrue(scrollTo(collapse, in: app))
+        collapse.tap()
+        XCTAssertEqual(collapse.value as? String, "Collapsed")
+        XCTAssertFalse(row.exists)
+        // The name line keeps its counts.
+        XCTAssertTrue(app.buttons["toastty-mobile-workspace-\(emptyosWorkspaceID)"].label.hasSuffix("2 idle"))
+        attachScreenshot(named: "home-card-collapsed", of: app)
+
+        app.terminate()
+        app = launchTaskFixture(keepsCollapsedCards: true)
+        select(.all, in: app)
+        let relaunched = app.buttons["toastty-card-collapse-\(emptyosWorkspaceID)"]
+        XCTAssertTrue(scrollTo(relaunched, in: app))
+        XCTAssertEqual(relaunched.value as? String, "Collapsed")
+        XCTAssertFalse(app.buttons["toastty-subspace-row-\(archiveSubspaceID)"].exists)
+        relaunched.tap()
+        XCTAssertEqual(relaunched.value as? String, "Expanded")
+        XCTAssertTrue(scrollTo(app.buttons["toastty-subspace-row-\(archiveSubspaceID)"], in: app))
+    }
+
+    func testTheTabBarShowsOnlyWhileTheMacSendsATaskBoard() {
+        let plain = XCUIApplication()
+        plain.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
+        plain.launch()
+        XCTAssertTrue(plain.segmentedControls["toastty-mobile-workspace-session-filter"].waitForExistence(timeout: 10))
+        XCTAssertFalse(plain.tabBars.buttons["Tasks"].exists)
+        XCTAssertFalse(plain.buttons["toastty-mobile-home-segment-all"].exists)
+        plain.terminate()
+
         let app = launchTaskFixture()
-        let segment = app.segmentedControls["toastty-mobile-home-segment"]
-        XCTAssertTrue(segment.waitForExistence(timeout: 10))
-        select("Status 5", in: segment)
+        XCTAssertTrue(app.tabBars.buttons["Home"].exists)
+        XCTAssertTrue(app.tabBars.buttons["Tasks"].exists)
+        XCTAssertTrue(app.tabBars.buttons["Home"].isSelected)
+    }
 
-        // Rows with an open task space are that task space's row.
-        let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
-        XCTAssertTrue(question.waitForExistence(timeout: 5))
-        // Rows from several projects share the list, so each names its own.
-        XCTAssertTrue(question.label.contains("Should the badge count tasks or sessions?, toastty"))
-        XCTAssertTrue(app.buttons["toastty-subspace-row-\(workingSubspaceID)"].exists)
-        // A task Toastty is still setting up lists under the task that
-        // started it.
-        XCTAssertTrue(app.buttons["toastty-task-row-\(startingTaskID)"].exists)
-        let failed = app.buttons["toastty-task-row-\(setupFailedTaskID)"]
-        XCTAssertTrue(failed.exists)
-        XCTAssertEqual(failed.label, "Composer blank line, ⚠ setup failed, toastty")
-        // Only task spaces list here: the toastty workspace's own sessions do not.
-        XCTAssertFalse(app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"].exists)
-        attachScreenshot(named: "tasks-status", of: app)
-
-        let toShip = app.buttons["toastty-status-to-ship"]
-        XCTAssertTrue(scrollTo(toShip, in: app))
-        XCTAssertEqual(toShip.value as? String, "Collapsed")
-        XCTAssertFalse(app.buttons["toastty-task-row-\(shippedTaskID)"].exists)
-        toShip.tap()
+    func testTheTasksTabListsToShipFirstAndATaskWithoutATaskSpaceOpensItsDetail() {
+        let app = launchTaskFixture()
+        app.tabBars.buttons["Tasks"].tap()
+        let toShip = app.descendants(matching: .any)["toastty-tasks-group-to-ship"]
+        XCTAssertTrue(toShip.waitForExistence(timeout: 5))
+        XCTAssertEqual(toShip.label, "To ship, 3")
+        let lane = app.descendants(matching: .any)["toastty-tasks-lane-toastty"]
+        XCTAssertTrue(lane.exists)
         let shipped = app.buttons["toastty-task-row-\(shippedTaskID)"]
-        XCTAssertTrue(scrollTo(shipped, in: app))
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-status-done"].exists)
-        attachScreenshot(named: "tasks-status-to-ship", of: app)
-        toShip.tap()
+        XCTAssertTrue(shipped.exists)
+        let needsYou = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
+        XCTAssertTrue(needsYou.exists)
+        XCTAssertGreaterThan(needsYou.frame.minY, shipped.frame.minY)
+        XCTAssertEqual(needsYou.label, "Needs you, 4")
+        // Rows from several projects share the list, so each names its own.
+        let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
+        XCTAssertTrue(question.label.contains("Should the badge count tasks or sessions?, toastty"))
+        attachScreenshot(named: "tasks-tab", of: app)
 
-        XCTAssertTrue(scrollTo(failed, in: app))
+        // A review lists under Ready to review, apart from Needs you.
+        let review = app.buttons["toastty-subspace-row-\(reviewSubspaceID)"]
+        XCTAssertTrue(scrollTo(review, in: app, list: "toastty-mobile-tasks"))
+        let readyToReview = app.descendants(matching: .any)["toastty-tasks-group-readyToReview"]
+        XCTAssertEqual(readyToReview.label, "Ready to review, 1")
+        XCTAssertGreaterThan(review.frame.minY, readyToReview.frame.minY)
+        // A task Toastty is still setting up lists in Running, apart from
+        // the task that started it, which needs the user.
+        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(startingTaskID)"], in: app, list: "toastty-mobile-tasks"))
+        XCTAssertGreaterThan(
+            app.buttons["toastty-task-row-\(startingTaskID)"].frame.minY,
+            app.descendants(matching: .any)["toastty-tasks-group-running"].frame.minY
+        )
+        XCTAssertTrue(scrollTo(app.descendants(matching: .any)["toastty-tasks-group-done"], in: app, list: "toastty-mobile-tasks"))
+        attachScreenshot(named: "tasks-tab-end", of: app)
+
+        let failed = app.buttons["toastty-task-row-\(setupFailedTaskID)"]
+        XCTAssertTrue(scrollTo(failed, in: app, list: "toastty-mobile-tasks"))
+        XCTAssertEqual(failed.label, "Composer blank line, ⚠ setup failed, toastty")
         failed.tap()
         let title = app.staticTexts["toastty-task-detail-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
@@ -99,23 +182,95 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
     }
 
-    private func launchTaskFixture() -> XCUIApplication {
+    func testEachTabKeepsItsStackAndASessionOpensFromTheTasksTab() {
+        let app = launchTaskFixture()
+        select(.all, in: app)
+        // Home: push the toastty workspace.
+        let workspace = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        workspace.tap()
+        let workspaceScreen = app.descendants(matching: .any)["toastty-mobile-workspace-detail"]
+        XCTAssertTrue(workspaceScreen.waitForExistence(timeout: 5))
+
+        // Tasks: open the question task's session from its row.
+        app.tabBars.buttons["Tasks"].tap()
+        let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        question.tap()
+        let conversationTitle = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-task-bar"].waitForExistence(timeout: 5))
+        // The tab bar stays on a pushed session.
+        XCTAssertTrue(app.tabBars.buttons["Home"].isHittable)
+        attachScreenshot(named: "tasks-session-with-tab-bar", of: app)
+
+        // Home still shows its workspace, and Tasks its session.
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(workspaceScreen.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(workspaceScreen))
+        XCTAssertFalse(conversationTitle.isHittable)
+        app.tabBars.buttons["Tasks"].tap()
+        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(conversationTitle))
+
+        // Back in Tasks returns to its list; Home kept its workspace.
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(waitUntilHittable(workspaceScreen))
+    }
+
+    func testACardsToShipAndDoneCountsOpenTheTasksTabAtTheirGroup() {
+        let app = launchTaskFixture()
+        select(.all, in: app)
+        let toShip = app.buttons["toastty-card-to-ship-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(scrollTo(toShip, in: app))
+        toShip.tap()
+        XCTAssertTrue(app.tabBars.buttons["Tasks"].waitForSelection())
+        XCTAssertTrue(waitUntilHittable(app.descendants(matching: .any)["toastty-tasks-lane-toastty"]))
+
+        app.tabBars.buttons["Home"].tap()
+        let done = app.buttons["toastty-card-done-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(waitUntilHittable(done))
+        done.tap()
+        XCTAssertTrue(app.tabBars.buttons["Tasks"].waitForSelection())
+        XCTAssertTrue(waitUntilHittable(app.descendants(matching: .any)["toastty-tasks-group-done"]))
+        attachScreenshot(named: "tasks-tab-done", of: app)
+    }
+
+    // MARK: - Helpers
+
+    private enum Segment: String {
+        case all
+        case needsYou
+    }
+
+    /// Without `keepsCollapsedCards`, every project card shows expanded
+    /// whatever an earlier test saved.
+    private func launchTaskFixture(keepsCollapsedCards: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        if keepsCollapsedCards == false {
+            app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
+        }
         app.launch()
+        XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 10))
         return app
     }
 
-    private func select(_ title: String, in segment: XCUIElement) {
-        let button = segment.buttons[title]
+    private func select(_ segment: Segment, in app: XCUIApplication) {
+        let button = app.buttons["toastty-mobile-home-segment-\(segment.rawValue)"]
         XCTAssertTrue(button.waitForExistence(timeout: 5))
         if button.isSelected == false { button.tap() }
+        XCTAssertTrue(button.waitForSelection())
     }
 
-    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication, attempts: Int = 10) -> Bool {
-        let list = app.collectionViews["toastty-mobile-home"].exists
-            ? app.collectionViews["toastty-mobile-home"]
+    private func scrollTo(
+        _ element: XCUIElement, in app: XCUIApplication, list identifier: String = "toastty-mobile-home", attempts: Int = 10
+    ) -> Bool {
+        let list = app.collectionViews[identifier].exists
+            ? app.collectionViews[identifier]
             : app.collectionViews.firstMatch
         for _ in 0..<attempts {
             if element.exists, element.isHittable { return true }
@@ -126,6 +281,13 @@ final class ToasttyMobileTaskUITests: XCTestCase {
             list.swipeDown(velocity: .slow)
         }
         return element.exists && element.isHittable
+    }
+
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func attachScreenshot(named name: String, of app: XCUIApplication) {

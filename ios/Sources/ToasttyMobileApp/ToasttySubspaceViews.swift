@@ -4,10 +4,11 @@ import SwiftUI
 import ToasttyMobileDomain
 import UIKit
 
-/// Which Subspaces groups the user collapsed, kept across launches so a long
-/// list of finished tasks stays folded away.
+/// Which Subspaces groups, or with the task system which project cards, the
+/// user collapsed, kept across launches so a long list stays folded away.
 struct ToasttyCollapsedSubspaceGroups: Equatable {
     static let preferenceKey = "toastty-mobile-collapsed-subspace-groups"
+    static let projectCardsPreferenceKey = "toastty-mobile-collapsed-project-cards"
 
     private(set) var parentIDs: Set<UUID>
 
@@ -108,8 +109,10 @@ struct ToasttySubspaceGroup: View {
                 .toasttyListRow()
             if isExpanded {
                 if listed.isFiltered, let activeFilter {
-                    filterBar(activeFilter)
-                        .toasttyListRow()
+                    ToasttySpawnerFilterBar(filter: activeFilter, controller: controller) {
+                        spawnerFilter = nil
+                    }
+                    .toasttyListRow()
                 }
                 ForEach(listed.rows) { row in
                     ToasttySubspaceRow(
@@ -119,20 +122,7 @@ struct ToasttySubspaceGroup: View {
                         openWorkspace: openWorkspace
                     )
                     .toasttyListRow()
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        if row.showsDoneToggle, controller.canMarkSubspacesDone {
-                            Button {
-                                controller.setSubspaceDone(row.id, isDone: !row.workspace.isDone)
-                            } label: {
-                                Label(
-                                    row.workspace.isDone ? "Not Done" : "Done",
-                                    systemImage: row.workspace.isDone ? "square" : "checkmark.square"
-                                )
-                            }
-                            .tint(ToasttyDesignTokens.green)
-                            .accessibilityIdentifier("toastty-subspace-swipe-done-\(row.id.uuidString)")
-                        }
-                    }
+                    .toasttySubspaceDoneSwipe(row, controller: controller)
                 }
             }
         }
@@ -205,13 +195,19 @@ struct ToasttySubspaceGroup: View {
             + tallyCounts.map { "\($0.count) \(ToasttySubspaceGroupPresentation.statusLabel($0.status))" })
             .joined(separator: ", ")
     }
+}
 
-    private func filterBar(_ filter: ToasttySpawnerChip) -> some View {
+/// "Only task spaces from <session> ✕": the ⑂ filter that limits a group to
+/// one session's task spaces. Tapping it shows them all again.
+struct ToasttySpawnerFilterBar: View {
+    let filter: ToasttySpawnerChip
+    let controller: HomeScreenController
+    let clear: () -> Void
+
+    var body: some View {
         let name = controller.conversation(id: filter.conversationID)
             .map(ToasttySessionRowPresentation.title(for:)) ?? "this session"
-        return Button {
-            spawnerFilter = nil
-        } label: {
+        return Button(action: clear) {
             HStack(spacing: 6) {
                 Text("Only task spaces from \(name)")
                     .lineLimit(1)
@@ -517,6 +513,9 @@ struct ToasttySubspaceRow: View {
         if dynamicTypeSize.isAccessibilitySize == false {
             Spacer(minLength: 0)
         }
+        if let progress = row.task?.shownChildProgress {
+            ToasttyChildProgressChip(progress: progress)
+        }
         if let chip = row.chip {
             ToasttyAnnotationChip(
                 annotation: RemoteWorkspaceAnnotation(key: chip.key, text: chip.text, color: chip.color),
@@ -550,7 +549,8 @@ struct ToasttySubspaceRow: View {
             ? ToasttySubspaceGroupPresentation.statusLabel(row.status)
             : "last seen \(ToasttySubspaceGroupPresentation.statusLabel(row.status))"
         return ([row.title, "task space", status, row.summary, projectTag]
-            + [row.chip.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))])
+            + [row.chip.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))]
+            + [row.task?.shownChildProgress.map(ToasttyChildProgressChip.label)])
             .compactMap { $0 }
             .filter { $0.isEmpty == false }
             .joined(separator: ", ")
@@ -744,6 +744,25 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
 extension View {
     func toasttySubspaceDoneNotice(_ controller: HomeScreenController) -> some View {
         modifier(ToasttySubspaceDoneNoticeModifier(controller: controller))
+    }
+
+    /// A subspace row's leading swipe: Done, or Not Done, while the row is
+    /// quiet and the Mac takes the change.
+    func toasttySubspaceDoneSwipe(_ row: MobileSubspaceRow, controller: HomeScreenController) -> some View {
+        swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if row.showsDoneToggle, controller.canMarkSubspacesDone {
+                Button {
+                    controller.setSubspaceDone(row.id, isDone: !row.workspace.isDone)
+                } label: {
+                    Label(
+                        row.workspace.isDone ? "Not Done" : "Done",
+                        systemImage: row.workspace.isDone ? "square" : "checkmark.square"
+                    )
+                }
+                .tint(ToasttyDesignTokens.green)
+                .accessibilityIdentifier("toastty-subspace-swipe-done-\(row.id.uuidString)")
+            }
+        }
     }
 
     /// A row of the phone's session lists: no separator or system

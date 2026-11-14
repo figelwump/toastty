@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Tasks by stage: Needs you, Running and Idle as rows, To ship as one
 /// header per project with its latest tasks under it, and Done as a count.
-/// The iPhone's Status list uses these groups, and the Tasks view and the
-/// project cards use its family and Release rules. The Mac sidebar lists
+/// The iPhone's Needs you list uses these groups, and the Tasks view and
+/// the project cards use its family and Release rules. The Mac sidebar lists
 /// rows in `SidebarBuckets` instead.
 struct SidebarStatusSections: Equatable {
     struct Entry: Equatable, Identifiable {

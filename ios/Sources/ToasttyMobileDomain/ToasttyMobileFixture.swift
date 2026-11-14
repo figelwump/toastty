@@ -194,12 +194,14 @@ public enum ToasttyMobileFixture {
     public static let setupFailedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000003")!
     public static let startingTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000004")!
     public static let shippedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000005")!
+    public static let otherProjectTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000012")!
 
     /// `home` from a Mac with the task system on. Its task spaces are
     /// tasks: compact-session-rows waits for approval, early-session-titles
     /// asks a question, ios-subspaces is working, and sidebar-done-subspaces
-    /// is done. A review task holds PR #36; one task's setup failed; one
-    /// starts under the question task; one merged and waits for a release.
+    /// is done. A review task holds PR #36; one task's setup failed; the
+    /// question task started two tasks: one starts, and one merged and waits
+    /// for a release. One task's project is not open.
     /// The emptyos project holds one task space for each other Merge
     /// control state; see `taskActionTasks`.
     public static let taskHome: MobileHomeSnapshot = {
@@ -224,14 +226,16 @@ public enum ToasttyMobileFixture {
                         kind: .openPullRequest, title: "Open PR #45", detail: "Checks failing",
                         menu: [RemoteTaskActionItem(action: .merge, title: "Merge PR #45"), archiveTaskItem]
                     ),
-                    actions: [mergeItem, archiveItem]
+                    actions: [mergeItem, archiveItem],
+                    childProgress: RemoteTaskChildProgress(merged: 1, total: 2)
                 ),
                 RemoteTaskSummary(
                     id: startingTaskID, title: "Split the parser", group: .running, mark: .starting,
                     statusLine: "Moving to worktree · fetching base", rowSummary: "Moving to worktree · fetching base",
                     stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
                     projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now,
-                    actions: [deleteItem]
+                    actions: [deleteItem],
+                    parentTaskID: questionTaskID, parentTaskTitle: "early-session-titles"
                 ),
                 RemoteTaskSummary(
                     id: reviewTaskID, title: "compact-session-rows", group: .needsYou,
@@ -267,7 +271,17 @@ public enum ToasttyMobileFixture {
                     statusLine: "Merged · waiting for a release", stageTitle: "To ship",
                     stageReason: "merged, waiting for a release tag",
                     projectWorkspaceID: toasttyID, projectTitle: "toastty",
-                    pullRequest: pullRequest(259, .merged), activityAt: now
+                    pullRequest: pullRequest(259, .merged), activityAt: now,
+                    parentTaskID: questionTaskID, parentTaskTitle: "early-session-titles"
+                ),
+                // Its project is not open on the Mac, so Home lists it in
+                // the Other tasks card.
+                RemoteTaskSummary(
+                    id: otherProjectTaskID, title: "Linux port spike", group: .idle,
+                    statusLine: "Codex · idle", rowSummary: "Codex · idle",
+                    stageTitle: "Idle", stageReason: "Codex · idle",
+                    projectTitle: "linux-port", activityAt: now,
+                    actions: [markDoneItem, archiveItem]
                 ),
             ] + taskActionTasks(now: now),
             needsYou: [
@@ -279,7 +293,7 @@ public enum ToasttyMobileFixture {
                 RemoteTaskBoardEntry(taskID: cleanupStoppedTaskID),
             ],
             running: [RemoteTaskBoardEntry(taskID: workingSubspaceID), RemoteTaskBoardEntry(taskID: mergingTaskID)],
-            idle: [RemoteTaskBoardEntry(taskID: archiveTaskID)],
+            idle: [RemoteTaskBoardEntry(taskID: archiveTaskID), RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
             toShip: [RemoteTaskShipLane(id: "toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [shippedTaskID])],
             doneCount: 14,
             finishedByProject: [
