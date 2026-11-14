@@ -17,6 +17,7 @@ final class DisplayShortcutInterceptor {
 
     enum ShortcutAction: Equatable {
         case commandPalette
+        case coordinatorDockShortcut
         case closePanel
         case consumeShortcut
         case createWindow
@@ -113,6 +114,17 @@ final class DisplayShortcutInterceptor {
         if Self.isCommandPaletteShortcut(event),
            appOwnedWindowID != nil {
             return .commandPalette
+        }
+
+        if Self.isCoordinatorDockShortcut(event),
+           let appOwnedWindowID,
+           let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController,
+           CoordinatorDockPresentation.showsToggle(
+               windowID: appOwnedWindowID,
+               coordinator: controller.location,
+               chatAvailable: controller.chatIsAvailable
+           ) {
+            return .coordinatorDockShortcut
         }
         if Self.isRepeatedNewWindowShortcut(event),
            canConsumeRepeatedWindowShortcut() {
@@ -296,6 +308,8 @@ final class DisplayShortcutInterceptor {
         switch action {
         case .commandPalette:
             toggleCommandPalette(appOwnedWindowID)
+        case .coordinatorDockShortcut:
+            performCoordinatorDockShortcut()
         case .closePanel:
             closeFocusedPanel(preferredWindowID: appOwnedWindowID)
         case .consumeShortcut:
@@ -377,6 +391,19 @@ final class DisplayShortcutInterceptor {
         guard event.type == .keyDown,
               event.isARepeat == false,
               event.charactersIgnoringModifiers?.lowercased() == "p" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
+    /// Cmd+Shift+K. The app owns it rather than the View menu item: SwiftUI
+    /// menu state is not told of every change it depends on, such as the
+    /// key window, and a stale disabled item would drop the key.
+    static func isCoordinatorDockShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "k" else {
             return false
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -818,15 +845,16 @@ final class DisplayShortcutInterceptor {
     }
 
     /// The window that the shortcut in `event` acts on. Text input focus
-    /// keeps most shortcuts with the text control, but Cmd+Shift+P has no
-    /// text-editing meaning, so the command palette also opens from text
-    /// views such as the Coordinator message bar and its transcript.
+    /// keeps most shortcuts with the text control, but Cmd+Shift+P and
+    /// Cmd+Shift+K have no text-editing meaning, so the command palette and
+    /// the coordinator's dock shortcut also work from text views such as the
+    /// Coordinator message bar and its transcript.
     static func shortcutWindowID(
         for event: NSEvent,
         keyWindow: NSWindow?,
         modalWindow: NSWindow?
     ) -> UUID? {
-        if isCommandPaletteShortcut(event) {
+        if isCommandPaletteShortcut(event) || isCoordinatorDockShortcut(event) {
             return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
         }
         return closePanelShortcutWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
@@ -919,6 +947,12 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func performCoordinatorDockShortcut() -> Bool {
+        guard let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController else { return false }
+        controller.performDockShortcut()
+        return true
     }
 
     private func toggleRightPanel(preferredWindowID: UUID?) -> Bool {

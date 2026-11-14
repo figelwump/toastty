@@ -1828,6 +1828,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let window = ShortcutTestWindow()
         window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
         let paletteEvent = try makeKeyEvent(characters: "P", modifiers: [.command, .shift], keyCode: 0x23)
+        let dockEvent = try makeKeyEvent(characters: "K", modifiers: [.command, .shift], keyCode: 0x28)
         let closeEvent = try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D)
         // The Coordinator message bar, and a read-only text view like the
         // Coordinator transcript's selectable text.
@@ -1838,6 +1839,11 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             window.forcedFirstResponder = responder
             XCTAssertEqual(
                 DisplayShortcutInterceptor.shortcutWindowID(for: paletteEvent, keyWindow: window, modalWindow: nil),
+                windowID
+            )
+            // Cmd+Shift+K, the coordinator's dock shortcut, too.
+            XCTAssertEqual(
+                DisplayShortcutInterceptor.shortcutWindowID(for: dockEvent, keyWindow: window, modalWindow: nil),
                 windowID
             )
             // Cmd+W stays with the text view.

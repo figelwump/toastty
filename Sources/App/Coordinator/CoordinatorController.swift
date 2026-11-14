@@ -524,14 +524,59 @@ final class CoordinatorController: ObservableObject {
         _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: false))
     }
 
-    /// The dock's toolbar button, shortcut and sidebar row: hides a dock
-    /// that shows, and otherwise shows it with the keyboard in its field.
+    /// The dock's toolbar button and sidebar row: hides a dock that shows,
+    /// and otherwise shows it with the keyboard in its field.
     func toggleDock() {
         guard let location else { return }
         if dockShows(in: location.windowID) {
             hideDock()
         } else {
             showDock(focusComposer: true)
+        }
+    }
+
+    /// What Cmd+Shift+K does now, in the coordinator's window. `nil`
+    /// without a coordinator.
+    var dockShortcutAction: CoordinatorDockPresentation.ShortcutAction? {
+        guard let location, let window = store.window(id: location.windowID) else { return nil }
+        // The full view's chat shows only in the coordinator's tab, and
+        // not while focus mode shows another panel.
+        let panelIsDisplayed = location.panelID.map { panelID in
+            store.state.workspacesByID[location.workspaceID]?.panelIsDisplayedInSelectedTab(panelID) == true
+        } ?? false
+        let fullViewChatOnScreen = chatIsAvailable
+            && panelIsDisplayed
+            && showsTerminal == false
+            && window.selectedWorkspaceID == location.workspaceID
+            && window.showsTasksView == false
+        return CoordinatorDockPresentation.shortcutAction(
+            dockShows: dockShows(in: location.windowID),
+            dockHasKeyboard: chat?.composerHasKeyboard(host: .dock) == true,
+            fullViewChatOnScreen: fullViewChatOnScreen,
+            fullViewHasKeyboard: chat?.composerHasKeyboard(host: .panel) == true
+        )
+    }
+
+    /// Cmd+Shift+K: the keyboard goes to the chat's field, in the dock or
+    /// in the full view. Only when the dock's field has it already does
+    /// the dock hide.
+    func performDockShortcut() {
+        guard let location, let action = dockShortcutAction else { return }
+        ToasttyLog.info("Ran the coordinator's dock shortcut", category: .tasks, metadata: ["action": "\(action)"])
+        switch action {
+        case .showDock:
+            showDock(focusComposer: true)
+        case .hideDock:
+            hideDock()
+        case .focusDock:
+            chat?.requestComposerFocus(host: .dock)
+        case .focusFullView:
+            // Another panel in the coordinator's workspace, such as
+            // policy.md, can have the focus.
+            if let panelID = location.panelID {
+                _ = store.send(.focusPanel(workspaceID: location.workspaceID, panelID: panelID))
+            }
+            chat?.requestComposerFocus(host: .panel)
         }
     }
 
