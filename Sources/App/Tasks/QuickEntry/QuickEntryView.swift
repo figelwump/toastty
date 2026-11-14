@@ -44,21 +44,34 @@ struct QuickEntryView: View {
                 header
                 QuickEntryTextEditor(
                     text: $model.text,
-                    placeholder: "What needs doing?",
+                    placeholder: model.isDictating ? "Say what needs doing" : "What needs doing?",
                     isEditable: model.isEditable,
                     focusRequestID: model.focusRequestID,
                     onSubmit: model.submit,
                     onCreateTask: model.createTask,
                     onCancel: model.cancel,
                     onPasteAttachments: model.pasteAttachments(from:),
-                    dropTarget: dropTarget
+                    dropTarget: dropTarget,
+                    dictatedWords: model.dictatedWords
                 )
+                if let status = model.dictationStatus {
+                    dictationLine(status)
+                }
             }
             .padding(EdgeInsets(top: 16, leading: 18, bottom: 10, trailing: 18))
 
-            attachmentsRow
-                .padding(.horizontal, 18)
-                .padding(.bottom, 12)
+            // The ways to fill the draft other than typing share a row.
+            // The footer keeps its room for the pills and the buttons.
+            // The microphone stays at the trailing edge, level with Attach.
+            HStack(alignment: .bottom, spacing: 10) {
+                attachmentsRow
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if model.canDictate {
+                    dictationControl
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 12)
 
             if let errorMessage = model.errorMessage {
                 Text(errorMessage)
@@ -131,6 +144,85 @@ struct QuickEntryView: View {
             }
         }
         .frame(height: 14)
+    }
+
+    /// One line under the text while dictation runs: the words of the
+    /// sentence in progress, with its latest words in view. A sentence
+    /// goes into the text when the recognizer has finished it.
+    private func dictationLine(_ status: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "waveform")
+                .font(.system(size: 11, weight: .medium))
+                // No repeating symbol effect: it redraws without end, and
+                // each redraw waits for the window server. When the window
+                // server does not show the panel, those waits take the
+                // whole main thread (seen in the test host on a remote Mac).
+                .foregroundStyle(model.dictationPhase == .listening ? Self.accentText : Self.mutedText)
+            Text(status)
+                .font(.system(size: 13))
+                .foregroundStyle(model.dictationPreview.isEmpty ? Self.mutedText : Self.secondaryText)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: 18)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Dictation")
+        .accessibilityValue(status)
+        .accessibilityIdentifier("quick-entry.dictation-status")
+    }
+
+    /// The microphone, and next to it the setting that makes the panel
+    /// listen each time it opens.
+    private var dictationControl: some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        return HStack(spacing: 0) {
+            Button(action: model.toggleDictation) {
+                Image(systemName: model.isDictating ? "mic.fill" : "mic")
+                    .font(.system(size: 12))
+                    .foregroundStyle(model.isDictating ? Self.accentText : Self.secondaryText)
+                    .frame(width: 30, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .disabled(model.isEditable == false)
+            .help(model.isDictating
+                ? "Stop dictating"
+                : "Dictate. Speech is turned into text on this Mac.")
+            .accessibilityLabel(model.isDictating ? "Stop Dictating" : "Dictate")
+            .accessibilityIdentifier("quick-entry.dictate")
+
+            Rectangle()
+                .fill(model.isDictating ? Self.missingBorder : Self.pillBorder)
+                .frame(width: 1, height: 14)
+
+            Button {
+                model.dictatesOnOpen.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    if model.dictatesOnOpen {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    Text("on open")
+                        .font(.system(size: 11.5))
+                }
+                .foregroundStyle(model.dictatesOnOpen ? Self.accentText : Self.mutedText)
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .contentShape(Rectangle())
+            }
+            .help(model.dictatesOnOpen
+                ? "Dictate on open is on: quick entry listens each time it opens, and its shortcut stops and starts dictation."
+                : "Dictate on open is off: hold the quick entry shortcut to talk. Turn it on to listen each time quick entry opens.")
+            .accessibilityLabel("Dictate on Open")
+            .accessibilityValue(model.dictatesOnOpen ? "on" : "off")
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityIdentifier("quick-entry.dictate-on-open")
+        }
+        .buttonStyle(.plain)
+        .background(shape.fill(model.isDictating ? Self.missingBackground : Self.pillBackground))
+        .overlay(shape.strokeBorder(model.isDictating ? Self.missingBorder : Self.pillBorder, lineWidth: 1))
+        .fixedSize()
     }
 
     private static let attachChipID = "attach"

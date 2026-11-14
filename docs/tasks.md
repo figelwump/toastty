@@ -98,6 +98,8 @@ rest of this section describes the panel with no coordinator, and what
   are deleted.
 - Pressing the shortcut while the panel is open brings it back with your
   draft.
+- **Dictate** in place of typing, on macOS 26 and later; see
+  [Dictation](#dictation).
 
 Other ways to open the same panel:
 
@@ -120,6 +122,42 @@ from another app open **New Task**, with this panel's workspaces, Frequent
 presets and `[defaults]`. A task created there counts toward Frequent and the
 last workspace here. See
 [Creating a task](remote-access.md#creating-a-task) in Remote Access.
+
+### Dictation
+
+On macOS 26 and later the panel shows a microphone in the row with
+**Attach**, and next to it **on open**. Toastty turns your speech into text on this Mac, with Apple's
+on-device speech recognition. No audio leaves the Mac, Toastty keeps no
+recording, and no account or API key is needed. On macOS 14 and 15 the panel
+has no microphone.
+
+- **Hold the shortcut to talk.** Hold `Option+Shift+T` and speak; release it
+  to stop. A short press only opens the panel for typing, as before. The
+  shortcut counts as held after about a third of a second. Holding needs the
+  global shortcut: **File > New Task…** opens the panel as a short press
+  does.
+- **Or dictate each time the panel opens.** Click **on open** to turn the
+  setting on; it shows a check mark. The panel then listens as soon as it
+  opens, from the shortcut or from any other way to open it, and pressing the
+  shortcut again stops and starts dictation, with no need to hold it.
+  Toastty remembers the setting.
+- **The microphone button** starts and stops dictation with a click, with
+  either setting.
+- **While it listens,** a line under the text shows the words of the sentence
+  in progress, which can still change. When the recognizer has finished a
+  sentence, it goes into the text at the caret, or in place of a selection,
+  as typing does. You can type while it listens.
+- **The text stays for you to correct.** Stopping does not send.
+  `Cmd+Return` sends as usual. While dictation runs, `Cmd+Return` first stops
+  it, waits for the last words, and then sends. `Esc` closes the panel and
+  turns the microphone off.
+- **The first time,** macOS asks whether Toastty may use the microphone. The
+  first dictation in a language can also download Apple's speech model for
+  it; the line then says **Downloading the speech model…**. Dictation uses
+  the Mac's language and region.
+- **When it cannot start,** the panel says why: Toastty has no access to the
+  microphone (System Settings ▸ Privacy & Security ▸ Microphone), the Mac has
+  no microphone, or the language is not supported.
 
 ## Create a task
 

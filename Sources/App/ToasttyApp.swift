@@ -1132,7 +1132,9 @@ struct ToasttyApp: App {
             // A smoke run or a test host must not take the user's shortcut
             // from the Toastty they are using.
             registersGlobalHotKey: automationConfig == nil
-                && Self.isRunningUnderXCTest(processInfo.environment) == false
+                && Self.isRunningUnderXCTest(processInfo.environment) == false,
+            makeDictationEngine: { QuickEntryDictation.makeSystemEngine() },
+            dictationDefaults: ToasttyAppDefaults.current
         )
         quickEntryController.loadCodexModels = { [weak agentLaunchService] in
             guard let executable = try agentLaunchService?.profileExecutableState(profileID: AgentKind.codex.rawValue),

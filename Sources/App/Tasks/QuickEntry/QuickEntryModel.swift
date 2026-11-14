@@ -99,6 +99,39 @@ final class QuickEntryModel: ObservableObject {
     private let coordinatorMessageID = UUID()
     private var attachmentChanges: AnyCancellable?
 
+    // MARK: Dictation state
+
+    enum DictationPhase: Equatable {
+        case idle
+        /// Asked for; the microphone is not on yet.
+        case starting
+        case listening
+        /// The microphone is off, and the last words are on their way.
+        case finishing
+    }
+
+    @Published private(set) var dictationPhase: DictationPhase = .idle
+    /// The words of the sentence in progress. They can still change, so
+    /// they are not in the text yet.
+    @Published private(set) var dictationPreview = ""
+    @Published private(set) var isDownloadingSpeechModel = false
+    /// Words that dictation finished. The text field puts them at the
+    /// caret, which only it knows.
+    let dictatedWords = PassthroughSubject<String, Never>()
+    /// The setting "Dictate on open": the panel listens each time it opens.
+    @Published var dictatesOnOpen: Bool {
+        didSet {
+            if dictatesOnOpen != oldValue { saveDictatesOnOpen(dictatesOnOpen) }
+        }
+    }
+    private let saveDictatesOnOpen: @MainActor (Bool) -> Void
+    /// `nil` where this Mac cannot dictate: the panel then shows no
+    /// microphone.
+    private let dictationEngine: (any QuickEntryDictationEngine)?
+    /// ⌘↩ or ⌥⌘↩ came while dictation ran: what to do once the last words
+    /// are in the text.
+    private var actionAfterDictation: (@MainActor () -> Void)?
+
     init(
         prefill: QuickEntryPrefill,
         preset: QuickEntryPreset? = nil,
@@ -107,6 +140,9 @@ final class QuickEntryModel: ObservableObject {
         frequentPresets: [QuickEntryPreset],
         stagingDirectoryURL: URL,
         coordinator: QuickEntryCoordinator? = nil,
+        dictationEngine: (any QuickEntryDictationEngine)? = nil,
+        dictatesOnOpen: Bool = false,
+        saveDictatesOnOpen: @escaping @MainActor (Bool) -> Void = { _ in },
         create: @escaping @MainActor (TaskCreateRequest) async throws -> TaskRecord,
         onCreated: @escaping @MainActor (TaskRecord) -> Void,
         onSent: @escaping @MainActor (CoordinatorController.SendResult) -> Void = { _ in },
@@ -117,6 +153,9 @@ final class QuickEntryModel: ObservableObject {
         self.frequentPresets = frequentPresets
         attachmentDraft = DraftAttachments(stagingDirectoryURL: stagingDirectoryURL)
         self.coordinator = coordinator
+        self.dictationEngine = dictationEngine
+        self.dictatesOnOpen = dictatesOnOpen
+        self.saveDictatesOnOpen = saveDictatesOnOpen
         self.create = create
         self.onCreated = onCreated
         self.onSent = onSent
@@ -148,7 +187,8 @@ final class QuickEntryModel: ObservableObject {
     private var hasDraft: Bool {
         isEditable
             && pendingAttachmentCount == 0
-            && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            // Words still in progress count: ⌘↩ waits for them.
+            && (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || dictationPreview.isEmpty == false)
     }
 
     /// Whether ⌘↩ can act: send to the coordinator, or without one create
@@ -269,6 +309,7 @@ final class QuickEntryModel: ObservableObject {
     /// copy is still writing into it; after a create, `task.create` has
     /// already made its own copies.
     func close() {
+        cancelDictation()
         attachmentDraft.close()
     }
 
@@ -285,6 +326,7 @@ final class QuickEntryModel: ObservableObject {
 
     /// ⌘↩: sends to the coordinator, or without one creates the task.
     func submit() {
+        guard finishDictation(then: { [weak self] in self?.submit() }) == false else { return }
         guard sendsToCoordinator else {
             createTask()
             return
@@ -327,6 +369,7 @@ final class QuickEntryModel: ObservableObject {
     /// ⌥⌘↩, and ⌘↩ without a coordinator: creates the task directly, in
     /// the workspace and with the preset of the pills.
     func createTask() {
+        guard finishDictation(then: { [weak self] in self?.createTask() }) == false else { return }
         guard canCreateTask else {
             // With a coordinator the pills are optional, so the key needs
             // to say what it lacks.
@@ -354,6 +397,105 @@ final class QuickEntryModel: ObservableObject {
             } catch {
                 isSubmitting = false
                 errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Dictation
+
+    var canDictate: Bool { dictationEngine != nil }
+
+    var isDictating: Bool { dictationPhase != .idle }
+
+    /// One line for the panel while dictation runs: what it waits for, or
+    /// the words in progress.
+    var dictationStatus: String? {
+        switch dictationPhase {
+        case .idle: nil
+        case .starting: "Starting dictation…"
+        case .listening, .finishing:
+            if dictationPreview.isEmpty == false {
+                dictationPreview
+            } else if isDownloadingSpeechModel {
+                "Downloading the speech model…"
+            } else {
+                dictationPhase == .finishing ? "Finishing…" : "Listening…"
+            }
+        }
+    }
+
+    func startDictation() {
+        guard let dictationEngine, dictationPhase == .idle, isEditable else { return }
+        errorMessage = nil
+        dictationPhase = .starting
+        dictationEngine.start { [weak self] event in
+            self?.handleDictation(event)
+        }
+    }
+
+    /// Turns the microphone off. The last words still go into the text.
+    func stopDictation() {
+        guard dictationPhase == .starting || dictationPhase == .listening else { return }
+        dictationPhase = .finishing
+        dictationEngine?.stop()
+    }
+
+    func toggleDictation() {
+        if dictationPhase == .idle {
+            startDictation()
+        } else {
+            stopDictation()
+        }
+    }
+
+    /// Ends dictation at once, without the words in progress.
+    private func cancelDictation() {
+        guard isDictating else { return }
+        dictationEngine?.cancel()
+        actionAfterDictation = nil
+        endDictation()
+    }
+
+    private func endDictation() {
+        dictationPhase = .idle
+        dictationPreview = ""
+        isDownloadingSpeechModel = false
+    }
+
+    /// While dictation runs, stops it and does `action` when its last
+    /// words are in the text. Returns false when no dictation runs.
+    private func finishDictation(then action: @escaping @MainActor () -> Void) -> Bool {
+        guard isDictating else { return false }
+        actionAfterDictation = action
+        stopDictation()
+        return true
+    }
+
+    private func handleDictation(_ event: QuickEntryDictationEvent) {
+        guard isDictating else { return }
+        switch event {
+        case .listening:
+            if dictationPhase == .starting { dictationPhase = .listening }
+        case .downloadingModel:
+            isDownloadingSpeechModel = true
+        case .volatile(let words):
+            isDownloadingSpeechModel = false
+            dictationPreview = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .final(let words):
+            isDownloadingSpeechModel = false
+            dictationPreview = ""
+            dictatedWords.send(words)
+        case .ended(let error):
+            // Words that never became final are still the user's words.
+            let leftover = dictationPreview
+            let action = actionAfterDictation
+            actionAfterDictation = nil
+            endDictation()
+            if leftover.isEmpty == false { dictatedWords.send(leftover) }
+            if let error {
+                errorMessage = error
+            } else {
+                action?()
             }
         }
     }
