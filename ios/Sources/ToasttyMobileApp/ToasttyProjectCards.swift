@@ -182,7 +182,6 @@ struct ToasttyProjectCards: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel("To ship \(card.toShipCount)")
                     .accessibilityHint("Shows the tasks to ship in Tasks")
                     .accessibilityIdentifier("toastty-card-to-ship-\(card.id.uuidString)")
