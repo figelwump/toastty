@@ -37,7 +37,10 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     /// workspace that shows the coordinator's chat.
     public static let defaultCoordinatorDockWidth: Double = 360
     public static let minCoordinatorDockWidth: Double = 300
-    public static let maxCoordinatorDockWidth: Double = 480
+    /// The widest saved width. A window shows the dock at most
+    /// `maxCoordinatorDockWindowFraction` of its width.
+    public static let maxCoordinatorDockWidth: Double = 2_400
+    public static let maxCoordinatorDockWindowFraction: Double = 0.4
 
     public let id: UUID
     public var frame: CGRectCodable
@@ -103,6 +106,20 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
 
     public var coordinatorDockWidth: Double {
         coordinatorDockWidthPointsOverride ?? Self.defaultCoordinatorDockWidth
+    }
+
+    /// The widest the dock can be in a window this wide: a part of the
+    /// window's width, never less than the dock's minimum.
+    public static func maxCoordinatorDockWidth(windowWidth: Double) -> Double {
+        guard windowWidth.isFinite, windowWidth > 0 else { return maxCoordinatorDockWidth }
+        let limit = (windowWidth * maxCoordinatorDockWindowFraction).rounded(.down)
+        return min(max(limit, minCoordinatorDockWidth), maxCoordinatorDockWidth)
+    }
+
+    /// The dock's width in a window this wide. A narrower window shows the
+    /// dock narrower and keeps the saved width for a wider window.
+    public func coordinatorDockWidth(windowWidth: Double) -> Double {
+        min(coordinatorDockWidth, Self.maxCoordinatorDockWidth(windowWidth: windowWidth))
     }
 
     public static func clampedSidebarWidth(_ width: Double) -> Double {

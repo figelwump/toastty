@@ -33,7 +33,8 @@ that:
   between the dock and the full view; the toolbar button and Cmd+Shift+K
   hide and show it, Cmd+Shift+K with the keyboard in its field, where
   Cmd+= changes the chat's text size and Cmd+W closes nothing; a drag on
-  its edge sets its width up to 480 points; with the sidebar hidden it is
+  its edge sets its width up to 40% of the window's width, and a narrower
+  window shows it narrower and keeps its width; with the sidebar hidden it is
   at the window's left edge; while it is hidden, a reply leaves the
   coordinator's row unread, and showing the dock reads it; after the
   relaunch it shows again at its width;
@@ -525,16 +526,30 @@ def run(check):
         step('the toolbar button and Cmd+Shift+K hid and showed the dock; Cmd+= sized its chat; Cmd+W closed nothing',
              composerHeight=before_scale)
 
-        # A drag on the dock's edge sets its width, up to 480 points.
+        # A drag on the dock's edge sets its width, up to 40% of the window's
+        # width. A narrower window shows the dock narrower and keeps its width.
         dock_frame = lambda: [int(value) for value in ui.run('frame', 'coordinator.dock')[1].split()]
+        window_frame = lambda: [int(value) for value in ui.run('window-frame')[1].split()]
+        dock_limit = lambda window_width: max(300, int(window_width * 0.4))
         x, y, width, height = dock_frame()
         ui.run('drag', str(x + width), str(y + height // 2), str(x + width + 60), str(y + height // 2))
         wait_for('a wider dock', lambda: dock_frame()[2] >= width + 50, timeout=10)
         x, y, wider, height = dock_frame()
-        ui.run('drag', str(x + wider), str(y + height // 2), str(x + wider + 400), str(y + height // 2))
-        wait_for('the widest dock', lambda: dock_frame()[2] == 480, timeout=10)
+        window_x, window_y, window_width, window_height = window_frame()
+        widest = dock_limit(window_width)
+        ui.run('drag', str(x + wider), str(y + height // 2), str(window_x + window_width - 40), str(y + height // 2))
+        wait_for(f'the widest dock ({widest})', lambda: dock_frame()[2] == widest, timeout=10)
         capture('dock-widest')
-        step('a drag on the dock\'s edge set its width', default=width, wider=wider, widest=dock_frame()[2])
+        narrow_width = 1_000
+        ui.run('window-set-frame', str(window_x), str(window_y), str(narrow_width), str(window_height))
+        wait_for(f'a narrower dock ({dock_limit(narrow_width)})',
+                 lambda: dock_frame()[2] == dock_limit(window_frame()[2]) < widest, timeout=10)
+        narrow_dock = dock_frame()[2]
+        capture('dock-narrow-window')
+        ui.run('window-set-frame', str(window_x), str(window_y), str(window_width), str(window_height))
+        wait_for('the dock at its width again', lambda: dock_frame()[2] == widest, timeout=10)
+        step('a drag on the dock\'s edge set its width, up to 40% of the window', default=width, wider=wider,
+             windowWidth=window_width, widest=widest, narrowWindowDock=narrow_dock, restored=dock_frame()[2])
 
         # 10. With the sidebar hidden, the dock is at the window's left edge.
         ui.run('key', 'cmd-b')
@@ -604,7 +619,7 @@ def run(check):
         # The dock comes back beside the task, at its width.
         instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=task_space)))
         wait_for('the dock after the relaunch', lambda: ui.exists('coordinator.dock')
-                 and int(ui.run('frame', 'coordinator.dock')[1].split()[2]) == 480, timeout=30)
+                 and int(ui.run('frame', 'coordinator.dock')[1].split()[2]) == widest, timeout=30)
         capture('relaunched-dock')
         instance.request('app_control.run_action', dict(id='workspace.select', args=dict(workspaceID=coordinator_id)))
         wait_for('the coordinator again', lambda: selected_workspace() == coordinator_id
