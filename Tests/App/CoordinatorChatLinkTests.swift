@@ -13,9 +13,9 @@ struct CoordinatorChatLinkTests {
     /// A done or archived task: its space closed.
     private let closedTaskID = UUID(uuidString: "74C9F5EA-8F2F-4014-A078-3AB97213BC34")!
 
-    private func action(_ text: String) throws -> CoordinatorChatLinks.Action {
+    private func action(_ text: String, webPagesOpenInSystemBrowser: Bool = false) throws -> CoordinatorChatLinks.Action {
         let url = try #require(URL(string: text))
-        return CoordinatorChatLinks.action(for: url) { id in
+        return CoordinatorChatLinks.action(for: url, webPagesOpenInSystemBrowser: webPagesOpenInSystemBrowser) { id in
             switch id {
             case taskID: .taskSpace(workspaceID: taskSpaceID)
             case closedTaskID: .tasksView
@@ -56,11 +56,20 @@ struct CoordinatorChatLinkTests {
     ])
     func noOtherLinkOpensAnything(_ text: String) throws {
         #expect(try action(text) == .ignore)
+        #expect(try action(text, webPagesOpenInSystemBrowser: true) == .ignore)
     }
 
     @Test(arguments: ["https://example.com/docs", "http://example.com", "HTTPS://github.com/figelwump/toastty/pull/283"])
-    func aWebLinkOpensInTheBrowser(_ text: String) throws {
-        #expect(try action(text) == .openWebPage)
+    func aWebLinkOpensInAToasttyBrowserOrWithShiftInTheSystemBrowser(_ text: String) throws {
+        #expect(try action(text) == .openWebPageInToastty)
+        #expect(try action(text, webPagesOpenInSystemBrowser: true) == .openWebPageInSystemBrowser)
+    }
+
+    @Test func shiftDoesNotChangeWhatATaskLinkDoes() throws {
+        #expect(try action("toastty://task/\(taskID.uuidString)", webPagesOpenInSystemBrowser: true)
+            == .openTaskSpace(workspaceID: taskSpaceID))
+        #expect(try action("toastty://task/\(closedTaskID.uuidString)", webPagesOpenInSystemBrowser: true)
+            == .showInTasksView(taskID: closedTaskID))
     }
 
     // MARK: - Chips
