@@ -726,15 +726,19 @@ struct SidebarView: View {
 
     /// A small tag on a task row's second line: its project, or how many of
     /// the tasks it started have merged.
-    static func sidebarTaskTag(_ text: String) -> some View {
-        Text(text)
-            .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+    static func sidebarTaskTag(_ text: String, maximumWidth: CGFloat = 90) -> some View {
+        // Like a parent-task tag, leave room for the row's status. The text
+        // must accept a tighter proposal rather than widen the whole list.
+        SidebarCappedIntrinsicWidthLayout(maximumWidth: maximumWidth) {
+            Text(text)
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+        }
     }
 
     /// Space under a card's session list: room above the card's bottom edge,

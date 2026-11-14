@@ -519,7 +519,7 @@ private struct TasksViewRow: View {
                 }
                 HStack(spacing: 8) {
                     if let project = item.projectTitle {
-                        SidebarView.sidebarTaskTag(project)
+                        SidebarView.sidebarTaskTag(project, maximumWidth: .infinity)
                     }
                     if let link = item.pullRequest {
                         Text("PR #\(link.number)")
