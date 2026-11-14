@@ -173,12 +173,17 @@ struct ToasttyProjectCards: View {
                     Button {
                         showTasks(.toShip(projectID: card.workspace?.id))
                     } label: {
-                        Label("To ship \(card.toShipCount)", systemImage: "arrow.up.square")
-                            .foregroundStyle(ToasttyDesignTokens.taskToShip)
-                            .frame(minHeight: 36)
-                            .contentShape(Rectangle())
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.up.square")
+                            Text("To ship \(card.toShipCount)")
+                        }
+                        .foregroundStyle(ToasttyDesignTokens.taskToShip)
+                        .frame(minHeight: 36)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("To ship \(card.toShipCount)")
                     .accessibilityHint("Shows the tasks to ship in Tasks")
                     .accessibilityIdentifier("toastty-card-to-ship-\(card.id.uuidString)")
                 }
@@ -219,6 +224,17 @@ struct ToasttyProjectCards: View {
     }
 }
 
+extension VerticalAlignment {
+    /// The middle of a project card's name line.
+    private enum CardName: AlignmentID {
+        static func defaultValue(in dimensions: ViewDimensions) -> CGFloat {
+            dimensions[VerticalAlignment.center]
+        }
+    }
+
+    static let cardName = VerticalAlignment(CardName.self)
+}
+
 /// A bucket row under the task that started it, or dimmed because its own
 /// state is calmer than its bucket's.
 private struct ToasttyBucketEntryStyle: ViewModifier {
@@ -241,7 +257,9 @@ struct ToasttyProjectCardHeader: View {
     let openWorkspace: (UUID) -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        // The chevron and the counts line up with the name, above any
+        // annotation chips.
+        HStack(alignment: .cardName, spacing: 2) {
             if card.isOtherTasks == false {
                 Button(action: toggleCollapsed) {
                     Image(systemName: "chevron.right")
@@ -280,12 +298,14 @@ struct ToasttyProjectCardHeader: View {
     }
 
     private func nameAndCounts(_ annotations: [RemoteWorkspaceAnnotation]) -> some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .cardName, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(card.title)
                     .font(card.isOtherTasks ? .subheadline : .headline)
                     .foregroundStyle(card.isOtherTasks ? ToasttyDesignTokens.secondaryText : ToasttyDesignTokens.primaryText)
                     .lineLimit(1)
+                    .frame(minHeight: 30)
+                    .alignmentGuide(.cardName) { $0[VerticalAlignment.center] }
                 if isCollapsed == false, annotations.isEmpty == false {
                     ToasttyWorkspaceHeaderAnnotations(annotations: annotations)
                         .padding(.top, 3)
