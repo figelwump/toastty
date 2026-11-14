@@ -1,6 +1,7 @@
 @testable import ConversationUI
 import CoreState
 import Foundation
+import RemoteProtocol
 import SwiftUI
 import Testing
 @testable import ToasttyApp

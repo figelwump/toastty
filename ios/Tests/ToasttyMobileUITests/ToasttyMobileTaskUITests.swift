@@ -243,7 +243,69 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         attachScreenshot(named: "tasks-tab-done", of: app)
     }
 
+    func testTaskLinksDrawAsChipsThatOpenTheTaskSpace() {
+        let app = launchTaskFixture(taskLinks: true)
+        select(.all, in: app)
+        // Every fixture conversation shows the transcript with task links.
+        let workspace = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        workspace.tap()
+        let session = app.buttons["toastty-mobile-workspace-session-\(workingSessionID)"]
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        session.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+
+        let answer = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Removed task")).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        // A chip shows the task's current title and pull request number,
+        // not the link's text.
+        let question = link(containing: "early-session-titles", in: app)
+        XCTAssertTrue(question.exists)
+        XCTAssertTrue(Self.words(question.label).contains("#45"), question.label)
+        XCTAssertFalse(link(containing: "Should the badge", in: app).exists)
+        XCTAssertTrue(Self.words(link(containing: "compact-session-rows", in: app).label).contains("#36"))
+        XCTAssertTrue(link(containing: "#259", in: app).exists)
+        // A task the Mac does not list, a task space with no task, and any
+        // other Toastty link are text that a tap cannot open.
+        for text in ["Removed task", "Watched space", "a settings link"] {
+            XCTAssertTrue((answer.value as? String)?.contains(text) == true, text)
+            XCTAssertFalse(link(containing: text, in: app).exists, text)
+        }
+        attachScreenshot(named: "task-link-chips", of: app)
+
+        // A task with no task space to open shows its detail instead.
+        link(containing: "#259", in: app).tap()
+        let title = app.staticTexts["toastty-task-detail-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "Parent task rollup")
+        attachScreenshot(named: "task-link-chip-without-task-space-opens-detail", of: app)
+        app.navigationBars["Task"].buttons["Done"].tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+
+        // A tap opens the task's space in place of the conversation, so Back
+        // returns to the workspace the conversation opened from.
+        question.tap()
+        let taskSpace = app.navigationBars["early-session-titles"]
+        XCTAssertTrue(taskSpace.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+        XCTAssertFalse(app.staticTexts["toastty-mobile-conversation-title"].exists)
+        attachScreenshot(named: "task-link-chip-opens-task-space", of: app)
+        taskSpace.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(waitUntilHittable(session))
+    }
+
     // MARK: - Helpers
+
+    /// A chip keeps its text on one line with no-break spaces and word
+    /// joiners; compare its words without them.
+    private func link(containing text: String, in app: XCUIApplication) -> XCUIElement {
+        let matches = app.links.allElementsBoundByIndex.filter { Self.words($0.label).contains(text) }
+        return matches.first ?? app.links["no link contains \(text)"]
+    }
+
+    private static func words(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{2060}", with: "").replacingOccurrences(of: "\u{00A0}", with: " ")
+    }
 
     private enum Segment: String {
         case all
@@ -252,10 +314,11 @@ final class ToasttyMobileTaskUITests: XCTestCase {
 
     /// Without `keepsCollapsedCards`, every project card shows expanded
     /// whatever an earlier test saved.
-    private func launchTaskFixture(keepsCollapsedCards: Bool = false) -> XCUIApplication {
+    private func launchTaskFixture(keepsCollapsedCards: Bool = false, taskLinks: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        if taskLinks { app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASK_LINKS"] = "1" }
         if keepsCollapsedCards == false {
             app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
         }

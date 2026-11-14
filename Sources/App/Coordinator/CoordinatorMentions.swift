@@ -1,6 +1,7 @@
 import AppKit
 import ConversationUI
 import CoreState
+import RemoteProtocol
 import SwiftUI
 
 /// A task that the user can mention in a message to the coordinator.

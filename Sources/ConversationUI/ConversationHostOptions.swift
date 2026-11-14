@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 import SwiftUI
 
 /// What a host changes about the shared transcript. The defaults are the
@@ -203,6 +204,43 @@ extension ConversationLinkPresenter: Equatable {
     /// Two presenters with one revision answer alike: see `revision`.
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.revision == rhs.revision
+    }
+}
+
+extension ConversationLinkPresenter {
+    /// Draws a `toastty://task/<id>` link to a task in `chips` as that
+    /// task's chip. The text is an agent's, so only that exact form names a
+    /// task: a link to any other task, and any other `toastty:` link, is
+    /// plain text that a tap cannot open. Other links stay as the
+    /// transcript draws them.
+    public static func taskChips(_ chips: [UUID: ConversationLinkChip]) -> ConversationLinkPresenter {
+        ConversationLinkPresenter(revision: chips.hashValue) { url in
+            taskLinkPresentation(for: url, chips: chips)
+        }
+    }
+
+    /// See `taskChips(_:)`. `nil` for a link that is not Toastty's.
+    public static func taskLinkPresentation(
+        for url: URL,
+        chips: [UUID: ConversationLinkChip]
+    ) -> ConversationLinkPresentation? {
+        guard CoordinatorTaskLink.isToasttyURL(url) else { return nil }
+        guard let taskID = CoordinatorTaskLink.taskID(in: url), let chip = chips[taskID] else {
+            return .plainText
+        }
+        return .chip(chip)
+    }
+}
+
+extension ConversationLinkChip {
+    /// A task chip's title holds at most this many characters.
+    public static let maximumTaskTitleLength = 60
+
+    /// A task's title on one line, shortened for its chip.
+    public static func taskTitle(_ title: String) -> String {
+        let oneLine = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard oneLine.isEmpty == false else { return "Untitled task" }
+        return oneLine.count > maximumTaskTitleLength ? oneLine.prefix(maximumTaskTitleLength - 1) + "…" : oneLine
     }
 }
 
