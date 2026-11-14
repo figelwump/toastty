@@ -826,12 +826,19 @@ final class DisplayShortcutInterceptor {
     /// keeps most shortcuts with the text control, but Cmd+Shift+P has no
     /// text-editing meaning, so the command palette also opens from text
     /// views such as the Coordinator message bar and its transcript.
+    /// Cmd+] and Cmd+[ also leave the Coordinator message bar: the
+    /// coordinator's dock is a stop of Select Next Split and Select Previous
+    /// Split.
     static func shortcutWindowID(
         for event: NSEvent,
         keyWindow: NSWindow?,
         modalWindow: NSWindow?
     ) -> UUID? {
         if isCommandPaletteShortcut(event) {
+            return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+        }
+        if focusSplitDirection(for: event) != nil,
+           keyWindow?.firstResponder is CoordinatorComposerTextView {
             return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
         }
         return closePanelShortcutWindowID(keyWindow: keyWindow, modalWindow: modalWindow)

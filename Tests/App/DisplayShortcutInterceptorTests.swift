@@ -1935,6 +1935,31 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
     }
 
+    func testFocusSplitShortcutWindowIDLeavesTheCoordinatorMessageBar() throws {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        let nextEvent = try makeKeyEvent(characters: "]", modifiers: [.command], keyCode: 0x1E)
+        let previousEvent = try makeKeyEvent(characters: "[", modifiers: [.command], keyCode: 0x21)
+
+        window.forcedFirstResponder = CoordinatorComposerTextView()
+        for event in [nextEvent, previousEvent] {
+            XCTAssertEqual(
+                DisplayShortcutInterceptor.shortcutWindowID(for: event, keyWindow: window, modalWindow: nil),
+                windowID
+            )
+            XCTAssertNil(
+                DisplayShortcutInterceptor.shortcutWindowID(for: event, keyWindow: window, modalWindow: NSWindow())
+            )
+        }
+
+        // Other text views keep the shortcuts.
+        window.forcedFirstResponder = NSTextView()
+        XCTAssertNil(
+            DisplayShortcutInterceptor.shortcutWindowID(for: nextEvent, keyWindow: window, modalWindow: nil)
+        )
+    }
+
     func testClosePanelShortcutWindowIDAllowsTerminalHostViewResponder() {
         let windowID = UUID()
         let window = ShortcutTestWindow()
