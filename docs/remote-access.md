@@ -624,7 +624,21 @@ in Home.
   its own state, as the Mac's switcher does.
 - In **All**, a row's title keeps its room, as on the Mac: a parent's child
   progress sits on the row's second line, and a row's pull request chip gives
-  way when the title would be cut short.
+  way when the title would be cut short. A chip or tag takes the width of its
+  text up to a cap, and the title takes the rest. In a one-line **Needs you**
+  row, the status pill gives way before the title shortens, since the mark
+  shows the same state.
+- A row names its project only where its heading does not: in the Tasks tab's
+  groups and in **Other tasks**, not in its own project's card or To ship
+  lane. A long project name shortens in the middle, so the status line keeps
+  its room. A pull request chip in a row has no link arrow, because the row
+  opens the task or its session.
+- At the accessibility text sizes, a row wraps its title and its status, and
+  a chip or tag that does not fit beside the others takes a line of its own.
+  The switcher and a session's task bar stop growing at the first of those
+  sizes, as system bars do, and the task bar drops its pull request chip
+  before it shortens the stage. In the Tasks tab, a lane's **Release…** moves
+  under the project's name when the line has no room for both.
 - The **Tasks** tab lists every task by where it stands, as the Mac's Tasks
   view does: **To ship** first, one lane per project with all of its merged
   tasks and **Release…** when the project can release, then **Needs you**,
@@ -633,13 +647,18 @@ in Home.
   review lists under Ready to review. A task with an open task space shows
   that task space's row. Any other task, such as one whose setup failed, opens
   its detail: the stage and why, the status line, the pull request, and the
-  project.
+  project. As in Home, the tab says above its list when the connection is not
+  live, with **Retry** while it reconnects, and shows what a release or a task
+  action started.
 
 The Mac computes every stage, group and line, so both apps show the same
 thing. It sends a `tasks` board in the session snapshot and advertises the
 `tasks` capability. The phone shows the tab bar and switches to All | Needs
 you only when a snapshot carries the board. An older Mac omits it, and the
 phone keeps **All | Active** with no tab bar. An older phone ignores the board.
+When the Mac turns its task system on or off while the phone is connected, the
+tab bar shows or leaves. A session open in Home stays open, and its transcript
+returns to the latest message.
 
 Each task on the board also names the task that started it
 (`parentTaskID` and `parentTaskTitle`), and a parent task carries its
@@ -717,7 +736,8 @@ names the project, how many tasks wait to ship, and the newest of them. The
 Mac then makes the same release task as its own button: its agent starts in
 a new worktree at the remote default branch's latest commit. The task shows
 in Home and Tasks like any other task, so you can answer its questions from
-the phone. While a release of the project runs, the button reads
+the phone. While the request is on its way to the Mac, the button shows a
+spinner and is off. While a release of the project runs, the button reads
 **Releasing…** and is off. A release task's agent can publish, so a release
 needs a native paired device with send access and both its **Task actions**
 and **Start sessions** switches on. Without them, the Mac refuses each request

@@ -133,7 +133,10 @@ struct ToasttyProjectCards: View {
             .toasttyListRow()
             .toasttySubspaceDoneSwipe(subspace, controller: controller)
         case .task(let task):
-            ToasttyTaskRow(task: task, freshness: controller.freshness, controller: controller) {
+            // The card names the project; only Other tasks mixes projects.
+            ToasttyTaskRow(
+                task: task, freshness: controller.freshness, controller: controller, showsProject: card.isOtherTasks
+            ) {
                 openTask(task)
             }
             .modifier(ToasttyBucketEntryStyle(entry: entry))
@@ -228,7 +231,10 @@ struct ToasttyProjectCards: View {
             .toasttyListRow(vertical: 0)
             if isExpanded {
                 ForEach(card.toShipTasks.prefix(Self.shownToShipTasks)) { task in
-                    ToasttyTaskRow(task: task, freshness: controller.freshness, controller: controller) {
+                    ToasttyTaskRow(
+                        task: task, freshness: controller.freshness, controller: controller,
+                        showsProject: card.isOtherTasks
+                    ) {
                         openTask(task)
                     }
                     .toasttyListRow()
@@ -469,6 +475,10 @@ struct ToasttyHomeSegmentControl: View {
         .overlay {
             RoundedRectangle(cornerRadius: 9).stroke(ToasttyDesignTokens.border)
         }
+        // As a system segmented control, the switcher stops growing at the
+        // accessibility text sizes: two segments share one line, and a
+        // larger label would break inside a word.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("toastty-mobile-home-segment")
     }
@@ -490,6 +500,8 @@ struct ToasttyHomeSegmentControl: View {
             label()
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(isSelected ? ToasttyDesignTokens.primaryText : ToasttyDesignTokens.secondaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .frame(maxWidth: .infinity, minHeight: 32)
                 .background {
                     if isSelected {
@@ -499,6 +511,7 @@ struct ToasttyHomeSegmentControl: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityShowsLargeContentViewer()
         .accessibilityLabel(Self.accessibilityLabel(value, counts: counts))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier("toastty-mobile-home-segment-\(value.rawValue)")
@@ -574,7 +587,8 @@ struct ToasttyNeedsYouCards: View {
     private func row(_ entry: MobileHomeBucketEntry, in card: MobileHomeCard) -> some View {
         let compact = ToasttyCompactRow(
             tag: entry.payload.compactTag(listsApartFromParent: entry.listsApartFromParent, showsProject: card.isOtherTasks),
-            detail: entry.payload.compactDetail
+            detail: entry.payload.compactDetail,
+            parentTitle: entry.listsApartFromParent ? entry.payload.task?.parentTaskTitle : nil
         )
         switch entry.payload {
         case .conversation(let conversation):

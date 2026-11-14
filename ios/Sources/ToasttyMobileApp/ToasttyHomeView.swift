@@ -201,7 +201,6 @@ struct ToasttyHomeView: View {
     @AppStorage private var storedHomeSegment: String
     @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
     @AppStorage(ToasttyCollapsedSubspaceGroups.projectCardsPreferenceKey) private var storedCollapsedCards = ""
-    @State private var isRetryingConnection = false
     /// The ⑂ chip whose subspaces its group is limited to.
     @State private var spawnerFilter: ToasttySpawnerChip?
     /// The session whose detail card the Info swipe opened.
@@ -284,7 +283,7 @@ struct ToasttyHomeView: View {
                 if let notificationError {
                     ToasttyNotificationErrorBanner(message: notificationError, retry: retryNotifications)
                 }
-                connectionNotice
+                ToasttyConnectionNotice(controller: controller, refresh: refresh)
                 if controller.snapshot.taskBoard != nil {
                     homeSegmentPicker
                 } else {
@@ -606,65 +605,6 @@ struct ToasttyHomeView: View {
 
     private func sessionCountLabel(_ count: Int) -> String {
         "\(count) \(count == 1 ? "session" : "sessions")"
-    }
-
-    @ViewBuilder
-    private var connectionNotice: some View {
-        if let message = controller.connectionNoticeMessage {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 9) {
-                    connectionNoticeIndicator
-                    Text(message)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
-                .accessibilityValue(showsProgressIndicator ? "In progress" : "")
-                .accessibilityIdentifier("toastty-mobile-connection-notice")
-
-                if controller.freshness == .reconnecting {
-                    Button("Retry", action: retryConnection)
-                        .buttonStyle(.bordered)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .disabled(isRetryingConnection)
-                        .accessibilityLabel("Retry connection")
-                        .accessibilityIdentifier("toastty-mobile-connection-retry")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(controller.freshness == .unreachable
-                ? ToasttyDesignTokens.red
-                : ToasttyDesignTokens.amberText)
-            .toasttyCard()
-        }
-    }
-
-    private func retryConnection() {
-        guard isRetryingConnection == false else { return }
-        isRetryingConnection = true
-        Task { @MainActor in
-            await refresh()
-            isRetryingConnection = false
-        }
-    }
-
-    @ViewBuilder
-    private var connectionNoticeIndicator: some View {
-        if showsProgressIndicator {
-            ProgressView()
-                .controlSize(.small)
-                .tint(ToasttyDesignTokens.amber)
-        } else {
-            Image(systemName: controller.freshness == .unreachable
-                ? "wifi.slash"
-                : "arrow.trianglehead.2.clockwise.rotate.90")
-        }
-    }
-
-    private var showsProgressIndicator: Bool {
-        controller.freshness == .reconnecting || controller.freshness == .connecting
     }
 
     private var header: some View {

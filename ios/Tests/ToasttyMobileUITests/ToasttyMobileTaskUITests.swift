@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Home from a fixture Mac that runs the task system: All | Needs you, the
@@ -21,6 +22,12 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private let releaseTaskID = "D1000000-0000-0000-0000-000000000015"
     /// A working session in the toastty workspace.
     private let workingSessionID = "B1000000-0000-0000-0000-000000000002"
+    /// The board whose project and tasks have long names.
+    private let longNamesProject = "toastty-ios-coordinator-parity-integration"
+    private let longNamesQuestionSubspaceID = "A3000000-0000-0000-0000-000000000011"
+    private let longNamesStartingTaskID = "D3000000-0000-0000-0000-000000000002"
+    private let longNamesShippedTaskID = "D3000000-0000-0000-0000-000000000003"
+    private let longNamesOtherProjectTaskID = "D3000000-0000-0000-0000-000000000004"
 
     override func setUp() {
         continueAfterFailure = false
@@ -322,6 +329,10 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(alert.waitForExistence(timeout: 5))
         alert.buttons["Release"].tap()
         XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+        // The Tasks tab says what started, as Home does.
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertEqual(notice.label, "Starting a release of \u{201C}toastty\u{201D} on your Mac.")
         XCTAssertTrue(waitForLabel(laneRelease, "Releasing toastty"))
         XCTAssertFalse(laneRelease.isEnabled)
         attachScreenshot(named: "release-tasks-lane-releasing", of: app)
@@ -405,6 +416,74 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(session))
     }
 
+    /// While the connection is not live, the Tasks tab says that its list
+    /// may be out of date, as Home does, and offers no release.
+    func testTheTasksTabSaysWhenTheConnectionIsNotLive() {
+        let app = launchTaskFixture(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"])
+        app.tabBars.buttons["Tasks"].tap()
+        let notice = app.descendants(matching: .any)["toastty-mobile-connection-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertTrue(notice.label.hasPrefix("Reconnecting"), notice.label)
+        XCTAssertTrue(app.buttons["toastty-mobile-connection-retry"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-tasks-lane-toastty"].exists)
+        XCTAssertFalse(app.buttons["toastty-tasks-lane-release-toastty"].exists)
+        attachScreenshot(named: "tasks-tab-reconnecting", of: app)
+    }
+
+    /// Long project and task names shorten inside their rows. No row leaves
+    /// the screen in Home or in the Tasks tab, at the default text size and
+    /// at a large one, and a row names its project only where its heading
+    /// does not.
+    func testLongNamesKeepEveryRowOnTheScreen() {
+        let question = "toastty-subspace-row-\(longNamesQuestionSubspaceID)"
+        let starting = "toastty-task-row-\(longNamesStartingTaskID)"
+        let shipped = "toastty-task-row-\(longNamesShippedTaskID)"
+        let otherProject = "toastty-task-row-\(longNamesOtherProjectTaskID)"
+        for size in [UIContentSizeCategory.large, .accessibilityLarge] {
+            let name = size == .large ? "default" : "large-text"
+            let app = launchTaskFixture(tasks: "long-names", contentSize: size)
+            let width = app.windows.firstMatch.frame.width
+            // Scrolls the row into the list and returns its spoken label.
+            // A row at a large text size can be taller than the list's
+            // visible part, so the row only has to be listed, not reachable.
+            func labelOfRowOnScreen(_ identifier: String, list: String) -> String {
+                let row = app.buttons[identifier]
+                let rows = app.collectionViews[list]
+                for _ in 0..<12 where row.exists == false { rows.swipeUp(velocity: .slow) }
+                for _ in 0..<12 where row.exists == false { rows.swipeDown(velocity: .slow) }
+                guard row.exists else {
+                    XCTFail("\(name): \(identifier) is not listed")
+                    return ""
+                }
+                XCTAssertGreaterThanOrEqual(row.frame.minX, 0, "\(name): \(identifier) \(row.frame)")
+                XCTAssertLessThanOrEqual(row.frame.maxX, width, "\(name): \(identifier) \(row.frame)")
+                return row.label
+            }
+
+            select(.all, in: app)
+            let home = "toastty-mobile-home"
+            // The card names the project; Other tasks mixes projects.
+            let startingInCard = labelOfRowOnScreen(starting, list: home)
+            XCTAssertFalse(startingInCard.contains(longNamesProject), startingInCard)
+            XCTAssertTrue(labelOfRowOnScreen(otherProject, list: home).contains("linux-port-with-a-long-name"))
+            _ = labelOfRowOnScreen(question, list: home)
+            attachScreenshot(named: "long-names-home-\(name)", of: app)
+
+            app.tabBars.buttons["Tasks"].tap()
+            let tasks = "toastty-mobile-tasks"
+            // A lane names its project; the groups below mix projects.
+            let shippedInLane = labelOfRowOnScreen(shipped, list: tasks)
+            XCTAssertFalse(shippedInLane.contains(longNamesProject), shippedInLane)
+            let startingInTasks = labelOfRowOnScreen(starting, list: tasks)
+            XCTAssertTrue(startingInTasks.contains(longNamesProject), startingInTasks)
+            _ = labelOfRowOnScreen(otherProject, list: tasks)
+            let questionInTasks = labelOfRowOnScreen(question, list: tasks)
+            XCTAssertTrue(questionInTasks.contains("Asks: Should the app badge count"), questionInTasks)
+            attachScreenshot(named: "long-names-tasks-\(name)", of: app)
+            app.terminate()
+        }
+    }
+
     // MARK: - Helpers
 
     /// A chip keeps its text on one line with no-break spaces and word
@@ -426,14 +505,19 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     /// Without `keepsCollapsedCards`, every project card shows expanded
     /// whatever an earlier test saved.
     private func launchTaskFixture(
-        keepsCollapsedCards: Bool = false, tasks: String = "1", taskLinks: Bool = false
+        keepsCollapsedCards: Bool = false, tasks: String = "1", taskLinks: Bool = false,
+        contentSize: UIContentSizeCategory? = nil, environment: [String: String] = [:]
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = tasks
         if taskLinks { app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASK_LINKS"] = "1" }
+        for (key, value) in environment { app.launchEnvironment[key] = value }
         if keepsCollapsedCards == false {
             app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
+        }
+        if let contentSize {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSize.rawValue]
         }
         app.launch()
         XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 10))

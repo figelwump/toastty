@@ -368,6 +368,111 @@ public enum ToasttyMobileFixture {
         return MobileHomeSnapshot(hostName: home.hostName, workspaces: [toastty], taskBoard: MobileTaskBoard(board))
     }()
 
+    public static let longNamesWorkspaceID = UUID(uuidString: "A3000000-0000-0000-0000-000000000001")!
+    public static let longNamesQuestionSubspaceID = UUID(uuidString: "A3000000-0000-0000-0000-000000000011")!
+    public static let longNamesQuestionTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000001")!
+    public static let longNamesStartingTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000002")!
+    public static let longNamesShippedTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000003")!
+    public static let longNamesOtherProjectTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000004")!
+
+    /// A Mac with the task system on whose project, tasks and sessions have
+    /// long names, for rows that must keep their text on the screen: a
+    /// question task space with a pull request and child progress, a
+    /// starting task with child progress, a merged task that waits for a
+    /// release, and a question in a project that is not open.
+    public static let longNamesTaskHome: MobileHomeSnapshot = {
+        let projectID = longNamesWorkspaceID
+        let project = "toastty-ios-coordinator-parity-integration"
+        let closedProject = "linux-port-with-a-long-name"
+        let now = Date()
+        func pullRequest(_ number: Int, _ state: RemoteTaskPullRequestState) -> RemoteTaskPullRequest {
+            RemoteTaskPullRequest(
+                number: number, url: URL(string: "https://github.com/example/toastty/pull/\(number)")!, state: state
+            )
+        }
+        let question = "Asks: Should the app badge count sessions, tasks, or both, and should reviews count?"
+        let workspaces = [
+            MobileWorkspace(
+                id: projectID,
+                title: project,
+                conversations: [
+                    conversation(
+                        31, workspaceID: projectID, workspaceTitle: project, cwd: "~/GiantThings/repos/toastty",
+                        agent: .claude, title: "Investigate why the gateway drops the websocket after sleep",
+                        status: .needsApproval, availability: .pendingInteraction(preview: "Review the command on the Mac"),
+                        age: "2m", last: "Allow Toastty to run scripts/remote/test.sh --platform ios?"
+                    ),
+                ]
+            ),
+            MobileWorkspace(
+                id: longNamesQuestionSubspaceID,
+                title: "decide-the-badge-rule-for-reviews",
+                conversations: [
+                    conversation(
+                        32, workspaceID: longNamesQuestionSubspaceID, workspaceTitle: "decide-the-badge-rule-for-reviews",
+                        cwd: "~/GiantThings/repos/toastty-decide-the-badge-rule", agent: .claude, title: "",
+                        status: .ready, availability: .unavailable(reason: "prompt not open"),
+                        age: "12m", last: "Which badge rule do you want?"
+                    ),
+                ],
+                annotations: [
+                    RemoteWorkspaceAnnotation(
+                        key: "github-pr", text: "PR #1188",
+                        url: URL(string: "https://github.com/example/toastty/pull/1188"), color: "#5BA08A"
+                    ),
+                ],
+                parentWorkspaceID: projectID
+            ),
+        ]
+        let board = RemoteTaskBoard(
+            tasks: [
+                RemoteTaskSummary(
+                    id: longNamesQuestionTaskID, title: "decide-the-badge-rule-for-reviews", group: .needsYou,
+                    mark: .question, statusLine: question, rowSummary: question,
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectWorkspaceID: projectID, projectTitle: project,
+                    taskSpaceWorkspaceID: longNamesQuestionSubspaceID, pullRequest: pullRequest(1188, .open),
+                    activityAt: now, childProgress: RemoteTaskChildProgress(merged: 2, total: 5)
+                ),
+                RemoteTaskSummary(
+                    id: longNamesStartingTaskID, title: "Parent without merged children yet", group: .running,
+                    mark: .starting, statusLine: "Moving to worktree · fetching base",
+                    rowSummary: "Moving to worktree · fetching base",
+                    stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
+                    projectWorkspaceID: projectID, projectTitle: project, activityAt: now,
+                    childProgress: RemoteTaskChildProgress(merged: 0, total: 3)
+                ),
+                RemoteTaskSummary(
+                    id: longNamesShippedTaskID, title: "Shipped change with a longer title than most", group: .toShip,
+                    mark: .toShip, statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: projectID, projectTitle: project,
+                    pullRequest: pullRequest(1204, .merged), activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: longNamesOtherProjectTaskID, title: "Question in a closed project", group: .needsYou,
+                    mark: .question, statusLine: "Asks: Which base branch should the port start from?",
+                    rowSummary: "Asks: Which base branch should the port start from?",
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectTitle: closedProject, activityAt: now
+                ),
+            ],
+            needsYou: [
+                RemoteTaskBoardEntry(taskID: longNamesQuestionTaskID),
+                RemoteTaskBoardEntry(taskID: longNamesOtherProjectTaskID),
+            ],
+            running: [RemoteTaskBoardEntry(taskID: longNamesStartingTaskID)],
+            toShip: [RemoteTaskShipLane(
+                id: "long-names", projectTitle: project, count: 1,
+                recentTaskIDs: [longNamesShippedTaskID], taskIDs: [longNamesShippedTaskID],
+                releaseWorkspaceID: projectID
+            )],
+            doneCount: 104,
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 1, doneCount: 104)]
+        )
+        return MobileHomeSnapshot(hostName: home.hostName, workspaces: workspaces, taskBoard: MobileTaskBoard(board))
+    }()
+
     /// Task worktrees spawned from the toastty workspace, one in each state
     /// a subspace row shows. Three come from the first session and one from
     /// the second, so the ⑂ filter has something to leave out.

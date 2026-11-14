@@ -31,6 +31,74 @@ struct ToasttyConnectionPill: View {
     }
 }
 
+/// Why the lists may be out of date while the connection is not live, with
+/// Retry while Toastty reconnects. Home and the Tasks tab show it above
+/// their lists; it draws nothing while the connection is live.
+struct ToasttyConnectionNotice: View {
+    let controller: HomeScreenController
+    let refresh: () async -> Void
+
+    @State private var isRetryingConnection = false
+
+    var body: some View {
+        if let message = controller.connectionNoticeMessage {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 9) {
+                    indicator
+                    Text(message)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
+                .accessibilityValue(showsProgressIndicator ? "In progress" : "")
+                .accessibilityIdentifier("toastty-mobile-connection-notice")
+
+                if controller.freshness == .reconnecting {
+                    Button("Retry", action: retryConnection)
+                        .buttonStyle(.bordered)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .disabled(isRetryingConnection)
+                        .accessibilityLabel("Retry connection")
+                        .accessibilityIdentifier("toastty-mobile-connection-retry")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(controller.freshness == .unreachable
+                ? ToasttyDesignTokens.red
+                : ToasttyDesignTokens.amberText)
+            .toasttyCard()
+        }
+    }
+
+    private func retryConnection() {
+        guard isRetryingConnection == false else { return }
+        isRetryingConnection = true
+        Task { @MainActor in
+            await refresh()
+            isRetryingConnection = false
+        }
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        if showsProgressIndicator {
+            ProgressView()
+                .controlSize(.small)
+                .tint(ToasttyDesignTokens.amber)
+        } else {
+            Image(systemName: controller.freshness == .unreachable
+                ? "wifi.slash"
+                : "arrow.trianglehead.2.clockwise.rotate.90")
+        }
+    }
+
+    private var showsProgressIndicator: Bool {
+        controller.freshness == .reconnecting || controller.freshness == .connecting
+    }
+}
+
 struct ToasttySessionStatusPresentation: Equatable, Sendable {
     let bucket: MobileSessionBucket
     let freshness: LiveProjectionFreshness

@@ -51,10 +51,24 @@ struct ToasttyTasksTabView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("toastty-mobile-tasks")
+        // As in Home: while the connection is not live, the list says that
+        // it shows the last update, and offers Retry.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if controller.connectionNoticeMessage != nil {
+                ToasttyConnectionNotice(controller: controller, refresh: refresh)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(ToasttyDesignTokens.background)
+            }
+        }
         .background(ToasttyDesignTokens.background)
         .navigationTitle("Tasks")
         .navigationBarTitleDisplayMode(.inline)
         .toasttyTaskDetailSheet($taskDetail, controller: controller, openWorkspace: openWorkspace)
+        // What a release or a task action started, as Home says it.
+        .toasttySubspaceDoneNotice(controller)
         .toasttyTaskActionPresenter(controller)
     }
 
@@ -89,7 +103,11 @@ struct ToasttyTasksTabView: View {
                     .id(Self.laneID(lane.id))
                     .toasttyListRow(vertical: 0)
                 ForEach(lane.tasks) { task in
-                    ToasttyTaskListRow(task: task, controller: controller, openWorkspace: openWorkspace, openTask: openTask)
+                    // The lane's line names the project.
+                    ToasttyTaskListRow(
+                        task: task, showsProject: false,
+                        controller: controller, openWorkspace: openWorkspace, openTask: openTask
+                    )
                 }
             }
         }
@@ -140,30 +158,49 @@ struct ToasttyTasksTabView: View {
     }
 
     /// A project's line in To ship: its name and count, and Release… when
-    /// the project can release from Toastty.
+    /// the project can release from Toastty. Release… sits beside the name
+    /// when the line has room, else under it, so a long name or a large
+    /// text size does not cut the name to a few letters.
     private func laneHeader(_ lane: MobileTaskSections.Lane) -> some View {
-        HStack(spacing: 6) {
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                Text(lane.projectTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.taskToShip)
-                    .lineLimit(1)
-                Text("\(lane.count)")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                laneTitle(lane)
+                Spacer(minLength: 0)
+                laneRelease(lane)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("toastty-tasks-lane-\(lane.id)")
-            Spacer(minLength: 0)
-            if let release = lane.release {
-                ToasttyReleaseButton(
-                    release: release,
-                    controller: controller,
-                    accessibilityIdentifier: "toastty-tasks-lane-release-\(lane.id)"
-                )
+            VStack(alignment: .leading, spacing: 4) {
+                laneTitle(lane)
+                laneRelease(lane)
             }
         }
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+    }
+
+    private func laneTitle(_ lane: MobileTaskSections.Lane) -> some View {
+        HStack(spacing: 6) {
+            Text(lane.projectTitle)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ToasttyDesignTokens.taskToShip)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(lane.count)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .fixedSize()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("toastty-tasks-lane-\(lane.id)")
+    }
+
+    @ViewBuilder
+    private func laneRelease(_ lane: MobileTaskSections.Lane) -> some View {
+        if let release = lane.release {
+            ToasttyReleaseButton(
+                release: release,
+                controller: controller,
+                accessibilityIdentifier: "toastty-tasks-lane-release-\(lane.id)"
+            )
+        }
     }
 }

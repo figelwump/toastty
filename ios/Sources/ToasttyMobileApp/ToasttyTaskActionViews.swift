@@ -221,28 +221,17 @@ struct ToasttyTaskBar: View {
     let controller: HomeScreenController
 
     var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 5) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(ToasttyTaskDetailSheet.stageColor(task))
-                    .frame(width: 8, height: 8)
-                Text(task.stageTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                    .lineLimit(1)
-            }
-            .fixedSize()
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Stage: \(task.stageTitle)")
-            .accessibilityIdentifier("toastty-task-bar-stage")
-            if let pullRequest = task.pullRequest {
-                ToasttyTaskPullRequestChip(pullRequest: pullRequest)
-            }
-            Spacer(minLength: 4)
-            if let control = task.mergeControl {
-                ToasttyTaskMergeControlView(control: control, task: task, controller: controller)
-            }
+        // The Merge control always shows. When the bar has no room, the
+        // pull request chip gives way first, since the control and the
+        // menu name the pull request too; then the stage shortens.
+        ViewThatFits(in: .horizontal) {
+            content(showsPullRequest: true)
+            content(showsPullRequest: false)
         }
+        // A bar, like the navigation bar above it: its text stops growing
+        // at the first accessibility size, so it cannot push the
+        // transcript off the screen.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, minHeight: 40)
@@ -254,6 +243,31 @@ struct ToasttyTaskBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("toastty-task-bar")
+    }
+
+    private func content(showsPullRequest: Bool) -> some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(ToasttyTaskDetailSheet.stageColor(task))
+                    .frame(width: 8, height: 8)
+                Text(task.stageTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .lineLimit(1)
+            }
+            .fixedSize(horizontal: showsPullRequest, vertical: false)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Stage: \(task.stageTitle)")
+            .accessibilityIdentifier("toastty-task-bar-stage")
+            if showsPullRequest, let pullRequest = task.pullRequest {
+                ToasttyTaskPullRequestChip(pullRequest: pullRequest)
+            }
+            Spacer(minLength: 4)
+            if let control = task.mergeControl {
+                ToasttyTaskMergeControlView(control: control, task: task, controller: controller)
+            }
+        }
     }
 }
 
@@ -563,11 +577,21 @@ struct ToasttyReleaseButton: View {
 
     var body: some View {
         if let runner, controller.canReleaseProjects {
-            let isOff = release.isReleasing || controller.isProjectReleaseInFlight(release)
+            // The request is on its way to the Mac: the button shows that
+            // the tap was taken, before the board names the release.
+            let isSending = controller.isProjectReleaseInFlight(release) && release.isReleasing == false
+            let isOff = release.isReleasing || isSending
             Button {
                 runner.release(release)
             } label: {
-                Text(release.isReleasing ? "Releasing\u{2026}" : "Release\u{2026}")
+                HStack(spacing: 5) {
+                    if isSending {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(ToasttyDesignTokens.taskToShip)
+                    }
+                    Text(release.isReleasing ? "Releasing\u{2026}" : "Release\u{2026}")
+                }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(ToasttyDesignTokens.taskToShip)
                     .padding(.horizontal, 8)
@@ -585,6 +609,7 @@ struct ToasttyReleaseButton: View {
             .fixedSize()
             .accessibilityLabel(release.isReleasing
                 ? "Releasing \(release.projectTitle)" : "Release \(release.projectTitle)")
+            .accessibilityValue(isSending ? "Sending to your Mac" : "")
             .accessibilityHint(release.isReleasing ? "" : "Asks first, then starts a release task on your Mac")
             .accessibilityIdentifier(accessibilityIdentifier)
         }
