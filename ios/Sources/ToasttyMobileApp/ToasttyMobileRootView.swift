@@ -320,7 +320,9 @@ struct ToasttyMobileRootView: View {
     @ViewBuilder
     private var tabContent: some View {
         if showsTasksTab {
-            TabView(selection: Binding(get: { tabs.selected }, set: selectTab)) {
+            // A closure, not the method itself: Swift 6.3 crashes making the
+            // isolated thunk for a method passed as `set`.
+            TabView(selection: Binding(get: { tabs.selected }, set: { selectTab($0) })) {
                 Tab("Home", systemImage: "house", value: ToasttyMobileTab.home) {
                     navigationStack(.home) { homeView }
                 }
