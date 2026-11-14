@@ -48,43 +48,6 @@ extension View {
     }
 }
 
-/// The Needs you segment, until it gets its own sections: the tasks that
-/// need the user, as the Mac sends its Needs you group, with each task's
-/// family. Emits sibling rows so the List gives each its own cell.
-struct ToasttyNeedsYouTaskList: View {
-    let board: MobileTaskBoard
-    let controller: HomeScreenController
-    let openWorkspace: (UUID) -> Void
-    let openTask: (UUID) -> Void
-
-    var body: some View {
-        let entries = board.entries(.needsYou)
-        if entries.isEmpty {
-            ContentUnavailableView(
-                "Nothing needs you",
-                systemImage: "checkmark.circle",
-                description: Text("Running and idle work is in All.")
-            )
-            .foregroundStyle(ToasttyDesignTokens.secondaryText)
-            .padding(.vertical, 32)
-            .accessibilityIdentifier("toastty-needs-you-empty")
-            .toasttyListRow()
-        } else {
-            ToasttyTaskGroupHeader(title: TaskBucket.needsYou.title, count: board.count(.needsYou), tint: ToasttyDesignTokens.needsYou)
-                .padding(.top, 10)
-                .toasttyListRow(vertical: 0)
-            ForEach(entries, id: \.taskID) { entry in
-                if let task = board.task(id: entry.taskID) {
-                    ToasttyTaskListRow(
-                        task: task, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext,
-                        controller: controller, openWorkspace: openWorkspace, openTask: openTask
-                    )
-                }
-            }
-        }
-    }
-}
-
 /// A task in a list of tasks from several projects: its task space's row
 /// while the task space is open, else its own row, which opens its detail.
 /// Each row names its project.
@@ -170,14 +133,92 @@ extension RemoteTaskSummary {
     }
 }
 
+/// How a row draws on one line, as the Needs you segment lists rows: its
+/// one tag, and the second line it keeps for a question or a failure.
+struct ToasttyCompactRow: Equatable {
+    let tag: MobileHomeRowTag?
+    let detail: String?
+
+    /// What the tag says to VoiceOver.
+    var tagAccessibilityLabel: String? {
+        switch tag {
+        case .pullRequestAnnotation(let annotation): ToasttyWorkspaceAnnotationAccessibility.label(for: annotation)
+        case .pullRequest(let pullRequest): "PR #\(pullRequest.number)"
+        case .parent(let title): "started by \(title)"
+        case .childProgress(let progress): ToasttyChildProgressChip.label(progress)
+        case .project(let project): project
+        case nil: nil
+        }
+    }
+}
+
+/// The one tag on a one-line row. As on the Mac, the tag keeps its room up
+/// to its cap and the title shortens first.
+struct ToasttyCompactRowTag: View {
+    let tag: MobileHomeRowTag
+
+    var body: some View {
+        content
+            .layoutPriority(1)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch tag {
+        case .pullRequestAnnotation(let annotation):
+            // Capped as in All: an annotation's text can be long.
+            ToasttyAnnotationChip(annotation: annotation, size: .compact)
+                .frame(minWidth: 44, maxWidth: 110, alignment: .trailing)
+        case .pullRequest(let pullRequest):
+            ToasttyTaskPullRequestChip(pullRequest: pullRequest)
+        case .parent(let title):
+            ToasttyParentTaskTag(title: title)
+        case .childProgress(let progress):
+            ToasttyChildProgressChip(progress: progress)
+        case .project(let project):
+            Text(project)
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+}
+
+/// "↖ Parent title", on a row that lists without the task that started
+/// it. A long title shortens.
+struct ToasttyParentTaskTag: View {
+    let title: String
+
+    var body: some View {
+        Text("↖ \(title)")
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(cornerRadius: 4))
+            .frame(maxWidth: 130, alignment: .trailing)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// A task with no open task space, such as one whose setup failed or one
 /// that merged: its mark, title, status line and project. It opens the
-/// task's detail.
+/// task's detail. As on the Mac, the pull request chip gives way when the
+/// title has no room, and the child progress sits on the status line. A
+/// one-line row (`compact`) shows one tag, and its second line only for a
+/// question or a failure.
 struct ToasttyTaskRow: View {
     let task: RemoteTaskSummary
     let freshness: LiveProjectionFreshness
     var controller: HomeScreenController?
+    var compact: ToasttyCompactRow? = nil
     let open: () -> Void
+
+    /// What a title keeps before a chip gives way, as on the Mac.
+    static let titleReservedWidth: CGFloat = 90
 
     var body: some View {
         Button(action: open) {
@@ -188,34 +229,36 @@ struct ToasttyTaskRow: View {
                     .overlay { ToasttyTaskMark(task: task, freshness: freshness) }
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(task.title)
-                            .font(.subheadline.weight(task.group == .needsYou ? .bold : .medium))
-                            .foregroundStyle(ToasttyDesignTokens.primaryText)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        if let progress = task.shownChildProgress {
-                            ToasttyChildProgressChip(progress: progress)
+                    if let compact {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            titleText
+                            Spacer(minLength: 0)
+                            if let tag = compact.tag {
+                                ToasttyCompactRowTag(tag: tag)
+                            }
+                            chevron
                         }
-                        if let pullRequest = task.pullRequest {
-                            ToasttyTaskPullRequestChip(pullRequest: pullRequest)
+                        if let detail = compact.detail {
+                            statusText(detail)
                         }
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    }
-                    HStack(spacing: 6) {
-                        Text(task.statusLine)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        if let project = task.projectTitle {
-                            Text(project)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                                .lineLimit(1)
-                                .fixedSize()
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            titleLine(showsPullRequest: true)
+                            titleLine(showsPullRequest: false)
+                        }
+                        HStack(spacing: 6) {
+                            statusText(task.statusLine)
+                            Spacer(minLength: 0)
+                            if let progress = task.shownChildProgress {
+                                ToasttyChildProgressChip(progress: progress)
+                            }
+                            if let project = task.projectTitle {
+                                Text(project)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                            }
                         }
                     }
                 }
@@ -226,9 +269,7 @@ struct ToasttyTaskRow: View {
             .contentShape(ToasttySessionRow.shape)
         }
         .buttonStyle(ToasttySessionRowButtonStyle(tint: .clear))
-        .accessibilityLabel([
-            task.title, task.statusLine, task.projectTitle, task.shownChildProgress.map(ToasttyChildProgressChip.label),
-        ].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(accessibilityLabel)
         .accessibilityHint("Shows the task")
         .accessibilityIdentifier("toastty-task-row-\(task.id.uuidString)")
         .contextMenu {
@@ -237,6 +278,48 @@ struct ToasttyTaskRow: View {
                 ToasttyTaskActionMenuItems(task: task, controller: controller)
             }
         }
+    }
+
+    private var titleText: some View {
+        Text(task.title)
+            .font(.subheadline.weight(task.group == .needsYou ? .bold : .medium))
+            .foregroundStyle(ToasttyDesignTokens.primaryText)
+            .lineLimit(1)
+    }
+
+    private func titleLine(showsPullRequest: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            titleText
+                .frame(minWidth: 0, idealWidth: Self.titleReservedWidth, maxWidth: .infinity, alignment: .leading)
+            if showsPullRequest, let pullRequest = task.pullRequest {
+                ToasttyTaskPullRequestChip(pullRequest: pullRequest)
+            }
+            chevron
+        }
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
+    }
+
+    private func statusText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .lineLimit(1)
+    }
+
+    private var accessibilityLabel: String {
+        // A one-line row still says its status, which its hidden second
+        // line would show.
+        let parts: [String?] = if let compact {
+            [task.title, compact.detail ?? task.statusLine, compact.tagAccessibilityLabel]
+        } else {
+            [task.title, task.statusLine, task.projectTitle, task.shownChildProgress.map(ToasttyChildProgressChip.label)]
+        }
+        return parts.compactMap { $0 }.joined(separator: ", ")
     }
 }
 

@@ -582,16 +582,20 @@ final class AppSessionControllerTests: XCTestCase {
         XCTAssertEqual(controller.appIconBadgeCount, 0)
     }
 
-    /// With the Mac's task system on, the badge counts tasks that need the
-    /// user, as the Mac's Tasks row and the Status segment do, not sessions.
-    /// A dimmed relative listed under Needs you does not count.
-    func testBadgeCountsTasksThatNeedTheUserWhileTheMacRunsTheTaskSystem() throws {
+    /// With the Mac's task system on, the badge shows the yellow number on
+    /// Home's Needs you switcher: sessions, task spaces and tasks that need
+    /// the user, without those that wait only for a review.
+    func testBadgeCountsTheNeedsYouRowsWhileTheMacRunsTheTaskSystem() throws {
         let credential = try Self.credential(deviceName: "Badge iPhone")
         let controller = makeController(vault: TestAppCredentialVault(initialCredential: credential), credential: credential)
         XCTAssertEqual(controller.appIconBadgeCount, 7)
         controller.applyLiveSnapshot(ToasttyMobileFixture.taskHome, connectionState: .live)
-        // Question, review, setup failed, complete task, cleanup stopped.
-        XCTAssertEqual(controller.appIconBadgeCount, 5)
+        // toastty: 3 sessions, 2 task spaces and the failed setup; release
+        // 0.9.0: 2 sessions; emptyos: the stopped cleanup. Its review does
+        // not count.
+        let counts = try XCTUnwrap(MobileHomeBuckets.needsYouCounts(in: ToasttyMobileFixture.taskHome))
+        XCTAssertEqual(counts, MobileHomeNeedsYouCounts(needsYou: 9, readyToReview: 1))
+        XCTAssertEqual(controller.appIconBadgeCount, 9)
         controller.applyLiveSnapshot(ToasttyMobileFixture.taskHome.withTaskBoard(nil), connectionState: .live)
         XCTAssertEqual(controller.appIconBadgeCount, controller.homeController.sessionsNeedingAttention().count)
     }

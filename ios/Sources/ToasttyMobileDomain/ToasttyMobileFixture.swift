@@ -308,6 +308,43 @@ public enum ToasttyMobileFixture {
         )
     }()
 
+    /// A Mac with the task system on where nothing needs the user: one
+    /// session works, one task runs and one is idle. Home's Needs you
+    /// segment shows its empty state.
+    public static let quietTaskHome: MobileHomeSnapshot = {
+        let toasttyID = previewWorkspaceID
+        let now = Date()
+        let toastty = MobileWorkspace(
+            id: toasttyID,
+            title: "toastty",
+            conversations: [
+                conversation(
+                    2, workspaceID: toasttyID, workspaceTitle: "toastty",
+                    cwd: "~/GiantThings/repos/toastty", agent: .codex,
+                    title: "Sparkle update check", status: .working,
+                    availability: .unavailable(reason: "working"), age: "now", last: "Running the test suite"
+                ),
+            ]
+        )
+        func task(_ id: UUID, _ title: String, _ group: RemoteTaskGroup, _ status: String) -> RemoteTaskSummary {
+            RemoteTaskSummary(
+                id: id, title: title, group: group, statusLine: status,
+                stageTitle: group == .running ? "Running" : "Idle", stageReason: status,
+                projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now
+            )
+        }
+        let board = RemoteTaskBoard(
+            tasks: [
+                task(startingTaskID, "Split the parser", .running, "Claude · working"),
+                task(otherProjectTaskID, "Linux port spike", .idle, "Codex · idle"),
+            ],
+            running: [RemoteTaskBoardEntry(taskID: startingTaskID)],
+            idle: [RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
+            doneCount: 3
+        )
+        return MobileHomeSnapshot(hostName: home.hostName, workspaces: [toastty], taskBoard: MobileTaskBoard(board))
+    }()
+
     /// Task worktrees spawned from the toastty workspace, one in each state
     /// a subspace row shows. Three come from the first session and one from
     /// the second, so the ⑂ filter has something to leave out.

@@ -25,10 +25,9 @@ final class ToasttyMobileTaskUITests: XCTestCase {
 
     func testAllListsEachProjectAsACardWithBuckets() {
         let app = launchTaskFixture()
-        // The Mac's switcher replaces All | Active, and Needs you counts the
-        // tasks that need the user.
+        // The Mac's switcher replaces All | Active.
         XCTAssertFalse(app.segmentedControls["toastty-mobile-workspace-session-filter"].exists)
-        XCTAssertEqual(app.buttons["toastty-mobile-home-segment-needsYou"].label, "Needs you, 5")
+        XCTAssertEqual(app.buttons["toastty-mobile-home-segment-all"].label, "All projects")
         select(.all, in: app)
 
         let toastty = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
@@ -80,13 +79,69 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(otherProjectTaskID)"], in: app))
         XCTAssertEqual(other.label, "Other tasks, 1 idle")
         attachScreenshot(named: "home-all-other-tasks", of: app)
+    }
 
-        // Needs you lists the tasks that need the user.
+    /// Needs you lists, per project, the rows All puts in Needs you, then
+    /// those in Ready to review, on one line each; a question keeps its
+    /// second line. The switcher counts both.
+    func testNeedsYouListsEachProjectsNeedsYouThenReadyToReviewRows() {
+        let app = launchTaskFixture()
+        XCTAssertEqual(
+            app.buttons["toastty-mobile-home-segment-needsYou"].label, "Only what needs you, 9, 1 ready for review"
+        )
         select(.needsYou, in: app)
-        XCTAssertTrue(app.buttons["toastty-subspace-row-\(questionSubspaceID)"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["toastty-task-row-\(setupFailedTaskID)"].exists)
+
+        // The toastty card's six Needs you rows from All, sessions included.
+        let header = app.descendants(matching: .any)["toastty-needs-you-bucket-\(toasttyWorkspaceID)-needsYou"]
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        XCTAssertEqual(header.label, "Needs you, 6")
+        XCTAssertTrue(app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"].label.hasSuffix("6 need you"))
+        XCTAssertTrue(app.buttons["toastty-mobile-grouped-card-B1000000-0000-0000-0000-000000000001"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-needs-you-bucket-\(toasttyWorkspaceID)-readyToReview"].exists)
+
+        // A question keeps its second line; an approval takes one line. Each
+        // shows one tag, its pull request.
+        let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
+        XCTAssertTrue(scrollTo(question, in: app))
+        XCTAssertTrue(question.label.contains("Asks: Should the badge count tasks or sessions?"), question.label)
+        XCTAssertTrue(question.label.contains("PR #45"), question.label)
+        XCTAssertFalse(question.label.contains("1/2 merged"), question.label)
+        XCTAssertTrue(app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"].exists)
+        // A one-line row is the rows' 44 pt minimum; the question's second
+        // line makes its row taller. (The approval row's query can match its
+        // whole list cell, so it is no height reference.)
+        XCTAssertGreaterThan(question.frame.height, 44 + 8, "question \(question.frame)")
+        // Running work, such as the task the question started, stays in All.
         XCTAssertFalse(app.buttons["toastty-subspace-row-\(workingSubspaceID)"].exists)
+        XCTAssertFalse(app.buttons["toastty-task-row-\(startingTaskID)"].exists)
+        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(setupFailedTaskID)"], in: app))
+        XCTAssertTrue(scrollTo(header, in: app))
         attachScreenshot(named: "home-needs-you", of: app)
+
+        // emptyos lists its review under Ready to review, after its Needs
+        // you row. The review's parent is Done, so the row names it.
+        let review = app.buttons["toastty-subspace-row-\(reviewSubspaceID)"]
+        XCTAssertTrue(scrollTo(review, in: app))
+        let reviewHeader = app.descendants(matching: .any)["toastty-needs-you-bucket-\(emptyosWorkspaceID)-readyToReview"]
+        let emptyosNeedsYou = app.descendants(matching: .any)["toastty-needs-you-bucket-\(emptyosWorkspaceID)-needsYou"]
+        XCTAssertEqual(reviewHeader.label, "Ready to review, 1")
+        XCTAssertEqual(emptyosNeedsYou.label, "Needs you, 1")
+        XCTAssertLessThan(emptyosNeedsYou.frame.minY, reviewHeader.frame.minY)
+        XCTAssertLessThan(reviewHeader.frame.minY, review.frame.minY)
+        XCTAssertTrue(review.label.hasSuffix("started by Website refresh"), review.label)
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-needs-you-all-note"].exists)
+        attachScreenshot(named: "home-needs-you-review", of: app)
+    }
+
+    func testNeedsYouSaysWhenNothingNeedsTheUser() {
+        let app = launchTaskFixture(tasks: "quiet")
+        XCTAssertEqual(app.buttons["toastty-mobile-home-segment-needsYou"].label, "Only what needs you")
+        select(.needsYou, in: app)
+        let empty = app.descendants(matching: .any)["toastty-needs-you-empty"]
+        XCTAssertTrue(empty.waitForExistence(timeout: 5))
+        XCTAssertTrue(empty.label.contains("Nothing needs you"), empty.label)
+        XCTAssertTrue(empty.label.contains("Running and idle work is in All."), empty.label)
+        attachScreenshot(named: "home-needs-you-empty", of: app)
     }
 
     func testACollapsedCardStaysCollapsedAfterARelaunch() {
@@ -252,10 +307,10 @@ final class ToasttyMobileTaskUITests: XCTestCase {
 
     /// Without `keepsCollapsedCards`, every project card shows expanded
     /// whatever an earlier test saved.
-    private func launchTaskFixture(keepsCollapsedCards: Bool = false) -> XCUIApplication {
+    private func launchTaskFixture(keepsCollapsedCards: Bool = false, tasks: String = "1") -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
-        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = tasks
         if keepsCollapsedCards == false {
             app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
         }
