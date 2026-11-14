@@ -278,22 +278,35 @@ final class ToasttyMobileTaskUITests: XCTestCase {
             ? app.collectionViews[identifier]
             : app.collectionViews.firstMatch
         for _ in 0..<attempts {
-            if isReachable(element, in: app) { return true }
+            if isReachable(element, in: app, list: identifier) { return true }
+            // A row under Home's header is above the visible rows.
+            if identifier == "toastty-mobile-home", element.exists, let top = homeHeaderBottom(in: app),
+               element.frame.minY < top {
+                break
+            }
             list.swipeUp(velocity: .slow)
         }
         for _ in 0..<attempts {
-            if isReachable(element, in: app) { return true }
+            if isReachable(element, in: app, list: identifier) { return true }
             list.swipeDown(velocity: .slow)
         }
-        return isReachable(element, in: app)
+        return isReachable(element, in: app, list: identifier)
     }
 
-    /// Visible and clear of Home's pinned header and the tab bar, which
-    /// cover list rows that XCTest still reports as hittable.
-    private func isReachable(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        guard element.exists, element.isHittable else { return false }
+    /// The bottom of Home's pinned header, which covers list rows that
+    /// XCTest still reports as hittable.
+    private func homeHeaderBottom(in app: XCUIApplication) -> CGFloat? {
         let segment = app.buttons["toastty-mobile-home-segment-all"]
-        if segment.exists, segment.isHittable, element.frame.minY < segment.frame.maxY + 8 { return false }
+        return segment.exists ? segment.frame.maxY + 8 : nil
+    }
+
+    /// Visible, below Home's header when the row is in Home's list, and
+    /// above the tab bar.
+    private func isReachable(_ element: XCUIElement, in app: XCUIApplication, list identifier: String) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        if identifier == "toastty-mobile-home", let top = homeHeaderBottom(in: app), element.frame.minY < top {
+            return false
+        }
         let tabBar = app.tabBars.firstMatch
         if tabBar.exists, element.frame.maxY > tabBar.frame.minY { return false }
         return true
