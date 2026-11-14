@@ -194,10 +194,13 @@ struct ToasttyHomeView: View {
     let notificationError: String?
     /// Nil hides Retry, such as for advice that retrying cannot resolve.
     let retryNotifications: (() -> Void)?
+    /// Switches to the Tasks tab at a group, from a card's To ship line.
+    let showTasks: (ToasttyTasksTabTarget) -> Void
 
     @AppStorage private var storedWorkspaceSessionFilter: String
     @AppStorage private var storedHomeSegment: String
     @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
+    @AppStorage(ToasttyCollapsedSubspaceGroups.projectCardsPreferenceKey) private var storedCollapsedCards = ""
     @State private var isRetryingConnection = false
     /// The ⑂ chip whose subspaces its group is limited to.
     @State private var spawnerFilter: ToasttySpawnerChip?
@@ -205,9 +208,6 @@ struct ToasttyHomeView: View {
     @State private var infoConversation: ToasttySessionInfoSelection?
     @State private var newSession: ToasttyNewSessionModel?
     @State private var taskDetail: ToasttyTaskDetailSelection?
-    /// The task the detail sheet opened on, kept for when the Mac stops
-    /// listing it while the sheet is open.
-    @State private var taskDetailFallback: RemoteTaskSummary?
     @State private var newTask: ToasttyNewTaskModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let defaults: UserDefaults
@@ -219,6 +219,7 @@ struct ToasttyHomeView: View {
         openWorkspace: @escaping (UUID) -> Void = { _ in },
         notificationError: String? = nil,
         retryNotifications: (() -> Void)? = nil,
+        showTasks: @escaping (ToasttyTasksTabTarget) -> Void = { _ in },
         defaults: UserDefaults = .standard
     ) {
         self.controller = controller
@@ -227,6 +228,7 @@ struct ToasttyHomeView: View {
         self.openWorkspace = openWorkspace
         self.notificationError = notificationError
         self.retryNotifications = retryNotifications
+        self.showTasks = showTasks
         self.defaults = defaults
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
@@ -263,16 +265,7 @@ struct ToasttyHomeView: View {
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
         .toasttyNewSessionSheet($newSession, controller: controller)
-        .sheet(item: $taskDetail) { selection in
-            if let task = controller.snapshot.taskBoard?.task(id: selection.id) ?? taskDetailFallback {
-                ToasttyTaskDetailSheet(
-                    task: task,
-                    canOpenTaskSpace: task.taskSpaceWorkspaceID.map { controller.snapshot.subspaceRow(id: $0) != nil } ?? false,
-                    openTaskSpace: openWorkspace,
-                    controller: controller
-                )
-            }
-        }
+        .toasttyTaskDetailSheet($taskDetail, controller: controller, openWorkspace: openWorkspace)
         .toasttyNewTaskSheet($newTask, controller: controller)
         .onChange(of: controller.requestedTaskDetailID, initial: true) { _, taskID in
             guard let taskID else { return }
@@ -319,17 +312,25 @@ struct ToasttyHomeView: View {
         }
     }
 
-    private var orderedRowIDs: [UUID] {
-        if let board = statusBoard {
-            return [RemoteTaskGroup.needsYou, .running, .idle].flatMap { board.entries($0).map(\.taskID) }
+    private var orderedRowIDs: [AnyHashable] {
+        if let board = controller.snapshot.taskBoard {
+            switch selectedHomeSegment {
+            case .needsYou:
+                return board.entries(.needsYou).map(\.taskID)
+            case .all:
+                return cards.flatMap { card in
+                    [AnyHashable(card.id)] + (isCardCollapsed(card) ? [] : card.orderedKeys.map(AnyHashable.init))
+                }
+            }
         }
-        return sections.flatMap { section in
+        let ids: [UUID] = sections.flatMap { section in
             [section.id] + section.workspace.conversations.map(\.id) + section.subspaceRows.map(\.id)
         }
+        return ids.map(AnyHashable.init)
     }
 
-    /// With the Mac's task system, Projects lists every session, as All
-    /// did; Status replaces Active.
+    /// With the Mac's task system, All lists every session in its project's
+    /// card; Needs you replaces Active.
     private var selectedWorkspaceSessionFilter: ToasttyWorkspaceSessionFilter {
         guard controller.snapshot.taskBoard == nil else { return .all }
         return ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) ?? .defaultFilter
@@ -339,26 +340,35 @@ struct ToasttyHomeView: View {
         ToasttyHomeSegment(rawValue: storedHomeSegment) ?? .defaultSegment
     }
 
-    /// The board, while the Status segment shows.
-    private var statusBoard: MobileTaskBoard? {
-        selectedHomeSegment == .status ? controller.snapshot.taskBoard : nil
+    private func homeSegmentPicker(_ board: MobileTaskBoard) -> some View {
+        ToasttyHomeSegmentControl(
+            selection: Binding(
+                get: { selectedHomeSegment },
+                set: { storedHomeSegment = $0.rawValue }
+            ),
+            needsYouCount: board.count(.needsYou)
+        )
     }
 
-    private func homeSegmentPicker(_ board: MobileTaskBoard) -> some View {
-        Picker("Home", selection: Binding(
-            get: { selectedHomeSegment },
-            set: { storedHomeSegment = $0.rawValue }
-        )) {
-            Text(ToasttyHomeSegment.projects.title).tag(ToasttyHomeSegment.projects)
-            Text(ToasttyHomeSegment.statusTitle(needsYouCount: board.count(.needsYou))).tag(ToasttyHomeSegment.status)
+    /// The All segment's cards. The ⑂ filter leaves the other task spaces
+    /// of its project out of the card's buckets, but not out of its counts.
+    private var cards: [MobileHomeCard] {
+        var hidden: Set<MobileHomeRowKey> = []
+        if let filter = spawnerFilter {
+            let rows = controller.snapshot.subspaceRows(of: filter.parentWorkspaceID)
+            let shown = Set(ToasttySubspaceGroupPresentation.rows(rows, spawnedBy: filter.conversationID).rows.map(\.id))
+            hidden = Set(rows.map(\.id).filter { shown.contains($0) == false }.map(MobileHomeRowKey.workspace))
         }
-        .pickerStyle(.segmented)
-        .accessibilityIdentifier("toastty-mobile-home-segment")
+        return MobileHomeBuckets.cards(in: controller.snapshot, hiding: hidden)
+    }
+
+    private func isCardCollapsed(_ card: MobileHomeCard) -> Bool {
+        card.isOtherTasks == false
+            && ToasttyCollapsedSubspaceGroups(storedValue: storedCollapsedCards).contains(card.id)
     }
 
     private func openTask(_ taskID: UUID) {
-        taskDetailFallback = controller.snapshot.taskBoard?.task(id: taskID)
-        taskDetail = ToasttyTaskDetailSelection(id: taskID)
+        taskDetail = ToasttyTaskDetailSelection(id: taskID, fallback: controller.snapshot.taskBoard?.task(id: taskID))
     }
 
     private var workspaceSessionFilterSelection: Binding<ToasttyWorkspaceSessionFilter> {
@@ -380,15 +390,40 @@ struct ToasttyHomeView: View {
 
     @ViewBuilder
     private func workspaceContent(_ proxy: ScrollViewProxy) -> some View {
-        if let board = statusBoard {
-            ToasttyTaskStatusList(
-                board: board,
-                controller: controller,
-                openWorkspace: openWorkspace,
-                openTask: openTask
-            )
+        if let board = controller.snapshot.taskBoard {
+            switch selectedHomeSegment {
+            case .all:
+                cardContent(proxy)
+            case .needsYou:
+                ToasttyNeedsYouTaskList(
+                    board: board,
+                    controller: controller,
+                    openWorkspace: openWorkspace,
+                    openTask: openTask
+                )
+            }
         } else {
             projectContent(proxy)
+        }
+    }
+
+    @ViewBuilder
+    private func cardContent(_ proxy: ScrollViewProxy) -> some View {
+        let cards = self.cards
+        if cards.isEmpty {
+            workspaceEmptyState
+                .toasttyListRow()
+        } else {
+            ToasttyProjectCards(
+                cards: cards,
+                controller: controller,
+                spawnerFilter: $spawnerFilter,
+                infoConversation: $infoConversation,
+                openWorkspace: openWorkspace,
+                openTask: { openTask($0.id) },
+                showTasks: showTasks,
+                onSpawnerChip: { toggleSpawnerFilter($0, proxy: proxy) }
+            )
         }
     }
 
@@ -438,12 +473,6 @@ struct ToasttyHomeView: View {
                         )
                         .id(Self.subspaceGroupID(section.id))
                     }
-                    if let tally = controller.snapshot.taskBoard?.finished(projectID: section.id) {
-                        ToasttyProjectFinishedFooter(tally: tally) {
-                            storedHomeSegment = ToasttyHomeSegment.status.rawValue
-                        }
-                        .toasttyListRow()
-                    }
                 }
             }
         }
@@ -457,20 +486,29 @@ struct ToasttyHomeView: View {
         "subspaces-\(parentID.uuidString)"
     }
 
-    /// The chip limits its group to the session's subspaces; tapping it
-    /// again shows them all. The group may sit under another workspace, so
-    /// it is opened and scrolled into view.
+    /// The chip limits its group, or with the task system its project's
+    /// card, to the session's subspaces; tapping it again shows them all.
+    /// The group may sit under another workspace, so it is opened and
+    /// scrolled into view.
     private func toggleSpawnerFilter(_ chip: ToasttySpawnerChip, proxy: ScrollViewProxy) {
         guard spawnerFilter?.conversationID != chip.conversationID else {
             spawnerFilter = nil
             return
         }
         spawnerFilter = chip
-        var groups = ToasttyCollapsedSubspaceGroups(storedValue: storedCollapsedGroups)
+        let usesCards = controller.snapshot.taskBoard != nil
+        var groups = ToasttyCollapsedSubspaceGroups(storedValue: usesCards ? storedCollapsedCards : storedCollapsedGroups)
         groups.set(chip.parentWorkspaceID, collapsed: false)
-        storedCollapsedGroups = groups.storedValue
+        if usesCards {
+            storedCollapsedCards = groups.storedValue
+        } else {
+            storedCollapsedGroups = groups.storedValue
+        }
         withAnimation(reduceMotion ? nil : .default) {
-            proxy.scrollTo(Self.subspaceGroupID(chip.parentWorkspaceID), anchor: .center)
+            proxy.scrollTo(
+                usesCards ? ToasttyProjectCards.cardScrollID(chip.parentWorkspaceID) : Self.subspaceGroupID(chip.parentWorkspaceID),
+                anchor: usesCards ? .top : .center
+            )
         }
     }
 

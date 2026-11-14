@@ -29,3 +29,23 @@ extension [ToasttyMobileRoute] {
         return path
     }
 }
+
+/// The app's tabs while the Mac runs its task system. Each tab keeps its
+/// own navigation stack. A new tab is a new case.
+enum ToasttyMobileTab: Hashable {
+    case home
+    case tasks
+}
+
+/// The selected tab and each tab's navigation stack. Switching tabs keeps
+/// every stack as it was.
+struct ToasttyMobileTabState: Equatable {
+    var selected = ToasttyMobileTab.home
+    var paths: [ToasttyMobileTab: [ToasttyMobileRoute]] = [:]
+
+    /// The stack of the tab on screen.
+    var selectedPath: [ToasttyMobileRoute] {
+        get { paths[selected] ?? [] }
+        set { paths[selected] = newValue }
+    }
+}

@@ -3,111 +3,100 @@ import SwiftUI
 import ToasttyMobileDomain
 
 /// Home's segments while the Mac runs its task system, as in the Mac
-/// sidebar: Projects lists each workspace with its task spaces; Status
-/// lists the tasks by where they stand.
+/// sidebar: All lists each project as a card with its rows in buckets;
+/// Needs you lists only what needs the user.
 enum ToasttyHomeSegment: String, CaseIterable {
-    case projects
-    case status
+    case all
+    case needsYou
 
-    static let defaultSegment = ToasttyHomeSegment.projects
+    static let defaultSegment = ToasttyHomeSegment.all
     static let preferenceKey = "toastty-mobile-home-segment"
 
     var title: String {
         switch self {
-        case .projects: "Projects"
-        case .status: "Status"
+        case .all: "All"
+        case .needsYou: "Needs you"
         }
-    }
-
-    /// "Status 4" while tasks need the user, like the Mac's Tasks badge.
-    static func statusTitle(needsYouCount: Int) -> String {
-        needsYouCount > 0 ? "Status \(needsYouCount)" : "Status"
     }
 }
 
 /// Which task the detail sheet shows.
 struct ToasttyTaskDetailSelection: Identifiable, Equatable {
     let id: UUID
+    /// The task as it was when the sheet opened, for when the Mac stops
+    /// listing it while the sheet is open.
+    var fallback: RemoteTaskSummary? = nil
 }
 
-/// The Status segment: Needs you, Running and Idle as rows, To ship as one
-/// line per project, and Done as a count. Emits sibling rows so the List
-/// gives each its own cell. A task with an open task space draws as that
-/// task space's row; the rest open the task's detail.
-struct ToasttyTaskStatusList: View {
+extension View {
+    /// The task detail sheet, on the task the Mac lists now.
+    func toasttyTaskDetailSheet(
+        _ selection: Binding<ToasttyTaskDetailSelection?>,
+        controller: HomeScreenController,
+        openWorkspace: @escaping (UUID) -> Void
+    ) -> some View {
+        sheet(item: selection) { selection in
+            if let task = controller.snapshot.taskBoard?.task(id: selection.id) ?? selection.fallback {
+                ToasttyTaskDetailSheet(
+                    task: task,
+                    canOpenTaskSpace: task.taskSpaceWorkspaceID.map { controller.snapshot.subspaceRow(id: $0) != nil } ?? false,
+                    openTaskSpace: openWorkspace,
+                    controller: controller
+                )
+            }
+        }
+    }
+}
+
+/// The Needs you segment, until it gets its own sections: the tasks that
+/// need the user, as the Mac sends its Needs you group, with each task's
+/// family. Emits sibling rows so the List gives each its own cell.
+struct ToasttyNeedsYouTaskList: View {
     let board: MobileTaskBoard
     let controller: HomeScreenController
     let openWorkspace: (UUID) -> Void
     let openTask: (UUID) -> Void
 
-    @AppStorage("toastty-mobile-status-to-ship-expanded") private var isToShipExpanded = false
-
     var body: some View {
-        if board.isEmpty {
+        let entries = board.entries(.needsYou)
+        if entries.isEmpty {
             ContentUnavailableView(
-                "No tasks",
-                systemImage: "checklist",
-                description: Text("Tasks you start on your Mac show here.")
+                "Nothing needs you",
+                systemImage: "checkmark.circle",
+                description: Text("Running and idle work is in All.")
             )
             .foregroundStyle(ToasttyDesignTokens.secondaryText)
             .padding(.vertical, 32)
+            .accessibilityIdentifier("toastty-needs-you-empty")
             .toasttyListRow()
-        }
-        ForEach([RemoteTaskGroup.needsYou, .running, .idle], id: \.self) { group in
-            let entries = board.entries(group)
-            if entries.isEmpty == false {
-                ToasttyTaskGroupHeader(
-                    title: Self.groupTitle(group),
-                    count: board.count(group),
-                    isHot: group == .needsYou
-                )
+        } else {
+            ToasttyTaskGroupHeader(title: TaskBucket.needsYou.title, count: board.count(.needsYou), tint: ToasttyDesignTokens.needsYou)
                 .padding(.top, 10)
                 .toasttyListRow(vertical: 0)
-                ForEach(entries, id: \.taskID) { entry in
-                    if let task = board.task(id: entry.taskID) {
-                        row(task, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext)
-                    }
+            ForEach(entries, id: \.taskID) { entry in
+                if let task = board.task(id: entry.taskID) {
+                    ToasttyTaskListRow(
+                        task: task, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext,
+                        controller: controller, openWorkspace: openWorkspace, openTask: openTask
+                    )
                 }
             }
-        }
-        if board.toShip.isEmpty == false {
-            toShipHeader
-                .padding(.top, 10)
-                .toasttyListRow(vertical: 0)
-            if isToShipExpanded {
-                ForEach(board.toShip) { lane in
-                    HStack(spacing: 6) {
-                        Text(lane.projectTitle)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(ToasttyDesignTokens.taskToShip)
-                        Text("\(lane.count)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(ToasttyDesignTokens.mutedText)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 30)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("toastty-status-to-ship-lane-\(lane.id)")
-                    .toasttyListRow()
-                    ForEach(lane.recentTaskIDs, id: \.self) { taskID in
-                        if let task = board.task(id: taskID) {
-                            row(task, isLinkedChild: false, isContext: false)
-                        }
-                    }
-                }
-            }
-        }
-        if board.doneCount > 0 {
-            ToasttyTaskGroupHeader(title: "Done", count: board.doneCount, isHot: false)
-                .padding(.top, 10)
-                .accessibilityIdentifier("toastty-status-done")
-                .toasttyListRow(vertical: 0)
         }
     }
+}
 
-    @ViewBuilder
-    private func row(_ task: RemoteTaskSummary, isLinkedChild: Bool, isContext: Bool) -> some View {
+/// A task in a list of tasks from several projects: its task space's row
+/// while the task space is open, else its own row, which opens its detail.
+/// Each row names its project.
+struct ToasttyTaskListRow: View {
+    let task: RemoteTaskSummary
+    var isLinkedChild = false
+    var isContext = false
+    let controller: HomeScreenController
+    let openWorkspace: (UUID) -> Void
+    let openTask: (UUID) -> Void
+
+    var body: some View {
         Group {
             if let taskSpaceID = task.taskSpaceWorkspaceID, let subspace = controller.snapshot.subspaceRow(id: taskSpaceID) {
                 ToasttySubspaceRow(
@@ -127,72 +116,57 @@ struct ToasttyTaskStatusList: View {
         .opacity(isContext ? 0.55 : 1)
         .toasttyListRow()
     }
-
-    private var toShipHeader: some View {
-        Button {
-            isToShipExpanded.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isToShipExpanded ? "chevron.down" : "chevron.right")
-                    .imageScale(.small)
-                    .frame(width: 12)
-                Image(systemName: "arrow.up.square")
-                    .foregroundStyle(ToasttyDesignTokens.taskToShip)
-                Text("TO SHIP")
-                    .tracking(0.8)
-                Text("\(board.toShipCount)")
-                if isToShipExpanded == false {
-                    Text(board.toShip.map { "\($0.projectTitle) \($0.count)" }.joined(separator: " · "))
-                        .foregroundStyle(ToasttyDesignTokens.taskToShip)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("To ship, \(board.toShipCount) \(board.toShipCount == 1 ? "task" : "tasks")")
-        .accessibilityValue(isToShipExpanded ? "Expanded" : "Collapsed")
-        .accessibilityIdentifier("toastty-status-to-ship")
-    }
-
-    static func groupTitle(_ group: RemoteTaskGroup) -> String {
-        switch group {
-        case .needsYou: "Needs you"
-        case .running: "Running"
-        case .idle: "Idle"
-        case .toShip: "To ship"
-        case .done: "Done"
-        case .archived: "Archived"
-        }
-    }
 }
 
-/// "NEEDS YOU 4": a Status group's title and count.
+/// "NEEDS YOU 4": a task group's title and count, in the group's color.
 struct ToasttyTaskGroupHeader: View {
     let title: String
     let count: Int
-    let isHot: Bool
+    /// Nil for the calm groups.
+    var tint: Color? = nil
 
     var body: some View {
+        let color = tint.flatMap { count > 0 ? $0 : nil } ?? ToasttyDesignTokens.mutedText
         HStack(spacing: 6) {
             Text(title.uppercased())
                 .tracking(0.8)
             Text("\(count)")
-                .foregroundStyle(isHot && count > 0 ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.mutedText)
             Spacer(minLength: 0)
         }
         .font(.caption2.monospaced().weight(.semibold))
-        .foregroundStyle(isHot && count > 0 ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.mutedText)
+        .foregroundStyle(color)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
         .accessibilityLabel("\(title), \(count)")
+    }
+}
+
+/// "1/3 merged" on a parent task's row: how many of the tasks it started
+/// have merged.
+struct ToasttyChildProgressChip: View {
+    let progress: RemoteTaskChildProgress
+
+    static func label(_ progress: RemoteTaskChildProgress) -> String {
+        "\(progress.merged)/\(progress.total) merged"
+    }
+
+    var body: some View {
+        Text(Self.label(progress))
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(cornerRadius: 4))
+            .fixedSize()
+    }
+}
+
+extension RemoteTaskSummary {
+    /// The child progress a row shows: only while the task has children.
+    var shownChildProgress: RemoteTaskChildProgress? {
+        childProgress.flatMap { $0.total > 0 ? $0 : nil }
     }
 }
 
@@ -220,6 +194,9 @@ struct ToasttyTaskRow: View {
                             .foregroundStyle(ToasttyDesignTokens.primaryText)
                             .lineLimit(1)
                         Spacer(minLength: 0)
+                        if let progress = task.shownChildProgress {
+                            ToasttyChildProgressChip(progress: progress)
+                        }
                         if let pullRequest = task.pullRequest {
                             ToasttyTaskPullRequestChip(pullRequest: pullRequest)
                         }
@@ -249,7 +226,9 @@ struct ToasttyTaskRow: View {
             .contentShape(ToasttySessionRow.shape)
         }
         .buttonStyle(ToasttySessionRowButtonStyle(tint: .clear))
-        .accessibilityLabel([task.title, task.statusLine, task.projectTitle].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel([
+            task.title, task.statusLine, task.projectTitle, task.shownChildProgress.map(ToasttyChildProgressChip.label),
+        ].compactMap { $0 }.joined(separator: ", "))
         .accessibilityHint("Shows the task")
         .accessibilityIdentifier("toastty-task-row-\(task.id.uuidString)")
         .contextMenu {
@@ -327,36 +306,6 @@ struct ToasttyTaskPullRequestChip: View {
         case .closed?: "closed"
         case nil: nil
         }
-    }
-}
-
-/// Under a project in the Projects segment: the tasks that left its list
-/// because they finished. Tapping it shows them in Status.
-struct ToasttyProjectFinishedFooter: View {
-    let tally: RemoteTaskProjectTally
-    let showStatus: () -> Void
-
-    var body: some View {
-        Button(action: showStatus) {
-            HStack(spacing: 12) {
-                if tally.toShipCount > 0 {
-                    Label("To ship \(tally.toShipCount)", systemImage: "arrow.up.square")
-                        .foregroundStyle(ToasttyDesignTokens.taskToShip)
-                }
-                if tally.doneCount > 0 {
-                    Label("Done \(tally.doneCount)", systemImage: "checkmark.square")
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                }
-                Spacer(minLength: 0)
-            }
-            .font(.caption2.monospaced())
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Shows tasks by status")
-        .accessibilityIdentifier("toastty-project-finished-\(tally.projectWorkspaceID.uuidString)")
     }
 }
 

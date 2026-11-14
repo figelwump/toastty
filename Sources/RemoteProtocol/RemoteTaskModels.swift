@@ -1,7 +1,7 @@
 import Foundation
 
 /// The Mac's task board, for a client that shows tasks. The Mac computes
-/// each task's stage, its wording, and the Status segment's groups, so the
+/// each task's stage, its wording, and the board's groups, so the
 /// Mac and the client always agree. The session snapshot carries it when the
 /// host advertises `tasks`; it is absent while the task system is off and
 /// from older hosts.
@@ -9,7 +9,7 @@ public struct RemoteTaskBoard: Codable, Equatable, Sendable {
     /// The tasks the groups below name, and every task whose task space is
     /// open, in the Mac sidebar's order.
     public var tasks: [RemoteTaskSummary]
-    /// The Status segment's row groups. Each lists a task under the task
+    /// The board's row groups. Each lists a task under the task
     /// that started it, in the group of the more urgent of the two.
     public var needsYou: [RemoteTaskBoardEntry]
     public var running: [RemoteTaskBoardEntry]

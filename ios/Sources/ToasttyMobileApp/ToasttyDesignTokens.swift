@@ -49,6 +49,8 @@ enum ToasttyDesignTokens {
     static let taskQuestion = Color(red: 232 / 255, green: 166 / 255, blue: 53 / 255)
     static let taskReview = Color(red: 110 / 255, green: 159 / 255, blue: 230 / 255)
     static let taskToShip = Color(red: 185 / 255, green: 140 / 255, blue: 224 / 255)
+    /// The Mac sidebar's Needs you yellow, for bucket titles and counts.
+    static let needsYou = Color(red: 242 / 255, green: 196 / 255, blue: 107 / 255)
 
     /// Corner scale: cards and bubbles, inset controls, and chips.
     static let cardCornerRadius = ConversationDesignTokens.cardCornerRadius
