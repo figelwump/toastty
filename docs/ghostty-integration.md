@@ -51,20 +51,26 @@ record the exact Ghostty commit because the branch name is not a stable pin.
 
 This checkout requires the OSC 7501 bridge, the clipboard API, and the
 at-prompt answer from the shell's OSC 133 state, from Ghostty fork commit
-[`8bc4f5354d334b2f3d743261faf87cdb4637155c`](https://github.com/figelwump/ghostty/commit/8bc4f5354d334b2f3d743261faf87cdb4637155c),
-which is based on upstream `c770410dbb57909ff4f6921a6497688a957f85db` and preserves
-the downstream changes above. Use Zig **0.16.0** for this revision. The embedded
-clipboard API now passes MIME requests and explicit byte lengths. Rebuild older
-local artifacts before compiling this Toastty checkout.
+[`13dc86d4c663e0a8b1b3569417f5ceeb6934f5a7`](https://github.com/figelwump/ghostty/commit/13dc86d4c663e0a8b1b3569417f5ceeb6934f5a7),
+which merges upstream `cf3a8a6594eec899fe6335465668c60f2281ce9c` and preserves
+the downstream changes above. Use Zig **0.17.0** for this revision.
 
-Artifacts built from `056ffe2a8` or older still compile with this checkout,
-because the C API did not change. But their `ghostty_surface_is_at_prompt`
-answers from the row prompt mark, so after a terminal resize Toastty can read a
-running Claude Code session as idle at a shell prompt and stop it as
-`idle_at_prompt`. `GhosttyPromptStateRedrawTests` fails with such an artifact.
+Rebuild and reinstall older local artifacts before compiling this checkout.
+The C header now declares pointer nullability, and Toastty's Swift bridge uses
+that contract. Keep each artifact's header and static library from the same
+commit: upstream also added an action tag before Toastty's program-status
+actions, so mixing a new header with an old library can dispatch the wrong
+action payload. The clipboard API still uses MIME requests and explicit byte
+lengths.
+
+The required `ghostty_surface_is_at_prompt` implementation answers from the
+shell's OSC 133 state rather than the row prompt mark. Without it, a terminal
+resize can make Toastty read a running Claude Code session as idle at a shell
+prompt and stop it as `idle_at_prompt`. `GhosttyPromptStateRedrawTests` checks
+this behavior against the installed artifact.
 
 This revision also contains upstream fix `ffaaf5d7a9951886d72f2c0dd8ba7380c1aea92c`
-(ghostty-org/ghostty#14691). Artifacts built from older revisions on this base,
+(ghostty-org/ghostty#14691). Artifacts built from older fork revisions,
 such as `e696c5ba9`, can hang. The render thread starts and stops its
 CVDisplayLink while CoreVideo does the same on the main thread after a display
 change. The render thread can then wait forever in `CVDisplayLinkStop`. That
@@ -80,7 +86,7 @@ Clone the maintained branch as a sibling of the Toastty checkout:
 git clone --branch toastty-downstream \
   https://github.com/figelwump/ghostty.git \
   ../ghostty
-git -C ../ghostty checkout 8bc4f5354d334b2f3d743261faf87cdb4637155c
+git -C ../ghostty checkout 13dc86d4c663e0a8b1b3569417f5ceeb6934f5a7
 ```
 
 Then, from that Ghostty checkout:

@@ -2270,7 +2270,6 @@ final class SidebarViewTests: XCTestCase {
 
         scroll(to: 0)
         XCTAssertNotNil(pill("below"))
-        let initialAbove = pill("above")
         try attachSidebar("sidebar-long-top")
 
         // Exercise the real clip view in both directions. The timings are
@@ -2315,14 +2314,21 @@ final class SidebarViewTests: XCTestCase {
         let afterDone = try XCTUnwrap(pill("above"))
         XCTAssertFalse(afterDone.contains("unread"), afterDone)
         XCTAssertTrue(afterDone.contains("working"), afterDone)
-        scroll(to: 0)
-        pumpMainRunLoop(duration: 0.2)
-        XCTAssertEqual(pill("above"), initialAbove)
-        XCTAssertNotNil(pill("below"))
+        // Supersede the earlier animated pill navigation through the same
+        // controller; directly changing clip bounds can be scrolled back.
+        try clickSemanticText(prefix: afterDone, in: root)
+        let topText = waitForRenderedText(in: root) { text in
+            text.contains { $0.contains("hidden above") } == false &&
+                text.contains { $0.contains("hidden below") }
+        }
+        XCTAssertNil(topText.first { $0.contains("hidden above") })
+        XCTAssertTrue(topText.contains { $0.contains("hidden below") })
 
         // Drag must use the latest measured frames after scrolling back.
         let source = try sessionPointerInteractionView(in: root, sessionID: "spawner")
         let target = try sessionPointerInteractionView(in: root, sessionID: "assessor")
+        XCTAssertTrue(document.visibleRect.contains(source.convert(source.bounds, to: document)))
+        XCTAssertTrue(document.visibleRect.contains(target.convert(target.bounds, to: document)))
         let sourceSession = try XCTUnwrap(harness.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: "spawner"))
         let targetSession = try XCTUnwrap(harness.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: "assessor"))
         let beforeDrag = harness.store.state
