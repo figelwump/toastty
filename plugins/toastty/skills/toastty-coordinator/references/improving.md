@@ -103,20 +103,22 @@ Write none for a release task or for a child of another task.
 
 **Its outcome.** Add it when the task is merged, Done or Archived, before
 you remove the task's lines from the ledger. Read
-`gh pr view <pr> --json state,mergedAt,headRefOid`.
+`gh pr view <pr> --json state,mergedAt,headRefOid,baseRefName`.
 
-- `outcome=unchanged` when the merged head commit is the `head` of the line.
-  `outcome=changed` when it is another commit, and for each earlier line of
-  the same task. `outcome=dropped` when the pull request did not merge.
+- `outcome=unchanged` when the merged head commit is the `head` of the line
+  and the base branch is its `base`. `outcome=changed` when one of them
+  differs, and for each earlier line of the same task. `outcome=dropped`
+  when the pull request did not merge.
 - `wait=` is the hours from the line's time to `mergedAt`, such as `3.1h`.
 - When the user later tells you that a merged change was wrong, or asks for
   its revert or for a fix of it, add the word `fix-followed` to its line.
 
 **A `question` line.** Write it when you pass a task's question to the user
 with the answer you suggest. `kind` is your own short name for the kind of
-question, the same name for the same kind. When the user answers, add
-`outcome=same` if the answer is your suggestion, or `outcome=different`, and
-`wait=`.
+question, the same name for the same kind. Write the answer you suggested
+in the ledger's `asked` line for that question, so that a new session can
+compare. When the user answers, add `outcome=same` if the answer is your
+suggestion, or `outcome=different`, and `wait=`.
 
 **A `rule` line.** Write it when the user answers a rule that a review
 proposed: `- 2026-11-14T17:05Z rule kind=docs outcome=accepted`, or
@@ -142,9 +144,10 @@ Steps:
 
    ```bash
    awk -v since=2026-11-01 '$3 == "review" && $2 >= since {
-     kind = ""; base = "?"; repo = "?"; verdict = ""; outcome = ""; wait = 0; fix = 0
+     kind = ""; base = "?"; repo = "?"; verdict = ""; outcome = ""; wait = 0; fix = 0; size = 0
      for (i = 4; i <= NF; i++) {
        if ($i ~ /^kind=/) kind = substr($i, 6)
+       if ($i ~ /^lines=/) size = substr($i, 7) + 0
        if ($i ~ /^base=/) base = substr($i, 6)
        if ($i ~ /^pr=https:/) { split($i, part, "/"); repo = part[4] "/" part[5] }
        if ($i ~ /^verdict=/) verdict = substr($i, 9)
@@ -155,9 +158,12 @@ Steps:
      if (kind == "" || outcome == "" || outcome == "dropped") next
      k = kind " into " base " of " repo
      n[k]++; hours[k] += wait
-     if (verdict == "yes") { yes[k]++; if (outcome == "unchanged") same[k]++; if (fix) bad[k]++ }
+     if (verdict == "yes") {
+       yes[k]++; if (fix) bad[k]++
+       if (outcome == "unchanged") { same[k]++; if (size > largest[k]) largest[k] = size }
+     }
    } END {
-     for (k in n) printf "%s: %d merged, %.1f h waited, would merge %d, of those unchanged %d, fix followed %d\n", k, n[k], hours[k], yes[k], same[k], bad[k]
+     for (k in n) printf "%s: %d merged, %.1f h waited, would merge %d, of those unchanged %d (largest %d lines), fix followed %d\n", k, n[k], hours[k], yes[k], same[k], largest[k], bad[k]
    }' decisions.md | sort
    ```
 
@@ -187,8 +193,8 @@ Steps:
    unchanged` is the same number, `fix followed` is 0, and the kind is not
    `build`. Give the exact words of the rule, in the form that
    `references/merging.md` shows: the project, the kind of change in plain
-   words, the base branch, and a size no larger than the largest change in
-   those lines. A wider form of a rule that exists counts as this one
+   words, the base branch, and a size no larger than `largest` in that
+   line. A wider form of a rule that exists counts as this one
    proposal. Propose no rule for a kind that has a `rule` line with
    `outcome=declined` in the last 14 days, or that a rule in Merging covers
    at that size.
@@ -199,7 +205,8 @@ Steps:
    that the user can answer "1 and 3". Write an `asked review` line in the
    ledger, and remove it when the user answers.
 7. Set `Last review:` to the time now. Remove Closed lines that are older
-   than 30 days, and lines of `decisions.md` that are older than 90 days.
+   than 30 days, but keep each line that the user closed as not a problem.
+   Remove lines of `decisions.md` that are older than 90 days.
 
 **Nothing to propose.** When no Open line qualifies and no rule can be
 proposed, a review at its time tells the user nothing, also not the counts.
@@ -212,24 +219,31 @@ gates of step 4.
 - **A policy line:** write it as Change the policy says. For a Merging rule,
   follow `references/merging.md`: write it only after the user's yes to its
   exact words.
-- **A task:** create it as New tasks says. Its text is yours, not the user's:
-  say that it comes from your review and that the user agreed, give the
-  line from `friction.md` with its count and its task links, and ask the
-  task to find the cause and to fix it at its source. Then add an
-  `improvement` line for the task to the ledger.
-- Move each line that got a fix to Sent on, with `→` and the task's link or
-  the policy section. Move a line that the user called not a problem to
-  Closed, with `→ the user: not a problem`.
-- Move a Sent on line to Closed when its task is Done, with the date.
+- **A task:** create it as New tasks says. Its text is yours, not the user's.
+  Its first line is exactly `[coordinator review]`: that line marks the task
+  for as long as it exists. Then say that it comes from your review and that
+  the user agreed, give the line from `friction.md` with its count and its
+  task links, and ask the task to find the cause and to fix it at its
+  source.
+- Move a line whose fix is a task to Sent on, with `→` and the task's link,
+  and to Closed, with the date, when that task is Done. Move a line whose
+  fix is a policy line straight to Closed, with `→ policy` and the section.
+  Move a line that the user called not a problem to Closed, with
+  `→ the user: not a problem`.
+- **A time in Improving.** When a turn of the user writes or changes the
+  time of the review, read `"$TOASTTY_CLI_PATH" --json coordinator status`.
+  If `wake.nextWakeAt` is null or later than the next review time, set your
+  check for that time with `coordinator wake --at`: no digest may come
+  before it.
 
 **Limits.** No rule in `policy.md` changes them.
 
 - Start nothing from a review without the user's yes in a message of their
   own.
-- Never ask for the merge, under a Merging rule, of a task with an
-  `improvement` line in the ledger: the user reads each change that comes
-  from a review. Keep that line until the task is Done or Archived.
-- Propose no task while 2 tasks with an `improvement` line are open. Say
-  that they come first.
+- Never ask for the merge, under a Merging rule, of a task whose `text`
+  starts with `[coordinator review]`: the user reads each change that comes
+  from a review.
+- Propose no task while 2 tasks with that first line are open; the `text`
+  field of `toastty --json task list` shows it. Say that they come first.
 - Never propose a change to the Never list, to the limits in
   `references/merging.md`, or to these limits.

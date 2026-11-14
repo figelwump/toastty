@@ -1941,9 +1941,9 @@ def review_ask(run):
               and not any(re.search(r'\bbuild\b|\bci\b', r.lower()) for r in rules), rules, required=False)
     run.check('it commits the rule, and only the policy', int(run.git('rev-list', '--count', 'HEAD') or 0) > commits
               and run.git('show', '--format=', '--name-only', 'HEAD') == 'policy.md', run.git('log', '--stat', '--format=%h %s'))
-    improvement = [line for line in run.ledger().splitlines() if ' improvement ' in line]
-    run.check('the ledger marks the new task as an improvement', bool(created)
-              and any(created[0]['taskID'] in line for line in improvement), run.ledger())
+    run.check("the new task's text starts with the mark of a task from a review", bool(created)
+              and (created[0].get('text') or '').lstrip().startswith('[coordinator review]'),
+              [(t.get('text') or '')[:300] for t in created])
     run.check('friction.md shows the pattern as sent on, with the time of this review',
               any('validation-mac-full' in line for line in run.friction_section('Sent on'))
               and 'Last review: never' not in run.friction(), run.friction(), required=False)

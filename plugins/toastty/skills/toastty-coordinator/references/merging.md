@@ -79,8 +79,9 @@ is obvious.
   `userTypedMinutesAgo` is null or more than 15. In
   `"$TOASTTY_CLI_PATH" --json task get <task-id>`, `parentTaskID` and `merge`
   are null: it is not a child of another task, and no merge is under way.
-  The ledger has no `merging` line and no `improvement` line for it: the
-  user reads each change that comes from a review.
+  The ledger has no `merging` line for it. Its `text` does not start with
+  `[coordinator review]`: the user reads each change that comes from your
+  review.
 
 **Never under a rule,** whatever the rule says:
 

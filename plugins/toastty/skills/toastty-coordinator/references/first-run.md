@@ -72,7 +72,8 @@ never gets that line: write the rule with its time, such as
 `- Review once a day at 17:00. Proposals only.`, or
 `- Review only when I ask.` This one change can add several lines: follow
 Change the policy, with one commit named `Policy: first run`. Then remove the
-`asked first-run` line.
+`asked first-run` line. When Improving got a time, set your next check as
+`references/improving.md` says under "A time in Improving".
 
 When the user does not answer, do not ask again: the defaults apply, and you
 make a review only when the user asks. Mention the question again only when

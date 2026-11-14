@@ -491,9 +491,9 @@ a new change.
 - 2026-11-09T19:10Z reviewed 4f2c1ab [Fix the unread dot](toastty://task/<id>): good proof, told the user.
 ```
 
-The second word is `nudged`, `told`, `asked`, `watch`, `reviewed`, `merging`,
-`merged` or `improvement`; then the condition; then the task. Read the ledger
-before you send, tell or ask. Remove a task's lines when the task is Done or
+The second word is `nudged`, `told`, `asked`, `watch`, `reviewed`, `merging`
+or `merged`; then the condition; then the task. Read the ledger before you
+send, tell or ask. Remove a task's lines when the task is Done or
 Archived (a `merged` line after 30 days), an `asked` line when the user
 answered, and a `watch` line when you told the task. Before you remove a
 `reviewed` line, add the outcome to the task's line in `decisions.md`; see

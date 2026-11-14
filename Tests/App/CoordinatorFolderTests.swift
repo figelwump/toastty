@@ -380,13 +380,15 @@ struct CoordinatorFolderTests {
         // from before the 14 days and a question count for nothing. A
         // verdict other than yes adds to the merged changes only. Another
         // base branch or repository is a count of its own, so that a
-        // record in one never supports a rule for the other.
+        // record in one never supports a rule for the other. The largest
+        // size is of the changes that merged as reviewed: the change of 20
+        // lines that merged after a change does not count, nor the 210.
         #expect(process.terminationStatus == 0)
         #expect(text == """
-        fix-internal into main of o/other: 1 merged, 0.5 h waited, would merge 1, of those unchanged 1, fix followed 0
-        fix-internal into main of o/r: 3 merged, 6.1 h waited, would merge 3, of those unchanged 2, fix followed 1
-        fix-internal into release of o/r: 1 merged, 1.5 h waited, would merge 1, of those unchanged 1, fix followed 0
-        ui into main of o/r: 1 merged, 10.0 h waited, would merge 0, of those unchanged 0, fix followed 0
+        fix-internal into main of o/other: 1 merged, 0.5 h waited, would merge 1, of those unchanged 1 (largest 20 lines), fix followed 0
+        fix-internal into main of o/r: 3 merged, 6.1 h waited, would merge 3, of those unchanged 2 (largest 74 lines), fix followed 1
+        fix-internal into release of o/r: 1 merged, 1.5 h waited, would merge 1, of those unchanged 1 (largest 20 lines), fix followed 0
+        ui into main of o/r: 1 merged, 10.0 h waited, would merge 0, of those unchanged 0 (largest 0 lines), fix followed 0
 
         """)
     }
