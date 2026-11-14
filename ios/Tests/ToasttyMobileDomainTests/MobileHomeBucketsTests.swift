@@ -99,8 +99,9 @@ final class MobileHomeBucketsTests: XCTestCase {
             subspaces: [first, second],
             board: board
         ).first)
-        // Sessions in the Mac's order, then task spaces in the order they
-        // opened, then tasks without a task space, whatever their status.
+        // Sessions in the snapshot's order, then task spaces in the order
+        // they opened, then tasks without a task space, whatever their
+        // status.
         XCTAssertEqual(names(card, .needsYou), [
             "Session B", "Session A", "Space opened first", "Space opened second",
             "Task created first", "Task created second",

@@ -108,8 +108,8 @@ public enum MobileHomeBuckets {
     public static func cards(in snapshot: MobileHomeSnapshot, hiding: Set<MobileHomeRowKey> = []) -> [MobileHomeCard] {
         guard let board = snapshot.taskBoard else { return [] }
         let topLevelIDs = Set(snapshot.topLevelWorkspaces.map(\.id))
-        // The Mac's order: workspaces as its sidebar lists them, and each
-        // workspace's sessions and task spaces as it sent them.
+        // The snapshot's order: workspaces as the Mac's sidebar lists them,
+        // and each workspace's sessions by title.
         let order = Dictionary(
             snapshot.workspaces.enumerated().map { ($1.id, $0) },
             uniquingKeysWith: { first, _ in first }

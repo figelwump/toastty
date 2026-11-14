@@ -16,8 +16,8 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private let startingTaskID = "D1000000-0000-0000-0000-000000000004"
     private let shippedTaskID = "D1000000-0000-0000-0000-000000000005"
     private let otherProjectTaskID = "D1000000-0000-0000-0000-000000000012"
-    /// The fixture's session in the question task's task space.
-    private let questionSessionID = "B1000000-0000-0000-0000-000000000010"
+    /// A working session in the toastty workspace.
+    private let workingSessionID = "B1000000-0000-0000-0000-000000000002"
 
     override func setUp() {
         continueAfterFailure = false
@@ -185,39 +185,44 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     func testEachTabKeepsItsStackAndASessionOpensFromTheTasksTab() {
         let app = launchTaskFixture()
         select(.all, in: app)
-        // Home: push the toastty workspace.
+        // Home: the toastty workspace, then one of its sessions.
         let workspace = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
         XCTAssertTrue(workspace.waitForExistence(timeout: 5))
         workspace.tap()
-        let workspaceScreen = app.descendants(matching: .any)["toastty-mobile-workspace-detail"]
-        XCTAssertTrue(workspaceScreen.waitForExistence(timeout: 5))
+        let homeSession = app.buttons["toastty-mobile-workspace-session-\(workingSessionID)"]
+        XCTAssertTrue(homeSession.waitForExistence(timeout: 5))
+        homeSession.tap()
+        let conversationTitle = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
+        let homeTitle = conversationTitle.label
 
-        // Tasks: open the question task's session from its row.
+        // Tasks: the question task's session, opened from its row.
         app.tabBars.buttons["Tasks"].tap()
         let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
         XCTAssertTrue(question.waitForExistence(timeout: 5))
         question.tap()
-        let conversationTitle = app.staticTexts["toastty-mobile-conversation-title"]
-        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["toastty-task-bar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
+        let tasksTitle = conversationTitle.label
+        XCTAssertNotEqual(tasksTitle, homeTitle)
         // The tab bar stays on a pushed session.
         XCTAssertTrue(app.tabBars.buttons["Home"].isHittable)
         attachScreenshot(named: "tasks-session-with-tab-bar", of: app)
 
-        // Home still shows its workspace, and Tasks its session.
+        // Each tab shows its own session again.
         app.tabBars.buttons["Home"].tap()
-        XCTAssertTrue(workspaceScreen.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitUntilHittable(workspaceScreen))
-        XCTAssertFalse(conversationTitle.isHittable)
+        XCTAssertTrue(waitForLabel(conversationTitle, homeTitle))
         app.tabBars.buttons["Tasks"].tap()
-        XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitUntilHittable(conversationTitle))
+        XCTAssertTrue(waitForLabel(conversationTitle, tasksTitle))
 
-        // Back in Tasks returns to its list; Home kept its workspace.
+        // Back in Tasks returns to its list; Home kept its session and,
+        // under it, its workspace.
         app.navigationBars.firstMatch.buttons.firstMatch.tap()
-        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(question))
         app.tabBars.buttons["Home"].tap()
-        XCTAssertTrue(waitUntilHittable(workspaceScreen))
+        XCTAssertTrue(waitForLabel(conversationTitle, homeTitle))
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertTrue(waitUntilHittable(homeSession))
     }
 
     func testACardsToShipAndDoneCountsOpenTheTasksTabAtTheirGroup() {
@@ -286,6 +291,13 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func waitForLabel(_ element: XCUIElement, _ label: String, timeout: TimeInterval = 5) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND label == %@", label), object: element
         )
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
