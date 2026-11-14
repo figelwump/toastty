@@ -218,6 +218,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(opacity, 0.01)
     }
 
+    @MainActor
     func testScratchpadBindingStatusShowsUnboundWithoutSessionLink() {
         XCTAssertEqual(
             PanelCardView.scratchpadBindingStatus(for: nil, sessionRegistry: SessionRegistry()),
@@ -225,6 +226,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadBindingStatusShowsUnboundForStaleSessionLink() {
         let sessionLink = ScratchpadSessionLink(
             sessionID: "stale-session",
@@ -241,6 +243,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadBindingStatusUsesActiveSessionTitle() {
         let panelID = UUID()
         let workspaceID = UUID()
@@ -274,6 +277,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorShowsLiveScratchpadBinding() throws {
         let panelID = UUID()
         let scratchpadPanelID = UUID()
@@ -318,6 +322,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(state.helpText, "Bound to Scratchpad: Agent Notes")
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorCountsPadsAndMarksDefaultIndependentlyOfSelection() throws {
         let panelID = UUID()
         let firstPadID = UUID()
@@ -393,6 +398,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(state.scratchpadPanelID, panelID)
     }
 
+    @MainActor
     func testScratchpadSessionHeaderIncludesRestoredMainSplitScratchpadsWithRightPanelPads() throws {
         let terminalPanelID = UUID()
         let mainPadID = UUID()
@@ -438,6 +444,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(withDefault.entries.map(\.isDefault), [true, false])
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorHidesStaleScratchpadBinding() {
         let panelID = UUID()
         let workspaceID = UUID()
@@ -464,6 +471,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorHidesOtherTerminalBindings() {
         let panelID = UUID()
         let otherPanelID = UUID()
@@ -503,6 +511,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorShowsNeutralZeroStateForLiveManagedSession() throws {
         let panelID = UUID()
         let tab = makeTerminalWorkspaceTab(panelID: panelID)
@@ -533,6 +542,7 @@ final class WorkspaceViewTests: XCTestCase {
         ))
     }
 
+    @MainActor
     func testScratchpadSessionHeaderListsUnboundAndOtherLiveOwnersWithinSameTab() throws {
         let panelID = UUID()
         let otherPanelID = UUID()
@@ -683,6 +693,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testPrimaryContentWidthSubtractsOnlyTheOwningTabRightPanelWidth() {
         XCTAssertEqual(
             WorkspaceView.primaryContentWidth(
@@ -700,6 +711,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testSplitDividerResizeHandleFrameExpandsHorizontalSplitVertically() {
         let placement = LayoutDividerPlacement(
             nodeID: UUID(),
@@ -715,6 +727,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testSplitDividerResizeHandleFrameExpandsVerticalSplitHorizontally() {
         let placement = LayoutDividerPlacement(
             nodeID: UUID(),
@@ -905,6 +918,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
     }
 
+    @MainActor
     func testRightAuxPanelVisibilityAnimationOnlyRunsForSelectedTabSurface() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
@@ -926,6 +940,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testRightAuxPanelBodyContentMountRequiresSelectedVisibleOwner() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelBodyContentMounted(
@@ -969,6 +984,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testRightAuxPanelResizeHandleOnlyAppearsForVisibleSelectedTabSurface() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelResizeHandleVisible(
@@ -1026,6 +1042,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testRightAuxPanelResizeHandleSitsLeftOfRightPanelToAvoidWebKitCursorRace() {
         let primaryContentWidth: CGFloat = 840
         let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
@@ -1043,6 +1060,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maxX, primaryContentWidth)
     }
 
+    @MainActor
     func testRightAuxPanelResizeHandleNeverOverlapsRightPanelSurfaceAcrossWidths() {
         for primaryContentWidth in [CGFloat](stride(from: 200, through: 1600, by: 137)) {
             let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
@@ -1757,9 +1775,6 @@ final class WorkspaceViewTests: XCTestCase {
         func stage() throws -> TaskStage {
             try XCTUnwrap(board.items().first { $0.id == .task(task.id) }).stage
         }
-        func textFields(in view: NSView) -> [String] {
-            (view as? NSTextField).map { [$0.stringValue] } ?? view.subviews.flatMap { textFields(in: $0) }
-        }
         /// Clicks the subtitle slot and answers the alert it opens with
         /// `response`. The timer also runs inside NSAlert's modal loop, so
         /// the real confirmation runs instead of a replaced one. Returns the
@@ -1769,7 +1784,7 @@ final class WorkspaceViewTests: XCTestCase {
             let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
                 MainActor.assumeIsolated {
                     guard let window = NSApp.modalWindow, let content = window.contentView else { return }
-                    dialogText = textFields(in: content)
+                    dialogText = Self.textFields(in: content)
                     NSApp.stopModal(withCode: response)
                 }
             }
@@ -2303,6 +2318,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testFocusedPanelToggleTitleShowsUnfocusOnlyWhenActive() {
         XCTAssertEqual(WorkspaceView.focusedPanelToggleTitle(isActive: true), "Unfocus")
         XCTAssertNil(WorkspaceView.focusedPanelToggleTitle(isActive: false))
@@ -3576,5 +3592,12 @@ final class WorkspaceViewTests: XCTestCase {
 private struct OfflinePullRequestRunner: WorkspaceMergeCommandRunning {
     func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
         WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
+    }
+}
+
+private extension WorkspaceViewTests {
+    @MainActor
+    static func textFields(in view: NSView) -> [String] {
+        (view as? NSTextField).map { [$0.stringValue] } ?? view.subviews.flatMap { textFields(in: $0) }
     }
 }

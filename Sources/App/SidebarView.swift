@@ -1210,7 +1210,7 @@ struct SidebarView: View {
     }
 
     /// Stands in for a workspace ID where the Other tasks card needs one.
-    private static let otherTasksCardID = UUID(uuidString: "00000000-0000-0000-0000-00000000071D")!
+    nonisolated private static let otherTasksCardID = UUID(uuidString: "00000000-0000-0000-0000-00000000071D")!
     static let otherTasksCardTitle = "Other tasks"
 
     private func isCardCollapsed(_ workspaceID: UUID) -> Bool {

@@ -320,7 +320,7 @@ struct ToasttySelectableText: NSViewRepresentable {
     }
 
     /// A 3-point bar, then 10 points of space.
-    static let quoteBarWidth: CGFloat = 3
+    nonisolated static let quoteBarWidth: CGFloat = 3
     static let quoteTextIndent: CGFloat = 13
     /// Breaks a line without starting a paragraph.
     static let lineSeparator = "\u{2028}"

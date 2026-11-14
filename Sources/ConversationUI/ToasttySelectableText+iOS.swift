@@ -131,11 +131,12 @@ struct ToasttySelectableText: UIViewRepresentable {
         let textScale: CGFloat
         let boldText: Bool
 
+        @MainActor
         func attributedText() -> NSAttributedString {
-            let traits = UITraitCollection(traitsFrom: [
-                UITraitCollection(preferredContentSizeCategory: contentSizeCategory),
-                UITraitCollection(legibilityWeight: boldText ? .bold : .regular),
-            ])
+            let traits = UITraitCollection { traits in
+                traits.preferredContentSizeCategory = contentSizeCategory
+                traits.legibilityWeight = boldText ? .bold : .regular
+            }
             let style = UIFont.preferredFont(forTextStyle: textStyle, compatibleWith: traits)
             let preferred = textScale == 1 ? style : style.withSize(style.pointSize * textScale)
             let paragraph = NSMutableParagraphStyle()

@@ -417,13 +417,15 @@ final class BoundaryInteractionOverlayView: NSView {
         if Thread.isMainThread {
             MainActor.assumeIsolated {
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: reason)
+                removeLocalMouseDownMonitor()
             }
         } else {
+            // The monitor stays installed. Its handler holds this view
+            // weakly, so it passes events through once the view is gone.
             Task { @MainActor in
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: reason)
             }
         }
-        removeLocalMouseDownMonitor()
     }
 
     private func descriptor(at location: CGPoint) -> BoundaryInteractionDescriptor? {

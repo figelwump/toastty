@@ -197,7 +197,8 @@ final class WindowCommandControllerTests: XCTestCase {
 
         bridge.installIfNeeded()
 
-        var mutationNotificationCount = 0
+        // With a nil queue, the observer runs synchronously on the main thread that posts.
+        nonisolated(unsafe) var mutationNotificationCount = 0
         let notificationCenter = NotificationCenter.default
         let observedNames: [Notification.Name] = [
             NSMenu.didAddItemNotification,

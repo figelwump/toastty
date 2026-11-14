@@ -36,6 +36,7 @@ final class ToasttyComposerTrace {
         let offsetX: Double?
         let offsetY: Double?
 
+        @MainActor
         init(_ view: UITextView) {
             width = Self.finite(view.bounds.width)
             height = Self.finite(view.bounds.height)

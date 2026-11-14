@@ -4902,7 +4902,7 @@ final class SessionRuntimeStore: ObservableObject {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
-            await self?.expirePendingCodexHookApproval(sessionID: sessionID, token: token)
+            self?.expirePendingCodexHookApproval(sessionID: sessionID, token: token)
         }
     }
 
