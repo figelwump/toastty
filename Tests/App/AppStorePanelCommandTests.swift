@@ -730,6 +730,39 @@ final class AppStorePanelCommandTests: AppStoreCommandTestCase {
         )
     }
 
+    func testFocusedScaleCommandTargetFollowsOnlyTheVisibleCoordinatorChatWhileTheTasksViewShows() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(store.send(.setTasksViewShown(windowID: windowID, shown: true)))
+
+        // The dock shows beside the Tasks view: with the keyboard in its
+        // field, the keys still change the chat's text.
+        XCTAssertEqual(
+            store.focusedScaleCommandTarget(
+                preferredWindowID: windowID,
+                coordinatorDockHasKeyboard: { $0 == windowID }
+            ),
+            .coordinatorChat(windowID: windowID)
+        )
+        // A chat that covers the focused terminal is itself covered by the
+        // Tasks view, so the keys do nothing.
+        XCTAssertNil(
+            store.focusedScaleCommandTarget(
+                preferredWindowID: windowID,
+                coordinatorChatCovers: { _ in true }
+            )
+        )
+
+        XCTAssertTrue(store.send(.setTasksViewShown(windowID: windowID, shown: false)))
+        XCTAssertEqual(
+            store.focusedScaleCommandTarget(
+                preferredWindowID: windowID,
+                coordinatorChatCovers: { _ in true }
+            ),
+            .coordinatorChat(windowID: windowID)
+        )
+    }
+
     func testFocusPanelContainingBrowserSelectsBrowserTab() throws {
         let initialState = AppState.bootstrap()
         let windowID = try XCTUnwrap(initialState.windows.first?.id)
