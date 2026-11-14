@@ -102,6 +102,55 @@ final class MobileTaskBoardTests: XCTestCase {
         }
     }
 
+    /// A lane's full task list and release fields are optional: an older
+    /// Mac omits them, and a value this phone cannot read reads as none
+    /// without losing the lane.
+    func testALanesReleaseFieldsAreOptional() throws {
+        let newest = UUID(), oldest = UUID(), project = UUID(), release = UUID()
+        func task(_ id: UUID) -> [String: Any] {
+            [
+                "id": id.uuidString, "hasRecord": true, "title": "Task", "group": "to_ship", "mark": "to_ship",
+                "statusLine": "Merged", "stageTitle": "To ship", "stageReason": "merged",
+                "activityAt": "2026-11-06T12:00:00.000Z", "projectWorkspaceID": project.uuidString,
+            ]
+        }
+        let lanes: [[String: Any]] = [
+            [
+                "id": "/repo/a", "projectTitle": "a", "count": 2, "recentTaskIDs": [newest.uuidString],
+                // A task this phone was not sent is left out of the list.
+                "taskIDs": [newest.uuidString, UUID().uuidString, oldest.uuidString],
+                "releaseWorkspaceID": project.uuidString,
+                // The release task need not be on the board.
+                "releaseTaskID": release.uuidString,
+            ],
+            ["id": "/repo/b", "projectTitle": "b", "count": 1, "recentTaskIDs": [oldest.uuidString]],
+            [
+                "id": "/repo/c", "projectTitle": "c", "count": 1, "recentTaskIDs": [],
+                "taskIDs": "all", "releaseWorkspaceID": "nope", "releaseTaskID": 7,
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: ["protocolVersion": "1.0", "snapshot": [
+            "projectionRunID": UUID().uuidString, "conversations": [], "generatedAt": "2026-11-06T12:00:00.000Z",
+            "tasks": [
+                "tasks": [task(newest), task(oldest)], "needsYou": [], "running": [], "idle": [],
+                "toShip": lanes, "doneCount": 0, "finishedByProject": [],
+            ],
+        ]])
+        let board = try XCTUnwrap(GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation().taskBoard)
+        XCTAssertEqual(board.toShip.map(\.id), ["/repo/a", "/repo/b", "/repo/c"])
+        XCTAssertEqual(board.toShip[0].taskIDs, [newest, oldest])
+        XCTAssertEqual(board.toShip[0].releaseWorkspaceID, project)
+        XCTAssertEqual(board.toShip[0].releaseTaskID, release)
+        for lane in board.toShip.dropFirst() {
+            XCTAssertNil(lane.taskIDs)
+            XCTAssertNil(lane.releaseWorkspaceID)
+            XCTAssertNil(lane.releaseTaskID)
+        }
+        XCTAssertFalse(board.listsEveryToShipTask)
+        // Each lane lists what the Mac sent: all, or the newest few.
+        XCTAssertEqual(MobileTaskSections.make(board).toShip.map { $0.tasks.map(\.id) }, [[newest, oldest], [oldest], []])
+    }
+
     func testAnOlderHostSendsNoBoard() throws {
         let directory = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "v1", withExtension: nil))
         let snapshot = try GatewayCompatibilityDecoder().decodeSessionListResponse(Data(

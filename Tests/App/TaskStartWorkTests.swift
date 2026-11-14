@@ -279,7 +279,7 @@ struct TaskStartWorkTests {
         fixture.config.defaults.startSkill = "task-start"
         let task = try await fixture.startedTask()
         #expect(fixture.launcher.calls.first?.prompt
-            == "Use the task-start skill.\n\nComposer keeps a blank line after send\n\n\(TaskPrompt.replyLine)")
+            == "Use the task-start skill.\n\nComposer keeps a blank line after send\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)")
         let source = try #require(task.operation.agentLaunch?.sessionID)
         let sourcePanel = try #require(task.operation.taskSpace?.panelID)
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
@@ -508,7 +508,9 @@ struct TaskStartWorkTests {
         #expect(fresh.forkFromSessionID == nil)
         #expect(fresh.profileID == "cursor")
         #expect(fresh.prompt.hasPrefix("Use the repo-start skill.\n\nYou are in the git worktree"))
-        #expect(fresh.prompt.hasSuffix("Composer keeps a blank line after send\n\n\(TaskPrompt.replyLine)"))
+        #expect(fresh.prompt.hasSuffix(
+            "Composer keeps a blank line after send\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
+        ))
         #expect(moved.startWork?.state == .finished)
         #expect(moved.operation.worktreeSession?.forked == false)
         guard case .kept(let reason)? = moved.operation.sourceOutcome else {
@@ -745,11 +747,13 @@ struct TaskStartWorkTests {
 
             Split the parser
 
+            \(TaskPrompt.coordinatorLine)
+
             \(TaskPrompt.replyLine)
             """)
         #expect(projectFork.prompt.contains("You are in the git worktree") == false)
         #expect(projectFork.prompt.hasSuffix(
-            "`toastty task send \(parent.id.uuidString) \"<message>\"`.\n\nSplit the lexer\n\n\(TaskPrompt.replyLine)"
+            "`toastty task send \(parent.id.uuidString) \"<message>\"`.\n\nSplit the lexer\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
         ))
 
         // Setup ends only once each fork reports its own conversation.

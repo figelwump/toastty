@@ -134,13 +134,19 @@ public struct GatewayCompatibilityDecoder: Sendable {
             idle: entries("idle"),
             toShip: ((try? object.requiredArray("toShip")) ?? []).compactMap { lane in
                 guard let id = lane.lossyString("id"), let count = try? lane.requiredInt("count") else { return nil }
+                func taskIDs(_ key: String) -> [UUID]? {
+                    (try? lane.requiredStringArray(key)).map { $0.compactMap(UUID.init(uuidString:)).filter(known.contains) }
+                }
+                // Older Macs send only the recent tasks and no release
+                // fields. The release task need not be on the board.
                 return RemoteTaskShipLane(
                     id: id,
                     projectTitle: lane.lossyString("projectTitle") ?? "Other",
                     count: count,
-                    recentTaskIDs: ((try? lane.requiredStringArray("recentTaskIDs")) ?? [])
-                        .compactMap(UUID.init(uuidString:))
-                        .filter(known.contains)
+                    recentTaskIDs: taskIDs("recentTaskIDs") ?? [],
+                    taskIDs: taskIDs("taskIDs"),
+                    releaseWorkspaceID: (try? lane.optionalUUID("releaseWorkspaceID")) ?? nil,
+                    releaseTaskID: (try? lane.optionalUUID("releaseTaskID")) ?? nil
                 )
             },
             doneCount: (try? object.requiredInt("doneCount")) ?? 0,

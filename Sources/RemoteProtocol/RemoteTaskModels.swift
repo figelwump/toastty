@@ -6,8 +6,8 @@ import Foundation
 /// host advertises `tasks`; it is absent while the task system is off and
 /// from older hosts.
 public struct RemoteTaskBoard: Codable, Equatable, Sendable {
-    /// The tasks the groups below name, and every task whose task space is
-    /// open, in the Mac sidebar's order.
+    /// The tasks the groups below name, every task that waits to ship, and
+    /// every task whose task space is open, in the Mac sidebar's order.
     public var tasks: [RemoteTaskSummary]
     /// The board's row groups. Each lists a task under the task
     /// that started it, in the group of the more urgent of the two.
@@ -66,13 +66,38 @@ public struct RemoteTaskShipLane: Codable, Equatable, Sendable, Identifiable {
     public var projectTitle: String
     public var count: Int
     /// The lane's most recently merged tasks, newest first; at most a few.
+    /// Kept for older clients; `taskIDs` lists them all.
     public var recentTaskIDs: [UUID]
+    /// Every task in the lane, newest merge first. The board's `tasks`
+    /// lists each of them. Absent from older hosts, which send only
+    /// `recentTaskIDs`.
+    public var taskIDs: [UUID]?
+    /// The project workspace that a release of this lane starts in, as the
+    /// Mac's Release button uses it. A client sends it in
+    /// `RemoteProjectReleaseRequest`. Absent when the project cannot release
+    /// from Toastty or is not open, and from older hosts.
+    public var releaseWorkspaceID: UUID?
+    /// The project's release task while it runs: from its start until it
+    /// ships, is done, or is archived. The Mac starts no second release of
+    /// the project meanwhile. Absent otherwise, and from older hosts.
+    public var releaseTaskID: UUID?
 
-    public init(id: String, projectTitle: String, count: Int, recentTaskIDs: [UUID] = []) {
+    public init(
+        id: String,
+        projectTitle: String,
+        count: Int,
+        recentTaskIDs: [UUID] = [],
+        taskIDs: [UUID]? = nil,
+        releaseWorkspaceID: UUID? = nil,
+        releaseTaskID: UUID? = nil
+    ) {
         self.id = id
         self.projectTitle = projectTitle
         self.count = count
         self.recentTaskIDs = recentTaskIDs
+        self.taskIDs = taskIDs
+        self.releaseWorkspaceID = releaseWorkspaceID
+        self.releaseTaskID = releaseTaskID
     }
 }
 

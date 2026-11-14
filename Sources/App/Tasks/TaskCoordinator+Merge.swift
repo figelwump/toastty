@@ -110,9 +110,10 @@ extension TaskCoordinator {
     }
 
     /// Stops a merge the user accepted: the agent's check, or Toastty's
-    /// wait for GitHub's checks. Clearing the done mark ends the wait; the
-    /// pull request script also refuses a waiting merge without it. A
-    /// `task.merge` from the turn that was checking is refused after this.
+    /// wait for GitHub's checks. The wait ends here, and the done mark goes
+    /// too; the pull request script also refuses a waiting merge without
+    /// it. A `task.merge` from the turn that was checking is refused after
+    /// this.
     func cancelMerge(taskID: UUID) throws {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
@@ -137,6 +138,11 @@ extension TaskCoordinator {
         try saveMergeState(taskID: taskID) {
             $0.mergeRequestedAt = nil
             $0.mergeCancelledAt = self.now()
+        }
+        // Before the done mark clears, so the wait does not end as a merge
+        // that stopped.
+        if let taskSpaceID {
+            merges?.cancelWaitingMerge(workspaceID: taskSpaceID)
         }
         if let taskSpaceID, store.state.workspacesByID[taskSpaceID]?.doneAt != nil {
             _ = store.send(.setWorkspaceDone(workspaceID: taskSpaceID, doneAt: nil))

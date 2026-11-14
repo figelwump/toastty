@@ -529,6 +529,9 @@ final class AppStore: ObservableObject {
     /// the hidden terminal's font. `coordinatorDockHasKeyboard` says whether
     /// the field of the coordinator's dock has a window's keyboard: the
     /// commands then change the chat's text, not the focused panel's.
+    /// While the Tasks view covers the workspace, the commands have no
+    /// target, so they do not change a panel the user cannot see. The dock
+    /// stays visible beside the Tasks view, so its chat keeps its target.
     func focusedScaleCommandTarget(
         preferredWindowID: UUID?,
         coordinatorChatCovers: (UUID) -> Bool = { _ in false },
@@ -538,7 +541,8 @@ final class AppStore: ObservableObject {
         if coordinatorDockHasKeyboard(selection.windowID) {
             return .coordinatorChat(windowID: selection.windowID)
         }
-        guard let focusedPanel = Self.focusedCommandPanel(in: selection.workspace) else {
+        guard selection.window.showsTasksView == false,
+              let focusedPanel = Self.focusedCommandPanel(in: selection.workspace) else {
             return nil
         }
 

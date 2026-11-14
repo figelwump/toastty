@@ -41,7 +41,7 @@ enum WorkspaceMergePresentation: Equatable {
     /// Close Without Merging is running.
     case closing(pullRequest: String)
 
-    /// The done mark records a finished merge, and only a subspace can hold
+    /// The done mark records a finished merge, and only a subspace row shows
     /// one, so a top-level workspace gets no button. `isCheckingMerge` is a
     /// task whose agent checks the pull request before it merges.
     /// `isTaskMerged` is a task whose merge is recorded, which shows as done

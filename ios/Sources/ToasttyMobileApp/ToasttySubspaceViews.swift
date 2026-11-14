@@ -348,6 +348,8 @@ struct ToasttySubspaceRow: View {
     let openWorkspace: (UUID) -> Void
     /// The project, where rows from several projects share a list.
     var projectTag: String? = nil
+    /// Drawn on one line, as the Needs you segment lists rows.
+    var compact: ToasttyCompactRow? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private static let railWidth: CGFloat = 16
@@ -437,20 +439,22 @@ struct ToasttySubspaceRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 titleLine
-                if row.summary != nil || projectTag != nil {
+                if let compact {
+                    if let detail = compact.detail {
+                        summaryText(detail)
+                    }
+                } else if row.summary != nil || projectTag != nil || childProgress != nil {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         if let summary = row.summary {
-                            Text(summary)
-                                .font(row.status == .working ? .caption.monospaced().italic() : .caption.monospaced())
-                                .foregroundStyle(row.status == .done
-                                    ? ToasttyDesignTokens.mutedText
-                                    : ToasttyDesignTokens.secondaryText)
-                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                                .truncationMode(.tail)
-                                .fixedSize(horizontal: false, vertical: true)
+                            summaryText(summary)
+                        }
+                        Spacer(minLength: 0)
+                        // As on the Mac, the child progress sits on the
+                        // summary line, so the title keeps its room.
+                        if let childProgress {
+                            ToasttyChildProgressChip(progress: childProgress)
                         }
                         if let projectTag {
-                            Spacer(minLength: 0)
                             // The summary shortens first; the tag says
                             // which project the row is in.
                             Text(projectTag)
@@ -469,21 +473,49 @@ struct ToasttySubspaceRow: View {
         .contentShape(ToasttySessionRow.shape)
     }
 
+    private var childProgress: RemoteTaskChildProgress? {
+        row.task?.shownChildProgress
+    }
+
+    private func summaryText(_ summary: String) -> some View {
+        Text(summary)
+            .font(row.status == .working ? .caption.monospaced().italic() : .caption.monospaced())
+            .foregroundStyle(row.status == .done
+                ? ToasttyDesignTokens.mutedText
+                : ToasttyDesignTokens.secondaryText)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     @ViewBuilder
     private var titleLine: some View {
         if dynamicTypeSize.isAccessibilitySize {
             VStack(alignment: .leading, spacing: 3) {
                 titleText
-                HStack(spacing: 6) { trailingFacts }
+                HStack(spacing: 6) { trailingFacts(showsChip: true) }
             }
-        } else {
-            // The title is laid out first and the chip takes what is left,
-            // so a long chip shortens before the subspace's name does.
+        } else if compact != nil {
+            // The one tag keeps its room; the title shortens first.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 titleText
-                    .layoutPriority(1)
-                trailingFacts
+                trailingFacts(showsChip: true)
             }
+        } else {
+            // As on the Mac, the title keeps some room: the chip gives way
+            // first, and the status pill stays.
+            ViewThatFits(in: .horizontal) {
+                titleLineWithReservedTitle(showsChip: true)
+                titleLineWithReservedTitle(showsChip: false)
+            }
+        }
+    }
+
+    private func titleLineWithReservedTitle(showsChip: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            titleText
+                .frame(minWidth: 0, idealWidth: ToasttyTaskRow.titleReservedWidth, maxWidth: .infinity, alignment: .leading)
+            trailingFacts(showsChip: showsChip)
         }
     }
 
@@ -499,7 +531,7 @@ struct ToasttySubspaceRow: View {
     }
 
     @ViewBuilder
-    private var trailingFacts: some View {
+    private func trailingFacts(showsChip: Bool) -> some View {
         if let badge = badge {
             let color = ToasttySubspaceStatusStyle.color(row.status, freshness: controller.freshness)
             Text(badge)
@@ -513,16 +545,19 @@ struct ToasttySubspaceRow: View {
         if dynamicTypeSize.isAccessibilitySize == false {
             Spacer(minLength: 0)
         }
-        if let progress = row.task?.shownChildProgress {
-            ToasttyChildProgressChip(progress: progress)
-        }
-        if let chip = row.chip {
-            ToasttyAnnotationChip(
-                annotation: RemoteWorkspaceAnnotation(key: chip.key, text: chip.text, color: chip.color),
-                size: .compact
-            )
-            .frame(minWidth: 44, maxWidth: 110, alignment: .trailing)
-            .opacity(row.status == .done ? 0.7 : 1)
+        if let compact {
+            if let tag = compact.tag {
+                ToasttyCompactRowTag(tag: tag)
+            }
+        } else {
+            if showsChip, let chip = row.chip {
+                ToasttyAnnotationChip(
+                    annotation: RemoteWorkspaceAnnotation(key: chip.key, text: chip.text, color: chip.color),
+                    size: .compact
+                )
+                .frame(minWidth: 44, maxWidth: 110, alignment: .trailing)
+                .opacity(row.status == .done ? 0.7 : 1)
+            }
         }
         Image(systemName: "arrow.right")
             .font(.caption2.weight(.semibold))
@@ -530,8 +565,10 @@ struct ToasttySubspaceRow: View {
             .accessibilityHidden(true)
     }
 
+    /// A one-line row's second line already says what the agent asks.
     private var badge: String? {
-        row.status.pillLabel
+        if row.status == .question, compact?.detail != nil { return nil }
+        return row.status.pillLabel
     }
 
     private var titleFont: Font {
@@ -548,6 +585,12 @@ struct ToasttySubspaceRow: View {
         let status = controller.freshness == .live
             ? ToasttySubspaceGroupPresentation.statusLabel(row.status)
             : "last seen \(ToasttySubspaceGroupPresentation.statusLabel(row.status))"
+        if let compact {
+            return [row.title, "task space", status, compact.detail ?? row.summary, compact.tagAccessibilityLabel]
+                .compactMap { $0 }
+                .filter { $0.isEmpty == false }
+                .joined(separator: ", ")
+        }
         return ([row.title, "task space", status, row.summary, projectTag]
             + [row.chip.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))]
             + [row.task?.shownChildProgress.map(ToasttyChildProgressChip.label)])

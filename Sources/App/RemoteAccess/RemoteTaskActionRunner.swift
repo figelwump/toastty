@@ -2,8 +2,8 @@ import CoreState
 import Foundation
 import RemoteProtocol
 
-/// Runs a task action that a paired device asks for, through the same
-/// `TaskCoordinator` calls as the Mac's own buttons.
+/// Runs a task action, or a project's release, that a paired device asks
+/// for, through the same `TaskCoordinator` calls as the Mac's own buttons.
 ///
 /// The device names an action; the Mac decides whether it may run. Each
 /// request is checked against the task as the snapshot would show it now,
@@ -35,6 +35,9 @@ final class RemoteTaskActionRunner {
     /// access is on, and the device is unrevoked, may send, and has its
     /// Task actions switch on. Read again after every wait.
     private let deviceMayAct: (UUID) -> Bool
+    /// Whether the device may still start a release at this instant: as
+    /// `deviceMayAct`, and its session start permission is on too.
+    private let deviceMayRelease: (UUID) -> Bool
     /// The task as the snapshot would show it now, with the item it comes
     /// from; `nil` when the task system is off or the task is gone.
     private let currentTask: (UUID) -> (item: TaskBoardItem, summary: RemoteTaskSummary)?
@@ -51,11 +54,13 @@ final class RemoteTaskActionRunner {
     init(
         coordinator: @escaping () -> TaskCoordinator?,
         deviceMayAct: @escaping (UUID) -> Bool,
+        deviceMayRelease: @escaping (UUID) -> Bool,
         currentTask: @escaping (UUID) -> (item: TaskBoardItem, summary: RemoteTaskSummary)?,
         now: @escaping () -> Date = Date.init
     ) {
         self.coordinator = coordinator
         self.deviceMayAct = deviceMayAct
+        self.deviceMayRelease = deviceMayRelease
         self.currentTask = currentTask
         self.now = now
     }
@@ -175,6 +180,48 @@ final class RemoteTaskActionRunner {
             "action": request.action.rawValue,
         ])
         return .performed
+    }
+
+    // MARK: - Release
+
+    /// Starts a release of the project, as the Mac's Release button does.
+    /// The device's request ID is saved on the release task, so a repeat
+    /// answers with that task and starts nothing, also after a restart.
+    /// Nothing here waits, so a second request runs only after the first
+    /// saved its task, and the coordinator then refuses it as under way.
+    func release(_ request: RemoteProjectReleaseRequest, device: RemoteDeviceRecord) -> RemoteProjectReleaseResult {
+        guard let coordinator = coordinator() else { return .rejected(reason: .tasksUnavailable, message: nil) }
+        guard deviceMayRelease(device.id) else { return .rejected(reason: .permissionDenied, message: nil) }
+        let record: TaskRecord
+        do {
+            record = try coordinator.release(
+                workspaceID: request.workspaceID,
+                caller: .remoteDevice(device.id),
+                clientRequestID: request.clientRequestID
+            )
+        } catch let error as TaskError {
+            let reason: RemoteProjectReleaseRejectionReason = switch error.reason {
+            case .workspaceNotFound: .projectNotFound
+            case .releaseNotConfigured: .notReleasable
+            case .releaseUnderWay: .releaseUnderWay
+            case nil: .failed
+            }
+            ToasttyLog.info("A paired device's release was refused", category: .tasks, metadata: [
+                "device_id": device.id.uuidString,
+                "reason": reason.rawValue,
+            ])
+            // The phone words the first two itself; the not-configured
+            // message names a local path.
+            let message = reason == .releaseUnderWay || reason == .failed ? RemoteTaskCreator.failureMessage(error) : nil
+            return .rejected(reason: reason, message: message)
+        } catch {
+            return .rejected(reason: .failed, message: nil)
+        }
+        ToasttyLog.info("Started a release from a paired device", category: .tasks, metadata: [
+            "task_id": record.id.uuidString,
+            "device_id": device.id.uuidString,
+        ])
+        return .started(taskID: record.id)
     }
 
     // MARK: - Archive check

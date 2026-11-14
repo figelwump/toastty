@@ -941,6 +941,24 @@ public actor ConnectionCoordinator {
         }
         return try await gateway.taskArchiveCheck(request)
     }
+
+    /// Asks the Mac to start a project's release, only while live against a
+    /// host that advertises it. `nil` means nothing was sent, so the caller
+    /// may repeat the request with the same `clientRequestID`.
+    public func releaseProject(
+        _ request: RemoteProjectReleaseRequest
+    ) async throws -> RemoteProjectReleaseResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.projectRelease) else {
+            return nil
+        }
+        // A release starts an agent. When this device is known to have lost
+        // send access, answer as the Mac would without asking it.
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteProjectReleaseResponse(result: .rejected(reason: .permissionDenied, message: nil))
+        }
+        return try await gateway.releaseProject(request)
+    }
     /// Asks which workspaces and agents a new task can use, only while live
     /// against a host that advertises task creation. `nil` is a
     /// capability/lifecycle refusal, not a transport failure.

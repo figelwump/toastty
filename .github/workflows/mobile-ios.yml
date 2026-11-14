@@ -46,7 +46,7 @@ jobs:
     needs: changes
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
-    timeout-minutes: ${{ matrix.configuration == 'Debug' && 90 || 45 }}
+    timeout-minutes: ${{ matrix.configuration == 'Debug' && 120 || 45 }}
     strategy:
       fail-fast: false
       matrix:

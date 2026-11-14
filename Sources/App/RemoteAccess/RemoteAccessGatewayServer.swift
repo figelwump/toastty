@@ -471,6 +471,17 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
                     self.sendPreviewResponse(response, connectionID: connectionID)
                 }
+            case .deferredProjectRelease(let deviceID, let releaseRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveProjectRelease(deviceID: deviceID, request: releaseRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
             case .deferredTaskArchiveCheck(let deviceID, let checkRequest):
                 connection.deviceID = deviceID
                 connection.authKind = .native

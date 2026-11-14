@@ -222,4 +222,112 @@ struct RemoteTaskActionGatewayTests {
         let decoded = try decoder.decode(RemoteTaskSummary.self, from: summary)
         #expect(decoded.actions.isEmpty && decoded.mergeControl == nil && decoded.offers(.archive) == false)
     }
+
+    // MARK: - Release
+
+    private static let projectID = UUID(uuidString: "30000000-0000-0000-0000-000000000303")!
+
+    private static func releaseResult(_ response: RemoteGatewayHTTPResponse) throws -> RemoteProjectReleaseResult {
+        try ConversationEventCoding.makeDecoder().decode(RemoteProjectReleaseResponse.self, from: response.body).result
+    }
+
+    /// A release starts an agent that can publish: the device needs send
+    /// access, its Task actions switch and its start permission, when the
+    /// request arrives and again when it runs.
+    @MainActor
+    @Test func aReleaseNeedsTaskActionsAndTheStartPermission() async throws {
+        let client = try Self.makeClient(taskActions: true)
+        var calls: [RemoteProjectReleaseRequest] = []
+        client.handler.projectReleaseHandler = { request, _ in
+            calls.append(request)
+            return .started(taskID: Self.taskID)
+        }
+        let path = RemoteProjectReleasePolicy.releasePath
+        let request = RemoteProjectReleaseRequest(workspaceID: Self.projectID, clientRequestID: "release-1")
+        let body = try Self.encode(request)
+        guard case .deferredProjectRelease(let deviceID, let deferred) = client.handle(path, body: body) else {
+            Issue.record("Expected a deferred release")
+            return
+        }
+        #expect(deviceID == client.deviceID)
+        #expect(deferred == request)
+
+        // Either permission off refuses it before the Mac's task code.
+        _ = try client.store.setSessionStartDisabled(true, forDevice: client.deviceID)
+        var response = try client.response(path, body: body)
+        #expect(response.status == 200)
+        #expect(try Self.releaseResult(response) == .rejected(reason: .permissionDenied, message: nil))
+        #expect(client.audit.entries.last?.action == .projectReleaseRejected)
+        #expect(client.audit.entries.last?.detail == "permission_denied")
+        _ = try client.store.setSessionStartDisabled(false, forDevice: client.deviceID)
+        _ = try client.store.setTaskActionsEnabled(false, forDevice: client.deviceID)
+        response = try client.response(path, body: body)
+        #expect(try Self.releaseResult(response) == .rejected(reason: .permissionDenied, message: nil))
+        // Without send access too, with a refusal the phone decodes.
+        _ = try client.store.setTaskActionsEnabled(true, forDevice: client.deviceID)
+        _ = try client.store.setScopes([.read], forDevice: client.deviceID)
+        response = try client.response(path, body: body)
+        #expect(try Self.releaseResult(response) == .rejected(reason: .permissionDenied, message: nil))
+        _ = try client.store.setScopes([.read, .send], forDevice: client.deviceID)
+
+        // The deferred request reads both again before it runs.
+        response = await client.handler.resolveProjectRelease(deviceID: client.deviceID, request: request)
+        #expect(try Self.releaseResult(response) == .started(taskID: Self.taskID))
+        #expect(calls == [request])
+        #expect(client.audit.entries.last?.action == .projectReleaseStarted)
+        _ = try client.store.setSessionStartDisabled(true, forDevice: client.deviceID)
+        response = await client.handler.resolveProjectRelease(deviceID: client.deviceID, request: request)
+        #expect(try Self.releaseResult(response) == .rejected(reason: .permissionDenied, message: nil))
+        _ = try client.store.setSessionStartDisabled(false, forDevice: client.deviceID)
+        _ = try client.store.setTaskActionsEnabled(false, forDevice: client.deviceID)
+        response = await client.handler.resolveProjectRelease(deviceID: client.deviceID, request: request)
+        #expect(try Self.releaseResult(response) == .rejected(reason: .permissionDenied, message: nil))
+        #expect(calls.count == 1)
+    }
+
+    @Test func helloAdvertisesReleaseOnlyWithAHandler() throws {
+        let client = try Self.makeClient(taskActions: true)
+        func capabilities() throws -> [RemoteGatewayCapability] {
+            guard case .respond(let response) = client.handler.handle(
+                Support.request("GET", "/api/hello", headerFields: [], body: Data()),
+                at: Support.now
+            ) else { throw CocoaError(.coderInvalidValue) }
+            return try JSONDecoder().decode(RemoteGatewayHelloResponse.self, from: response.body).capabilities
+        }
+        #expect(try capabilities().contains(.projectRelease) == false)
+        client.handler.projectReleaseHandler = { _, _ in .started(taskID: Self.taskID) }
+        #expect(try capabilities().contains(.projectRelease))
+    }
+
+    @Test func releaseRequestsAndAnswersStayReadable() throws {
+        let client = try Self.makeClient(taskActions: true)
+        let path = RemoteProjectReleasePolicy.releasePath
+        let badID = RemoteProjectReleaseRequest(workspaceID: Self.projectID, clientRequestID: "has spaces")
+        #expect(try Self.releaseResult(client.response(path, body: Self.encode(badID))) == .rejected(reason: .invalidRequest, message: nil))
+        var mismatched = RemoteProjectReleaseRequest(workspaceID: Self.projectID, clientRequestID: "r1")
+        mismatched.protocolVersion = "2.0"
+        #expect(try client.response(path, body: Self.encode(mismatched)).status == 409)
+        let oversized = Data(repeating: 0x20, count: RemoteProjectReleasePolicy.maximumBodyBytes + 1)
+        #expect(try client.response(path, body: oversized).status == 400)
+
+        let decoder = ConversationEventCoding.makeDecoder()
+        for result in [
+            RemoteProjectReleaseResult.started(taskID: Self.taskID),
+            .rejected(reason: .releaseUnderWay, message: "A release of toastty is already under way: Release toastty."),
+            .rejected(reason: .notReleasable, message: nil),
+        ] {
+            let data = try Self.encode(RemoteProjectReleaseResponse(result: result))
+            #expect(try decoder.decode(RemoteProjectReleaseResponse.self, from: data).result == result)
+        }
+        // A status or reason from a newer Mac is not mistaken for a start.
+        let newerStatus = Data(#"{"protocolVersion":"1.0","status":"queued"}"#.utf8)
+        #expect(try decoder.decode(RemoteProjectReleaseResponse.self, from: newerStatus).result == .unrecognized)
+        let newerReason = Data(#"{"protocolVersion":"1.0","status":"rejected","reason":"quota"}"#.utf8)
+        #expect(try decoder.decode(RemoteProjectReleaseResponse.self, from: newerReason).result == .rejected(reason: .unknown, message: nil))
+
+        // A lane from an older Mac reads without the release fields.
+        let lane = Data(#"{"id":"/repo","projectTitle":"repo","count":1,"recentTaskIDs":["\#(Self.taskID)"]}"#.utf8)
+        let decoded = try decoder.decode(RemoteTaskShipLane.self, from: lane)
+        #expect(decoded.taskIDs == nil && decoded.releaseWorkspaceID == nil && decoded.releaseTaskID == nil)
+    }
 }

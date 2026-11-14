@@ -25,6 +25,91 @@ public enum MobileHomeRow: Equatable, Sendable {
         case .task(let task): task
         }
     }
+
+    /// The one tag a one-line row shows, as the Mac's Needs you segment
+    /// picks it: the pull request, else the task that started this one when
+    /// the row lists without it, else how many child tasks merged. A row in
+    /// the Other tasks card falls back to its project.
+    public func compactTag(listsApartFromParent: Bool, showsProject: Bool) -> MobileHomeRowTag? {
+        if case .subspace(let row) = self,
+           let pullRequest = row.workspace.annotations.first(where: { $0.key == MobileSubspaceRow.pullRequestAnnotationKey }) {
+            return .pullRequestAnnotation(pullRequest)
+        }
+        guard let task else { return nil }
+        if let pullRequest = task.pullRequest { return .pullRequest(pullRequest) }
+        if listsApartFromParent, let parent = task.parentTaskTitle { return .parent(parent) }
+        if let progress = task.childProgress, progress.total > 0 { return .childProgress(progress) }
+        if showsProject, let project = task.projectTitle { return .project(project) }
+        return nil
+    }
+
+    /// The second line a one-line row keeps: the agent's question, or what
+    /// failed. A phone has no hover card to carry it, as the Mac's does.
+    /// `nil` for every other row, which shows one line.
+    public var compactDetail: String? {
+        switch self {
+        case .conversation(let conversation):
+            return conversation.state.bucket == .error ? conversation.lastActivity : nil
+        case .subspace(let row):
+            switch row.status {
+            case .question, .error: return row.summary
+            case .ready, .needsApproval, .review, .working, .idle, .toShip, .done:
+                return row.task.flatMap(Self.needsYouDetail)
+            }
+        case .task(let task):
+            return Self.needsYouDetail(task)
+        }
+    }
+
+    /// The Mac sends a task's `rowSummary` only for its question and for
+    /// setup that did not finish, such as a failed setup.
+    private static func needsYouDetail(_ task: RemoteTaskSummary) -> String? {
+        guard task.group == .needsYou, task.mark != .review else { return nil }
+        return task.rowSummary
+    }
+}
+
+/// The one tag on a one-line row in the Needs you segment.
+public enum MobileHomeRowTag: Equatable, Sendable {
+    /// The task space's pull request annotation.
+    case pullRequestAnnotation(RemoteWorkspaceAnnotation)
+    /// The pull request of a task without an open task space.
+    case pullRequest(RemoteTaskPullRequest)
+    /// "↖ Parent title": the row lists without the task that started it.
+    case parent(String)
+    /// "1/2 merged".
+    case childProgress(RemoteTaskChildProgress)
+    /// The project, in the Other tasks card.
+    case project(String)
+}
+
+/// The two numbers on the Needs you switcher: rows whose own state needs
+/// the user, and rows whose own state waits for a review, as the Needs you
+/// segment lists them across every card.
+public struct MobileHomeNeedsYouCounts: Equatable, Sendable {
+    public var needsYou: Int
+    public var readyToReview: Int
+
+    public init(needsYou: Int = 0, readyToReview: Int = 0) {
+        self.needsYou = needsYou
+        self.readyToReview = readyToReview
+    }
+
+    public init(_ cards: [MobileHomeCard]) {
+        self.init(
+            needsYou: cards.reduce(0) { $0 + ($1.counts[.needsYou] ?? 0) },
+            readyToReview: cards.reduce(0) { $0 + ($1.counts[.readyToReview] ?? 0) }
+        )
+    }
+
+    /// "Only what needs you, 4, 3 ready for review", leaving out a zero,
+    /// as the Mac's switcher says it.
+    public var accessibilityLabel: String {
+        var parts = ["Only what needs you"]
+        if needsYou > 0 { parts.append("\(needsYou)") }
+        if readyToReview > 0 { parts.append("\(readyToReview) ready for review") }
+        return parts.joined(separator: ", ")
+    }
 }
 
 public typealias MobileHomeBucketLayout = TaskBuckets<MobileHomeRowKey>.Layout<MobileHomeRow>
@@ -39,13 +124,19 @@ public struct MobileHomeCard: Identifiable {
     /// Rows by their own bucket, for the card's header.
     public let counts: [TaskBucket: Int]
     public let layout: MobileHomeBucketLayout
-    /// The project's latest To ship tasks that have no row in a bucket,
-    /// newest merge first.
+    /// The rows the Needs you segment lists: Needs you, then Ready to
+    /// review. The ⑂ filter does not apply to them.
+    public let needsYou: MobileHomeBucketLayout
+    /// The project's To ship tasks that have no row in a bucket, newest
+    /// merge first. An older Mac sends only each lane's newest few.
     public let toShipTasks: [RemoteTaskSummary]
-    /// All of the project's To ship tasks, which can be more than the
-    /// rows the board sends.
+    /// The To ship line's count: the rows under it when the Mac sends every
+    /// To ship task, as the Mac's card counts; else all of the project's
+    /// To ship tasks, which can be more than the rows the board sends.
     public let toShipCount: Int
     public let doneCount: Int
+    /// Release… on the To ship line, when the project can release.
+    public let release: MobileProjectRelease?
 
     public var id: UUID { workspace?.id ?? MobileHomeBuckets.otherTasksCardID }
     public var isOtherTasks: Bool { workspace == nil }
@@ -54,6 +145,14 @@ public struct MobileHomeCard: Identifiable {
     public var orderedKeys: [MobileHomeRowKey] {
         TaskBucket.allCases.flatMap { layout.entries($0).map(\.key) }
     }
+
+    /// The Needs you segment's rows in display order.
+    public var needsYouOrderedKeys: [MobileHomeRowKey] {
+        TaskBucket.needsYouSegmentBuckets.flatMap { needsYou.entries($0).map(\.key) }
+    }
+
+    /// Whether the Needs you segment lists the card.
+    public var listsInNeedsYou: Bool { needsYou.entries.isEmpty == false }
 }
 
 /// Builds Home's project cards from the Mac's snapshot and task board, with
@@ -100,6 +199,13 @@ public enum MobileHomeBuckets {
         return min(fromStatus, fromStage)
     }
 
+    /// The switcher's counts, from the cards the Needs you segment lists;
+    /// `nil` without a task board.
+    public static func needsYouCounts(in snapshot: MobileHomeSnapshot) -> MobileHomeNeedsYouCounts? {
+        guard snapshot.taskBoard != nil else { return nil }
+        return MobileHomeNeedsYouCounts(cards(in: snapshot))
+    }
+
     /// One card for each top-level workspace, in the Mac's sidebar order,
     /// then Other tasks when tasks have no open project. Empty without a
     /// task board: Home then keeps its All | Active lists. `hiding` leaves
@@ -131,8 +237,12 @@ public enum MobileHomeBuckets {
             }
             return .task(task.id)
         }
+        // A parent that left the board, such as a Done one, has no row,
+        // but a child still lists apart from it, as on the Mac.
         func parentKey(_ task: RemoteTaskSummary?) -> MobileHomeRowKey? {
-            task.flatMap(board.parent(of:)).map(rowKey)
+            guard let task else { return nil }
+            if let parent = board.parent(of: task) { return rowKey(parent) }
+            return task.parentTaskID.flatMap { $0 == task.id ? nil : .task($0) }
         }
         // Tasks that list by a row of their own: no task space row under a
         // card, and a stage the buckets list. Rows keep the board's order,
@@ -144,6 +254,31 @@ public enum MobileHomeBuckets {
             tasks.compactMap { task in
                 bucket(task).map { TaskBucketCandidate(key: rowKey(task), bucket: $0, parent: parentKey(task), payload: .task(task)) }
             }
+        }
+
+        // As the Mac's card counts: the rows under the line, or every To
+        // ship task while each shows as a row in a bucket.
+        func toShipLineCount(rows: [RemoteTaskSummary], tally: Int) -> Int {
+            board.listsEveryToShipTask && rows.isEmpty == false ? rows.count : tally
+        }
+        // The release of the lane that holds the project's To ship tasks.
+        // A lane groups by root, so it can hold another open project with
+        // the same root; the card starts the release in its own project,
+        // as the Mac's card does, and the Mac resolves the same root.
+        func release(projectID: UUID) -> MobileProjectRelease? {
+            board.toShip.lazy.compactMap { lane -> MobileProjectRelease? in
+                let tasks = MobileTaskBoard.taskIDs(lane).compactMap(board.task(id:))
+                guard tasks.contains(where: { $0.projectWorkspaceID == projectID }),
+                      let release = MobileTaskBoard.release(lane, tasks: tasks) else { return nil }
+                return MobileProjectRelease(
+                    laneID: release.laneID,
+                    projectTitle: release.projectTitle,
+                    workspaceID: projectID,
+                    taskCount: release.taskCount,
+                    taskTitles: release.taskTitles,
+                    releaseTaskID: release.releaseTaskID
+                )
+            }.first
         }
 
         var cards: [MobileHomeCard] = []
@@ -161,6 +296,7 @@ public enum MobileHomeBuckets {
             }
             candidates += recordCandidates(recordTasks.filter { $0.projectWorkspaceID == workspace.id })
             let shownTaskIDs = Set(candidates.compactMap { $0.payload.task?.id })
+            let toShipRows = board.toShipTasks(projectID: workspace.id).filter { shownTaskIDs.contains($0.id) == false }
             let tally = board.finished(projectID: workspace.id)
             openToShip += tally?.toShipCount ?? 0
             openDone += tally?.doneCount ?? 0
@@ -169,9 +305,11 @@ public enum MobileHomeBuckets {
                 title: workspace.title,
                 counts: TaskBuckets<MobileHomeRowKey>.counts(candidates),
                 layout: TaskBuckets.layout(candidates.filter { hiding.contains($0.key) == false }, pin: nil),
-                toShipTasks: board.toShipTasks(projectID: workspace.id).filter { shownTaskIDs.contains($0.id) == false },
-                toShipCount: tally?.toShipCount ?? 0,
-                doneCount: tally?.doneCount ?? 0
+                needsYou: TaskBuckets.needsYou(candidates, pin: nil),
+                toShipTasks: toShipRows,
+                toShipCount: toShipLineCount(rows: toShipRows, tally: tally?.toShipCount ?? 0),
+                doneCount: tally?.doneCount ?? 0,
+                release: release(projectID: workspace.id)
             ))
         }
 
@@ -186,11 +324,12 @@ public enum MobileHomeBuckets {
                 title: otherTasksCardTitle,
                 counts: TaskBuckets<MobileHomeRowKey>.counts(otherCandidates),
                 layout: TaskBuckets.layout(otherCandidates, pin: nil),
-                toShipTasks: board.toShip.flatMap(\.recentTaskIDs).compactMap(board.task(id:)).filter {
-                    $0.projectWorkspaceID.map(topLevelIDs.contains) != true
-                },
+                needsYou: TaskBuckets.needsYou(otherCandidates, pin: nil),
+                toShipTasks: board.toShipTasks.filter { $0.projectWorkspaceID.map(topLevelIDs.contains) != true },
                 toShipCount: otherToShip,
-                doneCount: otherDone
+                doneCount: otherDone,
+                // A project that is not open cannot release.
+                release: nil
             ))
         }
         return cards

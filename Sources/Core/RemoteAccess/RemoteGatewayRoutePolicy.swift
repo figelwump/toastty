@@ -34,6 +34,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case nativePushRegistration
     case taskAction
     case taskArchiveCheck
+    case projectRelease
 
     var path: String {
         switch self {
@@ -67,6 +68,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .nativePushRegistration: RemotePushPolicy.registrationPath
         case .taskAction: RemoteTaskActionPolicy.actionPath
         case .taskArchiveCheck: RemoteTaskActionPolicy.archiveCheckPath
+        case .projectRelease: RemoteProjectReleasePolicy.releasePath
         }
     }
 }
@@ -148,6 +150,10 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // same.
         .taskAction: .init(route: .taskAction, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .taskArchiveCheck: .init(route: .taskArchiveCheck, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // A release starts an agent that can publish, so it needs send scope;
+        // the handler also checks the Task actions switch and the start
+        // permission.
+        .projectRelease: .init(route: .projectRelease, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

@@ -136,6 +136,35 @@ refused. It writes `remote-session-start.json` under the run's artifacts
 directory. This is state evidence from the automation socket and the gateway.
 It is not a screenshot, and it does not cover the iOS screens.
 
+### Remote project release
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote \
+  --validation-command 'python3 scripts/automation/remote-project-release-check.py'
+```
+
+This checks Release from a paired device end to end on the remote host. Like
+the session start check, it starts its own second instance with a throwaway
+runtime home, a throwaway user home, seeded test devices and a loopback
+gateway port. The user home is a git repository whose `origin` is a local bare
+repository, its `agents.toml` names a fake `claude` script, and its
+`tasks.toml` gives the project release tags and a release prompt that only
+asks to echo. No real agent runs and nothing can publish; the check confirms
+that the bare remote has no tags at the end.
+
+The check creates a task with the real CLI, stops the app, marks the record
+merged in `task-records.json`, and starts the app again, so the task waits to
+ship. Then it acts as the phone over HTTP: devices with **Start sessions** or
+**Task actions** off are refused, the To ship lane names its
+`releaseWorkspaceID`, `POST /api/project.release` starts the release task, a
+repeat of the request returns the same task, and a second request is refused
+with `release_under_way`. It checks that the release agent got the release
+prompt and the merged task in a new worktree on no branch at the remote's
+tip, that the lane then names the running release, and that a repeat of the
+request after the app restarts still returns the same release.
+It writes `remote-project-release-check.json` and the app log under the run's
+artifacts directory. It does not cover the iOS screens.
+
 ### Remote session close
 
 ```bash
@@ -704,7 +733,7 @@ sv exec -- scripts/remote/test.sh \
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-`Toastty CI` runs native simulator tests only on manual dispatch. Its Debug job includes the full UI suite; Debug and Release both include the provisional 5,000-event numeric budget and the separate event/cursor correctness test. Debug has a 90-minute limit because the full UI suite can exceed 60 minutes on hosted runners; Release keeps its 45-minute limit.
+`Toastty CI` runs native simulator tests only on manual dispatch. Its Debug job includes the full UI suite; Debug and Release both include the provisional 5,000-event numeric budget and the separate event/cursor correctness test. Debug has a 120-minute limit because the full UI suite and its artifact upload can exceed 90 minutes on hosted runners; Release keeps its 45-minute limit.
 
 Each hosted simulator invocation passes `--retry-tests-on-failure`, which maps to `xcodebuild -retry-tests-on-failure -test-iterations 2`. The uploaded xcresult records both attempts. Investigate tests that need a retry. Local dispatcher runs and the remote wrapper keep single attempts so flaky and deterministic failures remain distinguishable.
 

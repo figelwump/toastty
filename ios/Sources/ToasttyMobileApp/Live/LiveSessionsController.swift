@@ -74,6 +74,9 @@ protocol LiveConnectionRuntime: Sendable {
     func taskArchiveCheck(
         _ request: RemoteTaskArchiveCheckRequest
     ) async throws -> RemoteTaskArchiveCheckResponse?
+    func releaseProject(
+        _ request: RemoteProjectReleaseRequest
+    ) async throws -> RemoteProjectReleaseResponse?
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse?
@@ -140,6 +143,12 @@ extension LiveConnectionRuntime {
     func taskArchiveCheck(
         _ request: RemoteTaskArchiveCheckRequest
     ) async throws -> RemoteTaskArchiveCheckResponse? {
+        nil
+    }
+
+    func releaseProject(
+        _ request: RemoteProjectReleaseRequest
+    ) async throws -> RemoteProjectReleaseResponse? {
         nil
     }
     func taskCreateOptions(
@@ -326,6 +335,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteTaskArchiveCheckResponse? {
         try await coordinator.taskArchiveCheck(request)
     }
+
+    func releaseProject(
+        _ request: RemoteProjectReleaseRequest
+    ) async throws -> RemoteProjectReleaseResponse? {
+        try await coordinator.releaseProject(request)
+    }
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse? {
@@ -492,6 +507,17 @@ final class LiveSessionsController {
                     return response.map { .answered($0.result) } ?? .unreachable
                 } catch {
                     return .unreachable
+                }
+            }
+        )
+        homeController.installProjectRelease(
+            perform: { [runtime] request in
+                do {
+                    let response = try await runtime.releaseProject(request)
+                    return response.map { .answered($0.result) } ?? .notSent
+                } catch {
+                    // Whether the Mac started it is not known.
+                    return .unconfirmed
                 }
             }
         )
@@ -718,6 +744,7 @@ final class LiveSessionsController {
         homeController.setHostSupportsConversationClose(acceptsConversationClose)
         homeController.setHostSupportsSessionStart(acceptsSessionStart)
         homeController.setHostSupportsTaskActions(acceptsTaskActions)
+        homeController.setHostSupportsProjectRelease(acceptsProjectRelease)
         homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
         await runtime.updateDeviceScopes(scopes)
     }
@@ -734,6 +761,12 @@ final class LiveSessionsController {
     /// checked when the request arrives.
     private var acceptsTaskActions: Bool {
         coordinatorState.capabilities.contains(.taskActions) && deviceScopes.contains(.send)
+    }
+    /// A release starts an agent that can publish, so only a device allowed
+    /// to send sees Release…. The Mac checks the device's Task actions
+    /// switch and start permission when the request arrives.
+    private var acceptsProjectRelease: Bool {
+        coordinatorState.capabilities.contains(.projectRelease) && deviceScopes.contains(.send)
     }
     /// A task starts an agent with the task as its first message, so it is
     /// gated like a session start.
@@ -882,6 +915,7 @@ final class LiveSessionsController {
             hostSupportsTaskCreate: acceptsTaskCreate,
             hostSupportsConversationClose: acceptsConversationClose,
             hostSupportsTaskActions: acceptsTaskActions,
+            hostSupportsProjectRelease: acceptsProjectRelease,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

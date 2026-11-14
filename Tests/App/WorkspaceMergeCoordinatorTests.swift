@@ -349,7 +349,7 @@ struct WorkspaceMergeCoordinatorTests {
     }
 
     @Test
-    func clearingTheDoneMarkCancelsAWaitingMerge() async throws {
+    func clearingTheDoneMarkCancelsAWaitingMergeAndSaysWhy() async throws {
         let fixture = try MergeFixture()
         fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
         fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")]
@@ -358,11 +358,131 @@ struct WorkspaceMergeCoordinatorTests {
 
         fixture.markDone(false)
 
-        #expect(fixture.request == nil)
+        // A script run that started before the clear reports back first.
+        try await fixture.waitUntil { fixture.request == nil }
         let calls = fixture.runner.scriptCalls.count
         try await Task.sleep(for: .milliseconds(50))
-        #expect(fixture.runner.scriptCalls.count <= calls + 1)
-        #expect(fixture.notifications.isEmpty)
+        #expect(fixture.runner.scriptCalls.count == calls)
+        #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
+        #expect(fixture.mergeFailures.count == 1)
+        #expect(fixture.mergeFailures.first?.contains("done mark was cleared") == true)
+        #expect(fixture.events.contains(.dropped) == false)
+    }
+
+    /// The script run may merge after the done mark cleared, past its own
+    /// check: the merge happened, so it is reported as one.
+    @Test
+    func aWaitingMergeThatMergesAsTheDoneMarkClearsReportsTheMerge() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("merged", "merged PR #59")]
+        fixture.runner.onScript["merge"] = { if fixture.isDone { fixture.markDone(false) } }
+        await fixture.merge(thenCleanUp: false)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == 2)
+        #expect(fixture.notifications.map(\.title) == ["Merged PR #59"])
+        #expect(fixture.mergeFailures.isEmpty)
+    }
+
+    /// Clearing the mark ends the acceptance even when it is set again
+    /// before the running script reports back.
+    @Test
+    func aDoneMarkClearedAndSetAgainDuringAScriptRunStillEndsTheWait() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")]
+        fixture.runner.onScript["merge"] = {
+            if fixture.isDone {
+                fixture.markDone(false)
+                fixture.markDone(true)
+            }
+        }
+        await fixture.merge(thenCleanUp: false)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == 2)
+        #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
+        #expect(fixture.mergeFailures.count == 1)
+        // The mark set again is the user's own.
+        #expect(fixture.isDone)
+    }
+
+    /// A run can merge and then fail to confirm it. With the acceptance
+    /// ended meanwhile, the next run decides instead of a "not merged"
+    /// report.
+    @Test
+    func aFailedRunAfterTheAcceptanceEndedIsDecidedByTheNextRun() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [
+            MergeFixture.mergeReport("failed", "GitHub reported the merge, but PR #59 is unknown"),
+            MergeFixture.mergeReport("merged", "PR #59 has merged"),
+        ]
+        fixture.runner.onScript["merge"] = { if fixture.isDone { fixture.markDone(false) } }
+        await fixture.merge(thenCleanUp: false)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == 3)
+        #expect(fixture.notifications.map(\.title) == ["Merged PR #59"])
+        #expect(fixture.mergeFailures.isEmpty)
+    }
+
+    /// The merge's done mark goes with a wait that ends because the pull
+    /// request link changed, so it cannot read as finished work.
+    @Test
+    func removingThePullRequestLinkEndsAWaitAndItsDoneMark() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")]
+        await fixture.merge(thenCleanUp: true)?.value
+        #expect(fixture.isDone)
+
+        fixture.store.send(.clearWorkspaceAnnotation(workspaceID: fixture.taskWorkspaceID, key: "github-pr"))
+
+        try await fixture.waitUntil { fixture.request == nil }
+        #expect(fixture.isDone == false)
+        #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
+        #expect(fixture.mergeFailures.first?.contains("no longer links to PR #59") == true)
+    }
+
+    /// A saved wait that no longer applies at launch is dropped before the
+    /// task observer is attached; the task still hears why.
+    @Test
+    func aSavedWaitDroppedAtLaunchReachesTheTaskObserver() throws {
+        let fixture = try MergeFixture()
+        var saved = WorkspaceMergeRequest(
+            pullRequest: MergeFixture.pullRequest, repoPath: "/work/fix-question",
+            phase: .awaitingChecks(acceptedHead: MergeFixture.acceptedHead, thenCleanUp: true)
+        )
+        saved.acceptedBase = "feat/integration"
+        let data = try JSONEncoder().encode([fixture.taskWorkspaceID.uuidString: saved])
+        fixture.userDefaults.set(data, forKey: "toastty.workspaceMergeRequests")
+        fixture.events = []
+
+        fixture.makeCoordinator()
+
+        #expect(fixture.request == nil)
+        #expect(fixture.mergeFailures.count == 1)
+        #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
+    }
+
+    /// A subspace whose parent closes becomes top-level and loses its done
+    /// mark. Its waiting merge ends, and says so.
+    @Test
+    func aWaitingMergeInASubspaceThatMovesToTopLevelSaysWhyItStopped() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("waiting", "waiting for checks: CI gate")]
+        await fixture.merge(thenCleanUp: true)?.value
+        let parentID = try #require(fixture.store.state.workspacesByID[fixture.taskWorkspaceID]?.parentWorkspaceID)
+
+        fixture.store.send(.closeWorkspace(workspaceID: parentID))
+
+        try await fixture.waitUntil { fixture.request == nil }
+        #expect(fixture.isDone == false)
+        #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
+        #expect(fixture.mergeFailures.count == 1)
     }
 
     @Test

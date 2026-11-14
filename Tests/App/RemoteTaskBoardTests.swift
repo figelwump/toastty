@@ -124,6 +124,65 @@ struct RemoteTaskBoardTests {
         #expect(board.finishedByProject.first { $0.projectWorkspaceID == fixture.workspaceID }?.toShipCount == 1)
     }
 
+    /// Every To ship task travels, so a phone can list what a release
+    /// ships, and each lane says where Release starts and which release
+    /// runs, as the Mac's Release button reads them.
+    @Test func aLaneCarriesEveryToShipTaskAndItsRelease() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config = TasksConfig(workspaces: [
+            TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*", releasePrompt: "Echo the release plan."),
+        ])
+        let harness = try Harness(fixture)
+        defer { harness.removeRuntimeFiles() }
+        var merged: [TaskRecord] = []
+        for index in 0..<5 {
+            var record = TaskRecord(
+                createdAt: Date(), text: "Merged \(index)", title: "Merged \(index)", slug: "merged-\(index)", source: .cli,
+                resolved: TaskFields(agent: "codex"), workspaceID: fixture.workspaceID,
+                projectRoot: fixture.projectRoot, setup: .started
+            )
+            record.pullRequestURL = "https://github.com/example/toastty/pull/\(300 + index)"
+            // Each later task merged later.
+            record.mergedAt = Date(timeIntervalSinceNow: Double(index - 10) * 60)
+            record.mergeCommit = "abc\(index)"
+            try fixture.coordinator.records.insert(record)
+            merged.append(record)
+        }
+        func lane() throws -> (lane: RemoteTaskShipLane, board: RemoteTaskBoard) {
+            let board = try #require(harness.service.facadeSessionList(at: .now).tasks)
+            return (try #require(board.toShip.first), board)
+        }
+
+        var current = try lane()
+        let newestFirst = merged.reversed().map(\.id)
+        #expect(current.lane.count == 5)
+        // An older phone still reads the newest few.
+        #expect(current.lane.recentTaskIDs == Array(newestFirst.prefix(3)))
+        #expect(current.lane.taskIDs == newestFirst)
+        #expect(Set(current.board.tasks.map(\.id)).isSuperset(of: newestFirst))
+        #expect(current.lane.releaseWorkspaceID == fixture.workspaceID)
+        #expect(current.lane.releaseTaskID == nil)
+
+        // While a release of the project runs, the lane names it.
+        var release = TaskRecord(
+            createdAt: Date(), text: "Release toastty", title: "Release toastty", slug: "release", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: fixture.projectRoot, setup: .started
+        )
+        release.release = TaskRelease(childTaskIDs: merged.map(\.id))
+        try fixture.coordinator.records.insert(release)
+        current = try lane()
+        #expect(current.lane.releaseTaskID == release.id)
+
+        // Without a release setting the lane offers no Release, and names
+        // no release.
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        harness.board.reloadConfig()
+        current = try lane()
+        #expect(current.lane.releaseWorkspaceID == nil)
+        #expect(current.lane.releaseTaskID == nil)
+        #expect(current.lane.taskIDs?.count == 5)
+    }
+
     @Test func aChangeOnlyTheBoardSeesSendsANewSnapshot() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let harness = try Harness(fixture)

@@ -373,7 +373,7 @@ struct TaskLifecycleTests {
             #expect(launch.prompt.contains("\(releasePrompt)\n\nThe task, as written:\n\nRelease "))
         }
         #expect(launch.prompt.hasSuffix(
-            "- Fix the parser — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))\n\n\(TaskPrompt.replyLine)"
+            "- Fix the parser — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
         ))
     }
 

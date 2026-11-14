@@ -5,11 +5,12 @@ import ToasttyMobileDomain
 
 // MARK: - Running an action
 
-/// Runs a task action the user picked, through the nearest presenter, which
-/// asks first where the Mac would and shows what went wrong. Absent where
-/// no presenter is installed, and views then show no actions.
+/// Runs a task action or a release the user picked, through the nearest
+/// presenter, which asks first where it should and shows what went wrong.
+/// Absent where no presenter is installed, and views then show no actions.
 struct ToasttyTaskActionRunner: Sendable {
     let run: @MainActor @Sendable (RemoteTaskActionItem, RemoteTaskSummary) -> Void
+    let release: @MainActor @Sendable (MobileProjectRelease) -> Void
 }
 
 private struct ToasttyTaskActionRunnerKey: EnvironmentKey {
@@ -23,15 +24,20 @@ extension EnvironmentValues {
     }
 }
 
-/// An action that waits for the user's yes. The phone asks before a merge,
-/// unlike the Mac's one-click button, since a tap on glass is easy to make
-/// by mistake. Mark Done and Delete ask as they do on the Mac.
+/// An action that waits for the user's yes. The phone asks before a merge
+/// and a release, unlike the Mac's one-click buttons, since a tap on glass
+/// is easy to make by mistake. Mark Done and Delete ask as they do on the
+/// Mac.
 struct ToasttyTaskActionConfirmation: Identifiable {
+    enum Request {
+        /// The task as the phone showed it, so the Mac refuses if its pull
+        /// request changed since.
+        case task(RemoteTaskActionItem, RemoteTaskSummary)
+        case release(MobileProjectRelease)
+    }
+
     let id = UUID()
-    let item: RemoteTaskActionItem
-    /// The task as the phone showed it, so the Mac refuses if its pull
-    /// request changed since.
-    let task: RemoteTaskSummary
+    let request: Request
     let title: String
     let message: String
     let confirmTitle: String
@@ -44,8 +50,7 @@ struct ToasttyTaskActionConfirmation: Identifiable {
         case .merge:
             let pullRequest = task.pullRequest.map { "PR #\($0.number)" }
             return Self(
-                item: item,
-                task: task,
+                request: .task(item, task),
                 title: pullRequest.map { "Merge \($0)?" } ?? "Merge \(name)?",
                 message: "Your Mac asks the task\u{2019}s agent to check \(pullRequest ?? "the pull request"), then merge it, "
                     + "unless tasks.toml merges directly. Toastty then closes the task space and removes its worktree.",
@@ -54,8 +59,7 @@ struct ToasttyTaskActionConfirmation: Identifiable {
             )
         case .markDone:
             return Self(
-                item: item,
-                task: task,
+                request: .task(item, task),
                 title: "Complete \(name)?",
                 message: "Moves the task to Done and closes its task space on your Mac. The worktree stays.",
                 confirmTitle: item.title,
@@ -63,8 +67,7 @@ struct ToasttyTaskActionConfirmation: Identifiable {
             )
         case .delete:
             return Self(
-                item: item,
-                task: task,
+                request: .task(item, task),
                 title: "Delete \(name)?",
                 message: "Removes the task from your Mac. This can\u{2019}t be undone.",
                 confirmTitle: "Delete Task",
@@ -74,6 +77,29 @@ struct ToasttyTaskActionConfirmation: Identifiable {
             return nil
         }
     }
+
+    /// The question before a release: the project, how many tasks wait to
+    /// ship, and the newest of them by title.
+    static func release(_ release: MobileProjectRelease) -> Self {
+        let count = release.taskCount
+        var message = "Your Mac starts a release task for \(count) merged \(count == 1 ? "task" : "tasks") waiting to ship. "
+            + "Its agent starts from the remote default branch\u{2019}s latest commit and can publish the release."
+        let listed = release.taskTitles.prefix(Self.listedReleaseTasks)
+        if listed.isEmpty == false {
+            message += "\n\n" + listed.map { "\u{2022} \($0)" }.joined(separator: "\n")
+            let more = max(count, release.taskTitles.count) - listed.count
+            if more > 0 { message += "\n\u{2022} and \(more) more" }
+        }
+        return Self(
+            request: .release(release),
+            title: "Release \u{201C}\(release.projectTitle)\u{201D}?",
+            message: message,
+            confirmTitle: "Release",
+            isDestructive: false
+        )
+    }
+
+    static let listedReleaseTasks = 5
 }
 
 struct ToasttyTaskArchiveSelection: Identifiable {
@@ -101,9 +127,21 @@ final class ToasttyTaskActionPresentation {
         }
     }
 
+    func requestRelease(_ release: MobileProjectRelease) {
+        confirmation = .release(release)
+    }
+
     func confirm(_ confirmation: ToasttyTaskActionConfirmation, controller: HomeScreenController) {
         self.confirmation = nil
-        send(confirmation.item, task: confirmation.task, controller: controller)
+        switch confirmation.request {
+        case .task(let item, let task):
+            send(item, task: task, controller: controller)
+        case .release(let release):
+            Task { @MainActor [weak self] in
+                let failure = await controller.releaseProject(release)
+                if let failure { self?.failure = failure }
+            }
+        }
     }
 
     private func send(_ item: RemoteTaskActionItem, task: RemoteTaskSummary, controller: HomeScreenController) {
@@ -124,9 +162,14 @@ struct ToasttyTaskActionPresenterModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .environment(\.toasttyTaskActionRunner, ToasttyTaskActionRunner { [presentation, controller] item, task in
-                presentation.request(item, task: task, controller: controller)
-            })
+            .environment(\.toasttyTaskActionRunner, ToasttyTaskActionRunner(
+                run: { [presentation, controller] item, task in
+                    presentation.request(item, task: task, controller: controller)
+                },
+                release: { [presentation] release in
+                    presentation.requestRelease(release)
+                }
+            ))
             .alert(
                 presentation.confirmation?.title ?? "",
                 isPresented: Binding(
@@ -503,6 +546,48 @@ struct ToasttyTaskActionButtons: View {
 
     private func background(_ action: RemoteTaskAction) -> Color {
         ToasttyTaskActionStyle.isPrimary(action) ? ToasttyDesignTokens.amber : ToasttyDesignTokens.raisedSurface
+    }
+}
+
+// MARK: - Release
+
+/// Release… on a To ship lane or a project card's To ship line, while the
+/// Mac takes releases from this phone. It asks first, then the Mac starts a
+/// release task. While a release of the project runs it reads Releasing…
+/// and is off.
+struct ToasttyReleaseButton: View {
+    let release: MobileProjectRelease
+    let controller: HomeScreenController
+    let accessibilityIdentifier: String
+    @Environment(\.toasttyTaskActionRunner) private var runner
+
+    var body: some View {
+        if let runner, controller.canReleaseProjects {
+            let isOff = release.isReleasing || controller.isProjectReleaseInFlight(release)
+            Button {
+                runner.release(release)
+            } label: {
+                Text(release.isReleasing ? "Releasing\u{2026}" : "Release\u{2026}")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ToasttyDesignTokens.taskToShip)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(ToasttyDesignTokens.taskToShip.opacity(0.5), lineWidth: 1)
+                    )
+                    .frame(minHeight: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isOff)
+            .opacity(isOff ? 0.5 : 1)
+            .fixedSize()
+            .accessibilityLabel(release.isReleasing
+                ? "Releasing \(release.projectTitle)" : "Release \(release.projectTitle)")
+            .accessibilityHint(release.isReleasing ? "" : "Asks first, then starts a release task on your Mac")
+            .accessibilityIdentifier(accessibilityIdentifier)
+        }
     }
 }
 
