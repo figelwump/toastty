@@ -45,7 +45,7 @@ Then derive a short validation plan from that scope:
 
 - Inspect the diff or the relevant changed files first.
 - Write down the concrete user-visible behaviors that could have changed.
-- Prefer 2-5 high-signal test cases over a generic “open the app and click around”.
+- Write specific test cases that come from the changed behavior, not a generic “open the app and click around”.
 - If the user already gave explicit test cases, use those instead of inventing new ones.
 
 ## Choosing the path

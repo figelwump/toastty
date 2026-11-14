@@ -868,7 +868,7 @@ toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root 
 toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>]
-toastty task send <task-id> (<text> | --text-file <path>)
+toastty task send <task-id> (<text> | --text-file <path>) [--steer]
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
@@ -939,7 +939,11 @@ calling agent's task space.
 
 `task send`, `task watch` and `task list --changed-since` let an agent follow
 and talk to other tasks by task ID; see
-[Coordinate tasks](tasks.md#coordinate-tasks). `task watch` tells the calling
+[Coordinate tasks](tasks.md#coordinate-tasks). `task send` types its message
+whatever the agent does. With `--steer`, it checks the agent first: the message
+goes to the agent's open prompt or into its running turn, or Toastty holds it
+for the next open prompt, and nothing is typed into a permission prompt.
+`task watch` tells the calling
 agent's own task, or the `--notify` task, once with a one-line message when the
 condition holds. With `--wait`, it blocks instead and exits 0 when the condition
 held, or 1 when it can never hold or `--timeout` ran out. `--until to-ship` or
@@ -955,7 +959,8 @@ the Merge button does: the task's agent checks the pull request and then
 merges it, also in a project with `merge = "direct"`. It refuses where the
 Merge button is not offered. Toastty merges at the checkout's
 commit, refuses with `--head` when the checkout moved past the checked commit,
-waits for checks that still run, and cleans up after the agent's turn ends.
+waits for checks that still run, and cleans up 24 hours after the merge,
+once the agent's turn has ended.
 `task cancel-merge` stops a merge the user accepted. `task archive` closes a
 task without merging; it refuses with the reason, and `--close-pr`,
 `--delete-unpushed` and `--discard-changes` allow what it would otherwise

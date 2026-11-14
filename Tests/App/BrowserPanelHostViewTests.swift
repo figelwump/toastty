@@ -39,17 +39,54 @@ final class BrowserPanelHostViewTests: XCTestCase {
         let menu = NSMenu()
         menu.addItem(withTitle: "Copy", action: nil, keyEquivalent: "")
 
-        webView.augmentHistoryContextMenu(menu)
+        webView.augmentContextMenu(menu)
         XCTAssertEqual(menu.items.map(\.title), ["Copy"])
 
         webView.showsHistoryContextMenuItems = true
-        webView.augmentHistoryContextMenu(menu)
-        webView.augmentHistoryContextMenu(menu)
+        webView.augmentContextMenu(menu)
+        webView.augmentContextMenu(menu)
 
         XCTAssertEqual(menu.items.map(\.title), ["Copy", "", "Back", "Forward"])
         XCTAssertTrue(menu.items[1].isSeparatorItem)
         XCTAssertFalse(menu.items[2].isEnabled)
         XCTAssertFalse(menu.items[3].isEnabled)
+    }
+
+    func testPanelContextMenuItemsWorkWithoutHistoryItems() {
+        let fixture = makeHistoryContextMenuFixture()
+        fixture.webView.showsHistoryContextMenuItems = false
+        var builtItemCount = 0
+        fixture.webView.additionalContextMenuItems = {
+            builtItemCount += 1
+            let item = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+            item.identifier = NSUserInterfaceItemIdentifier("test.appearance")
+            return [item]
+        }
+
+        fixture.webView.handleContextMenuGesture(
+            eventType: .rightMouseDown,
+            modifierFlags: [],
+            eventWindow: fixture.window,
+            hitView: fixture.contentView
+        )
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Copy", action: nil, keyEquivalent: "")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
+        fixture.webView.augmentContextMenu(menu)
+
+        XCTAssertEqual(menu.items.map(\.title), ["Copy", "", "Appearance"])
+        XCTAssertEqual(builtItemCount, 2, "Items are built each time a menu opens")
+
+        fixture.webView.additionalContextMenuItems = nil
+        fixture.webView.handleContextMenuGesture(
+            eventType: .rightMouseDown,
+            modifierFlags: [],
+            eventWindow: fixture.window,
+            hitView: fixture.contentView
+        )
+        let laterMenu = NSMenu()
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: laterMenu)
+        XCTAssertTrue(laterMenu.items.isEmpty)
     }
 
     func testPendingHistoryContextMenuAugmentationOnlyMutatesNextTrackedMenu() {
@@ -96,7 +133,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
     func testHistoryContextMenuGestureFromWebContentAugmentsTrackedMenu() {
         let fixture = makeHistoryContextMenuFixture()
 
-        fixture.webView.handleHistoryContextMenuGesture(
+        fixture.webView.handleContextMenuGesture(
             eventType: .rightMouseDown,
             modifierFlags: [],
             eventWindow: fixture.window,
@@ -115,7 +152,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
     func testHistoryContextMenuGestureWaitsForDeferredWebKitMenu() async {
         let fixture = makeHistoryContextMenuFixture()
 
-        fixture.webView.handleHistoryContextMenuGesture(
+        fixture.webView.handleContextMenuGesture(
             eventType: .rightMouseDown,
             modifierFlags: [],
             eventWindow: fixture.window,
@@ -139,13 +176,13 @@ final class BrowserPanelHostViewTests: XCTestCase {
     func testNewMouseGestureCancelsPendingHistoryContextMenu() {
         let fixture = makeHistoryContextMenuFixture()
 
-        fixture.webView.handleHistoryContextMenuGesture(
+        fixture.webView.handleContextMenuGesture(
             eventType: .rightMouseDown,
             modifierFlags: [],
             eventWindow: fixture.window,
             hitView: fixture.contentView
         )
-        fixture.webView.handleHistoryContextMenuGesture(
+        fixture.webView.handleContextMenuGesture(
             eventType: .leftMouseDown,
             modifierFlags: [],
             eventWindow: fixture.window,
@@ -164,13 +201,13 @@ final class BrowserPanelHostViewTests: XCTestCase {
     func testRepeatedContextMenuGestureAugmentsMenuOnlyOnce() {
         let fixture = makeHistoryContextMenuFixture()
 
-        fixture.webView.handleHistoryContextMenuGesture(
+        fixture.webView.handleContextMenuGesture(
             eventType: .leftMouseDown,
             modifierFlags: [.control],
             eventWindow: fixture.window,
             hitView: fixture.contentView
         )
-        fixture.webView.handleHistoryContextMenuGesture(
+        fixture.webView.handleContextMenuGesture(
             eventType: .rightMouseDown,
             modifierFlags: [.control],
             eventWindow: fixture.window,
@@ -191,7 +228,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
         let outsideView = NSView(frame: .zero)
 
         XCTAssertTrue(
-            FocusAwareWKWebView.shouldPrepareHistoryContextMenu(
+            FocusAwareWKWebView.shouldPrepareContextMenu(
                 eventType: .rightMouseDown,
                 modifierFlags: [],
                 eventWindow: fixture.window,
@@ -201,7 +238,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
             )
         )
         XCTAssertTrue(
-            FocusAwareWKWebView.shouldPrepareHistoryContextMenu(
+            FocusAwareWKWebView.shouldPrepareContextMenu(
                 eventType: .leftMouseDown,
                 modifierFlags: [.control],
                 eventWindow: fixture.window,
@@ -211,7 +248,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
             )
         )
         XCTAssertFalse(
-            FocusAwareWKWebView.shouldPrepareHistoryContextMenu(
+            FocusAwareWKWebView.shouldPrepareContextMenu(
                 eventType: .leftMouseDown,
                 modifierFlags: [],
                 eventWindow: fixture.window,
@@ -221,7 +258,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
             )
         )
         XCTAssertFalse(
-            FocusAwareWKWebView.shouldPrepareHistoryContextMenu(
+            FocusAwareWKWebView.shouldPrepareContextMenu(
                 eventType: .rightMouseDown,
                 modifierFlags: [],
                 eventWindow: fixture.window,
@@ -242,7 +279,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
         )
 
         XCTAssertFalse(
-            FocusAwareWKWebView.shouldPrepareHistoryContextMenu(
+            FocusAwareWKWebView.shouldPrepareContextMenu(
                 eventType: .rightMouseDown,
                 modifierFlags: [],
                 eventWindow: otherWindow,

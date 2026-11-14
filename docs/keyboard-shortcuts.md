@@ -135,7 +135,7 @@ These shortcuts are available when the focused panel is a browser panel:
 
 ## Local documents
 
-These shortcuts are available when the focused panel is a local document. Supported local documents currently include Markdown, YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts, logs, and common source files such as Swift, JavaScript/TypeScript, Python, Go, and Rust. Read mode also exposes `Copy Full Path` and `Open in Default App` actions in the panel header for backed local documents.
+These shortcuts are available when the focused panel is a local document. Supported local documents currently include Markdown, YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts, logs, and common source files such as Swift, JavaScript/TypeScript, Python, Go, and Rust. Read mode also exposes `Copy Full Path` and `Open in Default App` actions in the panel header for backed local documents. Markdown documents also show a `Formatted`/`Source` switch there; `Cmd+E` edits the Markdown source from either view.
 
 Preview mode:
 

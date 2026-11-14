@@ -1374,6 +1374,12 @@ struct TaskBoardTests {
         #expect(alone.toShip.map(\.count) == [1])
         #expect(alone.toShip.first?.releaseWorkspaceID == nil)
         #expect(TasksViewSections.make([parent], releasable: { _ in true }).toShip.first?.releaseWorkspaceID == nil)
+        // In the Tasks view, a child lists under its parent in the parent's
+        // lane, and apart from it in another project's lane.
+        let elsewhere = statusItem("toastty-copy", parent: parentID, stage: .toShip, project: "toastty")
+        let lanes = TasksViewSections.make([parent, child, elsewhere]).toShip
+        #expect(lanes.map(\.projectTitle) == ["emptyos", "toastty"])
+        #expect(lanes.map { $0.entries.map(\.isLinkedChild) } == [[false, true], [false]])
     }
 
     @Test func childrenListUnderTheTaskThatStartedThem() {
@@ -1435,6 +1441,22 @@ struct TaskBoardTests {
             projectTitle: project, stage: stage, agent: .idle, pullRequest: nil, pullRequestState: nil,
             branch: nil, parentTaskID: parent, activityAt: Date()
         )
+    }
+
+    /// The Tasks view splits Needs you as the sidebar does, and keeps a
+    /// family together in its most urgent section.
+    @Test func tasksViewListsReviewsApartAndKeepsFamiliesTogether() {
+        let parentID = UUID()
+        let parent = statusItem("review-parent", taskID: parentID, stage: .needsYou(.review))
+        let child = statusItem("asking-child", parent: parentID, stage: .needsYou(.awaitingReply))
+        let marked = statusItem("marked-ready", stage: .needsYou(.readyForReview))
+        let failed = statusItem("setup-failed", stage: .needsYou(.setupFailed(reason: "x")))
+        let view = TasksViewSections.make([parent, child, marked, failed])
+        #expect(view.needsYou.map(\.item.title) == ["review-parent", "asking-child", "setup-failed"])
+        #expect(view.needsYou.map(\.isLinkedChild) == [false, true, false])
+        #expect(view.readyToReview.map(\.item.title) == ["marked-ready"])
+        // Needs you, then Ready to review, in the list and for arrow keys.
+        #expect(view.all.map(\.item.title) == ["review-parent", "asking-child", "setup-failed", "marked-ready"])
     }
 
     /// Status lists tasks in the order of the project cards: by project,

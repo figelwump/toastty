@@ -2,8 +2,9 @@ import AppKit
 import CoreState
 import SwiftUI
 
-/// The groups the Tasks view lists, in sidebar order. To ship lists its
-/// tasks under one header per project.
+/// The groups the Tasks view lists, in sidebar order. Needs you is split as
+/// the sidebar splits it: what blocks an agent, then Ready to review. To
+/// ship lists its tasks under one header per project.
 struct TasksViewSections: Equatable {
     struct Lane: Equatable, Identifiable {
         /// The project's root directory, or its title for tasks without one:
@@ -17,6 +18,9 @@ struct TasksViewSections: Equatable {
     }
 
     var needsYou: [SidebarStatusSections.Entry] = []
+    /// Tasks in Needs you whose open pull request or ready mark waits for
+    /// the user's review.
+    var readyToReview: [SidebarStatusSections.Entry] = []
     var running: [SidebarStatusSections.Entry] = []
     var idle: [SidebarStatusSections.Entry] = []
     var toShip: [Lane] = []
@@ -28,12 +32,35 @@ struct TasksViewSections: Equatable {
             SidebarStatusSections.grouped(items.filter { $0.stage.group == group })
         }
         var sections = Self()
-        sections.needsYou = entries(.needsYou)
+        // A family lists in Needs you when any member blocks an agent, else
+        // in Ready to review; a member whose own state is calmer is dimmed.
+        var family: [SidebarStatusSections.Entry] = []
+        func placeFamily() {
+            guard family.isEmpty == false else { return }
+            let buckets = family.compactMap { SidebarBucket($0.item.stage) }
+            let bucket = buckets.min() ?? .needsYou
+            let placed = family.map { entry in
+                var entry = entry
+                entry.isContext = SidebarBucket(entry.item.stage) != bucket
+                return entry
+            }
+            if bucket == .readyToReview { sections.readyToReview += placed } else { sections.needsYou += placed }
+            family = []
+        }
+        for entry in entries(.needsYou) {
+            if entry.isLinkedChild == false { placeFamily() }
+            family.append(entry)
+        }
+        placeFamily()
         sections.running = entries(.running)
         sections.idle = entries(.idle)
-        sections.toShip = Dictionary(grouping: entries(.toShip), by: { SidebarStatusSections.laneKey($0.item) })
-            .map { key, entries in
-                Lane(
+        // Lanes first, then families in each lane: a child in another
+        // project's lane lists apart from its parent.
+        let toShipItems = items.filter { $0.stage.group == .toShip }
+        sections.toShip = Dictionary(grouping: toShipItems, by: SidebarStatusSections.laneKey)
+            .map { key, items in
+                let entries = SidebarStatusSections.grouped(items)
+                return Lane(
                     id: key,
                     projectTitle: entries.first?.item.projectTitle ?? "Other",
                     entries: entries,
@@ -48,13 +75,13 @@ struct TasksViewSections: Equatable {
 
     /// Every entry in display order, for picking a selection.
     var all: [SidebarStatusSections.Entry] {
-        needsYou + running + idle + toShip.flatMap(\.entries) + done + archived
+        needsYou + readyToReview + running + idle + toShip.flatMap(\.entries) + done + archived
     }
 
     /// The entries the list shows, in order: Done and Archived only while
     /// they are expanded.
     func visible(isDoneExpanded: Bool, isArchivedExpanded: Bool) -> [SidebarStatusSections.Entry] {
-        needsYou + running + idle + toShip.flatMap(\.entries)
+        needsYou + readyToReview + running + idle + toShip.flatMap(\.entries)
             + (isDoneExpanded ? done : []) + (isArchivedExpanded ? archived : [])
     }
 
@@ -98,7 +125,6 @@ struct TasksView: View {
     /// Observed so agent activity redraws the list.
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let newTask: (() -> Void)?
-    var newTaskShortcutLabel: String? = nil
 
     @State private var isDoneExpanded = false
     @State private var isArchivedExpanded = false
@@ -165,10 +191,19 @@ struct TasksView: View {
                     )
                     .id(selected.id)
                 } else {
-                    Text("No tasks yet.")
-                        .font(ToastyTheme.fontBody)
-                        .foregroundStyle(ToastyTheme.mutedText)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 6) {
+                        Text("No tasks yet.")
+                            .font(ToastyTheme.fontBody)
+                        if newTask != nil, let hint = Self.emptyStateShortcutHint(board.newTaskShortcut) {
+                            Text(hint)
+                                .font(.system(size: 12))
+                                .accessibilityIdentifier("tasks.view.empty.shortcut")
+                        }
+                    }
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .frame(width: Self.detailWidth)
@@ -204,6 +239,16 @@ struct TasksView: View {
         .accessibilityIdentifier("tasks.view")
     }
 
+    /// The empty state's second line, which teaches the quick entry
+    /// shortcut. It says "in any app" only when macOS delivers the
+    /// shortcut while another app is active.
+    static func emptyStateShortcutHint(_ shortcut: NewTaskShortcutHint?) -> String? {
+        guard let shortcut else { return nil }
+        return shortcut.isGlobal
+            ? "Press \(shortcut.label) in any app to add a task."
+            : "Press \(shortcut.label) to add a task."
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Text("Tasks")
@@ -214,8 +259,8 @@ struct TasksView: View {
                 Button(action: newTask) {
                     HStack(spacing: 7) {
                         Label("New Task", systemImage: "plus")
-                        if let newTaskShortcutLabel {
-                            Text(newTaskShortcutLabel)
+                        if let label = board.newTaskShortcut?.label {
+                            Text(label)
                                 .font(.system(size: 10.5, weight: .medium))
                                 .padding(.horizontal, 4)
                                 .overlay { RoundedRectangle(cornerRadius: 3).stroke(Color(hex: 0x9A6208), lineWidth: 1) }
@@ -269,6 +314,13 @@ struct TasksView: View {
         LazyVStack(alignment: .leading, spacing: 0) {
             groupHeader(.needsYou, count: sections.needsYou.count, isHot: sections.needsYou.isEmpty == false)
             rows(sections.needsYou, selectedID: selectedID)
+            if sections.readyToReview.isEmpty == false {
+                groupHeader(
+                    title: SidebarBucket.readyToReview.title, identifier: "readyToReview",
+                    count: sections.readyToReview.count, color: ToastyTheme.sidebarTaskReviewMark
+                )
+                rows(sections.readyToReview, selectedID: selectedID)
+            }
             groupHeader(.running, count: sections.running.count)
             rows(sections.running, selectedID: selectedID)
             groupHeader(.idle, count: sections.idle.count)
@@ -302,21 +354,28 @@ struct TasksView: View {
     }
 
     private func groupHeader(_ group: TaskStage.Group, count: Int, isHot: Bool = false) -> some View {
+        groupHeader(
+            title: TaskBoardPresentation.groupTitle(group), identifier: "\(group)", count: count,
+            color: isHot ? Color(hex: 0xF2C46B) : ToastyTheme.mutedText
+        )
+    }
+
+    private func groupHeader(title: String, identifier: String, count: Int, color: Color) -> some View {
         HStack(spacing: 8) {
-            Text(TaskBoardPresentation.groupTitle(group).uppercased())
+            Text(title.uppercased())
                 .tracking(0.8)
             Text("\(count)")
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundStyle(ToastyTheme.inactiveText)
         }
         .font(.system(size: 10.5, weight: .semibold))
-        .foregroundStyle(isHot ? Color(hex: 0xF2C46B) : ToastyTheme.mutedText)
+        .foregroundStyle(color)
         .padding(.horizontal, 18)
         .padding(.top, 14)
         .padding(.bottom, 6)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
-        .accessibilityIdentifier("tasks.view.group.\(group)")
+        .accessibilityIdentifier("tasks.view.group.\(identifier)")
     }
 
     private func collapsibleGroup(
@@ -379,23 +438,21 @@ struct TasksView: View {
 
     private func rows(_ entries: [SidebarStatusSections.Entry], selectedID: TaskBoardItem.Subject?) -> some View {
         ForEach(entries) { entry in
-            TasksViewRow(entry: entry, isSelected: entry.id == selectedID) {
-                board.selectionByWindowID[windowID] = entry.id
-            }
+            TasksViewRow(
+                entry: entry,
+                isSelected: entry.id == selectedID,
+                select: { board.selectionByWindowID[windowID] = entry.id },
+                open: entry.item.taskSpaceWorkspaceID.map { workspaceID in
+                    { openTaskSpace(workspaceID) }
+                }
+            )
             .contextMenu {
                 if let coordinator = board.coordinator {
                     TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(
                         entry.item,
                         isTriageConfigured: coordinator.isTriageConfigured
                     )) { menuItem in
-                        TaskActions.runFromMenu(menuItem, coordinator: coordinator) { workspaceID in
-                            TaskActions.openTaskSpace(
-                                workspaceID: workspaceID,
-                                fallbackWindowID: windowID,
-                                store: store,
-                                sessionRuntimeStore: sessionRuntimeStore
-                            )
-                        }
+                        TaskActions.runFromMenu(menuItem, coordinator: coordinator, openTaskSpace: openTaskSpace)
                     }
                 }
             }
@@ -404,6 +461,15 @@ struct TasksView: View {
             // whenever its group or status line changes.
             .id(Self.rowIdentity(entry))
         }
+    }
+
+    private func openTaskSpace(_ workspaceID: UUID) {
+        TaskActions.openTaskSpace(
+            workspaceID: workspaceID,
+            fallbackWindowID: windowID,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     private static func rowIdentity(_ entry: SidebarStatusSections.Entry) -> RowIdentity {
@@ -430,6 +496,9 @@ private struct TasksViewRow: View {
     let entry: SidebarStatusSections.Entry
     let isSelected: Bool
     let select: () -> Void
+    /// Opens the task's space on a double click. Nil when the task has no
+    /// open task space.
+    let open: (() -> Void)?
 
     @State private var isHovered = false
 
@@ -484,6 +553,16 @@ private struct TasksViewRow: View {
         .padding(.leading, entry.isLinkedChild ? 36 : 18)
         .padding(.trailing, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A task an agent split off lists under the task that started it,
+        // indented, with a ↳ mark left of its status mark.
+        .overlay(alignment: .topLeading) {
+            if entry.isLinkedChild {
+                TaskChildArrowMark(size: 10)
+                    .frame(width: 18, height: 16)
+                    .padding(.leading, 18)
+                    .padding(.top, 9)
+            }
+        }
         .background(isSelected ? Color(hex: 0x1C1C1C) : (isHovered ? Color(hex: 0x161616) : Color.clear))
         .overlay(alignment: .leading) {
             if isSelected {
@@ -494,7 +573,10 @@ private struct TasksViewRow: View {
             Rectangle().fill(ToastyTheme.hairline).frame(height: 1)
         }
         .contentShape(Rectangle())
+        // The first click selects at once; the second click of a double
+        // click also opens the task space.
         .onTapGesture(perform: select)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { open?() })
         .onHover { isHovered = $0 }
         .background {
             SidebarSemanticTextBridge(text: accessibilityLabel)
@@ -505,6 +587,11 @@ private struct TasksViewRow: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, select)
+        .accessibilityActions {
+            if let open {
+                Button("Open Task Space", action: open)
+            }
+        }
         .accessibilityIdentifier("tasks.view.row")
     }
 

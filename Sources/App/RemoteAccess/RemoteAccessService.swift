@@ -457,7 +457,14 @@ enum RemoteAccessActivationState: Equatable, Sendable {
 final class RemoteAccessService: ObservableObject {
     typealias TailnetServeSetup = @Sendable (_ port: UInt16, _ configuredOrigin: String, _ configureIfNeeded: Bool) async throws -> String
 
-    @Published private(set) var activationState: RemoteAccessActivationState = .off
+    @Published private(set) var activationState: RemoteAccessActivationState = .off {
+        didSet {
+            guard oldValue.isEnabled != activationState.isEnabled else { return }
+            gatewayFollowsPanelsSince = activationState.isEnabled ? Date() : nil
+        }
+    }
+    /// When the gateway began to follow every agent panel, while it is on.
+    private var gatewayFollowsPanelsSince: Date?
     @Published private(set) var tailnetSetupState: RemoteAccessTailnetSetupState = .unchecked
     @Published private(set) var deviceManagementError: String?
     @Published private(set) var currentPairingCode: RemotePairingCode?
@@ -566,6 +573,7 @@ final class RemoteAccessService: ObservableObject {
     private var gatewayObservationCancellables: Set<AnyCancellable> = []
     private struct LocalSubscriptionState {
         var panelID: UUID
+        var since = Date()
         var changes: AsyncStream<Void>.Continuation
         /// The summary the subscriber was last told about.
         var publishedSummary: RemoteConversationSummary?
@@ -1695,9 +1703,14 @@ final class RemoteAccessService: ObservableObject {
     /// The task as the snapshot would show it now, with the item it comes
     /// from, so an action is checked against the Mac's current list.
     func currentTask(id taskID: UUID) -> (item: TaskBoardItem, summary: RemoteTaskSummary)? {
-        guard let taskBoard, taskBoard.isEnabled,
-              let item = taskBoard.items().first(where: { $0.id == .task(taskID) }) else { return nil }
-        return (item, RemoteTaskBoardProjection.summary(item, context: taskProjectionContext(taskBoard)))
+        guard let taskBoard, taskBoard.isEnabled else { return nil }
+        let items = taskBoard.items()
+        guard let item = items.first(where: { $0.id == .task(taskID) }) else { return nil }
+        return (item, RemoteTaskBoardProjection.summary(
+            item,
+            context: taskProjectionContext(taskBoard),
+            family: RemoteTaskBoardProjection.Family(items: items)
+        ))
     }
 
     /// Maps each managed session to its conversation, limited to the
@@ -4792,6 +4805,12 @@ extension RemoteAccessService: LocalConversationAccess {
         return conversationIDByPanelID[panelID]
     }
 
+    fileprivate func localFollowedSince(subscriptionID: UUID) -> Date? {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID else { return nil }
+        let subscribed = localSubscriptions.values.filter { $0.panelID == panelID }.map(\.since)
+        return (subscribed + [gatewayFollowsPanelsSince].compactMap { $0 }).min()
+    }
+
     fileprivate func localSnapshot(subscriptionID: UUID, at date: Date) -> RemoteConversationSnapshot? {
         guard let panelID = localSubscriptions[subscriptionID]?.panelID,
               let summary = localSummary(
@@ -4912,6 +4931,10 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     var conversationID: RemoteConversationID? {
         service?.localConversationID(subscriptionID: id)
+    }
+
+    var followedSince: Date? {
+        service?.localFollowedSince(subscriptionID: id)
     }
 
     func snapshot(at date: Date) -> RemoteConversationSnapshot? {

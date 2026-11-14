@@ -11,8 +11,9 @@ what the user cannot see at a glance, resolve routine Git merge conflicts, then
 either merge or report what blocks the merge. Toastty does the merge itself:
 `toastty task merge` merges at the commit you checked, waits for GitHub's checks
 if they still run, never turns on
-auto-merge, and closes the task space and removes its worktree after your turn
-ends. Do not merge with `gh`, close this workspace, or remove the worktree.
+auto-merge, and closes the task space and removes its worktree a day after the
+merge, once your turn has ended. Do not merge with `gh`, close this workspace,
+or remove the worktree.
 
 Run the commands below with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
 this skill must run inside a Toastty-managed agent session, and stop.
@@ -103,7 +104,7 @@ If nothing blocks, run:
 
 It returns at once. Report the pull request, the commit, and whether Toastty
 merges it now or after the checks that are still running. Then end your turn
-and run nothing else: Toastty cleans up after this turn ends.
+and run nothing else: Toastty cleans up later, after this turn ends.
 
 If something blocks, report each blocker with its link and end your turn. Do
 not run `task merge`. The task then waits for the user in the Tasks view, who can

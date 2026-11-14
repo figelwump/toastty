@@ -43,7 +43,8 @@ struct CoordinatorChatView: View {
     )
 
     var body: some View {
-        let chips = CoordinatorTaskChips(items: board.items())
+        let items = board.items()
+        let chips = CoordinatorTaskChips(items: items)
         VStack(spacing: 0) {
             ToasttyTranscriptView(
                 state: model.presentation,
@@ -57,7 +58,12 @@ struct CoordinatorChatView: View {
                 options: Self.transcriptOptions,
                 replyToMessage: { model.reply(to: $0) }
             )
-            composerArea
+            .overlay {
+                if model.showsIntroduction {
+                    introduction
+                }
+            }
+            composerArea(mentionCandidates: CoordinatorMentionCandidate.candidates(from: items))
         }
         // Files and images dropped anywhere on the chat are attached to the
         // composer's message. The terminal under the chat takes none.
@@ -89,7 +95,33 @@ struct CoordinatorChatView: View {
         }
     }
 
-    private var composerArea: some View {
+    static let introductionTitle = "Hi, I'm Toasty."
+    static let introductionText = "I follow your tasks, keep them moving, and tell you what needs you. Say hi to get started."
+
+    /// Toasty introduces itself while the conversation has no message. It
+    /// covers the empty transcript, also while that loads.
+    private var introduction: some View {
+        let scale = model.textScale
+        return VStack(spacing: 10 * scale) {
+            ToastyIcon(style: .golden, size: 52 * scale, badgeRingColor: ConversationDesignTokens.background)
+            Text(Self.introductionTitle)
+                .font(.system(size: 17 * scale, weight: .semibold))
+                .foregroundStyle(ConversationDesignTokens.primaryText)
+            Text(Self.introductionText)
+                .font(.system(size: 13 * scale))
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 300 * scale)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ConversationDesignTokens.background)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("coordinator.chat.introduction")
+    }
+
+    private func composerArea(mentionCandidates: [CoordinatorMentionCandidate]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let notice = model.notice {
                 noticeRow(notice)
@@ -101,7 +133,7 @@ struct CoordinatorChatView: View {
                 onCancelReply: { model.cancelReply() },
                 // The dock is narrow: its hint leaves out the shortcut.
                 placeholder: Self.composerPlaceholder(
-                    quickEntryShortcut: host == .panel ? board.newTaskShortcutLabel() : nil
+                    quickEntryShortcut: host == .panel ? board.newTaskShortcut : nil
                 ),
                 canStop: model.canStop,
                 isEditable: model.isSendingFiles == false,
@@ -114,7 +146,8 @@ struct CoordinatorChatView: View {
                 onStop: { model.stop() },
                 onChooseFiles: { model.chooseFiles() },
                 dropTarget: model.attachmentDropTarget,
-                onTextView: { [host] in model.setComposerTextView($0, host: host) }
+                onTextView: { [host] in model.setComposerTextView($0, host: host) },
+                mentionCandidates: mentionCandidates
             )
         }
         .frame(maxWidth: Self.maximumContentWidth)
@@ -187,11 +220,12 @@ struct CoordinatorChatView: View {
     }
 
     /// The field's hint also names the quick entry shortcut, which sends to
-    /// the coordinator from any app. Without a shortcut it names none.
-    static func composerPlaceholder(quickEntryShortcut: String?) -> String {
-        let placeholder = "Message the coordinator…"
-        guard let quickEntryShortcut else { return placeholder }
-        return "\(placeholder)  \(quickEntryShortcut) from anywhere"
+    /// the coordinator from any app. It names none when the shortcut is off
+    /// or another app holds its keys.
+    static func composerPlaceholder(quickEntryShortcut: NewTaskShortcutHint?) -> String {
+        let placeholder = "Message Toasty…"
+        guard let quickEntryShortcut, quickEntryShortcut.isGlobal else { return placeholder }
+        return "\(placeholder)  \(quickEntryShortcut.label) from anywhere"
     }
 
     static func text(for notice: CoordinatorChatModel.Notice) -> String {
@@ -217,16 +251,24 @@ struct CoordinatorChatView: View {
 
     /// A click on a link in the coordinator's text. The text is an agent's,
     /// so only three things can happen: a task's space opens, the Tasks
-    /// view shows a task whose space is closed, or a web page opens in the
+    /// view shows a task whose space is closed, or a web page opens in a
     /// browser. Nothing else is opened and nothing is run.
     private func open(_ url: URL, chips: CoordinatorTaskChips) -> OpenURLAction.Result {
-        switch CoordinatorChatLinks.action(for: url, taskTarget: { taskID in
-            guard chips.chips[taskID] != nil, let record = board.coordinator?.records.record(id: taskID) else { return nil }
-            if let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil {
-                return .taskSpace(workspaceID: workspaceID)
+        // The link's click is the current event: the text view calls this
+        // while it handles the click.
+        let holdsShift = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
+        let showsTasksView = store.state.window(id: windowID)?.showsTasksView == true
+        switch CoordinatorChatLinks.action(
+            for: url,
+            webPagesOpenInSystemBrowser: holdsShift || showsTasksView,
+            taskTarget: { taskID in
+                guard chips.chips[taskID] != nil, let record = board.coordinator?.records.record(id: taskID) else { return nil }
+                if let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil {
+                    return .taskSpace(workspaceID: workspaceID)
+                }
+                return .tasksView
             }
-            return .tasksView
-        }) {
+        ) {
         case .openTaskSpace(let workspaceID):
             // The chat stays beside the task, in the dock.
             controller.openTaskSpaceFromChat(workspaceID: workspaceID, fallbackWindowID: windowID)
@@ -241,7 +283,21 @@ struct CoordinatorChatView: View {
                 source: .ui("coordinator_task_link")
             )
             return .handled
-        case .openWebPage:
+        case .openWebPageInToastty:
+            // The same router as every other link in the app: a Toastty
+            // browser in the right panel of the workspace on screen (in the
+            // full view, the coordinator's own; beside the dock, that
+            // workspace's), unless the user's settings send web links to
+            // the system browser.
+            let result = AppURLRouter.openResult(url, preferredWindowID: windowID, appStore: store)
+            // Focus mode gives the right panel no width, so it ends, as
+            // for a link in a terminal.
+            if result.openedRightPanelInToastty,
+               let workspaceID = store.state.workspaceSelection(in: windowID)?.workspaceID {
+                store.send(.exitFocusedPanelMode(workspaceID: workspaceID))
+            }
+            return .handled
+        case .openWebPageInSystemBrowser:
             return .systemAction
         case .ignore:
             return .discarded
@@ -256,8 +312,12 @@ enum CoordinatorChatLinks {
         /// A task whose space is closed, such as a done or archived one:
         /// the Tasks view, with the task selected.
         case showInTasksView(taskID: UUID)
-        /// An `http` or `https` page, in the user's browser.
-        case openWebPage
+        /// An `http` or `https` page, in a Toastty browser.
+        case openWebPageInToastty
+        /// An `http` or `https` page, in the system browser: the click held
+        /// Shift, as for a link in a terminal, or the Tasks view covers the
+        /// window's workspace, so a Toastty browser could not be seen.
+        case openWebPageInSystemBrowser
         case ignore
     }
 
@@ -270,8 +330,12 @@ enum CoordinatorChatLinks {
     }
 
     /// `taskTarget` answers for a task that exists, or `nil` for any other
-    /// task ID.
-    static func action(for url: URL, taskTarget: (UUID) -> TaskTarget?) -> Action {
+    /// task ID. `webPagesOpenInSystemBrowser` changes only web links.
+    static func action(
+        for url: URL,
+        webPagesOpenInSystemBrowser: Bool = false,
+        taskTarget: (UUID) -> TaskTarget?
+    ) -> Action {
         if CoordinatorTaskLink.isToasttyURL(url) {
             guard let taskID = CoordinatorTaskLink.taskID(in: url),
                   let target = taskTarget(taskID) else { return .ignore }
@@ -282,7 +346,7 @@ enum CoordinatorChatLinks {
         }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               url.host?.isEmpty == false else { return .ignore }
-        return .openWebPage
+        return webPagesOpenInSystemBrowser ? .openWebPageInSystemBrowser : .openWebPageInToastty
     }
 }
 
@@ -343,7 +407,7 @@ struct CoordinatorTaskChips {
         }
     }
 
-    private static func chipColor(_ color: Color) -> ConversationChipColor {
+    static func chipColor(_ color: Color) -> ConversationChipColor {
         let resolved = NSColor(color).usingColorSpace(.sRGB) ?? .gray
         return ConversationChipColor(
             red: Double(resolved.redComponent),

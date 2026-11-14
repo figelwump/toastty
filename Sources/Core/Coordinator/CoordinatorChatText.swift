@@ -1,4 +1,14 @@
 import Foundation
+import RemoteProtocol
+
+extension CoordinatorTaskLink {
+    /// The task as a one-line Markdown link, `[title](toastty://task/<id>)`:
+    /// the form the coordinator writes and the form a mention in the user's
+    /// message takes. The title is escaped as a digest escapes it.
+    public static func markdown(taskID: UUID, title: String) -> String {
+        "[\(CoordinatorWakeState.linkText(title))](\(url(taskID: taskID).absoluteString))"
+    }
+}
 
 /// Folds a digest that Toastty typed into one line of the chat.
 public enum CoordinatorDigestFold {

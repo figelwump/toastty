@@ -321,28 +321,34 @@ chip directly left of it; Send uses the same arrow for every mode, and Stop and
 Send are never shown together. The agent's working state is shown in the
 transcript, not under the field.
 
-- **Queue** is the default. Send holds the message on the Mac, and the Mac
-  types it as the next prompt once the turn ends and the prompt opens, through
-  the same open-prompt gate as a live send. One queued message is delivered per
-  open prompt, in order; messages are never merged. The queue holds at most 5
-  messages per conversation and belongs to the current runtime binding: a
-  resumed or relaunched agent drops it, and the phone shows those messages as
-  not delivered. Queued messages appear at the end of the transcript as dashed
-  bubbles with **Edit**, **Steer now**, and **Remove**. Edit and Steer now first
-  remove the message on the Mac and act only when the Mac confirms it was still
-  waiting. A queued message with attachments keeps them on the Mac; editing it
-  restores only the text.
-- **Steer** submits the message to the running Codex or Claude Code CLI, only
-  while nobody has typed in that turn's terminal on the Mac. Claude Code labels
-  this input queued, but can read it within the current turn after active tool
-  calls finish. If it has no earlier opportunity to read the message, it sends
-  it after the turn ends. Toastty's **Queue** holds the message until the turn
+- **Steer** is the default while the host allows it. Send submits the message
+  to the running Codex or Claude Code CLI, only while nobody has typed in that
+  turn's terminal on the Mac. A message with attachments can steer: the Mac
+  types its text and the paths of the staged files. When steer is not
+  available, or closes while the user types, the chip, the Send label, and the
+  send itself fall back to Queue together. Claude Code labels this input
+  queued, but can read it within the current turn after active tool calls
+  finish. If it has no earlier opportunity to read the message, it sends it
+  after the turn ends. Toastty's **Queue** holds the message until the turn
   ends and the next prompt opens. See Claude Code's [interrupt and steer documentation](https://code.claude.com/docs/en/how-claude-code-works#interrupt-and-steer).
   A Claude steer leaves **Sending…** when Claude reads it. The message appears
   in the transcript within the running turn, or as a new turn if Claude reads
   it after the current turn ends. Input submitted on the Mac within a running
   turn also appears when Claude reads it.
-  The chip returns to Queue after each send.
+- **Queue** is the other choice, and the chip shows it in the accent color.
+  Send holds the message on the Mac, and the Mac types it as the next prompt
+  once the turn ends and the prompt opens, through the same open-prompt gate
+  as a live send. One queued message is delivered per open prompt, in order;
+  messages are never merged. The queue holds at most 5 messages per
+  conversation and belongs to the current runtime binding: a resumed or
+  relaunched agent drops it, and the phone shows those messages as not
+  delivered. Queued messages appear at the end of the transcript as dashed
+  bubbles with **Edit**, **Steer now**, and **Remove**. Edit and Steer now first
+  remove the message on the Mac and act only when the Mac confirms it was still
+  waiting. A queued message with attachments keeps them on the Mac; editing it
+  restores only the text, and it does not offer Steer now.
+- The chip returns to Steer after a send empties the field and when a new turn
+  starts. A send that fails keeps the user's choice with the draft.
 - **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
   A stop names that turn, so a late tap cannot stop a later one. After a stop
   the queue pauses until the user taps **Send next** on a queued message,
@@ -594,6 +600,15 @@ thing. It sends a `tasks` board in the session snapshot and advertises the
 `tasks` capability. The phone switches to Projects | Status only when a
 snapshot carries the board. An older Mac omits it, and the phone keeps **All |
 Active**. An older phone ignores the board.
+
+Each task on the board also names the task that started it
+(`parentTaskID` and `parentTaskTitle`), and a parent task carries its
+`childProgress`: how many of its child tasks that are not archived have merged,
+as the Mac's "2/3 merged" label shows. The parent's title travels with its ID
+because a Done parent is not on the board. A To ship lane groups by project
+root, so a client finds a project's To ship tasks by each task's
+`projectWorkspaceID`. The phone decodes these fields but does not show them yet.
+An older Mac omits them, and the phone reads them as absent.
 
 #### Acting on tasks
 

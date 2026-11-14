@@ -125,6 +125,35 @@ struct TaskCoordinationTests {
         }
     }
 
+    @Test func aCheckedSendGoesToTheTasksAgentAndSaysHowItWasGiven() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let panel = try panelID(task)
+
+        fixture.sessions.steerResult = .success(.queued(position: 2))
+        let reached = try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
+        #expect(reached.session.sessionID == (try sessionID(task)))
+        #expect(reached.delivery == .queued(position: 2))
+        #expect(fixture.sessions.steered.map(\.panelID) == [panel])
+        #expect(fixture.sessions.steered.map(\.text) == ["Use the new name"])
+        // Nothing went through the unchecked path.
+        #expect(try messages(fixture, to: task).isEmpty)
+
+        // A send that types nothing says so, with the reason.
+        fixture.sessions.steerResult = .failure(.stateUnknown)
+        await #expect(throws: TaskError("Toastty cannot tell what task \(task.title)'s agent does now, so it typed nothing. Send the message again when the agent is idle.")) {
+            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
+        }
+        fixture.sessions.steerResult = .failure(.queueFull)
+        await #expect(throws: TaskError("Task \(task.title) already has 5 messages that wait for its agent's next prompt. Nothing was added.")) {
+            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
+        }
+        fixture.sessions.stop(try sessionID(task))
+        await #expect(throws: TaskError("Task \(task.title) has no running agent.")) {
+            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
+        }
+    }
+
     @Test func taskSessionsAreUnscopedUnlessTheirCreatorWasScoped() async throws {
         let fixture = try Fixture()
         _ = try await fixture.startedTask()

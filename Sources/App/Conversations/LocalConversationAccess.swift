@@ -24,6 +24,14 @@ protocol LocalConversationSubscription: AnyObject {
     /// agent conversation.
     var conversationID: RemoteConversationID? { get }
 
+    /// Since when Toastty has followed the panel without a break: its
+    /// conversation, and typing in its terminal. The gateway follows every
+    /// agent panel while it is on; without it, a panel is followed from its
+    /// oldest in-app subscription. The conversation does not know of text
+    /// that someone typed in the terminal before this time. `nil` once the
+    /// subscription is cancelled.
+    var followedSince: Date? { get }
+
     /// Yields after the conversation changed: new events, a different
     /// summary (state, input availability, queue), or a restarted event
     /// sequence. Changes are coalesced and a yield can be spurious, so read

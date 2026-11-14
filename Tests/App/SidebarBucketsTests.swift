@@ -3,7 +3,8 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
-/// The rules that place sidebar rows in Needs you, Running and Idle, and
+/// The rules that place sidebar rows in Needs you, Ready to review,
+/// Running and Idle, and
 /// that keep the selected row from moving under the pointer.
 @MainActor
 struct SidebarBucketsTests {
@@ -49,7 +50,14 @@ struct SidebarBucketsTests {
         // A failed setup needs the user although no agent asks anything.
         #expect(SidebarBucket.subspace(subspace(status: .idle, stage: .needsYou(.setupFailed(reason: "x")))) == .needsYou)
         #expect(SidebarBucket.subspace(subspace(status: .question, stage: .needsYou(.awaitingReply))) == .needsYou)
-        #expect(SidebarBucket.subspace(subspace(status: .review, stage: .needsYou(.review))) == .needsYou)
+        // A review waits apart from what blocks an agent, also while the
+        // turn that opened the pull request is unread.
+        #expect(SidebarBucket.subspace(subspace(status: .review, stage: .needsYou(.review))) == .readyToReview)
+        #expect(SidebarBucket.subspace(subspace(status: .review, stage: .needsYou(.readyForReview))) == .readyToReview)
+        // An agent that asks for an approval in a task waiting for review
+        // blocks it again.
+        #expect(SidebarBucket.subspace(subspace(status: .needsApproval, stage: .needsYou(.agentNeedsInput))) == .needsYou)
+        #expect(SidebarBucket.subspace(subspace(status: .needsApproval, stage: .needsYou(.review))) == .needsYou)
         #expect(SidebarBucket.subspace(subspace(status: .working, stage: .starting)) == .running)
         #expect(SidebarBucket.subspace(subspace(status: .idle, stage: .idle)) == .idle)
         // A working agent in a merged task space keeps the row in Running.
@@ -57,6 +65,16 @@ struct SidebarBucketsTests {
         // A subspace without a task uses its sessions only.
         #expect(SidebarBucket.subspace(subspace(status: .ready, stage: nil)) == .needsYou)
         #expect(SidebarBucket.subspace(subspace(status: .idle, stage: nil)) == .idle)
+    }
+
+    @Test func tasksWithoutATaskSpaceSplitReviewsFromWhatBlocksThem() {
+        #expect(SidebarBucket(.needsYou(.review)) == .readyToReview)
+        #expect(SidebarBucket(.needsYou(.readyForReview)) == .readyToReview)
+        #expect(SidebarBucket(.needsYou(.awaitingReply)) == .needsYou)
+        #expect(SidebarBucket(.needsYou(.agentFinished)) == .needsYou)
+        #expect(SidebarBucket(.needsYou(.taskSpaceClosed)) == .needsYou)
+        #expect(SidebarBucket(.starting) == .running)
+        #expect(SidebarBucket(.toShip) == nil)
     }
 
     @Test func familiesListTogetherInTheMostUrgentBucketAndRowsKeepTheirOrder() {
@@ -152,9 +170,53 @@ struct SidebarBucketsTests {
         let list = SidebarBuckets.needsYou(candidates, pin: nil)
         // A child lists under its parent only when both need the user, and
         // no row lists dimmed.
-        #expect(names(list.entries) == [
+        #expect(names(list.entries(.needsYou)) == [
             "Asking child ↖", "Asking parent", "  Asking child 2", "Child of another project ↖",
         ])
+        #expect(list.entries(.readyToReview).isEmpty)
+    }
+
+    @Test func needsYouListsReviewsInASectionOfTheirOwn() {
+        let candidates = [
+            row("Asks", .needsYou),
+            row("Pull request", .readyToReview),
+            row("Review parent", .readyToReview),
+            row("Asking child", .needsYou, parent: "Review parent"),
+            row("Review child", .readyToReview, parent: "Running parent"),
+            row("Running parent", .running),
+            row("Idle", .idle),
+        ]
+        let list = SidebarBuckets.needsYou(candidates, pin: nil)
+        // A family lists where its most urgent row needs the user, with a
+        // parent that waits for review dimmed above its asking child.
+        #expect(names(list.entries(.needsYou)) == ["Asks", "Review parent (dimmed)", "  Asking child"])
+        #expect(names(list.entries(.readyToReview)) == ["Pull request", "Review child ↖"])
+        #expect(list.entries(.running).isEmpty && list.entries(.idle).isEmpty)
+        #expect(SidebarBuckets.counts(candidates)[.readyToReview] == 3)
+
+        // In All, a running parent lists with its child that waits for
+        // review, as with a child that asks.
+        let layout = SidebarBuckets.layout(candidates, pin: nil)
+        #expect(names(layout.entries(.readyToReview)) == ["Pull request", "Running parent (dimmed)", "  Review child"])
+        #expect(layout.entries(.running).isEmpty)
+    }
+
+    @Test func aSelectedReviewHoldsInItsSectionWhileItsTaskCalmsDown() {
+        var candidates = [row("Review", .readyToReview), row("Asks", .needsYou)]
+        var list = SidebarBuckets.needsYou(candidates, pin: nil)
+        var pin = SidebarBuckets.pin(previous: nil, selected: key("Review"), displayed: list.displayed)
+
+        // The user accepts the work by hand, so the task goes idle.
+        candidates[0] = row("Review", .idle)
+        list = SidebarBuckets.needsYou(candidates, pin: pin)
+        #expect(names(list.entries(.readyToReview)) == ["Review (dimmed)"])
+
+        // A question while selected moves it up at once.
+        pin = SidebarBuckets.pin(previous: list.pin, selected: key("Review"), displayed: list.displayed)
+        candidates[0] = row("Review", .needsYou)
+        list = SidebarBuckets.needsYou(candidates, pin: pin)
+        #expect(names(list.entries(.needsYou)) == ["Review", "Asks"])
+        #expect(list.entries(.readyToReview).isEmpty)
     }
 
     @Test func needsYouHoldsTheSelectedRowUntilTheSelectionMovesOrWorkResumes() {
@@ -164,12 +226,12 @@ struct SidebarBucketsTests {
 
         candidates[0] = row("Thumbnail", .idle)
         list = SidebarBuckets.needsYou(candidates, pin: pin)
-        #expect(names(list.entries) == ["Thumbnail (dimmed)", "Hostname"])
+        #expect(names(list.entries(.needsYou)) == ["Thumbnail (dimmed)", "Hostname"])
 
         // Selecting another row lets it go.
         pin = SidebarBuckets.pin(previous: list.pin, selected: key("Hostname"), displayed: list.displayed)
         list = SidebarBuckets.needsYou(candidates, pin: pin)
-        #expect(names(list.entries) == ["Hostname"])
+        #expect(names(list.entries(.needsYou)) == ["Hostname"])
 
         // A held row that starts work leaves at once.
         candidates = [row("Thumbnail", .needsYou), row("Hostname", .needsYou)]
@@ -177,6 +239,6 @@ struct SidebarBucketsTests {
         pin = SidebarBuckets.pin(previous: nil, selected: key("Thumbnail"), displayed: list.displayed)
         candidates[0] = row("Thumbnail", .running)
         list = SidebarBuckets.needsYou(candidates, pin: pin)
-        #expect(names(list.entries) == ["Hostname"])
+        #expect(names(list.entries(.needsYou)) == ["Hostname"])
     }
 }

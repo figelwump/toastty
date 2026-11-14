@@ -136,12 +136,21 @@ struct QuickEntryPickerView: View {
     private var footer: some View {
         HStack(spacing: 12) {
             if picker.columns != nil {
-                KeyHint(keys: ["tab"], label: "next column")
-                Text("type to filter the focused column")
+                // The same keys as the list's footer, with Enter on the
+                // button it presses, as on Create Task.
+                KeyHint(keys: ["tab", "⇧tab"], label: "column")
+                Text("type to filter")
+                KeyHint(keys: ["esc"], label: "back")
                 Spacer(minLength: 8)
-                Button("Choose") { picker.submit() }
-                    .buttonStyle(ChooseButtonStyle())
-                    .accessibilityIdentifier("quick-entry.picker.choose")
+                Button { picker.submit() } label: {
+                    HStack(spacing: 6) {
+                        Text("Choose")
+                        KeyCap(text: "↩", size: 10, color: Color(hex: 0x3A2806), border: Color(hex: 0x9A6208))
+                    }
+                }
+                .buttonStyle(ChooseButtonStyle())
+                .accessibilityLabel("Choose")
+                .accessibilityIdentifier("quick-entry.picker.choose")
             } else {
                 if let last = picker.rows.last(where: { $0.number != nil })?.number {
                     KeyHint(keys: [last > 1 ? "1–\(last)" : "1"], label: "pick")

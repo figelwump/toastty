@@ -126,7 +126,7 @@ extension TaskCoordinator {
             throw TaskError("Toastty is merging the pull request right now, so the merge cannot be cancelled.")
         }
         switch request?.phase {
-        case .awaitingMerge?, .cleaningUp?:
+        case .awaitingMerge?, .holdingCleanup?, .cleaningUp?:
             throw TaskError("The pull request has merged.")
         case .merging?, .closing?:
             throw TaskError("Toastty is merging the pull request right now, so the merge cannot be cancelled.")
@@ -377,7 +377,10 @@ extension TaskCoordinator {
         switch cleanup.kind {
         case .merge:
             guard let taskSpaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[taskSpaceID] != nil else {
-                throw TaskError("The task space is closed. Remove what is left of the worktree by hand, then choose Keep As Is.")
+                // The user closed the task space; its worktree and local
+                // branch go the way an archive removes them.
+                startTeardown(taskID: taskID, kind: .merge, options: TaskArchiveOptions())
+                return
             }
             guard agentInTurn(workspaceID: taskSpaceID) == false else {
                 throw TaskError("The agent is still working. Clean up once its turn ends.")
@@ -387,6 +390,38 @@ extension TaskCoordinator {
         case .archive, .release:
             startTeardown(taskID: taskID, kind: cleanup.kind, options: cleanup.kind == .archive ? lastArchiveOptions(record) : TaskArchiveOptions())
         }
+    }
+
+    /// "Close Task Space": the cleanup Toastty holds for a day after the
+    /// merge runs now.
+    func cleanUpHeldTaskSpaceNow(taskID: UUID) throws {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        guard let taskSpaceID = record.taskSpaceWorkspaceID, let merges else {
+            throw TaskError("\(record.title) has no task space to close.")
+        }
+        try merges.cleanUpHeldTaskSpaceNow(workspaceID: taskSpaceID)
+    }
+
+    /// The user closed the task space of a merged task before its cleanup
+    /// did: removes the worktree and the local branch the merge's cleanup
+    /// would have removed, with an archive's checks, so uncommitted files
+    /// and commits on no remote branch stay. The branch on GitHub stays.
+    /// A cleanup that closes the task space itself is still running then,
+    /// so it is left alone.
+    func mergedTaskSpaceClosed(workspaceID: UUID) {
+        guard store.state.workspacesByID[workspaceID] == nil,
+              let record = records.record(taskSpaceWorkspaceID: workspaceID),
+              record.mergedAt != nil, record.archivedAt == nil,
+              let worktree = record.worktree, worktree.isDetached == false,
+              isDirectory(worktree.path),
+              cleanupTasks[record.id] == nil,
+              merges?.request(workspaceID: workspaceID) == nil else { return }
+        ToasttyLog.info("Removing the worktree of a merged task whose task space closed", category: .tasks, metadata: [
+            "task_id": record.id.uuidString,
+        ])
+        startTeardown(taskID: record.id, kind: .merge, options: TaskArchiveOptions())
     }
 
     /// "Keep As Is": the user leaves what a stopped cleanup left behind.
@@ -470,6 +505,8 @@ extension TaskCoordinator {
                 break
             case .merging, .awaitingChecks, .awaitingMerge, .cleaningUp, .closing:
                 throw TaskError("A merge of \(record.title) is already under way.")
+            case .holdingCleanup:
+                throw TaskError("\(record.title) has merged.")
             }
         }
         mergeDeliveryTasks.removeValue(forKey: record.id)?.cancel()

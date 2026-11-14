@@ -888,6 +888,15 @@ final class AppControlExecutor {
             let (service, name) = try withRequestContext(context) { try prepareWebhookTest(args: args) }
             return try await runWebhookTest(service: service, name: name)
         }
+        if AppControlActionID.resolve(rawID) == .taskSend {
+            let preparation = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskSend.descriptor)
+                return try prepareTaskSteerSend(args: args)
+            }
+            if let (coordinator, taskID, text) = preparation {
+                return try await finishTaskSteerSend(coordinator, taskID: taskID, text: text)
+            }
+        }
         if AppControlActionID.resolve(rawID) == .taskArchive {
             let (coordinator, taskID, options) = try withRequestContext(context) {
                 try prepareTaskArchive(args: args)
@@ -2469,6 +2478,7 @@ private extension AppControlExecutor {
             "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
             "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
             "currentTheme": .string(runtimeState.currentTheme.rawValue),
+            "runtimeMagnification": .double(runtimeState.magnification),
             "hasCurrentBootstrap": .bool(runtimeState.currentBootstrap != nil),
             "pendingBootstrapScript": .bool(runtimeState.hasPendingBootstrapScript),
             "currentAssetPath": runtimeState.currentAssetPath.map { .string($0) } ?? .null,

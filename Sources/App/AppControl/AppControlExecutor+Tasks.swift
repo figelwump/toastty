@@ -92,6 +92,9 @@ extension AppControlExecutor {
         case .taskArchive:
             throw AutomationSocketError.invalidPayload("task.archive checks git before it returns; send it through app_control.run_action")
         case .taskSend:
+            guard try args.taskBool("steer") != true else {
+                throw AutomationSocketError.invalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action")
+            }
             let record = try visibleTask(args: args, coordinator: coordinator)
             guard let text = args.taskString("text") else {
                 throw AutomationSocketError.invalidPayload("text is required")
@@ -155,6 +158,40 @@ extension AppControlExecutor {
         do {
             let record = try await coordinator.finishCreate(preparation)
             return .init(didMutateState: true, result: Self.taskSnapshot(record))
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
+    /// The checks of a `task.send` with `steer`, in this request's context.
+    /// `nil` for a send without it, which does not wait.
+    func prepareTaskSteerSend(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, String)? {
+        guard try args.taskBool("steer") == true else { return nil }
+        let coordinator = try requiredTaskCoordinator()
+        let record = try visibleTask(args: args, coordinator: coordinator)
+        guard let text = args.taskString("text") else {
+            throw AutomationSocketError.invalidPayload("text is required")
+        }
+        return (coordinator, record.id, text)
+    }
+
+    func finishTaskSteerSend(_ coordinator: TaskCoordinator, taskID: UUID, text: String) async throws -> AppControlActionOutcome {
+        do {
+            let (session, delivery) = try await coordinator.sendSteering(taskID: taskID, text: text)
+            var result: [String: AutomationJSONValue] = [
+                "taskID": .string(taskID.uuidString),
+                "sessionID": .string(session.sessionID),
+                "panelID": .string(session.panelID.uuidString),
+                "delivery": .string(delivery.name),
+                "message": .string(delivery.message),
+                // False for a message that waits: nothing was typed yet.
+                "delivered": .bool(true),
+            ]
+            if case .queued(let position) = delivery {
+                result["delivered"] = .bool(false)
+                result["queuePosition"] = .int(position)
+            }
+            return .init(didMutateState: false, result: result)
         } catch let error as TaskError {
             throw AutomationSocketError.invalidPayload(error.message)
         }

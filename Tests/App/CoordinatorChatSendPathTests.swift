@@ -55,6 +55,46 @@ struct CoordinatorChatSendPathTests {
             == .userMessage(text: "Summarize the open tasks", origin: .local, deliveryMode: nil))
     }
 
+    // MARK: - Toasty's introduction
+
+    @MainActor
+    @Test func toastyIntroducesItselfInANewConversationUntilItsFirstMessage() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let session = try #require(fixture.controller.session)
+
+        // An agent that Toastty did not start in this run, as one that a
+        // relaunch resumed: its conversation may have history, so no
+        // introduction, before and after the chat read it.
+        #expect(fixture.controller.hasNewConversation == false)
+        #expect(fixture.chat.showsIntroduction == false)
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt and the conversation's rows") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+                && fixture.chat.presentation.rows.isEmpty == false
+        }
+        #expect(fixture.chat.showsIntroduction == false)
+
+        // The agent that Toastty started: a new conversation, whose rows are
+        // only the markers of its binding to the terminal.
+        fixture.controller.noteStartedSession(session.sessionID)
+        #expect(fixture.chat.showsIntroduction)
+
+        // The first message ends the introduction, also while it waits for
+        // its echo.
+        fixture.chat.draft = "hi"
+        fixture.chat.send()
+        #expect(fixture.chat.presentation.sendItems.isEmpty == false)
+        #expect(fixture.chat.showsIntroduction == false)
+        try fixture.startTurn(1, userText: "hi")
+        try await fixture.waitUntil("the message in the conversation") {
+            fixture.chat.presentation.sendItems.isEmpty
+                && fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "hi", origin: .local, deliveryMode: nil)
+        }
+        #expect(fixture.chat.showsIntroduction == false)
+    }
+
     // MARK: - Whose message a row is
 
     @MainActor

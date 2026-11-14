@@ -566,6 +566,40 @@ struct TaskAppControlTests {
                 id: "task.send", args: ["taskID": .string(other.id.uuidString), "text": .string("hi")], context: context(scoped)
             )
         }
+        // The checked send has the same limit.
+        await expectInvalidPayload("No task has ID \(other.id.uuidString).") {
+            _ = try await executor.runActionAsync(
+                id: "task.send",
+                args: ["taskID": .string(other.id.uuidString), "text": .string("hi"), "steer": .bool(true)],
+                context: context(scoped)
+            )
+        }
+    }
+
+    @Test func aSteerSendTypesNothingWhenToasttyCannotTellWhatTheAgentDoes() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        // These sessions have no conversation that Toastty follows.
+        let typed = useLiveSessions(fixture)
+        let task = try await fixture.coordinator.create(TaskCreateRequest(text: "mine", workspaceID: fixture.workspaceID, agent: "codex"))
+        await fixture.waitForSetup(task.id)
+        let title = try #require(fixture.record(task.id)).title
+        let typedBefore = typed.entries.count
+        let args: [String: AutomationJSONValue] = [
+            "taskID": .string(task.id.uuidString), "text": .string("Use the new name"), "steer": .bool(true),
+        ]
+
+        await expectInvalidPayload(
+            "Toastty cannot tell what task \(title)'s agent does now, so it typed nothing. Send the message again when the agent is idle."
+        ) {
+            _ = try await executor.runActionAsync(id: "task.send", args: args, context: context())
+        }
+        // The call that cannot wait refuses a steer send. It does not fall
+        // back to typing without the check.
+        await expectInvalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action") {
+            _ = try executor.runAction(id: "task.send", args: args, context: context())
+        }
+        #expect(typed.entries.count == typedBefore)
     }
 }
 
