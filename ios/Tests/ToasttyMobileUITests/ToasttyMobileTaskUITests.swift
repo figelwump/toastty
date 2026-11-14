@@ -278,14 +278,25 @@ final class ToasttyMobileTaskUITests: XCTestCase {
             ? app.collectionViews[identifier]
             : app.collectionViews.firstMatch
         for _ in 0..<attempts {
-            if element.exists, element.isHittable { return true }
+            if isReachable(element, in: app) { return true }
             list.swipeUp(velocity: .slow)
         }
         for _ in 0..<attempts {
-            if element.exists, element.isHittable { return true }
+            if isReachable(element, in: app) { return true }
             list.swipeDown(velocity: .slow)
         }
-        return element.exists && element.isHittable
+        return isReachable(element, in: app)
+    }
+
+    /// Visible and clear of Home's pinned header and the tab bar, which
+    /// cover list rows that XCTest still reports as hittable.
+    private func isReachable(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        let segment = app.buttons["toastty-mobile-home-segment-all"]
+        if segment.exists, segment.isHittable, element.frame.minY < segment.frame.maxY + 8 { return false }
+        let tabBar = app.tabBars.firstMatch
+        if tabBar.exists, element.frame.maxY > tabBar.frame.minY { return false }
+        return true
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
