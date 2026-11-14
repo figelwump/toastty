@@ -148,3 +148,25 @@ test("destination validation ignores an ineligible-only UDID", () => {
   assert.equal(destinationIsAvailable(output, "INELIGIBLE-UDID"), false);
   assert.equal(destinationIsAvailable(output, "READY"), false);
 });
+
+test("destination validation reads the Xcode 27 compatible and incompatible headings", () => {
+  // Shape of real `xcodebuild -showdestinations` output from Xcode 27.0.
+  const output = [
+    "",
+    "\tDestinations compatible with the \"ToasttyMobileApp\" scheme:",
+    "\t\t{ platform:macOS, arch:arm64, variant:Designed for [iPad,iPhone], id:MAC-UDID, name:My Mac }",
+    "\t\t{ platform:iOS, arch:arm64, id:READY-UDID, name:Ready’s iPhone }",
+    "\t\t{ platform:iOS, arch:arm64, id:BUSY-UDID, name:Busy Phone, error:Device is busy }",
+    "\t\t{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }",
+    "",
+    "\tDestinations incompatible with the \"ToasttyMobileApp\" scheme:",
+    "\t\t{ platform:watchOS, arch:arm64e, id:WATCH-UDID, name:Watch, error:Watch’s watchOS platform doesn’t match Toastty.app’s supported platforms. }",
+    "\t\t{ platform:iOS, arch:arm64, id:INCOMPATIBLE-UDID, name:Old Phone, error:Old Phone’s iOS version is too old. }",
+    "",
+  ].join("\n");
+  assert.equal(destinationIsAvailable(output, "READY-UDID"), true);
+  assert.equal(destinationIsAvailable(output, "BUSY-UDID"), false);
+  assert.equal(destinationIsAvailable(output, "WATCH-UDID"), false);
+  assert.equal(destinationIsAvailable(output, "INCOMPATIBLE-UDID"), false);
+  assert.equal(destinationIsAvailable(output, "READY"), false);
+});

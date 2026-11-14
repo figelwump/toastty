@@ -788,6 +788,8 @@ struct ToasttyApp: App {
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
             initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             isWorkspaceMergeEnabled: initialToasttySettings.isWorkspaceMergeEnabled,
+            initialLocalDocumentMarkdownViewMode: initialToasttySettings.localDocumentMarkdownViewMode,
+            initialLocalDocumentAppearance: initialToasttySettings.localDocumentAppearance,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()
@@ -909,7 +911,8 @@ struct ToasttyApp: App {
                 socketPath: socketPath,
                 cliExecutablePath: cliExecutablePath
             ),
-            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
+            taskSpaceCleanupHold: WorkspaceMergeCoordinator.taskSpaceCleanupHold
         )
         let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
@@ -1157,9 +1160,7 @@ struct ToasttyApp: App {
         taskBoard.newTask = { [weak quickEntryController] in
             quickEntryController?.present(prefill: .empty)
         }
-        taskBoard.newTaskShortcutLabel = { [weak quickEntryController] in
-            quickEntryController?.shortcut?.symbolLabel
-        }
+        taskBoard.showShortcut(of: quickEntryController)
         terminalRuntimeRegistry.presentQuickEntryFromSelection = { [weak quickEntryController] text, panelID in
             quickEntryController?.presentFromSelection(text, panelID: panelID)
         }

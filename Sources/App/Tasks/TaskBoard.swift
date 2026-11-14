@@ -33,6 +33,9 @@ struct TaskBoardItem: Identifiable, Equatable {
     var parentTaskID: UUID?
     /// An accepted merge that is still under way.
     var merge: TaskMergeActivity?
+    /// When the merged task's open task space gets its cleanup, while
+    /// Toastty holds it so the user can still look at the task.
+    var cleanupHeldUntil: Date? = nil
     /// The latest change Toastty knows of, for ordering within a group.
     var activityAt: Date
 
@@ -306,8 +309,11 @@ enum TaskBoard {
             facts.doneAt = taskSpace.doneAt
         }
         var cleanupProblem: String?
-        if case .failed(let reason)? = request?.phase {
-            cleanupProblem = reason
+        var cleanupHeldUntil: Date?
+        switch request?.phase {
+        case .failed(let reason)?: cleanupProblem = reason
+        case .holdingCleanup(let until)?: cleanupHeldUntil = until
+        default: break
         }
         let merge = mergeActivity(
             record: record,
@@ -351,6 +357,7 @@ enum TaskBoard {
             branch: record.worktree.flatMap { $0.isDetached ? nil : $0.branch },
             parentTaskID: record.parentTaskID,
             merge: merge,
+            cleanupHeldUntil: cleanupHeldUntil,
             activityAt: dates.max() ?? record.createdAt
         )
     }
@@ -377,7 +384,7 @@ enum TaskBoard {
         case .merging?, .closing?: return .merging
         case .awaitingChecks?: return .waitingForChecks
         case .awaitingMerge?, .cleaningUp?: return .cleaningUp
-        case .failed?: return nil
+        case .holdingCleanup?, .failed?: return nil
         case nil: break
         }
         guard let requestedAt = record.mergeRequestedAt,
@@ -476,6 +483,15 @@ enum TaskBoard {
     }
 }
 
+/// The quick entry shortcut as the task views show it.
+struct NewTaskShortcutHint: Equatable {
+    /// Such as "⌥⇧T".
+    let label: String
+    /// True when macOS delivers the shortcut while another app is active.
+    /// It is false when another app holds the keys.
+    let isGlobal: Bool
+}
+
 /// Keeps the inputs of the board current and tells views when they change:
 /// task records, pull request answers, and tasks.toml. It also asks GitHub
 /// about pending task pull requests every 15 seconds and settled ones every
@@ -509,8 +525,22 @@ final class TaskBoardStore: ObservableObject {
     /// Opens the quick entry panel, for the sidebar's ＋ and the Tasks
     /// view's New Task. `nil` hides them.
     var newTask: (@MainActor () -> Void)?
-    /// The quick entry shortcut, such as "⌥⇧T", shown on New Task.
-    var newTaskShortcutLabel: @MainActor () -> String? = { nil }
+    /// The quick entry shortcut, shown on New Task, the sidebar's ＋ and the
+    /// empty Tasks view; nil when it is off. Published so a configuration
+    /// reload redraws them.
+    @Published private(set) var newTaskShortcut: NewTaskShortcutHint?
+
+    /// Shows the quick entry shortcut, and follows it when a configuration
+    /// reload changes it or another app takes its keys.
+    func showShortcut(of quickEntry: QuickEntryController) {
+        quickEntry.$shortcut
+            .combineLatest(quickEntry.$isShortcutGlobal)
+            .map { shortcut, isGlobal in
+                shortcut.map { NewTaskShortcutHint(label: $0.symbolLabel, isGlobal: isGlobal) }
+            }
+            .removeDuplicates()
+            .assign(to: &$newTaskShortcut)
+    }
 
     private weak var store: AppStore?
     private weak var sessionRuntimeStore: SessionRuntimeStore?
@@ -590,11 +620,12 @@ final class TaskBoardStore: ObservableObject {
         pullRequests.answerObserver = { [weak self] link, state in
             self?.recordAnswer(link: link, state: state)
         }
-        storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
+        storeObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
             self?.syncRecords(state: nextState)
             if Self.stageInputsChanged(from: previousState, to: nextState) {
                 self?.scheduleStateTimesPass()
             }
+            self?.handleClosedTaskSpaces(after: action, from: previousState, to: nextState)
         }
         reloadConfig()
         syncRecords(state: store.state)
@@ -939,6 +970,27 @@ final class TaskBoardStore: ObservableObject {
             }
             if next != record {
                 _ = records.update(id: record.id) { $0 = next }
+            }
+        }
+    }
+
+    /// Tells the coordinator about task spaces that closed, after the other
+    /// observers of the same change ran: the merge coordinator drops the
+    /// closed workspace's request first. Only closes count: moving the last
+    /// pane out also removes the workspace, but its terminal lives on.
+    private func handleClosedTaskSpaces(after action: AppAction, from previousState: AppState, to nextState: AppState) {
+        switch action {
+        case .closeWorkspace, .closeWorkspaceTab, .closePanel, .closeWindow: break
+        default: return
+        }
+        guard previousState.workspacesByID.count > nextState.workspacesByID.count else { return }
+        let closed = previousState.workspacesByID.values
+            .filter { $0.taskID != nil && nextState.workspacesByID[$0.id] == nil }
+            .map(\.id)
+        guard closed.isEmpty == false else { return }
+        Task { @MainActor [weak self] in
+            for workspaceID in closed {
+                self?.coordinator?.mergedTaskSpaceClosed(workspaceID: workspaceID)
             }
         }
     }

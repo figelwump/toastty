@@ -169,6 +169,7 @@ public struct GatewayCompatibilityDecoder: Sendable {
                 state: pullRequest.lossyString("state").flatMap(RemoteTaskPullRequestState.init(rawValue:))
             )
         }
+        let parentTaskID = (try? object.optionalUUID("parentTaskID")) ?? nil
         return RemoteTaskSummary(
             id: id,
             hasRecord: ((try? object.optionalBool("hasRecord")) ?? nil) ?? true,
@@ -187,8 +188,19 @@ public struct GatewayCompatibilityDecoder: Sendable {
             mergeControl: object.lossyObject("mergeControl").flatMap(decodeTaskMergeControl),
             actions: ((try? object.requiredArray("actions")) ?? []).compactMap(decodeTaskActionItem),
             // Absent without a request, and from older Macs.
-            releaseAfterMergeRequestedAt: try? object.requiredDate("releaseAfterMergeRequestedAt")
+            releaseAfterMergeRequestedAt: try? object.requiredDate("releaseAfterMergeRequestedAt"),
+            // Older Macs send no parent and no child progress. A malformed
+            // value reads as none and keeps the task.
+            parentTaskID: parentTaskID,
+            parentTaskTitle: parentTaskID == nil ? nil : object.lossyString("parentTaskTitle"),
+            childProgress: object.lossyObject("childProgress").flatMap(decodeTaskChildProgress)
         )
+    }
+
+    private func decodeTaskChildProgress(_ object: JSONObject) -> RemoteTaskChildProgress? {
+        guard let merged = try? object.requiredInt("merged"), let total = try? object.requiredInt("total"),
+              total > 0, (0...total).contains(merged) else { return nil }
+        return RemoteTaskChildProgress(merged: merged, total: total)
     }
 
     /// A control of a kind this client does not know reads as none, so the

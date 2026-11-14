@@ -585,13 +585,15 @@ private extension RemoteProtocolGoldenTests {
                     actions: [
                         RemoteTaskActionItem(action: .markDone, title: "Mark Done"),
                         RemoteTaskActionItem(action: .archive, title: "Archive…"),
-                    ]
+                    ],
+                    childProgress: RemoteTaskChildProgress(merged: 1, total: 2)
                 ),
                 RemoteTaskSummary(
                     id: child, title: "Split the parser", group: .running, mark: .starting,
                     statusLine: "Moving to worktree · fetching base", rowSummary: "Moving to worktree · fetching base",
                     stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
-                    projectWorkspaceID: projectID, projectTitle: "toastty", activityAt: timestamp
+                    projectWorkspaceID: projectID, projectTitle: "toastty", activityAt: timestamp,
+                    parentTaskID: question, parentTaskTitle: "iOS task support"
                 ),
                 RemoteTaskSummary(
                     id: review, title: "Jump-to-next-active fix", group: .needsYou, mark: .review,
@@ -636,7 +638,9 @@ private extension RemoteProtocolGoldenTests {
                     pullRequest: RemoteTaskPullRequest(
                         number: 259, url: URL(string: "https://github.com/example/toastty/pull/259")!, state: .merged
                     ),
-                    activityAt: timestamp.addingTimeInterval(-240)
+                    activityAt: timestamp.addingTimeInterval(-240),
+                    // A Done parent is not on the board; its title names it.
+                    parentTaskID: numberedUUID(399), parentTaskTitle: "Mobile release prep"
                 ),
             ],
             needsYou: [

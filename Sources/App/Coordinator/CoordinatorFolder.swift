@@ -9,6 +9,10 @@ import Foundation
 ///   at every resume, so the coordinator has the instructions of the running
 ///   Toastty with no step of its own, also in a conversation that began under
 ///   an older Toastty. Toastty writes both files again whenever they differ.
+/// - `references/` is Toastty's too. It holds the skill's reference files,
+///   such as the rules for a merge, which the instructions tell the agent to
+///   read when it needs them. By default, Codex reads 32 KiB of its
+///   instruction files, so the instructions cannot hold everything.
 /// - `policy.md` and `ledger.md` are the user's and the coordinator's.
 ///   Toastty creates each one when it is missing and never writes it again.
 /// - The folder is a git repository, so the coordinator can commit each
@@ -18,6 +22,7 @@ struct CoordinatorFolder: Sendable {
     static let claudeInstructionsFileName = "CLAUDE.md"
     static let policyFileName = "policy.md"
     static let ledgerFileName = "ledger.md"
+    static let referencesDirectoryName = "references"
 
     static let instructionsHeader = """
     <!-- Toastty writes this file and replaces it when Toastty changes. Do not edit it. Your own rules go in policy.md. -->
@@ -44,6 +49,8 @@ struct CoordinatorFolder: Sendable {
 
     ## Reviewing
 
+    ## Merging
+
     ## Unblocking
 
     ## Releases
@@ -60,7 +67,7 @@ struct CoordinatorFolder: Sendable {
     /// Kept out of the repository: Toastty's own files, the ledger, which
     /// changes on most wakes, and an agent's local settings. A commit then
     /// holds a change of the policy and nothing else.
-    static let repositoryExcludes = ["AGENTS.md", "CLAUDE.md", "ledger.md", ".claude/"]
+    static let repositoryExcludes = ["AGENTS.md", "CLAUDE.md", "ledger.md", ".claude/", "references/"]
 
     /// The environment of the coordinator's agent. Without its own `.git`,
     /// the folder would use the first repository git finds in a folder
@@ -79,6 +86,8 @@ struct CoordinatorFolder: Sendable {
     /// The coordinator's instructions, or `nil` when Toastty cannot read
     /// them.
     var instructions: @Sendable () -> String? = { CoordinatorFolder.shippedInstructions() }
+    /// The skill's reference files, by file name.
+    var references: @Sendable () -> [String: String] = { CoordinatorFolder.shippedReferences() }
     var runner: any TaskCommandRunning = TaskLiveCommandRunner()
     /// The environment for git: the login shell's PATH, without Toastty's
     /// session variables.
@@ -94,6 +103,21 @@ struct CoordinatorFolder: Sendable {
             return nil
         }
         return instructionsBody(ofSkill: text)
+    }
+
+    /// The Markdown files in the shipped skill's `references` folder, by
+    /// file name.
+    static func shippedReferences(pluginURL: URL? = ToasttyAgentPluginBundle.bundledPluginURL()) -> [String: String] {
+        guard let directoryURL = pluginURL?.appending(
+            path: "skills/toastty-coordinator/\(referencesDirectoryName)", directoryHint: .isDirectory
+        ), let names = try? FileManager.default.contentsOfDirectory(atPath: directoryURL.path) else {
+            return [:]
+        }
+        var references: [String: String] = [:]
+        for name in names where name.hasSuffix(".md") {
+            references[name] = try? String(contentsOf: directoryURL.appending(path: name, directoryHint: .notDirectory), encoding: .utf8)
+        }
+        return references
     }
 
     /// A skill file starts with front matter between two `---` lines, which
@@ -126,6 +150,16 @@ struct CoordinatorFolder: Sendable {
         do {
             try write(Self.instructionsHeader + "\n" + instructions, to: Self.instructionsFileName)
             try write(Self.claudeInstructions, to: Self.claudeInstructionsFileName)
+            let references = references()
+            if references.isEmpty == false {
+                try fileManager.createDirectory(
+                    at: directoryURL.appending(path: Self.referencesDirectoryName, directoryHint: .isDirectory),
+                    withIntermediateDirectories: true
+                )
+            }
+            for (name, text) in references {
+                try write(Self.instructionsHeader + "\n" + text, to: "\(Self.referencesDirectoryName)/\(name)")
+            }
             try createIfMissing(Self.policyTemplate, at: Self.policyFileName)
             try createIfMissing(Self.ledgerTemplate, at: Self.ledgerFileName)
         } catch {
