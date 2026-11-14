@@ -3139,9 +3139,11 @@ final class SidebarViewTests: XCTestCase {
         let target = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
         XCTAssertNotEqual(startWorkspaceID, ids.readyUnreadID)
 
-        // One click selects the row and stays in the Tasks view, also after
-        // the double-click interval has passed.
+        // One click selects the row at once, before the double-click
+        // interval ends, and stays in the Tasks view after it.
         try clickSemanticText(prefix: "\(target.title), ", in: tasks.hostingView)
+        XCTAssertLessThan(0.1, NSEvent.doubleClickInterval)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], target.id)
         pumpMainRunLoop(duration: 0.6)
         XCTAssertEqual(board.selectionByWindowID[harness.windowID], target.id)
         XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
