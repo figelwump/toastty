@@ -339,9 +339,10 @@ the parent ID does not grant automation access to that workspace.
 `workspace.set-done` marks a task space's task done, and `workspace.clear-done`
 clears the mark. With no `workspaceID` or `windowID`, a managed agent's call
 targets its own workspace rather than the selected one; a caller whose session
-Toastty no longer runs must name the workspace. Only task spaces hold the mark:
-`workspace.set-done` rejects a top-level workspace, and moving a task space to top
-level drops it. The sidebar shows a done task space with a check in place of its
+Toastty no longer runs must name the workspace. Only subspaces and a task's
+task space hold the mark: `workspace.set-done` rejects any other top-level
+workspace, and moving a subspace that is not a task's task space to top level
+drops it. The sidebar shows a done task space with a check in place of its
 idle box and keeps its place; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn

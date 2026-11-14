@@ -543,7 +543,117 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
             #expect(scenario.record?.mergeRequestedAt == nil)
             #expect(scenario.record?.mergeCancelledAt != nil)
+            // The user stopped it, so it is not reported as a merge that stopped.
+            #expect(scenario.record?.mergeFailure == nil)
+            #expect(scenario.notifications.isEmpty, "\(scenario.notifications)")
             #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
+        }
+    }
+
+    /// Closing the project's workspace leaves its task spaces open as
+    /// top-level workspaces. An accepted merge there still waits for the
+    /// checks after the agent's turn ends, then merges and cleans up.
+    @Test(arguments: [false, true])
+    func aMergeWaitingInATopLevelTaskSpaceMergesAfterTheAgentsTurn(closeProjectWhileWaiting: Bool) async throws {
+        try await withScenario(checksPending: true) { scenario in
+            if closeProjectWhileWaiting == false {
+                scenario.closeProjectWorkspace()
+            }
+            // The merge skill calls task merge in the middle of its turn.
+            scenario.reportAgent(.working)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the merge waits for checks") { scenario.isWaitingForChecks }
+            if closeProjectWhileWaiting {
+                scenario.closeProjectWorkspace()
+            }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt != nil)
+
+            // The turn ends. The next state change used to drop the waiting
+            // merge; one is made here, since whether the turn's end marks
+            // the panel unread depends on what the window shows.
+            scenario.reportAgent(.ready)
+            #expect(scenario.store.send(.updateTerminalPanelMetadata(
+                panelID: scenario.taskPanelID, title: "after the turn", cwd: nil
+            )))
+            try await Task.sleep(for: .milliseconds(700))
+            #expect(scenario.isWaitingForChecks)
+            #expect(scenario.boardItem?.merge == .waitingForChecks)
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+
+            scenario.passChecks()
+            await scenario.waitUntil("the merge and cleanup finish") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker))
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(scenario.boardItem?.stage == .done)
+        }
+    }
+
+    /// A merge that does not wait still cleans up a top-level task space
+    /// after the agent's turn ends, also after the cleanup's hold.
+    @Test(arguments: [0, 1.0])
+    func aMergeInATopLevelTaskSpaceCleansUpAfterTheAgentsTurn(cleanupHold: TimeInterval) async throws {
+        try await withScenario(cleanupHold: cleanupHold) { scenario in
+            scenario.closeProjectWorkspace()
+            // The window shows another workspace, so a held cleanup can run.
+            #expect(scenario.store.send(.createWorkspace(windowID: scenario.windowID, title: "other", activate: true)))
+            scenario.reportAgent(.working)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the merge is recorded") { scenario.record?.mergedAt != nil }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt != nil)
+
+            scenario.reportAgent(.ready)
+            if cleanupHold > 0 {
+                await scenario.waitUntil("the cleanup is held") { scenario.isHeld }
+                // A state change during the hold keeps it.
+                #expect(scenario.store.send(.updateTerminalPanelMetadata(
+                    panelID: scenario.taskPanelID, title: "after the merge", cwd: nil
+                )))
+                #expect(scenario.isHeld)
+            }
+            await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(scenario.record?.cleanup?.problem == nil)
+        }
+    }
+
+    /// New work in the task space after the acceptance cancels a waiting
+    /// merge, in a subspace and in a top-level task space. The task says
+    /// why and offers Merge again, instead of showing a merge under way.
+    @Test(arguments: [false, true])
+    func newWorkCancelsAWaitingMergeAndTheTaskSaysWhy(topLevel: Bool) async throws {
+        try await withScenario(checksPending: true) { scenario in
+            if topLevel {
+                scenario.closeProjectWorkspace()
+            }
+            scenario.reportAgent(.working)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the merge waits for checks") { scenario.isWaitingForChecks }
+            scenario.reportAgent(.ready)
+
+            // The user asks for more work.
+            scenario.reportAgent(.working)
+            await scenario.waitUntil("the waiting merge stops") { scenario.record?.mergeFailure != nil }
+            let reason = try #require(scenario.record?.mergeFailure?.reason)
+            #expect(reason.contains("New work"), "\(reason)")
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+            #expect(scenario.record?.mergeRequestedAt == nil)
+            #expect(scenario.notifications == ["PR #7 was not merged: \(reason)"])
+            scenario.reportAgent(.ready)
+            let item = try #require(scenario.boardItem)
+            #expect(item.merge == nil)
+            #expect(TaskBoardPresentation.statusLine(item) == "⚠ merge stopped")
+            #expect(TaskBoardPresentation.detailActions(item).contains(.merge))
+
+            // Passing checks no longer merge the version accepted earlier.
+            scenario.passChecks()
+            try await Task.sleep(for: .milliseconds(700))
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree))
         }
     }
 
@@ -923,6 +1033,23 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
 
         func git(_ arguments: [String], in directory: String) throws -> String { try git(arguments, directory) }
 
+        /// Closes the project's workspace, as Cmd+W on its last panel does.
+        /// Its subspaces stay open as top-level workspaces.
+        func closeProjectWorkspace() {
+            #expect(store.send(.closeWorkspace(workspaceID: parentWorkspaceID)))
+            #expect(store.state.workspacesByID[taskSpaceID]?.parentWorkspaceID == nil)
+        }
+
+        var isWaitingForChecks: Bool {
+            if case .awaitingChecks? = merges.request(workspaceID: taskSpaceID)?.phase { return true }
+            return false
+        }
+
+        /// GitHub's checks finish and pass.
+        func passChecks() {
+            FileManager.default.createFile(atPath: mergedMarker + "-checks-passed", contents: nil)
+        }
+
         /// The task space's agent, as the merge owner sees it.
         func reportAgent(_ kind: SessionStatusKind) {
             if sessionRuntimeStore.sessionRegistry.sessionsByID["agent"] == nil {
@@ -997,6 +1124,9 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         retargeted["baseRefName"] = "main"
         retargeted["mergeStateStatus"] = "CLEAN"
         retargeted["statusCheckRollup"] = [["name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"]]
+        var checksPassed = pullRequest
+        checksPassed["mergeStateStatus"] = "CLEAN"
+        checksPassed["statusCheckRollup"] = [["name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"]]
         func json(_ object: [String: Any]) throws -> String {
             String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
         }
@@ -1006,7 +1136,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         #!/bin/sh
         case "$1 $2" in
           "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"},"mergeCommitAllowed":true}' ;;
-          "pr view") if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; elif [ -e '\(mergedMarker)-retargeted' ]; then echo '\(try json(retargeted))'; else echo '\(try json(pullRequest))'; fi ;;
+          "pr view") if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; elif [ -e '\(mergedMarker)-retargeted' ]; then echo '\(try json(retargeted))'; elif [ -e '\(mergedMarker)-checks-passed' ]; then echo '\(try json(checksPassed))'; else echo '\(try json(pullRequest))'; fi ;;
           "pr list") echo '[]' ;;
           "api --method") [ "$3 $4 $6 $8" = 'PUT repos/test/repo/pulls/7/merge sha=\(head) merge_method=merge' ] && touch '\(mergedMarker)' ;;
           *) echo "unexpected gh call: $*" >&2; exit 1 ;;

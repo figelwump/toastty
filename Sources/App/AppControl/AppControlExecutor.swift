@@ -256,7 +256,7 @@ final class AppControlExecutor {
         case .workspaceSetDone, .workspaceClearDone:
             let workspaceID = try resolveWorkspaceIDDefaultingToCallerSession(args: args)
             if action == .workspaceSetDone,
-               try requiredStore().state.workspacesByID[workspaceID]?.parentWorkspaceID == nil {
+               try requiredStore().state.workspacesByID[workspaceID]?.canHoldDoneMark == false {
                 throw AutomationSocketError.invalidPayload(
                     "workspace.set-done applies to task spaces; this workspace is top-level"
                 )

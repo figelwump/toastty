@@ -295,12 +295,14 @@ Notable action-specific behavior:
     self-parenting and cycles are rejected.
   - The caller needs access to the target workspace, requested parent, and root.
     Reparenting retains the original spawning session when present; otherwise
-    it records the managed caller. Detaching clears the spawner and done mark.
+    it records the managed caller. Detaching clears the spawner, and the done
+    mark of a workspace that is not a task's task space.
     Any task spaces of the target workspace move under the same root.
 - `workspace.set-done`, `workspace.clear-done`
   - With no workspace or window selector, a managed caller targets its own
     workspace. A caller whose session has ended must name the workspace.
-  - `workspace.set-done` rejects top-level workspaces. Repeating it preserves
+  - `workspace.set-done` rejects a top-level workspace that is not a task's
+    task space. Repeating it preserves
     the original mark time; `workspace.clear-done` removes the mark.
   - The mark clears when a managed agent session in that workspace starts new
     work. The turn that set it, restored sessions, and process watches do not

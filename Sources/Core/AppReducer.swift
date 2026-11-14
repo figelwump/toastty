@@ -299,8 +299,8 @@ public struct AppReducer {
         case .setWorkspaceDone(let workspaceID, let doneAt):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             // Only a subspace row shows the mark, so a top-level workspace
-            // cannot hold one.
-            guard doneAt == nil || workspace.parentWorkspaceID != nil else { return false }
+            // cannot hold one, unless it is a task space.
+            guard doneAt == nil || workspace.canHoldDoneMark else { return false }
             // Marking an already-done workspace keeps its original time.
             guard (workspace.doneAt == nil) != (doneAt == nil) else { return false }
             workspace.doneAt = doneAt
@@ -325,6 +325,9 @@ public struct AppReducer {
                   // The coordinator's workspace is never a task space.
                   taskID == nil || workspace.isCoordinator == false else { return false }
             workspace.taskID = taskID
+            if workspace.canHoldDoneMark == false {
+                workspace.doneAt = nil
+            }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -355,7 +358,7 @@ public struct AppReducer {
             let nestedWorkspaceIDs = resolvedParentID == nil ? [] : state.subspaceWorkspaceIDs(of: workspaceID)
             workspace.parentWorkspaceID = resolvedParentID
             workspace.spawningSessionID = resolvedSpawningSessionID
-            if resolvedParentID == nil {
+            if workspace.canHoldDoneMark == false {
                 workspace.doneAt = nil
             }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
@@ -2273,10 +2276,13 @@ public struct AppReducer {
 
         // Closing a parent keeps its subspaces open as top-level workspaces
         // rather than closing work the user may still be running there.
+        // A task space keeps its done mark: a merge waiting there relies on it.
         for subspaceID in state.subspaceWorkspaceIDs(of: workspaceID) {
             state.workspacesByID[subspaceID]?.parentWorkspaceID = nil
             state.workspacesByID[subspaceID]?.spawningSessionID = nil
-            state.workspacesByID[subspaceID]?.doneAt = nil
+            if state.workspacesByID[subspaceID]?.canHoldDoneMark == false {
+                state.workspacesByID[subspaceID]?.doneAt = nil
+            }
         }
         state.workspacesByID.removeValue(forKey: workspaceID)
         window.workspaceIDs.remove(at: workspaceIndex)

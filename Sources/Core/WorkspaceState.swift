@@ -255,12 +255,18 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     /// and may point at a session that has since stopped.
     public var spawningSessionID: String?
     /// When the user or an agent marked this subspace's task done, usually
-    /// once its pull request merged; `nil` while it is open. Only subspaces
-    /// hold one: the sidebar shows it as a check on the subspace row, the
-    /// reducer drops it when the workspace moves to top level, and the
-    /// session runtime clears it when an agent in the workspace starts new
-    /// work.
+    /// once its pull request merged; `nil` while it is open. Only a
+    /// workspace that `canHoldDoneMark` holds one: the sidebar shows it as a
+    /// check on the subspace row, the reducer drops it when the workspace
+    /// can no longer hold it, and the session runtime clears it when an
+    /// agent in the workspace starts new work.
     public var doneAt: Date?
+    /// A subspace, or a task space. A task space stays one when it is top
+    /// level, as after its project's workspace closed: the mark records the
+    /// acceptance that a waiting merge and its cleanup rely on.
+    public var canHoldDoneMark: Bool {
+        parentWorkspaceID != nil || taskID != nil
+    }
     /// The project directory of a top-level workspace, usually its first
     /// terminal's git root. Tasks use it as their project root; a subspace
     /// uses its parent's.

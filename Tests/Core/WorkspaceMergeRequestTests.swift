@@ -20,18 +20,19 @@ struct WorkspaceMergeRequestTests {
             .holdingCleanup(until: Date(timeIntervalSince1970: 1_800_000_000)),
             .failed(reason: "skipped"),
         ] {
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: link) == with(phase))
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: false, pullRequest: link) == nil)
-            #expect(with(phase).reconciled(workspaceExists: false, isDone: true, pullRequest: link) == nil)
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: other) == nil)
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: nil) == nil)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: true, pullRequest: link) == nil)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: false, pullRequest: link) == .doneMarkCleared)
+            #expect(with(phase).dropReason(workspaceExists: false, isDone: true, pullRequest: link) == .workspaceClosed)
+            #expect(with(phase).dropReason(workspaceExists: false, isDone: false, pullRequest: nil) == .workspaceClosed)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: true, pullRequest: other) == .pullRequestChanged)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: false, pullRequest: nil) == .pullRequestChanged)
         }
     }
 
     @Test
     func aRunningScriptKeepsItsRequestUntilItReportsBack() throws {
         for running in [with(.merging(thenCleanUp: true)), with(.cleaningUp), with(.closing)] {
-            #expect(running.reconciled(workspaceExists: false, isDone: false, pullRequest: nil) == running)
+            #expect(running.dropReason(workspaceExists: false, isDone: false, pullRequest: nil) == nil)
         }
         // A relaunch starts an interrupted cleanup over, but not a merge or a close.
         #expect(with(.cleaningUp).persisted == with(.awaitingMerge))
