@@ -1742,17 +1742,16 @@ def interrupted(run):
     return turns
 
 
-def merge_as_the_user(run, number, pr_head=None, merge_error='Server Error'):
-    """A reviewed task whose merge the user accepted in the task, and what Toastty made of that merge.
+def branch_task(run, number, pr_head=None, merge_error='Server Error', project='app'):
+    """A task whose pull request is a real pushed branch in the project's checkout.
 
-    The pull request's branch is a real pushed branch in the project's
-    checkout, so Toastty's own merge passes its checks of the checkout and
-    reaches GitHub's merge call. `pr_head` gives GitHub another head than the
-    checkout has, which Toastty refuses. Returns the task and its record
-    after the merge stopped.
+    Toastty's own merge then passes its checks of the checkout and reaches
+    GitHub's merge call, which the fake `gh` answers with `merge_error`.
+    `pr_head` gives GitHub another head than the checkout has, which Toastty
+    refuses. Returns the task and the checkout's commit.
     """
-    task = run.create_task('Setup guide: fix the install command', status='working')
-    directory = run.projects[task.project]
+    task = run.create_task('Setup guide: fix the install command', project=project, status='working')
+    directory = run.projects[project]
 
     def git(*arguments):
         return subprocess.run(['git', '-C', str(directory), *arguments], check=True, capture_output=True, text=True).stdout.strip()
@@ -1767,19 +1766,33 @@ def merge_as_the_user(run, number, pr_head=None, merge_error='Server Error'):
     run.set_pr(task, number, head=pr_head or head, branch=f'task-{number}', body=DOCS_PROOF.format(head=head),
                diff=DOCS_DIFF, additions=3, deletions=3, files=[dict(path='docs/setup.md', additions=3, deletions=3)],
                mergeError=merge_error)
+    return task, head
+
+
+def merge_in_task(run, task, head):
+    """The merge skill's command, from the task's own agent session: what
+    Merge on the task, or "merge it" in the task, ends in."""
+    merged = subprocess.run([str(run.cli_path), '--json', 'task', 'merge', task.id, '--head', head],
+                            env=dict(run.environment, TOASTTY_SESSION_ID=run.session_of(task)),
+                            capture_output=True, text=True, timeout=180)
+    require(merged.returncode == 0, f'The task merge was not accepted: {merged.stdout} {merged.stderr}')
+
+
+def merge_as_the_user(run, number, pr_head=None):
+    """A reviewed task whose merge the user accepted in the task, and that Toastty stopped.
+
+    Returns the task, the checkout's commit, and the task's record after the
+    merge stopped.
+    """
+    task, head = branch_task(run, number, pr_head=pr_head)
     publish_report(run, task, head, DOCS_REPORT)
     run.open_coordinator()
     ready(run, task)
     reviewed = run.new_turns(wake=True)
     run.check('with no Merging rule, it asks for no merge after its review', merge_requests(reviewed, task) == [],
               [c for t in reviewed for c in t['commands']])
-    # The merge skill's command, from the task's own agent session: what
-    # Merge on the task, or "merge it" in the task, ends in.
     run.wait_idle()
-    session = run.session_of(task)
-    merged = subprocess.run([str(run.cli_path), '--json', 'task', 'merge', task.id, '--head', head],
-                            env=dict(run.environment, TOASTTY_SESSION_ID=session), capture_output=True, text=True, timeout=180)
-    require(merged.returncode == 0, f'The task merge was not accepted: {merged.stdout} {merged.stderr}')
+    merge_in_task(run, task, head)
     record = run.wait_task(task, 'the merge stops', lambda t: t if t.get('mergeFailure') else None, timeout=240)
     run.notes.append(f'mergeFailure: {record["mergeFailure"]}')
     return task, head, record
@@ -1791,7 +1804,7 @@ def merge_error(run):
     task, head, record = merge_as_the_user(run, 61)
     failure = record['mergeFailure']
     run.check('Toastty ran the merge again, then recorded the error and the commit',
-              failure.get('cause') == 'error' and failure.get('head') == head
+              failure.get('cause') == 'error' and failure.get('head') == head and failure.get('base') == 'main'
               and len([c for c in run.gh_calls() if c.get('mergeError')]) == 3,
               dict(failure=failure, mergeCalls=len([c for c in run.gh_calls() if c.get('mergeError')])))
     first = run.new_turns(wake=True)

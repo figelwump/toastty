@@ -99,9 +99,8 @@ The user accepted that merge, so you ask for it again, one time, without a
 new message from the user.
 
 `"$TOASTTY_CLI_PATH" --json task get <task-id>` gives `mergeFailure` with
-`at`, `reason`, `cause`, `head` and `base`. Ask again only when every point below
-holds in a read that is less than a minute old. If one point fails, or you
-are not sure, tell the user that the merge stopped, with `reason`.
+`at`, `reason`, `cause`, `head` and `base`. Ask again only when every point
+below holds in a read that is less than a minute old.
 
 - **The cause.** `mergeFailure.cause` is `error`. With `refused`,
   `acceptanceEnded` or null, something must change or the user must accept
@@ -115,13 +114,19 @@ are not sure, tell the user that the merge stopped, with `reason`.
 - **The user's merge.** The ledger has no `merging` line for the task that
   says "by rule" or "again". `parentTaskID` is null: a parent task follows
   the merges of its own child tasks. It is not a release task.
-- **The task.** `agent` is `idle`, `merge` is null, and
-  `userTypedMinutesAgo` is null or more than 15.
-- **The time.** `mergeFailure.at` is 10 minutes ago or more, so that a
+- **The task.** `agent` is `idle`, and `merge` is null.
+- **The user's typing.** `userTypedMinutesAgo` is null or more than 15.
+- **The age.** `mergeFailure.at` is 10 minutes ago or more, so that a
   failure of GitHub can pass. The Unblocking section of `policy.md` can give
-  another time. Before that, do not tell the user about the stopped merge:
-  Toastty already did. Set your next check for that time, as for any wait
-  that is younger than its limit.
+  another time.
+
+The last two points are waits. While all other points hold and one of these
+two does not hold yet, do not tell the user about the stopped merge: Toastty
+already did. Set your next check for the time when both will hold, as for
+any wait that is younger than its limit, and read every point again then.
+
+If another point fails, or you are not sure, tell the user that the merge
+stopped, with `reason`, and ask for no merge.
 
 When you ask, the ledger line says "again after an error", with
 `mergeFailure.head` as its commit. If that merge stops too, the task is the
