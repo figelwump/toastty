@@ -163,8 +163,8 @@ struct SidebarCoordinatorRow: View {
         )
         Button(action: select) {
             HStack(spacing: 8) {
-                // Golden while the chat is on screen, in the dock or the
-                // full view, as Toasty on the toolbar is.
+                // Golden while the coordinator is on screen, in the dock or
+                // the full view, as Toasty on the toolbar is.
                 ToastyIcon(
                     style: dockShows || isSelected ? .golden : .outline,
                     size: 14,
