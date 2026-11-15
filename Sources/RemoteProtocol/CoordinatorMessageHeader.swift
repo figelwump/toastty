@@ -9,7 +9,7 @@ import Foundation
 /// first line counts. So no text can make a message look like the user's,
 /// like a digest, or like another sender's.
 ///
-/// - `[Toastty] Wake …`: a digest (`CoordinatorWakeState`).
+/// - `[Toastty] Wake …`: a digest (`CoordinatorWakeState` on the Mac).
 /// - `[Toastty] From …`: a message that `coordinator send` brought.
 /// - `[Toastty] Quick entry …`: the user's message from the quick entry
 ///   panel, with the choices the user made there.
@@ -27,6 +27,9 @@ public enum CoordinatorMessageHeader {
         case unknown
     }
 
+    /// The first words of a digest. The Mac's `CoordinatorWakeState`
+    /// writes it, and a chat folds the message it starts.
+    public static let digestPrefix = "[Toastty] Wake"
     public static let senderPrefix = "[Toastty] From "
     public static let quickEntryPrefix = "[Toastty] Quick entry"
     public static let replyPrefix = "[Toastty] Reply from the user"
@@ -39,7 +42,7 @@ public enum CoordinatorMessageHeader {
     public static func senderLine(_ sender: Sender) -> String {
         switch sender {
         case .task(let id, let title):
-            return "\(senderPrefix)task [\(CoordinatorWakeState.linkText(title))](toastty://task/\(id.uuidString)): not from the user."
+            return "\(senderPrefix)task [\(CoordinatorTaskLink.linkText(title))](toastty://task/\(id.uuidString)): not from the user."
         case .session(let id, let agent, let workspaceTitle):
             let place = workspaceTitle.map { ", workspace \(quoted($0))" } ?? ""
             return "\(senderPrefix)agent session \(word(id)) (\(word(agent))\(place)): not from the user."
@@ -121,7 +124,7 @@ public enum CoordinatorMessageHeader {
     /// attached file is a path in a code span on its own line: Claude Code
     /// drops the Return that follows a bare pasted image path.
     public static func quickEntryMessage(_ entry: QuickEntry, text: String, attachmentPaths: [String] = []) -> String {
-        let delivered = RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: attachmentPaths)
+        let delivered = RemoteAttachmentDeliveryText.text(text, paths: attachmentPaths)
         return quickEntryLine(entry) + "\n" + delivered
     }
 
@@ -150,7 +153,7 @@ public enum CoordinatorMessageHeader {
     public static func replyMessage(quote: String, time: String?, text: String, attachmentPaths: [String] = []) -> String {
         let lines = quoteLines(quote)
         let quoted = lines.map { $0.isEmpty ? ">" : "> " + $0 }.joined(separator: "\n")
-        let delivered = RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: attachmentPaths)
+        let delivered = RemoteAttachmentDeliveryText.text(text, paths: attachmentPaths)
         return replyLine(quoteLineCount: lines.count, time: time) + "\n" + quoted + "\n" + delivered
     }
 
@@ -351,7 +354,7 @@ public enum CoordinatorMessageHeader {
     /// code span on each line, to the end. `nil` for a message without such
     /// a list; text that only quotes those words stays text.
     public static func attachedFiles(in message: String) -> (text: String, paths: [String])? {
-        let marker = RemoteMessageAttachmentStore.Staged.attachmentsIntroduction
+        let marker = RemoteAttachmentDeliveryText.introduction
         guard let range = message.range(of: marker, options: .backwards) else { return nil }
         var paths: [String] = []
         for line in message[range.upperBound...].split(whereSeparator: \.isNewline) {
@@ -363,7 +366,7 @@ public enum CoordinatorMessageHeader {
     }
 
     /// The text inside a code span that is the whole line, as
-    /// `RemoteMessageAttachmentStore.Staged.codeSpan` writes it.
+    /// `RemoteAttachmentDeliveryText.codeSpan` writes it.
     private static func codeSpanContent(_ rawLine: Substring) -> String? {
         let line = rawLine.trimmingCharacters(in: .whitespaces)
         let fence = String(line.prefix { $0 == "`" })

@@ -640,7 +640,9 @@ that a phone queued for the coordinator is typed first. For any other agent,
 Toastty goes by the session's reported status.
 
 Toastty Mobile shows the coordinator in its own **Coordinator** tab, with its
-chat, and leaves its workspace out of Home's project cards and counts; see
+chat, and leaves its workspace out of Home's project cards and counts. The
+phone's chat shows digests, messages from agents, quick entry messages and
+replies as this chat does; see
 [The Coordinator tab](remote-access.md#the-coordinator-tab).
 
 **Who a message is from.** Toastty writes the first line of each message
@@ -805,7 +807,9 @@ relaunch resumes does not show it.
   turn, as Escape in the terminal does. Messages that waited are
   then **Paused**, so none starts a new turn right after the stop. **Send
   next** lets them go again. A digest from Toastty does not wait for paused
-  messages.
+  messages. **Stop** in the coordinator's chat on a paired iPhone does the
+  same: the messages that waited show here as Paused. The phone does not
+  list them, so **Send next** is on the Mac.
 - **Terminal.** The **Terminal** button in the full view's panel header
   shows the terminal in place of the chat, and **Chat** switches back. Use the terminal
   for a login, a folder-trust or a permission prompt, and to answer a

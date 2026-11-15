@@ -493,6 +493,60 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.delivered.texts.last == "Second")
     }
 
+    /// A Stop from a paired phone sets the same messages aside as the
+    /// chat's Stop: the user's message and one that `coordinator send`
+    /// brought. Neither starts a new turn when the stopped turn ends. The
+    /// user's message stays set aside across a relaunch, until "Send next".
+    @MainActor
+    @Test func aStopFromAPhoneSetsTheCoordinatorsWaitingMessagesAside() async throws {
+        let fixture = try CoordinatorChatFixture(pairsNativeDevice: true, savesQueue: true)
+        defer { fixture.tearDown() }
+        fixture.conversations.enableGateway()
+        var interrupts = 0
+        fixture.conversations.terminalRuntimeRegistry.setAutomationSendInterruptHandlerForTesting { panelID in
+            #expect(panelID == fixture.panelID)
+            interrupts += 1
+            return true
+        }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        let fromScript = CoordinatorMessageHeader.message(from: .unknown, text: "From a script")
+        #expect(try fixture.controller.send("First", byUser: true, id: "first").isQueued)
+        #expect(try fixture.controller.send(fromScript, id: "script").isQueued)
+        let summary = try #require(fixture.chat.summary)
+        let turnEpoch = try #require(summary.inputControl?.turnEpoch)
+
+        let stop = try fixture.conversations.gatewayInterrupt(
+            RemoteConversationInterruptRequest(conversationID: summary.conversationID, expectedTurnEpoch: turnEpoch),
+            credential: fixture.conversations.nativeCredential
+        )
+        #expect(stop.result == .accepted)
+        #expect(interrupts == 1)
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.controller.pausedEntries.map(\.id) == ["first", "script"])
+        #expect(fixture.controller.status?.queuedCount == 2)
+
+        // The stopped turn ends. Nothing that waited starts a new turn.
+        try fixture.endTurn(1)
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+
+        // Toastty saves the user's messages only. The one set aside stays
+        // set aside after a relaunch, and goes when the user lets it go.
+        fixture.relaunch()
+        fixture.chat.show(panelID: fixture.panelID)
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.controller.pausedEntries.map(\.id) == ["first"])
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+        fixture.chat.perform(.resume)
+        try await fixture.waitUntil("the first message") { fixture.delivered.texts == ["First"] }
+    }
+
     @MainActor
     @Test func aWaitingMessageCanBeRemovedOrTakenBackIntoTheComposer() async throws {
         let fixture = try CoordinatorChatFixture()

@@ -115,6 +115,50 @@ final class LiveConversationControllerTests: XCTestCase {
         XCTAssertEqual(subject.projectionRunID, runID(2))
     }
 
+    /// The Mac names the coordinator's session. Its chat then shows the
+    /// messages that Toastty typed as the coordinator chat does, and goes
+    /// back to the plain rows when the session is no longer the
+    /// coordinator's.
+    func testTheCoordinatorsChatShowsToasttysDigestAsOneLine() {
+        let subject = LiveConversationController(
+            conversationID: conversationID.rawValue,
+            runtime: ConversationRuntime(conversationID: conversationID)
+        )
+        let digest = """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - [Fix the unread dot](toastty://task/\(UUID().uuidString)): running at 2026-08-11T14:04:10Z
+        Read `toastty task list` for details.
+        """
+        subject.consume(state(
+            runID: runID(1),
+            events: [.known(ConversationEvent(
+                conversationID: conversationID,
+                sequence: 1,
+                eventID: "digest",
+                timestamp: Date(timeIntervalSince1970: 1),
+                provider: .claude,
+                payload: .userMessage(ConversationUserMessagePayload(text: digest, origin: .remote))
+            ))],
+            phase: .live
+        ))
+        XCTAssertEqual(subject.transcriptPresentation.rows.map(\.content), [
+            .userMessage(text: digest, origin: .remote, deliveryMode: nil),
+        ])
+
+        subject.consumeIsCoordinatorChat(true)
+        XCTAssertEqual(subject.change, .rebuild)
+        XCTAssertEqual(subject.transcriptPresentation.revision, .rebuilt)
+        guard case .hostMessage(let message) = subject.transcriptPresentation.rows.first?.content else {
+            return XCTFail("Expected the digest's folded line")
+        }
+        XCTAssertTrue(message.summary.hasPrefix("Toastty · 1 update · "), message.summary)
+
+        subject.consumeIsCoordinatorChat(false)
+        XCTAssertEqual(subject.transcriptPresentation.rows.map(\.content), [
+            .userMessage(text: digest, origin: .remote, deliveryMode: nil),
+        ])
+    }
+
     func testReadyEntryResolvesAfterTheLastCatchUpPageAndPhaseOnlyCompletion() async {
         let runtime = ConversationRuntime(conversationID: conversationID)
         let subject = LiveConversationController(conversationID: conversationID.rawValue, runtime: runtime)

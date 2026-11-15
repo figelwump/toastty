@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 @testable import ToasttyApp
 

@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 extension AppControlActionID {
     var isCoordinatorAction: Bool {
