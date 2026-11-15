@@ -40,8 +40,8 @@ final class ToasttyMobileNotificationsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["You can change this later in Settings."].exists)
         capture(app, name: "Notification introduction")
         app.buttons["toastty-mobile-notifications-continue"].tap()
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 5))
-        XCTAssertFalse(intro.exists)
         app.buttons["toastty-mobile-settings-button"].tap()
         XCTAssertTrue(app.switches["toastty-mobile-notifications-toggle"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.switches["toastty-mobile-notifications-toggle"].value as? String, "1")
@@ -51,10 +51,11 @@ final class ToasttyMobileNotificationsUITests: XCTestCase {
 
     func testNotNowIsRememberedAndSettingsStillOffersOneToggle() {
         let app = launch(mode: "intro")
+        let intro = app.descendants(matching: .any)["toastty-mobile-notifications-introduction"].firstMatch
         let notNowButton = app.buttons["toastty-mobile-notifications-not-now"]
         XCTAssertTrue(notNowButton.waitForExistence(timeout: 8))
         notNowButton.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
-        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-notifications-introduction"].firstMatch.exists)
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5))
         app.buttons["toastty-mobile-settings-button"].tap()
         let toggle = app.switches["toastty-mobile-notifications-toggle"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
@@ -82,8 +83,8 @@ final class ToasttyMobileNotificationsUITests: XCTestCase {
         XCTAssertTrue(notNowButton.isHittable)
         capture(app, name: "Notification introduction accessibility XXXL actions")
         notNowButton.tap()
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 5))
-        XCTAssertFalse(intro.exists)
     }
 
     func testIntroductionActionsRemainReachableAtXXXL() {
@@ -100,8 +101,8 @@ final class ToasttyMobileNotificationsUITests: XCTestCase {
         XCTAssertTrue(notNowButton.isHittable)
         capture(app, name: "Notification introduction XXXL actions")
         notNowButton.tap()
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 5))
-        XCTAssertFalse(intro.exists)
     }
 
     func testSetupErrorIsSmallAndProvidesRetryInHomeAndSettings() {

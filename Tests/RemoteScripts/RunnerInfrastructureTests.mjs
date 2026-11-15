@@ -36,8 +36,12 @@ function invoke(name, ...args) {
 }
 
 function invokeAsync(name, ...args) {
+  return runShellAsync('set -euo pipefail; source "$1"; shift; "$@"', helper, name, ...args);
+}
+
+function runShellAsync(script, ...args) {
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/bash", ["-c", 'set -euo pipefail; source "$1"; shift; "$@"', "runner-test", helper, name, ...args]);
+    const child = spawn("/bin/bash", ["-c", script, "runner-test", ...args]);
     let stderr = "";
     child.stderr.on("data", (data) => { stderr += data; });
     child.on("error", reject);
@@ -131,6 +135,51 @@ test("separate run roots cannot claim the same worktree", async (t) => {
     invokeAsync("toastty_allocate_remote_run", repo, worktree, join(root, category, "shared"))));
   assert.equal(results.filter(({ status }) => status === 0).length, 1, JSON.stringify(results));
   assert.equal(git(worktree, "rev-parse", "HEAD"), git(repo, "rev-parse", "HEAD"));
+});
+
+test("allocation stays exclusive while Git replaces the empty worktree directory", async (t) => {
+  const root = fixture(t);
+  const repo = repository(root);
+  const worktree = join(root, "worktrees", "shared");
+  const run = join(root, "runs", "shared");
+  const entered = join(root, "git-entered");
+  const release = join(root, "release-git");
+  const first = runShellAsync(`
+set -euo pipefail
+source "$1"
+entered="$5" release="$6"
+git() {
+  if [[ "\$3" == worktree && "\$4" == add ]]; then
+    # Git can remove its empty destination before it checks out the tree.
+    [[ ! -d "\$6" ]] || rmdir "\$6"
+    touch "$entered"
+    local attempts=0
+    while [[ ! -e "$release" ]]; do
+      (( attempts < 500 )) || return 1
+      attempts=$((attempts + 1))
+      sleep 0.01
+    done
+  fi
+  command git "$@"
+}
+toastty_allocate_remote_run "$2" "$3" "$4"
+`, helper, repo, worktree, run, entered, release);
+  let firstResult;
+  try {
+    const deadline = Date.now() + 8000;
+    while (!existsSync(entered) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(existsSync(entered), "first allocation did not reach Git");
+    const second = await invokeAsync("toastty_allocate_remote_run", repo, worktree, join(root, "test-runs", "shared"));
+    assert.notEqual(second.status, 0, "a second caller claimed the worktree while Git was creating it");
+  } finally {
+    writeFileSync(release, "continue");
+    firstResult = await first;
+  }
+  succeeds(firstResult);
+  assert.equal(git(worktree, "rev-parse", "HEAD"), git(repo, "rev-parse", "HEAD"));
+  assert.ok(lstatSync(run).isDirectory());
 });
 
 test("remote allocation leaves existing paths and dangling links unchanged", (t) => {

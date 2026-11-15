@@ -116,9 +116,12 @@ Remote wrappers generate a unique label by default. An explicit `--run-label`
 must use 1–128 letters, numbers, dots, underscores, or hyphens, starting with a
 letter or number. Each label is for one run: the wrappers refuse existing local
 artifact directories and remote run or worktree directories. Choose a new label
-for a retry. Exclusive directory creation prevents collisions among updated
-wrappers, including validation and test runs that share the remote worktree
-root. Older wrappers in other worktrees can still replace explicit labels.
+for a retry. A sibling `<worktree>.allocation-lock` directory keeps allocation
+exclusive while Git creates the worktree, including validation and test runs
+that share the remote worktree root. It is removed when allocation exits. If a
+process is killed before it can remove the reservation, use a new label and
+inspect the incomplete allocation. Older wrappers in other worktrees do not
+honor this reservation and can still replace explicit labels.
 
 By default, artifact transfers keep result bundles, build logs, screenshots,
 recordings, runtime metadata, and other evidence. They omit known build product,

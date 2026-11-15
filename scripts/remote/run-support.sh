@@ -21,15 +21,23 @@ toastty_allocate_local_artifacts() {
 }
 
 # This definition is sent over SSH: the remote source checkout may be older.
-toastty_allocate_remote_run() {
+toastty_allocate_remote_run() (
   local repo="$1" worktree="$2" run_root="$3"
+  local allocation_lock="$2.allocation-lock"
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null || return 1
   mkdir -p "$(dirname "$worktree")" "$(dirname "$run_root")" || return 1
+  # Git may remove an empty destination while creating its worktree. Keep
+  # ownership outside that directory until allocation has finished.
+  mkdir "$allocation_lock" || {
+    printf 'error: remote worktree allocation already exists: %s; choose a new run label or inspect the incomplete allocation\n' "$allocation_lock" >&2
+    return 1
+  }
+  trap 'rmdir "$allocation_lock"' EXIT
   mkdir "$run_root" || {
     printf 'error: remote run already exists or cannot be created: %s; choose a new run label\n' "$run_root" >&2
     return 1
   }
-  if ! mkdir "$worktree"; then
+  if [[ -e "$worktree" || -L "$worktree" ]]; then
     rmdir "$run_root" || true
     printf 'error: remote worktree already exists or cannot be created: %s; choose a new run label\n' "$worktree" >&2
     return 1
@@ -40,7 +48,7 @@ toastty_allocate_remote_run() {
     printf 'error: could not create remote worktree: %s; inspect partial files and git worktree list for stale registrations\n' "$worktree" >&2
     return 1
   fi
-}
+)
 
 toastty_remove_remote_run() {
   local repo="$1" worktree="$2" run_root="$3"
