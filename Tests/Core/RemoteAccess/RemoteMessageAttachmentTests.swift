@@ -28,7 +28,7 @@ struct RemoteMessageAttachmentTests {
         ("`/tmp/x``", "``` `/tmp/x`` ```"),
     ])
     func deliveredPathsUseCodeSpansLongerThanAnyBacktickRun(path: String, expected: String) {
-        #expect(RemoteMessageAttachmentStore.Staged.codeSpan(path) == expected)
+        #expect(RemoteAttachmentDeliveryText.codeSpan(path) == expected)
     }
 
     @Test func validatesTypeContentsCountAndDecodedLimits() {

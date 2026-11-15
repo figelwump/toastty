@@ -72,8 +72,16 @@ protocol LocalConversationSubscription: AnyObject {
     /// Stops the turn the request names by sending the agent's interrupt
     /// key, under the turn check of a phone's Stop. A person asked for it,
     /// so it counts as the user's input. Messages a phone queued for the
-    /// conversation then wait until a device resumes them.
+    /// conversation then wait until a device resumes them, and `onStop`
+    /// runs for each subscription of the panel.
     func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult
+
+    /// Runs when a Stop from any app, this Mac's or a paired phone's, ended
+    /// a turn of the panel's conversation: right after the interrupt key
+    /// went to the terminal, before the stopped turn's end can open the
+    /// prompt. A sender that keeps its own waiting messages holds them
+    /// here, as the messages a phone queued are held.
+    var onStop: (@MainActor () -> Void)? { get set }
 
     /// Reopens a prompt that text typed in the terminal holds closed, after
     /// the user said that the agent's prompt holds none of their text. The

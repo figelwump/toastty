@@ -57,6 +57,10 @@ final class LiveConversationController {
     private(set) var isLoadingOlder = false
     private(set) var prependAnchorID: ToasttyTranscriptRowID?
     private(set) var transcriptPresentation: ToasttyConversationPresentationState = .loading
+    /// The conversation is the coordinator's own, which the Mac names: its
+    /// chat shows the messages that Toastty typed as the Mac's coordinator
+    /// chat does.
+    private(set) var isCoordinatorChat = false
     private(set) var composerAuthority = ConversationComposerAuthority()
     private(set) var sendReconciliation = SendReconciliationState()
     private(set) var lastSendGateFailure: ConversationSendGateFailure?
@@ -298,6 +302,13 @@ final class LiveConversationController {
             localDraftReleaseRefusal = .failed
         }
         return result
+    }
+
+    func consumeIsCoordinatorChat(_ isCoordinatorChat: Bool) {
+        guard self.isCoordinatorChat != isCoordinatorChat else { return }
+        self.isCoordinatorChat = isCoordinatorChat
+        change = .rebuild
+        refreshTranscriptPresentation(contentChanged: true)
     }
 
     func consumeInputControl(_ control: RemoteConversationInputControl?) {
@@ -630,7 +641,8 @@ final class LiveConversationController {
             ),
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,
-            prependAnchorID: prependAnchorID
+            prependAnchorID: prependAnchorID,
+            coordinatorMessages: isCoordinatorChat ? ToasttyConversationPresentationAdapter.coordinatorMessages : nil
         )
     }
 
