@@ -1814,7 +1814,8 @@ final class RemoteAccessService: ObservableObject {
                 primaryAnnotationKey: workspace.primaryAnnotationKey
                     .flatMap { workspace.annotations[$0] == nil ? nil : $0 },
                 doneAt: parentID == nil ? nil : workspace.doneAt,
-                acceptsDoneMark: parentID == nil || acceptsDoneMark(id))
+                acceptsDoneMark: parentID == nil || acceptsDoneMark(id),
+                isCoordinator: workspace.isCoordinator)
         }
     }
 

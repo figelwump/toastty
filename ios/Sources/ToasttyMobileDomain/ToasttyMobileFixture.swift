@@ -189,6 +189,46 @@ public enum ToasttyMobileFixture {
         )
     }()
 
+    public static let coordinatorWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000090")!
+    public static let coordinatorConversationID = UUID(uuidString: "B1000000-0000-0000-0000-000000000090")!
+
+    /// `snapshot` with the Mac's coordinator workspace. Its session has
+    /// `status`; without one the workspace lists no session, as while the
+    /// coordinator does not run or is starting. The coordinator's session
+    /// asks for approval and waits in Needs you, so a test can check that
+    /// Home leaves it out.
+    public static func withCoordinator(
+        _ snapshot: MobileHomeSnapshot,
+        status: RemoteSessionPresentationStatus?
+    ) -> MobileHomeSnapshot {
+        let conversations = status.map { status in
+            [MobileConversation(
+                id: coordinatorConversationID,
+                workspaceID: coordinatorWorkspaceID,
+                workspaceTitle: "Coordinator",
+                cwd: "~/.toastty/coordinator",
+                agent: .claude,
+                title: "Toasty",
+                state: .known(status),
+                inputAvailability: status == .working ? .unavailable(reason: "Claude is working") : .openPrompt,
+                age: "1m",
+                activityAge: MobileActivityAge(secondsAtReceipt: 60, receivedAtMonotonicTime: fixtureReceiptTime),
+                lastActivity: "Two tasks moved."
+            )]
+        } ?? []
+        let coordinator = MobileWorkspace(
+            id: coordinatorWorkspaceID,
+            title: "Coordinator",
+            conversations: conversations,
+            isCoordinator: true
+        )
+        return MobileHomeSnapshot(
+            hostName: snapshot.hostName,
+            workspaces: [coordinator] + snapshot.workspaces,
+            taskBoard: snapshot.taskBoard
+        )
+    }
+
     public static let questionTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000001")!
     public static let reviewTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000002")!
     public static let setupFailedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000003")!

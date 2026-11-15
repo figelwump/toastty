@@ -371,6 +371,56 @@ final class MobileHomeBucketsTests: XCTestCase {
         )
     }
 
+    /// The coordinator is not a project, as on the Mac: its workspace has
+    /// no card, and its session counts in neither Needs you number nor the
+    /// sessions that want the user, whatever it waits for. Its own tab
+    /// shows its state.
+    func testTheCoordinatorsWorkspaceLeavesHomesCardsAndCounts() throws {
+        let coordinatorID = uuid(90, prefix: "A2")
+        let projectSessions = [session(1, "Approval", .needsApproval), session(2, "Unread", .ready)]
+        let board = RemoteTaskBoard(tasks: [task(21, "Open PR", .needsYou, mark: .review)])
+        func withCoordinator(_ status: RemoteSessionPresentationStatus?, board: RemoteTaskBoard?) -> MobileHomeSnapshot {
+            let coordinator = MobileWorkspace(
+                id: coordinatorID, title: "Coordinator",
+                conversations: status.map { [session(90, "Toasty", $0, workspace: coordinatorID)] } ?? [],
+                isCoordinator: true
+            )
+            return MobileHomeSnapshot(
+                hostName: "mac",
+                workspaces: [coordinator, MobileWorkspace(id: projectID, title: "toastty", conversations: projectSessions)],
+                taskBoard: board.map(MobileTaskBoard.init)
+            )
+        }
+
+        for status: RemoteSessionPresentationStatus in [.needsApproval, .error, .ready, .working, .idle] {
+            let snapshot = withCoordinator(status, board: board)
+            XCTAssertEqual(MobileHomeBuckets.cards(in: snapshot).map(\.id), [projectID], "\(status)")
+            XCTAssertEqual(
+                MobileHomeBuckets.needsYouCounts(in: snapshot),
+                MobileHomeNeedsYouCounts(needsYou: 2, readyToReview: 1),
+                "\(status)"
+            )
+            XCTAssertEqual(snapshot.activitySessions.map(\.title), ["Approval", "Unread"], "\(status)")
+            XCTAssertEqual(snapshot.coordinatorConversation?.title, "Toasty")
+        }
+
+        // The tab's mark follows the session, as the Mac's row marks it.
+        let marks: [(RemoteSessionPresentationStatus?, MobileCoordinatorMark)] = [
+            (nil, .notRunning), (.idle, .quiet), (.working, .working), (.ready, .unread),
+            (.needsApproval, .needsApproval), (.error, .error),
+        ]
+        for (status, mark) in marks {
+            XCTAssertEqual(withCoordinator(status, board: board).coordinatorMark, mark, "\(String(describing: status))")
+        }
+        XCTAssertEqual(marks.filter { $0.1.callsForUser }.map(\.1), [.unread, .needsApproval, .error])
+
+        // Without a board there are no cards and no Coordinator tab: the
+        // coordinator's session is an ordinary one again.
+        let noBoard = withCoordinator(.needsApproval, board: nil)
+        XCTAssertNil(noBoard.coordinatorMark)
+        XCTAssertEqual(Set(noBoard.activitySessions.map(\.title)), ["Approval", "Unread", "Toasty"])
+    }
+
     /// The Tasks tab splits Needs you as the Mac's Tasks view does: a family
     /// whose only members that need the user wait for a review lists under
     /// Ready to review.

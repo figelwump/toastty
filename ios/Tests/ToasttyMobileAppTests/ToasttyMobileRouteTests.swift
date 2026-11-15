@@ -68,6 +68,27 @@ final class ToasttyMobileRouteTests: XCTestCase {
         )
     }
 
+    /// Only the top screen keeps a conversation open. The Coordinator tab's
+    /// own screen is the coordinator's chat; a screen pushed over it closes
+    /// that chat until Back returns to it.
+    func testTheCoordinatorTabsOwnScreenIsTheCoordinatorsChat() {
+        let coordinatorConversationID = UUID()
+        var tabs = ToasttyMobileTabState()
+        func open(_ tab: ToasttyMobileTab) -> UUID? {
+            tabs.openConversationID(in: tab, coordinatorConversationID: coordinatorConversationID)
+        }
+        XCTAssertEqual(open(.coordinator), coordinatorConversationID)
+        XCTAssertNil(open(.home))
+        tabs.paths[.coordinator] = [.conversation(conversationID)]
+        XCTAssertEqual(open(.coordinator), conversationID)
+        tabs.paths[.coordinator] = [.workspace(workspaceID)]
+        XCTAssertNil(open(.coordinator))
+        tabs.paths[.coordinator] = []
+        XCTAssertNil(tabs.openConversationID(in: .coordinator, coordinatorConversationID: nil))
+        tabs.paths[.home] = [.workspace(workspaceID), .conversation(conversationID)]
+        XCTAssertEqual(open(.home), conversationID)
+    }
+
     func testContainsConversationDistinguishesRouteKinds() {
         XCTAssertFalse([ToasttyMobileRoute]().containsConversation)
         XCTAssertFalse([ToasttyMobileRoute.workspace(workspaceID)].containsConversation)

@@ -340,6 +340,20 @@ final class ToasttyPushController {
         }
     }
 
+#if DEBUG
+    /// A fixture's stand-in for tapping a session's notification: the same
+    /// payload a session alert carries, for this pairing.
+    func receiveFixtureSessionTap(conversationID: UUID) {
+        receiveTap(RemotePushPayload(
+            kind: .session,
+            registrationID: UUID(),
+            pairingID: context?.pairingID ?? UUID(),
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            eventID: UUID()
+        ))
+    }
+#endif
+
     /// One reconciliation path handles foreground, connection, token, and
     /// retry events. Proof completion can run alongside a pending begin HTTP
     /// call because APNs may deliver before that HTTP call returns.

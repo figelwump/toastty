@@ -55,6 +55,10 @@ struct ToasttyConversationScreen: View {
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
     /// Leaves this conversation for a task space.
     let openTaskSpace: (UUID) -> Void
+    /// The coordinator's chat as the Coordinator tab's own screen: its
+    /// title shows Toasty, and the tab bar stays, because Back has nowhere
+    /// to go.
+    let isCoordinatorRoot: Bool
 
     init(
         conversationID: UUID,
@@ -88,7 +92,8 @@ struct ToasttyConversationScreen: View {
         submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         canAcknowledgeRead: Bool,
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
-        openTaskSpace: @escaping (UUID) -> Void = { _ in }
+        openTaskSpace: @escaping (UUID) -> Void = { _ in },
+        isCoordinatorRoot: Bool = false
     ) {
         self.conversationID = conversationID
         self.controller = controller
@@ -119,6 +124,7 @@ struct ToasttyConversationScreen: View {
         self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
         self.openTaskSpace = openTaskSpace
+        self.isCoordinatorRoot = isCoordinatorRoot
     }
 
     var body: some View {
@@ -195,9 +201,10 @@ struct ToasttyConversationScreen: View {
         .sensoryFeedback(trigger: sendFeedback) { _, new in new?.sensoryFeedback }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        // A session takes the whole screen, as a chat does. The Home | Tasks
-        // tab bar comes back on the list that Back returns to.
-        .toolbar(.hidden, for: .tabBar)
+        // A session takes the whole screen, as a chat does. The tab bar
+        // comes back on the list that Back returns to. The coordinator's
+        // chat is its tab's own screen, so it keeps the bar.
+        .toolbar(isCoordinatorRoot ? .visible : .hidden, for: .tabBar)
         .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -371,15 +378,21 @@ struct ToasttyConversationScreen: View {
     private func navigationBarHeader(_ conversation: MobileConversation) -> some View {
         VStack(spacing: 2) {
             HStack(spacing: 3) {
-                Text(conversation.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityHint("Shows session details")
-                    .accessibilityAction { isShowingDetails = true }
-                    .accessibilityIdentifier("toastty-mobile-conversation-title")
+                if isCoordinatorRoot {
+                    ToasttyCoordinatorTitle(mark: MobileCoordinatorMark(session: conversation))
+                        .accessibilityHint("Shows session details")
+                        .accessibilityAction { isShowingDetails = true }
+                } else {
+                    Text(conversation.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityHint("Shows session details")
+                        .accessibilityAction { isShowingDetails = true }
+                        .accessibilityIdentifier("toastty-mobile-conversation-title")
+                }
                 Image(systemName: "chevron.down")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -390,7 +403,7 @@ struct ToasttyConversationScreen: View {
             // then the workspace, so the status never wraps.
             ViewThatFits(in: .horizontal) {
                 headerStatusLine(conversation, metadata: headerMetadata(conversation))
-                headerStatusLine(conversation, metadata: conversation.workspaceTitle)
+                headerStatusLine(conversation, metadata: isCoordinatorRoot ? "" : conversation.workspaceTitle)
                 headerStatusLine(conversation, metadata: "")
             }
         }
@@ -434,7 +447,9 @@ struct ToasttyConversationScreen: View {
     }
 
     private func headerMetadata(_ conversation: MobileConversation) -> String {
-        [conversation.workspaceTitle, conversation.agent.displayName]
+        // The coordinator's workspace is named after it, as the title is.
+        if isCoordinatorRoot { return conversation.agent.displayName }
+        return [conversation.workspaceTitle, conversation.agent.displayName]
             .filter { $0.isEmpty == false }
             .joined(separator: " · ")
     }

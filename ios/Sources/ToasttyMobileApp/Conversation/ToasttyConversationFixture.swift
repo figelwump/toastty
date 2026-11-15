@@ -558,6 +558,36 @@ enum ToasttyConversationFixture {
         )
     }
 
+    /// The coordinator's chat, as in the proposal's mockup: an update on
+    /// two tasks, the user's request and the coordinator's answer.
+    static func coordinatorPresentation(
+        for conversationID: UUID
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        func link(_ title: String, _ id: UUID) -> String {
+            "[\(title)](toastty://task/\(id.uuidString))"
+        }
+        return ToasttyConversationPresentationState(
+            rows: [
+                row(conversationID, 1, timestamp, .assistantMessage(
+                    text: "Two tasks moved. \(link("Compact session rows", ToasttyMobileFixture.reviewTaskID)) "
+                        + "is ready for review, and \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)) merged.",
+                    phase: .final
+                )),
+                row(conversationID, 2, timestamp, .userMessage(
+                    text: "Release toastty once the export API merges.", origin: .remote
+                )),
+                row(conversationID, 3, timestamp, .assistantMessage(
+                    text: "Noted. I will start the release right after it merges, as your policy says.",
+                    phase: .final
+                )),
+            ],
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
     static func toolActivityPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {

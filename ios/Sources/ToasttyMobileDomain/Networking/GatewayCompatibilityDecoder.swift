@@ -250,7 +250,10 @@ public struct GatewayCompatibilityDecoder: Sendable {
             doneAt: (try? object.requiredDate("doneAt"))
                 ?? object.lossyString("doneAt").map { _ in Date.distantPast },
             // Absent from older hosts, whose subspaces all take the mark.
-            acceptsDoneMark: ((try? object.optionalBool("acceptsDoneMark")) ?? nil) ?? true)
+            acceptsDoneMark: ((try? object.optionalBool("acceptsDoneMark")) ?? nil) ?? true,
+            // Absent from older hosts, which list the coordinator's
+            // workspace as an ordinary one.
+            isCoordinator: ((try? object.optionalBool("isCoordinator")) ?? nil) ?? false)
     }
 
     /// Annotations are display-only, so a malformed chip is dropped rather

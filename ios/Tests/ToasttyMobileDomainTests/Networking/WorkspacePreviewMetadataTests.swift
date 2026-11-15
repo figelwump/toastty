@@ -197,10 +197,65 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         XCTAssertEqual(workspaces.first { $0.title == "Broken" }?.annotations, [])
     }
 
-    private func snapshotData(workspaces: [[String: Any]]?) throws -> Data {
+    /// The Mac marks its coordinator's workspace. With a task board the
+    /// phone sets it apart for the Coordinator tab; without one, or from an
+    /// older Mac that sends no mark, it is an ordinary workspace.
+    func testCoordinatorMarkSetsTheWorkspaceApartOnlyWithATaskBoard() throws {
+        let projectID = UUID()
+        let coordinatorID = UUID()
+        func response(tasks: RemoteTaskBoard?) throws -> Data {
+            try ConversationEventCoding.makeEncoder().encode(RemoteGatewaySessionListResponse(snapshot: RemoteSessionListSnapshot(
+                projectionRunID: RemoteProjectionRunID(rawValue: UUID()), conversations: [],
+                generatedAt: Date(timeIntervalSince1970: 1_788_696_000),
+                workspaces: [
+                    RemoteWorkspaceSummary(id: projectID, title: "toastty", panels: []),
+                    RemoteWorkspaceSummary(id: coordinatorID, title: "Coordinator", panels: [], isCoordinator: true),
+                ],
+                tasks: tasks
+            )))
+        }
+
+        let withBoard = try GatewayCompatibilityDecoder().decodeSessionListResponse(response(tasks: RemoteTaskBoard()))
+            .presentation()
+        XCTAssertEqual(withBoard.coordinator?.id, coordinatorID)
+        XCTAssertEqual(withBoard.topLevelWorkspaces.map(\.id), [projectID])
+        XCTAssertEqual(withBoard.rankedWorkspaces.map(\.id), [projectID])
+        // A lookup by ID still finds it, so its session can open.
+        XCTAssertEqual(withBoard.workspaces.map(\.id), [projectID, coordinatorID])
+        XCTAssertEqual(withBoard.workspaces.map(\.isCoordinator), [false, true])
+        XCTAssertEqual(withBoard.coordinatorMark, .notRunning)
+
+        // Without a task board the phone has no tabs, so the workspace lists
+        // as a project.
+        let withoutBoard = try GatewayCompatibilityDecoder().decodeSessionListResponse(response(tasks: nil)).presentation()
+        XCTAssertNil(withoutBoard.coordinator)
+        XCTAssertNil(withoutBoard.coordinatorMark)
+        XCTAssertEqual(Set(withoutBoard.topLevelWorkspaces.map(\.id)), [projectID, coordinatorID])
+
+        // The Mac sends the field only for the coordinator's workspace.
+        let plain = try ConversationEventCoding.makeEncoder().encode(
+            RemoteWorkspaceSummary(id: projectID, title: "toastty", panels: []))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("isCoordinator"))
+
+        // An older Mac sends no mark, and a malformed one counts as none.
+        for mark: Any? in [nil, "yes"] {
+            var coordinator: [String: Any] = ["id": coordinatorID.uuidString, "title": "Coordinator", "panels": []]
+            coordinator["isCoordinator"] = mark
+            let older = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(
+                workspaces: [["id": projectID.uuidString, "title": "toastty", "panels": []], coordinator],
+                tasks: [:]
+            )).presentation()
+            XCTAssertNotNil(older.taskBoard)
+            XCTAssertNil(older.coordinator, "mark: \(String(describing: mark))")
+            XCTAssertEqual(Set(older.topLevelWorkspaces.map(\.id)), [projectID, coordinatorID])
+        }
+    }
+
+    private func snapshotData(workspaces: [[String: Any]]?, tasks: [String: Any]? = nil) throws -> Data {
         var snapshot: [String: Any] = ["projectionRunID": UUID().uuidString, "conversations": [],
                                         "generatedAt": "2026-09-06T12:00:00.000Z"]
         if let workspaces { snapshot["workspaces"] = workspaces }
+        if let tasks { snapshot["tasks"] = tasks }
         return try JSONSerialization.data(withJSONObject: ["protocolVersion": "1.0", "snapshot": snapshot])
     }
 }

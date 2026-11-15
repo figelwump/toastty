@@ -639,7 +639,9 @@ prompt, and each open prompt takes one message from one sender. A message
 that a phone queued for the coordinator is typed first. For any other agent,
 Toastty goes by the session's reported status.
 
-Toastty Mobile shows the coordinator's workspace as an ordinary workspace.
+Toastty Mobile shows the coordinator in its own **Coordinator** tab, with its
+chat, and leaves its workspace out of Home's project cards and counts; see
+[The Coordinator tab](remote-access.md#the-coordinator-tab).
 
 **Who a message is from.** Toastty writes the first line of each message
 that is not your own typing, from who called it and never from the message's
