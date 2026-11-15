@@ -92,7 +92,8 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
         XCTAssertEqual(deliveryMode, .steer)
         let line = try XCTUnwrap(quote)
         XCTAssertEqual(line.text, answer)
-        XCTAssertEqual(line.timeText, time(2))
+        // The line writes the time on one line, with plain spaces.
+        XCTAssertEqual(line.timeText, CoordinatorMessageHeader.replyTime(time(2)))
         // A tap on the line scrolls to the message it answers.
         XCTAssertEqual(line.sourceRowID, rows[1].id)
     }
