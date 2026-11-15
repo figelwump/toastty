@@ -171,12 +171,37 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
 
 /// A merge that Toastty started and that stopped without merging.
 public struct TaskMergeFailure: Codable, Equatable, Sendable {
+    /// What stopped the merge. It tells a caller whether the same merge
+    /// can work when it is asked for again.
+    public enum Cause: String, Codable, Sendable {
+        /// A check refused the merge, such as new commits, conflicts or
+        /// failing checks. Something must change before a merge can work.
+        case refused
+        /// GitHub or a command failed, and nothing refused the merge. If
+        /// the failure came after a commit was accepted, Toastty ran the
+        /// merge again a few times before it stopped.
+        case error
+        /// The user's acceptance ended while the merge waited: new work,
+        /// a closed workspace, or another pull request in the workspace.
+        case acceptanceEnded
+    }
+
     public var at: Date
     public var reason: String
+    /// `nil` in a record saved before causes were recorded.
+    public var cause: Cause?
+    /// The commit that was to merge, when Toastty knew it.
+    public var head: String?
+    /// The target branch that was accepted with that commit, when the
+    /// merge got far enough to read it.
+    public var base: String?
 
-    public init(at: Date, reason: String) {
+    public init(at: Date, reason: String, cause: Cause? = nil, head: String? = nil, base: String? = nil) {
         self.at = at
         self.reason = reason
+        self.cause = cause
+        self.head = head
+        self.base = base
     }
 }
 
