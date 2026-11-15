@@ -50,6 +50,23 @@ final class ToasttyMobileShareSheetUITests: XCTestCase {
         let shareButtons = ["ShareButton", "Share"].map { safari.buttons[$0].firstMatch }
         let moreButtons = ["MoreMenuButton", "MoreButton", "More"].map { safari.buttons[$0].firstMatch }
         let controls = shareButtons + moreButtons
+        let toolbarTip = safari.otherElements["TipView"].firstMatch
+        let closeTip = toolbarTip.buttons["Close"].firstMatch
+        // A fresh Safari can cover More with its toolbar introduction. That
+        // popover needs dismissal; waiting for the covered button cannot help.
+        let toolbarOrTipReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (closeTip.exists && closeTip.isHittable) || controls.contains { $0.exists && $0.isHittable }
+        }, object: nil)
+        guard XCTWaiter.wait(for: [toolbarOrTipReady], timeout: 10) == .completed else {
+            attachScreenshot(named: "toolbar-not-ready", of: safari)
+            XCTFail("Safari has no hittable Share, More, or toolbar tip Close control. \(dump(safari, "toolbar"))")
+            return
+        }
+        if closeTip.exists && closeTip.isHittable {
+            attachScreenshot(named: "safari-toolbar-tip", of: safari)
+            closeTip.tap()
+            XCTAssertTrue(toolbarTip.waitForNonExistence(timeout: 5), dump(safari, "toolbar-tip"))
+        }
         // Page content can appear before Safari's toolbar finishes appearing.
         // Wait for an actionable control, not just an accessibility element.
         let toolbarReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
