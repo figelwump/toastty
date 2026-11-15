@@ -262,6 +262,8 @@ else:
     sys.exit(f'gh: this check does not answer: {" ".join(args)}')
 '''
 
+# A long message as Claude Code records it: the whole text inside one wrapper.
+PASTED = re.compile(r'^\s*<pasted_content id="([^"\n]+)">\n(.*?)\n</pasted_content id="\1">\s*$', re.S)
 # The files in its folder that the coordinator may change.
 OWN_FILES = ('policy.md', 'ledger.md', 'friction.md', 'decisions.md')
 # The Improving rule of a user who wants no review on a timer.
@@ -762,6 +764,9 @@ class Run:
             parts = [dict(type='text', text=content)] if isinstance(content, str) else [p for p in content or [] if isinstance(p, dict)]
             if record.get('type') == 'user':
                 text = '\n'.join(p.get('text', '') for p in parts if p.get('type') == 'text').strip()
+                # Claude Code records a long message, such as a digest of four lines, inside one wrapper.
+                pasted = PASTED.match(text)
+                text = pasted.group(2).strip() if pasted else text
                 if text and not any(p.get('type') == 'tool_result' for p in parts) and not text.startswith('<'):
                     turns.append(dict(prompt=text, wake=text.startswith(WAKE), commands=[], edits=[], tools=[], texts=[],
                                       at=record.get('timestamp')))
