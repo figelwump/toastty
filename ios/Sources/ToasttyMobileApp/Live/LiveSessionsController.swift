@@ -947,6 +947,7 @@ final class LiveSessionsController {
             hostSupportsConversationClose: acceptsConversationClose,
             hostSupportsTaskActions: acceptsTaskActions,
             hostSupportsProjectRelease: acceptsProjectRelease,
+            hostSupportsCoordinatorSend: acceptsCoordinatorSend,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

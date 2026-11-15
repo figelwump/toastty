@@ -288,6 +288,7 @@ final class HomeScreenController {
         hostSupportsConversationClose: Bool? = nil,
         hostSupportsTaskActions: Bool? = nil,
         hostSupportsProjectRelease: Bool? = nil,
+        hostSupportsCoordinatorSend: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
@@ -309,6 +310,9 @@ final class HomeScreenController {
         }
         if let hostSupportsTaskActions {
             self.hostSupportsTaskActions = hostSupportsTaskActions
+        }
+        if let hostSupportsCoordinatorSend {
+            self.hostSupportsCoordinatorSend = hostSupportsCoordinatorSend
         }
         if let hostSupportsProjectRelease {
             self.hostSupportsProjectRelease = hostSupportsProjectRelease
