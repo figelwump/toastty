@@ -139,7 +139,8 @@ through Toastty's notification service and Apple. There is no title-hiding optio
 While the Mac runs the task system, a task that needs you sends its own alert;
 see [Task alerts](#task-alerts).
 Tapping an alert opens its conversation if it still belongs to the current Mac
-pairing. The Mac must remain running with Remote Access enabled to send new
+pairing. An alert from the coordinator's session opens the
+[Coordinator tab](#the-coordinator-tab) instead of Home. The Mac must remain running with Remote Access enabled to send new
 alerts. The phone does not need an open connection to receive Apple's alert, but
 opening the conversation still requires access to the Mac through Tailscale.
 
@@ -576,16 +577,17 @@ checkbox. An older phone ignores them and keeps its flat list.
 ### Tasks
 
 When the Mac runs the task system (see [Tasks](tasks.md)), the phone shows a
-tab bar with **Home** and **Tasks**, and Home's **All | Active** switch becomes
-**All | Needs you**, as in the Mac sidebar. Each tab keeps its own stack of
-screens. The tab bar stays on list screens, such as a workspace. A session's
+tab bar with **Home** and **Tasks**, and **Coordinator** while the Mac has a
+coordinator (see [The Coordinator tab](#the-coordinator-tab)). Home's
+**All | Active** switch becomes **All | Needs you**, as in the Mac sidebar.
+Each tab keeps its own stack of screens. The tab bar stays on list screens, such as a workspace. A session's
 screen has no tab bar, as a chat has none, so the transcript and the composer
 use the whole screen: the bar slides away when a session opens in either tab
 or from a notification, and comes back on the list that Back returns to. Only
 the tab on screen has an open session: the session of the other tab closes and
 opens again when that tab shows again, so a notification for it is not
 silenced while you look at the other tab. A tapped notification or link opens
-in Home.
+in Home, except one for the coordinator, which opens its tab.
 
 - **All** lists each project as a card with the Mac sidebar's buckets:
   **Needs you**, **Ready to review**, **Running** and **Idle**. A card mixes
@@ -809,6 +811,54 @@ Compatibility:
   refuses them, and the Mac sends the session's Ready alert instead, as before.
 - A phone that predates task alerts shows their text, but tapping one only
   opens the app. In the foreground, it does not show them.
+
+### The Coordinator tab
+
+While the Mac runs the task system and has a coordinator (see
+[The coordinator](tasks.md#the-coordinator)), the phone's tab bar reads
+**Home | Tasks | Coordinator**. The tab is the phone's form of the Mac's dock:
+it keeps the coordinator's chat one tap away from any list, and keeps its place
+while you work in the other tabs.
+
+- **The tab's own screen is the coordinator's chat**, the same conversation
+  screen as any session, with its composer. Its title shows the golden Toasty,
+  with steam while the coordinator works, and the name **Coordinator**; the
+  line under it shows the status and the agent. The tab bar stays on this
+  screen, because Back has nowhere to go. A task link opens the task's space
+  over the chat, and **Next** opens another session over it, which hides the
+  bar as every session screen does. Back returns to the chat.
+- **The tab's icon is Toasty's outline.** While another tab shows, its badge
+  says what the coordinator waits for, from its session's status, as the
+  Mac's coordinator row marks it: **New** for output you have not read, **!**
+  for an approval, and **Error** for an error. A working or quiet coordinator
+  has no badge, and the badge leaves while the tab shows. The system draws
+  every badge in red, so the text tells them apart.
+- **Not running.** When the coordinator's agent does not run or is still
+  starting, the tab shows Toasty and says that the coordinator is not running
+  and that it starts on the Mac (**Open Coordinator** in the Agent menu). The
+  phone cannot start it. The chat shows when the agent runs, and no "no longer
+  available" banner shows when it stops.
+- **Not a project.** As in the Mac sidebar, the coordinator's workspace has no
+  card in Home, its session counts in neither Needs you number, the app badge
+  or **Next**, and a new session does not start in its workspace.
+- **Notifications and links.** An alert or a `conversation` link for the
+  coordinator's session, or a `workspace` link for its workspace, opens the
+  tab's chat, and closes any screen pushed over it. Every other alert and link
+  opens in Home.
+
+The Mac marks the coordinator's workspace in the session snapshot with
+`isCoordinator: true` on its `RemoteWorkspaceSummary`, and sends the field only
+for that workspace. While the coordinator's agent runs, the same workspace
+names its session in `coordinatorConversationID`: another agent can run in the
+coordinator's workspace, and the transcript of an agent that exited stays
+listed, so the phone takes the coordinator's session only from this field.
+Without it the tab says that the coordinator is not running. Other sessions in
+that workspace do not show on the phone, as the Mac's sidebar does not list
+them. No capability is needed. The phone sets the workspace apart only when
+the snapshot also carries the task board: without a board the phone has no tab
+bar and lists the coordinator's workspace as an ordinary one, as it does for an
+older Mac that sends no mark. An older phone ignores both fields and lists the
+workspace as before.
 
 ### Starting a session
 

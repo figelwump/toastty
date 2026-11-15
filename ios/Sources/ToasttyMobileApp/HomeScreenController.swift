@@ -279,6 +279,7 @@ final class HomeScreenController {
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
+        let coordinatorWorkspaceID = snapshot.coordinator?.id
         if let hostSupportsSubspaceDone {
             self.hostSupportsSubspaceDone = hostSupportsSubspaceDone
         }
@@ -319,7 +320,11 @@ final class HomeScreenController {
 
         if let removedConversation, conversation(id: removedConversation.id) == nil {
             selectConversation(nil)
-            removedSelectionMessage = "\(removedConversation.title) is no longer available on your Mac."
+            // The Coordinator tab says itself when the coordinator stops,
+            // and shows the new session when it restarts.
+            if removedConversation.workspaceID != coordinatorWorkspaceID {
+                removedSelectionMessage = "\(removedConversation.title) is no longer available on your Mac."
+            }
         }
     }
 
@@ -577,7 +582,10 @@ final class HomeScreenController {
     /// session this phone started, while the Mac still lists it, otherwise
     /// the workspace Home lists first.
     func defaultSessionStartWorkspace(lastUsed: UUID?) -> MobileWorkspace? {
-        lastUsed.flatMap(workspace(id:)) ?? snapshot.topLevelWorkspaces.first
+        // A session does not start in the coordinator's workspace, which
+        // the workspace list leaves out.
+        lastUsed.flatMap(workspace(id:)).flatMap { $0.id == snapshot.coordinator?.id ? nil : $0 }
+            ?? snapshot.topLevelWorkspaces.first
     }
 
     func sessionStartWorkspaces(keeping keptWorkspaceIDs: Set<UUID>) -> [ToasttyNewSessionWorkspace] {

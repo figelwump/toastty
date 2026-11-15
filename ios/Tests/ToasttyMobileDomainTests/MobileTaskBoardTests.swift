@@ -9,6 +9,9 @@ final class MobileTaskBoardTests: XCTestCase {
         let snapshot = try GatewayCompatibilityDecoder().decodeSessionListResponse(Data(
             contentsOf: directory.appending(path: "session-list-with-tasks.json", directoryHint: .notDirectory)))
         let board = try XCTUnwrap(snapshot.presentation().taskBoard)
+        // The Mac marks its coordinator's workspace, which leaves the projects.
+        XCTAssertEqual(snapshot.presentation().coordinator?.id, uuid(210))
+        XCTAssertFalse(snapshot.presentation().topLevelWorkspaces.contains { $0.id == uuid(210) })
 
         XCTAssertEqual(board.tasks.count, 6)
         let question = try XCTUnwrap(board.task(taskSpaceID: uuid(201)))

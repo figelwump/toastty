@@ -1039,6 +1039,34 @@ final class HomeScreenControllerTests: XCTestCase {
         XCTAssertNil(controller.removedSelectionMessage)
     }
 
+    /// The coordinator's session goes when it stops or restarts. Its tab
+    /// says so itself, so no banner reports it; the new session shows on the
+    /// tab once it comes.
+    func testRemovingTheCoordinatorsSessionDismissesWithoutABanner() throws {
+        let snapshot = ToasttyMobileFixture.withCoordinator(ToasttyMobileFixture.taskHome, status: .idle)
+        let controller = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot, connectionState: .live)
+        XCTAssertTrue(controller.openConversation(id: ToasttyMobileFixture.coordinatorConversationID))
+
+        controller.update(
+            snapshot: ToasttyMobileFixture.withCoordinator(ToasttyMobileFixture.taskHome, status: nil),
+            connectionState: .live,
+            freshness: .live
+        )
+
+        XCTAssertNil(controller.selectedConversationID)
+        XCTAssertNil(controller.removedSelectionMessage)
+        XCTAssertEqual(controller.snapshot.coordinatorMark, .notRunning)
+        // A session does not start in the coordinator's workspace, even when
+        // the phone last started one there.
+        XCTAssertNotEqual(
+            controller.defaultSessionStartWorkspace(lastUsed: ToasttyMobileFixture.coordinatorWorkspaceID)?.id,
+            ToasttyMobileFixture.coordinatorWorkspaceID
+        )
+        XCTAssertFalse(controller.sessionStartWorkspaces(keeping: []).contains {
+            $0.id == ToasttyMobileFixture.coordinatorWorkspaceID
+        })
+    }
+
     private func fixtureConversation(
         in bucket: MobileSessionBucket,
         where predicate: (MobileConversation) -> Bool = { _ in true }
