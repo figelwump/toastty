@@ -1,5 +1,6 @@
 import XCTest
 @testable import ToasttyMobileApp
+import ToasttyMobileDomain
 
 final class ToasttyMobileRouteTests: XCTestCase {
     private let workspaceID = UUID()
@@ -87,6 +88,19 @@ final class ToasttyMobileRouteTests: XCTestCase {
         XCTAssertNil(tabs.openConversationID(in: .coordinator, coordinatorConversationID: nil))
         tabs.paths[.home] = [.workspace(workspaceID), .conversation(conversationID)]
         XCTAssertEqual(open(.home), conversationID)
+    }
+
+    /// The Coordinator tab's badge: unread output, an approval or an error,
+    /// and only while another tab shows.
+    func testTheCoordinatorBadgeCallsOnlyFromAnotherTab() {
+        let marks: [(MobileCoordinatorMark?, String?)] = [
+            (.unread, "New"), (.needsApproval, "!"), (.error, "Error"),
+            (.working, nil), (.quiet, nil), (.notRunning, nil), (nil, nil),
+        ]
+        for (mark, badge) in marks {
+            XCTAssertEqual(ToasttyCoordinatorTabPresentation.badge(mark, isOnScreen: false), badge, "\(String(describing: mark))")
+            XCTAssertNil(ToasttyCoordinatorTabPresentation.badge(mark, isOnScreen: true), "\(String(describing: mark))")
+        }
     }
 
     func testContainsConversationDistinguishesRouteKinds() {

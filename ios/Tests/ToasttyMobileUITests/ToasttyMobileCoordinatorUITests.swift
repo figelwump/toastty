@@ -65,21 +65,27 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
     /// While another tab shows, the badge says what the coordinator waits
     /// for: unread output, an approval or an error. A working or quiet
     /// coordinator has none, and the badge leaves while its tab shows.
+    /// iOS 26 draws the badge but reports it to no accessibility element, so
+    /// there the test keeps only the screenshots; iOS 27 reports it as the
+    /// tab's value.
     func testTheBadgeShowsUnreadApprovalAndErrorWhileAnotherTabShows() {
+        let readsBadges = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
         for (state, badge) in [("unread", "New"), ("approval", "!"), ("error", "Error"), ("working", nil), ("quiet", nil)] {
             let app = launch(coordinator: state)
             let tab = app.tabBars.buttons["Coordinator"]
             XCTAssertTrue(tab.waitForExistence(timeout: 5))
-            if let badge {
-                XCTAssertTrue(waitForValue(of: tab, containing: badge), "\(state): \(String(describing: tab.value))")
+            if readsBadges {
+                XCTAssertTrue(waitForBadge(badge, on: tab, in: app), "\(state)")
             } else {
-                XCTAssertTrue(((tab.value as? String) ?? "").isEmpty, "\(state): \(String(describing: tab.value))")
+                RunLoop.current.run(until: Date().addingTimeInterval(1))
             }
             attachScreenshot(named: "badge-\(state)", of: app)
             if badge != nil {
                 tab.tap()
                 XCTAssertTrue(tab.waitForSelection())
-                XCTAssertTrue(waitForValue(of: tab, containing: nil), "\(state): \(String(describing: tab.value))")
+                if readsBadges {
+                    XCTAssertTrue(waitForBadge(nil, on: tab, in: app), "\(state) on screen")
+                }
             }
             app.terminate()
         }
@@ -203,16 +209,20 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         return matches.first ?? app.links["no link contains \(text)"]
     }
 
-    /// The tab's value carries its badge. `nil` waits for no badge.
-    private func waitForValue(of element: XCUIElement, containing text: String?, timeout: TimeInterval = 5) -> Bool {
+    /// Waits until the tab shows exactly `badge`, or no badge for `nil`.
+    private func waitForBadge(_ badge: String?, on tab: XCUIElement, in app: XCUIApplication, timeout: TimeInterval = 5) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            let value = (element.value as? String) ?? ""
-            if let text, value.contains(text) { return true }
-            if text == nil, value.isEmpty { return true }
+            let shown = ["New", "!", "Error"].filter { showsBadge($0, on: tab, in: app) }
+            if shown == (badge.map { [$0] } ?? []) { return true }
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         } while Date() < deadline
         return false
+    }
+
+    /// iOS 27 reports a tab's badge as the tab's value.
+    private func showsBadge(_ text: String, on tab: XCUIElement, in app: XCUIApplication) -> Bool {
+        ((tab.value as? String) ?? "").contains(text)
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
