@@ -3,15 +3,17 @@ import SwiftUI
 import ToasttyMobileDomain
 
 /// The New Task form, as the Mac's quick entry: the task text and files, a
-/// Workspace pill, an Agent pill, and the Mac's Frequent presets. The model
-/// owns every decision; this view only draws it and forwards edits.
+/// Workspace pill, Agent, Model and Effort pills (the Mac's Agent picker
+/// columns), and the Mac's Frequent presets. The model owns every
+/// decision; this view only draws it and forwards edits.
 struct ToasttyNewTaskSheet: View {
     let model: ToasttyNewTaskModel
     /// Called once the Mac saved the task, before the sheet dismisses itself.
     let onCreated: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var customModelAgent: RemoteSessionStartAgent?
+    /// The agent the Other model prompt opened for, while it shows.
+    @State private var customModelProfileID: String?
     @State private var customModelText = ""
     @FocusState private var textIsFocused: Bool
 
@@ -67,11 +69,11 @@ struct ToasttyNewTaskSheet: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             Button("Use") {
-                if let agent = customModelAgent { model.useCustomModel(customModelText, for: agent) }
+                if let profileID = customModelProfileID { model.useCustomModel(customModelText, for: profileID) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Type the model ID that \(customModelAgent?.displayName ?? "the agent") accepts.")
+            Text("Type the model ID that \(customModelAgentName) accepts.")
         }
     }
 
@@ -137,11 +139,20 @@ struct ToasttyNewTaskSheet: View {
                         removeAttachment: model.removeAttachment
                     )
                 }
-                // A long workspace or model moves the Agent pill to its own
-                // line before either pill truncates.
+                // A pill that does not fit moves to the next line before
+                // any pill truncates. Model and Effort show only for an
+                // agent that takes them.
                 ToasttyChipFlowLayout(spacing: 8, lineSpacing: 8) {
                     workspacePill
                     agentPill
+                    if let agent = model.selectedAgent {
+                        if agent.supportsModel {
+                            modelPill
+                        }
+                        if agent.reasoningEfforts.isEmpty == false {
+                            effortPill(agent)
+                        }
+                    }
                 }
                 .disabled(model.allowsEditing == false)
                 if model.frequentPresets.isEmpty == false {
@@ -214,45 +225,13 @@ struct ToasttyNewTaskSheet: View {
         .accessibilityIdentifier("toastty-mobile-new-task-workspace")
     }
 
-    /// Each agent opens its own menu of models and efforts, as the Mac's
-    /// Agent picker lists them.
+    /// Agent, Model and Effort are one pill each, as the Mac's Agent picker
+    /// has a column for each. A Frequent chip sets all three.
     private var agentPill: some View {
         Menu {
-            ForEach(model.agents) { agent in
-                Menu(agent.displayName) {
-                    if agent.supportsModel {
-                        Section("Model") {
-                            choice("Profile default", isSelected: isSelected(agent) && model.preset?.model == nil) {
-                                model.selectModel(nil, for: agent)
-                            }
-                            ForEach(model.modelChoices(for: agent), id: \.self) { value in
-                                choice(ToasttyNewTaskModel.shortModelName(value), isSelected: isSelected(agent) && model.preset?.model == value) {
-                                    model.selectModel(value, for: agent)
-                                }
-                            }
-                            Button("Other…") {
-                                customModelText = isSelected(agent) ? model.preset?.model ?? "" : ""
-                                customModelAgent = agent
-                            }
-                        }
-                    }
-                    if agent.reasoningEfforts.isEmpty == false {
-                        Section("Effort") {
-                            choice("Profile default", isSelected: isSelected(agent) && model.preset?.effort == nil) {
-                                model.selectEffort(nil, for: agent)
-                            }
-                            ForEach(agent.reasoningEfforts, id: \.self) { value in
-                                choice(value, isSelected: isSelected(agent) && model.preset?.effort == value) {
-                                    model.selectEffort(value, for: agent)
-                                }
-                            }
-                        }
-                    }
-                    if agent.supportsModel == false, agent.reasoningEfforts.isEmpty {
-                        choice("Use \(agent.displayName)", isSelected: isSelected(agent)) {
-                            model.selectPreset(RemoteTaskPreset(profileID: agent.profileID))
-                        }
-                    }
+            Picker("Agent", selection: agentSelection) {
+                ForEach(model.agents) { agent in
+                    Text(agent.displayName).tag(Optional(agent.profileID))
                 }
             }
         } label: {
@@ -261,6 +240,43 @@ struct ToasttyNewTaskSheet: View {
         .accessibilityLabel("Agent")
         .accessibilityValue(model.agentTitle)
         .accessibilityIdentifier("toastty-mobile-new-task-agent")
+    }
+
+    private var modelPill: some View {
+        Menu {
+            Picker("Model", selection: modelSelection) {
+                Text(ToasttyNewTaskModel.defaultChoiceTitle).tag(String?.none)
+                ForEach(model.modelChoices, id: \.self) { value in
+                    Text(ToasttyNewTaskModel.shortModelName(value)).tag(Optional(value))
+                }
+            }
+            Divider()
+            Button("Other…") {
+                customModelText = model.preset?.model ?? ""
+                customModelProfileID = model.preset?.profileID
+            }
+        } label: {
+            pill(label: "Model", value: model.modelTitle)
+        }
+        .accessibilityLabel("Model")
+        .accessibilityValue(model.modelTitle)
+        .accessibilityIdentifier("toastty-mobile-new-task-model")
+    }
+
+    private func effortPill(_ agent: RemoteSessionStartAgent) -> some View {
+        Menu {
+            Picker("Effort", selection: effortSelection) {
+                Text(ToasttyNewTaskModel.defaultChoiceTitle).tag(String?.none)
+                ForEach(agent.reasoningEfforts, id: \.self) { value in
+                    Text(value).tag(Optional(value))
+                }
+            }
+        } label: {
+            pill(label: "Effort", value: model.effortTitle)
+        }
+        .accessibilityLabel("Effort")
+        .accessibilityValue(model.effortTitle)
+        .accessibilityIdentifier("toastty-mobile-new-task-effort")
     }
 
     private var frequent: some View {
@@ -303,20 +319,6 @@ struct ToasttyNewTaskSheet: View {
     }
 
     // MARK: - Pieces
-
-    private func isSelected(_ agent: RemoteSessionStartAgent) -> Bool {
-        model.preset?.profileID == agent.profileID
-    }
-
-    private func choice(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            if isSelected {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
-            }
-        }
-    }
 
     private func pill(label: String, value: String) -> some View {
         HStack(spacing: 6) {
@@ -373,7 +375,25 @@ struct ToasttyNewTaskSheet: View {
     }
 
     private var customModelPromptIsPresented: Binding<Bool> {
-        Binding(get: { customModelAgent != nil }, set: { if $0 == false { customModelAgent = nil } })
+        Binding(get: { customModelProfileID != nil }, set: { if $0 == false { customModelProfileID = nil } })
+    }
+
+    private var customModelAgentName: String {
+        model.agents.first { $0.profileID == customModelProfileID }?.displayName ?? "the agent"
+    }
+
+    private var agentSelection: Binding<String?> {
+        Binding(get: { model.preset?.profileID }, set: { id in
+            if let agent = model.agents.first(where: { $0.profileID == id }) { model.selectAgent(agent) }
+        })
+    }
+
+    private var modelSelection: Binding<String?> {
+        Binding(get: { model.preset?.model }, set: { value in model.selectModel(value) })
+    }
+
+    private var effortSelection: Binding<String?> {
+        Binding(get: { model.preset?.effort }, set: { value in model.selectEffort(value) })
     }
 
     private var workspaceSelection: Binding<UUID?> {
