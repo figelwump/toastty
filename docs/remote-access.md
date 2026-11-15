@@ -1008,8 +1008,9 @@ not sure, and creates the task.
 - **Retries.** If the phone does not get an answer, **Send** sends the same
   request again, and the Mac answers with the first result and sends nothing
   new. The Mac remembers each answer until it quits. After a relaunch, it
-  finds a message that still waits by its ID; a message that the coordinator
-  already took before the quit can be sent a second time.
+  finds a message that still waits by its ID, and a message with files by
+  their copies; a message without files that the coordinator already took
+  before the quit can be sent a second time.
 
 The Mac advertises the `coordinator_send` capability for
 `POST /api/coordinator.send`, and the native-only

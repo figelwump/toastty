@@ -15,6 +15,10 @@ struct RemoteCoordinatorSenderTests {
         let quickEntry: QuickEntryCoordinatorTests.Harness
         let attachmentRoot: URL
         var deviceMaySend = true
+        /// The permission check, counted from 1, that answers no: the
+        /// device loses its permission at that moment.
+        var revokesAtCheck: Int?
+        private(set) var permissionChecks = 0
         /// Set to nil to stand in for a Mac with no coordinator controller.
         var coordinatorIsAvailable = true
         let device = RemoteDeviceRecord(
@@ -44,7 +48,10 @@ struct RemoteCoordinatorSenderTests {
                     quickEntry.controller.currentChoices(includeProfile: RemoteTaskCreator.offersProfile)
                 },
                 attachmentStore: RemoteMessageAttachmentStore(root: attachmentRoot),
-                deviceMaySend: { [unowned self] _ in deviceMaySend }
+                deviceMaySend: { [unowned self] _ in
+                    permissionChecks += 1
+                    return deviceMaySend && permissionChecks != revokesAtCheck
+                }
             )
         }
 
@@ -157,6 +164,14 @@ struct RemoteCoordinatorSenderTests {
             #expect(typed.contains(folder.appendingPathComponent(name).path))
         }
         #expect(harness.uploads.isEmpty, "The uploads are removed once the coordinator has its copies")
+
+        // A repeat after a relaunch, of a message the coordinator took: its
+        // copies say so, and nothing is sent again.
+        harness.relaunchSender()
+        #expect(await harness.send(request) == .sent)
+        #expect(harness.typedTexts.count == 1)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() == names)
+        #expect(harness.uploads.isEmpty)
     }
 
     @Test func whileTheCoordinatorWorksTheMessageWaitsForTheTurnsEnd() async throws {
@@ -234,8 +249,19 @@ struct RemoteCoordinatorSenderTests {
         #expect(harness.uploads.isEmpty)
         #expect(harness.quickEntry.attachmentFolders.isEmpty)
 
-        // A refusal sent nothing, so the same request may go once allowed.
+        // Revoked while the coordinator copied the files: the check
+        // directly before the send refuses it, and the copies go.
         harness.deviceMaySend = true
+        harness.revokesAtCheck = harness.permissionChecks + 3
+        #expect(await harness.send(request) == .rejected(reason: .permissionDenied, message: nil))
+        #expect(harness.permissionChecks == harness.revokesAtCheck)
+        #expect(harness.typedTexts.isEmpty)
+        #expect(harness.coordinator.controller.queuedEntries.isEmpty)
+        #expect(harness.uploads.isEmpty)
+        #expect(harness.quickEntry.attachmentFolders.isEmpty)
+
+        // A refusal sent nothing, so the same request may go once allowed.
+        harness.revokesAtCheck = nil
         #expect(await harness.send(request) == .sent)
         #expect(harness.typedTexts.count == 1)
     }

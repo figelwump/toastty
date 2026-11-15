@@ -83,6 +83,13 @@ struct CoordinatorAttachments: Sendable {
         }
     }
 
+    /// Whether message `messageID` has copies here. A refused message keeps
+    /// none, and Remove deletes them, so a message with copies was sent or
+    /// still waits.
+    func hasCopies(messageID: String) -> Bool {
+        FileManager.default.fileExists(atPath: folderURL(messageID: messageID).path)
+    }
+
     /// The messages whose folders `text` names as paths.
     func messageIDs(namedIn text: String) -> Set<String> {
         let prefix = folderPathPrefix

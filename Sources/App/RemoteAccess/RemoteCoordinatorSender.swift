@@ -29,8 +29,11 @@ final class RemoteCoordinatorSender {
     /// The device lost its permission while the message's files were copied.
     private struct PermissionRevoked: Error {}
 
-    /// The answers that this run remembers for repeats. A repeat after a
-    /// Mac relaunch finds its message by ID while the message still waits.
+    /// The answers that this run remembers for repeats, for each device. A
+    /// phone repeats only the draft of its one open sheet, so neither its
+    /// own nor another device's later sends push that answer out. A repeat
+    /// after a Mac relaunch finds its message by ID while the message still
+    /// waits, or by its copies when it had files.
     static let maximumRememberedAnswers = 200
 
     private let coordinator: () -> CoordinatorController?
@@ -46,7 +49,8 @@ final class RemoteCoordinatorSender {
     /// The answer to each request that sent or saved its message, so a
     /// repeat gets it again and sends nothing new.
     private var answers: [RequestKey: RemoteCoordinatorSendResult] = [:]
-    private var answerOrder: [RequestKey] = []
+    /// Each device's remembered requests, oldest first.
+    private var answerOrder: [UUID: [RequestKey]] = [:]
 
     init(
         coordinator: @escaping () -> CoordinatorController?,
@@ -104,10 +108,12 @@ final class RemoteCoordinatorSender {
 
     private func remember(_ result: RemoteCoordinatorSendResult, for key: RequestKey) {
         answers[key] = result
-        answerOrder.append(key)
-        while answerOrder.count > Self.maximumRememberedAnswers {
-            answers[answerOrder.removeFirst()] = nil
+        var order = answerOrder[key.deviceID, default: []]
+        order.append(key)
+        while order.count > Self.maximumRememberedAnswers {
+            answers[order.removeFirst()] = nil
         }
+        answerOrder[key.deviceID] = order
     }
 
     private func performSend(_ request: RemoteCoordinatorSendRequest, deviceID: UUID) async -> RemoteCoordinatorSendResult {
@@ -119,6 +125,11 @@ final class RemoteCoordinatorSender {
         // queue under the same ID.
         if let waiting = Self.waitingAnswer(messageID: messageID.uuidString, in: controller) {
             return waiting
+        }
+        // A message with files that the coordinator took before the
+        // relaunch: its copies stay in the coordinator's folder.
+        if request.attachments.isEmpty == false, controller.attachments.hasCopies(messageID: messageID.uuidString) {
+            return .sent
         }
         let choices = choices()
         var project: CoordinatorMessageHeader.Workspace?

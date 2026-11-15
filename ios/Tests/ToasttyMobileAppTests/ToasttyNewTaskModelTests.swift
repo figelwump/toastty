@@ -406,7 +406,7 @@ final class ToasttyNewTaskModelTests: XCTestCase {
     func testAutoSendsNoChoiceAndAPillTheUserSetsGoesAsTheirChoice() async {
         let (model, host) = await coordinatorSheet()
         model.updateText("  Unread dot stays on\n")
-        let screenshot = RemoteMessageAttachment(filename: "screen.png", data: Data([137, 80, 78, 71]))
+        let screenshot = RemoteMessageAttachment(filename: "screen.png", data: Data([137, 80, 78, 71, 13, 10, 26, 10, 1]))
         XCTAssertNil(model.addAttachments([screenshot]))
         host.sendOutcomes = [.answered(.sent)]
         await model.send()
