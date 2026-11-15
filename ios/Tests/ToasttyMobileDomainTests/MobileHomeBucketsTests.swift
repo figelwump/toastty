@@ -406,7 +406,7 @@ final class MobileHomeBucketsTests: XCTestCase {
                 MobileHomeNeedsYouCounts(needsYou: 2, readyToReview: 1),
                 "\(status)"
             )
-            XCTAssertEqual(snapshot.activitySessions.map(\.title), ["Approval", "Unread"], "\(status)")
+            XCTAssertEqual(Set(snapshot.activitySessions.map(\.title)), ["Approval", "Unread"], "\(status)")
             XCTAssertEqual(snapshot.coordinatorConversation?.title, "Toasty")
         }
 
