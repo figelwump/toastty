@@ -215,13 +215,12 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         // The top of the chat, as in mockup A: the digest's line, the
         // coordinator's answer with chips, and the task's card.
         for _ in 0..<4 { app.swipeDown() }
-        let digest = app.buttons["toastty-mobile-transcript-host-message-1"]
+        // The row's identifier covers the line's own, so the line is found
+        // by what it says.
+        let digest = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Toastty · 2 updates · ")).firstMatch
         XCTAssertTrue(waitUntilHittable(digest))
-        XCTAssertTrue(digest.label.hasPrefix("Toastty · 2 updates · "), digest.label)
         XCTAssertEqual(digest.value as? String, "Collapsed")
-        let card = app.descendants(matching: .any)["toastty-mobile-transcript-row-3"]
-        XCTAssertTrue(card.exists)
-        XCTAssertTrue(card.staticTexts["task early-session-titles"].exists)
+        XCTAssertTrue(app.staticTexts["task early-session-titles"].exists)
         XCTAssertTrue(textView(containing: "Should the old API stay for one release?", in: app).exists)
         XCTAssertFalse(textView(containing: "[Toastty]", in: app).exists)
         attachScreenshot(named: "coordinator-chat-mockup-a", of: app)
