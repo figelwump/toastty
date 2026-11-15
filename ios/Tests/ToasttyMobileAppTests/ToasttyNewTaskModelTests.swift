@@ -342,7 +342,8 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         defaultWorkspaceID: UUID? = nil,
         frequent: [RemoteTaskPreset]? = nil,
         defaultPreset: RemoteTaskPreset? = nil,
-        supportsAttachments: Bool = true
+        supportsAttachments: Bool = true,
+        coordinator: RemoteCoordinatorSendState? = nil
     ) -> ToasttyTaskCreateOptionsOutcome {
         .loaded(RemoteTaskCreateOptionsResponse(
             permission: .allowed,
@@ -351,8 +352,221 @@ final class ToasttyNewTaskModelTests: XCTestCase {
             agents: agents(),
             frequentPresets: frequent ?? [opus, sol],
             defaultPreset: defaultPreset,
-            supportsAttachments: supportsAttachments
+            supportsAttachments: supportsAttachments,
+            coordinator: coordinator
         ))
+    }
+
+    // MARK: - To the coordinator
+
+    private let running = RemoteCoordinatorSendState(agent: .running)
+
+    /// A sheet on a Mac with a running coordinator, whose quick entry
+    /// would start on emptyos and Codex · gpt-6.1-sol · high.
+    private func coordinatorSheet(
+        _ state: RemoteCoordinatorSendState? = nil
+    ) async -> (ToasttyNewTaskModel, FakeNewTaskHost) {
+        let host = FakeNewTaskHost(
+            options: options(defaultWorkspaceID: emptyos.id, defaultPreset: sol, coordinator: state ?? running),
+            supportsCoordinatorSend: true
+        )
+        var requestIDs = (1...20).map { "request-\($0)" }
+        let model = ToasttyNewTaskModel(host: host, makeRequestID: { requestIDs.removeFirst() })
+        await model.loadOptions()
+        return (model, host)
+    }
+
+    func testTheSheetSendsToTheCoordinatorOnlyWhileTheMacOffersOne() async {
+        let (model, _) = await coordinatorSheet()
+        XCTAssertTrue(model.sendsToCoordinator)
+        XCTAssertEqual([model.workspacePillTitle, model.agentPillTitle], ["Auto", "Auto"])
+        XCTAssertTrue(model.workspaceIsAuto && model.agentIsAuto)
+        XCTAssertFalse(model.showsModelAndEffort, "Model and Effort belong to a chosen agent")
+        XCTAssertFalse(model.canSend, "Nothing to send yet")
+        model.updateText("Unread dot stays on")
+        XCTAssertTrue(model.canSend)
+        XCTAssertTrue(model.canCreate, "Create uses the values the pills started on")
+
+        // An older Mac: a coordinator in the options, but no capability.
+        let older = ToasttyNewTaskModel(host: FakeNewTaskHost(options: options(coordinator: running)))
+        await older.loadOptions()
+        XCTAssertFalse(older.sendsToCoordinator)
+        XCTAssertEqual(older.workspacePillTitle, "toastty")
+        XCTAssertTrue(older.showsModelAndEffort)
+
+        // A Mac that takes messages for a coordinator, but has none now.
+        let none = ToasttyNewTaskModel(host: FakeNewTaskHost(options: options(), supportsCoordinatorSend: true))
+        await none.loadOptions()
+        none.updateText("Fix it")
+        XCTAssertFalse(none.sendsToCoordinator)
+        XCTAssertFalse(none.canSend)
+        XCTAssertEqual(none.agentPillTitle, "Claude")
+    }
+
+    func testAutoSendsNoChoiceAndAPillTheUserSetsGoesAsTheirChoice() async {
+        let (model, host) = await coordinatorSheet()
+        model.updateText("  Unread dot stays on\n")
+        let screenshot = RemoteMessageAttachment(filename: "screen.png", data: Data([137, 80, 78, 71]))
+        XCTAssertNil(model.addAttachments([screenshot]))
+        host.sendOutcomes = [.answered(.sent)]
+        await model.send()
+        let auto = host.sendRequests.last
+        XCTAssertNil(auto?.workspaceID)
+        XCTAssertNil(auto?.profileID)
+        XCTAssertNil(auto?.model)
+        XCTAssertNil(auto?.effort)
+        XCTAssertEqual(auto?.text, "Unread dot stays on")
+        XCTAssertEqual(auto?.attachments, [screenshot])
+        XCTAssertEqual(model.phase, .sent(.sent))
+        XCTAssertTrue(host.requests.isEmpty, "Send makes no task itself")
+
+        // A chosen agent starts on Default: only what the user sets goes.
+        let (chosen, chosenHost) = await coordinatorSheet()
+        chosen.updateText("Fix the computer update")
+        chosen.selectWorkspace(emptyos.id)
+        XCTAssertEqual(chosen.workspacePillTitle, "emptyos", "Choosing the value it started on is still a choice")
+        chosen.selectAgent(chosen.agents[1])
+        XCTAssertEqual([chosen.agentPillTitle, chosen.modelTitle, chosen.effortTitle], ["Codex", "Default", "Default"])
+        XCTAssertTrue(chosen.showsModelAndEffort)
+        chosen.selectEffort("high")
+        chosenHost.sendOutcomes = [.answered(.waiting(reason: .working))]
+        await chosen.send()
+        let request = chosenHost.sendRequests.last
+        XCTAssertEqual(request?.workspaceID, emptyos.id)
+        XCTAssertEqual(request?.profileID, "codex")
+        XCTAssertNil(request?.model)
+        XCTAssertEqual(request?.effort, "high")
+        XCTAssertEqual(chosen.phase, .sent(.waiting(reason: .working)))
+
+        // A Frequent preset sets all three; Auto takes the choices back.
+        let (frequent, frequentHost) = await coordinatorSheet()
+        frequent.updateText("Fix it")
+        frequent.selectPreset(opus)
+        frequent.selectWorkspace(toastty.id)
+        frequent.selectAutoWorkspace()
+        XCTAssertEqual(frequent.workspacePillTitle, "Auto")
+        XCTAssertEqual(frequent.workspaceID, emptyos.id, "Auto goes back to the value the sheet started on")
+        frequentHost.sendOutcomes = [.answered(.sent)]
+        await frequent.send()
+        XCTAssertNil(frequentHost.sendRequests.last?.workspaceID)
+        XCTAssertEqual(frequentHost.sendRequests.last?.profileID, "claude")
+        XCTAssertEqual(frequentHost.sendRequests.last?.model, "claude-opus-5-5")
+        XCTAssertEqual(frequentHost.sendRequests.last?.effort, "xhigh")
+    }
+
+    func testCreateMakesTheTaskDirectlyWithTheStartingValuesForAutoPills() async {
+        let (model, host) = await coordinatorSheet()
+        model.updateText("Fix the composer")
+        host.outcomes = [.answered(.created(taskID: UUID()))]
+        await model.create()
+        XCTAssertEqual(host.requests.last?.workspaceID, emptyos.id)
+        XCTAssertEqual(host.requests.last?.profileID, "codex")
+        XCTAssertEqual(host.requests.last?.model, "gpt-6.1-sol")
+        XCTAssertEqual(host.requests.last?.effort, "high")
+        XCTAssertTrue(host.sendRequests.isEmpty, "Create sends nothing to the coordinator")
+        XCTAssertEqual(model.phase, .created)
+
+        // A pill the user set is used.
+        let (chosen, chosenHost) = await coordinatorSheet()
+        chosen.updateText("Fix the composer")
+        chosen.selectWorkspace(toastty.id)
+        chosen.selectAutoAgent()
+        chosenHost.outcomes = [.answered(.created(taskID: UUID()))]
+        await chosen.create()
+        XCTAssertEqual(chosenHost.requests.last?.workspaceID, toastty.id)
+        XCTAssertEqual(chosenHost.requests.last?.profileID, "codex")
+    }
+
+    func testTheSheetSaysWhenTheMessageWillWait() async {
+        let (notRunning, _) = await coordinatorSheet(RemoteCoordinatorSendState(agent: .notRunning))
+        XCTAssertEqual(notRunning.coordinatorNote, "The coordinator is not running. Your message waits on your Mac until it starts.")
+        XCTAssertTrue(notRunning.coordinatorNoteIsWarning)
+        notRunning.updateText("Fix it")
+        XCTAssertTrue(notRunning.canSend, "The message waits; the send is not blocked")
+
+        let (starting, _) = await coordinatorSheet(RemoteCoordinatorSendState(agent: .starting))
+        XCTAssertEqual(starting.coordinatorNote, "The coordinator is starting. Your message waits on your Mac until it is ready.")
+        XCTAssertTrue(starting.coordinatorNoteIsWarning)
+
+        let (queued, _) = await coordinatorSheet(RemoteCoordinatorSendState(agent: .running, waitingCount: 2))
+        XCTAssertEqual(queued.coordinatorNote, "2 messages wait for the coordinator.")
+        XCTAssertFalse(queued.coordinatorNoteIsWarning)
+
+        let (atRest, _) = await coordinatorSheet()
+        XCTAssertNil(atRest.coordinatorNote)
+    }
+
+    func testOnlyAMissingPermissionBlocksASend() async {
+        for permission in [RemoteSessionStartPermission.startDisabled, .sendDisabled] {
+            let host = FakeNewTaskHost(
+                options: .loaded(RemoteTaskCreateOptionsResponse(
+                    permission: permission, workspaces: [toastty], agents: agents(), coordinator: running
+                )),
+                supportsCoordinatorSend: true
+            )
+            let model = ToasttyNewTaskModel(host: host)
+            await model.loadOptions()
+            model.updateText("Fix it")
+            XCTAssertNotNil(model.blockingMessage)
+            XCTAssertFalse(model.canSend)
+            await model.send()
+            XCTAssertTrue(host.sendRequests.isEmpty)
+        }
+        // The coordinator can answer without a project or an agent; only
+        // Create needs them.
+        let host = FakeNewTaskHost(
+            options: .loaded(RemoteTaskCreateOptionsResponse(permission: .allowed, coordinator: running)),
+            supportsCoordinatorSend: true
+        )
+        let model = ToasttyNewTaskModel(host: host)
+        await model.loadOptions()
+        model.updateText("Which project has the flaky test?")
+        XCTAssertNil(model.blockingMessage)
+        XCTAssertTrue(model.canSend)
+        XCTAssertFalse(model.canCreate)
+    }
+
+    func testARetryReusesTheRequestIDUntilTheDraftChanges() async {
+        let (model, host) = await coordinatorSheet()
+        model.updateText("Fix it")
+        host.sendOutcomes = [.unconfirmed, .answered(.unrecognized), .answered(.rejected(reason: .busy, message: nil))]
+        await model.send()
+        XCTAssertEqual(model.errorMessage, ToasttyNewTaskModel.sendUnreachableMessage)
+        XCTAssertEqual(model.phase, .form)
+        await model.send()
+        XCTAssertEqual(model.errorMessage, ToasttyNewTaskModel.unrecognizedSendAnswerMessage)
+        await model.send()
+        XCTAssertEqual(host.sendRequests.map(\.clientRequestID), ["request-1", "request-1", "request-1"])
+
+        model.updateText("Fix it now")
+        host.sendOutcomes = [.answered(.sent)]
+        await model.send()
+        XCTAssertEqual(host.sendRequests.last?.clientRequestID, "request-2", "An edit makes a new message")
+    }
+
+    func testWithoutACoordinatorTheSheetReloadsAndCreatesTheTaskItself() async {
+        let (model, host) = await coordinatorSheet()
+        model.updateText("Fix it")
+        host.sendOutcomes = [.answered(.rejected(reason: .noCoordinator, message: nil))]
+        host.options = options(defaultWorkspaceID: emptyos.id, defaultPreset: sol)
+        await model.send()
+        XCTAssertEqual(model.errorMessage, "Your Mac has no coordinator now. Nothing was sent. Tap Create to make the task yourself.")
+        XCTAssertFalse(model.sendsToCoordinator)
+        XCTAssertEqual(model.workspacePillTitle, "emptyos")
+        XCTAssertEqual(model.text, "Fix it", "The draft stays")
+        XCTAssertTrue(model.canCreate)
+    }
+
+    func testTheNoticeSaysWhereTheMessageWent() {
+        XCTAssertEqual(ToasttyNewTaskModel.sentNotice(.sent), "Sent to the coordinator")
+        XCTAssertEqual(
+            ToasttyNewTaskModel.sentNotice(.waiting(reason: .working)),
+            "Waits on your Mac: the coordinator is working"
+        )
+        XCTAssertEqual(
+            ToasttyNewTaskModel.sentNotice(.waiting(reason: .notRunning)),
+            "Waits on your Mac: the coordinator is not running"
+        )
     }
 }
 
@@ -361,9 +575,13 @@ private final class FakeNewTaskHost: ToasttyNewTaskHost {
     var options: ToasttyTaskCreateOptionsOutcome
     var outcomes: [ToasttyTaskCreateOutcome] = []
     private(set) var requests: [RemoteTaskCreateRequest] = []
+    var supportsCoordinatorSend: Bool
+    var sendOutcomes: [ToasttyCoordinatorSendOutcome] = []
+    private(set) var sendRequests: [RemoteCoordinatorSendRequest] = []
 
-    init(options: ToasttyTaskCreateOptionsOutcome) {
+    init(options: ToasttyTaskCreateOptionsOutcome, supportsCoordinatorSend: Bool = false) {
         self.options = options
+        self.supportsCoordinatorSend = supportsCoordinatorSend
     }
 
     func taskCreateOptions() async -> ToasttyTaskCreateOptionsOutcome {
@@ -373,5 +591,10 @@ private final class FakeNewTaskHost: ToasttyNewTaskHost {
     func createTask(_ request: RemoteTaskCreateRequest) async -> ToasttyTaskCreateOutcome {
         requests.append(request)
         return outcomes.isEmpty ? .unconfirmed : outcomes.removeFirst()
+    }
+
+    func sendToCoordinator(_ request: RemoteCoordinatorSendRequest) async -> ToasttyCoordinatorSendOutcome {
+        sendRequests.append(request)
+        return sendOutcomes.isEmpty ? .unconfirmed : sendOutcomes.removeFirst()
     }
 }

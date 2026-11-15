@@ -180,7 +180,160 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["Coordinator"].waitForSelection())
     }
 
+    // MARK: - New Task to the coordinator
+
+    func testNewTaskSendsToTheCoordinatorWithAutoPillsAndSaysItWasSent() {
+        let app = launch(coordinator: "quiet")
+        let newTask = app.buttons["toastty-mobile-home-new-task"]
+        XCTAssertTrue(newTask.waitForExistence(timeout: 10))
+        newTask.tap()
+
+        // The Mac's panel with a coordinator: To coordinator, Send first,
+        // both pills on Auto, and Create Task kept.
+        let send = app.buttons["toastty-mobile-new-task-send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["To Coordinator"].exists)
+        XCTAssertFalse(send.isEnabled, "A message needs its text")
+        let workspace = app.buttons["toastty-mobile-new-task-workspace"]
+        let agent = app.buttons["toastty-mobile-new-task-agent"]
+        XCTAssertEqual(workspace.value as? String, "Auto")
+        XCTAssertEqual(agent.value as? String, "Auto")
+        XCTAssertFalse(app.buttons["toastty-mobile-new-task-model"].exists, "Model and Effort belong to a chosen agent")
+        XCTAssertFalse(app.buttons["toastty-mobile-new-task-effort"].exists)
+        XCTAssertTrue(app.buttons["toastty-mobile-new-task-create"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-new-task-coordinator-note"].exists,
+                       "A coordinator at its prompt takes the message at once")
+        attachScreenshot(named: "coordinator-new-task-empty", of: app)
+
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        text.tap()
+        text.typeText("Unread dot stays on after reading on the phone.")
+        XCTAssertTrue(waitUntil(timeout: 5) { send.isEnabled })
+
+        // The first row of a list sets the pill back to Auto.
+        workspace.tap()
+        let research = app.buttons["herdr research"]
+        XCTAssertTrue(research.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Auto"].exists)
+        attachScreenshot(named: "coordinator-new-task-workspace-menu", of: app)
+        research.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { workspace.value as? String == "herdr research" })
+        agent.tap()
+        let claude = app.buttons["Claude"]
+        XCTAssertTrue(claude.waitForExistence(timeout: 5))
+        claude.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "Claude" })
+        XCTAssertEqual(app.buttons["toastty-mobile-new-task-model"].value as? String, "Default")
+        agent.tap()
+        let auto = app.buttons["Auto"]
+        XCTAssertTrue(auto.waitForExistence(timeout: 5))
+        auto.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "Auto" })
+        attachScreenshot(named: "coordinator-new-task-filled", of: app)
+
+        send.tap()
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(notice.label, "Sent to the coordinator")
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-task-sheet"].waitForNonExistence(timeout: 5))
+        attachScreenshot(named: "coordinator-new-task-sent", of: app)
+    }
+
+    func testTheSheetSaysWhenTheCoordinatorIsNotRunningAndTheMessageWaits() {
+        let app = launch(coordinator: "not-running")
+        app.tabBars.buttons["Tasks"].tap()
+        let newTask = app.buttons["toastty-mobile-tasks-new-task"]
+        XCTAssertTrue(newTask.waitForExistence(timeout: 10))
+        newTask.tap()
+
+        let send = app.buttons["toastty-mobile-new-task-send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        let note = app.descendants(matching: .any)["toastty-mobile-new-task-coordinator-note"]
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        XCTAssertTrue(note.label.contains("The coordinator is not running. Your message waits on your Mac until it starts."),
+                      note.label)
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        text.tap()
+        text.typeText("Check the release notes.")
+        XCTAssertTrue(waitUntil(timeout: 5) { send.isEnabled })
+        attachScreenshot(named: "coordinator-new-task-not-running", of: app)
+
+        send.tap()
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(notice.label, "Waits on your Mac: the coordinator is not running")
+        attachScreenshot(named: "coordinator-new-task-waits", of: app)
+    }
+
+    func testCreateInTheCoordinatorFormMakesTheTaskDirectly() {
+        let app = launch(coordinator: "quiet")
+        let newTask = app.buttons["toastty-mobile-home-new-task"]
+        XCTAssertTrue(newTask.waitForExistence(timeout: 10))
+        newTask.tap()
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertFalse(create.isEnabled, "A task needs its text")
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        text.tap()
+        text.typeText("Composer keeps a blank line after send.")
+        XCTAssertTrue(waitUntil(timeout: 5) { create.isEnabled })
+        // The line under Create Task names what Auto falls back to.
+        let footer = app.descendants(matching: .any)["toastty-mobile-new-task-footer"]
+        XCTAssertTrue(footer.label.contains("Create Task makes it now in toastty with codex · gpt-6.1-sol · high."),
+                      footer.label)
+        create.tap()
+
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(notice.label, "Task saved on your Mac. It's setting up now.")
+    }
+
+    /// A Mac with a coordinator that does not take a message from the
+    /// phone, such as one from before the phone could send to it: the sheet
+    /// is as it was.
+    func testWithoutTheCapabilityTheSheetCreatesTheTaskAsBefore() {
+        let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_SEND": "unsupported"])
+        let newTask = app.buttons["toastty-mobile-home-new-task"]
+        XCTAssertTrue(newTask.waitForExistence(timeout: 10))
+        newTask.tap()
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["New Task"].exists)
+        XCTAssertFalse(app.buttons["toastty-mobile-new-task-send"].exists)
+        XCTAssertEqual(app.buttons["toastty-mobile-new-task-workspace"].value as? String, "toastty")
+        XCTAssertEqual(app.buttons["toastty-mobile-new-task-agent"].value as? String, "Codex")
+        attachScreenshot(named: "coordinator-new-task-without-capability", of: app)
+    }
+
+    func testSharedContentOpensTheCoordinatorForm() throws {
+        let app = launch(coordinator: "working", environment: ["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "link"])
+        let link = try XCTUnwrap(URL(string: "toastty-mobile-dev://shared-draft/5A4E0D2A-0000-4000-8000-000000000001"))
+        app.open(link)
+        let send = app.buttons["toastty-mobile-new-task-send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 10))
+        let text = app.textViews["toastty-mobile-new-task-text"]
+        XCTAssertEqual(text.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
+        XCTAssertTrue(app.staticTexts["Shared screenshot.png"].exists)
+        XCTAssertTrue(waitUntil(timeout: 5) { send.isEnabled })
+        attachScreenshot(named: "coordinator-new-task-shared-draft", of: app)
+        send.tap()
+
+        // A working coordinator keeps a quick entry message for its turn's end.
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 10))
+        XCTAssertEqual(notice.label, "Waits on your Mac: the coordinator is working")
+    }
+
     // MARK: - Helpers
+
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < deadline
+        return condition()
+    }
 
     private func launch(coordinator: String?, environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()

@@ -83,6 +83,9 @@ protocol LiveConnectionRuntime: Sendable {
     func createTask(
         _ request: RemoteTaskCreateRequest
     ) async throws -> RemoteTaskCreateResponse?
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse?
 }
 
 extension LiveConnectionRuntime {
@@ -160,6 +163,12 @@ extension LiveConnectionRuntime {
     func createTask(
         _ request: RemoteTaskCreateRequest
     ) async throws -> RemoteTaskCreateResponse? {
+        nil
+    }
+
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse? {
         nil
     }
 
@@ -352,6 +361,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteTaskCreateResponse? {
         try await coordinator.createTask(request)
     }
+
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse? {
+        try await coordinator.sendToCoordinator(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -541,6 +556,16 @@ final class LiveSessionsController {
                 }
             }
         )
+        homeController.installCoordinatorSend { [runtime] request in
+            // Any failure leaves it unknown whether the Mac sent the
+            // message, so the caller retries with the same request ID.
+            do {
+                let response = try await runtime.sendToCoordinator(request)
+                return response.map { .answered($0.result) } ?? .unconfirmed
+            } catch {
+                return .unconfirmed
+            }
+        }
         homeController.installConversationLifecycle(
             onOpen: { [weak self] conversationID in
                 Task { @MainActor [weak self] in
@@ -746,6 +771,7 @@ final class LiveSessionsController {
         homeController.setHostSupportsTaskActions(acceptsTaskActions)
         homeController.setHostSupportsProjectRelease(acceptsProjectRelease)
         homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
+        homeController.setHostSupportsCoordinatorSend(acceptsCoordinatorSend)
         await runtime.updateDeviceScopes(scopes)
     }
 
@@ -772,6 +798,11 @@ final class LiveSessionsController {
     /// gated like a session start.
     private var acceptsTaskCreate: Bool {
         coordinatorState.capabilities.contains(.taskCreate) && deviceScopes.contains(.send)
+    }
+    /// The coordinator makes a task from the message, so it is gated as a
+    /// task create is.
+    private var acceptsCoordinatorSend: Bool {
+        coordinatorState.capabilities.contains(.coordinatorSend) && deviceScopes.contains(.send)
     }
 
     private var acceptsConversationFlag: Bool {

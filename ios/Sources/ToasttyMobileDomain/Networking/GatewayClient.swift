@@ -123,6 +123,9 @@ public protocol GatewayClientProtocol: Sendable {
     func createTask(
         _ request: RemoteTaskCreateRequest
     ) async throws -> RemoteTaskCreateResponse
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse
 }
 
 public extension GatewayClientProtocol {
@@ -223,6 +226,12 @@ public extension GatewayClientProtocol {
     func createTask(
         _ request: RemoteTaskCreateRequest
     ) async throws -> RemoteTaskCreateResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -639,6 +648,27 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         let response = try await sendTransportRequest(urlRequest)
         guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
         return try decodeVersioned(RemoteTaskCreateResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    /// Uses the upload route when files are attached, as a task create
+    /// does, so the Mac authorizes the headers before it reads the body.
+    public func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse {
+        var urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: request.attachments.isEmpty
+                ? RemoteCoordinatorSendPolicy.sendPath
+                : RemoteCoordinatorSendPolicy.sendWithAttachmentsPath,
+            body: try request.encodedForTransport(),
+            sendsOrigin: true
+        )
+        if !request.attachments.isEmpty { urlRequest.timeoutInterval = 150 }
+        let response = try await sendTransportRequest(urlRequest)
+        guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
+        return try decodeVersioned(RemoteCoordinatorSendResponse.self, from: response.body) {
             $0.protocolVersion
         }
     }

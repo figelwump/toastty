@@ -990,6 +990,24 @@ public actor ConnectionCoordinator {
         return try await gateway.createTask(request)
     }
 
+    /// Sends a quick entry message to the coordinator, only while live
+    /// against a host that advertises it. `nil` means nothing was sent, so
+    /// the caller may repeat the request with the same `clientRequestID`.
+    public func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorSend) else {
+            return nil
+        }
+        // When this device is known to have lost send access, answer as the
+        // Mac would without asking it.
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteCoordinatorSendResponse(result: .rejected(reason: .permissionDenied, message: nil))
+        }
+        return try await gateway.sendToCoordinator(request)
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

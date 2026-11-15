@@ -809,7 +809,8 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: shownNotice)
             .sensoryFeedback(trigger: controller.subspaceDoneNotice) { _, notice in
                 switch notice?.kind {
-                case .changed?, .flagChanged?, .sessionStarted?, .taskCreated?, .sessionClosed?, .taskAction?: .success
+                case .changed?, .flagChanged?, .sessionStarted?, .taskCreated?, .coordinatorMessage?, .sessionClosed?,
+                     .taskAction?: .success
                 case .failed?: .error
                 case nil: nil
                 }

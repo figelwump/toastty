@@ -720,6 +720,12 @@ you when it is not sure, and creates the task.
 - **In the chat** a quick entry message shows your text, and under it your
   choices and the files: an image as a thumbnail, another file as its name.
   The terminal shows the message as typed.
+- **From the iPhone**, **+** in Home or the Tasks tab, and content shared to
+  Toastty, open the New Task sheet as **To Coordinator** while the coordinator's
+  workspace exists. It works as this panel does: **Send**, Auto pills,
+  **Create Task**, and a note when the coordinator is not running or is
+  starting. The phone sends no project hint; set Workspace to name a project.
+  See [To the coordinator](remote-access.md#to-the-coordinator).
 
 A message looks like this in the coordinator's terminal:
 

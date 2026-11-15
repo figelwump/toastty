@@ -970,11 +970,65 @@ session and shared content opens the new-session sheet. The Mac records the
 task's source as Toastty Mobile; a Toastty build from before this change shows
 it as created from the CLI.
 
+#### To the coordinator
+
+While the Mac has a coordinator (see
+[Quick entry with the coordinator](tasks.md#quick-entry-with-the-coordinator)),
+**+** opens the same sheet with the title **To Coordinator**, as the Mac's
+quick entry panel has the label **To coordinator**. **Send** is the main
+action: the Mac sends your text to the coordinator as a quick entry message,
+and the coordinator chooses the project and the agent, asks you when it is
+not sure, and creates the task.
+
+- **Workspace and Agent start as Auto.** Auto leaves the choice to the
+  coordinator. A value that you set goes with the message as your choice, and
+  the first row of each menu sets the pill back to Auto. **Model** and
+  **Effort** show after you choose an agent, and start on **Default**. A
+  **Frequent** preset sets all three.
+- **No project hint.** The Mac's panel also names the project that is selected
+  in Toastty as a hint. The phone sends none: the sheet opens from Home or the
+  Tasks tab, which show every project, and the Mac's selection says where you
+  last worked on the Mac, not what you look at on the phone. Set Workspace to
+  name a project.
+- **Create Task** under the pills makes the task directly, without the
+  coordinator, as the sheet does without one. A pill left on Auto uses the
+  value the sheet starts on without a coordinator, and the line under the
+  button names both.
+- **The message waits on the Mac** until the coordinator's prompt takes it,
+  and never goes into a running turn, as for quick entry on the Mac. When the
+  coordinator is not running or is starting, the sheet says so before you
+  send. After a send, Home or the Tasks tab says **Sent to the coordinator**,
+  or why the message waits, for example **Waits on your Mac: the coordinator
+  is working**.
+- **Files** follow the limits above. The Mac copies them into the
+  coordinator's folder, with the names you gave them cleaned as on the Mac,
+  and the message ends with their paths. The Mac deletes the uploads.
+- **Permission** is the same as for creating a task: the coordinator makes a
+  task from the message.
+- **Retries.** If the phone does not get an answer, **Send** sends the same
+  request again, and the Mac answers with the first result and sends nothing
+  new. The Mac remembers each answer until it quits. After a relaunch, it
+  finds a message that still waits by its ID; a message that the coordinator
+  already took before the quit can be sent a second time.
+
+The Mac advertises the `coordinator_send` capability for
+`POST /api/coordinator.send`, and the native-only
+`POST /api/coordinator.send-with-attachments` route with the task create
+upload checks. While the Mac has a coordinator, the task create options carry
+`coordinator` with the agent's state (`running`, `starting` or
+`not_running`) and the number of waiting messages. The answer's `status` is
+`sent`, `waiting` with a `reason` (`not_running`, `starting`, `working`,
+`user_draft`, `prompt_not_open`, `not_saved`), or `rejected` with a `reason`,
+such as `no_coordinator` when the Mac has no coordinator workspace now. The
+sheet then shows the error and turns back into the New Task sheet. With an
+older Mac, or with no coordinator, the sheet is as described above.
+
 ### Share to Toastty from other apps
 
 In Photos, Safari, Files, or any app with a share sheet, tap **Share**, then
 **Toastty**. Toastty opens the New Task sheet filled in, or the new-session
-sheet when the Mac cannot create tasks. Images, PDFs, and supported text files
+sheet when the Mac cannot create tasks. While the Mac has a coordinator, the
+sheet sends to it ([To the coordinator](#to-the-coordinator)). Images, PDFs, and supported text files
 become attachments. A link becomes the page title and URL in the text, and
 shared text goes in the text as is. A new-session sheet starts on the same
 workspace as **+** on Home. Check the workspace and agent, then tap **Create**
@@ -1160,6 +1214,13 @@ support conversations; update Toastty on the Mac to enable previews.
   permission again before it stores the files and before it saves the task.
   Accepted and refused creates are recorded in the audit log with the device,
   without the task text.
+- A message to the coordinator has the same requirements as creating a task.
+  The device chooses only an open top-level workspace, an agent profile, a
+  model, an effort level, the text, and attached files; the Mac writes
+  Toastty's first line itself. The Mac checks the permission again before it
+  stores the files and directly before it types or saves the message. Sent,
+  waiting and refused messages are recorded in the audit log with the device,
+  without the text.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These

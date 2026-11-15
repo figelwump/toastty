@@ -19,11 +19,25 @@ enum ToasttyTaskCreateOutcome: Equatable, Sendable {
     case unconfirmed
 }
 
+/// What the phone learned from asking the Mac to send a message to the
+/// coordinator.
+enum ToasttyCoordinatorSendOutcome: Equatable, Sendable {
+    case answered(RemoteCoordinatorSendResult)
+    /// No answer: the request failed on the way or was never sent. The Mac
+    /// may still have the message, so a retry must reuse the same request
+    /// ID.
+    case unconfirmed
+}
+
 /// The parts of the app the New Task sheet talks to.
 @MainActor
 protocol ToasttyNewTaskHost: AnyObject {
+    /// The Mac takes messages for its coordinator from this device. The
+    /// create options then say whether it has a coordinator now.
+    var supportsCoordinatorSend: Bool { get }
     func taskCreateOptions() async -> ToasttyTaskCreateOptionsOutcome
     func createTask(_ request: RemoteTaskCreateRequest) async -> ToasttyTaskCreateOutcome
+    func sendToCoordinator(_ request: RemoteCoordinatorSendRequest) async -> ToasttyCoordinatorSendOutcome
 }
 
 extension HomeScreenController: ToasttyNewTaskHost {}
@@ -32,6 +46,13 @@ extension HomeScreenController: ToasttyNewTaskHost {}
 /// quick entry: the task text and files, a project, and an agent preset.
 /// The Mac saves the task at once and runs its setup, so the sheet closes
 /// as soon as the Mac answers.
+///
+/// While the Mac has a coordinator and takes messages for it, the sheet
+/// sends to it, as the Mac's panel does: Send is the main action, the
+/// Workspace and Agent pills start as Auto and leave the choice to the
+/// coordinator, and a pill the user sets goes with the message as their
+/// choice. Create still makes the task directly, with the values the pills
+/// start on for a pill left on Auto.
 @MainActor
 @Observable
 final class ToasttyNewTaskModel: Identifiable {
@@ -44,9 +65,17 @@ final class ToasttyNewTaskModel: Identifiable {
         case creating
         /// The Mac saved the task.
         case created
+        /// A message for the coordinator is on its way.
+        case sending
+        /// The coordinator has the message, or the Mac keeps it until the
+        /// coordinator's prompt takes it.
+        case sent(RemoteCoordinatorSendResult)
     }
 
     static let unreachableMessage = "Couldn't reach your Mac. Your task is still here. Tap Create to try again."
+    static let sendUnreachableMessage = "Couldn't reach your Mac. Your message is still here. Tap Send to try again."
+    static let unrecognizedSendAnswerMessage = "Your Mac sent an answer this app doesn't understand. Check the coordinator on the Mac before you send again, and update Toastty Mobile."
+    static let autoTitle = "Auto"
     static let unrecognizedAnswerMessage = "Your Mac sent an answer this app doesn't understand. Check the Mac before you try again, and update Toastty Mobile."
     static let textTooLongMessage = "That task is too long to send. Shorten it and tap Create again."
     static let attachmentsTooLargeMessage = "That task and its attachments are too large to send. Shorten the task or remove a file, then tap Create again."
@@ -67,6 +96,14 @@ final class ToasttyNewTaskModel: Identifiable {
     private(set) var errorMessage: String?
     /// The form is asking the Mac for its options again.
     private(set) var isReloadingOptions = false
+    /// The coordinator, while the Mac has one and takes messages for it
+    /// from this device. The sheet then sends to it.
+    private(set) var coordinator: RemoteCoordinatorSendState?
+    /// The user set the Workspace pill in this sheet. Only then does a
+    /// message for the coordinator name the project as the user's choice.
+    private(set) var choseWorkspace = false
+    /// The user set the agent, model or effort in this sheet.
+    private(set) var chosePreset = false
 
     @ObservationIgnored private let host: any ToasttyNewTaskHost
     @ObservationIgnored private let makeRequestID: () -> String
@@ -75,6 +112,15 @@ final class ToasttyNewTaskModel: Identifiable {
     /// second task. Only an edit or a created task clears it: a refusal
     /// can follow an attempt whose answer was lost after the Mac saved it.
     @ObservationIgnored private var unconfirmedRequestID: String?
+    /// The request ID of this unchanged draft's message for the
+    /// coordinator, once sent, with the same rules as
+    /// `unconfirmedRequestID`. The Mac answers a repeat with the first
+    /// result and sends nothing new.
+    @ObservationIgnored private var unconfirmedSendRequestID: String?
+    /// The workspace and preset the pills started on. A pill set back to
+    /// Auto goes back to them, for a direct create.
+    @ObservationIgnored private var startingWorkspaceID: UUID?
+    @ObservationIgnored private var startingPreset: RemoteTaskPreset?
     /// Late import or options answers must not restore a canceled draft.
     @ObservationIgnored private var isDiscarded = false
 
@@ -95,6 +141,61 @@ final class ToasttyNewTaskModel: Identifiable {
     }
 
     // MARK: - Derived presentation
+
+    /// The sheet sends to the coordinator; Create is the second action.
+    var sendsToCoordinator: Bool {
+        coordinator != nil
+    }
+
+    /// The coordinator chooses the project: the user has not set the
+    /// Workspace pill.
+    var workspaceIsAuto: Bool {
+        sendsToCoordinator && choseWorkspace == false
+    }
+
+    /// The coordinator chooses the agent, model and effort.
+    var agentIsAuto: Bool {
+        sendsToCoordinator && chosePreset == false
+    }
+
+    /// The Workspace pill's value: with a coordinator, Auto until the user
+    /// sets it.
+    var workspacePillTitle: String {
+        workspaceIsAuto ? Self.autoTitle : workspaceTitle
+    }
+
+    /// The Agent pill's value: with a coordinator, Auto until the user sets
+    /// it. Model and Effort show only once an agent is chosen.
+    var agentPillTitle: String {
+        agentIsAuto ? Self.autoTitle : agentTitle
+    }
+
+    var showsModelAndEffort: Bool {
+        agentIsAuto == false
+    }
+
+    /// One line before a send when the message will wait, as the Mac's
+    /// panel says it in its header.
+    var coordinatorNote: String? {
+        guard let coordinator else { return nil }
+        switch coordinator.agent {
+        case .notRunning:
+            return "The coordinator is not running. Your message waits on your Mac until it starts."
+        case .starting:
+            return "The coordinator is starting. Your message waits on your Mac until it is ready."
+        case .running, .unknown:
+            switch coordinator.waitingCount {
+            case 0: return nil
+            case 1: return "1 message waits for the coordinator."
+            case let count: return "\(count) messages wait for the coordinator."
+            }
+        }
+    }
+
+    /// Whether the note says that a sent message will wait.
+    var coordinatorNoteIsWarning: Bool {
+        coordinator?.agent == .notRunning || coordinator?.agent == .starting
+    }
 
     var workspaces: [RemoteTaskCreateWorkspace] {
         options?.workspaces ?? []
@@ -144,7 +245,9 @@ final class ToasttyNewTaskModel: Identifiable {
             .filter { Self.isValidModel($0) && seen.insert($0).inserted }
     }
 
-    /// A reason in the options that rules out any create.
+    /// A reason in the options that rules out any create. With a
+    /// coordinator, only a missing permission rules out a send: the
+    /// coordinator can answer without a project or an agent.
     var blockingMessage: String? {
         guard let options else { return nil }
         switch options.permission {
@@ -157,6 +260,7 @@ final class ToasttyNewTaskModel: Identifiable {
         case .unknown:
             return "Your Mac isn't accepting new tasks from this iPhone right now."
         }
+        if sendsToCoordinator { return nil }
         if options.workspaces.isEmpty {
             return "Toastty on your Mac has no project open. Open one there, then try again."
         }
@@ -167,14 +271,28 @@ final class ToasttyNewTaskModel: Identifiable {
     }
 
     var canCreate: Bool {
+        canSubmitDraft
+            && workspaces.contains { $0.id == workspaceID }
+            && selectedAgent != nil
+    }
+
+    var canSend: Bool {
+        sendsToCoordinator && canSubmitDraft
+    }
+
+    /// The draft and the options allow a send or a create.
+    private var canSubmitDraft: Bool {
         allowsEditing
             && isLoadingAttachments == false
             && isReloadingOptions == false
             && blockingMessage == nil
-            && workspaces.contains { $0.id == workspaceID }
-            && selectedAgent != nil
             && trimmedText.isEmpty == false
             && (attachments.isEmpty || supportsAttachments)
+    }
+
+    /// A send or a create is on its way.
+    var isSubmitting: Bool {
+        phase == .creating || phase == .sending
     }
 
     var supportsAttachments: Bool {
@@ -190,7 +308,7 @@ final class ToasttyNewTaskModel: Identifiable {
     }
 
     var preventsInteractiveDismissal: Bool {
-        text.isEmpty == false || attachments.isEmpty == false || isLoadingAttachments || phase == .creating
+        text.isEmpty == false || attachments.isEmpty == false || isLoadingAttachments || isSubmitting
     }
 
     private var trimmedText: String {
@@ -231,40 +349,74 @@ final class ToasttyNewTaskModel: Identifiable {
     }
 
     /// Starts on the Mac's quick entry choices: its last workspace and
-    /// preset, else the first of each.
+    /// preset, else the first of each. A choice the Mac no longer offers
+    /// goes back to Auto.
     private func apply(_ response: RemoteTaskCreateOptionsResponse) {
         options = response
+        coordinator = host.supportsCoordinatorSend ? response.coordinator : nil
         if workspaces.contains(where: { $0.id == workspaceID }) == false {
             workspaceID = response.defaultWorkspaceID.flatMap { id in workspaces.contains { $0.id == id } ? id : nil }
                 ?? workspaces.first?.id
+            startingWorkspaceID = workspaceID
+            choseWorkspace = false
         }
         if preset.map(isUsable) != true {
             preset = response.defaultPreset.flatMap { isUsable($0) ? $0 : nil }
                 ?? frequentPresets.first
                 ?? agents.first.map { RemoteTaskPreset(profileID: $0.profileID) }
+            startingPreset = preset
+            chosePreset = false
         }
     }
 
     // MARK: - Editing
 
     func selectWorkspace(_ id: UUID) {
-        guard allowsEditing, id != workspaceID, workspaces.contains(where: { $0.id == id }) else { return }
+        // From Auto, the value the pill started on is a choice too.
+        guard allowsEditing, id != workspaceID || workspaceIsAuto,
+              workspaces.contains(where: { $0.id == id }) else { return }
         workspaceID = id
+        choseWorkspace = true
+        draftDidChange()
+    }
+
+    /// Leaves the project to the coordinator. A direct create uses the
+    /// workspace the sheet started on.
+    func selectAutoWorkspace() {
+        guard allowsEditing, sendsToCoordinator, choseWorkspace else { return }
+        choseWorkspace = false
+        workspaceID = startingWorkspaceID.flatMap { id in workspaces.contains { $0.id == id } ? id : nil }
+            ?? workspaces.first?.id
         draftDidChange()
     }
 
     func selectPreset(_ newPreset: RemoteTaskPreset) {
-        guard allowsEditing, newPreset != preset, isUsable(newPreset) else { return }
+        guard allowsEditing, newPreset != preset || agentIsAuto, isUsable(newPreset) else { return }
         preset = newPreset
+        chosePreset = true
+        draftDidChange()
+    }
+
+    /// Leaves the agent, model and effort to the coordinator. A direct
+    /// create uses the preset the sheet started on.
+    func selectAutoAgent() {
+        guard allowsEditing, sendsToCoordinator, chosePreset else { return }
+        chosePreset = false
+        preset = startingPreset.flatMap { isUsable($0) ? $0 : nil }
+            ?? frequentPresets.first
+            ?? agents.first.map { RemoteTaskPreset(profileID: $0.profileID) }
         draftDidChange()
     }
 
     /// Switches the agent as the Mac's Agent column does: a model or effort
-    /// the new agent does not list goes back to Default.
+    /// the new agent does not list goes back to Default. An agent chosen
+    /// from Auto starts on Default: only what the user sets goes to the
+    /// coordinator as their choice.
     func selectAgent(_ agent: RemoteSessionStartAgent) {
-        guard agent.profileID != preset?.profileID else { return }
-        let model = preset?.model.flatMap { agent.supportsModel && agent.recentModels.contains($0) ? $0 : nil }
-        let effort = preset?.effort.flatMap { agent.reasoningEfforts.contains($0) ? $0 : nil }
+        guard agent.profileID != preset?.profileID || agentIsAuto else { return }
+        let current = agentIsAuto ? nil : preset
+        let model = current?.model.flatMap { agent.supportsModel && agent.recentModels.contains($0) ? $0 : nil }
+        let effort = current?.effort.flatMap { agent.reasoningEfforts.contains($0) ? $0 : nil }
         selectPreset(RemoteTaskPreset(profileID: agent.profileID, model: model, effort: effort))
     }
 
@@ -329,7 +481,7 @@ final class ToasttyNewTaskModel: Identifiable {
     }
 
     func discardDraft() {
-        guard phase != .creating else { return }
+        guard isSubmitting == false else { return }
         isDiscarded = true
         text = ""
         attachments = []
@@ -396,11 +548,128 @@ final class ToasttyNewTaskModel: Identifiable {
         }
     }
 
+    // MARK: - Sending to the coordinator
+
+    /// Sends the text and files to the coordinator as a quick entry
+    /// message, with the pills the user set as their choices.
+    func send() async {
+        guard canSend else { return }
+        let agent = chosePreset ? selectedAgent : nil
+        let chosen = agent == nil ? nil : preset
+        let requestID = unconfirmedSendRequestID ?? makeRequestID()
+        let request = RemoteCoordinatorSendRequest(
+            clientRequestID: requestID,
+            workspaceID: choseWorkspace ? workspaceID : nil,
+            profileID: agent?.profileID,
+            model: agent?.supportsModel == true ? chosen?.model : nil,
+            effort: chosen?.effort.flatMap { agent?.reasoningEfforts.contains($0) == true ? $0 : nil },
+            text: trimmedText,
+            attachments: attachments
+        )
+        // The Mac refuses a larger request before it reads it.
+        guard request.text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            errorMessage = Self.textTooLongMessage
+            return
+        }
+        if let error = RemoteAttachmentPolicy.validationError(for: request.attachments) {
+            errorMessage = error
+            return
+        }
+        let maximumBodyBytes = attachments.isEmpty
+            ? RemoteGatewayProtocol.maximumRequestBodyBytes
+            : RemoteAttachmentPolicy.maximumEncodedBodyBytes
+        guard let encoded = try? request.encodedForTransport(), encoded.count <= maximumBodyBytes else {
+            errorMessage = attachments.isEmpty ? Self.textTooLongMessage : Self.attachmentsTooLargeMessage
+            return
+        }
+        unconfirmedSendRequestID = requestID
+        errorMessage = nil
+        phase = .sending
+
+        switch await host.sendToCoordinator(request) {
+        case .answered(let result):
+            switch result {
+            case .sent, .waiting:
+                unconfirmedSendRequestID = nil
+                phase = .sent(result)
+            case .rejected(let reason, let message):
+                // This attempt sent nothing, but an earlier one with the
+                // same ID may have, so the unchanged draft keeps its ID.
+                errorMessage = Self.message(for: reason, macMessage: message, agentName: agent?.displayName)
+                phase = .form
+                // The coordinator closed, or the pickers list a project or
+                // agent the Mac no longer has. Without a coordinator the
+                // sheet creates the task directly.
+                if reason == .noCoordinator || reason == .workspaceNotFound || reason == .agentUnavailable {
+                    await reloadOptions()
+                }
+            case .unrecognized:
+                errorMessage = Self.unrecognizedSendAnswerMessage
+                phase = .form
+            }
+        case .unconfirmed:
+            errorMessage = Self.sendUnreachableMessage
+            phase = .form
+        }
+    }
+
+    /// What the screen that opened the sheet says after a send, as the
+    /// Mac's quick entry toast says it.
+    static func sentNotice(_ result: RemoteCoordinatorSendResult) -> String {
+        switch result {
+        case .sent:
+            "Sent to the coordinator"
+        case .waiting(let reason):
+            switch reason {
+            case .notRunning: "Waits on your Mac: the coordinator is not running"
+            case .starting: "Waits on your Mac: the coordinator is starting"
+            case .working: "Waits on your Mac: the coordinator is working"
+            case .userDraft: "Waits on your Mac: text is in the coordinator's terminal"
+            case .promptNotOpen: "Waits on your Mac for the coordinator's prompt"
+            case .notSaved: "Waits on your Mac: Toastty could not save it"
+            case .unknown: "Waits on your Mac for the coordinator"
+            }
+        case .rejected, .unrecognized:
+            "The coordinator didn't get the message"
+        }
+    }
+
+    static func message(
+        for reason: RemoteCoordinatorSendRejectionReason,
+        macMessage: String?,
+        agentName: String?
+    ) -> String {
+        switch reason {
+        case .permissionDenied:
+            "Your Mac didn't let this iPhone send to the coordinator. Check Toastty → Settings → Remote Access on your Mac."
+        case .noCoordinator:
+            "Your Mac has no coordinator now. Nothing was sent. Tap Create to make the task yourself."
+        case .workspaceNotFound:
+            "That project is no longer open in Toastty on your Mac. Choose another one, or Auto."
+        case .agentUnavailable:
+            "\(agentName ?? "That agent") can't take a task on your Mac. Choose another agent, or Auto."
+        case .invalidRequest:
+            "Your Mac couldn't use this message. Check the model and effort, then try again."
+        case .invalidAttachments:
+            "Your Mac couldn't use an attachment. Remove it and choose an image, PDF, or supported text file."
+        case .attachmentStorageUnavailable:
+            "Your Mac couldn't save the attachments. Check its available disk space, then try again."
+        case .sendFailed:
+            macMessage.map { "The coordinator didn't take the message: \($0)" }
+                ?? "The coordinator didn't take the message. Check Toastty on your Mac, then try again."
+        case .busy:
+            "Your Mac is still sending another message from this iPhone. Try again in a moment."
+        case .unknown:
+            "Your Mac didn't send the message. Try again."
+        }
+    }
+
     // MARK: - Helpers
 
     /// Any edit makes a different request, which needs its own key.
     private func draftDidChange() {
         unconfirmedRequestID = nil
+        unconfirmedSendRequestID = nil
         errorMessage = nil
     }
 

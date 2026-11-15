@@ -80,6 +80,9 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
         case sessionStarted
         /// The Mac saved a task from this phone and is setting it up.
         case taskCreated
+        /// The coordinator has a message from this phone, or the Mac keeps
+        /// it until the coordinator's prompt takes it.
+        case coordinatorMessage
         case sessionClosed
         /// The Mac ran a task action, or started it.
         case taskAction
@@ -97,7 +100,7 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     var canUndo: Bool {
         switch kind {
         case .changed, .flagChanged: true
-        case .sessionStarted, .taskCreated, .sessionClosed, .taskAction, .failed: false
+        case .sessionStarted, .taskCreated, .coordinatorMessage, .sessionClosed, .taskAction, .failed: false
         }
     }
 }
@@ -121,6 +124,10 @@ final class HomeScreenController {
     /// ＋ and shared content open New Task when it does, New Session when
     /// it does not.
     private(set) var hostSupportsTaskCreate: Bool
+    /// Whether the connected Mac takes messages for its coordinator from
+    /// this device. New Task sends to the coordinator while the Mac also
+    /// reports one in the create options.
+    private(set) var hostSupportsCoordinatorSend: Bool
     /// Whether the connected Mac closes sessions for this device.
     private(set) var hostSupportsConversationClose: Bool
     /// Whether the connected Mac takes task actions from this device. The
@@ -173,6 +180,9 @@ final class HomeScreenController {
     private var sendTaskCreate: (@MainActor (RemoteTaskCreateRequest) async -> ToasttyTaskCreateOutcome)?
     /// Tasks a fixture "created", newest last, for tests.
     private(set) var fixtureCreatedTasks: [RemoteTaskCreateRequest] = []
+    private var sendCoordinatorMessage: (@MainActor (RemoteCoordinatorSendRequest) async -> ToasttyCoordinatorSendOutcome)?
+    /// Messages a fixture "sent" to the coordinator, newest last, for tests.
+    private(set) var fixtureCoordinatorMessages: [RemoteCoordinatorSendRequest] = []
     /// Flag states the user asked for that the Mac's snapshot does not show
     /// yet, by conversation, with the same rules as `pendingSubspaceDone`.
     private var pendingConversationFlag: [UUID: PendingSubspaceDone] = [:]
@@ -220,6 +230,8 @@ final class HomeScreenController {
         hostSupportsConversationFlag = runtimeMode == .fixture
         hostSupportsSessionStart = runtimeMode == .fixture
         hostSupportsTaskCreate = runtimeMode == .fixture && Self.fixtureSupportsTaskCreate
+        hostSupportsCoordinatorSend = runtimeMode == .fixture && Self.fixtureSupportsTaskCreate
+            && Self.fixtureSupportsCoordinatorSend
         hostSupportsConversationClose = runtimeMode == .fixture
         hostSupportsTaskActions = runtimeMode == .fixture
         hostSupportsProjectRelease = runtimeMode == .fixture
@@ -695,7 +707,15 @@ final class HomeScreenController {
             return await loadTaskCreateOptions()
         }
         guard runtimeMode == .fixture else { return .unreachable }
-        return .loaded(ToasttyMobileFixture.taskCreateOptions(workspaces: hostSnapshot.topLevelWorkspaces))
+        var options = ToasttyMobileFixture.taskCreateOptions(workspaces: hostSnapshot.topLevelWorkspaces)
+        // As the Mac does: the coordinator's state while it has one.
+        if hostSupportsCoordinatorSend, hostSnapshot.coordinator != nil {
+            options.coordinator = RemoteCoordinatorSendState(
+                agent: hostSnapshot.coordinatorConversation == nil ? .notRunning : .running,
+                waitingCount: fixtureCoordinatorWaitingCount
+            )
+        }
+        return .loaded(options)
     }
 
     func createTask(_ request: RemoteTaskCreateRequest) async -> ToasttyTaskCreateOutcome {
@@ -710,6 +730,75 @@ final class HomeScreenController {
         }
         fixtureCreatedTasks.append(request)
         return .answered(.created(taskID: UUID()))
+    }
+
+    // MARK: - Message to the coordinator
+
+    /// Messages to the coordinator go only to a live Mac that takes them
+    /// from this device. The create options say whether it has a
+    /// coordinator now.
+    var supportsCoordinatorSend: Bool {
+        hostSupportsCoordinatorSend && freshness == .live
+    }
+
+    /// A fixture launch with this set to "unsupported" stands in for a Mac
+    /// with a coordinator that cannot take a message from the phone, such
+    /// as one from before the phone could send to it.
+    private static var fixtureSupportsCoordinatorSend: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_SEND"] != "unsupported"
+#else
+        true
+#endif
+    }
+
+    func setHostSupportsCoordinatorSend(_ isSupported: Bool) {
+        hostSupportsCoordinatorSend = isSupported
+    }
+
+    func installCoordinatorSend(
+        _ send: @escaping @MainActor (RemoteCoordinatorSendRequest) async -> ToasttyCoordinatorSendOutcome
+    ) {
+        sendCoordinatorMessage = send
+    }
+
+    func sendToCoordinator(_ request: RemoteCoordinatorSendRequest) async -> ToasttyCoordinatorSendOutcome {
+        if let sendCoordinatorMessage {
+            return await sendCoordinatorMessage(request)
+        }
+        guard runtimeMode == .fixture else { return .unconfirmed }
+        // A pause that stands in for the Mac copying the files.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard hostSnapshot.coordinator != nil else {
+            return .answered(.rejected(reason: .noCoordinator, message: nil))
+        }
+        // As the Mac does, a repeat sends nothing new.
+        if fixtureCoordinatorMessages.contains(where: { $0.clientRequestID == request.clientRequestID }) == false {
+            fixtureCoordinatorMessages.append(request)
+        }
+        let result: RemoteCoordinatorSendResult = switch hostSnapshot.coordinatorMark {
+        case .notRunning?: .waiting(reason: .notRunning)
+        case .working?, .needsApproval?: .waiting(reason: .working)
+        case .quiet?, .unread?, .error?, nil: .sent
+        }
+        return .answered(result)
+    }
+
+    /// Messages that wait in the fixture Mac's coordinator queue: those a
+    /// coordinator that does not run or works could not take yet.
+    private var fixtureCoordinatorWaitingCount: Int {
+        switch hostSnapshot.coordinatorMark {
+        case .notRunning?, .working?, .needsApproval?: fixtureCoordinatorMessages.count
+        case .quiet?, .unread?, .error?, nil: 0
+        }
+    }
+
+    /// Says that the coordinator has the message, or why the Mac keeps it.
+    func announceCoordinatorSend(_ result: RemoteCoordinatorSendResult) {
+        subspaceDoneNotice = SubspaceDoneNotice(
+            kind: .coordinatorMessage,
+            message: ToasttyNewTaskModel.sentNotice(result)
+        )
     }
 
     /// Says that the Mac has the task. Its task space appears in the list
@@ -818,7 +907,7 @@ final class HomeScreenController {
         case .flagChanged(let conversationID, let isFlagged)?:
             subspaceDoneNotice = nil
             setConversationFlag(conversationID, isFlagged: !isFlagged, announces: false)
-        case .sessionStarted?, .taskCreated?, .sessionClosed?, .taskAction?, .failed?, nil:
+        case .sessionStarted?, .taskCreated?, .coordinatorMessage?, .sessionClosed?, .taskAction?, .failed?, nil:
             break
         }
     }

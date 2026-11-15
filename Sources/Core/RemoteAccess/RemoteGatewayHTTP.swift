@@ -17,6 +17,7 @@ public struct RemoteGatewayHTTPRequest: Equatable, Sendable {
         path == RemoteAttachmentPolicy.sendPath
             || path == RemoteSessionStartPolicy.startWithAttachmentsPath
             || path == RemoteTaskCreatePolicy.createWithAttachmentsPath
+            || path == RemoteCoordinatorSendPolicy.sendWithAttachmentsPath
     }
 
     public var method: String

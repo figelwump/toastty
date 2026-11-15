@@ -163,16 +163,10 @@ final class RemoteTaskCreator {
         guard choices.workspaces.contains(where: { $0.id == request.workspaceID }) else {
             return .rejected(reason: .workspaceNotFound, message: nil)
         }
-        if let profileID = request.profileID {
-            guard let profile = choices.profiles.first(where: { $0.id == profileID }) else {
-                return .rejected(reason: .agentUnavailable, message: nil)
-            }
-            if request.model != nil, profile.supportsModel == false {
-                return .rejected(reason: .invalidRequest, message: nil)
-            }
-            if let effort = request.effort, profile.efforts.contains(effort) == false {
-                return .rejected(reason: .invalidRequest, message: nil)
-            }
+        switch Self.checkAgentChoice(profileID: request.profileID, model: request.model, effort: request.effort, in: choices) {
+        case .usable: break
+        case .unavailable: return .rejected(reason: .agentUnavailable, message: nil)
+        case .invalid: return .rejected(reason: .invalidRequest, message: nil)
         }
         guard deviceMayCreate(deviceID) else { return .rejected(reason: .permissionDenied, message: nil) }
 
@@ -237,14 +231,45 @@ final class RemoteTaskCreator {
         return .created(taskID: record.id)
     }
 
+    enum AgentChoiceCheck {
+        /// No agent was chosen, or quick entry offers it with this model
+        /// and effort.
+        case usable
+        /// Quick entry does not offer the agent now.
+        case unavailable
+        /// The agent takes no model, or does not list the effort.
+        case invalid
+    }
+
+    /// Checks a device's agent, model and effort against what quick entry
+    /// offers now, for a task or a message that the coordinator makes a
+    /// task from.
+    static func checkAgentChoice(
+        profileID: String?,
+        model: String?,
+        effort: String?,
+        in choices: QuickEntryChoices
+    ) -> AgentChoiceCheck {
+        guard let profileID else { return .usable }
+        guard let profile = choices.profiles.first(where: { $0.id == profileID }) else { return .unavailable }
+        if model != nil, profile.supportsModel == false { return .invalid }
+        if let effort, profile.efforts.contains(effort) == false { return .invalid }
+        return .usable
+    }
+
     /// The coordinator's explanation, as the CLI shows it, bounded and on
     /// one line. Only the coordinator's own messages go to the device;
     /// another error's text can carry system detail, so it sends none.
     static func failureMessage(_ error: any Error) -> String? {
         guard let raw = (error as? TaskError)?.message else { return nil }
+        return oneLine(raw, maximumLength: RemoteTaskCreatePolicy.maximumFailureMessageLength)
+    }
+
+    /// `raw` on one line, cut to `maximumLength` characters.
+    static func oneLine(_ raw: String, maximumLength: Int) -> String {
         let scalars = raw.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) }
         let line = String(scalars).trimmingCharacters(in: .whitespaces)
-        guard line.count > RemoteTaskCreatePolicy.maximumFailureMessageLength else { return line }
-        return String(line.prefix(RemoteTaskCreatePolicy.maximumFailureMessageLength - 1)) + "…"
+        guard line.count > maximumLength else { return line }
+        return String(line.prefix(maximumLength - 1)) + "…"
     }
 }

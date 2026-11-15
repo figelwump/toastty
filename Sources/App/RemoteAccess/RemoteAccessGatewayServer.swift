@@ -536,6 +536,34 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
                     self.sendPreviewResponse(response, connectionID: connectionID)
                 }
+            case .deferredCoordinatorSend(let deviceID, let sendRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // Sending copies the message's files, which can outlast the
+                // timeout meant for reading a request.
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveCoordinatorSend(deviceID: deviceID, request: sendRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredCoordinatorSendAttachments(let deviceID, let body):
+                guard connection.admittedAttachmentUpload else { drop(connectionID); return }
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                    }
+                    let response = await self.handler.resolveCoordinatorSendAttachments(deviceID: deviceID, body: body) {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                        connection.requestTimeoutTask?.cancel()
+                        connection.requestTimeoutTask = nil
+                    }
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
             case .deferredPreview(let operation):
                 guard activePreviewCount < 8 else {
                     RemotePreviewProvider.logFailure(

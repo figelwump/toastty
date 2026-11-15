@@ -83,6 +83,10 @@ public struct RemoteTaskCreateOptionsResponse: Codable, Equatable, Sendable {
     public var defaultPreset: RemoteTaskPreset?
     /// The Mac can store uploaded files and attach them to the task.
     public var supportsAttachments: Bool
+    /// The coordinator, while the Mac has one and takes messages for it
+    /// (`RemoteGatewayCapability.coordinatorSend`). The New Task sheet then
+    /// sends to it, as the Mac's quick entry panel does.
+    public var coordinator: RemoteCoordinatorSendState?
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
@@ -92,7 +96,8 @@ public struct RemoteTaskCreateOptionsResponse: Codable, Equatable, Sendable {
         agents: [RemoteSessionStartAgent] = [],
         frequentPresets: [RemoteTaskPreset] = [],
         defaultPreset: RemoteTaskPreset? = nil,
-        supportsAttachments: Bool = false
+        supportsAttachments: Bool = false,
+        coordinator: RemoteCoordinatorSendState? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.permission = permission
@@ -102,11 +107,12 @@ public struct RemoteTaskCreateOptionsResponse: Codable, Equatable, Sendable {
         self.frequentPresets = frequentPresets
         self.defaultPreset = defaultPreset
         self.supportsAttachments = supportsAttachments
+        self.coordinator = coordinator
     }
 
     private enum CodingKeys: String, CodingKey {
         case protocolVersion, permission, workspaces, defaultWorkspaceID, agents
-        case frequentPresets, defaultPreset, supportsAttachments
+        case frequentPresets, defaultPreset, supportsAttachments, coordinator
     }
 
     public init(from decoder: any Decoder) throws {
@@ -119,6 +125,9 @@ public struct RemoteTaskCreateOptionsResponse: Codable, Equatable, Sendable {
         frequentPresets = try container.decodeIfPresent([RemoteTaskPreset].self, forKey: .frequentPresets) ?? []
         defaultPreset = try container.decodeIfPresent(RemoteTaskPreset.self, forKey: .defaultPreset)
         supportsAttachments = try container.decodeIfPresent(Bool.self, forKey: .supportsAttachments) ?? false
+        // A malformed state from a newer Mac reads as no coordinator: the
+        // sheet then creates the task directly, as without one.
+        coordinator = try? container.decodeIfPresent(RemoteCoordinatorSendState.self, forKey: .coordinator)
     }
 }
 
