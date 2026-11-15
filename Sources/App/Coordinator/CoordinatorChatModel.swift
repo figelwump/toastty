@@ -100,6 +100,9 @@ final class CoordinatorChatModel: ObservableObject {
     /// Multiplies the size of all text in the chat. Saved, so that it
     /// survives a relaunch. See `changeTextScale`.
     @Published private(set) var textScale: Double
+    /// Where the coordinator's messages that the user has not seen start.
+    /// See "What the user has read".
+    @Published private(set) var newMessages: ToasttyNewMessagesMarker?
 
     /// The composer's text view of the view that showed last, so that
     /// keyboard focus meant for the terminal under the chat can go to it.
@@ -125,6 +128,23 @@ final class CoordinatorChatModel: ObservableObject {
     private weak var controller: CoordinatorController?
     private let access: any LocalConversationAccess
     private let now: () -> Date
+    /// Whether Toastty is the active app: a chat on screen behind another
+    /// app is not read.
+    private let isAppActive: () -> Bool
+    /// The time of the newest row that the user saw in the chat. Saved, so
+    /// that it survives a relaunch. `nil` before the user read any.
+    private var readThrough: Date?
+    /// The user left the chat, or has not read it yet in this run: the next
+    /// read of the rows places the new messages' line again.
+    private var placesNewMessagesLine = true
+    /// The line marks the rows after this time until the user leaves the
+    /// chat again. `nil` while the chat draws no line.
+    private var newMessagesAfter: Date?
+    /// Older pages are being read so that the line can go where the user
+    /// stopped reading.
+    private var isLoadingOlderForReadPoint = false
+    /// The most older pages read to place the line after a relaunch.
+    static let maximumOlderPagesForReadPoint = 5
     /// Where the text size is saved, or `nil` for a run that saves no
     /// preferences, such as an automation run.
     private let defaults: UserDefaults?
@@ -157,6 +177,7 @@ final class CoordinatorChatModel: ObservableObject {
         access: any LocalConversationAccess,
         defaults: UserDefaults? = nil,
         now: @escaping () -> Date = Date.init,
+        isAppActive: @escaping () -> Bool = { NSApplication.shared.isActive },
         attachmentStagingURL: URL = FileManager.default.temporaryDirectory
             .appending(path: "toastty-coordinator-composer/\(UUID().uuidString)", directoryHint: .isDirectory)
     ) {
@@ -164,6 +185,9 @@ final class CoordinatorChatModel: ObservableObject {
         self.access = access
         self.defaults = defaults
         self.now = now
+        self.isAppActive = isAppActive
+        readThrough = (defaults?.object(forKey: Self.readThroughDefaultsKey) as? Double)
+            .map(Date.init(timeIntervalSinceReferenceDate:))
         textScale = (defaults?.object(forKey: Self.textScaleDefaultsKey) as? Double)
             .map(Self.normalizedTextScale) ?? Self.defaultTextScale
         let attachmentDraft = DraftAttachments(stagingDirectoryURL: attachmentStagingURL)
@@ -177,6 +201,15 @@ final class CoordinatorChatModel: ObservableObject {
         attachmentDraft.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        // Leaving Toastty for another app is leaving the chat.
+        Publishers.Merge(
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification),
+            NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+        )
+        .sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.appActivityChanged() }
+        }
+        .store(in: &cancellables)
         // The draft's own copies go with the app. Files that a waiting
         // message holds are the controller's.
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
@@ -210,6 +243,7 @@ final class CoordinatorChatModel: ObservableObject {
     /// terminal, for the view at `host`. Call it while that view is on
     /// screen.
     func show(panelID: UUID, host: Host = .panel) {
+        if viewers.isEmpty { placesNewMessagesLine = true }
         viewers[host] = panelID
         activeHost = host
         subscribe(to: panelID)
@@ -233,6 +267,7 @@ final class CoordinatorChatModel: ObservableObject {
         if let activeHost, let shownPanelID = viewers[activeHost] {
             subscribe(to: shownPanelID)
         } else {
+            placesNewMessagesLine = true
             endSubscription()
         }
     }
@@ -243,6 +278,7 @@ final class CoordinatorChatModel: ObservableObject {
     func hide() {
         viewers.removeAll()
         activeHost = nil
+        placesNewMessagesLine = true
         endSubscription()
     }
 
@@ -364,6 +400,7 @@ final class CoordinatorChatModel: ObservableObject {
         }
         guard appended.isEmpty == false else {
             publishMetadata()
+            updateReadPoint()
             return
         }
         events.append(contentsOf: appended)
@@ -431,6 +468,7 @@ final class CoordinatorChatModel: ObservableObject {
             hasOlder: hasOlder,
             prependAnchorID: prependAnchorID
         )
+        updateReadPoint()
     }
 
     /// Publishes what changed around the rows: the waiting messages and the
@@ -764,6 +802,8 @@ final class CoordinatorChatModel: ObservableObject {
     }
 
     private func didSend() {
+        // The user answered: what is above the composer is read.
+        markAllRead()
         // The next message steers again, as the default.
         queueSelected = false
         transientNotice = nil
@@ -948,6 +988,75 @@ final class CoordinatorChatModel: ObservableObject {
         let files = paths.map { URL(filePath: $0) }
         guard files.allSatisfy(attachments.isStagedCopy) else { return nil }
         return (rest, files)
+    }
+
+    // MARK: - What the user has read
+
+    static let readThroughDefaultsKey = "toastty.coordinator.chatReadThrough"
+
+    /// The user reads the chat while it is on screen and Toastty is the
+    /// active app.
+    private var isReading: Bool { viewers.isEmpty == false && isAppActive() }
+
+    /// Places the new messages' line after the newest row the user read,
+    /// and keeps it in place while the user reads: rows that arrive then
+    /// are read at once, and the line moves the next time the user comes
+    /// back to the chat.
+    private func updateReadPoint() {
+        // Only rows that were read to the newest can place the line: not
+        // while Toastty replays the transcript after a launch.
+        guard loaded != nil, subscription?.isReadingInitialTranscript != true,
+              isLoadingOlderForReadPoint == false else { return }
+        if placesNewMessagesLine, let readThrough {
+            // After a relaunch the chat reads only the newest page. The
+            // line goes where the user stopped, so read back to it.
+            isLoadingOlderForReadPoint = true
+            for _ in 0 ..< Self.maximumOlderPagesForReadPoint {
+                guard hasOlder, let oldest = presentation.rows.first?.timestamp, oldest > readThrough else { break }
+                loadOlder()
+            }
+            isLoadingOlderForReadPoint = false
+        }
+        let rows = presentation.rows
+        if placesNewMessagesLine {
+            newMessagesAfter = CoordinatorChatReadPoint.marker(in: rows, after: readThrough) == nil ? nil : readThrough
+        }
+        let marker = newMessagesAfter.flatMap { CoordinatorChatReadPoint.marker(in: rows, after: $0) }
+        if newMessages != marker { newMessages = marker }
+        guard isReading else {
+            placesNewMessagesLine = true
+            return
+        }
+        placesNewMessagesLine = false
+        noteRead(through: rows.last?.timestamp)
+    }
+
+    private func markAllRead() {
+        newMessagesAfter = nil
+        if newMessages != nil { newMessages = nil }
+        noteRead(through: presentation.rows.last?.timestamp)
+    }
+
+    private func noteRead(through timestamp: Date?) {
+        guard let timestamp, timestamp > (readThrough ?? .distantPast) else { return }
+        readThrough = timestamp
+        defaults?.set(timestamp.timeIntervalSinceReferenceDate, forKey: Self.readThroughDefaultsKey)
+    }
+
+    /// Toastty became the active app or stopped being it. Leaving it for
+    /// another app leaves the chat; coming back places the line again.
+    func appActivityChanged() {
+        guard isReading else {
+            placesNewMessagesLine = true
+            return
+        }
+        // Read what the conversation has now, not only what the last
+        // change notice brought: a reply that arrived just before is new.
+        if subscription != nil {
+            refresh()
+        } else {
+            updateReadPoint()
+        }
     }
 
     // MARK: - Text size

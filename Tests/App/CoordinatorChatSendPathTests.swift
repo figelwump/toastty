@@ -1331,7 +1331,14 @@ final class CoordinatorChatFixture {
     final class Clock {
         var secondsAhead: TimeInterval = 0
         var now: Date { Date().addingTimeInterval(secondsAhead) }
+        /// Whether Toastty is the active app, as the chat sees it. A test
+        /// host is not always the active app.
+        var appIsActive = true
     }
+
+    /// Where the chat saves what it keeps over a relaunch, or `nil` to keep
+    /// nothing.
+    let chatDefaults: UserDefaults?
 
     /// Without `agentReportsStart`, Toastty launched the agent and the
     /// agent has reported nothing yet, as while it asks a question that
@@ -1340,7 +1347,8 @@ final class CoordinatorChatFixture {
         pairsNativeDevice: Bool = false,
         savesQueue: Bool = false,
         agentReportsStart: Bool = true,
-        initialUserMessages: [String] = []
+        initialUserMessages: [String] = [],
+        chatDefaults: UserDefaults? = nil
     ) throws {
         let conversations = try LocalConversationFixture(
             pairsNativeDevice: pairsNativeDevice,
@@ -1355,7 +1363,10 @@ final class CoordinatorChatFixture {
         queueFileURL = savesQueue
             ? URL(filePath: conversations.runtimeHome).appendingPathComponent("saved/coordinator-queue.json")
             : nil
-        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL, clock: clock)
+        self.chatDefaults = chatDefaults
+        (controller, chat) = Self.makeController(
+            conversations, gate: gate, queueFileURL: queueFileURL, clock: clock, defaults: chatDefaults
+        )
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
         second = initialUserMessages.count + 5
         if agentReportsStart { reportAgentStart() }
@@ -1375,7 +1386,8 @@ final class CoordinatorChatFixture {
         _ conversations: LocalConversationFixture,
         gate: StatusGateTyping,
         queueFileURL: URL?,
-        clock: Clock
+        clock: Clock,
+        defaults: UserDefaults?
     ) -> (CoordinatorController, CoordinatorChatModel) {
         let controller = CoordinatorController(
             store: conversations.store,
@@ -1393,7 +1405,13 @@ final class CoordinatorChatFixture {
             }
         )
         controller.conversationAccess = conversations.service
-        let chat = CoordinatorChatModel(controller: controller, access: conversations.service, now: { clock.now })
+        let chat = CoordinatorChatModel(
+            controller: controller,
+            access: conversations.service,
+            defaults: defaults,
+            now: { clock.now },
+            isAppActive: { clock.appIsActive }
+        )
         controller.chat = chat
         return (controller, chat)
     }
@@ -1404,7 +1422,9 @@ final class CoordinatorChatFixture {
     func relaunch() {
         chat.hide()
         typedObserver = nil
-        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL, clock: clock)
+        (controller, chat) = Self.makeController(
+            conversations, gate: gate, queueFileURL: queueFileURL, clock: clock, defaults: chatDefaults
+        )
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
     }
 
