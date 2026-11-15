@@ -89,6 +89,10 @@ struct SubspaceDoneNotice: Identifiable, Equatable {
     let id = UUID()
     let kind: Kind
     let message: String
+    /// When the notice was made. A screen shows it only for a few seconds
+    /// after that, so a notice made while no screen could show it, such as
+    /// after an action on a session screen, does not show late.
+    let createdAt = Date()
 
     var canUndo: Bool {
         switch kind {

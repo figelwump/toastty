@@ -43,7 +43,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     let entryLoadFixture: ToasttyConversationFixture.EntryLoad?
     /// The fixture Mac sends a task board, as one with the task system does:
     /// "1" for one with work in every state, "quiet" for one where nothing
-    /// needs the user.
+    /// needs the user, "long-names" for one whose names are long.
     let taskFixture: String?
 #endif
     let enablesSystemAppIconBadge: Bool
@@ -104,6 +104,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
         if entryLoadFixture != nil { return ToasttyConversationFixture.entryLoadHome() }
         if taskFixture == "1" { return ToasttyMobileFixture.taskHome }
         if taskFixture == "quiet" { return ToasttyMobileFixture.quietTaskHome }
+        if taskFixture == "long-names" { return ToasttyMobileFixture.longNamesTaskHome }
 #endif
         return switch runtimeMode {
         case .fixture:

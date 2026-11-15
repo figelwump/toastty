@@ -55,6 +55,9 @@ struct ToasttyTaskListRow: View {
     let task: RemoteTaskSummary
     var isLinkedChild = false
     var isContext = false
+    /// Off under a heading that already names the project, such as a To
+    /// ship lane.
+    var showsProject = true
     let controller: HomeScreenController
     let openWorkspace: (UUID) -> Void
     let openTask: (UUID) -> Void
@@ -67,10 +70,12 @@ struct ToasttyTaskListRow: View {
                     parentTitle: task.projectTitle ?? "",
                     controller: controller,
                     openWorkspace: openWorkspace,
-                    projectTag: task.projectTitle
+                    projectTag: showsProject ? task.projectTitle : nil
                 )
             } else {
-                ToasttyTaskRow(task: task, freshness: controller.freshness, controller: controller) {
+                ToasttyTaskRow(
+                    task: task, freshness: controller.freshness, controller: controller, showsProject: showsProject
+                ) {
                     openTask(task.id)
                 }
             }
@@ -133,11 +138,85 @@ extension RemoteTaskSummary {
     }
 }
 
+/// How wide a row's chip or tag can be.
+enum ToasttyRowTagWidth {
+    /// The width of its text up to a cap, on a line it shares with the
+    /// title: the default text sizes.
+    case capped
+    /// The width of its text, whatever that is: a large text size, where a
+    /// fit check then moves a tag that is too wide to a line of its own.
+    case natural
+    /// On a line of its own: the row's width, and it shortens only past it.
+    case ownLine
+}
+
+extension View {
+    /// Sizes a chip or tag whose text shortens with a tail or middle
+    /// ellipsis. `cap` applies only to `.capped`.
+    func toasttyRowTagWidth(_ width: ToasttyRowTagWidth, cap: CGFloat) -> some View {
+        frame(maxWidth: width == .capped ? cap : nil)
+            .fixedSize(horizontal: width != .ownLine, vertical: true)
+    }
+}
+
+/// The project a row belongs to, where rows from several projects share a
+/// list. It takes the width of the name up to a cap, and a longer name
+/// shortens in the middle, so the row's status line keeps its room.
+struct ToasttyProjectTag: View {
+    let title: String
+    var width = ToasttyRowTagWidth.capped
+
+    /// About fifteen characters, so a question beside the tag keeps most
+    /// of the line.
+    static let maximumWidth: CGFloat = 100
+
+    var body: some View {
+        Text(title)
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .toasttyRowTagWidth(width, cap: Self.maximumWidth)
+    }
+}
+
+/// A row's child progress and project at a large text size: side by side
+/// when both fit the row, else one under the other, where the project takes
+/// the row's width and shortens only past it. Neither can push the row off
+/// the screen.
+struct ToasttyLargeTextTags: View {
+    let progress: RemoteTaskChildProgress?
+    let project: String?
+
+    var body: some View {
+        if progress != nil || project != nil {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { tags(project: .natural) }
+                VStack(alignment: .leading, spacing: 3) { tags(project: .ownLine) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tags(project width: ToasttyRowTagWidth) -> some View {
+        if let progress {
+            ToasttyChildProgressChip(progress: progress)
+        }
+        if let project {
+            ToasttyProjectTag(title: project, width: width)
+        }
+    }
+}
+
 /// How a row draws on one line, as the Needs you segment lists rows: its
 /// one tag, and the second line it keeps for a question or a failure.
 struct ToasttyCompactRow: Equatable {
     let tag: MobileHomeRowTag?
     let detail: String?
+    /// The task that started this one, when the row lists without it. The
+    /// tag shows it only when the row has no pull request; VoiceOver always
+    /// says it, as on the Mac.
+    var parentTitle: String? = nil
 
     /// What the tag says to VoiceOver.
     var tagAccessibilityLabel: String? {
@@ -150,12 +229,22 @@ struct ToasttyCompactRow: Equatable {
         case nil: nil
         }
     }
+
+    /// The parent for VoiceOver, unless the tag already says it.
+    var parentAccessibilityLabel: String? {
+        if case .parent = tag { return nil }
+        return parentTitle.map { "started by \($0)" }
+    }
 }
 
-/// The one tag on a one-line row. As on the Mac, the tag keeps its room up
-/// to its cap and the title shortens first.
+/// The one tag on a one-line row. As on the Mac, the tag keeps the width of
+/// its text up to its cap, and the title shortens first.
 struct ToasttyCompactRowTag: View {
     let tag: MobileHomeRowTag
+    var width = ToasttyRowTagWidth.capped
+
+    /// An annotation's text can be long.
+    static let chipMaximumWidth: CGFloat = 110
 
     var body: some View {
         content
@@ -166,21 +255,21 @@ struct ToasttyCompactRowTag: View {
     private var content: some View {
         switch tag {
         case .pullRequestAnnotation(let annotation):
-            // Capped as in All: an annotation's text can be long.
-            ToasttyAnnotationChip(annotation: annotation, size: .compact)
-                .frame(minWidth: 44, maxWidth: 110, alignment: .trailing)
+            // Without the link arrow, as in All: the row opens the task
+            // space, not the pull request.
+            ToasttyAnnotationChip(
+                annotation: RemoteWorkspaceAnnotation(key: annotation.key, text: annotation.text, color: annotation.color),
+                size: .compact
+            )
+            .toasttyRowTagWidth(width, cap: Self.chipMaximumWidth)
         case .pullRequest(let pullRequest):
-            ToasttyTaskPullRequestChip(pullRequest: pullRequest)
+            ToasttyTaskPullRequestChip(pullRequest: pullRequest, showsLink: false)
         case .parent(let title):
-            ToasttyParentTaskTag(title: title)
+            ToasttyParentTaskTag(title: title, width: width)
         case .childProgress(let progress):
             ToasttyChildProgressChip(progress: progress)
         case .project(let project):
-            Text(project)
-                .font(.caption2.monospaced())
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .lineLimit(1)
-                .fixedSize()
+            ToasttyProjectTag(title: project, width: width)
         }
     }
 }
@@ -189,6 +278,9 @@ struct ToasttyCompactRowTag: View {
 /// it. A long title shortens.
 struct ToasttyParentTaskTag: View {
     let title: String
+    var width = ToasttyRowTagWidth.capped
+
+    static let maximumWidth: CGFloat = 130
 
     var body: some View {
         Text("↖ \(title)")
@@ -199,8 +291,7 @@ struct ToasttyParentTaskTag: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
             .background(ToasttyDesignTokens.chipSurface, in: RoundedRectangle(cornerRadius: 4))
-            .frame(maxWidth: 130, alignment: .trailing)
-            .fixedSize(horizontal: false, vertical: true)
+            .toasttyRowTagWidth(width, cap: Self.maximumWidth)
     }
 }
 
@@ -215,7 +306,11 @@ struct ToasttyTaskRow: View {
     let freshness: LiveProjectionFreshness
     var controller: HomeScreenController?
     var compact: ToasttyCompactRow? = nil
+    /// Off where a heading already names the project: its own card in Home,
+    /// or its To ship lane.
+    var showsProject = true
     let open: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// What a title keeps before a chip gives way, as on the Mac.
     static let titleReservedWidth: CGFloat = 90
@@ -229,10 +324,12 @@ struct ToasttyTaskRow: View {
                     .overlay { ToasttyTaskMark(task: task, freshness: freshness) }
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    if let compact {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        largeTextLines
+                    } else if let compact {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             titleText
-                            Spacer(minLength: 0)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             if let tag = compact.tag {
                                 ToasttyCompactRowTag(tag: tag)
                             }
@@ -248,16 +345,12 @@ struct ToasttyTaskRow: View {
                         }
                         HStack(spacing: 6) {
                             statusText(task.statusLine)
-                            Spacer(minLength: 0)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             if let progress = task.shownChildProgress {
                                 ToasttyChildProgressChip(progress: progress)
                             }
-                            if let project = task.projectTitle {
-                                Text(project)
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                                    .lineLimit(1)
-                                    .fixedSize()
+                            if let project = shownProject {
+                                ToasttyProjectTag(title: project)
                             }
                         }
                     }
@@ -280,11 +373,42 @@ struct ToasttyTaskRow: View {
         }
     }
 
+    private var shownProject: String? {
+        showsProject ? task.projectTitle : nil
+    }
+
+    /// Large text wraps the title and the status, and moves the tags to
+    /// their own lines, as the session and task space rows do.
+    @ViewBuilder
+    private var largeTextLines: some View {
+        titleText
+        HStack(spacing: 6) {
+            if let compact {
+                if let tag = compact.tag {
+                    ToasttyCompactRowTag(tag: tag, width: .ownLine)
+                }
+            } else if let pullRequest = task.pullRequest {
+                ToasttyTaskPullRequestChip(pullRequest: pullRequest, showsLink: false)
+            }
+            chevron
+        }
+        if let compact {
+            if let detail = compact.detail {
+                statusText(detail)
+            }
+        } else {
+            statusText(task.statusLine)
+            ToasttyLargeTextTags(progress: task.shownChildProgress, project: shownProject)
+        }
+    }
+
     private var titleText: some View {
         Text(task.title)
             .font(.subheadline.weight(task.group == .needsYou ? .bold : .medium))
             .foregroundStyle(ToasttyDesignTokens.primaryText)
-            .lineLimit(1)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func titleLine(showsPullRequest: Bool) -> some View {
@@ -292,7 +416,7 @@ struct ToasttyTaskRow: View {
             titleText
                 .frame(minWidth: 0, idealWidth: Self.titleReservedWidth, maxWidth: .infinity, alignment: .leading)
             if showsPullRequest, let pullRequest = task.pullRequest {
-                ToasttyTaskPullRequestChip(pullRequest: pullRequest)
+                ToasttyTaskPullRequestChip(pullRequest: pullRequest, showsLink: false)
             }
             chevron
         }
@@ -308,16 +432,22 @@ struct ToasttyTaskRow: View {
         Text(text)
             .font(.caption.monospaced())
             .foregroundStyle(ToasttyDesignTokens.secondaryText)
-            .lineLimit(1)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var accessibilityLabel: String {
         // A one-line row still says its status, which its hidden second
         // line would show.
         let parts: [String?] = if let compact {
-            [task.title, compact.detail ?? task.statusLine, compact.tagAccessibilityLabel]
+            [task.title, compact.detail ?? task.statusLine, compact.tagAccessibilityLabel, compact.parentAccessibilityLabel]
         } else {
-            [task.title, task.statusLine, task.projectTitle, task.shownChildProgress.map(ToasttyChildProgressChip.label)]
+            [
+                task.title, task.statusLine, shownProject, task.shownChildProgress.map(ToasttyChildProgressChip.label),
+                // The chip, which the status line does not always name.
+                task.pullRequest.map { "PR #\($0.number)" },
+            ]
         }
         return parts.compactMap { $0 }.joined(separator: ", ")
     }
@@ -359,13 +489,16 @@ struct ToasttyTaskMark: View {
 /// closed and so has no annotation of its own.
 struct ToasttyTaskPullRequestChip: View {
     let pullRequest: RemoteTaskPullRequest
+    /// Off in a list row: the row opens the task, not the pull request, so
+    /// its chip shows no link arrow, as a task space row's chip.
+    var showsLink = true
 
     var body: some View {
         ToasttyAnnotationChip(
             annotation: RemoteWorkspaceAnnotation(
                 key: "github-pr",
                 text: "PR #\(pullRequest.number)",
-                url: pullRequest.url,
+                url: showsLink ? pullRequest.url : nil,
                 color: Self.color(pullRequest.state)
             ),
             size: .compact
