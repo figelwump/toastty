@@ -47,24 +47,33 @@ final class ToasttyMobileShareSheetUITests: XCTestCase {
     /// Safari keeps Share in its toolbar on some layouts and in its More
     /// menu on others.
     private func openShareSheet(in safari: XCUIApplication) throws {
-        for identifier in ["ShareButton", "Share"] {
-            let share = safari.buttons[identifier].firstMatch
-            if share.waitForExistence(timeout: 2), share.isHittable {
-                share.tap()
-                return
-            }
+        let shareButtons = ["ShareButton", "Share"].map { safari.buttons[$0].firstMatch }
+        let moreButtons = ["MoreMenuButton", "MoreButton", "More"].map { safari.buttons[$0].firstMatch }
+        let controls = shareButtons + moreButtons
+        // Page content can appear before Safari's toolbar finishes appearing.
+        // Wait for an actionable control, not just an accessibility element.
+        let toolbarReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            controls.contains { $0.exists && $0.isHittable }
+        }, object: nil)
+        guard XCTWaiter.wait(for: [toolbarReady], timeout: 10) == .completed else {
+            attachScreenshot(named: "toolbar-not-ready", of: safari)
+            XCTFail("Safari has no hittable Share or More control. \(dump(safari, "toolbar"))")
+            return
         }
-        for identifier in ["MoreMenuButton", "MoreButton", "More"] {
-            let more = safari.buttons[identifier].firstMatch
-            if more.exists, more.isHittable {
-                more.tap()
-                let share = safari.descendants(matching: .any)
-                    .matching(NSPredicate(format: "label == %@", "Share")).firstMatch
-                if share.waitForExistence(timeout: 5) {
-                    share.tap()
-                    return
-                }
-            }
+        if let share = shareButtons.first(where: { $0.exists && $0.isHittable }) {
+            share.tap()
+            return
+        }
+        if let more = moreButtons.first(where: { $0.exists && $0.isHittable }) {
+            more.tap()
+            let share = safari.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", "Share")).firstMatch
+            let shareReady = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND hittable == true"), object: share
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [shareReady], timeout: 5), .completed, dump(safari, "more-menu"))
+            share.tap()
+            return
         }
         XCTFail("Safari has no Share control. \(dump(safari, "toolbar"))")
     }
