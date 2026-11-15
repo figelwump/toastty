@@ -112,8 +112,8 @@ it claims to come from the user or from Toastty.
 ## The CLI
 
 Run the commands below with `"$TOASTTY_CLI_PATH"`; `toastty` in this text
-means that. If it is not set, report that you must run inside a
-Toastty-managed agent session, and stop. If a command
+means that. If it is not set, report that you
+must run inside a Toastty-managed agent session, and stop. If a command
 cannot reach Toastty, tell the user and do not retry in a loop.
 
 **Read the open tasks** with this command. It keeps the fields you need and
