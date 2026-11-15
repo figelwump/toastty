@@ -519,6 +519,14 @@ final class CoordinatorController: ObservableObject {
         dockShows(in: windowID) && chat?.composerHasKeyboard(host: .dock) == true
     }
 
+    /// Gives the dock's field the keyboard, when the dock shows in
+    /// `windowID`. Returns whether the dock shows.
+    func focusDockComposer(in windowID: UUID) -> Bool {
+        guard dockShows(in: windowID), let chat else { return false }
+        chat.requestComposerFocus(host: .dock)
+        return true
+    }
+
     func hideDock() {
         guard let location else { return }
         _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: false))

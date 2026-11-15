@@ -1,11 +1,6 @@
 import Foundation
 
 public struct AppReducer {
-    private enum FocusGraphTarget: Equatable {
-        case mainPanel(UUID)
-        case rightAuxPanel(UUID)
-    }
-
     private enum EmptyWorkspaceTabDisposition {
         case bootstrapReplacementTab
         case removeWorkspace(EmptyWindowDisposition)
@@ -1646,23 +1641,16 @@ public struct AppReducer {
             return false
         }
 
-        let rightAuxPanelID = focusableRightAuxPanelID(in: workspace)
+        let rightAuxPanelID = workspace.focusableRightAuxPanelID
         let rightAuxPanelIsFocused = rightAuxPanelID != nil &&
             workspace.rightAuxPanel.focusedPanelID == rightAuxPanelID
 
         switch direction {
         case .previous, .next:
-            let targets = focusGraphTargets(in: workspace, rightAuxPanelID: rightAuxPanelID)
-            guard targets.count > 1 else { return false }
-
-            let currentTarget: FocusGraphTarget
-            if rightAuxPanelIsFocused, let rightAuxPanelID {
-                currentTarget = .rightAuxPanel(rightAuxPanelID)
-            } else {
-                currentTarget = .mainPanel(focusResolution.panelID)
-            }
-
-            guard let currentIndex = targets.firstIndex(of: currentTarget) else {
+            let targets = workspace.panelFocusCycle
+            guard targets.count > 1,
+                  let currentTarget = workspace.currentPanelFocusCycleTarget,
+                  let currentIndex = targets.firstIndex(of: currentTarget) else {
                 return false
             }
 
@@ -1732,38 +1720,9 @@ public struct AppReducer {
         }
     }
 
-    private static func focusableRightAuxPanelID(in workspace: WorkspaceState) -> UUID? {
-        guard workspace.focusedPanelModeActive == false,
-              workspace.rightAuxPanel.isVisible,
-              let activePanelID = workspace.rightAuxPanel.activePanelID else {
-            return nil
-        }
-        return activePanelID
-    }
-
-    private static func focusGraphTargets(
-        in workspace: WorkspaceState,
-        rightAuxPanelID: UUID?
-    ) -> [FocusGraphTarget] {
-        let visibleRoot = workspace.focusModeSubtree?.root ?? workspace.layoutTree
-        var targets = visibleRoot.allSlotInfos.compactMap { slot -> FocusGraphTarget? in
-            guard workspace.panels[slot.panelID] != nil else {
-                return nil
-            }
-            return .mainPanel(slot.panelID)
-        }
-
-        if let rightAuxPanelID,
-           targets.contains(.rightAuxPanel(rightAuxPanelID)) == false {
-            targets.append(.rightAuxPanel(rightAuxPanelID))
-        }
-
-        return targets
-    }
-
     @discardableResult
     private static func focus(
-        _ target: FocusGraphTarget,
+        _ target: PanelFocusCycleTarget,
         workspaceID: UUID,
         workspace: inout WorkspaceState,
         state: inout AppState
@@ -1786,7 +1745,7 @@ public struct AppReducer {
             workspace.unreadWorkspaceNotificationCount = 0
 
         case .rightAuxPanel(let targetPanelID):
-            guard focusableRightAuxPanelID(in: workspace) == targetPanelID else {
+            guard workspace.focusableRightAuxPanelID == targetPanelID else {
                 return false
             }
             guard workspace.rightAuxPanel.focusedPanelID != targetPanelID else {

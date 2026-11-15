@@ -262,9 +262,16 @@ final class SplitLayoutCommandController {
     static let appOwnedResizeAmount = 5
 
     private let store: AppStore
+    /// Gives a panel's view the keyboard after Select Next Split or Select
+    /// Previous Split leaves the coordinator's dock for it.
+    private let focusPanelKeyboard: @MainActor (UUID) -> Void
+    /// The coordinator's dock, a stop of Select Next Split and Select
+    /// Previous Split beside the workspace's panels while it shows.
+    weak var coordinatorDock: (any CoordinatorDockFocusStop)?
 
-    init(store: AppStore) {
+    init(store: AppStore, focusPanelKeyboard: @escaping @MainActor (UUID) -> Void = { _ in }) {
         self.store = store
+        self.focusPanelKeyboard = focusPanelKeyboard
     }
 
     func canSplit(preferredWindowID: UUID?) -> Bool {
@@ -285,10 +292,49 @@ final class SplitLayoutCommandController {
 
     @discardableResult
     func focusSplit(direction: SlotFocusDirection, preferredWindowID: UUID?) -> Bool {
-        guard let workspaceID = commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
             return false
         }
-        return store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
+        if let handled = focusSplitThroughCoordinatorDock(direction: direction, selection: selection) {
+            return handled
+        }
+        return store.sendNavigation(.focusSlot(workspaceID: selection.workspace.id, direction: direction))
+    }
+
+    /// Select Next Split and Select Previous Split treat the coordinator's
+    /// dock as the stop before the workspace's first panel, as it shows at
+    /// the workspace's left. From the dock's field, Next goes to the first
+    /// panel and Previous to the last. From the last panel, Next goes to the
+    /// dock's field, and from the first panel, Previous does. `nil` when the
+    /// dock takes no part, and the panels' own cycle applies.
+    private func focusSplitThroughCoordinatorDock(
+        direction: SlotFocusDirection,
+        selection: WindowCommandSelection
+    ) -> Bool? {
+        guard direction == .next || direction == .previous,
+              let coordinatorDock,
+              coordinatorDock.dockShows(in: selection.windowID),
+              // The Tasks view covers the panels: they cannot take the keyboard.
+              selection.window.showsTasksView == false else {
+            return nil
+        }
+        let workspace = selection.workspace
+        let cycle = workspace.panelFocusCycle
+        if coordinatorDock.dockHasKeyboard(in: selection.windowID) {
+            guard let target = direction == .next ? cycle.first : cycle.last else { return nil }
+            if workspace.currentPanelFocusCycleTarget != target {
+                _ = store.sendNavigation(.focusPanel(workspaceID: workspace.id, panelID: target.panelID))
+            }
+            focusPanelKeyboard(target.panelID)
+            return true
+        }
+        guard let current = workspace.currentPanelFocusCycleTarget,
+              let index = cycle.firstIndex(of: current) else {
+            return nil
+        }
+        let leavesCycle = direction == .next ? index == cycle.count - 1 : index == 0
+        guard leavesCycle else { return nil }
+        return coordinatorDock.focusDockComposer(in: selection.windowID)
     }
 
     func canAdjustSplitLayout(preferredWindowID: UUID?) -> Bool {
