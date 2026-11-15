@@ -740,6 +740,7 @@ final class LiveSessionsController {
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
         controller.consumeConnectionState(coordinatorState)
         controller.consumeInputControl(inputControl(for: conversationID))
+        controller.consumeIsCoordinatorChat(isCoordinatorConversation(conversationID))
         activeConversationController = controller
         await controller.start()
 
@@ -892,6 +893,15 @@ final class LiveSessionsController {
             controller.consumeInputControl(inputControl(for: controller.conversationID))
         }
         applyPresentation()
+        if let controller = activeConversationController {
+            controller.consumeIsCoordinatorChat(isCoordinatorConversation(controller.conversationID))
+        }
+    }
+
+    /// Whether the conversation is the coordinator's own, as the Coordinator
+    /// tab sees it.
+    private func isCoordinatorConversation(_ conversationID: UUID) -> Bool {
+        homeController.snapshot.coordinatorConversation?.id == conversationID
     }
 
     /// The host's queue, steer, and stop controls for a conversation from

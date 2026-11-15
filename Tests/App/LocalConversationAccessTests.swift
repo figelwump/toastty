@@ -969,6 +969,29 @@ final class LocalConversationFixture {
         return (response.status, result)
     }
 
+    /// Stops a turn through the gateway's own request handler, as a phone's
+    /// Stop does.
+    func gatewayInterrupt(
+        _ request: RemoteConversationInterruptRequest,
+        credential: String?
+    ) throws -> (status: Int, result: RemoteConversationInterruptResult?) {
+        var headers = ["tailscale-user-login": "owner@example.com"]
+        if let credential { headers["authorization"] = "Bearer \(credential)" }
+        let http = RemoteGatewayHTTPRequest(
+            method: "POST",
+            path: "/api/conversation.interrupt",
+            headers: headers,
+            body: try ConversationEventCoding.makeEncoder().encode(request)
+        )
+        guard case .respond(let response) = gatewayHandler.handle(http, at: .now) else {
+            throw LocalConversationFixtureError.unexpectedGatewayOutcome
+        }
+        let decoded = try? ConversationEventCoding.makeDecoder().decode(
+            RemoteConversationInterruptResponse.self, from: response.body
+        )
+        return (response.status, decoded?.result)
+    }
+
     func removeRuntimeFiles() {
         try? transcript?.close()
         service.setEnabled(false, persist: false)

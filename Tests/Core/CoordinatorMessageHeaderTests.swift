@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 
 /// The first line that Toastty writes on a message for the coordinator, and

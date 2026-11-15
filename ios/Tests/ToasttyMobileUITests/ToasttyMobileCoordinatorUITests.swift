@@ -134,6 +134,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
         let chip = link(containing: "compact-session-rows", in: app)
         XCTAssertTrue(chip.waitForExistence(timeout: 5))
+        // The chat opens at its newest message; the chip is near the top.
+        for _ in 0..<4 where chip.isHittable == false { app.swipeDown() }
         chip.tap()
         let taskSpace = app.navigationBars["compact-session-rows"]
         XCTAssertTrue(taskSpace.waitForExistence(timeout: 5))
@@ -324,6 +326,137 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertEqual(notice.label, "Waits on your Mac: the coordinator is working")
     }
 
+    /// Toastty's messages in the coordinator's chat show as the Mac's
+    /// coordinator chat shows them (mockup A): a digest folds to one line, a
+    /// task's message is a card with its sender, a reply names the message
+    /// it answers, and a quick entry message shows the user's text with the
+    /// choices and the names of its files. Toastty's first lines never show.
+    func testToasttysMessagesShowAsTheMacsCoordinatorChatShowsThem() {
+        let app = launch(coordinator: "quiet")
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+
+        // The newest messages show first: the quick entry message and the
+        // answer to it.
+        let quickEntry = textView(containing: "Add a CSV export to the Tasks tab", in: app)
+        XCTAssertTrue(quickEntry.waitForExistence(timeout: 5))
+        let shown = (quickEntry.value as? String) ?? ""
+        XCTAssertTrue(
+            shown.contains("project \"toastty\" · codex, model gpt-6.1-sol, effort high · csv-mockup.png"), shown
+        )
+        XCTAssertFalse(shown.contains("/Users/me"), shown)
+        XCTAssertFalse(textView(containing: "[Toastty]", in: app).exists)
+        attachScreenshot(named: "coordinator-chat-quick-entry", of: app)
+
+        // A reply names the message it answers, and a tap shows that message.
+        let quote = app.descendants(matching: .any)["toastty-transcript-reply-quote"]
+        XCTAssertTrue(quote.waitForExistence(timeout: 5))
+        XCTAssertTrue(quote.label.contains("I asked it to keep the old API"), quote.label)
+        let reply = textView(containing: "Good. Release toastty once the export API merges.", in: app)
+        XCTAssertTrue(reply.exists)
+        XCTAssertFalse(((reply.value as? String) ?? "").contains(">"))
+
+        // The top of the chat, as in mockup A: the digest's line, the
+        // coordinator's answer with chips, and the task's card.
+        for _ in 0..<4 { app.swipeDown() }
+        // The row's identifier covers the line's own, so the line is found
+        // by what it says.
+        let digest = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Toastty · 2 updates · ")).firstMatch
+        XCTAssertTrue(waitUntilHittable(digest))
+        XCTAssertEqual(digest.value as? String, "Collapsed")
+        XCTAssertTrue(app.staticTexts["task early-session-titles"].exists)
+        XCTAssertTrue(textView(containing: "Should the old API stay for one release?", in: app).exists)
+        XCTAssertFalse(textView(containing: "[Toastty]", in: app).exists)
+        attachScreenshot(named: "coordinator-chat-mockup-a", of: app)
+
+        // The digest's line opens to the whole digest.
+        digest.tap()
+        XCTAssertTrue(waitForValue("Expanded", of: digest))
+        XCTAssertTrue(textView(containing: "[Toastty] Wake", in: app).waitForExistence(timeout: 5))
+        attachScreenshot(named: "coordinator-chat-digest-open", of: app)
+
+        // Back at the bottom, the reply's line scrolls to the answer.
+        for _ in 0..<4 { app.swipeUp() }
+        XCTAssertTrue(waitUntilHittable(quote))
+        quote.tap()
+        XCTAssertTrue(waitUntilHittable(textView(containing: "I asked it to keep the old API", in: app)))
+    }
+
+    /// A chip opens its task over the chat, inside the Coordinator tab: the
+    /// task's space, or its detail when the phone lists no space for it. A
+    /// task that the Mac does not list stays text. Back returns to the chat
+    /// with the tab bar.
+    func testATaskChipInTheCoordinatorsChatOpensItsTaskOverTheChat() {
+        let app = launch(coordinator: "quiet")
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let unlisted = textView(containing: "Old export spike", in: app)
+        XCTAssertTrue(unlisted.waitForExistence(timeout: 5))
+        XCTAssertFalse(link(containing: "Old export spike", in: app).exists)
+
+        for _ in 0..<4 { app.swipeDown() }
+        let noSpace = link(containing: "#259", in: app)
+        XCTAssertTrue(noSpace.waitForExistence(timeout: 5))
+        noSpace.tap()
+        let detailTitle = app.staticTexts["toastty-task-detail-title"]
+        XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(detailTitle.label, "Parent task rollup")
+        attachScreenshot(named: "coordinator-chip-opens-task-detail", of: app)
+        app.navigationBars["Task"].buttons["Done"].tap()
+        XCTAssertTrue(detailTitle.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["Coordinator"].isSelected)
+
+        let withSpace = link(containing: "compact-session-rows", in: app)
+        XCTAssertTrue(waitUntilHittable(withSpace))
+        withSpace.tap()
+        let taskSpace = app.navigationBars["compact-session-rows"]
+        XCTAssertTrue(taskSpace.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["Coordinator"].isSelected)
+        attachScreenshot(named: "coordinator-chip-opens-task-space", of: app)
+        taskSpace.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(app.tabBars.buttons["Home"]))
+        XCTAssertFalse(app.navigationBars.firstMatch.buttons["Back"].exists)
+        attachScreenshot(named: "coordinator-chip-back-to-chat", of: app)
+    }
+
+    /// While the coordinator works, Send steers into its turn by default, as
+    /// the Mac's coordinator chat does; Queue stays a choice for one message.
+    func testTheComposerSteersByDefaultWhileTheCoordinatorWorks() {
+        let app = launch(coordinator: "working")
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["toastty-mobile-composer-stop"].exists)
+
+        input.tap()
+        input.typeText("Also check the release notes")
+        let mode = app.buttons["toastty-mobile-composer-mode"]
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.label, "Steer selected")
+        XCTAssertEqual(send.label, "Steer message")
+        attachScreenshot(named: "coordinator-composer-steer", of: app)
+        send.tap()
+        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-1"]
+        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        attachScreenshot(named: "coordinator-composer-steered", of: app)
+
+        input.tap()
+        input.typeText("Then summarize")
+        XCTAssertTrue(waitForLabel("Steer selected", of: mode))
+        mode.tap()
+        let queueChoice = app.buttons["toastty-mobile-composer-mode-queue"]
+        XCTAssertTrue(queueChoice.waitForExistence(timeout: 5))
+        queueChoice.tap()
+        XCTAssertTrue(waitForLabel("Queue selected", of: mode))
+        XCTAssertEqual(send.label, "Queue message")
+        send.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-2"]
+            .waitForExistence(timeout: 5))
+    }
+
     // MARK: - Helpers
 
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
@@ -360,6 +493,20 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         }
         let matches = app.links.allElementsBoundByIndex.filter { words($0.label).contains(text) }
         return matches.first ?? app.links["no link contains \(text)"]
+    }
+
+    private func textView(containing text: String, in app: XCUIApplication) -> XCUIElement {
+        app.textViews.matching(NSPredicate(format: "value CONTAINS %@", text)).firstMatch
+    }
+
+    private func waitForValue(_ value: String, of element: XCUIElement) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: 5) == .completed
+    }
+
+    private func waitForLabel(_ label: String, of element: XCUIElement) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", label), object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: 5) == .completed
     }
 
     /// Waits until the tab shows exactly `badge`, or no badge for `nil`.

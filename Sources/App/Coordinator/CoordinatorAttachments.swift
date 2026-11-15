@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// Toastty's copies of the files that the user attached to a message for
 /// the coordinator, in one folder for each message.

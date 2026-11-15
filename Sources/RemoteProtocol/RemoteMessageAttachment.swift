@@ -73,3 +73,38 @@ public enum RemoteAttachmentPolicy {
         return nil
     }
 }
+
+/// How the Mac writes a message's attached files into the text it types,
+/// and how a reader of that text finds them again
+/// (`CoordinatorMessageHeader.attachedFiles(in:)`).
+public enum RemoteAttachmentDeliveryText {
+    /// The line before the list of attached files.
+    public static let introduction = "Read the following files attached to this message on this Mac:"
+
+    /// `text` followed by the attached files, each as a path in a code
+    /// span on its own line. With no path, `text` alone.
+    public static func text(_ text: String, paths: [String]) -> String {
+        guard paths.isEmpty == false else { return text }
+        // Claude Code turns a pasted bare or quoted image path into an
+        // image attachment asynchronously and drops a Return that arrives
+        // meanwhile, so the send would wait unsubmitted in its prompt.
+        // Paths in code spans stay plain text.
+        let spans = paths.map(codeSpan).joined(separator: "\n")
+        return [text, introduction + "\n" + spans]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// A CommonMark code span with a fence longer than any backtick run in
+    /// `path`, padded when the path itself starts or ends with a backtick.
+    public static func codeSpan(_ path: String) -> String {
+        var longestRun = 0
+        var run = 0
+        for character in path {
+            run = character == "`" ? run + 1 : 0
+            longestRun = max(longestRun, run)
+        }
+        let fence = String(repeating: "`", count: longestRun + 1)
+        let padding = path.hasPrefix("`") || path.hasSuffix("`") ? " " : ""
+        return fence + padding + path + padding + fence
+    }
+}

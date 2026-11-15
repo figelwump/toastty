@@ -878,7 +878,15 @@ struct ToasttyMobileRootView: View {
             )
         }
         if conversationID == ToasttyMobileFixture.coordinatorConversationID {
-            return ToasttyConversationFixture.coordinatorPresentation(for: conversationID)
+            return ToasttyConversationFixture.coordinatorPresentation(
+                for: conversationID,
+                sendItems: isFixtureWorkingConversation(conversationID)
+                    ? ToasttySendPresentationAdapter.makeItems(
+                        from: SendReconciliationState(),
+                        inputControl: fixtureInputControl
+                    ) + fixtureSendItems
+                    : []
+            )
         }
         switch fixtureScenario {
         case .home, .reconnecting:
@@ -1206,7 +1214,7 @@ struct ToasttyMobileRootView: View {
         )
     }
 
-    private func fixtureQueueSteerComposer() -> ToasttyComposerPresentation {
+    private func fixtureQueueSteerComposer(agentDisplayName: String = "Codex") -> ToasttyComposerPresentation {
         let control = fixtureInputControl
         let authority: ConversationComposerAuthority
         if let turnEpoch = control.turnEpoch {
@@ -1234,7 +1242,7 @@ struct ToasttyMobileRootView: View {
                 inputControl: control
             )
         }
-        return ToasttyComposerPresentation.make(agentDisplayName: "Codex", authority: authority)
+        return ToasttyComposerPresentation.make(agentDisplayName: agentDisplayName, authority: authority)
     }
 
     private func fixtureReleaseLocalDraft(_ conversationID: UUID) {
@@ -1277,14 +1285,29 @@ struct ToasttyMobileRootView: View {
         )
     }
 
+    /// The conversation whose turn the queue and steer fixture runs: the
+    /// working session of that scenario, or the coordinator's chat while
+    /// the fixture coordinator works.
+    private func isFixtureWorkingConversation(_ conversationID: UUID) -> Bool {
+        switch fixtureScenario {
+        case .queueSteer:
+            conversationID == Self.fixtureWorkingConversationID
+        case .home:
+            conversationID == ToasttyMobileFixture.coordinatorConversationID
+                && sessionController.homeController.snapshot.coordinatorMark == .working
+        default:
+            false
+        }
+    }
+
     private func fixtureInterrupt(_ conversationID: UUID) {
-        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        guard isFixtureWorkingConversation(conversationID) else { return }
         fixtureTurnStopped = true
         fixtureQueuePaused = !fixtureQueuedMessages.isEmpty
     }
 
     private func fixtureQueuedMessageAction(_ action: ToasttyQueuedMessageAction, conversationID: UUID) {
-        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        guard isFixtureWorkingConversation(conversationID) else { return }
         switch action {
         case .remove(let clientRequestID):
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
@@ -1309,6 +1332,10 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         if fixtureScenario == .queueSteer {
             return conversationID == Self.fixtureWorkingConversationID ? fixtureQueueSteerComposer() : nil
+        }
+        // The coordinator's chat while the fixture coordinator works.
+        if isFixtureWorkingConversation(conversationID) {
+            return fixtureQueueSteerComposer(agentDisplayName: "Claude")
         }
         if fixtureScenario == .localDraftRelease {
             return conversationID == Self.fixtureLocalDraftConversationID ? fixtureLocalDraftComposer() : nil
@@ -1358,8 +1385,8 @@ struct ToasttyMobileRootView: View {
         deliveryMode: RemoteMessageDeliveryMode?
     ) -> Bool {
 #if DEBUG
-        if fixtureScenario == .queueSteer {
-            guard submission.conversationID == Self.fixtureWorkingConversationID,
+        if fixtureScenario == .queueSteer || isFixtureWorkingConversation(submission.conversationID) {
+            guard isFixtureWorkingConversation(submission.conversationID),
                   fixtureTurnStopped == false else {
                 finishSubmission(submission, outcome: .notEnqueued(.inputUnavailable))
                 return false

@@ -356,7 +356,11 @@ transcript, not under the field.
   the queue pauses until the user taps **Send next** on a queued message,
   removes the last queued message, or queues a new one. The prompt reopens a
   short moment after the provider reports the aborted turn, unless local input
-  or another provider transition happens first.
+  or another provider transition happens first. In the coordinator's chat, a
+  Stop also holds the coordinator's own waiting messages (the Mac chat's
+  messages, quick entry, `coordinator send` and digests that wait), as the
+  Mac chat's Stop does: the Mac chat shows them as **Paused** until **Send
+  next** there. The phone does not list them.
 
 Typing on the Mac still wins. Local keyboard input during a turn blocks steer
 for that turn and, unless the provider logs the Mac user's own message, opens
@@ -824,9 +828,34 @@ while you work in the other tabs.
   screen as any session, with its composer. Its title shows the golden Toasty,
   with steam while the coordinator works, and the name **Coordinator**; the
   line under it shows the status and the agent. The tab bar stays on this
-  screen, because Back has nowhere to go. A task link opens the task's space
-  over the chat, and **Next** opens another session over it, which hides the
-  bar as every session screen does. Back returns to the chat.
+  screen, because Back has nowhere to go. A task chip opens the task's space
+  over the chat, or the task's detail when the phone lists no space for it;
+  a link to a task that the Mac does not list stays text. **Next** opens
+  another session over the chat, which hides the bar as every session screen
+  does. Back returns to the chat.
+- **Toastty's messages show as on the Mac.** In the coordinator's chat only,
+  the phone reads the first line that Toastty writes on a message it types
+  into the coordinator ("Who a message is from" in
+  [The coordinator](tasks.md#the-coordinator)), as the Mac's coordinator
+  chat does, with the same shared code. A digest folds to one
+  line, such as "Toastty · 2 updates · 14:05", that opens to the digest. A
+  message that `coordinator send` brought shows its sender and body in a
+  card. A quick entry message shows your text without Toastty's first line,
+  then your choices and the names of its files. A reply shows a line with the
+  time and opening of the coordinator's message it answers; a tap shows that
+  message. The files stay on the Mac, so the phone shows their names, not
+  thumbnails. Other sessions' chats show every message as it was typed.
+- **Steer and Stop.** While the coordinator works, Send steers into its turn
+  by default, as the Mac chat's Send does, and **Queue** is the other choice
+  (see [Queue, steer, and stop](#queue-steer-and-stop-while-the-agent-works)).
+  A message the phone queues waits in the phone's own queue, which the Mac
+  types before the coordinator's waiting messages. **Stop** holds the
+  coordinator's waiting messages too.
+- **Not on the phone yet.** The coordinator's own queue (the Mac chat's
+  Queued and Paused rows with Edit, Remove, Steer now and Send next), quiet
+  turns folded under their digest, thumbnails of attached images, the line
+  above messages you have not read, Reply on the coordinator's messages, and
+  `@` mentions in the composer stay on the Mac.
 - **The tab's icon is Toasty's outline.** While another tab shows, its badge
   says what the coordinator waits for, from its session's status, as the
   Mac's coordinator row marks it: **New** for output you have not read, **!**

@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// The coordinator's message that the user's message answers.
 struct CoordinatorReplyTarget: Equatable {

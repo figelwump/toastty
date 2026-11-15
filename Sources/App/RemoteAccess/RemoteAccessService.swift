@@ -578,6 +578,8 @@ final class RemoteAccessService: ObservableObject {
         var changes: AsyncStream<Void>.Continuation
         /// The summary the subscriber was last told about.
         var publishedSummary: RemoteConversationSummary?
+        /// See `LocalConversationSubscription.onStop`.
+        var onStop: (@MainActor () -> Void)?
     }
     /// In-app subscribers, by subscription. With the gateway off, only their
     /// panels are tracked.
@@ -3766,6 +3768,12 @@ final class RemoteAccessService: ObservableObject {
             )
             if delivery == .delivered {
                 sendQueue.pause(conversationID)
+                // An in-app sender holds its own waiting messages too, so a
+                // Stop from any app holds the same messages.
+                let stopHandlers = localSubscriptions.values
+                    .filter { $0.panelID == panelID }
+                    .compactMap(\.onStop)
+                for handler in stopHandlers { handler() }
                 // Direct surface input bypasses the local key callback. Pause
                 // queued sends before the shared status can become idle.
                 _ = sessionRuntimeStore.handleLocalInterruptForPanelIfActive(
@@ -4964,6 +4972,14 @@ extension RemoteAccessService: LocalConversationAccess {
         return performInterrupt(request, origin: .mac(byUser: true))
     }
 
+    fileprivate func localStopHandler(subscriptionID: UUID) -> (@MainActor () -> Void)? {
+        localSubscriptions[subscriptionID]?.onStop
+    }
+
+    fileprivate func setLocalStopHandler(_ handler: (@MainActor () -> Void)?, subscriptionID: UUID) {
+        localSubscriptions[subscriptionID]?.onStop = handler
+    }
+
     /// Reopens a prompt that a draft in the terminal holds closed, for an
     /// in-app caller. Nothing is typed.
     fileprivate func releaseLocalDraftLocal(
@@ -5036,6 +5052,11 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult {
         service?.interruptLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
+    }
+
+    var onStop: (@MainActor () -> Void)? {
+        get { service?.localStopHandler(subscriptionID: id) }
+        set { service?.setLocalStopHandler(newValue, subscriptionID: id) }
     }
 
     func releaseLocalDraft(

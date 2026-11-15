@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import RemoteProtocol
 
 /// What waits for the coordinator's next open prompt: the task changes it
 /// has not been told about, and its timer.
@@ -272,7 +273,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
 
     /// The first line of every digest. A reader, such as the coordinator's
     /// chat view, finds Toastty's own messages by `digestPrefix`.
-    public static let digestPrefix = "[Toastty] Wake"
+    public static let digestPrefix = CoordinatorMessageHeader.digestPrefix
     public static let digestHeader = "\(digestPrefix): this message is from Toastty, not from the user."
     public static let digestFooter = "Read `toastty task list` for details."
 
@@ -308,29 +309,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
             stage += ", merged"
         }
         let alerts = change.alerts.map { "; \($0.digestText)" }.joined()
-        return "- [\(linkText(change.title))](toastty://task/\(change.taskID.uuidString)): \(stage) at \(timestamp(change.at))\(alerts)"
-    }
-
-    /// A title as the text of a one-line Markdown link. A title is a
-    /// person's or an agent's text and is typed into a terminal, so no
-    /// control character goes through: an escape sequence in it could end
-    /// the terminal's paste early.
-    static func linkText(_ title: String) -> String {
-        var scalars = String.UnicodeScalarView()
-        for scalar in title.unicodeScalars {
-            if scalar.properties.isWhitespace {
-                scalars.append(" ")
-            } else if scalar.properties.generalCategory != .control {
-                scalars.append(scalar)
-            }
-        }
-        let oneLine = String(scalars).split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
-        let shortened = oneLine.count > 80 ? oneLine.prefix(79) + "…" : oneLine[...]
-        let escaped = shortened
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "[", with: "\\[")
-            .replacingOccurrences(of: "]", with: "\\]")
-        return escaped.isEmpty ? "Untitled task" : escaped
+        return "- [\(CoordinatorTaskLink.linkText(change.title))](toastty://task/\(change.taskID.uuidString)): \(stage) at \(timestamp(change.at))\(alerts)"
     }
 
     static func timestamp(_ date: Date) -> String {
