@@ -56,6 +56,11 @@ public final class RemoteGatewayRequestHandler {
         /// A validated create request. Saving the task copies files off the
         /// main thread, so the transport resolves it with `resolveTaskCreate`.
         case deferredTaskCreate(deviceID: UUID, request: RemoteTaskCreateRequest)
+        case deferredCoordinatorSendAttachments(deviceID: UUID, body: Data)
+        /// A validated message for the coordinator. Sending copies files off
+        /// the main thread, so the transport resolves it with
+        /// `resolveCoordinatorSend`.
+        case deferredCoordinatorSend(deviceID: UUID, request: RemoteCoordinatorSendRequest)
         case upgradeToWebSocket(
             deviceID: UUID,
             authKind: RemoteDeviceAuthKind,
@@ -72,6 +77,12 @@ public final class RemoteGatewayRequestHandler {
     private enum TaskCreateAttachmentDecode: Sendable {
         case request(RemoteTaskCreateRequest)
         case rejected(RemoteTaskCreateRejectionReason)
+        case protocolMismatch
+    }
+
+    private enum CoordinatorSendAttachmentDecode: Sendable {
+        case request(RemoteCoordinatorSendRequest)
+        case rejected(RemoteCoordinatorSendRejectionReason)
         case protocolMismatch
     }
 
@@ -387,12 +398,108 @@ public final class RemoteGatewayRequestHandler {
         return await resolveTaskCreate(deviceID: deviceID, request: request)
     }
 
+    /// Sends a quick entry message to the coordinator. Installing it is
+    /// what advertises `RemoteGatewayCapability.coordinatorSend`. Invoked
+    /// only by the main-actor transport, after `resolveCoordinatorSend`
+    /// re-checks the device.
+    public var coordinatorSendHandler: (
+        @MainActor (RemoteCoordinatorSendRequest, RemoteDeviceRecord) async -> RemoteCoordinatorSendResult
+    )?
+
+    /// The coordinator turns the message into a task, so the device needs
+    /// the permission a task create needs. It can change between the
+    /// request and this call, so it is read again here; the send handler
+    /// reads it once more before the message is typed or saved.
+    @MainActor
+    public func resolveCoordinatorSend(
+        deviceID: UUID,
+        request: RemoteCoordinatorSendRequest
+    ) async -> RemoteGatewayHTTPResponse {
+        let result: RemoteCoordinatorSendResult
+        if let device = deviceStore.devices.first(where: { $0.id == deviceID }), device.canStartSessions {
+            if let coordinatorSendHandler {
+                result = await coordinatorSendHandler(request, device)
+            } else {
+                result = .rejected(reason: .noCoordinator, message: nil)
+            }
+        } else {
+            result = .rejected(reason: .permissionDenied, message: nil)
+        }
+        recordCoordinatorSend(result, deviceID: deviceID, at: Date())
+        return coordinatorSendResponse(result)
+    }
+
+    @MainActor
+    public func resolveCoordinatorSendAttachments(
+        deviceID: UUID,
+        body: Data,
+        onDecoded: @MainActor () -> Void = {}
+    ) async -> RemoteGatewayHTTPResponse {
+        // Large JSON and file-content checks do not block the Mac's UI.
+        let decoded = await Task.detached(priority: .userInitiated) {
+            () -> CoordinatorSendAttachmentDecode in
+            guard body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes,
+                  let request = try? ConversationEventCoding.makeDecoder().decode(
+                    RemoteCoordinatorSendRequest.self,
+                    from: body
+                  )
+            else { return .rejected(.invalidAttachments) }
+            guard request.protocolVersion == RemoteGatewayProtocol.version else { return .protocolMismatch }
+            guard !request.attachments.isEmpty,
+                  RemoteAttachmentPolicy.validationError(for: request.attachments) == nil
+            else { return .rejected(.invalidAttachments) }
+            guard RemoteGatewayRequestHandler.isValidCoordinatorSend(request) else { return .rejected(.invalidRequest) }
+            return .request(request)
+        }.value
+        // Release the upload slot before the message's files are copied.
+        onDecoded()
+        guard !Task.isCancelled else {
+            return coordinatorSendResponse(.rejected(reason: .permissionDenied, message: nil))
+        }
+        let request: RemoteCoordinatorSendRequest
+        switch decoded {
+        case .request(let value): request = value
+        case .rejected(let reason): return coordinatorSendRejection(reason, deviceID: deviceID)
+        case .protocolMismatch:
+            return errorResponse(status: 409, reason: "Conflict", code: "protocol_mismatch", message: "Unsupported protocol version")
+        }
+        return await resolveCoordinatorSend(deviceID: deviceID, request: request)
+    }
+
+    private func recordCoordinatorSend(_ result: RemoteCoordinatorSendResult, deviceID: UUID, at date: Date) {
+        switch result {
+        case .sent:
+            auditLog.record(.init(at: date, action: .coordinatorSendAccepted, deviceID: deviceID, detail: "sent"))
+        case .waiting(let reason):
+            auditLog.record(.init(at: date, action: .coordinatorSendAccepted, deviceID: deviceID, detail: "waiting_\(reason.rawValue)"))
+        case .rejected(let reason, _):
+            auditLog.record(.init(at: date, action: .coordinatorSendRejected, deviceID: deviceID, detail: reason.rawValue))
+        case .unrecognized:
+            // A decoding outcome on the client; the host never produces it.
+            break
+        }
+    }
+
+    private func coordinatorSendResponse(_ result: RemoteCoordinatorSendResult) -> RemoteGatewayHTTPResponse {
+        .json(body: (try? encoder.encode(RemoteCoordinatorSendResponse(result: result))) ?? Data())
+    }
+
+    private func coordinatorSendRejection(
+        _ reason: RemoteCoordinatorSendRejectionReason,
+        deviceID: UUID,
+        at date: Date = Date()
+    ) -> RemoteGatewayHTTPResponse {
+        let result = RemoteCoordinatorSendResult.rejected(reason: reason, message: nil)
+        recordCoordinatorSend(result, deviceID: deviceID, at: date)
+        return coordinatorSendResponse(result)
+    }
+
     /// Uses precisely the same method/origin/credential/scope policy as final
     /// dispatch, before the listener admits a large request body.
     public func authorizeAttachmentUpload(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {
         guard let policy = RemoteGatewayRoutePolicy.policy(for: request.path),
               policy.route == .messageSendWithAttachments || policy.route == .sessionStartWithAttachments
-                || policy.route == .taskCreateWithAttachments else {
+                || policy.route == .taskCreateWithAttachments || policy.route == .coordinatorSendWithAttachments else {
             return .respond(.text(status: 400, reason: "Bad Request", "Invalid upload route"))
         }
         return handle(request, policy: policy, at: date, headersOnly: true)
@@ -698,6 +805,9 @@ public final class RemoteGatewayRequestHandler {
                     recordProjectRelease(result, deviceID: authenticated.id, at: date)
                     return .respond(projectReleaseResponse(result))
                 }
+                if policy.route == .coordinatorSend || policy.route == .coordinatorSendWithAttachments {
+                    return .respond(coordinatorSendRejection(.permissionDenied, deviceID: authenticated.id, at: date))
+                }
                 if policy.route == .conversationInterrupt {
                     auditLog.record(RemoteAccessAuditEntry(
                         at: date,
@@ -846,6 +956,17 @@ public final class RemoteGatewayRequestHandler {
             return handleTaskArchiveCheck(request, device: authenticated)
         case .projectRelease:
             return handleProjectRelease(request, device: authenticated, at: date)
+        case .coordinatorSend:
+            return handleCoordinatorSend(request, device: authenticated, at: date)
+        case .coordinatorSendWithAttachments:
+            guard authenticated.canStartSessions else {
+                return .respond(coordinatorSendRejection(.permissionDenied, deviceID: authenticated.id, at: date))
+            }
+            if headersOnly { return .attachmentUploadAuthorized(deviceID: authenticated.id) }
+            guard request.body.count <= RemoteAttachmentPolicy.maximumEncodedBodyBytes else {
+                return .respond(.text(status: 413, reason: "Content Too Large", "Attachment request is too large"))
+            }
+            return .deferredCoordinatorSendAttachments(deviceID: authenticated.id, body: request.body)
         case .hello, .browserPair, .nativePairingExchange:
             assertionFailure("Unauthenticated route reached authenticated dispatch")
             return .respond(errorResponse(status: 500, reason: "Internal Server Error", code: "internal_error", message: "Internal error"))
@@ -859,6 +980,7 @@ public final class RemoteGatewayRequestHandler {
         if configuration.pushConfiguration != nil { response.capabilities.append(.pushNotifications) }
         if taskCreateHandler != nil { response.capabilities.append(.taskCreate) }
         if projectReleaseHandler != nil { response.capabilities.append(.projectRelease) }
+        if coordinatorSendHandler != nil { response.capabilities.append(.coordinatorSend) }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))
     }
@@ -1554,31 +1676,84 @@ public final class RemoteGatewayRequestHandler {
         return .deferredTaskCreate(deviceID: device.id, request: createRequest)
     }
 
+    private func handleCoordinatorSend(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= RemoteGatewayProtocol.maximumRequestBodyBytes else {
+            return .respond(.text(status: 413, reason: "Content Too Large", "Coordinator message is too large"))
+        }
+        guard let sendRequest = try? ConversationEventCoding.makeDecoder().decode(
+            RemoteCoordinatorSendRequest.self,
+            from: request.body
+        ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected coordinator message JSON"
+            ))
+        }
+        guard sendRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        guard device.canStartSessions else {
+            return .respond(coordinatorSendRejection(.permissionDenied, deviceID: device.id, at: date))
+        }
+        guard sendRequest.attachments.isEmpty else {
+            return .respond(coordinatorSendRejection(.invalidAttachments, deviceID: device.id, at: date))
+        }
+        guard Self.isValidCoordinatorSend(sendRequest) else {
+            return .respond(coordinatorSendRejection(.invalidRequest, deviceID: device.id, at: date))
+        }
+        return .deferredCoordinatorSend(deviceID: device.id, request: sendRequest)
+    }
+
+    /// Bounds every field before anything reaches the coordinator, with the
+    /// limits of a task create: the coordinator makes a task from it. The
+    /// workspace and the profile are resolved against live state later.
+    static func isValidCoordinatorSend(_ request: RemoteCoordinatorSendRequest) -> Bool {
+        RemoteCoordinatorSendPolicy.isValidClientRequestID(request.clientRequestID)
+            && isValidTaskFields(text: request.text, profileID: request.profileID, model: request.model, effort: request.effort)
+    }
+
     /// Bounds every field before anything reaches the task coordinator. The
     /// workspace and the profile are resolved against live state later.
     static func isValidTaskCreate(_ request: RemoteTaskCreateRequest) -> Bool {
+        RemoteTaskCreatePolicy.isValidClientRequestID(request.clientRequestID)
+            && isValidTaskFields(text: request.text, profileID: request.profileID, model: request.model, effort: request.effort)
+    }
+
+    /// The text and agent choice of a task, for a create or for a message
+    /// that the coordinator makes a task from.
+    private static func isValidTaskFields(text: String, profileID: String?, model: String?, effort: String?) -> Bool {
         // A task's title comes from its text, so files alone are not enough.
-        guard RemoteTaskCreatePolicy.isValidClientRequestID(request.clientRequestID),
-              !request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              request.text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes,
-              request.text.contains("\u{0}") == false else {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              text.utf8.count <= RemoteGatewayProtocol.maximumRequestBodyBytes,
+              text.contains("\u{0}") == false else {
             return false
         }
-        if let profileID = request.profileID, profileID.isEmpty || profileID.count > 64 {
+        if let profileID, profileID.isEmpty || profileID.count > 64 {
             return false
         }
         // A model or effort belongs to an agent.
-        if request.profileID == nil, request.model != nil || request.effort != nil {
+        if profileID == nil, model != nil || effort != nil {
             return false
         }
-        if let model = request.model,
+        if let model,
            RemoteSessionStartPolicy.isValidSelectionValue(
                model,
                maximumLength: RemoteSessionStartPolicy.maximumModelLength
            ) == false {
             return false
         }
-        if let effort = request.effort,
+        if let effort,
            RemoteSessionStartPolicy.isValidSelectionValue(
                effort,
                maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength

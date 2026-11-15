@@ -545,6 +545,7 @@ final class RemoteAccessService: ObservableObject {
     private var taskActionRunner: RemoteTaskActionRunner?
     private let taskCreateBridge = RemoteAccessTaskCreateBridge()
     private var taskCreator: RemoteTaskCreator?
+    private var coordinatorSender: RemoteCoordinatorSender?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -891,6 +892,29 @@ final class RemoteAccessService: ObservableObject {
                     return .rejected(reason: .tasksUnavailable, message: nil)
                 }
                 return runner.release(request, device: device)
+            }
+            // Only a Mac with the coordinator's controller advertises a send
+            // to it. Whether a coordinator workspace exists now, the options
+            // and each send say.
+            if taskBoard?.coordinator?.coordinatorController != nil {
+                coordinatorSender = RemoteCoordinatorSender(
+                    coordinator: { [weak taskBoard] in taskBoard?.coordinator?.coordinatorController },
+                    choices: { [weak quickEntryController] in
+                        quickEntryController?.currentChoices(includeProfile: RemoteTaskCreator.offersProfile)
+                            ?? QuickEntryChoices(workspaces: [], profiles: [], frequentPresets: [])
+                    },
+                    attachmentStore: attachmentStore,
+                    deviceMaySend: { [weak self] deviceID in
+                        guard let self, self.isEnabled else { return false }
+                        return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
+                    }
+                )
+                handler.coordinatorSendHandler = { [weak self] request, device in
+                    guard let self, self.isEnabled, let sender = self.coordinatorSender else {
+                        return .rejected(reason: .noCoordinator, message: nil)
+                    }
+                    return await sender.send(request, device: device)
+                }
             }
         }
         handler.onDevicePaired = { [weak self] device in
@@ -4602,10 +4626,14 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteTaskCreateOptionsRequest,
         device: RemoteDeviceRecord
     ) -> RemoteTaskCreateOptionsResponse {
-        taskCreator?.options(device: device)
-            ?? RemoteTaskCreateOptionsResponse(
+        guard var response = taskCreator?.options(device: device) else {
+            return RemoteTaskCreateOptionsResponse(
                 permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device)
             )
+        }
+        // The New Task sheet sends to the coordinator while one exists.
+        response.coordinator = coordinatorSender?.state()
+        return response
     }
 
     /// Models that this provider's listed sessions report, most recently

@@ -22,9 +22,14 @@ struct CoordinatorAttachments: Sendable {
     }
 
     /// Copies `files` into the folder of message `messageID`, and returns
-    /// the copies. On a failure nothing of the message stays.
-    func stage(_ files: [URL], messageID: UUID) throws -> [URL] {
+    /// the copies. Each copy takes its name from `names`, in the order of
+    /// `files`, or else from its file. On a failure nothing of the message
+    /// stays.
+    func stage(_ files: [URL], names: [String]? = nil, messageID: UUID) throws -> [URL] {
         guard files.isEmpty == false else { return [] }
+        guard names == nil || names?.count == files.count else {
+            throw CoordinatorError("Toastty could not copy the attached files: their names do not match them.")
+        }
         guard files.count <= TaskRecord.maximumAttachmentCount else {
             throw CoordinatorError("Attach at most \(TaskRecord.maximumAttachmentCount) files.")
         }
@@ -40,18 +45,19 @@ struct CoordinatorAttachments: Sendable {
             madeFolder = true
             var copies: [URL] = []
             var usedNames: Set<String> = []
-            for file in files {
+            for (index, file) in files.enumerated() {
+                let name = names?[index] ?? file.lastPathComponent
                 let size = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
                 guard size.isRegularFile == true else {
-                    throw CoordinatorError("\(file.lastPathComponent) is not a file.")
+                    throw CoordinatorError("\(name) is not a file.")
                 }
                 guard (size.fileSize ?? 0) <= TaskCoordinator.maximumAttachmentBytes else {
                     throw CoordinatorError(
-                        "\(file.lastPathComponent) is larger than \(TaskCoordinator.maximumAttachmentBytes / 1024 / 1024) MB."
+                        "\(name) is larger than \(TaskCoordinator.maximumAttachmentBytes / 1024 / 1024) MB."
                     )
                 }
                 let copy = folder.appending(
-                    path: Self.uniqueName(Self.fileName(file.lastPathComponent), among: &usedNames),
+                    path: Self.uniqueName(Self.fileName(name), among: &usedNames),
                     directoryHint: .notDirectory
                 )
                 try fileManager.copyItem(at: file, to: copy)
@@ -76,6 +82,13 @@ struct CoordinatorAttachments: Sendable {
         for id in messageIDs(namedIn: attached).union([messageID]) where UUID(uuidString: id) != nil {
             try? FileManager.default.removeItem(at: folderURL(messageID: id))
         }
+    }
+
+    /// Whether message `messageID` has copies here. A refused message keeps
+    /// none, and Remove deletes them, so a message with copies was sent or
+    /// still waits.
+    func hasCopies(messageID: String) -> Bool {
+        FileManager.default.fileExists(atPath: folderURL(messageID: messageID).path)
     }
 
     /// The messages whose folders `text` names as paths.

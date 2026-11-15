@@ -25,6 +25,10 @@ struct CoordinatorUserMessage: Equatable {
     var text: String
     /// Files to copy into the coordinator's folder for this message.
     var files: [URL] = []
+    /// The name of each copy, in the order of `files`, when a file's own
+    /// name is not the user's name for it: a phone's upload is stored under
+    /// a random name. `nil` keeps each file's own name.
+    var fileNames: [String]?
     /// Copies that a waiting message made, which the user took back into
     /// the chat's field with Edit. They stay where they are and come first.
     var stagedFiles: [URL] = []
@@ -44,7 +48,13 @@ extension CoordinatorController {
     /// running turn when that turn can take it, as `sendUserText` sends it.
     /// Otherwise the message waits, saved, until the coordinator's prompt
     /// takes it. A quick entry message never goes into a running turn.
-    func sendUserMessage(_ message: CoordinatorUserMessage, steering: Bool = false) async throws -> SendResult {
+    /// `beforeSend` runs after the files are copied, directly before the
+    /// message is typed or saved; a throw there sends nothing.
+    func sendUserMessage(
+        _ message: CoordinatorUserMessage,
+        steering: Bool = false,
+        beforeSend: (@MainActor () throws -> Void)? = nil
+    ) async throws -> SendResult {
         let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.isEmpty == false || message.files.isEmpty == false || message.stagedFiles.isEmpty == false else {
             throw CoordinatorError("The message is empty.")
@@ -58,9 +68,10 @@ extension CoordinatorController {
         let attachments = attachments
         try attachments.checkStaged(message.stagedFiles)
         let files = message.files
+        let names = message.fileNames
         let id = message.id
         let copies = try await Task.detached(priority: .userInitiated) {
-            try attachments.stage(files, messageID: id)
+            try attachments.stage(files, names: names, messageID: id)
         }.value
         do {
             // The copy took time. The message is for the coordinator that
@@ -68,6 +79,7 @@ extension CoordinatorController {
             guard location?.workspaceID == workspaceID else {
                 throw CoordinatorError("The coordinator closed. Nothing was sent.")
             }
+            try beforeSend?()
             let paths = (message.stagedFiles + copies).map { $0.path(percentEncoded: false) }
             let delivered = if let choices = message.quickEntry {
                 CoordinatorMessageHeader.quickEntryMessage(choices, text: text, attachmentPaths: paths)
