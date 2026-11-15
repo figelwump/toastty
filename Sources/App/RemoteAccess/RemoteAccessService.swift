@@ -1686,6 +1686,13 @@ final class RemoteAccessService: ObservableObject {
                 annotationColorTokens: annotationStyleStore.colorTokensByKey,
                 conversationIDsBySessionID: Self.conversationIDsBySessionID(
                     activeSessionIDByConversationID, listed: conversations),
+                liveConversationIDsByPanelID: Dictionary(
+                    conversations.compactMap { conversation in
+                        guard activeSessionIDByConversationID[conversation.conversationID] != nil else { return nil }
+                        return conversation.placement.panelID.map { ($0, conversation.conversationID) }
+                    },
+                    uniquingKeysWith: { first, _ in first }
+                ),
                 acceptsDoneMark: { refusals.contains($0) == false }),
             tasks: makeTaskBoard()
         )
@@ -1752,9 +1759,15 @@ final class RemoteAccessService: ObservableObject {
         associations: [UUID: RemoteConversationID] = [:],
         annotationColorTokens: [String: AnnotationColorToken] = [:],
         conversationIDsBySessionID: [String: RemoteConversationID] = [:],
+        liveConversationIDsByPanelID: [UUID: RemoteConversationID] = [:],
         acceptsDoneMark: (UUID) -> Bool = { _ in true }
     ) -> [RemoteWorkspaceSummary] {
         let parentIDs = state.subspaceParentIDsByWorkspaceID()
+        // The coordinator's own session, by its panel, while its agent runs:
+        // other agents can run in the same workspace, and a listed
+        // transcript outlives the agent.
+        let coordinator = state.coordinator
+        let coordinatorConversationID = coordinator?.panelID.flatMap { liveConversationIDsByPanelID[$0] }
         var ids: [UUID] = []
         var seen: Set<UUID> = []
         for window in state.windows {
@@ -1815,7 +1828,9 @@ final class RemoteAccessService: ObservableObject {
                     .flatMap { workspace.annotations[$0] == nil ? nil : $0 },
                 doneAt: parentID == nil ? nil : workspace.doneAt,
                 acceptsDoneMark: parentID == nil || acceptsDoneMark(id),
-                isCoordinator: workspace.isCoordinator)
+                isCoordinator: workspace.isCoordinator,
+                coordinatorConversationID: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorConversationID : nil)
         }
     }
 

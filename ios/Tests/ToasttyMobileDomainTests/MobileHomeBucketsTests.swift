@@ -379,11 +379,17 @@ final class MobileHomeBucketsTests: XCTestCase {
         let coordinatorID = uuid(90, prefix: "A2")
         let projectSessions = [session(1, "Approval", .needsApproval), session(2, "Unread", .ready)]
         let board = RemoteTaskBoard(tasks: [task(21, "Open PR", .needsYou, mark: .review)])
-        func withCoordinator(_ status: RemoteSessionPresentationStatus?, board: RemoteTaskBoard?) -> MobileHomeSnapshot {
+        func withCoordinator(
+            _ status: RemoteSessionPresentationStatus?,
+            board: RemoteTaskBoard?,
+            otherAgent: RemoteSessionPresentationStatus? = nil
+        ) -> MobileHomeSnapshot {
             let coordinator = MobileWorkspace(
                 id: coordinatorID, title: "Coordinator",
-                conversations: status.map { [session(90, "Toasty", $0, workspace: coordinatorID)] } ?? [],
-                isCoordinator: true
+                conversations: (status.map { [session(90, "Toasty", $0, workspace: coordinatorID)] } ?? [])
+                    + (otherAgent.map { [session(91, "Other agent", $0, workspace: coordinatorID)] } ?? []),
+                isCoordinator: true,
+                coordinatorConversationID: status == nil ? nil : uuid(90, prefix: "B2")
             )
             return MobileHomeSnapshot(
                 hostName: "mac",
@@ -413,6 +419,13 @@ final class MobileHomeBucketsTests: XCTestCase {
             XCTAssertEqual(withCoordinator(status, board: board).coordinatorMark, mark, "\(String(describing: status))")
         }
         XCTAssertEqual(marks.filter { $0.1.callsForUser }.map(\.1), [.unread, .needsApproval, .error])
+
+        // Another agent in the coordinator's workspace is not the
+        // coordinator, however urgent it is.
+        let crowded = withCoordinator(.idle, board: board, otherAgent: .needsApproval)
+        XCTAssertEqual(crowded.coordinatorConversation?.title, "Toasty")
+        XCTAssertEqual(crowded.coordinatorMark, .quiet)
+        XCTAssertEqual(withCoordinator(nil, board: board, otherAgent: .working).coordinatorMark, .notRunning)
 
         // Without a board there are no cards and no Coordinator tab: the
         // coordinator's session is an ordinary one again.

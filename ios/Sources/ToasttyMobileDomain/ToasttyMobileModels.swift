@@ -570,6 +570,9 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     /// The Mac marks this workspace as the coordinator's. See
     /// `MobileHomeSnapshot.coordinator` for when the phone sets it apart.
     public let isCoordinator: Bool
+    /// On the coordinator's workspace, the coordinator's own session, which
+    /// the Mac names because other sessions can share the workspace.
+    public let coordinatorConversationID: UUID?
 
     public init(
         id: UUID,
@@ -582,7 +585,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         primaryAnnotationKey: String? = nil,
         isDone: Bool = false,
         acceptsDoneMark: Bool = true,
-        isCoordinator: Bool = false
+        isCoordinator: Bool = false,
+        coordinatorConversationID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -595,6 +599,7 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         self.isDone = isDone
         self.acceptsDoneMark = acceptsDoneMark
         self.isCoordinator = isCoordinator
+        self.coordinatorConversationID = coordinatorConversationID
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -615,7 +620,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             primaryAnnotationKey: primaryAnnotationKey,
             isDone: isDone,
             acceptsDoneMark: acceptsDoneMark,
-            isCoordinator: isCoordinator
+            isCoordinator: isCoordinator,
+            coordinatorConversationID: coordinatorConversationID
         )
     }
 
@@ -631,7 +637,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             primaryAnnotationKey: primaryAnnotationKey,
             isDone: isDone,
             acceptsDoneMark: acceptsDoneMark,
-            isCoordinator: isCoordinator
+            isCoordinator: isCoordinator,
+            coordinatorConversationID: coordinatorConversationID
         )
     }
 }

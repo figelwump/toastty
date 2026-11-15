@@ -1227,7 +1227,8 @@ struct RemoteAccessServiceSafetyTests {
     }
 
     /// The phone shows the coordinator in its own tab, so the snapshot marks
-    /// the coordinator's workspace, and only that one. The mark leaves the
+    /// the coordinator's workspace, and only that one, and names the
+    /// coordinator's own session while its agent runs. The mark leaves the
     /// wire when the coordinator closes.
     @MainActor
     @Test func workspaceInventoryMarksOnlyTheCoordinatorsWorkspace() throws {
@@ -1239,19 +1240,32 @@ struct RemoteAccessServiceSafetyTests {
         state.workspacesByID[subspace.id] = subspace
         state.windows[0].workspaceIDs.append(subspace.id)
         let coordinatorID = UUID()
+        let coordinatorPanelID = UUID()
         #expect(AppReducer.reduce(
             action: .createCoordinatorWorkspace(
-                windowID: windowID, workspaceID: coordinatorID, panelID: UUID(),
+                windowID: windowID, workspaceID: coordinatorID, panelID: coordinatorPanelID,
                 terminalCWD: "/Users/tester/.toastty/coordinator"
             ),
             state: &state
         ))
+        #expect(state.coordinator?.panelID == coordinatorPanelID)
+        // The coordinator's agent and another agent in a project both run.
+        let coordinatorConversation = RemoteConversationID()
+        let live = [
+            coordinatorPanelID: coordinatorConversation,
+            try #require(state.workspacesByID[projectID]?.focusedPanelID): RemoteConversationID(),
+        ]
 
-        let summaries = RemoteAccessService.workspaceInventory(state: state)
+        let summaries = RemoteAccessService.workspaceInventory(state: state, liveConversationIDsByPanelID: live)
         #expect(Set(summaries.map(\.id)) == [projectID, subspace.id, coordinatorID])
         #expect(summaries.filter(\.isCoordinator).map(\.id) == [coordinatorID])
         let coordinator = try #require(summaries.first { $0.id == coordinatorID })
         #expect(coordinator.parentWorkspaceID == nil)
+        #expect(coordinator.coordinatorConversationID == coordinatorConversation)
+        #expect(summaries.filter { $0.coordinatorConversationID != nil }.map(\.id) == [coordinatorID])
+        // Without a running agent the coordinator has no session to name.
+        #expect(RemoteAccessService.workspaceInventory(state: state)
+            .first { $0.id == coordinatorID }?.coordinatorConversationID == nil)
         // Only the coordinator's workspace carries the field on the wire.
         for summary in summaries {
             let json = String(decoding: try ConversationEventCoding.makeEncoder().encode(summary), as: UTF8.self)

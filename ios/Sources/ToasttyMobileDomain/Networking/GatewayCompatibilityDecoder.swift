@@ -253,7 +253,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
             acceptsDoneMark: ((try? object.optionalBool("acceptsDoneMark")) ?? nil) ?? true,
             // Absent from older hosts, which list the coordinator's
             // workspace as an ordinary one.
-            isCoordinator: ((try? object.optionalBool("isCoordinator")) ?? nil) ?? false)
+            isCoordinator: ((try? object.optionalBool("isCoordinator")) ?? nil) ?? false,
+            coordinatorConversationID: ((try? object.optionalUUID("coordinatorConversationID")) ?? nil)
+                .map(RemoteConversationID.init(rawValue:)))
     }
 
     /// Annotations are display-only, so a malformed chip is dropped rather

@@ -833,12 +833,11 @@ while you work in the other tabs.
   for an approval, and **Error** for an error. A working or quiet coordinator
   has no badge, and the badge leaves while the tab shows. The system draws
   every badge in red, so the text tells them apart.
-- **Not running.** When the coordinator's workspace has no session, because
-  the coordinator does not run or is starting, the tab shows Toasty and says
-  that the coordinator is not running and that it starts on the Mac (**Open
-  Coordinator** in the Agent menu). The phone cannot start it. The chat shows
-  when the session comes, and no "no longer available" banner shows when the
-  session goes.
+- **Not running.** When the coordinator's agent does not run or is still
+  starting, the tab shows Toasty and says that the coordinator is not running
+  and that it starts on the Mac (**Open Coordinator** in the Agent menu). The
+  phone cannot start it. The chat shows when the agent runs, and no "no longer
+  available" banner shows when it stops.
 - **Not a project.** As in the Mac sidebar, the coordinator's workspace has no
   card in Home, its session counts in neither Needs you number, the app badge
   or **Next**, and a new session does not start in its workspace.
@@ -849,13 +848,17 @@ while you work in the other tabs.
 
 The Mac marks the coordinator's workspace in the session snapshot with
 `isCoordinator: true` on its `RemoteWorkspaceSummary`, and sends the field only
-for that workspace. No capability is needed. The phone sets the workspace apart
-only when the snapshot also carries the task board: without a board the phone
-has no tab bar and lists the coordinator's workspace as an ordinary one, as it
-does for an older Mac that sends no mark. An older phone ignores the field and
-lists the workspace as before. The phone takes the coordinator's session to be
-the one session its workspace lists; while a restart briefly lists two, it
-takes the more urgent one.
+for that workspace. While the coordinator's agent runs, the same workspace
+names its session in `coordinatorConversationID`: another agent can run in the
+coordinator's workspace, and the transcript of an agent that exited stays
+listed, so the phone takes the coordinator's session only from this field.
+Without it the tab says that the coordinator is not running. Other sessions in
+that workspace do not show on the phone, as the Mac's sidebar does not list
+them. No capability is needed. The phone sets the workspace apart only when
+the snapshot also carries the task board: without a board the phone has no tab
+bar and lists the coordinator's workspace as an ordinary one, as it does for an
+older Mac that sends no mark. An older phone ignores both fields and lists the
+workspace as before.
 
 ### Starting a session
 

@@ -203,13 +203,17 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
     func testCoordinatorMarkSetsTheWorkspaceApartOnlyWithATaskBoard() throws {
         let projectID = UUID()
         let coordinatorID = UUID()
+        let coordinatorConversation = RemoteConversationID(rawValue: UUID())
         func response(tasks: RemoteTaskBoard?) throws -> Data {
             try ConversationEventCoding.makeEncoder().encode(RemoteGatewaySessionListResponse(snapshot: RemoteSessionListSnapshot(
                 projectionRunID: RemoteProjectionRunID(rawValue: UUID()), conversations: [],
                 generatedAt: Date(timeIntervalSince1970: 1_788_696_000),
                 workspaces: [
                     RemoteWorkspaceSummary(id: projectID, title: "toastty", panels: []),
-                    RemoteWorkspaceSummary(id: coordinatorID, title: "Coordinator", panels: [], isCoordinator: true),
+                    RemoteWorkspaceSummary(
+                        id: coordinatorID, title: "Coordinator", panels: [], isCoordinator: true,
+                        coordinatorConversationID: coordinatorConversation
+                    ),
                 ],
                 tasks: tasks
             )))
@@ -223,6 +227,8 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         // A lookup by ID still finds it, so its session can open.
         XCTAssertEqual(withBoard.workspaces.map(\.id), [projectID, coordinatorID])
         XCTAssertEqual(withBoard.workspaces.map(\.isCoordinator), [false, true])
+        XCTAssertEqual(withBoard.coordinator?.coordinatorConversationID, coordinatorConversation.rawValue)
+        // The named session is not in this snapshot's list, so none runs.
         XCTAssertEqual(withBoard.coordinatorMark, .notRunning)
 
         // Without a task board the phone has no tabs, so the workspace lists
@@ -236,6 +242,7 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         let plain = try ConversationEventCoding.makeEncoder().encode(
             RemoteWorkspaceSummary(id: projectID, title: "toastty", panels: []))
         XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("isCoordinator"))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("coordinatorConversationID"))
 
         // An older Mac sends no mark, and a malformed one counts as none.
         for mark: Any? in [nil, "yes"] {
@@ -247,6 +254,7 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
             )).presentation()
             XCTAssertNotNil(older.taskBoard)
             XCTAssertNil(older.coordinator, "mark: \(String(describing: mark))")
+            XCTAssertNil(older.workspaces.first { $0.id == coordinatorID }?.coordinatorConversationID)
             XCTAssertEqual(Set(older.topLevelWorkspaces.map(\.id)), [projectID, coordinatorID])
         }
     }

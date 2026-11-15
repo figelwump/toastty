@@ -40,11 +40,13 @@ public enum MobileCoordinatorMark: Equatable, Sendable {
 }
 
 extension MobileHomeSnapshot {
-    /// The coordinator's session: the one session its workspace lists, or
-    /// the most urgent while a restart briefly lists two. `nil` when the
-    /// coordinator does not run, or when the phone has no Coordinator tab.
+    /// The coordinator's own session, which the Mac names: another agent
+    /// can run in the same workspace, and a restart briefly lists the old
+    /// session beside the new one. `nil` when the coordinator does not run,
+    /// or when the phone has no Coordinator tab.
     public var coordinatorConversation: MobileConversation? {
-        coordinator?.conversations.first
+        guard let coordinator, let id = coordinator.coordinatorConversationID else { return nil }
+        return coordinator.conversations.first { $0.id == id }
     }
 
     /// The coordinator's mark, or `nil` when the phone has no Coordinator

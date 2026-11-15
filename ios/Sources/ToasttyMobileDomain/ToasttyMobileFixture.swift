@@ -220,7 +220,8 @@ public enum ToasttyMobileFixture {
             id: coordinatorWorkspaceID,
             title: "Coordinator",
             conversations: conversations,
-            isCoordinator: true
+            isCoordinator: true,
+            coordinatorConversationID: status == nil ? nil : coordinatorConversationID
         )
         return MobileHomeSnapshot(
             hostName: snapshot.hostName,
