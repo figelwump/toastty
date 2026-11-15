@@ -519,6 +519,14 @@ final class CoordinatorController: ObservableObject {
         dockShows(in: windowID) && chat?.composerHasKeyboard(host: .dock) == true
     }
 
+    /// Gives the dock's field the keyboard, when the dock shows in
+    /// `windowID`. Returns whether the dock shows.
+    func focusDockComposer(in windowID: UUID) -> Bool {
+        guard dockShows(in: windowID), let chat else { return false }
+        chat.requestComposerFocus(host: .dock)
+        return true
+    }
+
     func hideDock() {
         guard let location else { return }
         _ = store.send(.setCoordinatorDockVisible(windowID: location.windowID, visible: false))
@@ -1125,15 +1133,29 @@ final class CoordinatorController: ObservableObject {
             expectedTurnEpoch: turnEpoch
         )) {
         case .accepted:
+            // The stop set the waiting entries aside already: see
+            // `setWaitingEntriesAside`.
             ToasttyLog.info("Stopped the coordinator's turn", category: .tasks, metadata: [
-                "set_aside": String(queuedEntries.count),
+                "set_aside": String(pausedEntries.count),
             ])
-            pausedEntries.append(contentsOf: queuedEntries)
-            queuedEntries.removeAll()
-            drain()
         case .rejected(let reason):
             throw CoordinatorError("Toastty could not stop the coordinator's turn (\(reason.rawValue)).")
         }
+    }
+
+    /// A Stop from any app, this chat's or a paired phone's, ended the
+    /// coordinator's turn. Entries that wait are set aside, so none starts
+    /// a new turn right after the stop: they wait until `resumeQueue`. The
+    /// conversation calls this before the stopped turn's end can open the
+    /// prompt.
+    private func setWaitingEntriesAside() {
+        guard queuedEntries.isEmpty == false else { return }
+        ToasttyLog.info("Set the coordinator's waiting messages aside after a stop", category: .tasks, metadata: [
+            "set_aside": String(queuedEntries.count),
+        ])
+        pausedEntries.append(contentsOf: queuedEntries)
+        queuedEntries.removeAll()
+        drain()
     }
 
     /// Lets the entries that a stop set aside go again, before any entry
@@ -1638,6 +1660,7 @@ final class CoordinatorController: ObservableObject {
         guard let panelID, let conversationAccess else { return nil }
         let subscription = conversationAccess.subscribeToConversation(inPanel: panelID)
         let changes = subscription.changes
+        subscription.onStop = { [weak self] in self?.setWaitingEntriesAside() }
         conversationSubscription = subscription
         // A change can open the prompt for the next queued entry.
         conversationObserver = Task { @MainActor [weak self] in

@@ -75,6 +75,13 @@ final class ToasttyMobileTaskActionUITests: XCTestCase {
         XCTAssertTrue(merging.waitForExistence(timeout: 5))
         XCTAssertTrue(waitForLabelPrefix(merging, "Merging PR #36…"))
         attachScreenshot(named: "task-merge-started", of: app)
+
+        // The bar shows the merge. The notice is for the list screens, and
+        // it does not show late: after its few seconds, Back shows none.
+        Thread.sleep(forTimeInterval: 6)
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        XCTAssertFalse(app.staticTexts["toastty-subspace-done-notice"].waitForExistence(timeout: 3))
+        attachScreenshot(named: "task-merge-back-without-a-late-notice", of: app)
     }
 
     func testArchiveShowsTheMacsCheckAndUncommittedChangesBlockIt() {

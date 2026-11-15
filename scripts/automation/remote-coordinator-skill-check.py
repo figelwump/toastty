@@ -154,9 +154,18 @@ MUTATING = (['pr', 'merge'], ['pr', 'close'], ['pr', 'edit'], ['pr', 'comment'],
 method = next((args[i + 1].upper() for i, a in enumerate(args[:-1]) if a in ('--method', '-X')), 'GET')
 mutation = any(args[:len(m)] == m for m in MUTATING) or (args[:1] == ['api'] and (
     method != 'GET' or any(a in ('-f', '-F', '--field', '--raw-field', '--input') for a in args)) and 'graphql' not in args)
+# A pull request with `mergeError` makes GitHub fail the app's own merge
+# call with that error, as a server error does. The call changes nothing. A
+# merge call from an agent's session stays a refused change.
+merge_path = next((a for a in args[1:] if '/pulls/' in a and a.endswith('/merge')), None) if (
+    args[:1] == ['api'] and method == 'PUT' and not os.environ.get('TOASTTY_SESSION_ID')) else None
+merge_error = merge_path and state['prs'].get(merge_path.split('/pulls/')[1].split('/')[0], {}).get('mergeError')
 with open(path + '.log', 'a') as log:
     log.write(json.dumps(dict(at=time.time(), args=args, session=os.environ.get('TOASTTY_SESSION_ID'),
-                              mutation=mutation)) + '\n')
+                              mutation=mutation and not merge_error, mergeError=merge_error or None)) + '\n')
+if merge_error:
+    print(json.dumps(dict(message=merge_error)))
+    sys.exit(f'gh: {merge_error} (HTTP 500)')
 if mutation:
     sys.exit('refused: GitHub is read-only in this check')
 
@@ -2106,6 +2115,149 @@ def review_empty(run):
     return turns
 
 
+def branch_task(run, number, pr_head=None, merge_error='Server Error', project='app'):
+    """A task whose pull request is a real pushed branch in the project's checkout.
+
+    Toastty's own merge then passes its checks of the checkout and reaches
+    GitHub's merge call, which the fake `gh` answers with `merge_error`.
+    `pr_head` gives GitHub another head than the checkout has, which Toastty
+    refuses. Returns the task and the checkout's commit.
+    """
+    task = run.create_task('Setup guide: fix the install command', project=project, status='working')
+    directory = run.projects[project]
+
+    def git(*arguments):
+        return subprocess.run(['git', '-C', str(directory), *arguments], check=True, capture_output=True, text=True).stdout.strip()
+
+    git('checkout', '-q', '-b', f'task-{number}')
+    (directory / 'docs').mkdir(exist_ok=True)
+    (directory / 'docs/setup.md').write_text('Install the tool with Homebrew:\n\n    brew install toastty-check\n')
+    git('add', '.')
+    git('commit', '-q', '-m', 'Fix the install command')
+    git('push', '-q', 'origin', f'task-{number}')
+    head = git('rev-parse', 'HEAD')
+    run.set_pr(task, number, head=pr_head or head, branch=f'task-{number}', body=DOCS_PROOF.format(head=head),
+               diff=DOCS_DIFF, additions=3, deletions=3, files=[dict(path='docs/setup.md', additions=3, deletions=3)],
+               mergeError=merge_error)
+    return task, head
+
+
+def merge_in_task(run, task, head):
+    """The merge skill's command, from the task's own agent session: what
+    Merge on the task, or "merge it" in the task, ends in."""
+    merged = subprocess.run([str(run.cli_path), '--json', 'task', 'merge', task.id, '--head', head],
+                            env=dict(run.environment, TOASTTY_SESSION_ID=run.session_of(task)),
+                            capture_output=True, text=True, timeout=180)
+    require(merged.returncode == 0, f'The task merge was not accepted: {merged.stdout} {merged.stderr}')
+
+
+def merge_as_the_user(run, number, pr_head=None):
+    """A reviewed task whose merge the user accepted in the task, and that Toastty stopped.
+
+    Returns the task, the checkout's commit, and the task's record after the
+    merge stopped.
+    """
+    task, head = branch_task(run, number, pr_head=pr_head)
+    publish_report(run, task, head, DOCS_REPORT)
+    run.open_coordinator()
+    ready(run, task)
+    reviewed = run.new_turns(wake=True)
+    run.check('with no Merging rule, it asks for no merge after its review', merge_requests(reviewed, task) == [],
+              [c for t in reviewed for c in t['commands']])
+    run.wait_idle()
+    merge_in_task(run, task, head)
+    record = run.wait_task(task, 'the merge stops', lambda t: t if t.get('mergeFailure') else None, timeout=240)
+    run.notes.append(f'mergeFailure: {record["mergeFailure"]}')
+    return task, head, record
+
+
+def merge_error(run):
+    """GitHub's error stopped a merge that the user asked for: it waits for the failure's age, then asks once again."""
+    run.seed_policy(unblocking='- Ask again for a merge that an error stopped after 3 minutes.')
+    task, head, record = merge_as_the_user(run, 61)
+    failure = record['mergeFailure']
+    run.check('Toastty ran the merge again, then recorded the error and the commit',
+              failure.get('cause') == 'error' and failure.get('head') == head and failure.get('base') == 'main'
+              and len([c for c in run.gh_calls() if c.get('mergeError')]) == 3,
+              dict(failure=failure, mergeCalls=len([c for c in run.gh_calls() if c.get('mergeError')])))
+    first = run.new_turns(wake=True)
+    wake = run.coordinator()['wake']
+    seconds = (parse_time(wake.get('nextWakeAt')) - time.time()) if wake.get('nextWakeAt') else None
+    run.check('before the age, it asks for no merge', merge_requests(first, task) == [],
+              [c for t in first for c in t['commands']])
+    run.check('the next check is set for when the failure reaches the age', seconds is not None and seconds <= 240, wake)
+    # GitHub works again before the coordinator's next check.
+    task.pr.pop('mergeError')
+    run.save_prs()
+    run.merges_expected.add(task.id)
+    later = run.new_turns(wake=True, timeout=TURN_TIMEOUT + 240)
+    commands = [c for t in later for c in t['commands']]
+    run.check("after the age, it asks the task's agent to merge, once", len(merge_requests(first + later, task)) == 1, commands)
+    record = run.get(task)
+    run.check('Toastty holds the merge request', record.get('mergeRequestedAt') is not None,
+              {key: record.get(key) for key in ('mergedAt', 'mergeRequestedAt', 'merge', 'mergeFailure')})
+    prompts = [m['text'] for m in run.messages(task) if 'toastty-task-merge' in m['text']]
+    run.check("the task's agent got Toastty's merge prompt, and nothing else",
+              len(prompts) == 1 and len(run.messages(task)) == 1, [m['text'] for m in run.messages(task)])
+    asked_at = next((i for i, c in enumerate(commands) if re.search(r'request-merge\b', c) and task.id in c), len(commands))
+    run.check('it read the head of the pull request before it asked',
+              any(re.search(r'gh\s+pr\s+view\b', c) for c in commands[:asked_at]), commands)
+    said = run.said(later)
+    run.check('it tells the user that it asked again, with the task link',
+              task.link in said and re.search(r'merg', said.lower()), said)
+    run.check('the ledger records the request', re.search(r'merging', run.ledger()) and task.id in run.ledger(),
+              run.ledger(), required=False)
+    watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
+    run.check('it asks Toastty to wake it at the merge', task.id in watched, watched)
+    if task.id not in watched:
+        return
+    merge_on_github(run, task)
+    after = run.new_turns(wake=True)
+    run.check('after the merge, the user is told that it merged, with the task link',
+              task.link in run.said(after) and 'merged' in run.said(after).lower(), run.said(after))
+    run.check('it asked for one merge in all', len(merge_requests(run.turns(), task)) == 1,
+              merge_requests(run.turns(), task))
+
+
+def merge_stopped_other(run, name):
+    """A stopped merge that is not the coordinator's to ask for again: the user is told, and no merge is asked for."""
+    run.seed_policy(unblocking='- Ask again for a merge that an error stopped after 3 minutes.')
+    if name == 'merge-refused':
+        # GitHub has another head than the checkout: Toastty refuses, and no error is involved.
+        task, head, record = merge_as_the_user(run, 62, pr_head=f'{0xbad:040x}')
+        run.check('Toastty recorded a refusal', record['mergeFailure'].get('cause') == 'refused', record['mergeFailure'])
+    else:
+        task, head, record = merge_as_the_user(run, 63)
+        run.check('Toastty recorded the error and the commit',
+                  record['mergeFailure'].get('cause') == 'error' and record['mergeFailure'].get('head') == head,
+                  record['mergeFailure'])
+        # A commit is pushed after the user accepted the merge.
+        task.pr.pop('mergeError')
+        run.update_pr(task, head=f'{0xfeed:040x}')
+    turns = run.new_turns(wake=True)
+    if not task.link in run.said(turns):
+        # It may wait for the failure's age before it looks at the commit.
+        turns += run.new_turns(wake=True, timeout=TURN_TIMEOUT + 240)
+    said = run.said(turns)
+    run.check('it asks for no merge', merge_requests(run.turns(), task) == [], merge_requests(run.turns(), task))
+    run.check('nothing is sent to the task', run.messages(task) == [], run.messages(task))
+    run.check('the user is told that the merge stopped, with the task link',
+              task.link in said and re.search(r'merg', said.lower()), said)
+    record = run.get(task)
+    run.check('no merge is under way', record.get('mergeRequestedAt') is None and record.get('mergedAt') is None,
+              {key: record.get(key) for key in ('mergedAt', 'mergeRequestedAt', 'merge')})
+
+
+def merge_refused(run):
+    """A check refused the user's merge: the user is told why, and no merge is asked for."""
+    merge_stopped_other(run, 'merge-refused')
+
+
+def merge_error_new_commit(run):
+    """An error stopped the user's merge and a commit was pushed after it: no merge is asked for."""
+    merge_stopped_other(run, 'merge-error-new-commit')
+
+
 SCENARIOS = {
     'first-run': first_run,
     'first-run-instructions': first_run_instructions,
@@ -2126,6 +2278,9 @@ SCENARIOS = {
     'merge-simple': merge_simple,
     'merge-outside-rule': merge_outside_rule,
     'merge-release': merge_release,
+    'merge-error': merge_error,
+    'merge-error-new-commit': merge_error_new_commit,
+    'merge-refused': merge_refused,
     'release': release,
     'user-typed': user_typed,
     'busy-silent': busy_silent,
@@ -2141,7 +2296,8 @@ SCENARIOS = {
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
-            'merge-simple', 'merge-outside-rule', 'merge-release', 'new-task', 'release', 'user-words-busy',
+            'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
+            'new-task', 'release', 'user-words-busy',
             'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty')
 
 

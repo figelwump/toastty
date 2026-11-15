@@ -116,9 +116,12 @@ Remote wrappers generate a unique label by default. An explicit `--run-label`
 must use 1–128 letters, numbers, dots, underscores, or hyphens, starting with a
 letter or number. Each label is for one run: the wrappers refuse existing local
 artifact directories and remote run or worktree directories. Choose a new label
-for a retry. Exclusive directory creation prevents collisions among updated
-wrappers, including validation and test runs that share the remote worktree
-root. Older wrappers in other worktrees can still replace explicit labels.
+for a retry. A sibling `<worktree>.allocation-lock` directory keeps allocation
+exclusive while Git creates the worktree, including validation and test runs
+that share the remote worktree root. It is removed when allocation exits. If a
+process is killed before it can remove the reservation, use a new label and
+inspect the incomplete allocation. Older wrappers in other worktrees do not
+honor this reservation and can still replace explicit labels.
 
 By default, artifact transfers keep result bundles, build logs, screenshots,
 recordings, runtime metadata, and other evidence. They omit known build product,
@@ -638,6 +641,8 @@ session, where the Claude login is readable.
 - GitHub is a fake `gh`, first on the PATH of the app and of the
   coordinator. It serves pull requests from a state file, records each call
   with the calling session, and refuses every call that changes something.
+  For a pull request with `mergeError`, it answers the app's own merge call
+  with that error, as GitHub does for a server error, and changes nothing.
 - The coordinator runs in Claude Code's default permission mode with Bash
   and the file tools allowed, so it runs every command without a prompt, and
   only its instructions stop a merge. `--permission-mode auto` runs it in
@@ -647,7 +652,8 @@ session, where the Claude login is readable.
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
 `review-ask`, `review-timer`, `review-empty`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
-`no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `release`, `user-typed`, `busy-silent`,
+`no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
+`merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
 `user-words-busy`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
 passes the words on with `task send --steer` and not without it. `dependency` also checks that the coordinator
@@ -660,7 +666,14 @@ yes; with a Merging rule it asks for
 the merge of a small documentation change and reports it; it asks for none
 when the change is source code, a CI workflow, over the rule's size, or into
 a release branch; and a change that it merged starts no release before the
-user's yes. `quiet-wake` wakes the
+user's yes. The three stopped-merge scenarios start a merge as the task's own
+agent does after the user's Merge, on a real pushed branch, so Toastty's own
+merge runs. In `merge-error` GitHub answers the merge call with "Server
+Error": Toastty runs the merge three times and records the cause `error`;
+the coordinator waits for the failure's age, then asks the task's agent to
+merge once more and reports it. It asks for no merge in
+`merge-error-new-commit`, where a commit is pushed after the failure, and in
+`merge-refused`, where Toastty refused the merge. `quiet-wake` wakes the
 coordinator for a task that only waits for CI, and checks that it marks the
 turn quiet with `coordinator wake --quiet`, that Toastty took the mark and
 did not show the turn's end as Ready, and that a turn the user starts is not

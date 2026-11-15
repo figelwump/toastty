@@ -3,15 +3,25 @@ import SwiftUI
 import ToasttyMobileDomain
 
 /// The New Task form, as the Mac's quick entry: the task text and files, a
-/// Workspace pill, an Agent pill, and the Mac's Frequent presets. The model
-/// owns every decision; this view only draws it and forwards edits.
+/// Workspace pill, Agent, Model and Effort pills (the Mac's Agent picker
+/// columns), and the Mac's Frequent presets. The model owns every
+/// decision; this view only draws it and forwards edits.
+///
+/// While the Mac has a coordinator, the form is titled To Coordinator, as
+/// the Mac's panel is labeled: Send is the main action, the Workspace and
+/// Agent pills start as Auto, and Create Task under the pills makes the
+/// task directly.
 struct ToasttyNewTaskSheet: View {
     let model: ToasttyNewTaskModel
     /// Called once the Mac saved the task, before the sheet dismisses itself.
     let onCreated: () -> Void
+    /// Called once the coordinator has the message or the Mac keeps it,
+    /// before the sheet dismisses itself.
+    var onSent: (RemoteCoordinatorSendResult) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
-    @State private var customModelAgent: RemoteSessionStartAgent?
+    /// The agent the Other model prompt opened for, while it shows.
+    @State private var customModelProfileID: String?
     @State private var customModelText = ""
     @FocusState private var textIsFocused: Bool
 
@@ -20,7 +30,7 @@ struct ToasttyNewTaskSheet: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(ToasttyDesignTokens.background)
-                .navigationTitle("New Task")
+                .navigationTitle(model.sendsToCoordinator ? "To Coordinator" : "New Task")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -30,7 +40,7 @@ struct ToasttyNewTaskSheet: View {
                             model.discardDraft()
                             dismiss()
                         }
-                        .disabled(model.phase == .creating)
+                        .disabled(model.isSubmitting)
                         .accessibilityIdentifier("toastty-mobile-new-task-cancel")
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -38,6 +48,18 @@ struct ToasttyNewTaskSheet: View {
                             ProgressView()
                                 .accessibilityLabel("Creating")
                                 .accessibilityIdentifier("toastty-mobile-new-task-creating")
+                        } else if model.phase == .sending {
+                            ProgressView()
+                                .accessibilityLabel("Sending")
+                                .accessibilityIdentifier("toastty-mobile-new-task-sending")
+                        } else if model.sendsToCoordinator {
+                            Button("Send") {
+                                textIsFocused = false
+                                Task { await model.send() }
+                            }
+                            .fontWeight(.semibold)
+                            .disabled(model.canSend == false)
+                            .accessibilityIdentifier("toastty-mobile-new-task-send")
                         } else {
                             Button("Create") {
                                 textIsFocused = false
@@ -58,20 +80,27 @@ struct ToasttyNewTaskSheet: View {
         .accessibilityIdentifier("toastty-mobile-new-task-sheet")
         .task { await model.loadOptions() }
         .onChange(of: model.phase) { _, phase in
-            guard phase == .created else { return }
-            onCreated()
-            dismiss()
+            switch phase {
+            case .created:
+                onCreated()
+                dismiss()
+            case .sent(let result):
+                onSent(result)
+                dismiss()
+            case .loading, .unreachable, .form, .creating, .sending:
+                break
+            }
         }
         .alert("Other model", isPresented: customModelPromptIsPresented) {
             TextField("Model ID", text: $customModelText)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             Button("Use") {
-                if let agent = customModelAgent { model.useCustomModel(customModelText, for: agent) }
+                if let profileID = customModelProfileID { model.useCustomModel(customModelText, for: profileID) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Type the model ID that \(customModelAgent?.displayName ?? "the agent") accepts.")
+            Text("Type the model ID that \(customModelAgentName) accepts.")
         }
     }
 
@@ -94,7 +123,7 @@ struct ToasttyNewTaskSheet: View {
             }
             .foregroundStyle(ToasttyDesignTokens.secondaryText)
             .accessibilityIdentifier("toastty-mobile-new-task-unreachable")
-        case .form, .creating, .created:
+        case .form, .creating, .created, .sending, .sent:
             form
         }
     }
@@ -122,6 +151,13 @@ struct ToasttyNewTaskSheet: View {
                 if let error = model.errorMessage {
                     note(error, tone: .error, identifier: "toastty-mobile-new-task-error")
                 }
+                if let coordinatorNote = model.coordinatorNote {
+                    note(
+                        coordinatorNote,
+                        tone: model.coordinatorNoteIsWarning ? .warning : .info,
+                        identifier: "toastty-mobile-new-task-coordinator-note"
+                    )
+                }
                 textEditor
                 if ToasttyAttachmentTray.isVisible(
                     attachments: model.attachments,
@@ -137,21 +173,34 @@ struct ToasttyNewTaskSheet: View {
                         removeAttachment: model.removeAttachment
                     )
                 }
-                // A long workspace or model moves the Agent pill to its own
-                // line before either pill truncates.
+                // A pill that does not fit moves to the next line before
+                // any pill truncates. Model and Effort show only for an
+                // agent that takes them.
                 ToasttyChipFlowLayout(spacing: 8, lineSpacing: 8) {
                     workspacePill
                     agentPill
+                    if model.showsModelAndEffort, let agent = model.selectedAgent {
+                        if agent.supportsModel {
+                            modelPill
+                        }
+                        if agent.reasoningEfforts.isEmpty == false {
+                            effortPill(agent)
+                        }
+                    }
                 }
                 .disabled(model.allowsEditing == false)
                 if model.frequentPresets.isEmpty == false {
                     frequent
                 }
-                Text("The Mac saves the task at once and runs setup.")
-                    .font(.footnote)
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                    .padding(.top, 4)
-                    .accessibilityIdentifier("toastty-mobile-new-task-footer")
+                if model.sendsToCoordinator {
+                    createDirectly
+                } else {
+                    Text("The Mac saves the task at once and runs setup.")
+                        .font(.footnote)
+                        .foregroundStyle(ToasttyDesignTokens.mutedText)
+                        .padding(.top, 4)
+                        .accessibilityIdentifier("toastty-mobile-new-task-footer")
+                }
             }
             .padding(16)
             .frame(maxWidth: 560)
@@ -202,65 +251,78 @@ struct ToasttyNewTaskSheet: View {
     private var workspacePill: some View {
         Menu {
             Picker("Workspace", selection: workspaceSelection) {
+                // The first row leaves the choice to the coordinator, as
+                // in the Mac's list.
+                if model.sendsToCoordinator {
+                    Text(ToasttyNewTaskModel.autoTitle).tag(UUID?.none)
+                }
                 ForEach(model.workspaces) { workspace in
                     Text(workspace.title).tag(Optional(workspace.id))
                 }
             }
         } label: {
-            pill(label: "Workspace", value: model.workspaceTitle)
+            pill(label: "Workspace", value: model.workspacePillTitle, isAuto: model.workspaceIsAuto)
         }
         .accessibilityLabel("Workspace")
-        .accessibilityValue(model.workspaceTitle)
+        .accessibilityValue(model.workspacePillTitle)
         .accessibilityIdentifier("toastty-mobile-new-task-workspace")
     }
 
-    /// Each agent opens its own menu of models and efforts, as the Mac's
-    /// Agent picker lists them.
+    /// Agent, Model and Effort are one pill each, as the Mac's Agent picker
+    /// has a column for each. A Frequent chip sets all three.
     private var agentPill: some View {
         Menu {
-            ForEach(model.agents) { agent in
-                Menu(agent.displayName) {
-                    if agent.supportsModel {
-                        Section("Model") {
-                            choice("Profile default", isSelected: isSelected(agent) && model.preset?.model == nil) {
-                                model.selectModel(nil, for: agent)
-                            }
-                            ForEach(model.modelChoices(for: agent), id: \.self) { value in
-                                choice(ToasttyNewTaskModel.shortModelName(value), isSelected: isSelected(agent) && model.preset?.model == value) {
-                                    model.selectModel(value, for: agent)
-                                }
-                            }
-                            Button("Other…") {
-                                customModelText = isSelected(agent) ? model.preset?.model ?? "" : ""
-                                customModelAgent = agent
-                            }
-                        }
-                    }
-                    if agent.reasoningEfforts.isEmpty == false {
-                        Section("Effort") {
-                            choice("Profile default", isSelected: isSelected(agent) && model.preset?.effort == nil) {
-                                model.selectEffort(nil, for: agent)
-                            }
-                            ForEach(agent.reasoningEfforts, id: \.self) { value in
-                                choice(value, isSelected: isSelected(agent) && model.preset?.effort == value) {
-                                    model.selectEffort(value, for: agent)
-                                }
-                            }
-                        }
-                    }
-                    if agent.supportsModel == false, agent.reasoningEfforts.isEmpty {
-                        choice("Use \(agent.displayName)", isSelected: isSelected(agent)) {
-                            model.selectPreset(RemoteTaskPreset(profileID: agent.profileID))
-                        }
-                    }
+            Picker("Agent", selection: agentSelection) {
+                if model.sendsToCoordinator {
+                    Text(ToasttyNewTaskModel.autoTitle).tag(String?.none)
+                }
+                ForEach(model.agents) { agent in
+                    Text(agent.displayName).tag(Optional(agent.profileID))
                 }
             }
         } label: {
-            pill(label: "Agent", value: model.agentTitle)
+            pill(label: "Agent", value: model.agentPillTitle, isAuto: model.agentIsAuto)
         }
         .accessibilityLabel("Agent")
-        .accessibilityValue(model.agentTitle)
+        .accessibilityValue(model.agentPillTitle)
         .accessibilityIdentifier("toastty-mobile-new-task-agent")
+    }
+
+    private var modelPill: some View {
+        Menu {
+            Picker("Model", selection: modelSelection) {
+                Text(ToasttyNewTaskModel.defaultChoiceTitle).tag(String?.none)
+                ForEach(model.modelChoices, id: \.self) { value in
+                    Text(ToasttyNewTaskModel.shortModelName(value)).tag(Optional(value))
+                }
+            }
+            Divider()
+            Button("Other…") {
+                customModelText = model.preset?.model ?? ""
+                customModelProfileID = model.preset?.profileID
+            }
+        } label: {
+            pill(label: "Model", value: model.modelTitle)
+        }
+        .accessibilityLabel("Model")
+        .accessibilityValue(model.modelTitle)
+        .accessibilityIdentifier("toastty-mobile-new-task-model")
+    }
+
+    private func effortPill(_ agent: RemoteSessionStartAgent) -> some View {
+        Menu {
+            Picker("Effort", selection: effortSelection) {
+                Text(ToasttyNewTaskModel.defaultChoiceTitle).tag(String?.none)
+                ForEach(agent.reasoningEfforts, id: \.self) { value in
+                    Text(value).tag(Optional(value))
+                }
+            }
+        } label: {
+            pill(label: "Effort", value: model.effortTitle)
+        }
+        .accessibilityLabel("Effort")
+        .accessibilityValue(model.effortTitle)
+        .accessibilityIdentifier("toastty-mobile-new-task-effort")
     }
 
     private var frequent: some View {
@@ -281,7 +343,8 @@ struct ToasttyNewTaskSheet: View {
     }
 
     private func frequentChip(_ preset: RemoteTaskPreset, index: Int) -> some View {
-        let isSelected = preset == model.preset
+        // On Auto no preset is the user's choice.
+        let isSelected = preset == model.preset && model.agentIsAuto == false
         return Button {
             model.selectPreset(preset)
         } label: {
@@ -302,23 +365,53 @@ struct ToasttyNewTaskSheet: View {
         .accessibilityIdentifier("toastty-mobile-new-task-frequent-\(index)")
     }
 
+    /// Create Task while the sheet sends to the coordinator: the task is
+    /// made directly, with the values the pills started on for a pill left
+    /// on Auto, which the line under the button names.
+    private var createDirectly: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                textIsFocused = false
+                Task { await model.create() }
+            } label: {
+                HStack(spacing: 6) {
+                    if model.phase == .creating {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text("Create Task")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .foregroundStyle(model.canCreate ? ToasttyDesignTokens.primaryText : ToasttyDesignTokens.mutedText)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(ToasttyDesignTokens.raisedSurface, in: Capsule())
+                .overlay {
+                    Capsule().stroke(ToasttyDesignTokens.border, lineWidth: 1)
+                }
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(model.canCreate == false)
+            .accessibilityIdentifier("toastty-mobile-new-task-create")
+            Text(createSummary)
+                .font(.footnote)
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("toastty-mobile-new-task-footer")
+        }
+        .padding(.top, 4)
+    }
+
+    private var createSummary: String {
+        guard model.workspaces.contains(where: { $0.id == model.workspaceID }), let preset = model.preset else {
+            return "Send leaves Auto to the coordinator, which creates the task. Create Task needs a project and an agent on your Mac."
+        }
+        return "Send leaves Auto to the coordinator, which creates the task. Create Task makes it now in \(model.workspaceTitle) with \(ToasttyNewTaskModel.title(preset))."
+    }
+
     // MARK: - Pieces
 
-    private func isSelected(_ agent: RemoteSessionStartAgent) -> Bool {
-        model.preset?.profileID == agent.profileID
-    }
-
-    private func choice(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            if isSelected {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
-            }
-        }
-    }
-
-    private func pill(label: String, value: String) -> some View {
+    private func pill(label: String, value: String, isAuto: Bool = false) -> some View {
         HStack(spacing: 6) {
             Text(label.uppercased())
                 .font(.caption2.monospaced())
@@ -326,9 +419,11 @@ struct ToasttyNewTaskSheet: View {
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
                 .lineLimit(1)
                 .fixedSize()
+            // "Auto": the coordinator chooses. Quieter than a value, as on
+            // the Mac.
             Text(value)
                 .font(.subheadline)
-                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .foregroundStyle(isAuto ? ToasttyDesignTokens.secondaryText : ToasttyDesignTokens.primaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Image(systemName: "chevron.down")
@@ -345,14 +440,24 @@ struct ToasttyNewTaskSheet: View {
     }
 
     private enum NoteTone {
+        case info
         case warning
         case error
     }
 
     private func note(_ text: String, tone: NoteTone, identifier: String) -> some View {
-        let color = tone == .error ? ToasttyDesignTokens.red : ToasttyDesignTokens.amberText
+        let color = switch tone {
+        case .info: ToasttyDesignTokens.secondaryText
+        case .warning: ToasttyDesignTokens.amberText
+        case .error: ToasttyDesignTokens.red
+        }
+        let symbol = switch tone {
+        case .info: "clock"
+        case .warning: "exclamationmark.triangle"
+        case .error: "exclamationmark.octagon"
+        }
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: tone == .error ? "exclamationmark.octagon" : "exclamationmark.triangle")
+            Image(systemName: symbol)
                 .foregroundStyle(color)
                 .accessibilityHidden(true)
             Text(text)
@@ -373,11 +478,41 @@ struct ToasttyNewTaskSheet: View {
     }
 
     private var customModelPromptIsPresented: Binding<Bool> {
-        Binding(get: { customModelAgent != nil }, set: { if $0 == false { customModelAgent = nil } })
+        Binding(get: { customModelProfileID != nil }, set: { if $0 == false { customModelProfileID = nil } })
     }
 
+    private var customModelAgentName: String {
+        model.agents.first { $0.profileID == customModelProfileID }?.displayName ?? "the agent"
+    }
+
+    /// `nil` is Auto while the sheet sends to the coordinator.
+    private var agentSelection: Binding<String?> {
+        Binding(get: { model.agentIsAuto ? nil : model.preset?.profileID }, set: { id in
+            if let agent = model.agents.first(where: { $0.profileID == id }) {
+                model.selectAgent(agent)
+            } else if id == nil {
+                model.selectAutoAgent()
+            }
+        })
+    }
+
+    private var modelSelection: Binding<String?> {
+        Binding(get: { model.preset?.model }, set: { value in model.selectModel(value) })
+    }
+
+    private var effortSelection: Binding<String?> {
+        Binding(get: { model.preset?.effort }, set: { value in model.selectEffort(value) })
+    }
+
+    /// `nil` is Auto while the sheet sends to the coordinator.
     private var workspaceSelection: Binding<UUID?> {
-        Binding(get: { model.workspaceID }, set: { id in id.map(model.selectWorkspace) })
+        Binding(get: { model.workspaceIsAuto ? nil : model.workspaceID }, set: { id in
+            if let id {
+                model.selectWorkspace(id)
+            } else {
+                model.selectAutoWorkspace()
+            }
+        })
     }
 
     private var textBinding: Binding<String> {
@@ -389,16 +524,17 @@ struct ToasttyNewTaskSheet: View {
     }
 }
 
-/// Presents the New Task sheet for `model`, and says the task was saved
-/// once the sheet has closed.
+/// Presents the New Task sheet for `model`, and says the task was saved,
+/// or where the coordinator's message went, once the sheet has closed.
 private struct ToasttyNewTaskSheetModifier: ViewModifier {
     @Binding var model: ToasttyNewTaskModel?
     let controller: HomeScreenController
     @State private var created = false
+    @State private var sent: RemoteCoordinatorSendResult?
 
     func body(content: Content) -> some View {
         content.sheet(item: $model, onDismiss: didDismiss) { model in
-            ToasttyNewTaskSheet(model: model) { created = true }
+            ToasttyNewTaskSheet(model: model, onCreated: { created = true }, onSent: { sent = $0 })
                 // Content shared from another app waits for this sheet too.
                 .onAppear { controller.isShowingNewSessionForm = true }
         }
@@ -406,9 +542,13 @@ private struct ToasttyNewTaskSheetModifier: ViewModifier {
 
     private func didDismiss() {
         controller.isShowingNewSessionForm = false
-        guard created else { return }
-        created = false
-        controller.announceTaskCreated()
+        if let sent {
+            self.sent = nil
+            controller.announceCoordinatorSend(sent)
+        } else if created {
+            created = false
+            controller.announceTaskCreated()
+        }
     }
 }
 

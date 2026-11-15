@@ -76,7 +76,13 @@ private final class MergeFixture {
     /// What the coordinator told the task that owns the workspace.
     var events: [WorkspaceMergeCoordinator.CleanupEvent] = []
     var mergeFailures: [String] {
-        events.compactMap { if case .mergeFailed(let reason) = $0 { reason } else { nil } }
+        events.compactMap { if case .mergeFailed(let reason, _, _, _) = $0 { reason } else { nil } }
+    }
+    /// The cause, the commit and the target branch of the last merge that stopped.
+    var lastMergeFailure: (cause: TaskMergeFailure.Cause, head: String?, base: String?)? {
+        events.compactMap {
+            if case .mergeFailed(_, let cause, let head, let base) = $0 { (cause, head, base) } else { nil }
+        }.last
     }
     private(set) var coordinator: WorkspaceMergeCoordinator!
 
@@ -318,6 +324,70 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.notifications.first?.body == "gh: could not resolve host")
     }
 
+    /// GitHub can fail the merge call itself, for example with "Server
+    /// Error", when every check has passed. The merge is accepted, so it
+    /// runs again at the same commit and target instead of stopping.
+    @Test
+    func aMergeThatGitHubFailsRunsAgainAtTheAcceptedCommit() async throws {
+        let fixture = try MergeFixture()
+        fixture.runner.scriptResults["merge"] = MergeFixture.mergeReport("failed", "GitHub did not merge PR #59: Server Error")
+        fixture.runner.waitingMergeResults = [MergeFixture.mergeReport("merged", "merged PR #59")]
+
+        await fixture.merge(thenCleanUp: false)?.value
+
+        #expect(fixture.isDone)
+        #expect(fixture.request?.phase == .awaitingChecks(acceptedHead: MergeFixture.acceptedHead, thenCleanUp: false))
+        #expect(fixture.notifications.isEmpty)
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == 2)
+        #expect(fixture.runner.scriptCalls.last == fixture.arguments("merge") + ["--head", MergeFixture.acceptedHead, "--base", "feat/integration"])
+        #expect(fixture.notifications.map(\.title) == ["Merged PR #59"])
+        #expect(fixture.mergeFailures.isEmpty)
+    }
+
+    @Test
+    func aMergeThatGitHubKeepsFailingStopsAsAnErrorWithItsCommit() async throws {
+        let fixture = try MergeFixture()
+        let failure = MergeFixture.mergeReport("failed", "GitHub did not merge PR #59: Server Error")
+        fixture.runner.scriptResults["merge"] = failure
+        fixture.runner.waitingMergeResults = [failure]
+
+        await fixture.merge(thenCleanUp: true)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        // The first run counts toward the limit.
+        #expect(fixture.runner.scriptCalls.count == WorkspaceMergeCoordinator.maximumPollFailures)
+        #expect(fixture.isDone == false)
+        #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
+        #expect(fixture.mergeFailures == ["GitHub did not merge PR #59: Server Error"])
+        #expect(fixture.lastMergeFailure?.cause == .error)
+        #expect(fixture.lastMergeFailure?.head == MergeFixture.acceptedHead)
+        #expect(fixture.lastMergeFailure?.base == "feat/integration")
+        #expect(fixture.savedRequests == nil)
+    }
+
+    /// New work that starts while the failed runs repeat ends the user's
+    /// acceptance. The merge then stops for that reason: recorded as an
+    /// error, it would read as a merge to ask for again.
+    @Test
+    func newWorkWhileAFailedMergeRunsAgainStopsItAsAnEndedAcceptance() async throws {
+        let fixture = try MergeFixture()
+        let failure = MergeFixture.mergeReport("failed", "GitHub did not merge PR #59: Server Error")
+        fixture.runner.scriptResults["merge"] = failure
+        fixture.runner.waitingMergeResults = [failure]
+        // The done mark clears during a run, so that run's report decides.
+        fixture.runner.onScript["merge"] = { if fixture.isDone { fixture.markDone(false) } }
+
+        await fixture.merge(thenCleanUp: true)?.value
+        try await fixture.waitUntil { fixture.request == nil }
+
+        #expect(fixture.runner.scriptCalls.count == WorkspaceMergeCoordinator.maximumPollFailures)
+        #expect(fixture.mergeFailures.count == 1)
+        #expect(fixture.mergeFailures.first?.hasPrefix("New work started in the workspace") == true)
+        #expect(fixture.lastMergeFailure?.cause == .acceptanceEnded)
+    }
+
     @Test
     func aWaitingReportWithoutATargetDoesNotMarkTheWorkspaceDone() async throws {
         let fixture = try MergeFixture()
@@ -539,6 +609,7 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.notifications.first?.body.hasPrefix("the worktree has uncommitted changes") == true)
         #expect(fixture.mergeFailures.count == 1)
         #expect(fixture.mergeFailures.first?.hasPrefix("the worktree has uncommitted changes") == true)
+        #expect(fixture.lastMergeFailure?.cause == .refused)
 
         fixture.runner.scriptResults["merge"] = WorkspaceMergeCommandResult(
             exitCode: 1,
@@ -549,6 +620,10 @@ struct WorkspaceMergeCoordinatorTests {
         await fixture.merge(thenCleanUp: false)?.value
         #expect(fixture.notifications.last?.body == "The pull request script failed: workspace-pull-request: gh pr view failed: HTTP 401")
         #expect(fixture.mergeFailures.last == "The pull request script failed: workspace-pull-request: gh pr view failed: HTTP 401")
+        // Without a report the script accepted no commit, so nothing runs
+        // again; the failure is still an error and not a refusal.
+        #expect(fixture.lastMergeFailure?.cause == .error)
+        #expect(fixture.runner.scriptCalls.count == 2)
         #expect(fixture.isDone == false)
         #expect(fixture.runner.checkCalls.isEmpty)
     }

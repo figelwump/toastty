@@ -8,6 +8,24 @@ import Testing
 /// share conversation tracking with the Remote Access gateway.
 @Suite(.serialized)
 struct LocalConversationAccessTests {
+    @MainActor
+    @Test func initialReadCompletionNotifiesSubscribersForAnEmptyTranscript() async throws {
+        let fixture = try LocalConversationFixture()
+        defer { fixture.removeRuntimeFiles() }
+        let subscription = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
+        #expect(subscription.isReadingInitialTranscript)
+        let changes = ChangeCounter()
+        let listener = Task { @MainActor in
+            for await _ in subscription.changes { changes.count += 1 }
+        }
+        defer { listener.cancel(); subscription.cancel() }
+        try await Self.waitUntil("initial read completion") {
+            subscription.isReadingInitialTranscript == false && changes.count > 0
+        }
+        subscription.cancel()
+        #expect(subscription.isReadingInitialTranscript == false)
+    }
+
     // MARK: - Remote Access off
 
     @MainActor
@@ -756,7 +774,8 @@ final class LocalConversationFixture {
         pairsNativeDevice: Bool = false,
         startsSession: Bool = true,
         savedConversationID: RemoteConversationID? = nil,
-        inCoordinatorWorkspace: Bool = false
+        inCoordinatorWorkspace: Bool = false,
+        initialTranscript: Data = Data()
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         if inCoordinatorWorkspace {
@@ -773,7 +792,7 @@ final class LocalConversationFixture {
         confirmedAt = Date(timeIntervalSince1970: 1_786_000_000)
         runtimeHome = "/tmp/toastty-local-conversation-\(UUID().uuidString)"
         let transcriptURL = URL(filePath: runtimeHome + "-transcript.jsonl")
-        try Data().write(to: transcriptURL)
+        try initialTranscript.write(to: transcriptURL)
         resumeRecord = ManagedAgentResumeRecord(
             agent: .codex,
             nativeSessionID: "native-\(UUID().uuidString)",
@@ -948,6 +967,29 @@ final class LocalConversationFixture {
         }
         let result = try? ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: response.body)
         return (response.status, result)
+    }
+
+    /// Stops a turn through the gateway's own request handler, as a phone's
+    /// Stop does.
+    func gatewayInterrupt(
+        _ request: RemoteConversationInterruptRequest,
+        credential: String?
+    ) throws -> (status: Int, result: RemoteConversationInterruptResult?) {
+        var headers = ["tailscale-user-login": "owner@example.com"]
+        if let credential { headers["authorization"] = "Bearer \(credential)" }
+        let http = RemoteGatewayHTTPRequest(
+            method: "POST",
+            path: "/api/conversation.interrupt",
+            headers: headers,
+            body: try ConversationEventCoding.makeEncoder().encode(request)
+        )
+        guard case .respond(let response) = gatewayHandler.handle(http, at: .now) else {
+            throw LocalConversationFixtureError.unexpectedGatewayOutcome
+        }
+        let decoded = try? ConversationEventCoding.makeDecoder().decode(
+            RemoteConversationInterruptResponse.self, from: response.body
+        )
+        return (response.status, decoded?.result)
     }
 
     func removeRuntimeFiles() {

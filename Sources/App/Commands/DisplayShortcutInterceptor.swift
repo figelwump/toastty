@@ -9,6 +9,9 @@ final class DisplayShortcutInterceptor {
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    /// Select Next Split and Select Previous Split, which include the
+    /// coordinator's dock. Without it, the shortcuts cycle the panels only.
+    private let splitLayoutCommandController: SplitLayoutCommandController?
     private let processWatchCommandController: ProcessWatchCommandController
     private let isCommandPalettePresented: @MainActor () -> Bool
     private let toggleCommandPalette: @MainActor (UUID?) -> Bool
@@ -64,6 +67,7 @@ final class DisplayShortcutInterceptor {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         processWatchCommandController: ProcessWatchCommandController? = nil,
+        splitLayoutCommandController: SplitLayoutCommandController? = nil,
         isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
         toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
@@ -74,6 +78,7 @@ final class DisplayShortcutInterceptor {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.splitLayoutCommandController = splitLayoutCommandController
         self.processWatchCommandController = processWatchCommandController ?? ProcessWatchCommandController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -848,13 +853,19 @@ final class DisplayShortcutInterceptor {
     /// keeps most shortcuts with the text control, but Cmd+Shift+P and
     /// Cmd+Shift+K have no text-editing meaning, so the command palette and
     /// the coordinator's dock shortcut also work from text views such as the
-    /// Coordinator message bar and its transcript.
+    /// Coordinator message bar and its transcript. Cmd+] and Cmd+[ also
+    /// leave the Coordinator message bar: the coordinator's dock is a stop
+    /// of Select Next Split and Select Previous Split.
     static func shortcutWindowID(
         for event: NSEvent,
         keyWindow: NSWindow?,
         modalWindow: NSWindow?
     ) -> UUID? {
         if isCommandPaletteShortcut(event) || isCoordinatorDockShortcut(event) {
+            return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+        }
+        if focusSplitDirection(for: event) != nil,
+           keyWindow?.firstResponder is CoordinatorComposerTextView {
             return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
         }
         return closePanelShortcutWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
@@ -1252,7 +1263,11 @@ final class DisplayShortcutInterceptor {
         guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        _ = store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
+        if let splitLayoutCommandController {
+            _ = splitLayoutCommandController.focusSplit(direction: direction, preferredWindowID: preferredWindowID)
+        } else {
+            _ = store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
+        }
         // Toastty-owned pane-focus shortcuts should not fall through to
         // embedded views once the current workspace window resolves, even if
         // there is no adjacent split target in that direction.

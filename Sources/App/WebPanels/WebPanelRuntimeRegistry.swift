@@ -302,6 +302,22 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         localDocumentRuntimeByPanelID[panelID]?.endSearch() == true
     }
 
+    /// Gives the web view of a browser, Markdown or Scratchpad panel the
+    /// keyboard. Returns false for a panel without a loaded web view.
+    @discardableResult
+    func focusWebView(panelID: UUID) -> Bool {
+        if let runtime = browserRuntimeByPanelID[panelID] {
+            return runtime.focusWebView()
+        }
+        if let runtime = localDocumentRuntimeByPanelID[panelID] {
+            return runtime.focusWebView()
+        }
+        if let runtime = scratchpadRuntimeByPanelID[panelID] {
+            return runtime.focusWebView()
+        }
+        return false
+    }
+
     @discardableResult
     func restoreLocalDocumentFocusAfterSearch(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.focusWebView() == true

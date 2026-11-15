@@ -19,6 +19,80 @@ struct CoordinatorChatSendPathTests {
     \(CoordinatorWakeState.digestFooter)
     """
 
+    @MainActor
+    @Test func restartReadsTheNewestPageBeforeShowingHistory() async throws {
+        // Saved history exists before the controller starts its reader.
+        let fixture = try CoordinatorChatFixture(
+            initialUserMessages: (0 ..< 1_000).map { "History message \($0)" }
+        )
+        defer { fixture.tearDown() }
+        var firstShownMessages: [ToasttyTranscriptRow]?
+        let observer = fixture.chat.$presentation.sink { presentation in
+            guard firstShownMessages == nil,
+                  presentation.rows.contains(where: { row in
+                      if case .userMessage = row.content { return true }
+                      return false
+                  }) else { return }
+            firstShownMessages = presentation.rows
+        }
+        defer { observer.cancel() }
+        fixture.chat.show(panelID: fixture.panelID)
+        // Replay can take much longer than a short pause between batches.
+        // Advance the chat's clock while its reader still has work to do.
+        fixture.clock.secondsAhead = 60
+        try await fixture.waitUntil("the newest history message") {
+            fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "History message 999", origin: .unknown, deliveryMode: nil)
+        }
+        #expect(firstShownMessages?.last?.content
+            == .userMessage(text: "History message 999", origin: .unknown, deliveryMode: nil))
+        #expect(fixture.chat.presentation.rows.count <= CoordinatorChatModel.pageSize)
+        #expect(fixture.chat.presentation.hasOlder)
+        let newestRows = fixture.chat.presentation.rows
+        fixture.chat.loadOlder()
+        #expect(fixture.chat.presentation.rows.count > newestRows.count)
+        #expect(fixture.chat.presentation.rows.suffix(newestRows.count) == newestRows[...])
+
+        // Later output still appends; hiding and showing keeps loaded history.
+        try fixture.recordUserMessage("Live message")
+        try await fixture.waitUntil("the live message") {
+            fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "Live message", origin: .unknown, deliveryMode: nil)
+        }
+        let rows = fixture.chat.presentation.rows
+        fixture.chat.hide()
+        fixture.chat.show(panelID: fixture.panelID)
+        #expect(fixture.chat.presentation.rows == rows)
+    }
+
+    @MainActor
+    @Test func aMissingTranscriptDoesNotHideTheSessionAndItsLaterHistoryLoadsAsOnePage() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let path = fixture.conversations.resumeRecord.sessionFilePath
+        try FileManager.default.removeItem(atPath: path)
+        fixture.chat.show(panelID: fixture.panelID)
+        fixture.clock.secondsAhead = 60
+        try await fixture.waitUntil("a live session without a readable transcript") {
+            fixture.chat.summary != nil && fixture.chat.presentation.phase == .live
+        }
+        fixture.report(.working)
+        try await fixture.waitUntil("Stop while the transcript is missing") { fixture.chat.canStop }
+
+        // A provider can report its path before it creates the file. When
+        // it becomes readable, its first read must still have a boundary.
+        let history = try CoordinatorChatFixture.userMessagesTranscript(
+            (0 ..< 1_000).map { "Delayed history \($0)" }
+        )
+        try history.write(to: URL(filePath: path), options: .atomic)
+        try await fixture.waitUntil("the newest delayed message") {
+            fixture.chat.presentation.rows.last?.content
+                == .userMessage(text: "Delayed history 999", origin: .unknown, deliveryMode: nil)
+        }
+        #expect(fixture.chat.presentation.rows.count <= CoordinatorChatModel.pageSize)
+        #expect(fixture.chat.presentation.hasOlder)
+    }
+
     // MARK: - At an open prompt
 
     @MainActor
@@ -269,7 +343,11 @@ struct CoordinatorChatSendPathTests {
         try await Task.sleep(for: .milliseconds(300))
         let changesBefore = changes
         #expect(fixture.chat.notice == .agentStarting)
-        try await fixture.waitUntil("the notice that names the terminal") { changes > changesBefore }
+        // Transcript and queue updates can also publish before the grace
+        // period ends. Wait for the notice itself, as well as a publish.
+        try await fixture.waitUntil("the notice that names the terminal") {
+            fixture.chat.notice == .startWaitsInTerminal && changes > changesBefore
+        }
         #expect(fixture.chat.notice == .startWaitsInTerminal)
         if #available(macOS 15.0, *) {
             #expect(CoordinatorChatView.text(for: .startWaitsInTerminal).contains("answer in the terminal"))
@@ -413,6 +491,60 @@ struct CoordinatorChatSendPathTests {
         try fixture.runTurn(3, userText: "First")
         try await fixture.waitUntil("the second message") { fixture.delivered.texts.count == 3 }
         #expect(fixture.delivered.texts.last == "Second")
+    }
+
+    /// A Stop from a paired phone sets the same messages aside as the
+    /// chat's Stop: the user's message and one that `coordinator send`
+    /// brought. Neither starts a new turn when the stopped turn ends. The
+    /// user's message stays set aside across a relaunch, until "Send next".
+    @MainActor
+    @Test func aStopFromAPhoneSetsTheCoordinatorsWaitingMessagesAside() async throws {
+        let fixture = try CoordinatorChatFixture(pairsNativeDevice: true, savesQueue: true)
+        defer { fixture.tearDown() }
+        fixture.conversations.enableGateway()
+        var interrupts = 0
+        fixture.conversations.terminalRuntimeRegistry.setAutomationSendInterruptHandlerForTesting { panelID in
+            #expect(panelID == fixture.panelID)
+            interrupts += 1
+            return true
+        }
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        let fromScript = CoordinatorMessageHeader.message(from: .unknown, text: "From a script")
+        #expect(try fixture.controller.send("First", byUser: true, id: "first").isQueued)
+        #expect(try fixture.controller.send(fromScript, id: "script").isQueued)
+        let summary = try #require(fixture.chat.summary)
+        let turnEpoch = try #require(summary.inputControl?.turnEpoch)
+
+        let stop = try fixture.conversations.gatewayInterrupt(
+            RemoteConversationInterruptRequest(conversationID: summary.conversationID, expectedTurnEpoch: turnEpoch),
+            credential: fixture.conversations.nativeCredential
+        )
+        #expect(stop.result == .accepted)
+        #expect(interrupts == 1)
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.controller.pausedEntries.map(\.id) == ["first", "script"])
+        #expect(fixture.controller.status?.queuedCount == 2)
+
+        // The stopped turn ends. Nothing that waited starts a new turn.
+        try fixture.endTurn(1)
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+
+        // Toastty saves the user's messages only. The one set aside stays
+        // set aside after a relaunch, and goes when the user lets it go.
+        fixture.relaunch()
+        fixture.chat.show(panelID: fixture.panelID)
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.controller.pausedEntries.map(\.id) == ["first"])
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(fixture.delivered.texts.isEmpty)
+        fixture.chat.perform(.resume)
+        try await fixture.waitUntil("the first message") { fixture.delivered.texts == ["First"] }
     }
 
     @MainActor
@@ -1253,15 +1385,29 @@ final class CoordinatorChatFixture {
     final class Clock {
         var secondsAhead: TimeInterval = 0
         var now: Date { Date().addingTimeInterval(secondsAhead) }
+        /// Whether Toastty is the active app, as the chat sees it. A test
+        /// host is not always the active app.
+        var appIsActive = true
     }
+
+    /// Where the chat saves what it keeps over a relaunch, or `nil` to keep
+    /// nothing.
+    let chatDefaults: UserDefaults?
 
     /// Without `agentReportsStart`, Toastty launched the agent and the
     /// agent has reported nothing yet, as while it asks a question that
     /// comes before its first report. `reportAgentStart` reports then.
-    init(pairsNativeDevice: Bool = false, savesQueue: Bool = false, agentReportsStart: Bool = true) throws {
+    init(
+        pairsNativeDevice: Bool = false,
+        savesQueue: Bool = false,
+        agentReportsStart: Bool = true,
+        initialUserMessages: [String] = [],
+        chatDefaults: UserDefaults? = nil
+    ) throws {
         let conversations = try LocalConversationFixture(
             pairsNativeDevice: pairsNativeDevice,
-            inCoordinatorWorkspace: true
+            inCoordinatorWorkspace: true,
+            initialTranscript: try Self.userMessagesTranscript(initialUserMessages)
         )
         self.conversations = conversations
         delivered = conversations.captureDeliveredText()
@@ -1271,8 +1417,12 @@ final class CoordinatorChatFixture {
         queueFileURL = savesQueue
             ? URL(filePath: conversations.runtimeHome).appendingPathComponent("saved/coordinator-queue.json")
             : nil
-        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL, clock: clock)
+        self.chatDefaults = chatDefaults
+        (controller, chat) = Self.makeController(
+            conversations, gate: gate, queueFileURL: queueFileURL, clock: clock, defaults: chatDefaults
+        )
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
+        second = initialUserMessages.count + 5
         if agentReportsStart { reportAgentStart() }
         #expect(conversations.store.state.coordinator?.panelID == conversations.panelID)
     }
@@ -1290,7 +1440,8 @@ final class CoordinatorChatFixture {
         _ conversations: LocalConversationFixture,
         gate: StatusGateTyping,
         queueFileURL: URL?,
-        clock: Clock
+        clock: Clock,
+        defaults: UserDefaults?
     ) -> (CoordinatorController, CoordinatorChatModel) {
         let controller = CoordinatorController(
             store: conversations.store,
@@ -1308,7 +1459,13 @@ final class CoordinatorChatFixture {
             }
         )
         controller.conversationAccess = conversations.service
-        let chat = CoordinatorChatModel(controller: controller, access: conversations.service, now: { clock.now })
+        let chat = CoordinatorChatModel(
+            controller: controller,
+            access: conversations.service,
+            defaults: defaults,
+            now: { clock.now },
+            isAppActive: { clock.appIsActive }
+        )
         controller.chat = chat
         return (controller, chat)
     }
@@ -1319,7 +1476,9 @@ final class CoordinatorChatFixture {
     func relaunch() {
         chat.hide()
         typedObserver = nil
-        (controller, chat) = Self.makeController(conversations, gate: gate, queueFileURL: queueFileURL, clock: clock)
+        (controller, chat) = Self.makeController(
+            conversations, gate: gate, queueFileURL: queueFileURL, clock: clock, defaults: chatDefaults
+        )
         typedObserver = controller.typedEntries.sink { [weak self] entry in self?.typed.append(entry) }
     }
 
@@ -1349,6 +1508,19 @@ final class CoordinatorChatFixture {
     private static func line(_ payload: String, second: Int, type: String) -> Data {
         let timestamp = String(format: "2026-08-07T10:%02d:%02d.000Z", second / 60, second % 60)
         return Data((#"{"timestamp":"\#(timestamp)","type":"\#(type)","payload":\#(payload)}"# + "\n").utf8)
+    }
+
+    /// Builds saved history before a file reader can observe it.
+    static func userMessagesTranscript(_ messages: [String]) throws -> Data {
+        var data = Data()
+        for (index, message) in messages.enumerated() {
+            let escaped = String(decoding: try JSONEncoder().encode(message), as: UTF8.self)
+            data.append(Self.line(
+                #"{"type":"user_message","message":\#(escaped),"images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+                second: index + 6, type: "event_msg"
+            ))
+        }
+        return data
     }
 
     private var second = 5

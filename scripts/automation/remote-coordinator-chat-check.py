@@ -32,7 +32,9 @@ that:
   is read; Open Full View and the full view's Dock button move the chat
   between the dock and the full view; the toolbar button and Cmd+Shift+K
   hide and show it, Cmd+Shift+K with the keyboard in its field, where
-  Cmd+= changes the chat's text size and Cmd+W closes nothing; a drag on
+  Cmd+= changes the chat's text size and Cmd+W closes nothing; Cmd+]
+  moves the keyboard from its field to the task's terminal and Cmd+[
+  moves it back; a drag on
   its edge sets its width up to 40% of the window's width, and a narrower
   window shows it narrower and keeps its width; with the sidebar hidden it is
   at the window's left edge; while it is hidden, a reply leaves the
@@ -347,6 +349,39 @@ def run(check):
     def pid():
         return json.loads((runtime_home / 'instance.json').read_text())['pid']
 
+    def check_dock_split_keys(task_space):
+        """Cmd+] and Cmd+[ move the keyboard between the dock's field and the
+        task's only terminal: the dock is the stop before the first panel.
+        The task's terminal echoes what is typed, without a Return."""
+        def task_screen():
+            response = instance.request('app_control.run_query',
+                                        dict(id='terminal.visible-text', args=dict(workspaceID=task_space)))
+            return (response.get('result') or {}).get('text') or ''
+
+        def field():
+            return ui.texts('coordinator.chat.composer')
+
+        ui.run('focus', 'coordinator.chat.composer')
+        time.sleep(0.3)
+        ui.run('key', 'cmd-right-bracket')
+        time.sleep(0.5)
+        ui.run('type', 'docknext')
+        wait_for('the typing after Cmd+] in the task\'s terminal', lambda: 'docknext' in task_screen(), timeout=10)
+        require('docknext' not in field(), 'The dock\'s field kept the keyboard after Cmd+]')
+        ui.run('key', 'cmd-left-bracket')
+        time.sleep(0.5)
+        ui.run('type', 'dockback')
+        wait_for('the typing after Cmd+[ in the dock\'s field', lambda: 'dockback' in field(), timeout=10)
+        require('dockback' not in task_screen(), 'The task\'s terminal kept the keyboard after Cmd+[')
+        capture('dock-split-keys')
+        ui.run('key', 'cmd-a')
+        ui.run('key', 'delete')
+        wait_for('an empty field', lambda: 'dockback' not in field(), timeout=10)
+        require(selected_workspace() == task_space and ui.exists('coordinator.dock'),
+                'Cmd+] or Cmd+[ left the task or hid the dock')
+        step('Cmd+] moved the keyboard from the dock\'s field to the task\'s terminal, and Cmd+[ moved it back',
+             terminal=task_screen()[-200:])
+
     try:
         workspaces = instance.wait_until_ready()
         project_id = workspaces[0]['workspaceID']
@@ -525,6 +560,7 @@ def run(check):
                 'Cmd+W in the dock\'s field closed something')
         step('the toolbar button and Cmd+Shift+K hid and showed the dock; Cmd+= sized its chat; Cmd+W closed nothing',
              composerHeight=before_scale)
+        check_dock_split_keys(task_space)
 
         # A drag on the dock's edge sets its width, up to 40% of the window's
         # width. A narrower window shows the dock narrower and keeps its width.

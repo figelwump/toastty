@@ -139,7 +139,8 @@ through Toastty's notification service and Apple. There is no title-hiding optio
 While the Mac runs the task system, a task that needs you sends its own alert;
 see [Task alerts](#task-alerts).
 Tapping an alert opens its conversation if it still belongs to the current Mac
-pairing. The Mac must remain running with Remote Access enabled to send new
+pairing. An alert from the coordinator's session opens the
+[Coordinator tab](#the-coordinator-tab) instead of Home. The Mac must remain running with Remote Access enabled to send new
 alerts. The phone does not need an open connection to receive Apple's alert, but
 opening the conversation still requires access to the Mac through Tailscale.
 
@@ -355,7 +356,11 @@ transcript, not under the field.
   the queue pauses until the user taps **Send next** on a queued message,
   removes the last queued message, or queues a new one. The prompt reopens a
   short moment after the provider reports the aborted turn, unless local input
-  or another provider transition happens first.
+  or another provider transition happens first. In the coordinator's chat, a
+  Stop also holds the coordinator's own waiting messages (the Mac chat's
+  messages, quick entry, `coordinator send` and digests that wait), as the
+  Mac chat's Stop does: the Mac chat shows them as **Paused** until **Send
+  next** there. The phone does not list them.
 
 Typing on the Mac still wins. Local keyboard input during a turn blocks steer
 for that turn and, unless the provider logs the Mac user's own message, opens
@@ -576,13 +581,17 @@ checkbox. An older phone ignores them and keeps its flat list.
 ### Tasks
 
 When the Mac runs the task system (see [Tasks](tasks.md)), the phone shows a
-tab bar with **Home** and **Tasks**, and Home's **All | Active** switch becomes
-**All | Needs you**, as in the Mac sidebar. Each tab keeps its own stack of
-screens, and the tab bar stays on a pushed screen such as a session. Only the
-tab on screen has an open session: the session of the other tab closes and
+tab bar with **Home** and **Tasks**, and **Coordinator** while the Mac has a
+coordinator (see [The Coordinator tab](#the-coordinator-tab)). Home's
+**All | Active** switch becomes **All | Needs you**, as in the Mac sidebar.
+Each tab keeps its own stack of screens. The tab bar stays on list screens, such as a workspace. A session's
+screen has no tab bar, as a chat has none, so the transcript and the composer
+use the whole screen: the bar slides away when a session opens in either tab
+or from a notification, and comes back on the list that Back returns to. Only
+the tab on screen has an open session: the session of the other tab closes and
 opens again when that tab shows again, so a notification for it is not
 silenced while you look at the other tab. A tapped notification or link opens
-in Home.
+in Home, except one for the coordinator, which opens its tab.
 
 - **All** lists each project as a card with the Mac sidebar's buckets:
   **Needs you**, **Ready to review**, **Running** and **Idle**. A card mixes
@@ -624,7 +633,21 @@ in Home.
   its own state, as the Mac's switcher does.
 - In **All**, a row's title keeps its room, as on the Mac: a parent's child
   progress sits on the row's second line, and a row's pull request chip gives
-  way when the title would be cut short.
+  way when the title would be cut short. A chip or tag takes the width of its
+  text up to a cap, and the title takes the rest. In a one-line **Needs you**
+  row, the status pill gives way before the title shortens, since the mark
+  shows the same state.
+- A row names its project only where its heading does not: in the Tasks tab's
+  groups and in **Other tasks**, not in its own project's card or To ship
+  lane. A long project name shortens in the middle, so the status line keeps
+  its room. A pull request chip in a row has no link arrow, because the row
+  opens the task or its session.
+- At the accessibility text sizes, a row wraps its title and its status, and
+  a chip or tag that does not fit beside the others takes a line of its own.
+  The switcher does not grow past the largest standard size, and a session's
+  task bar stops growing at the first accessibility size, as system bars do.
+  The task bar drops its pull request chip before it shortens the stage. In the Tasks tab, a lane's **Release…** moves
+  under the project's name when the line has no room for both.
 - The **Tasks** tab lists every task by where it stands, as the Mac's Tasks
   view does: **To ship** first, one lane per project with all of its merged
   tasks and **Release…** when the project can release, then **Needs you**,
@@ -633,13 +656,19 @@ in Home.
   review lists under Ready to review. A task with an open task space shows
   that task space's row. Any other task, such as one whose setup failed, opens
   its detail: the stage and why, the status line, the pull request, and the
-  project.
+  project. As in Home, the tab says above its list when the connection is not
+  live, with **Retry** while it reconnects, and shows what a release or a task
+  action started. Its navigation bar has the same **+** as Home: it opens
+  [New Task](#creating-a-task), or the new-session sheet with an older Mac.
 
 The Mac computes every stage, group and line, so both apps show the same
 thing. It sends a `tasks` board in the session snapshot and advertises the
 `tasks` capability. The phone shows the tab bar and switches to All | Needs
 you only when a snapshot carries the board. An older Mac omits it, and the
 phone keeps **All | Active** with no tab bar. An older phone ignores the board.
+When the Mac turns its task system on or off while the phone is connected, the
+tab bar shows or leaves. A session open in Home stays open, and its transcript
+returns to the latest message.
 
 Each task on the board also names the task that started it
 (`parentTaskID` and `parentTaskTitle`), and a parent task carries its
@@ -717,7 +746,8 @@ names the project, how many tasks wait to ship, and the newest of them. The
 Mac then makes the same release task as its own button: its agent starts in
 a new worktree at the remote default branch's latest commit. The task shows
 in Home and Tasks like any other task, so you can answer its questions from
-the phone. While a release of the project runs, the button reads
+the phone. While the request is on its way to the Mac, the button shows a
+spinner and is off. While a release of the project runs, the button reads
 **Releasing…** and is off. A release task's agent can publish, so a release
 needs a native paired device with send access and both its **Task actions**
 and **Start sessions** switches on. Without them, the Mac refuses each request
@@ -785,6 +815,79 @@ Compatibility:
   refuses them, and the Mac sends the session's Ready alert instead, as before.
 - A phone that predates task alerts shows their text, but tapping one only
   opens the app. In the foreground, it does not show them.
+
+### The Coordinator tab
+
+While the Mac runs the task system and has a coordinator (see
+[The coordinator](tasks.md#the-coordinator)), the phone's tab bar reads
+**Home | Tasks | Coordinator**. The tab is the phone's form of the Mac's dock:
+it keeps the coordinator's chat one tap away from any list, and keeps its place
+while you work in the other tabs.
+
+- **The tab's own screen is the coordinator's chat**, the same conversation
+  screen as any session, with its composer. Its title shows the golden Toasty,
+  with steam while the coordinator works, and the name **Coordinator**; the
+  line under it shows the status and the agent. The tab bar stays on this
+  screen, because Back has nowhere to go. A task chip opens the task's space
+  over the chat, or the task's detail when the phone lists no space for it;
+  a link to a task that the Mac does not list stays text. **Next** opens
+  another session over the chat, which hides the bar as every session screen
+  does. Back returns to the chat.
+- **Toastty's messages show as on the Mac.** In the coordinator's chat only,
+  the phone reads the first line that Toastty writes on a message it types
+  into the coordinator ("Who a message is from" in
+  [The coordinator](tasks.md#the-coordinator)), as the Mac's coordinator
+  chat does, with the same shared code. A digest folds to one
+  line, such as "Toastty · 2 updates · 14:05", that opens to the digest. A
+  message that `coordinator send` brought shows its sender and body in a
+  card. A quick entry message shows your text without Toastty's first line,
+  then your choices and the names of its files. A reply shows a line with the
+  time and opening of the coordinator's message it answers; a tap shows that
+  message. The files stay on the Mac, so the phone shows their names, not
+  thumbnails. Other sessions' chats show every message as it was typed.
+- **Steer and Stop.** While the coordinator works, Send steers into its turn
+  by default, as the Mac chat's Send does, and **Queue** is the other choice
+  (see [Queue, steer, and stop](#queue-steer-and-stop-while-the-agent-works)).
+  A message the phone queues waits in the phone's own queue, which the Mac
+  types before the coordinator's waiting messages. **Stop** holds the
+  coordinator's waiting messages too.
+- **Not on the phone yet.** The coordinator's own queue (the Mac chat's
+  Queued and Paused rows with Edit, Remove, Steer now and Send next), quiet
+  turns folded under their digest, thumbnails of attached images, the line
+  above messages you have not read, Reply on the coordinator's messages, and
+  `@` mentions in the composer stay on the Mac.
+- **The tab's icon is Toasty's outline.** While another tab shows, its badge
+  says what the coordinator waits for, from its session's status, as the
+  Mac's coordinator row marks it: **New** for output you have not read, **!**
+  for an approval, and **Error** for an error. A working or quiet coordinator
+  has no badge, and the badge leaves while the tab shows. The system draws
+  every badge in red, so the text tells them apart.
+- **Not running.** When the coordinator's agent does not run or is still
+  starting, the tab shows Toasty and says that the coordinator is not running
+  and that it starts on the Mac (**Open Coordinator** in the Agent menu). The
+  phone cannot start it. The chat shows when the agent runs, and no "no longer
+  available" banner shows when it stops.
+- **Not a project.** As in the Mac sidebar, the coordinator's workspace has no
+  card in Home, its session counts in neither Needs you number, the app badge
+  or **Next**, and a new session does not start in its workspace.
+- **Notifications and links.** An alert or a `conversation` link for the
+  coordinator's session, or a `workspace` link for its workspace, opens the
+  tab's chat, and closes any screen pushed over it. Every other alert and link
+  opens in Home.
+
+The Mac marks the coordinator's workspace in the session snapshot with
+`isCoordinator: true` on its `RemoteWorkspaceSummary`, and sends the field only
+for that workspace. While the coordinator's agent runs, the same workspace
+names its session in `coordinatorConversationID`: another agent can run in the
+coordinator's workspace, and the transcript of an agent that exited stays
+listed, so the phone takes the coordinator's session only from this field.
+Without it the tab says that the coordinator is not running. Other sessions in
+that workspace do not show on the phone, as the Mac's sidebar does not list
+them. No capability is needed. The phone sets the workspace apart only when
+the snapshot also carries the task board: without a board the phone has no tab
+bar and lists the coordinator's workspace as an ordinary one, as it does for an
+older Mac that sends no mark. An older phone ignores both fields and lists the
+workspace as before.
 
 ### Starting a session
 
@@ -861,8 +964,8 @@ again when you return to a newer build.
 
 ### Creating a task
 
-Tap **+** on the Home screen to create a [task](tasks.md), as the Mac's quick
-entry panel does. Write the task, attach photos or files with **Attach**, and
+Tap **+** on the Home screen, or in the **Tasks** tab's navigation bar, to
+create a [task](tasks.md), as the Mac's quick entry panel does. Write the task, attach photos or files with **Attach**, and
 tap **Create**. The Mac saves the task at once and runs its setup: it makes
 the task space and starts the agent there. The sheet closes when the Mac has
 saved the task. On the Mac the task appears at once; on the phone it appears
@@ -896,11 +999,66 @@ session and shared content opens the new-session sheet. The Mac records the
 task's source as Toastty Mobile; a Toastty build from before this change shows
 it as created from the CLI.
 
+#### To the coordinator
+
+While the Mac has a coordinator (see
+[Quick entry with the coordinator](tasks.md#quick-entry-with-the-coordinator)),
+**+** opens the same sheet with the title **To Coordinator**, as the Mac's
+quick entry panel has the label **To coordinator**. **Send** is the main
+action: the Mac sends your text to the coordinator as a quick entry message,
+and the coordinator chooses the project and the agent, asks you when it is
+not sure, and creates the task.
+
+- **Workspace and Agent start as Auto.** Auto leaves the choice to the
+  coordinator. A value that you set goes with the message as your choice, and
+  the first row of each menu sets the pill back to Auto. **Model** and
+  **Effort** show after you choose an agent, and start on **Default**. A
+  **Frequent** preset sets all three.
+- **No project hint.** The Mac's panel also names the project that is selected
+  in Toastty as a hint. The phone sends none: the sheet opens from Home or the
+  Tasks tab, which show every project, and the Mac's selection says where you
+  last worked on the Mac, not what you look at on the phone. Set Workspace to
+  name a project.
+- **Create Task** under the pills makes the task directly, without the
+  coordinator, as the sheet does without one. A pill left on Auto uses the
+  value the sheet starts on without a coordinator, and the line under the
+  button names both.
+- **The message waits on the Mac** until the coordinator's prompt takes it,
+  and never goes into a running turn, as for quick entry on the Mac. When the
+  coordinator is not running or is starting, the sheet says so before you
+  send. After a send, Home or the Tasks tab says **Sent to the coordinator**,
+  or why the message waits, for example **Waits on your Mac: the coordinator
+  is working**.
+- **Files** follow the limits above. The Mac copies them into the
+  coordinator's folder, with the names you gave them cleaned as on the Mac,
+  and the message ends with their paths. The Mac deletes the uploads.
+- **Permission** is the same as for creating a task: the coordinator makes a
+  task from the message.
+- **Retries.** If the phone does not get an answer, **Send** sends the same
+  request again, and the Mac answers with the first result and sends nothing
+  new. The Mac remembers each answer until it quits. After a relaunch, it
+  finds a message that still waits by its ID, and a message with files by
+  their copies; a message without files that the coordinator already took
+  before the quit can be sent a second time.
+
+The Mac advertises the `coordinator_send` capability for
+`POST /api/coordinator.send`, and the native-only
+`POST /api/coordinator.send-with-attachments` route with the task create
+upload checks. While the Mac has a coordinator, the task create options carry
+`coordinator` with the agent's state (`running`, `starting` or
+`not_running`) and the number of waiting messages. The answer's `status` is
+`sent`, `waiting` with a `reason` (`not_running`, `starting`, `working`,
+`user_draft`, `prompt_not_open`, `not_saved`), or `rejected` with a `reason`,
+such as `no_coordinator` when the Mac has no coordinator workspace now. The
+sheet then shows the error and turns back into the New Task sheet. With an
+older Mac, or with no coordinator, the sheet is as described above.
+
 ### Share to Toastty from other apps
 
 In Photos, Safari, Files, or any app with a share sheet, tap **Share**, then
 **Toastty**. Toastty opens the New Task sheet filled in, or the new-session
-sheet when the Mac cannot create tasks. Images, PDFs, and supported text files
+sheet when the Mac cannot create tasks. While the Mac has a coordinator, the
+sheet sends to it ([To the coordinator](#to-the-coordinator)). Images, PDFs, and supported text files
 become attachments. A link becomes the page title and URL in the text, and
 shared text goes in the text as is. A new-session sheet starts on the same
 workspace as **+** on Home. Check the workspace and agent, then tap **Create**
@@ -1086,6 +1244,13 @@ support conversations; update Toastty on the Mac to enable previews.
   permission again before it stores the files and before it saves the task.
   Accepted and refused creates are recorded in the audit log with the device,
   without the task text.
+- A message to the coordinator has the same requirements as creating a task.
+  The device chooses only an open top-level workspace, an agent profile, a
+  model, an effort level, the text, and attached files; the Mac writes
+  Toastty's first line itself. The Mac checks the permission again before it
+  stores the files and directly before it types or saves the message. Sent,
+  waiting and refused messages are recorded in the audit log with the device,
+  without the text.
 - Workspace snapshots also include open-panel titles, tab placement, and
   file or URL metadata. A native client fetches document contents, Scratchpad
   HTML, and permitted local HTML assets only when needed for a preview. These

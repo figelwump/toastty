@@ -8,10 +8,15 @@ import Testing
 struct AutomationSocketServerEventBatchTests: AutomationSocketServerTestSupport {
     /// A Claude Stop hook sends its Ready status and its turn end together.
     /// Both must reach the session, or the conversation stays "working".
-    @Test
-    func batchAppliesEveryEventInOrderAndAuditsEachOne() async throws {
+    @Test(arguments: [false, true])
+    func batchAppliesEveryEventInOrderAndAuditsEachOne(applicationActive: Bool) async throws {
         let socketPath = temporarySocketPath()
-        let server = try await MainActor.run { try makeServer(socketPath: socketPath) }
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                sessionRuntimeStore: SessionRuntimeStore(isApplicationActive: { applicationActive })
+            )
+        }
         defer { withExtendedLifetime(server.server) {} }
         try waitForSocket(at: socketPath)
 
@@ -49,7 +54,9 @@ struct AutomationSocketServerEventBatchTests: AutomationSocketServerTestSupport 
                 server.sessionRuntimeStore.providerConversationFeed(managedSessionID: sessionID)?.observations
             )
         }
-        #expect(status?.kind == .ready)
+        // A ready result in the focused, active panel is already read, so
+        // Toastty stores it as idle. Both cases must still deliver the batch.
+        #expect(status?.kind == (applicationActive ? .idle : .ready))
         #expect(observations?.last == turnEnd)
 
         let diagnostics = try sendRequest(

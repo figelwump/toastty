@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// What an opener fills in before the quick entry panel shows.
 struct QuickEntryPrefill: Equatable {

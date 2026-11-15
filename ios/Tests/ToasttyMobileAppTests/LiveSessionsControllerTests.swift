@@ -624,6 +624,44 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertFalse(home.canCreateTasks)
     }
 
+    /// New Task sends to the coordinator only for a live Mac that
+    /// advertises it to a device allowed to send. The capability can arrive
+    /// after the device's scopes, with the next connection state.
+    func testCoordinatorSendNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+        ))
+        await subject.updateDeviceScopes([.read, .send])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.taskCreate]
+        ))
+        XCTAssertTrue(home.canCreateTasks)
+        XCTAssertFalse(home.supportsCoordinatorSend, "An older Mac gets the New Task sheet as before")
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.taskCreate, .coordinatorSend]
+        ))
+        XCTAssertTrue(home.supportsCoordinatorSend)
+        await subject.updateDeviceScopes([.read])
+        XCTAssertFalse(home.supportsCoordinatorSend)
+        await subject.updateDeviceScopes([.read, .send])
+        XCTAssertTrue(home.supportsCoordinatorSend)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .reconnecting(failureCount: 1, showsBanner: false),
+            capabilities: [.taskCreate, .coordinatorSend]
+        ))
+        XCTAssertFalse(home.supportsCoordinatorSend)
+    }
+
     func testSessionStartTreatsEveryUnansweredRequestAsUnconfirmed() async {
         let runtime = LiveRuntimeSpy()
         let conversationID = RemoteConversationID()

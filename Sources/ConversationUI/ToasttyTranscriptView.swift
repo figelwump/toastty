@@ -28,6 +28,9 @@ public struct ToasttyTranscriptView: View {
     let options: ToasttyTranscriptOptions
     /// Reply on an agent's message. `nil` offers no Reply.
     let replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)?
+    /// Where the messages that the reader has not seen start, or `nil` to
+    /// draw no line.
+    let newMessages: ToasttyNewMessagesMarker?
     @Binding private var jumpToLiveEdgeRequest: UInt64
 
     @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
@@ -44,6 +47,9 @@ public struct ToasttyTranscriptView: View {
     @State private var scrollCoordinator = TranscriptScrollCoordinator()
     @State private var messageHover = ToasttyMessageHoverState()
     @State private var measuredEntryTargets: Set<ToasttyConversationScrollTarget> = []
+    /// Counts the reader's own scrolls, so that a scroll to the new
+    /// messages' line gives way to one.
+    @State private var scrollInteractionCount = 0
     #if DEBUG && os(iOS)
     @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
     #endif
@@ -67,7 +73,8 @@ public struct ToasttyTranscriptView: View {
         canAcknowledgeRead: Bool,
         onVisibleLiveEdge: @escaping () -> Void = {},
         options: ToasttyTranscriptOptions = ToasttyTranscriptOptions(),
-        replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)? = nil
+        replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)? = nil,
+        newMessages: ToasttyNewMessagesMarker? = nil
     ) {
         self.state = state
         self.isSubmitting = isSubmitting
@@ -84,6 +91,7 @@ public struct ToasttyTranscriptView: View {
         self.onVisibleLiveEdge = onVisibleLiveEdge
         self.options = options
         self.replyToMessage = replyToMessage
+        self.newMessages = newMessages
         _entryScrollPosition = State(initialValue: TranscriptEntryScrollPosition(status: readAcknowledgementEpoch))
         _followsLiveEdge = State(initialValue:
             readAcknowledgementEpoch?.activity != .ready || state.phase == .loading || state.phase == .resyncing
@@ -228,6 +236,7 @@ public struct ToasttyTranscriptView: View {
                         // after finger lift.
                         jumpToLiveEdgeRequest = 0
                         followsLiveEdge = false
+                        scrollInteractionCount &+= 1
                         entryScrollPosition.cancelForInteraction()
                         scrollCoordinator.cancelForInteraction()
                         #if DEBUG && os(iOS)
@@ -266,7 +275,7 @@ public struct ToasttyTranscriptView: View {
                             entryScrollPosition.cancelForInteraction()
                             scrollCoordinator.requestJump()
                         } label: {
-                            Label("Jump to latest", systemImage: "arrow.down")
+                            Label(jumpToLatestTitle, systemImage: "arrow.down")
                                 .conversationFont(.caption, weight: .semibold)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 9)
@@ -428,6 +437,9 @@ public struct ToasttyTranscriptView: View {
                         )
                     }
                 }
+                .task(id: newMessages?.firstRowID) {
+                    await revealNewMessages(using: proxy)
+                }
                 .onChange(of: liveEdgeVisibilityKey, initial: true) { _, key in
                     guard key.isEligible else { return }
                     onVisibleLiveEdge()
@@ -477,28 +489,35 @@ public struct ToasttyTranscriptView: View {
 
         let items = displayItems
         let entryContext = scrollTaskKey.responseContext
+        let newMessagesItemID = newMessages?.itemID(in: items)
         ForEach(items) { item in
-            displayItemView(item)
-                .background(alignment: .bottom) {
-                    if let entryContext, entryContext.markerHostID == item.id {
-                        // This target includes 20 points of the preceding row
-                        // plus the 12-point stack gap, without changing layout.
-                        Color.clear
-                            .frame(height: Self.responseEntryContextHeight - Self.transcriptStackSpacing)
-                            .id(entryContext.target)
-                            .background {
-                                entryMeasurement(for: entryContext.target)
-                            }
-                            .accessibilityHidden(true)
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                if item.id == newMessagesItemID {
+                    ToasttyNewMessagesDivider()
+                        .padding(.bottom, Self.transcriptStackSpacing)
                 }
-                .background {
-                    if let entryContext,
-                       item.id == entryContext.target || item.id == scrollTaskKey.response {
-                        entryMeasurement(for: item.id)
-                    }
+                displayItemView(item)
+            }
+            .background(alignment: .bottom) {
+                if let entryContext, entryContext.markerHostID == item.id {
+                    // This target includes 20 points of the preceding row
+                    // plus the 12-point stack gap, without changing layout.
+                    Color.clear
+                        .frame(height: Self.responseEntryContextHeight - Self.transcriptStackSpacing)
+                        .id(entryContext.target)
+                        .background {
+                            entryMeasurement(for: entryContext.target)
+                        }
+                        .accessibilityHidden(true)
                 }
-                .id(item.id)
+            }
+            .background {
+                if let entryContext,
+                   item.id == entryContext.target || item.id == scrollTaskKey.response {
+                    entryMeasurement(for: item.id)
+                }
+            }
+            .id(item.id)
         }
 
         // The working row sits between what reached the agent and what waits
@@ -911,6 +930,44 @@ public struct ToasttyTranscriptView: View {
     /// a folded turn opens its turn first. The reader then owns the
     /// position, as after a scroll by hand: the transcript stops following
     /// the newest message, and Jump to latest shows.
+    private var jumpToLatestTitle: String {
+        guard let count = newMessages?.count, count > 0 else { return "Jump to latest" }
+        return "\(count) new"
+    }
+
+    /// Opens the transcript at the new messages' line, in place of the
+    /// latest response or the live edge, when one shows: while the reader
+    /// follows the live edge or has not scrolled this transcript yet. A
+    /// reader who scrolled into the history stays there.
+    private func revealNewMessages(using proxy: ScrollViewProxy) async {
+        guard newMessages != nil,
+              followsLiveEdge || scrollInteractionCount == 0
+        else { return }
+        let interactions = scrollInteractionCount
+        // The line takes the place of the opening position and of the
+        // automatic move to the live edge for the rows that brought it.
+        followsLiveEdge = false
+        entryScrollPosition.cancelForInteraction()
+        scrollCoordinator.cancelForInteraction()
+        // Twice: the first move can stop at a lazy stack's estimate.
+        for _ in 0 ..< 2 {
+            try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+            guard Task.isCancelled == false,
+                  scrollInteractionCount == interactions,
+                  let target = newMessages?.itemID(in: displayItems)
+            else { return }
+            scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+        }
+        try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+        guard Task.isCancelled == false,
+              scrollInteractionCount == interactions,
+              hasMeasuredScrollGeometry
+        else { return }
+        // New messages that fit on screen show the live edge too: keep
+        // following it then, as a short opening response does.
+        followsLiveEdge = hasReachedPhysicalLiveEdge
+    }
+
     private func revealRow(_ rowID: ToasttyTranscriptRowID, using proxy: ScrollViewProxy) {
         let blockID = ToasttyTranscriptBlockID(rowID: rowID)
         guard state.blocks.contains(where: { $0.id == blockID }) else { return }
@@ -1598,6 +1655,14 @@ enum ToasttyTranscriptDisplayItem: Identifiable {
         switch self {
         case .block(let block, _): .transcript(block.id)
         case .workStrip(let turn): .turnWork(turn.id)
+        }
+    }
+
+    /// The first row that the item shows.
+    var firstRowID: ToasttyTranscriptRowID? {
+        switch self {
+        case .block(let block, _): block.id.rowID
+        case .workStrip(let turn): turn.workBlockIDs.first?.rowID
         }
     }
 }

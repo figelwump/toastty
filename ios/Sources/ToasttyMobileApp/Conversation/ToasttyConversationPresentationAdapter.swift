@@ -4,6 +4,9 @@ import RemoteProtocol
 import ToasttyMobileDomain
 
 enum ToasttyConversationPresentationAdapter {
+    /// `coordinatorMessages` is set for the coordinator's chat only: its
+    /// digests, sender cards, quick entry messages and replies then show as
+    /// the Mac's coordinator chat shows them.
     static func makeState(
         events: [CompatibleConversationEvent],
         projectionRunID: RemoteProjectionRunID?,
@@ -14,89 +17,23 @@ enum ToasttyConversationPresentationAdapter {
         sendItems: [ToasttySendPresentationItem] = [],
         hasOlder: Bool = false,
         isLoadingOlder: Bool = false,
-        prependAnchorID: ToasttyTranscriptRowID? = nil
+        prependAnchorID: ToasttyTranscriptRowID? = nil,
+        coordinatorMessages: CoordinatorChatTranscript.Messages? = nil
     ) -> ToasttyConversationPresentationState {
-        let resolutions = interactionResolutions(in: events)
-        let responseClosures = interactionResponseClosures(in: events)
-        var toolNames: [String: String] = [:]
-        let rows = events.compactMap { event -> ToasttyTranscriptRow? in
-            switch event {
-            case .unknown:
-                return nil
-            case .statusChanged:
-                // Live status belongs in the header and composer, not chat history.
-                return nil
-            case .known(let value):
-                let content: ToasttyTranscriptRow.Content
-                switch value.payload {
-                case .userMessage(let payload):
-                    content = .userMessage(text: payload.text, origin: payload.origin, deliveryMode: payload.deliveryMode)
-                case .assistantMessage(let payload):
-                    content = .assistantMessage(text: payload.text, phase: payload.phase)
-                case .toolStarted(let payload):
-                    toolNames[payload.callID] = payload.toolName
-                    content = .toolStarted(
-                        callID: payload.callID,
-                        name: payload.toolName,
-                        detail: payload.detail
-                    )
-                case .toolFinished(let payload):
-                    content = .toolFinished(
-                        callID: payload.callID,
-                        name: payload.toolName ?? toolNames[payload.callID] ?? "Tool",
-                        outcome: payload.outcome,
-                        detail: payload.detail
-                    )
-                case .statusChanged:
-                    return nil
-                case .interactionPresented(var payload):
-                    if let resolution = resolutions[payload.id] {
-                        payload.state = resolution.resolution
-                        payload.answers = resolution.answers
-                        payload.responseID = nil
-                    } else if responseClosures[payload.id] != nil {
-                        payload.responseID = nil
-                    }
-                    content = .interaction(ToasttyInteractionPresentation(
-                        interaction: payload,
-                        responseClosedReason: responseClosures[payload.id]
-                    ))
-                case .interactionResolved(let payload):
-                    content = .interactionResolved(
-                        interactionID: payload.interactionID,
-                        resolution: payload.resolution
-                    )
-                case .interactionResponseClosed:
-                    // The presented card carries the response-channel state.
-                    // A second marker would imply that the native question ended.
-                    return nil
-                case .subagentSummary(let payload):
-                    content = .subagentSummary(
-                        name: payload.displayName,
-                        phase: payload.phase,
-                        detail: payload.detail
-                    )
-                case .sessionBindingChanged(let payload):
-                    content = .sessionBindingChanged(reason: payload.reason)
-                case .sendDeliveryUnconfirmed:
-                    // Delivery receipts render through SendReconciliation so
-                    // they stay attached to the optimistic outgoing message.
-                    return nil
-                }
-                return ToasttyTranscriptRow(
-                    id: rowID(
-                        projectionRunID: projectionRunID,
-                        projectionGeneration: projectionGeneration,
-                        conversationID: value.conversationID,
-                        sequence: value.sequence
-                    ),
-                    timestamp: value.timestamp,
-                    provider: value.provider,
-                    content: content
-                )
-            }
+        // An event this version does not know, and a status change, which
+        // belongs in the header and the composer, are not rows.
+        let known = events.compactMap { event -> ConversationEvent? in
+            guard case .known(let value) = event else { return nil }
+            return value
         }
-
+        let rows = ToasttyTranscriptRows.rows(
+            from: known,
+            projectionRunID: projectionRunID?.rawValue
+                ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+            projectionGeneration: projectionGeneration ?? 0,
+            interactions: .answerable,
+            coordinatorMessages: coordinatorMessages
+        )
         return ToasttyConversationPresentationState(
             rows: rows,
             sendItems: sendItems,
@@ -109,59 +46,13 @@ enum ToasttyConversationPresentationAdapter {
         )
     }
 
-    private static func interactionResolutions(
-        in events: [CompatibleConversationEvent]
-    ) -> [RemotePendingInteraction.ID: ConversationInteractionResolvedPayload] {
-        events.reduce(into: [:]) { resolutions, event in
-            guard case .known(let known) = event,
-                  case .interactionResolved(let payload) = known.payload else { return }
-            if let previous = resolutions[payload.interactionID],
-               previous.resolution == .resolved {
-                resolutions[payload.interactionID] = ConversationInteractionResolvedPayload(
-                    interactionID: payload.interactionID,
-                    resolution: .resolved,
-                    answers: payload.answers ?? previous.answers
-                )
-            } else {
-                resolutions[payload.interactionID] = ConversationInteractionResolvedPayload(
-                    interactionID: payload.interactionID,
-                    resolution: payload.resolution,
-                    answers: payload.answers ?? resolutions[payload.interactionID]?.answers
-                )
-            }
-        }
-    }
-
-    private static func interactionResponseClosures(
-        in events: [CompatibleConversationEvent]
-    ) -> [RemotePendingInteraction.ID: RemoteQuestionAnswerRejectionReason] {
-        events.reduce(into: [:]) { closures, event in
-            guard case .known(let known) = event else { return }
-            switch known.payload {
-            case .interactionResponseClosed(let payload):
-                closures[payload.interactionID] = payload.reason
-            case .interactionPresented(let payload):
-                closures[payload.id] = nil
-            case .interactionResolved(let payload):
-                closures[payload.interactionID] = nil
-            default:
-                break
-            }
-        }
-    }
-
-    private static func rowID(
-        projectionRunID: RemoteProjectionRunID?,
-        projectionGeneration: UInt64?,
-        conversationID: RemoteConversationID,
-        sequence: UInt64
-    ) -> ToasttyTranscriptRowID {
-        ToasttyTranscriptRowID(
-            projectionRunID: projectionRunID?.rawValue
-                ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
-            projectionGeneration: projectionGeneration ?? 0,
-            conversationID: conversationID.rawValue,
-            sequence: sequence
+    /// How the coordinator's chat on this phone shows the messages that
+    /// Toastty typed: times as the phone writes them, and the attached
+    /// files by name, because the files stay on the Mac.
+    static var coordinatorMessages: CoordinatorChatTranscript.Messages {
+        CoordinatorChatTranscript.Messages(
+            timeText: { $0.formatted(date: .omitted, time: .shortened) },
+            attachedFiles: .byName
         )
     }
 }

@@ -1003,7 +1003,7 @@ struct ToasttyCommandMenus: Commands {
             _ = webPanelRuntimeRegistry.restoreLocalDocumentFocusAfterSearch(panelID: panelID)
         case .terminal(let panelID):
             _ = terminalRuntimeRegistry.endSearch(panelID: panelID)
-            terminalRuntimeRegistry.restoreTerminalFocusAfterSearch(panelID: panelID)
+            terminalRuntimeRegistry.takeKeyboardFocus(panelID: panelID)
         case nil:
             return
         }

@@ -2,6 +2,7 @@
 import AppKit
 import CoreState
 import Foundation
+import RemoteProtocol
 import ImageIO
 import Testing
 import UniformTypeIdentifiers

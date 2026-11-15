@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 @testable import ToasttyApp
 

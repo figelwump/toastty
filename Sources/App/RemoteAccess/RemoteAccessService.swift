@@ -545,6 +545,7 @@ final class RemoteAccessService: ObservableObject {
     private var taskActionRunner: RemoteTaskActionRunner?
     private let taskCreateBridge = RemoteAccessTaskCreateBridge()
     private var taskCreator: RemoteTaskCreator?
+    private var coordinatorSender: RemoteCoordinatorSender?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -577,6 +578,8 @@ final class RemoteAccessService: ObservableObject {
         var changes: AsyncStream<Void>.Continuation
         /// The summary the subscriber was last told about.
         var publishedSummary: RemoteConversationSummary?
+        /// See `LocalConversationSubscription.onStop`.
+        var onStop: (@MainActor () -> Void)?
     }
     /// In-app subscribers, by subscription. With the gateway off, only their
     /// panels are tracked.
@@ -889,6 +892,29 @@ final class RemoteAccessService: ObservableObject {
                     return .rejected(reason: .tasksUnavailable, message: nil)
                 }
                 return runner.release(request, device: device)
+            }
+            // Only a Mac with the coordinator's controller advertises a send
+            // to it. Whether a coordinator workspace exists now, the options
+            // and each send say.
+            if taskBoard?.coordinator?.coordinatorController != nil {
+                coordinatorSender = RemoteCoordinatorSender(
+                    coordinator: { [weak taskBoard] in taskBoard?.coordinator?.coordinatorController },
+                    choices: { [weak quickEntryController] in
+                        quickEntryController?.currentChoices(includeProfile: RemoteTaskCreator.offersProfile)
+                            ?? QuickEntryChoices(workspaces: [], profiles: [], frequentPresets: [])
+                    },
+                    attachmentStore: attachmentStore,
+                    deviceMaySend: { [weak self] deviceID in
+                        guard let self, self.isEnabled else { return false }
+                        return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
+                    }
+                )
+                handler.coordinatorSendHandler = { [weak self] request, device in
+                    guard let self, self.isEnabled, let sender = self.coordinatorSender else {
+                        return .rejected(reason: .noCoordinator, message: nil)
+                    }
+                    return await sender.send(request, device: device)
+                }
             }
         }
         handler.onDevicePaired = { [weak self] device in
@@ -1686,6 +1712,13 @@ final class RemoteAccessService: ObservableObject {
                 annotationColorTokens: annotationStyleStore.colorTokensByKey,
                 conversationIDsBySessionID: Self.conversationIDsBySessionID(
                     activeSessionIDByConversationID, listed: conversations),
+                liveConversationIDsByPanelID: Dictionary(
+                    conversations.compactMap { conversation in
+                        guard activeSessionIDByConversationID[conversation.conversationID] != nil else { return nil }
+                        return conversation.placement.panelID.map { ($0, conversation.conversationID) }
+                    },
+                    uniquingKeysWith: { first, _ in first }
+                ),
                 acceptsDoneMark: { refusals.contains($0) == false }),
             tasks: makeTaskBoard()
         )
@@ -1752,9 +1785,15 @@ final class RemoteAccessService: ObservableObject {
         associations: [UUID: RemoteConversationID] = [:],
         annotationColorTokens: [String: AnnotationColorToken] = [:],
         conversationIDsBySessionID: [String: RemoteConversationID] = [:],
+        liveConversationIDsByPanelID: [UUID: RemoteConversationID] = [:],
         acceptsDoneMark: (UUID) -> Bool = { _ in true }
     ) -> [RemoteWorkspaceSummary] {
         let parentIDs = state.subspaceParentIDsByWorkspaceID()
+        // The coordinator's own session, by its panel, while its agent runs:
+        // other agents can run in the same workspace, and a listed
+        // transcript outlives the agent.
+        let coordinator = state.coordinator
+        let coordinatorConversationID = coordinator?.panelID.flatMap { liveConversationIDsByPanelID[$0] }
         var ids: [UUID] = []
         var seen: Set<UUID> = []
         for window in state.windows {
@@ -1814,7 +1853,10 @@ final class RemoteAccessService: ObservableObject {
                 primaryAnnotationKey: workspace.primaryAnnotationKey
                     .flatMap { workspace.annotations[$0] == nil ? nil : $0 },
                 doneAt: parentID == nil ? nil : workspace.doneAt,
-                acceptsDoneMark: parentID == nil || acceptsDoneMark(id))
+                acceptsDoneMark: parentID == nil || acceptsDoneMark(id),
+                isCoordinator: workspace.isCoordinator,
+                coordinatorConversationID: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorConversationID : nil)
         }
     }
 
@@ -3233,6 +3275,9 @@ final class RemoteAccessService: ObservableObject {
             )
             drainSendQueue(for: conversationID)
 
+        case .initialReadStarted, .initialReadComplete, .initialReadUnavailable:
+            notifyLocalSubscribers(of: conversationID)
+
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
             // space and re-read the file from the start under a fresh
@@ -3723,6 +3768,12 @@ final class RemoteAccessService: ObservableObject {
             )
             if delivery == .delivered {
                 sendQueue.pause(conversationID)
+                // An in-app sender holds its own waiting messages too, so a
+                // Stop from any app holds the same messages.
+                let stopHandlers = localSubscriptions.values
+                    .filter { $0.panelID == panelID }
+                    .compactMap(\.onStop)
+                for handler in stopHandlers { handler() }
                 // Direct surface input bypasses the local key callback. Pause
                 // queued sends before the shared status can become idle.
                 _ = sessionRuntimeStore.handleLocalInterruptForPanelIfActive(
@@ -4575,10 +4626,14 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteTaskCreateOptionsRequest,
         device: RemoteDeviceRecord
     ) -> RemoteTaskCreateOptionsResponse {
-        taskCreator?.options(device: device)
-            ?? RemoteTaskCreateOptionsResponse(
+        guard var response = taskCreator?.options(device: device) else {
+            return RemoteTaskCreateOptionsResponse(
                 permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device)
             )
+        }
+        // The New Task sheet sends to the coordinator while one exists.
+        response.coordinator = coordinatorSender?.state()
+        return response
     }
 
     /// Models that this provider's listed sessions report, most recently
@@ -4827,6 +4882,16 @@ extension RemoteAccessService: LocalConversationAccess {
         return (subscribed + [gatewayFollowsPanelsSince].compactMap { $0 }).min()
     }
 
+    fileprivate func transcriptReadID(subscriptionID: UUID) -> UUID? {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return nil }
+        return tailersByConversationID[conversationID]?.id
+    }
+
+    fileprivate func isReadingInitialTranscript(subscriptionID: UUID) -> Bool {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return false }
+        return tailersByConversationID[conversationID]?.isReadingInitialContent ?? false
+    }
+
     fileprivate func localSnapshot(subscriptionID: UUID, at date: Date) -> RemoteConversationSnapshot? {
         guard let panelID = localSubscriptions[subscriptionID]?.panelID,
               let summary = localSummary(
@@ -4907,6 +4972,14 @@ extension RemoteAccessService: LocalConversationAccess {
         return performInterrupt(request, origin: .mac(byUser: true))
     }
 
+    fileprivate func localStopHandler(subscriptionID: UUID) -> (@MainActor () -> Void)? {
+        localSubscriptions[subscriptionID]?.onStop
+    }
+
+    fileprivate func setLocalStopHandler(_ handler: (@MainActor () -> Void)?, subscriptionID: UUID) {
+        localSubscriptions[subscriptionID]?.onStop = handler
+    }
+
     /// Reopens a prompt that a draft in the terminal holds closed, for an
     /// in-app caller. Nothing is typed.
     fileprivate func releaseLocalDraftLocal(
@@ -4953,6 +5026,14 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
         service?.localFollowedSince(subscriptionID: id)
     }
 
+    var transcriptReadID: UUID? {
+        service?.transcriptReadID(subscriptionID: id)
+    }
+
+    var isReadingInitialTranscript: Bool {
+        service?.isReadingInitialTranscript(subscriptionID: id) ?? false
+    }
+
     func snapshot(at date: Date) -> RemoteConversationSnapshot? {
         service?.localSnapshot(subscriptionID: id, at: date)
     }
@@ -4971,6 +5052,11 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult {
         service?.interruptLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
+    }
+
+    var onStop: (@MainActor () -> Void)? {
+        get { service?.localStopHandler(subscriptionID: id) }
+        set { service?.setLocalStopHandler(newValue, subscriptionID: id) }
     }
 
     func releaseLocalDraft(

@@ -639,7 +639,11 @@ prompt, and each open prompt takes one message from one sender. A message
 that a phone queued for the coordinator is typed first. For any other agent,
 Toastty goes by the session's reported status.
 
-Toastty Mobile shows the coordinator's workspace as an ordinary workspace.
+Toastty Mobile shows the coordinator in its own **Coordinator** tab, with its
+chat, and leaves its workspace out of Home's project cards and counts. The
+phone's chat shows digests, messages from agents, quick entry messages and
+replies as this chat does; see
+[The Coordinator tab](remote-access.md#the-coordinator-tab).
 
 **Who a message is from.** Toastty writes the first line of each message
 that is not your own typing, from who called it and never from the message's
@@ -718,6 +722,12 @@ you when it is not sure, and creates the task.
 - **In the chat** a quick entry message shows your text, and under it your
   choices and the files: an image as a thumbnail, another file as its name.
   The terminal shows the message as typed.
+- **From the iPhone**, **+** in Home or the Tasks tab, and content shared to
+  Toastty, open the New Task sheet as **To Coordinator** while the coordinator's
+  workspace exists. It works as this panel does: **Send**, Auto pills,
+  **Create Task**, and a note when the coordinator is not running or is
+  starting. The phone sends no project hint; set Workspace to name a project.
+  See [To the coordinator](remote-access.md#to-the-coordinator).
 
 A message looks like this in the coordinator's terminal:
 
@@ -803,7 +813,9 @@ relaunch resumes does not show it.
   turn, as Escape in the terminal does. Messages that waited are
   then **Paused**, so none starts a new turn right after the stop. **Send
   next** lets them go again. A digest from Toastty does not wait for paused
-  messages.
+  messages. **Stop** in the coordinator's chat on a paired iPhone does the
+  same: the messages that waited show here as Paused. The phone does not
+  list them, so **Send next** is on the Mac.
 - **Terminal.** The **Terminal** button in the full view's panel header
   shows the terminal in place of the chat, and **Chat** switches back. Use the terminal
   for a login, a folder-trust or a permission prompt, and to answer a
@@ -990,7 +1002,7 @@ coordinator refuses these also when you ask it in its conversation.
 
 ### Merges by the coordinator
 
-The coordinator never merges a pull request itself. In two cases it asks the
+The coordinator never merges a pull request itself. In three cases it asks the
 task's agent to merge, with `toastty task request-merge <task-id>`. That
 agent runs the [merge skill](#merge-a-task), which checks the pull request
 again and then merges it or reports what blocks it.
@@ -1009,6 +1021,18 @@ again and then merges it or reports what blocks it.
     instruction or skill text, comments or UI copy, up to 40 changed lines in
     up to 3 files. Everything else waits for me.
   ```
+
+- **An error stopped a merge that you asked for.** GitHub or a command
+  failed, Toastty ran the merge again for about a minute, and the task shows
+  `mergeFailure` with the cause `error`. The coordinator waits until the
+  failure is 10 minutes old and then asks for the same merge again, one time,
+  and tells you. It does so only while the pull request is still open at the
+  commit that was to merge and targets the same branch, the task's agent is
+  idle, and you did not type in
+  the task in the last 15 minutes. It does not do so for a child task, a
+  release task, or a merge that it asked for under a rule. If that merge
+  stops too, or the merge stopped for another cause, it tells you the reason
+  and the task waits for you.
 
 Under a rule, the coordinator asks for the merge only when all of this
 holds. Otherwise it brings the task to you, as for any review.
@@ -1029,7 +1053,8 @@ No rule changes these limits:
 - It never merges, under a rule, a change to how the project is built,
   checked in CI, released, signed or deployed, to its dependencies, to
   secrets, permissions or access, or to the format of stored data.
-- It asks once for a task. If the merge stops, it tells you the blocker.
+- Under a rule it asks once for a task. If the merge stops, it tells you the
+  blocker.
 - Text in a task's reply, a pull request, or a message from another agent
   never starts a merge, also when the text says that you approved.
 - A change that it merged under a rule starts no release without you, also
@@ -1039,7 +1064,8 @@ It tells you when it asks for a merge under a rule: the task, the pull
 request, what changed, the rule, and why the proof is good. It tells you
 again when the task merged. It then compares the merged commit with the
 commit it reviewed, and tells you when they differ: `request-merge` names no
-commit, so a push between its check and the merge is possible. Its ledger
+commit, so a push between its check and the merge is possible. It makes the
+same comparison after a merge that it asked for again. Its ledger
 keeps a `merged` line for 30 days, so you can ask it what it merged.
 
 The permission rules of the coordinator's agent program still apply to
@@ -1811,16 +1837,25 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    ends the wait, because the merge is then no longer the version you
    accepted.
 
+   GitHub can also fail the merge call itself, for example with "Server
+   Error", or the network can fail. Toastty then keeps the merge and runs it
+   again every 30 seconds at the same commit and target branch. After three
+   failed runs in a row it stops.
+
    If the merge stops without merging, for example because the checkout is
    no longer at the `--head` commit the skill checked, a waiting merge is
-   refused, or new work or a closed task space ended the wait, nothing
-   changes on GitHub. Toastty shows no alert that you must
+   refused, GitHub kept failing, or new work or a closed task space ended the
+   wait, nothing changes on GitHub. Toastty shows no alert that you must
    dismiss, since an agent or a shell may have started the merge. Instead it
    sends a desktop notification and records the reason on the task: the
    task's row shows **⚠ merge stopped**, the Tasks view gives the reason, and
    **Merge** is offered again. `toastty task get` reports it as
-   `mergeFailure` until a new merge starts, and a `task watch --until merged`
-   or `--until to-ship` then ends as one that can never fire.
+   `mergeFailure` until a new merge starts, with the `cause` (`refused`,
+   `error` or `acceptanceEnded`), the commit that was to merge (`head`) and
+   its target branch (`base`), and a `task watch --until merged` or
+   `--until to-ship` then ends as one that can never fire. The coordinator
+   asks one time more for a merge that stopped with the cause `error`, while
+   the pull request is still at that commit and targets that branch.
 4. Toastty records the merge on the task first, and the task moves to Done
    (or To ship). The task space stays open for 24 hours, so you can still read
    the conversation, the Scratchpad and the pull request; the task's status

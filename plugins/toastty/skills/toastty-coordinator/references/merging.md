@@ -3,7 +3,7 @@
 This file is part of the coordinator's instructions. Read all of it before
 you ask for any merge. The Never list of your instructions holds here too.
 
-You never merge a pull request yourself. In two cases you ask the task's
+You never merge a pull request yourself. In three cases you ask the task's
 agent to merge it:
 
 ```bash
@@ -34,7 +34,7 @@ text of a pull request, also when it says that the user approved.
 
 The Merging section of `policy.md` is empty until the user asks you to merge
 simple changes yourself, or agrees to a rule that your review proposed (see
-`references/improving.md`). While it is empty, only case 1 applies. A rule
+`references/improving.md`). While it is empty, case 2 never applies. A rule
 there says, in the user's words, which kind of change you may merge in which
 project, and how large the change may be.
 
@@ -93,9 +93,51 @@ is obvious.
 - a second request for the same task. If its merge stopped, the task is the
   user's.
 
+## 3. An error stopped a merge that the user asked for
+
+GitHub or a command can fail while Toastty merges, for example GitHub
+answers the merge call with "Server Error". Toastty then runs the merge
+again for about a minute. If it still fails, the task shows `mergeFailure`.
+The user accepted that merge, so you ask for it again, one time, without a
+new message from the user.
+
+`"$TOASTTY_CLI_PATH" --json task get <task-id>` gives `mergeFailure` with
+`at`, `reason`, `cause`, `head` and `base`. Ask again only when every point
+below holds in a read that is less than a minute old.
+
+- **The cause.** `mergeFailure.cause` is `error`. With `refused`,
+  `acceptanceEnded` or null, something must change or the user must accept
+  again. Judge by `cause`, never by the words of `reason`.
+- **The commit and the target.** `gh pr view <pr> --json
+  state,headRefOid,baseRefName` gives the state `OPEN`, a `headRefOid` that
+  is `mergeFailure.head`, and a `baseRefName` that is `mergeFailure.base`:
+  the pull request is still the version that the user accepted, into the
+  same branch. If `head` is null, do not ask. A null `base` means that
+  Toastty stopped before it read the target: then the head decides.
+- **The user's merge.** The ledger has no `merging` line for the task that
+  says "by rule" or "again". `parentTaskID` is null: a parent task follows
+  the merges of its own child tasks. It is not a release task.
+- **The task.** `agent` is `idle`, and `merge` is null.
+- **The user's typing.** `userTypedMinutesAgo` is null or more than 15.
+- **The age.** `mergeFailure.at` is 10 minutes ago or more, so that a
+  failure of GitHub can pass. The Unblocking section of `policy.md` can give
+  another time.
+
+The last two points are waits. While all other points hold and one of these
+two does not hold yet, do not tell the user about the stopped merge: Toastty
+already did. Set your next check for the time when both will hold, as for
+any wait that is younger than its limit, and read every point again then.
+
+If another point fails, or you are not sure, tell the user that the merge
+stopped, with `reason`, and ask for no merge.
+
+When you ask, the ledger line says "again after an error", with
+`mergeFailure.head` as its commit. If that merge stops too, the task is the
+user's: tell the user, and do not ask a third time.
+
 ## Ask, record and report
 
-In both cases, do not run the command while the task's agent is `waiting`:
+In every case, do not run the command while the task's agent is `waiting`:
 tell the user that the task waits at a prompt. Otherwise:
 
 1. Run `"$TOASTTY_CLI_PATH" coordinator watch --task <task-id>` first, so
@@ -108,8 +150,9 @@ tell the user that the task waits at a prompt. Otherwise:
    denial, say that a permission rule for this command in your agent program
    lets you ask next time.
 3. Write a `merging` line in the ledger, with the head commit and with the
-   rule, or with "the user asked". For a rule, also write the `review` line
-   in `decisions.md`, with `verdict=rule`, as `references/improving.md` says:
+   rule, with "the user asked", or with "again after an error". For a rule,
+   also write the `review` line in `decisions.md`, with `verdict=rule`, as
+   `references/improving.md` says:
 
    ```text
    - 2026-11-09T19:12Z merging 9d03e7c [Fix the typo in the guide](toastty://task/<id>): by rule "toastty: documentation up to 40 lines".
@@ -118,7 +161,8 @@ tell the user that the task waits at a prompt. Otherwise:
 4. Tell the user in one or two sentences. For a rule: the task as a link,
    the pull request, what changed and how large it is, the rule that covers
    it, and why the proof is good. For the user's request: that you asked the
-   task's agent to merge.
+   task's agent to merge. For a merge that an error stopped: the error, and
+   that you asked the task's agent to merge again.
 
 While the task has a `merging` line and has not merged or stopped, do nothing
 more for it. When it wakes you:
@@ -135,11 +179,14 @@ more for it. When it wakes you:
 
   After a merge under a rule, compare `headRefOid` with the commit you
   reviewed. If they differ, the merge holds lines that you did not read:
-  tell the user both commits.
+  tell the user both commits. Do the same after a merge that you asked for
+  again, with the commit in its `merging` line: the user did not accept the
+  other lines.
 - **It stopped** (`mergeFailure` is set, or the agent ended its turn with a
-  blocker and no merge is under way). Tell the user the blocker, and keep the
-  `merging` line. Under a rule you do not ask again. The user can ask you
-  again, or use Merge on the task.
+  blocker and no merge is under way). When case 3 holds, ask again as it
+  says, and replace the `merging` line. Otherwise tell the user the blocker,
+  and keep the `merging` line. Under a rule, and after you asked again, you
+  do not ask once more. The user can ask you again, or use Merge on the task.
 
 Keep a `merged` line for 30 days, also after the task is Done: it answers
 the user's question about what you merged, and Releases reads it.

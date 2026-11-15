@@ -558,6 +558,94 @@ enum ToasttyConversationFixture {
         )
     }
 
+    /// A task the Mac's board does not list, so its link stays text.
+    static let unlistedTaskID = UUID(uuidString: "99999999-9999-4999-8999-999999999999")!
+
+    /// The coordinator's chat, as in the proposal's mockup A, from the
+    /// events that the Mac sends: a digest that Toastty typed, the
+    /// coordinator's answer with task links, a task's message that
+    /// `coordinator send` brought, a reply to the coordinator, and a quick
+    /// entry message with its choices and a file. They show as the Mac's
+    /// coordinator chat shows them.
+    static func coordinatorPresentation(
+        for conversationID: UUID,
+        sendItems: [ToasttySendPresentationItem] = []
+    ) -> ToasttyConversationPresentationState {
+        ToasttyConversationPresentationAdapter.makeState(
+            events: coordinatorEvents(for: conversationID).map(CompatibleConversationEvent.known),
+            projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
+            projectionGeneration: projectionGeneration,
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false,
+            sendItems: sendItems,
+            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages
+        )
+    }
+
+    static func coordinatorEvents(for conversationID: UUID) -> [ConversationEvent] {
+        // Event `n` is `n - 1` times two minutes after the first.
+        func time(_ sequence: Int) -> Date {
+            Date(timeIntervalSince1970: 1_786_406_400).addingTimeInterval(TimeInterval((sequence - 1) * 2 * 60))
+        }
+        func link(_ title: String, _ id: UUID) -> String {
+            "[\(title)](toastty://task/\(id.uuidString))"
+        }
+        let digest = """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - \(link("compact-session-rows", ToasttyMobileFixture.reviewTaskID)): needsYou (review) at 2026-08-11T14:04:10Z
+        - \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)): toShip, merged at 2026-08-11T14:04:40Z
+        Read `toastty task list` for details.
+        """
+        let fromTask = CoordinatorMessageHeader.message(
+            from: .task(id: ToasttyMobileFixture.questionTaskID, title: "early-session-titles"),
+            text: "Done the first pass. Should the old API stay for one release?"
+        )
+        let answer = "I asked it to keep the old API until the next release, as your policy says."
+        // The reply quotes the answer, event 4, by its time.
+        let reply = CoordinatorMessageHeader.replyMessage(
+            quote: answer,
+            time: ToasttyConversationPresentationAdapter.coordinatorMessages.timeText(time(4)),
+            text: "Good. Release toastty once the export API merges."
+        )
+        let quickEntry = CoordinatorMessageHeader.quickEntryMessage(
+            CoordinatorMessageHeader.QuickEntry(
+                project: .init(id: ToasttyMobileFixture.previewWorkspaceID, title: "toastty"),
+                agent: "codex", model: "gpt-6.1-sol", effort: "high"
+            ),
+            text: "Add a CSV export to the Tasks tab, like this mockup.",
+            attachmentPaths: ["/Users/me/.toastty/coordinator/attachments/A1/csv-mockup.png"]
+        )
+        let payloads: [ConversationEventPayload] = [
+            .userMessage(.init(text: digest, origin: .remote)),
+            .assistantMessage(.init(
+                text: "Two tasks moved. \(link("Compact session rows", ToasttyMobileFixture.reviewTaskID)) "
+                    + "is ready for review, and \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)) merged.",
+                phase: .final
+            )),
+            .userMessage(.init(text: fromTask, origin: .remote)),
+            .assistantMessage(.init(text: answer, phase: .final)),
+            .userMessage(.init(text: reply, origin: .remote)),
+            .assistantMessage(.init(
+                text: "Noted. I will start the release right after it merges. "
+                    + "\(link("Old export spike", unlistedTaskID)) was archived, so it stays out.",
+                phase: .final
+            )),
+            .userMessage(.init(text: quickEntry, origin: .remote)),
+            .assistantMessage(.init(text: "I made a task for it in toastty, with Codex.", phase: .final)),
+        ]
+        return payloads.enumerated().map { index, payload in
+            ConversationEvent(
+                conversationID: RemoteConversationID(rawValue: conversationID),
+                sequence: UInt64(index + 1),
+                eventID: "coordinator-fixture-\(index + 1)",
+                timestamp: time(index + 1),
+                provider: .claude,
+                payload: payload
+            )
+        }
+    }
+
     static func toolActivityPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {

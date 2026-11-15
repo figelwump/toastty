@@ -444,24 +444,30 @@ struct ToasttySubspaceRow: View {
                         summaryText(detail)
                     }
                 } else if row.summary != nil || projectTag != nil || childProgress != nil {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        // Large text wraps the summary, so the tags take
+                        // their own line.
                         if let summary = row.summary {
                             summaryText(summary)
                         }
-                        Spacer(minLength: 0)
-                        // As on the Mac, the child progress sits on the
-                        // summary line, so the title keeps its room.
-                        if let childProgress {
-                            ToasttyChildProgressChip(progress: childProgress)
-                        }
-                        if let projectTag {
-                            // The summary shortens first; the tag says
-                            // which project the row is in.
-                            Text(projectTag)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                                .lineLimit(1)
-                                .fixedSize()
+                        ToasttyLargeTextTags(progress: childProgress, project: projectTag)
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            // As on the Mac, the child progress sits on
+                            // the summary line, so the title keeps its
+                            // room. The summary shortens before the tags.
+                            if let summary = row.summary {
+                                summaryText(summary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                Spacer(minLength: 0)
+                            }
+                            if let childProgress {
+                                ToasttyChildProgressChip(progress: childProgress)
+                            }
+                            if let projectTag {
+                                ToasttyProjectTag(title: projectTag)
+                            }
                         }
                     }
                 }
@@ -477,6 +483,7 @@ struct ToasttySubspaceRow: View {
         row.task?.shownChildProgress
     }
 
+
     private func summaryText(_ summary: String) -> some View {
         Text(summary)
             .font(row.status == .working ? .caption.monospaced().italic() : .caption.monospaced())
@@ -491,31 +498,59 @@ struct ToasttySubspaceRow: View {
     @ViewBuilder
     private var titleLine: some View {
         if dynamicTypeSize.isAccessibilitySize {
+            // Large text wraps the title. The pill and the chip share the
+            // next line when both fit; else the chip takes a line of its
+            // own, where it shortens only past the row's width.
             VStack(alignment: .leading, spacing: 3) {
                 titleText
-                HStack(spacing: 6) { trailingFacts(showsChip: true) }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        badgeView
+                        trailingChip(showsChip: true, width: .natural)
+                        openMark
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            badgeView
+                            openMark
+                        }
+                        trailingChip(showsChip: true, width: .ownLine)
+                    }
+                }
             }
         } else if compact != nil {
-            // The one tag keeps its room; the title shortens first.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                titleText
-                trailingFacts(showsChip: true)
+            // The one tag keeps its room. The status pill gives way before
+            // the title shortens, since the mark already shows the state.
+            ViewThatFits(in: .horizontal) {
+                titleLine(showsBadge: true, showsChip: true)
+                titleLine(showsBadge: false, showsChip: true)
             }
         } else {
             // As on the Mac, the title keeps some room: the chip gives way
             // first, and the status pill stays.
             ViewThatFits(in: .horizontal) {
-                titleLineWithReservedTitle(showsChip: true)
-                titleLineWithReservedTitle(showsChip: false)
+                titleLine(showsBadge: true, showsChip: true, reservedTitleWidth: ToasttyTaskRow.titleReservedWidth)
+                titleLine(showsBadge: true, showsChip: false, reservedTitleWidth: ToasttyTaskRow.titleReservedWidth)
             }
         }
     }
 
-    private func titleLineWithReservedTitle(showsChip: Bool) -> some View {
+    /// The title with its pill right after it, then the chip or tag and the
+    /// open mark at the trailing edge. The title takes the room the others
+    /// leave and shortens last. `reservedTitleWidth` is what a fit check
+    /// counts for the title in place of its full width.
+    private func titleLine(showsBadge: Bool, showsChip: Bool, reservedTitleWidth: CGFloat? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            titleText
-                .frame(minWidth: 0, idealWidth: ToasttyTaskRow.titleReservedWidth, maxWidth: .infinity, alignment: .leading)
-            trailingFacts(showsChip: showsChip)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                titleText
+                    .frame(idealWidth: reservedTitleWidth, alignment: .leading)
+                if showsBadge {
+                    badgeView
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailingChip(showsChip: showsChip)
+            openMark
         }
     }
 
@@ -531,7 +566,7 @@ struct ToasttySubspaceRow: View {
     }
 
     @ViewBuilder
-    private func trailingFacts(showsChip: Bool) -> some View {
+    private var badgeView: some View {
         if let badge = badge {
             let color = ToasttySubspaceStatusStyle.color(row.status, freshness: controller.freshness)
             Text(badge)
@@ -542,23 +577,27 @@ struct ToasttySubspaceRow: View {
                 .background(color.opacity(0.2), in: RoundedRectangle(cornerRadius: 4))
                 .fixedSize()
         }
-        if dynamicTypeSize.isAccessibilitySize == false {
-            Spacer(minLength: 0)
-        }
+    }
+
+    /// A one-line row's tag, else the row's chip. Each takes the width of
+    /// its text up to a cap, so a short chip leaves its room to the title.
+    @ViewBuilder
+    private func trailingChip(showsChip: Bool, width: ToasttyRowTagWidth = .capped) -> some View {
         if let compact {
             if let tag = compact.tag {
-                ToasttyCompactRowTag(tag: tag)
+                ToasttyCompactRowTag(tag: tag, width: width)
             }
-        } else {
-            if showsChip, let chip = row.chip {
-                ToasttyAnnotationChip(
-                    annotation: RemoteWorkspaceAnnotation(key: chip.key, text: chip.text, color: chip.color),
-                    size: .compact
-                )
-                .frame(minWidth: 44, maxWidth: 110, alignment: .trailing)
-                .opacity(row.status == .done ? 0.7 : 1)
-            }
+        } else if showsChip, let chip = row.chip {
+            ToasttyAnnotationChip(
+                annotation: RemoteWorkspaceAnnotation(key: chip.key, text: chip.text, color: chip.color),
+                size: .compact
+            )
+            .toasttyRowTagWidth(width, cap: ToasttyCompactRowTag.chipMaximumWidth)
+            .opacity(row.status == .done ? 0.7 : 1)
         }
+    }
+
+    private var openMark: some View {
         Image(systemName: "arrow.right")
             .font(.caption2.weight(.semibold))
             .foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -586,7 +625,10 @@ struct ToasttySubspaceRow: View {
             ? ToasttySubspaceGroupPresentation.statusLabel(row.status)
             : "last seen \(ToasttySubspaceGroupPresentation.statusLabel(row.status))"
         if let compact {
-            return [row.title, "task space", status, compact.detail ?? row.summary, compact.tagAccessibilityLabel]
+            return [
+                row.title, "task space", status, compact.detail ?? row.summary, compact.tagAccessibilityLabel,
+                compact.parentAccessibilityLabel,
+            ]
                 .compactMap { $0 }
                 .filter { $0.isEmpty == false }
                 .joined(separator: ", ")
@@ -733,32 +775,51 @@ struct ToasttySubspaceDetailCard: View {
 struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
     let controller: HomeScreenController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The notice this screen shows. A notice that is out of date when the
+    /// screen comes on is never shown.
+    @State private var shownNoticeID: UUID?
 
     private static let visibleDuration: Duration = .seconds(5)
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottom) {
-                if let notice = controller.subspaceDoneNotice {
+                if let notice = controller.subspaceDoneNotice, notice.id == shownNoticeID {
                     noticeView(notice)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 18)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .task(id: notice.id) {
-                            try? await Task.sleep(for: Self.visibleDuration)
-                            guard Task.isCancelled == false else { return }
-                            controller.dismissSubspaceDoneNotice(notice)
-                        }
                 }
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controller.subspaceDoneNotice)
+            // Runs when the notice changes and when this screen comes back
+            // on. The notice shows for what is left of its few seconds,
+            // counted from when it was made, on whichever screen is up.
+            .task(id: controller.subspaceDoneNotice?.id) {
+                guard let notice = controller.subspaceDoneNotice else { return }
+                let remaining = Self.visibleDuration - .seconds(Date().timeIntervalSince(notice.createdAt))
+                guard remaining > .zero else {
+                    controller.dismissSubspaceDoneNotice(notice)
+                    return
+                }
+                shownNoticeID = notice.id
+                try? await Task.sleep(for: remaining)
+                guard Task.isCancelled == false else { return }
+                controller.dismissSubspaceDoneNotice(notice)
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: shownNotice)
             .sensoryFeedback(trigger: controller.subspaceDoneNotice) { _, notice in
                 switch notice?.kind {
-                case .changed?, .flagChanged?, .sessionStarted?, .taskCreated?, .sessionClosed?, .taskAction?: .success
+                case .changed?, .flagChanged?, .sessionStarted?, .taskCreated?, .coordinatorMessage?, .sessionClosed?,
+                     .taskAction?: .success
                 case .failed?: .error
                 case nil: nil
                 }
             }
+    }
+
+    /// The notice on screen, for its animation.
+    private var shownNotice: SubspaceDoneNotice? {
+        controller.subspaceDoneNotice.flatMap { $0.id == shownNoticeID ? $0 : nil }
     }
 
     private func noticeView(_ notice: SubspaceDoneNotice) -> some View {

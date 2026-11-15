@@ -785,8 +785,13 @@ with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
 has `parentTaskID`, a top-level `sessionID` for the session that works on
 the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
 `replyRequest` (`askedAt` and `question`, or `null`), `mergeRequestedAt`, `mergeCancelledAt`,
-`mergeFailure` (`at` and `reason` of Toastty's last merge that stopped without
-merging, cleared when a new merge starts, or `null`), `releaseAfterMerge`
+`mergeFailure` (`at`, `reason`, `cause`, `head` and `base` of Toastty's last merge that
+stopped without merging, cleared when a new merge starts, or `null`; `cause` is
+`refused` when a check refused the merge, `error` when GitHub or a command
+failed and nothing refused it, `acceptanceEnded` when new work, a closed
+workspace or another pull request ended a waiting merge, or `null` in an older
+record; `head` is the commit that was to merge and `base` the target branch
+accepted with it, each `null` when Toastty did not know it), `releaseAfterMerge`
 (`requestedAt` of the user's request to release the task right after it merges,
 from `task.set-release`, or `null`), `shippedAt`, `releaseTag`, `doneAt`,
 `archivedAt`, and `stage` with

@@ -44,6 +44,64 @@ public extension WorkspaceState {
         return layoutTree.slotContaining(panelID: panelID) != nil &&
             panelIsVisibleInFocusMode(panelID)
     }
+
+    /// The right panel's active panel, when Select Next Split and Select
+    /// Previous Split can reach it: the right panel is open and focus mode
+    /// is off.
+    var focusableRightAuxPanelID: UUID? {
+        guard focusedPanelModeActive == false,
+              rightAuxPanel.isVisible,
+              let activePanelID = rightAuxPanel.activePanelID else {
+            return nil
+        }
+        return activePanelID
+    }
+
+    /// The stops of Select Next Split and Select Previous Split, in order:
+    /// the panels of the visible layout, then the right panel's active
+    /// panel. The commands wrap around at either end.
+    var panelFocusCycle: [PanelFocusCycleTarget] {
+        let visibleRoot = focusModeSubtree?.root ?? layoutTree
+        var targets = visibleRoot.allSlotInfos.compactMap { slot -> PanelFocusCycleTarget? in
+            guard panels[slot.panelID] != nil else {
+                return nil
+            }
+            return .mainPanel(slot.panelID)
+        }
+        if let rightAuxPanelID = focusableRightAuxPanelID,
+           targets.contains(.rightAuxPanel(rightAuxPanelID)) == false {
+            targets.append(.rightAuxPanel(rightAuxPanelID))
+        }
+        return targets
+    }
+
+    /// The stop of `panelFocusCycle` that has focus now. `nil` when no
+    /// panel of the layout can take focus.
+    var currentPanelFocusCycleTarget: PanelFocusCycleTarget? {
+        guard let resolution = resolvedFocusedPanel else {
+            return nil
+        }
+        if let rightAuxPanelID = focusableRightAuxPanelID,
+           rightAuxPanel.focusedPanelID == rightAuxPanelID {
+            return .rightAuxPanel(rightAuxPanelID)
+        }
+        return .mainPanel(resolution.panelID)
+    }
+}
+
+/// A stop of Select Next Split and Select Previous Split.
+public enum PanelFocusCycleTarget: Equatable, Sendable {
+    /// A panel in the workspace's split layout.
+    case mainPanel(UUID)
+    /// The active panel of the workspace's right panel.
+    case rightAuxPanel(UUID)
+
+    public var panelID: UUID {
+        switch self {
+        case .mainPanel(let panelID), .rightAuxPanel(let panelID):
+            return panelID
+        }
+    }
 }
 
 extension WorkspaceState {

@@ -567,6 +567,12 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     /// Whether the Mac takes a done mark for the subspace. False for a task
     /// with an open pull request, which finishes through Merge.
     public let acceptsDoneMark: Bool
+    /// The Mac marks this workspace as the coordinator's. See
+    /// `MobileHomeSnapshot.coordinator` for when the phone sets it apart.
+    public let isCoordinator: Bool
+    /// On the coordinator's workspace, the coordinator's own session, which
+    /// the Mac names because other sessions can share the workspace.
+    public let coordinatorConversationID: UUID?
 
     public init(
         id: UUID,
@@ -578,7 +584,9 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         spawningConversationID: UUID? = nil,
         primaryAnnotationKey: String? = nil,
         isDone: Bool = false,
-        acceptsDoneMark: Bool = true
+        acceptsDoneMark: Bool = true,
+        isCoordinator: Bool = false,
+        coordinatorConversationID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -590,6 +598,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         self.primaryAnnotationKey = primaryAnnotationKey
         self.isDone = isDone
         self.acceptsDoneMark = acceptsDoneMark
+        self.isCoordinator = isCoordinator
+        self.coordinatorConversationID = coordinatorConversationID
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -609,7 +619,9 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             spawningConversationID: spawningConversationID,
             primaryAnnotationKey: primaryAnnotationKey,
             isDone: isDone,
-            acceptsDoneMark: acceptsDoneMark
+            acceptsDoneMark: acceptsDoneMark,
+            isCoordinator: isCoordinator,
+            coordinatorConversationID: coordinatorConversationID
         )
     }
 
@@ -624,21 +636,33 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             spawningConversationID: spawningConversationID,
             primaryAnnotationKey: primaryAnnotationKey,
             isDone: isDone,
-            acceptsDoneMark: acceptsDoneMark
+            acceptsDoneMark: acceptsDoneMark,
+            isCoordinator: isCoordinator,
+            coordinatorConversationID: coordinatorConversationID
         )
     }
 }
 
 public struct MobileHomeSnapshot: Equatable, Sendable {
     public let hostName: String
+    /// Every workspace the Mac sends, the coordinator's included, so a
+    /// lookup by ID finds any of them.
     public let workspaces: [MobileWorkspace]
+    /// Every session but the coordinator's, most urgent first.
     public let activitySessions: [MobileConversation]
-    /// Every workspace, subspaces included, most urgent first.
+    /// Every workspace but the coordinator's, subspaces included, most
+    /// urgent first.
     public let rankedWorkspaces: [MobileWorkspace]
     /// Workspaces that are not nested under another, most urgent first. A
     /// workspace's urgency counts its subspaces' sessions, so a parent whose
-    /// only activity is in a subspace still ranks by it.
+    /// only activity is in a subspace still ranks by it. The coordinator's
+    /// workspace is not one of them.
     public let topLevelWorkspaces: [MobileWorkspace]
+    /// The coordinator's workspace, which the phone shows in its own tab, as
+    /// the Mac pins it apart from the projects. `nil` without a task board:
+    /// the phone then has no tab bar and lists the workspace as an ordinary
+    /// one, as it does for an older Mac that sends no mark.
+    public let coordinator: MobileWorkspace?
     /// The Mac's task board; `nil` from a Mac without the task system,
     /// which keeps Home's All and Active filters.
     public let taskBoard: MobileTaskBoard?
@@ -648,10 +672,14 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         self.hostName = hostName
         self.workspaces = workspaces
         self.taskBoard = taskBoard
-        activitySessions = workspaces
+        // The Mac keeps one coordinator, which is never nested.
+        let coordinator = taskBoard == nil ? nil : workspaces.first { $0.isCoordinator && $0.parentWorkspaceID == nil }
+        self.coordinator = coordinator.map { $0.withConversations($0.sortedConversations) }
+        let others = workspaces.filter { $0.id != coordinator?.id }
+        activitySessions = others
             .flatMap(\.conversations)
             .sorted(by: MobileConversation.isOrderedBeforeInActivity)
-        let sorted = workspaces.map { $0.withConversations($0.sortedConversations) }
+        let sorted = others.map { $0.withConversations($0.sortedConversations) }
         rankedWorkspaces = sorted.sorted {
             Self.isOrderedBefore($0, $0.conversations.first, $1, $1.conversations.first)
         }

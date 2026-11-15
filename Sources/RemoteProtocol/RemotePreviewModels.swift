@@ -24,6 +24,17 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
     /// host refuses the mark then. Sent only when false, so an older host's
     /// subspaces accept it.
     public var acceptsDoneMark: Bool
+    /// The coordinator's own workspace: the Mac pins it apart from the
+    /// projects, and a client with the task system shows it on its own. Sent
+    /// only when true. Absent from older hosts, whose clients list every
+    /// workspace as a project.
+    public var isCoordinator: Bool
+    /// On the coordinator's workspace: the coordinator's own session while
+    /// its agent runs. Other sessions can run in the same workspace, and a
+    /// listed transcript outlives its agent, so a client takes the
+    /// coordinator's session from here. Absent while the coordinator does
+    /// not run or is starting.
+    public var coordinatorConversationID: RemoteConversationID?
     public init(
         id: UUID, title: String, panels: [RemoteWorkspacePanel],
         annotations: [RemoteWorkspaceAnnotation] = [],
@@ -31,7 +42,9 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         spawningConversationID: RemoteConversationID? = nil,
         primaryAnnotationKey: String? = nil,
         doneAt: Date? = nil,
-        acceptsDoneMark: Bool = true
+        acceptsDoneMark: Bool = true,
+        isCoordinator: Bool = false,
+        coordinatorConversationID: RemoteConversationID? = nil
     ) {
         self.id = id
         self.title = title
@@ -42,6 +55,8 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         self.primaryAnnotationKey = primaryAnnotationKey
         self.doneAt = doneAt
         self.acceptsDoneMark = acceptsDoneMark
+        self.isCoordinator = isCoordinator
+        self.coordinatorConversationID = coordinatorConversationID
     }
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -54,10 +69,13 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         try container.encodeIfPresent(primaryAnnotationKey, forKey: .primaryAnnotationKey)
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
         if !acceptsDoneMark { try container.encode(false, forKey: .acceptsDoneMark) }
+        if isCoordinator { try container.encode(true, forKey: .isCoordinator) }
+        try container.encodeIfPresent(coordinatorConversationID, forKey: .coordinatorConversationID)
     }
     private enum CodingKeys: String, CodingKey {
         case id, title, panels, annotations
-        case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt, acceptsDoneMark
+        case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt, acceptsDoneMark, isCoordinator
+        case coordinatorConversationID
     }
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -71,6 +89,9 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         primaryAnnotationKey = try container.decodeIfPresent(String.self, forKey: .primaryAnnotationKey)
         doneAt = try container.decodeIfPresent(Date.self, forKey: .doneAt)
         acceptsDoneMark = try container.decodeIfPresent(Bool.self, forKey: .acceptsDoneMark) ?? true
+        isCoordinator = try container.decodeIfPresent(Bool.self, forKey: .isCoordinator) ?? false
+        coordinatorConversationID = try container.decodeIfPresent(
+            RemoteConversationID.self, forKey: .coordinatorConversationID)
     }
 }
 

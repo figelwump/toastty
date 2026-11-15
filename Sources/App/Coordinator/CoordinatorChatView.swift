@@ -57,7 +57,8 @@ struct CoordinatorChatView: View {
                 presentation: model.presentation,
                 sessionStatus: model.sessionStatus,
                 workingIndicator: model.workingIndicator,
-                jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest
+                jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest,
+                newMessages: model.newMessages
             )
             .equatable()
             .overlay {
@@ -326,6 +327,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
     let sessionStatus: ToasttyTranscriptSessionStatus?
     let workingIndicator: ToasttyTranscriptWorkingIndicator?
     let jumpToLiveEdgeRequest: UInt64
+    let newMessages: ToasttyNewMessagesMarker?
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -333,6 +335,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             && lhs.sessionStatus == rhs.sessionStatus
             && lhs.workingIndicator == rhs.workingIndicator
             && lhs.jumpToLiveEdgeRequest == rhs.jumpToLiveEdgeRequest
+            && lhs.newMessages == rhs.newMessages
     }
 
     var body: some View {
@@ -349,7 +352,8 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             ),
             canAcknowledgeRead: false,
             options: CoordinatorChatView.transcriptOptions,
-            replyToMessage: { model.reply(to: $0) }
+            replyToMessage: { model.reply(to: $0) },
+            newMessages: newMessages
         )
     }
 }

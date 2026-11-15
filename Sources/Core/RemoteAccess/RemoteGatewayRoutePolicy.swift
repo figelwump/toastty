@@ -35,6 +35,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case taskAction
     case taskArchiveCheck
     case projectRelease
+    case coordinatorSend
+    case coordinatorSendWithAttachments
 
     var path: String {
         switch self {
@@ -69,6 +71,8 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .taskAction: RemoteTaskActionPolicy.actionPath
         case .taskArchiveCheck: RemoteTaskActionPolicy.archiveCheckPath
         case .projectRelease: RemoteProjectReleasePolicy.releasePath
+        case .coordinatorSend: RemoteCoordinatorSendPolicy.sendPath
+        case .coordinatorSendWithAttachments: RemoteCoordinatorSendPolicy.sendWithAttachmentsPath
         }
     }
 }
@@ -154,6 +158,11 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // the handler also checks the Task actions switch and the start
         // permission.
         .projectRelease: .init(route: .projectRelease, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // A message to the coordinator is a send, and the coordinator makes
+        // a task from it, so these follow the task create routes; the
+        // handler checks the start permission itself.
+        .coordinatorSend: .init(route: .coordinatorSend, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .coordinatorSendWithAttachments: .init(route: .coordinatorSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

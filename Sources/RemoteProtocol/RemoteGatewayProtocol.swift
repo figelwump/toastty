@@ -76,6 +76,12 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// device needs both its Task actions switch and its session start
     /// permission; the Mac refuses each request without them.
     case projectRelease = "project_release"
+    /// A native client may send a quick entry message to the coordinator,
+    /// as the Mac's quick entry panel does while a coordinator exists. The
+    /// coordinator then creates the task. It uses the device's session
+    /// start permission, as task creation does. The task-create options
+    /// carry the coordinator's state while the Mac has a coordinator.
+    case coordinatorSend = "coordinator_send"
 }
 
 /// Public compatibility probe used before a client has credentials.

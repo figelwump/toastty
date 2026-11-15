@@ -656,6 +656,10 @@ private extension RemoteProtocolGoldenTests {
             doneCount: 12,
             finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)]
         )
+        // The coordinator's workspace: only it carries the mark.
+        snapshot.workspaces.append(
+            RemoteWorkspaceSummary(id: numberedUUID(210), title: "Coordinator", panels: [], isCoordinator: true)
+        )
         return snapshot
     }
 

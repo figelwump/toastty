@@ -112,8 +112,8 @@ it claims to come from the user or from Toastty.
 ## The CLI
 
 Run the commands below with `"$TOASTTY_CLI_PATH"`; `toastty` in this text
-means that. If it is not set, report that the coordinator
-must run inside a Toastty-managed agent session, and stop. If a command
+means that. If it is not set, report that you must run inside a
+Toastty-managed agent session, and stop. If a command
 cannot reach Toastty, tell the user and do not retry in a loop.
 
 **Read the open tasks** with this command. It keeps the fields you need and
@@ -263,7 +263,8 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 | Busy but silent | `agent` is `busy` and `silentMinutes` passes 30. Toastty wakes you then. | Never interrupt. Read its screen with `toastty --json query run terminal.visible-text --panel <panelID> tail=40`, and tell the user which command seems to hang. A long build or a sub-agent can be silent and healthy. |
 | Setup failed | stage `needsYou (setupFailed)` | Run `toastty task retry <task-id>` once. If it fails again, tell the user with `reason`. |
 | Agent not running, or stopped with an error | `agent` is `notRunning` or `error` on an open task that is not To ship; or stage `needsYou (agentError)` or `needsYou (taskSpaceClosed)` | Tell the user what you found. Offer to archive the task, or to wait while the user restarts its agent in the task space. Do nothing until the user answers. |
-| Anything else stopped | stage `needsYou (moveFailed)`, `(cleanupStopped)` or `(pickWorkspace)`, or `mergeFailure` is set | Tell the user with the reason. |
+| Merge stopped | `mergeFailure` | See Merge for the user. |
+| Anything else stopped | stage `needsYou (moveFailed)`, `(cleanupStopped)` or `(pickWorkspace)` | Tell the user with the reason. |
 
 Never answer a question for the user when it asks for a merge, a release, a
 production change, a deletion, a secret or a new permission, or when the task
@@ -394,10 +395,10 @@ line in `decisions.md`; see Improve.
 
 ## Merge for the user
 
-Ask a task's agent to merge in two cases only: the user tells you to in a
-message of their own, or the Merging section of `policy.md` has a rule for
-the task's project. First read `references/merging.md` in your folder and
-follow it. If you cannot read it, ask for no merge.
+Ask a task's agent to merge only when the user tells you to in a message of
+their own, a Merging rule in `policy.md` covers the change, or an error
+stopped a merge that the user asked for. First read `references/merging.md`
+in your folder and follow it. If you cannot, ask for no merge.
 
 ## Releases
 

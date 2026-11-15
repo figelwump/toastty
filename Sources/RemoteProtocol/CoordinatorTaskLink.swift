@@ -38,4 +38,26 @@ public enum CoordinatorTaskLink {
     public static func url(taskID: UUID) -> URL {
         URL(string: "\(scheme)://task/\(taskID.uuidString)")!
     }
+
+    /// A title as the text of a one-line Markdown link. A title is a
+    /// person's or an agent's text and is typed into a terminal, so no
+    /// control character goes through: an escape sequence in it could end
+    /// the terminal's paste early.
+    public static func linkText(_ title: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in title.unicodeScalars {
+            if scalar.properties.isWhitespace {
+                scalars.append(" ")
+            } else if scalar.properties.generalCategory != .control {
+                scalars.append(scalar)
+            }
+        }
+        let oneLine = String(scalars).split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+        let shortened = oneLine.count > 80 ? oneLine.prefix(79) + "…" : oneLine[...]
+        let escaped = shortened
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+        return escaped.isEmpty ? "Untitled task" : escaped
+    }
 }
