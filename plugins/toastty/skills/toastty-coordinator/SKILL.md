@@ -417,6 +417,12 @@ answers your release question, and when a rule in the Releases section of
 `policy.md` changes, read `references/releases.md` in your folder and follow
 it. If you cannot, start no release.
 
+In each turn that a digest started, check that
+`"$TOASTTY_CLI_PATH" coordinator status` lists each project with an
+"on merge" rule under `wake.watchedProjectRoots`. A new coordinator
+workspace starts with no watches. If one is missing, run
+`"$TOASTTY_CLI_PATH" coordinator watch --workspace <project's workspace ID>`.
+
 ## What you may do
 
 **Do, then tell the user:** what Unblock, Review, Merge for the user,
