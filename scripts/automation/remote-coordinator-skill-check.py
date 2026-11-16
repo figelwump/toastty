@@ -277,6 +277,9 @@ PASTED = re.compile(r'^\s*<pasted_content id="([^"\n]+)">\n(.*?)\n</pasted_conte
 OWN_FILES = ('policy.md', 'ledger.md', 'friction.md', 'decisions.md')
 # The Improving rule of a user who wants no review on a timer.
 REVIEW_ON_REQUEST = '- Review only when I ask.'
+# The Talking rules of a scenario that is not about the daily list: with the
+# list on, every wake turn would set a check for the next list time.
+NO_DAILY_LIST = "- The coordinator's defaults.\n- No daily list."
 
 POLICY = '''# Coordinator policy
 
@@ -287,8 +290,7 @@ POLICY = '''# Coordinator policy
 - App bug with a clear repro: claude, claude-opus-5-5, high; start work at once.
 
 ## Talking
-- The coordinator's defaults.
-
+{talking}
 ## Reviewing
 {reviewing}
 ## Merging
@@ -669,8 +671,10 @@ class Run:
 
     # MARK: The coordinator
 
-    def seed_policy(self, reviewing='', unblocking='', releases='', merging='', improving=REVIEW_ON_REQUEST, text=None):
+    def seed_policy(self, reviewing='', unblocking='', releases='', merging='', improving=REVIEW_ON_REQUEST, text=None,
+                    talking=NO_DAILY_LIST):
         (self.folder / 'policy.md').write_text(text if text is not None else POLICY.format(
+            talking=talking + '\n',
             reviewing=(reviewing or "- The coordinator's defaults.") + '\n', merging=merging + ('\n' if merging else ''),
             improving=improving + ('\n' if improving else ''),
             unblocking=unblocking + ('\n' if unblocking else ''), releases=releases + ('\n' if releases else '')))
@@ -937,7 +941,8 @@ class Run:
         except Exception:  # noqa: BLE001
             pass
         for name in ('policy.md', 'ledger.md', 'friction.md', 'decisions.md', 'AGENTS.md', 'CLAUDE.md',
-                     'references/merging.md', 'references/improving.md', 'references/first-run.md'):
+                     'references/merging.md', 'references/improving.md', 'references/first-run.md',
+                     'references/follow-through.md'):
             if (self.folder / name).is_file():
                 shutil.copyfile(self.folder / name, self.artifacts / Path(name).name)
         if (self.folder / '.git').is_dir():
@@ -1103,7 +1108,7 @@ def first_run_request(run):
 def first_run_upgrade(run):
     """A policy from before Talking and Merging: it asks only about Talking, adds the heading, and follows the answer."""
     run.create_task('Fix the unread dot in the sidebar', done=True)
-    run.seed_policy(text=POLICY.replace("## Talking\n- The coordinator's defaults.\n\n", '')
+    run.seed_policy(text=POLICY.replace('## Talking\n{talking}\n', '')
                     .replace('## Merging\n{merging}\n', '').format(
         reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n', unblocking='', releases=''))
     run.open_coordinator()
@@ -1412,7 +1417,8 @@ def merge_rule_setup(run):
     run.create_task('Fix the unread dot in the sidebar', done=True)
     # A policy from before the Merging section, as every policy is at first.
     run.seed_policy(text=POLICY.replace('## Merging\n{merging}\n', '').format(
-        reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n', unblocking='', releases=''))
+        talking=NO_DAILY_LIST + '\n', reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n',
+        unblocking='', releases=''))
     run.open_coordinator()
     before, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
     asked = run.tell('From now on, merge simple changes in the app project yourself, and tell me afterwards.')
@@ -1786,7 +1792,8 @@ def first_run_improving(run):
     """A policy from before the Improving section: it asks only about that, explains it, and writes the user's rule."""
     run.create_task('Fix the unread dot in the sidebar', done=True)
     run.seed_policy(text=POLICY.replace('## Improving\n{improving}\n', '').format(
-        reviewing="- The coordinator's defaults.\n", merging='', unblocking='', releases=''))
+        talking=NO_DAILY_LIST + '\n', reviewing="- The coordinator's defaults.\n", merging='', unblocking='',
+        releases=''))
     run.open_coordinator()
     before, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
     said = run.said(run.tell('Hi.'))
@@ -2115,6 +2122,177 @@ def review_empty(run):
     return turns
 
 
+# Work that a task names for after its merge, under the heading the task skills give it.
+REMAINING_AFTER_MERGE = """
+## Remaining after merge
+Step 3, the rollout of this change to the 24 computers, is not in this pull request. Plan: release version 0.9.1,
+update the canary computer first, then the others in two groups. Open questions: which version to release, and who
+confirms the cloud access policy before the canary.
+"""
+
+
+def followup_merge(run):
+    """A merged change leaves work: the coordinator follows the task, and after the merge it creates the next task."""
+    task = run.create_task('Move links to the new domain', status='working')
+    head = f'{0xd0a1:040x}'
+    run.set_pr(task, 61, head=head, body=GOOD_PROOF.format(head=head) + REMAINING_AFTER_MERGE,
+               files=['Sources/App/Links.swift', 'Tests/App/LinksTests.swift'])
+    publish_report(run, task, head)
+    run.seed_policy()
+    run.open_coordinator()
+    run.reply(task, 'The pull request is open and its checks pass. The rollout to the computers remains after the '
+                    'merge: the plan and its open questions are in the description, under Remaining after merge.')
+    to_review(run, task)
+    first = run.new_turns(wake=True)
+    ledger = run.ledger()
+    run.check('the review records the remaining work in a followup line',
+              any('followup' in line and task.id in line for line in ledger.splitlines()), ledger)
+    watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
+    run.check('it asks Toastty to wake it at the merge', task.id in watched, watched)
+    run.check('nothing is sent to the task', run.messages(task) == [], run.messages(task))
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    merge_on_github(run, task)
+    later = run.new_turns(wake=True)
+    created = created_since(run, before)
+    root = run.get(task).get('projectRoot')
+    run.check('after the merge, it creates one task for the remaining work, in the same project',
+              len(created) == 1 and created[0].get('projectRoot') == root,
+              [(t['title'], t.get('projectRoot')) for t in created])
+    if created:
+        new = created[0]
+        text = (new.get('text') or '').lower()
+        run.check('the new task names the remaining work and the merged task',
+                  re.search(r'rollout|step 3|computers', text) and (task.id.lower() in text or 'pull/61' in text),
+                  new.get('text'))
+        run.check('the new task does not start work in a worktree', new.get('worktree') is None, new.get('worktree'))
+        run.check('it tells the user, with the new task link', f"toastty://task/{new['taskID']}" in run.said(later),
+                  run.said(later))
+        run.check('the followup line names the new task', new['taskID'] in run.ledger(), run.ledger(), required=False)
+    commands = [c for t in later for c in t['commands']]
+    run.check('it starts no release', not [c for c in commands if re.search(r'task\s+release\b', c)], commands)
+    return first + later
+
+
+def dashboard(run):
+    """The coordinator's Scratchpad "Waiting on you": its revision and its HTML, or (None, '')."""
+    session = run.coordinator().get('sessionID')
+    listed = run.cli('query', 'run', 'panel.scratchpad.list', f'sessionID={session}')
+    pads = [s for s in listed.get('scratchpads') or [] if 'waiting on you' in (s.get('title') or '').lower()]
+    if not pads:
+        return None, ''
+    exported = run.cli('action', 'run', 'panel.scratchpad.export', f'sessionID={session}',
+                       f"documentID={pads[0]['documentID']}")
+    path = Path(exported.get('filePath') or '/nonexistent')
+    return exported.get('revision'), path.read_text() if path.is_file() else ''
+
+
+def asked_line(run, word):
+    """The ledger's asked or told line that holds the word."""
+    return next((line for line in run.ledger().splitlines()
+                 if word in line and re.match(r'- \S+ (asked|told)\b', line)), '')
+
+
+def list_line(run):
+    """The ledger's list line, which numbers the items of the last daily list."""
+    return next((line for line in run.ledger().splitlines() if re.match(r'- \S+ list\b', line)), '')
+
+
+def daily_list(run):
+    """The list is due: one dashboard and one message; offers expire, answered lines go, counts rise; numbers work."""
+    question = run.create_task('Pick the export format', status='working')
+    run.ask(question, 'CSV or JSON for the export?', 'Which format should the export use, CSV or JSON? I suggest CSV.')
+    merged = run.create_task('Move links to the new domain', done=True)
+    moving = run.create_task('Roll out the new domain', status='working')
+    run.seed_policy(talking=f"- The coordinator's defaults.\n- Waiting on you list each day at {review_time(-2)}.",
+                    releases='- app: on merge.')
+    stamp = '%Y-%m-%dT%H:%MZ'
+    (run.folder / 'ledger.md').write_text('\n'.join([
+        '# Coordinator ledger',
+        f'- {day(3, stamp)} asked question [Pick the export format]({question.link}): passed its question, CSV or JSON, '
+        'to the user with the suggestion CSV. listed=1',
+        f'- {day(4, stamp)} asked offer screen-sharing-check: offered a task for a check of Screen Sharing on the '
+        'validation Mac (app); create it when the user says yes. listed=3',
+        f'- {day(2, stamp)} asked offer export-docs: offered a task to document the export command in docs/export.md '
+        '(app); create it when the user says yes. listed=1',
+        f'- {day(2, stamp)} asked release-rule app: on merge or in batches?',
+        f'- {day(1, stamp)} followup [Move links to the new domain]({merged.link}): step 3, the rollout; held by '
+        f'[Roll out the new domain]({moving.link}).',
+    ]) + '\n')
+    run.open_coordinator()
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    turns = run.timer_wake()
+    said = run.said(turns)
+    revision, page = dashboard(run)
+    lower = page.lower()
+    run.check('it publishes its Scratchpad "Waiting on you"', revision is not None and page, page[:300])
+    run.check('the dashboard lists the open question and the open offer',
+              'export format' in lower and re.search(r'export command|docs/export|document the export', lower), page[:3000])
+    run.check('the dashboard holds no script', '<script' not in lower, page[:300])
+    run.check('the dashboard shows the follow-up that moves', re.search(r'roll ?out', lower), page[:3000], required=False)
+    run.check('the dashboard names the dropped offer', 'screen sharing' in lower, page[:3000], required=False)
+    ledger = run.ledger()
+    run.check('the offer that was on 3 lists is dropped from the ledger', 'screen-sharing-check' not in ledger, ledger)
+    run.check('the question the policy answered is gone from the ledger', 'release-rule' not in ledger, ledger)
+    run.check('the counts rise: listed=2 on the question and on the open offer',
+              'listed=2' in asked_line(run, question.id) and 'listed=2' in asked_line(run, 'export-docs'), ledger)
+    numbered = list_line(run)
+    run.check('the ledger has a list line that numbers the items', re.search(r'\b1\b', numbered), ledger)
+    run.check('the message links the task whose question waits', question.link in said, said)
+    quiet = [c for t in turns for c in t['commands'] if re.search(r'coordinator\s+wake\b.*--quiet', c)]
+    run.check('a list with items is not a quiet turn', not quiet, quiet)
+    run.check('it starts nothing without the user', created_since(run, before) == [],
+              [t['title'] for t in created_since(run, before)])
+    run.check('nothing is sent to the tasks', not run.messages(question) and not run.messages(moving),
+              [run.messages(question), run.messages(moving)])
+    wake = run.coordinator()['wake']
+    hours = (parse_time(wake['nextWakeAt']) - time.time()) / 3600 if wake.get('nextWakeAt') else None
+    run.check('the next check is the list of the next day', hours is not None and 20 <= hours <= 25, wake)
+
+    # The user asks: the list again, with no count and no new list line.
+    counted = [line for line in run.ledger().splitlines() if 'listed=' in line]
+    asked = run.tell('What waits for me?')
+    again, _ = dashboard(run)
+    run.check('a list that the user asked for changes no count', counted == [line for line in run.ledger().splitlines()
+                                                                           if 'listed=' in line], run.ledger())
+    run.check('a list that the user asked for keeps the list line', list_line(run) == numbered, run.ledger())
+    run.check('it shows the list again in the dashboard', again is not None and revision is not None and again > revision,
+              [revision, again], required=False)
+    run.check('it answers with the question that waits', question.link in run.said(asked), run.said(asked), required=False)
+
+    # The user answers with the number of the offer.
+    number = re.search(r'(\d+)\s+[^;]*?(export-docs|document)', numbered)
+    run.check('the list line names the offer with its number', number, numbered)
+    if number:
+        answered = run.tell(f'{number.group(1)} yes')
+        created = created_since(run, before)
+        run.check('the answer by number creates the offered task',
+                  len(created) == 1 and re.search(r'export', (created[0].get('text') or '').lower()),
+                  [(t['title'], t.get('text', '')[:200]) for t in created])
+        run.check('the offer leaves the ledger', 'export-docs' not in run.ledger(), run.ledger(), required=False)
+        turns += answered
+    return turns + asked
+
+
+def daily_list_quiet(run):
+    """The list is due and nothing waits for the user: the dashboard says so, and the turn is quiet."""
+    task = waits_for_ci(run)
+    run.seed_policy(talking=f"- The coordinator's defaults.\n- Waiting on you list each day at {review_time(-3)}.")
+    run.open_coordinator()
+    end_turn_for_ci(run, task)
+    turns = run.new_turns(wake=True)
+    quiet = [c for t in turns for c in t['commands'] if re.search(r'coordinator\s+wake\b.*--quiet', c)]
+    run.check('with nothing on the list, the turn is quiet', quiet, [c for t in turns for c in t['commands']])
+    run.check('the ledger has a list line', list_line(run), run.ledger())
+    revision, page = dashboard(run)
+    run.check('the dashboard says that nothing waits', revision is not None and 'nothing waits' in page.lower(),
+              page[:500], required=False)
+    run.check('nothing is sent to the task that waits for CI', run.messages(task) == [], run.messages(task))
+    wake = run.coordinator()['wake']
+    hours = (parse_time(wake['nextWakeAt']) - time.time()) / 3600 if wake.get('nextWakeAt') else None
+    run.check('the next check is the list of the next day', hours is not None and 20 <= hours <= 25, wake)
+    return turns
+
+
 def branch_task(run, number, pr_head=None, merge_error='Server Error', project='app'):
     """A task whose pull request is a real pushed branch in the project's checkout.
 
@@ -2294,13 +2472,17 @@ SCENARIOS = {
     'review-ask': review_ask,
     'review-timer': review_timer,
     'review-empty': review_empty,
+    'followup-merge': followup_merge,
+    'daily-list': daily_list,
+    'daily-list-quiet': daily_list_quiet,
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
             'new-task', 'release', 'user-words-busy',
-            'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty')
+            'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',
+            'followup-merge', 'daily-list', 'daily-list-quiet')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):

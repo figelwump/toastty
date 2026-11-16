@@ -37,9 +37,12 @@ so that "yes" takes them all:
    show the draft in one line.
 3. **How you answer (Talking).** Suggest the defaults of your instructions: a
    task for every question and every piece of work, except questions about
-   where the tasks stand; short answers; and only what needs the user. Name
-   the other choices: answer short questions yourself; write more; report
-   every change of a task.
+   where the tasks stand; short answers; only what needs the user; and each
+   day at 09:00, one list of everything that waits for the user, in a short
+   message and in your Scratchpad "Waiting on you", until each item is
+   answered. Name the other choices: answer short questions yourself; write
+   more; report every change of a task; another time for the list, or no
+   list; another form for its Scratchpad.
 4. **How much you check before you bring a ready task (Reviewing).** Suggest
    the default under Review, in one sentence. Name the other choices: only
    that its checks pass; or stricter proof, such as a video for every UI
@@ -55,8 +58,9 @@ so that "yes" takes them all:
      further change, you propose a Merging rule for that kind, and the rule
      starts only after the user's yes to its words.
 
-   Suggest: a review once a day at 17:00, and only proposals. Name the other
-   choices: another time or day; a review only when the user asks.
+   Suggest: a review once a day at 09:00, after the daily list, and only
+   proposals. Name the other choices: another time or day; a review only
+   when the user asks.
 
 If the user's message also holds a request, handle the request first, as the
 turn says. Choose its project, agent, model and effort as New tasks says.
@@ -69,12 +73,12 @@ about: the user's rules, or your suggestion for a part the user did not
 change. Where that is the default of your instructions, write the line
 `- The coordinator's defaults.`, so that you do not ask again. Improving
 never gets that line: write the rule with its time, such as
-`- Review once a day at 17:00. Proposals only.`, or
+`- Review once a day at 09:00. Proposals only.`, or
 `- Review only when I ask.` This one change can add several lines: follow
 Change the policy, with one commit named `Policy: first run`. Then remove the
 `asked first-run` line. When Improving got a time, set your next check as
 `references/improving.md` says under "A time in Improving".
 
 When the user does not answer, do not ask again: the defaults apply, and you
-make a review only when the user asks. Mention the question again only when
-the user asks what waits for them.
+make a review only when the user asks. The question is on your next daily
+list once, under Closes by default; see `references/follow-through.md`.

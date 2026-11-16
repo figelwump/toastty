@@ -330,7 +330,7 @@ struct CoordinatorFolderTests {
         // The app ships every reference file that the instructions name.
         let shipped = CoordinatorFolder.shippedReferences()
         let named = instructions.matches(of: #/`references/([a-z-]+\.md)`/#).map { String($0.output.1) }
-        #expect(Set(named).isSuperset(of: ["merging.md", "first-run.md", "improving.md"]))
+        #expect(Set(named).isSuperset(of: ["merging.md", "first-run.md", "improving.md", "follow-through.md"]))
         #expect(named.allSatisfy { shipped[$0]?.isEmpty == false })
     }
 
