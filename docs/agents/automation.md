@@ -651,7 +651,7 @@ session, where the Claude login is readable.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
-`review-ask`, `review-timer`, `review-empty`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
+`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
 `user-words-busy`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
@@ -693,6 +693,19 @@ not merged under that rule; `review-timer` names a time in Improving a few
 minutes ahead and checks that a wake sets the next check for it and that the
 review then comes; `review-empty` checks that a due review with nothing to
 propose tells the user nothing and still counts as made.
+`followup-merge` gives a ready task a `Remaining after merge` section in its
+description, and checks that the review writes a `followup` line and watches
+the task, and that after the merge the coordinator creates one task for the
+remaining work in the same project, without `--start-work`, and tells the
+user. `daily-list` names a list time in Talking that has just passed and
+seeds the ledger with a question, two offers (one that was on 3 lists), a
+question that the policy already answers, and a follow-up. It checks the
+Scratchpad "Waiting on you", the dropped offer and the answered question, the
+raised `listed=` counts, the `list` line, and the next check a day later;
+then that "what waits for me?" changes no count, and that an answer with an
+item's number creates the offered task. `daily-list-quiet` checks that a due
+list with nothing on it is a quiet turn. Every other scenario seeds Talking
+with "No daily list", so that its checks of the next check stay as they were.
 `--scenarios a,b` selects some, and `--scenarios judgment`
 selects those whose result depends on the coordinator's judgment.
 `--repeat N` runs each scenario N times and `--repeat-judgment N` only the

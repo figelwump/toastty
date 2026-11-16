@@ -96,6 +96,15 @@ do not bypass them to complete a merge.
 
 ## Merge or report
 
+Before you merge, check for work in this task's scope that goes on after the
+merge, such as a rollout or a later step that your answers or the description
+name. It does not block the merge. But Toastty removes the worktree after the
+merge, with its ignored files, such as a plan under `artifacts/`. When such
+work exists, make sure that the description has a `## Remaining after merge`
+section with what remains, its plan and its open questions. If the section is
+missing, add it with `gh pr edit --body-file` and keep the rest of the
+description.
+
 If nothing blocks, run:
 
 ```bash

@@ -1084,6 +1084,49 @@ prompt as your own typing, with a first line from Toastty that names its
 sender. Text that an agent types straight into the coordinator's terminal,
 with `terminal.send-text`, has no such line.
 
+### How the coordinator keeps work moving
+
+Work that you started must not stop without a next step. The coordinator
+makes sure that each piece of work is finished, moves in a task, or waits
+for one answer from you on its daily list. Its rules are in
+`references/follow-through.md` in [its folder](#the-coordinators-folder).
+
+**Work that remains after a merge.** A pull request can merge while its work
+goes on, such as a rollout or a later step. A task's agent names that work
+under the heading `Remaining after merge`, in the pull request description
+and in its last answer. The description keeps the plan, because Toastty
+removes the worktree after the merge, with its ignored files such as
+`artifacts/`. The coordinator watches such a task. After the merge, when no
+open task holds the rest of the work, it creates one in the same project and
+tells you. It does not wait for your yes, because your request covers the
+rest of its work. The new task brings its open questions to you in Needs
+you. A release, a deployment or another production step still needs your
+approval.
+
+**The daily list.** Once a day, at 09:00 by default, the coordinator brings
+one list of everything that waits for you: a short message in its chat, and
+its Scratchpad "Waiting on you" beside the chat. Items that waited longest
+come first. The list marks an item that was on 2 lists or more, or a task in
+which you typed nothing since it began to wait. The groups:
+
+- **Blocks work you started:** a review, a question, a failed merge, merged
+  tasks that wait for a release. Such an item stays on the list until you
+  answer.
+- **Offers:** a task or a rule that the coordinator offered. An offer is on
+  at most 3 lists, then the coordinator drops it and says so.
+- **Closes by default:** a question with a default, such as the first-run
+  question. It is on one list, which names the default.
+- **Moving:** work that it follows after a merge, one line each.
+
+Answer in the chat with the number, such as "2 yes". Ask "what waits for
+me?" for the list at any time. Outside the list, the coordinator tells you
+each thing once. The Talking section of [your policy](#the-policy-file)
+changes the time, turns the list off, or changes what its Scratchpad shows,
+such as `- Waiting on you list at 08:30 on weekdays; group it by project.`
+A [review](#how-the-coordinator-improves-the-work) can propose such a line
+when you overlooked items on the list. Links do not open from a Scratchpad:
+the task links are in the chat message.
+
 ### How the coordinator improves the work
 
 The coordinator sees every task, so it sees what slows the work and where the
@@ -1116,7 +1159,7 @@ section of [your policy](#the-policy-file) names:
 
 ```markdown
 ## Improving
-- Review once a day at 17:00. Proposals only.
+- Review once a day at 09:00. Proposals only.
 ```
 
 With `- Review only when I ask.`, or with no rule, no review runs on a
@@ -1237,6 +1280,7 @@ by asking you:
 ## Talking
 - Answer short questions about code yourself; make a task for the rest.
 - Tell me only what blocks a task.
+- Waiting on you list at 08:30 on weekdays.
 
 ## Reviewing
 - Good proof = a scenario list, each checked through the real UI or CLI;
@@ -1248,7 +1292,7 @@ by asking you:
   up to 3 files. Everything else waits for me.
 
 ## Improving
-- Review once a day at 17:00. Proposals only.
+- Review once a day at 09:00. Proposals only.
 
 ## Unblocking
 - Tell me about permission prompts after 10 minutes.
@@ -1274,12 +1318,13 @@ all the suggestions.
 - **Projects:** which work goes to which project, drafted from the history
   and your open projects. It asks only when that is unclear.
 - **Talking:** whether it answers questions itself or makes a task for each
-  one, how long its answers are, and what it brings to you.
+  one, how long its answers are, what it brings to you, and when its
+  [daily list](#how-the-coordinator-keeps-work-moving) comes.
 - **Reviewing:** how much proof it checks before it brings you a ready task.
 - **Improving:** it explains
   [how it helps the work get faster](#how-the-coordinator-improves-the-work),
-  and asks when its review runs. It suggests once a day at 17:00, with
-  proposals only.
+  and asks when its review runs. It suggests once a day at 09:00, after
+  the daily list, with proposals only.
 
 It writes your answers to the policy in one commit, `Policy: first run`. A
 part where you kept the default gets the line `- The coordinator's
@@ -1447,7 +1492,10 @@ toastty coordinator wake --clear
   digest.
 - **With no time set, no timer runs.** Only a task change that may need the
   coordinator, or an alert, wakes it. `--clear` removes the time the
-  coordinator set.
+  coordinator set. While the
+  [daily list](#how-the-coordinator-keeps-work-moving) is on, the
+  coordinator always has a time set: the next list time, or an earlier
+  deadline.
 
 `toastty coordinator status` shows `wake.nextWakeAt`, the time the
 coordinator set (`null` when it set none), `wake.lastWakeAt`,

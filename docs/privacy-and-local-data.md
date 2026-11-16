@@ -75,7 +75,9 @@ Toastty is designed to run locally on your machine. The app itself does not send
     policy holds your rules for your tasks, and the ledger holds task titles
     and what the coordinator did. `friction.md` holds what the coordinator
     saw slow your work, with task titles, and `decisions.md` holds task IDs,
-    pull request addresses and what you decided. Closing the coordinator's workspace leaves it.
+    pull request addresses and what you decided. The coordinator's daily
+    list is a Scratchpad document, "Waiting on you", with task titles; it is
+    kept in `scratchpad-documents/` as every Scratchpad is. Closing the coordinator's workspace leaves it.
   - `attachments/<message-id>/` holds Toastty's copies of the files you
     attached to a quick entry message for the coordinator. Toastty removes
     a message's copies when you remove the waiting message, and otherwise

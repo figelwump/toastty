@@ -149,6 +149,14 @@ ready when they pass. Readiness does not authorize a merge.
   scope and check again.
 - After later changes, update the pull request's description and the evidence
   for the new commit.
+- **Work that remains after the merge.** When work in this task's scope goes
+  on after the pull request merges, such as a rollout, a later step or a fix
+  that you found, add a section `## Remaining after merge` to the
+  description: what remains, its plan, and the open questions with the
+  answers you suggest. Toastty removes the worktree after the merge, and its
+  ignored files with it: never keep such a plan only in a folder such as
+  `artifacts/`. The coordinator, when one runs, then continues the work in a
+  new task.
 
 In a repository without pull requests, report the verified commit instead.
 
@@ -181,7 +189,9 @@ evidence files yourself, check them, and publish the report with its proof here.
 
 Prepare the complete answer before you change the status. Finish with what you
 found or changed, how you verified it, what remains and who owns it, and the
-task's status. Point to the evidence in this task's Scratchpad.
+task's status. Put work that goes on after a merge under the heading
+`Remaining after merge`, as in the description. Point to the evidence in this
+task's Scratchpad.
 
 - **A question for the user:** run
   `"$TOASTTY_CLI_PATH" task needs-reply --question "<the question in a few words>"`

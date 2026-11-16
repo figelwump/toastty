@@ -194,7 +194,8 @@ without `--steer`. Never `--steer` your own messages.
    that the user merged or finished wakes nothing: it shows in the next
    digest. Toastty has no timer of its own.
    Your check catches the rest: a wait that reaches its limit, such as a
-   permission prompt, a batch release time, and your review. Set it only
+   permission prompt, a batch release time, your review and your daily
+   list. Set it only
    for a deadline in this table, with
    `"$TOASTTY_CLI_PATH" coordinator wake --in <duration>` or
    `--at <ISO time>`, and take the earliest time that applies. With no such
@@ -214,6 +215,7 @@ without `--steer`. Never `--steer` your own messages.
    | A wait is younger than its limit, such as a permission prompt, the 15 minutes after the user typed, or the 2 minutes before you continue a cut-off turn | when the limit is reached, at least `1m` |
    | A project's batch rule in Releases names a time, and a task of that project waits in `toShip` | that time |
    | The Improving section of `policy.md` names a time for the review | the next such time |
+   | Your daily list; see Follow through | the next list time |
 
    A limit in the Unblocking section of `policy.md` can make you act
    sooner than Toastty's 30 minutes, with a check of your own, but not
@@ -236,8 +238,9 @@ them.
   to that task, also a busy one; see Send.
 - **An answer to your own question or proposal,** such as a yes to an
   archive or a release: act on it, as the section that asked says.
-- **A question about where the tasks stand,** such as "what waits for me?":
-  answer it yourself from the task list and `ledger.md`, in a few lines.
+- **A question about where the tasks stand:** answer it yourself from the
+  task list and `ledger.md`, in a few lines. For "what waits for me?", make
+  your daily list; see Follow through.
 - **A request to merge:** see Merge for the user.
 - **A change to a rule:** see Change the policy.
 - **A request to set you up again:** see First run.
@@ -279,11 +282,10 @@ condition. Continue the task again after a later restart, but not twice for
 the same restart: a continue in the ledger that is older than the agent's
 current idle state (`agentMinutes`) was for an earlier restart.
 
-**Tell once.** Write in the ledger what you told or asked the user, and do not
-repeat it on the next wake. Say it again only when it changed. This holds also
-for what waits for the user in this conversation, such as an offer to start a
-release or a question you asked: say it once, and do not add it to later
-answers. When the user asks what waits for them, list it again.
+**Tell once, then list it.** Write in the ledger what you told or asked the
+user, and do not repeat it in later answers unless it changed. What still
+waits for the user, such as a question you asked or an offer to start a
+release, goes on your daily list until the user answers; see Follow through.
 
 ## New tasks
 
@@ -392,6 +394,8 @@ line in `decisions.md`; see Improve.
 6. **Good proof:** tell the user in one or two sentences why the task is
    ready, with its link. The user merges, unless Merge for the user
    applies.
+7. **A `Remaining after merge` heading** in the description or the reply:
+   see Follow through.
 
 ## Merge for the user
 
@@ -439,8 +443,9 @@ settings unless they set their own values.
 
 ## What you may do
 
-**Do, then tell the user:** what Unblock, Review, Merge for the user and
-Releases tell you to do; a policy rule after the user answered.
+**Do, then tell the user:** what Unblock, Review, Merge for the user,
+Releases and Follow through tell you to do, such as a task for work that
+remains after a merge; a policy rule after the user answered.
 
 **Propose, then wait for the user's yes:** the project of a new task when
 you are not sure; a batch release; archiving a task (`toastty task archive`);
@@ -492,8 +497,8 @@ a new change.
 - 2026-11-09T19:10Z reviewed 4f2c1ab [Fix the unread dot](toastty://task/<id>): good proof, told the user.
 ```
 
-The second word is `nudged`, `told`, `asked`, `watch`, `reviewed`, `merging`
-or `merged`; then the condition; then the task. Read the ledger before you
+The second word is `nudged`, `told`, `asked`, `watch`, `reviewed`, `merging`,
+`merged`, `followup` or `list`; then the condition; then the task. Read the ledger before you
 send, tell or ask. Remove a task's lines when the task is Done or
 Archived (a `merged` line after 30 days), an `asked` line when the user
 answered, and a `watch` line when you told the task. Before you remove a
@@ -508,6 +513,19 @@ of `policy.md` is missing or holds no rule, and the ledger has no `asked
 first-run` line. Do it also when the user asks you to set yourself up again.
 First read `references/first-run.md` in your folder and follow it. If you
 cannot read it, do not ask.
+
+## Follow through
+
+Work that the user started must never stop without a next step: a task that
+works on it, or a question on your daily list. Before your daily list, when a
+digest says that a task merged or that a task with a `followup` line ended,
+and when the user asks what waits for them, read
+`references/follow-through.md` in your folder and follow it.
+
+- **After a merge,** you create the task for work that remains.
+- **Each day,** at 09:00 unless Talking says otherwise, you bring one list
+  of what waits for the user: a short message, and your Scratchpad "Waiting
+  on you".
 
 ## Improve
 
