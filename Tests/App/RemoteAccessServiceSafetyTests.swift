@@ -1185,6 +1185,13 @@ struct RemoteAccessServiceSafetyTests {
             "workspace-done-response-work_in_progress.json"))
         #expect(oldResponse == releasedRefusal)
         #expect(try JSONDecoder().decode(ReleasedWorkspaceDoneResponse.self, from: oldResponse).result == .workInProgress)
+        // The new iPhone build ships before this Mac. The v0.9.2 Mac decodes
+        // its request and ignores the key it does not know.
+        let newRequest = try ConversationEventCoding.makeDecoder().decode(
+            ReleasedWorkspaceDoneRequest.self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("workspace-done-request-knows-open-pull-request.json"))
+        )
+        #expect(newRequest.done && newRequest.protocolVersion == RemoteGatewayProtocol.version)
         #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
         #expect(board.items().first { $0.id == .task(taskID) }?.stage.group != .done)
         #expect(try summary(taskSpace).acceptsDoneMark == false)
@@ -4002,6 +4009,13 @@ private final class RemoteBootstrapFixture {
 
 private enum RemoteBootstrapFixtureError: Error {
     case couldNotPublishResumeRecord
+}
+
+/// The done-mark request as the v0.9.2 Mac decodes it.
+private struct ReleasedWorkspaceDoneRequest: Decodable {
+    var protocolVersion: String
+    var workspaceID: UUID
+    var done: Bool
 }
 
 /// The done-mark response as the v0.9.2 iPhone app decodes it: a result
