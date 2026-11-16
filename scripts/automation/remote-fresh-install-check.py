@@ -79,6 +79,9 @@ class Run(qe.Run):
         # The dispatcher stays first on the PATH as `claude`; the profile
         # that points at it goes, with the rest of ~/.toastty.
         shutil.rmtree(self.user_home / '.toastty')
+        # The app makes the coordinator's folder when it starts the
+        # coordinator, and asks the first-launch question only before that.
+        shutil.rmtree(self.folder)
         subprocess.run(['git', 'init', '-q', str(self.user_home)], check=True)
 
     def write_config(self):
