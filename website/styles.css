@@ -562,7 +562,7 @@ a { color: inherit; }
 /* Paused or offscreen: freeze the stage's CSS animations along with its timeline. */
 .stage.paused *, .stage.paused *::before { animation-play-state: paused !important; }
 @media (prefers-reduced-motion: reduce) {
-  .stage *, .stage *::before, .sbdemo * { animation: none !important; transition: none !important; }
+  .stage *, .stage *::before, .sbdemo *, .tshot * { animation: none !important; transition: none !important; }
 }
 
 /* ---------- Toastty Mobile ----------

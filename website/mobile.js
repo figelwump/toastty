@@ -25,11 +25,12 @@
     var timed = Array.prototype.slice.call(stage.querySelectorAll('[data-at],[data-until]'));
     var home = $('s-home'), conv = $('s-conv'), coord = $('s-coord');
     var homeDim = $('home-dim');
+    var lumenNeeds = $('lumen-needs'), lumenY = $('lumen-y'), segY = $('seg-y');
     var rowMigrate = $('row-migrate'), migrateIc = $('migrate-ic'), migrateBadge = $('migrate-badge'), migrateS = $('migrate-s'), migrateAge = $('migrate-age');
     var cstatIc = $('cstat-ic'), cstatT = $('cstat-t'), cstat = cstatT.parentNode;
     var qcard = $('qcard'), qstate = $('qstate'), opt1 = $('opt1'), qstatus = $('qstatus'), qsubmit = $('qsubmit');
     var strip2Spin = $('strip2-spin'), strip2Chev = $('strip2-chev'), strip2T = $('strip2-t');
-    var comp = $('comp'), cph = $('cph'), csend = $('csend'), cstop = $('cstop'), wrow = $('wrow'), wrowT = $('wrow-t');
+    var comp = $('comp'), cph = $('cph'), csend = $('csend'), cstop = $('cstop'), wrow = $('wrow'), wrowT = $('wrow-t'), backb = $('backb');
     var ccomp = $('ccomp'), cfield2 = $('cfield2'), cph2 = $('cph2'), ctyped2 = $('ctyped2'), csend3 = $('csend3'), cstop3 = $('cstop3'), ckbd = $('ckbd');
     var cwrow = $('cwrow'), cwrowT = $('cwrow-t');
     var tabbar = $('tabbar'), tabHome = $('tab-home'), tabCoord = $('tab-coord');
@@ -58,18 +59,21 @@
       tapRow: 2.5, push: [2.75, 3.1],
       tapOpt: 4.3, tapSubmit: 5.4, sending: [5.45, 6.0], sent: [6.0, 6.8], resolved: 6.8,
       strip2: [[7.2, 'working · 1 tool call'], [7.9, 'working · 2 tool calls'], [8.6, 'working · 3 tool calls']],
-      // The Coordinator tab: ask for a task, then answer Toasty's review note with "merge it".
-      tapTab: 8.3, tab: [8.35, 8.55],
-      tapField: 8.9, kbd: [9.0, 9.3], type: [9.4, 10.9], tapSend: 11.2, kbdOut: [11.3, 11.6],
+      // Back to Home, where the tab bar is, then the Coordinator tab: ask for a task, then answer
+      // Toasty's review note with "merge it".
+      tapBack: 7.85, pop: [7.95, 8.3],
+      tapTab: 8.55, tab: [8.6, 8.8],
+      tapField: 9.15, kbd: [9.25, 9.55], type: [9.6, 11.0], tapSend: 11.3, kbdOut: [11.4, 11.7],
       tapField2: 15.2, kbd2: [15.3, 15.6], type2: [15.7, 16.1], tapSend2: 16.4, kbdOut2: [16.5, 16.8],
       fadeOut: 20.2
     };
     // Toasty works between a message and its answer.
-    var COORD_TURNS = [[11.35, 12.4], [13.6, 14.0], [16.55, 17.5]];
+    var COORD_TURNS = [[11.45, 12.5], [13.6, 14.0], [16.55, 17.5]];
     var TAPS = [
       [T.tapRow, function () { return center(rowMigrate); }],
       [T.tapOpt, function () { var b = offsetIn(opt1); return { x: b.x + 9, y: b.y + 13 }; }],
       [T.tapSubmit, function () { return center(qsubmit); }],
+      [T.tapBack, function () { return center(backb); }],
       [T.tapTab, function () { return center(tabCoord); }],
       [T.tapField, function () { var b = offsetIn(cfield2); return { x: b.x + 120, y: b.y + b.h / 2 }; }],
       [T.tapSend, function () { return center(csend3); }],
@@ -85,10 +89,10 @@
         el.classList.toggle('show', t >= a && t < u);
       });
 
-      // Screen transitions: iOS push slides the conversation in from the right and nudges Home left.
-      // The Coordinator tab replaces both without a slide.
-      var cx = seg(T.push[0], T.push[1]);
-      conv.style.visibility = cx > 0.001 && t < T.tab[1] ? 'visible' : 'hidden';
+      // Screen transitions: iOS push slides the conversation in from the right and nudges Home left;
+      // Back reverses it. The Coordinator tab replaces Home without a slide.
+      var cx = seg(T.push[0], T.push[1]) - seg(T.pop[0], T.pop[1]);
+      conv.style.visibility = cx > 0.001 ? 'visible' : 'hidden';
       conv.style.transform = 'translateX(' + (SW * (1 - cx)) + 'px)';
       home.style.transform = 'translateX(' + (-0.3 * SW * cx) + 'px)';
       homeDim.style.opacity = 0.4 * cx;
@@ -99,8 +103,14 @@
       tabHome.classList.toggle('on', !onCoord);
       tabCoord.classList.toggle('on', onCoord);
 
-      // Home: the migration session needs approval until the question is answered.
+      // Home: the migration session needs approval until the question is answered. Once its agent
+      // works again it leaves the Needs you list, which Home shows.
       var mstate = t < T.resolved ? 'approval' : 'working';
+      var listed = mstate === 'approval';
+      rowMigrate.style.display = listed ? '' : 'none';
+      lumenNeeds.style.display = listed ? '' : 'none';
+      lumenY.style.display = listed ? '' : 'none';
+      setText(segY, listed ? '2' : '1');
       rowMigrate.className = 'mrow ' + mstate;
       migrateBadge.style.display = mstate === 'approval' ? '' : 'none';
       setIcon(migrateIc, mstate === 'approval' ? '<i class="mk dot appr"></i>' : '<span class="spin"></span>');
@@ -161,10 +171,11 @@
       cstop3.classList.toggle('show', coordWorking);
       var k = Math.max(seg(T.kbd[0], T.kbd[1]) - seg(T.kbdOut[0], T.kbdOut[1]), seg(T.kbd2[0], T.kbd2[1]) - seg(T.kbdOut2[0], T.kbdOut2[1]));
       ckbd.style.height = (248 * k) + 'px';
-      // The composers clear the floating tab bar until the keyboard, which covers it, takes over.
-      comp.style.paddingBottom = '108px';
+      // A session screen hides the tab bar (ToasttyConversationScreen.swift); the coordinator's chat
+      // keeps it, and its composer clears it until the keyboard, which covers it, takes over.
+      comp.style.paddingBottom = '42px';
       ccomp.style.paddingBottom = (12 + 96 * (1 - k)) + 'px';
-      tabbar.style.opacity = 1 - k;
+      tabbar.style.opacity = (1 - cx) * (1 - k);
 
       // Touch indicator
       touch.style.opacity = 0;

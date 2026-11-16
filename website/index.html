@@ -574,10 +574,10 @@
                   <span class="plusb">+</span>
                   <span class="gearb"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
                 </div>
-                <div class="seg"><span>All</span><span class="on segn">Needs you<b class="segy">2</b><b class="segdot">·</b><b class="segb">2</b></span></div>
+                <div class="seg"><span>All</span><span class="on segn">Needs you<b class="segy" id="seg-y">2</b><b class="segdot">·</b><b class="segb">2</b></span></div>
                 <div class="mlist">
-                  <div class="wsh"><div><b>lumen</b></div><span class="phc"><span class="y"><i></i>1</span><span class="bl"><i></i>2</span></span></div>
-                  <div class="pbkt y">NEEDS YOU 1</div>
+                  <div class="wsh"><div><b>lumen</b></div><span class="phc"><span class="y" id="lumen-y"><i></i>1</span><span class="bl"><i></i>2</span></span></div>
+                  <div class="pbkt y" id="lumen-needs">NEEDS YOU 1</div>
                   <div class="mrow approval" id="row-migrate"><span class="rail" id="migrate-ic"><i class="mk dot appr"></i></span><div class="rt"><b id="migrate-t">Migrate orders table</b><em class="sbadge appr" id="migrate-badge">approval</em><span class="age" id="migrate-age">1m</span></div><div class="rs" id="migrate-s">Needs approval: run migration</div></div>
                   <div class="pbkt bl">READY TO REVIEW 2</div>
                   <div class="mrow subr rev"><span class="rail"><i class="pmark rev"></i></span><div class="rt"><b>checkout-redesign</b><em class="achip pr">PR #128 <i>↗</i></em><span class="arrow">→</span></div></div>
@@ -640,8 +640,8 @@
                 <div class="chead"><b><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg>Coordinator <span>⌄</span></b><small>· claude</small></div>
                 <div class="ctx">
                   <div class="tr at always"><span class="tlink">search-filters</span> merged into main. Nothing else waits for you.</div>
-                  <div class="tr ub" data-at="11.3"><span>Add a CSV export to the orders page, like the mockup in lumen.</span></div>
-                  <div class="tr at" data-at="12.4">I made <span class="tlink">csv-export</span> in lumen with Codex, at high effort. I'll tell you when it's ready.</div>
+                  <div class="tr ub" data-at="11.4"><span>Add a CSV export to the orders page, like the mockup in lumen.</span></div>
+                  <div class="tr at" data-at="12.5">I made <span class="tlink">csv-export</span> in lumen with Codex, at high effort. I'll tell you when it's ready.</div>
                   <div class="tr cnew" data-at="13.6" data-until="16.5">New</div>
                   <div class="tr cdig" data-at="13.6">Toastty · 1 update · 4:12 PM ›</div>
                   <div class="tr at" data-at="14.0"><span class="tlink">checkout-redesign</span> is ready for your review: the report shows the summary card above payment at 390 px, and all 4 checks passed. PR #128.</div>
@@ -689,7 +689,7 @@
     <button type="button" class="pp" id="mpp" aria-label="Pause"><svg viewBox="0 0 24 24" id="mpp-ic"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
     <button type="button" class="beat" data-t="0" data-seek="1.2" aria-label="Step 1: What needs you, at a glance"><span class="bar"><i></i></span><span class="n">01</span><span class="l">What needs you, at a glance</span></button>
     <button type="button" class="beat" data-t="2.5" data-seek="3.3" aria-label="Step 2: Answer the question your agent asked"><span class="bar"><i></i></span><span class="n">02</span><span class="l">Answer the question your agent asked</span></button>
-    <button type="button" class="beat" data-t="8.0" data-seek="12.8" aria-label="Step 3: Hand the coordinator the next task"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Hand the coordinator the next task</span></button>
+    <button type="button" class="beat" data-t="7.8" data-seek="12.9" aria-label="Step 3: Hand the coordinator the next task"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Hand the coordinator the next task</span></button>
     <button type="button" class="beat" data-t="13.6" data-seek="18.0" aria-label="Step 4: Say merge it when it's ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Say "merge it" when it's ready</span></button>
   </div>
 </section>
