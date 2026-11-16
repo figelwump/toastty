@@ -2,6 +2,7 @@ import AppKit
 import ConversationUI
 import CoreState
 import PhotosUI
+import RemoteProtocol
 import SwiftUI
 
 /// While the coordinator's turn runs: what Send does with the text.

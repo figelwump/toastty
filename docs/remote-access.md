@@ -854,6 +854,19 @@ while you work in the other tabs.
   time and opening of the coordinator's message it answers; a tap shows that
   message. The files stay on the Mac, so the phone shows their names, not
   thumbnails. Other sessions' chats show every message as it was typed.
+- **Copy and Reply.** As in the Mac's coordinator chat, Copy is under your
+  messages and the coordinator's, and Reply is under the coordinator's. A
+  phone has no pointer, so both always show. Copy shows a check mark for a
+  moment. A long message has them once, under its end, and Copy takes the
+  whole message. Reply shows the message it answers above the field, with
+  ✕ to remove it, and the field takes the keyboard; a second Reply replaces
+  the first. Send sends a reply in the Mac's format (see "Reply" in
+  [The coordinator's chat](tasks.md#the-coordinators-chat)), with your
+  files, and steers or queues as any message does. The bubble shows your
+  text under the quote, on the phone and on the Mac, also while it waits.
+  **Edit** on a waiting reply brings it back as a reply. A message that
+  starts with Toastty's line for another sender cannot become a reply.
+  Digests, sender cards and other sessions' chats have neither button.
 - **Steer and Stop.** While the coordinator works, Send steers into its turn
   by default, as the Mac chat's Send does, and **Queue** is the other choice
   (see [Queue, steer, and stop](#queue-steer-and-stop-while-the-agent-works)).
@@ -863,8 +876,8 @@ while you work in the other tabs.
 - **Not on the phone yet.** The coordinator's own queue (the Mac chat's
   Queued and Paused rows with Edit, Remove, Steer now and Send next), quiet
   turns folded under their digest, thumbnails of attached images, the line
-  above messages you have not read, Reply on the coordinator's messages, and
-  `@` mentions in the composer stay on the Mac.
+  above messages you have not read, and `@` mentions in the composer stay on
+  the Mac.
 - **The tab's icon is Toasty's outline.** While another tab shows, its badge
   says what the coordinator waits for, from its session's status, as the
   Mac's coordinator row marks it: **New** for output you have not read, **!**

@@ -513,7 +513,7 @@ final class CoordinatorChatModel: ObservableObject {
                 sentCaption: pending.steered
                     ? ToasttyUserMessageCaption.text(origin: .local, deliveryMode: .steer)
                     : nil,
-                quote: Self.quote(of: pending.text),
+                quote: CoordinatorChatTranscript.quote(of: pending.text),
                 attachments: parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
             )
         }
@@ -531,26 +531,28 @@ final class CoordinatorChatModel: ObservableObject {
                     isPaused: true,
                     canSteer: turnTakesSteer && entry.canBeSteered
                 )),
-                quote: Self.quote(of: entry.text)
+                quote: CoordinatorChatTranscript.quote(of: entry.text)
             ))
         }
         // A phone's queue is in the conversation. Its messages go first:
         // Toastty types them as the prompt opens, before the controller
-        // looks. The chat cannot change them.
+        // looks. The chat cannot change them. A phone's reply shows with
+        // its quote, as the Mac's own does.
         var position = 0
         let control = summary?.inputControl
         for message in control?.queuedMessages ?? [] {
             position += 1
             items.append(ToasttySendPresentationItem(
                 clientRequestID: message.clientRequestID,
-                text: message.text,
+                text: CoordinatorMessageHeader.displayText(of: message.text),
                 content: .queued(ToasttyQueuedSendPresentation(
                     position: position,
                     attachmentCount: message.attachmentCount,
                     isPaused: control?.isQueuePaused ?? false,
                     canSteer: false,
                     canChange: false
-                ))
+                )),
+                quote: CoordinatorChatTranscript.quote(of: message.text)
             ))
         }
         if control?.isQueuePaused == true { position = 0 }
@@ -566,17 +568,10 @@ final class CoordinatorChatModel: ObservableObject {
                     canSteer: turnTakesSteer && entry.canBeSteered,
                     waitingCaption: Self.waitingCaption(position: position, hold: controller.hold)
                 )),
-                quote: Self.quote(of: entry.text)
+                quote: CoordinatorChatTranscript.quote(of: entry.text)
             ))
         }
         return items
-    }
-
-    /// The quote that a reply's bubble shows, from the text as Toastty
-    /// types it. A waiting message's quote does not open its message.
-    static func quote(of text: String) -> ToasttyMessageQuote? {
-        guard case .reply(let quote, let time, _, _) = CoordinatorMessageHeader.kind(of: text) else { return nil }
-        return ToasttyMessageQuote(text: quote, timeText: time)
     }
 
     /// The files that a waiting message names, as Toastty wrote them.
@@ -849,32 +844,17 @@ final class CoordinatorChatModel: ObservableObject {
         guard isSendingFiles == false else { return }
         // The field holds another sender's message, taken back with Edit.
         // As a reply it would read as the user's.
-        guard Self.hasOtherHeader(draft) == false else {
+        guard CoordinatorMessageHeader.hasOtherHeader(draft) == false else {
             transientNotice = .failure(Self.otherHeaderReplyRefusal)
             return
         }
-        replyTarget = CoordinatorReplyTarget(
-            text: request.text,
-            // As the reply's first line writes it, so a waiting reply that
-            // comes back with Edit is the same reply.
-            time: CoordinatorMessageHeader.replyTime(request.timestamp.formatted(date: .omitted, time: .shortened))
-        )
+        replyTarget = CoordinatorReplyTarget(request)
         requestComposerFocus()
     }
 
     static let otherHeaderReplyRefusal =
         "The message you are writing starts with Toastty's line for another sender, so it cannot be a reply. "
             + "Send or clear it first."
-
-    /// The text starts with Toastty's line for a digest, another sender or
-    /// the quick entry panel. A reply puts its own line first, which would
-    /// change whose message it is.
-    static func hasOtherHeader(_ text: String) -> Bool {
-        switch CoordinatorMessageHeader.kind(of: text) {
-        case .digest, .fromSender, .quickEntry: true
-        case .reply, .plain: false
-        }
-    }
 
     /// The composer's message answers no message anymore.
     func cancelReply() {
@@ -923,7 +903,7 @@ final class CoordinatorChatModel: ObservableObject {
                 )
                 break
             }
-            if replyTarget != nil, Self.hasOtherHeader(entry.text) {
+            if replyTarget != nil, CoordinatorMessageHeader.hasOtherHeader(entry.text) {
                 transientNotice = .failure(
                     "This message starts with Toastty's line for another sender, and the message you are writing "
                         + "is a reply. Remove the reply first."
