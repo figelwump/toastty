@@ -25,6 +25,12 @@ panel. Write the task, attach what helps, and press `Cmd+Return` or Create
 Task. Toastty saves the task at once and shows "Task created".
 Focus goes back to the app you were in.
 
+The key works in every app, so other apps and Toastty's own terminals no
+longer get it. Toastty asks first: the What's new sheet at the first launch
+has **Use ⌥⇧T in every app**, on by default. Until you answer, and after you
+clear it, **File ▸ New Task…** opens the panel. A `shortcut` in
+[`tasks.toml`](#toasttytaskstoml) wins over that answer.
+
 While [the coordinator](#the-coordinator) exists, the same panel sends your
 text to it, and the coordinator makes the task; see
 [Quick entry with the coordinator](#quick-entry-with-the-coordinator). The
@@ -547,9 +553,10 @@ name in its first answer. It runs in its own workspace, named **Coordinator**, w
 [What the coordinator does](#what-the-coordinator-does), and your rules for
 it are in [the policy file](#the-policy-file).
 
-- **At a first launch**, when no coordinator was ever opened, Toastty asks
-  once whether to start it. **Start Coordinator** does what Open Coordinator
-  does. **Not Now** is saved, and Toastty does not ask again. The question
+- **At a first launch**, when no coordinator was ever opened, Toastty shows
+  the What's new sheet once. It names tasks, quick entry and the coordinator,
+  and asks whether to start the coordinator. **Start Coordinator** does what
+  Open Coordinator does. **Not Now** is saved, and Toastty does not ask again. The question
   shows over the window that has the keyboard, and the rest of the app stays
   in use. An automation run asks nothing.
 - **Open Coordinator**, in the **Agent** menu and the command palette, creates
@@ -2197,6 +2204,9 @@ the coordinator, so that Codex reads all of its instructions (see
 [quick_entry]
 shortcut = "opt+shift+t"   # the default; "none" turns it off
 ```
+
+A `shortcut` written here wins over the answer to **Use ⌥⇧T in every app** in
+the What's new sheet.
 
 A shortcut joins modifiers and one key with `+`. Modifiers are `cmd`,
 `ctrl`, `opt` (or `alt`) and `shift`. The key is a letter, a digit,

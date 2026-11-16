@@ -65,6 +65,40 @@ struct QuickEntryPickerTests {
         #expect(choices.value.count == 1, "Return with no match chooses nothing")
     }
 
+    /// A task takes its workspace's folder, so the list shows it and marks
+    /// one that is not in a git repository, without refusing it.
+    @Test func workspaceRowsShowTheFolderAndMarkOneOutsideARepository() {
+        let ids = (0..<3).map { _ in UUID() }
+        let options = [
+            QuickEntryModel.Option(id: ids[0].uuidString, title: "lumen", folder: "~/code/lumen", isInGitRepository: true),
+            QuickEntryModel.Option(id: ids[1].uuidString, title: "Workspace 1", folder: "~", isInGitRepository: false),
+            QuickEntryModel.Option(id: ids[2].uuidString, title: "scratch"),
+        ]
+        let picker = QuickEntryPicker(workspaces: options, current: ids[0])
+        #expect(picker.rows.map(\.detail) == ["~/code/lumen", "~", QuickEntryWorkspaceFolders.noFolderYet])
+        #expect(picker.rows.map(\.warning) == [nil, QuickEntryWorkspaceFolders.notAGitRepository, nil])
+        #expect(picker.highlightedWarningHint == nil)
+        picker.move(1)
+        #expect(picker.highlightedWarningHint == QuickEntryWorkspaceFolders.notAGitRepositoryHint)
+
+        // The folder check ends while the user types: the search and the
+        // highlight stay.
+        picker.query = "code"
+        #expect(picker.rows.map(\.title) == ["lumen"], "The search matches the folder")
+        var checked = options
+        checked[2] = QuickEntryModel.Option(id: ids[2].uuidString, title: "scratch", folder: "~/code/scratch", isInGitRepository: false)
+        picker.updateWorkspaces(checked)
+        #expect(picker.query == "code")
+        #expect(picker.rows.map(\.title) == ["lumen", "scratch"])
+        #expect(picker.highlightedRow?.title == "lumen")
+
+        let choices = Box<[QuickEntryPicker.Choice]>([])
+        picker.onChoose = { choices.value.append($0) }
+        picker.move(1)
+        picker.submit()
+        #expect(choices.value == [.workspace(ids[2])], "A workspace outside a repository can still be chosen")
+    }
+
     @Test func arrowsMoveTheHighlightAndStopAtTheEnds() {
         let options = ["a", "b"].map { QuickEntryModel.Option(id: UUID().uuidString, title: $0) }
         let picker = QuickEntryPicker(workspaces: options, current: nil)

@@ -75,6 +75,11 @@ final class QuickEntryPicker: ObservableObject {
         var detail: String?
         /// The detail is a shortcut, drawn as key caps.
         var detailIsShortcut = false
+        /// The detail is a folder, shortened in the middle when long.
+        var detailIsPath = false
+        /// A warning after the detail, such as a folder that is not in a git
+        /// repository.
+        var warning: String?
         var action: Action
         /// What the search matches: the title and anything it leaves out,
         /// such as the profile ID.
@@ -106,7 +111,7 @@ final class QuickEntryPicker: ObservableObject {
     /// The panel sends to the coordinator, so the pill can stay unset:
     /// the list starts with a row that clears it.
     private let offersCoordinatorChoice: Bool
-    private let workspaces: [QuickEntryModel.Option]
+    private var workspaces: [QuickEntryModel.Option]
     private(set) var profiles: [QuickEntryAgentProfile]
     private let frequent: [QuickEntryPreset]
     /// The preset rows: the pinned preset under "Current" when it is not a
@@ -154,6 +159,24 @@ final class QuickEntryPicker: ObservableObject {
 
     var highlightedRow: Row? {
         rows.first { $0.id == highlightedID }
+    }
+
+    /// Under the list while the highlighted workspace has no repository.
+    var highlightedWarningHint: String? {
+        guard kind == .workspace, highlightedRow?.warning != nil else { return nil }
+        return QuickEntryWorkspaceFolders.notAGitRepositoryHint
+    }
+
+    /// Folder checks add each workspace's mark without changing what the
+    /// user has typed or highlighted.
+    func updateWorkspaces(_ workspaces: [QuickEntryModel.Option]) {
+        guard kind == .workspace, workspaces != self.workspaces else { return }
+        self.workspaces = workspaces
+        let previous = highlightedID
+        rebuildRows(highlightingCurrent: false)
+        if let previous, rows.contains(where: { $0.id == previous }) {
+            highlightedID = previous
+        }
     }
 
     /// Catalog results add choices without changing what the user has typed
@@ -386,8 +409,12 @@ final class QuickEntryPicker: ObservableObject {
                 id: "workspace:\(option.id)",
                 section: "Open workspaces",
                 title: option.title,
+                detail: option.folder ?? QuickEntryWorkspaceFolders.noFolderYet,
+                detailIsPath: option.folder != nil,
+                warning: option.isInGitRepository == false ? QuickEntryWorkspaceFolders.notAGitRepository : nil,
                 action: .workspace(id),
-                searchText: option.title
+                // The folder too, so "code" or a repository's name finds it.
+                searchText: [option.title, option.folder].compactMap { $0 }.joined(separator: " ")
             )
         }
         return ranked(open, query: query)

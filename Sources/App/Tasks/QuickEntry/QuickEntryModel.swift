@@ -43,6 +43,11 @@ final class QuickEntryModel: ObservableObject {
     struct Option: Identifiable, Equatable {
         let id: String
         let title: String
+        /// The folder a task here would use, with the home folder as ~; nil
+        /// when the workspace has none yet.
+        var folder: String? = nil
+        /// Whether that folder is in a git repository; nil until checked.
+        var isInGitRepository: Bool? = nil
     }
 
     @Published var text = ""

@@ -185,6 +185,31 @@
     padding: 2px 6px;
   }
 
+  ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+  ol.steps li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 9px 27px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--body);
+  }
+  ol.steps li::before {
+    content: counter(step);
+    position: absolute; left: 0; top: 0;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center;
+  }
+  ol.steps li b { color: var(--text); font-weight: 600; }
+  .steps-coordinator {
+    border-top: 1px solid var(--border-soft);
+    padding-top: 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--body);
+  }
+
   footer.note {
     margin-top: 4px;
     padding-top: 16px;
@@ -206,7 +231,7 @@
       <h1>Get Started with Toastty</h1>
     </div>
     <nav class="pagenav">
-      <a href="#onboarding">Onboarding</a><span>·</span><a href="#manual-setup">Manual setup</a><span>·</span><a href="#shortcuts">Shortcuts</a>
+      <a href="#onboarding">Onboarding</a><span>·</span><a href="#tasks">Tasks</a><span>·</span><a href="#manual-setup">Manual setup</a><span>·</span><a href="#shortcuts">Shortcuts</a>
     </nav>
 
     <section id="onboarding">
@@ -229,6 +254,20 @@
 "$TOASTTY_CLI_PATH" setup guide
 
 Read the guide, narrate each step, dry-run every setup installer first (pass --dry-run), show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.</pre>
+    </section>
+
+    <section id="tasks">
+      <h2>Your first task</h2>
+      <p class="lede" style="margin-bottom:10px">A task is work you hand to an agent. It runs in its own git worktree and ends in a pull request that you review.</p>
+
+      <div class="setup" style="margin-top:0">
+        <ol class="steps">
+          <li>Open a workspace in a <b>git repository</b>. For pull requests, the repository needs a GitHub remote, and <span style="font-family:var(--mono);font-size:11px">gh</span> must be signed in.</li>
+          <li>Press <kbd>⌥⇧T</kbd> from any app, or choose <b>File ▸ New Task…</b>, write what you want, and press <kbd>⌘↩</kbd>.</li>
+          <li>When the task shows in <b>Needs you</b>, review its pull request, then press <b>Merge</b>. <kbd>⇧⌘T</kbd> shows all tasks.</li>
+        </ol>
+        <div class="steps-coordinator">Want one agent to follow all your tasks? The coordinator asks you a few questions first, then runs by itself. <a class="actionlink" href="toastty://action/open-coordinator" data-action="open-coordinator">Open Coordinator →</a></div>
+      </div>
     </section>
 
     <section id="manual-setup">
@@ -278,6 +317,8 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
     <section id="shortcuts">
       <h2>Keyboard shortcuts</h2>
       <table>
+        <tr><td>Add a task from any app (default key)</td><td class="keys"><kbd>⌥⇧T</kbd></td></tr>
+        <tr><td>Show or hide Tasks</td><td class="keys"><kbd>⇧⌘T</kbd></td></tr>
         <tr><td>Show or hide the sidebar</td><td class="keys"><kbd>⌘B</kbd></td></tr>
         <tr><td>Show or hide this right panel</td><td class="keys"><kbd>⇧⌘B</kbd></td></tr>
         <tr><td>Create a new workspace</td><td class="keys"><kbd>⇧⌘N</kbd></td></tr>

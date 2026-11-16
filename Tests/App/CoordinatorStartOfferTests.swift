@@ -57,6 +57,11 @@ struct CoordinatorStartOfferTests {
         let fixture: CoordinatorControllerTests.Fixture
         let sheet = Sheet()
         let offer: CoordinatorStartOffer
+        /// Quick entry, with its key tied to the question as the app ties
+        /// it.
+        let quickEntry: QuickEntryController
+        let defaults: UserDefaults?
+        private(set) var shortcutMessages: [String] = []
         private let failureLog = FailureLog()
         /// The titles of the failures that the offer showed.
         var failures: [String] { failureLog.titles }
@@ -70,15 +75,36 @@ struct CoordinatorStartOfferTests {
             self.fixture = fixture
             let sheet = sheet
             let failureLog = failureLog
+            // A new object each launch, as a new process has.
+            let defaults = try defaultsSuite.map { try #require(UserDefaults(suiteName: $0)) }
+            self.defaults = defaults
             offer = CoordinatorStartOffer(
                 controller: fixture.controller,
                 store: fixture.store,
-                // A new object each launch, as a new process has.
-                defaults: try defaultsSuite.map { try #require(UserDefaults(suiteName: $0)) },
+                defaults: defaults,
                 coordinatorDirectoryURL: fixture.directory,
                 present: { windowID, answer in sheet.present(windowID: windowID, answer: answer) },
                 presentFailure: { title, _ in failureLog.titles.append(title) }
             )
+            quickEntry = QuickEntryController(
+                store: fixture.store,
+                agentProfiles: { [] },
+                create: { _ in throw TaskError("Not used") },
+                configLoader: { .empty },
+                registersGlobalHotKey: false
+            )
+            QuickEntryShortcutAnswer.connect(quickEntry, to: offer, defaults: defaults) { [weak self] message in
+                self?.shortcutMessages.append(message)
+            }
+            // As at launch.
+            quickEntry.reloadShortcut()
+        }
+
+        /// The sheet saves the state of "Use ⌥⇧T in every app" before it
+        /// answers.
+        func choose(_ answer: CoordinatorStartOffer.Answer, allowingTheKey allowed: Bool) {
+            QuickEntryShortcutAnswer.save(allowed, in: defaults)
+            sheet.choose(answer)
         }
 
         var windowID: UUID {
@@ -261,11 +287,84 @@ struct CoordinatorStartOfferTests {
         #expect(relaunch.sheet.shownOverWindowIDs.isEmpty)
     }
 
+    // MARK: - The quick entry key
+
+    /// Toastty takes ⌥⇧T from every app only after the user allowed it in
+    /// the sheet.
+    @Test func theQuickEntryKeyWaitsForTheAnswerAndFollowsIt() throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        #expect(launch.quickEntry.shortcut == nil, "No key while the question waits")
+        try launch.windowBecameKey()
+        // A window closed under the question leaves it waiting.
+        launch.sheet.closeWithoutAnAnswer()
+        #expect(launch.quickEntry.shortcut == nil)
+
+        try launch.windowBecameKey()
+        launch.choose(.notNow, allowingTheKey: false)
+        #expect(launch.quickEntry.shortcut == nil)
+        let relaunch = try Launch(fixture, defaultsSuite: suite)
+        #expect(relaunch.quickEntry.shortcut == nil, "The no is saved")
+        #expect(relaunch.shortcutMessages.isEmpty)
+    }
+
+    @Test func allowingTheKeyRegistersItAtOnceAndAtTheNextLaunch() throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        try launch.windowBecameKey()
+        launch.choose(.notNow, allowingTheKey: true)
+        #expect(launch.quickEntry.shortcut == .default)
+        #expect(try Launch(fixture, defaultsSuite: suite).quickEntry.shortcut == .default)
+    }
+
+    /// With a key written in tasks.toml the sheet asks nothing about the
+    /// key. If the file loses that key while the sheet shows, the answer
+    /// still ends the wait: the key is read after the answer counts.
+    @Test func anAnswerWithNoKeyChoiceEndsTheWait() throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        try launch.windowBecameKey()
+        launch.sheet.choose(.notNow)
+        #expect(launch.quickEntry.shortcut == .default)
+    }
+
+    @Test func aUserWhoWillNotSeeTheQuestionKeepsTheKey() async throws {
+        // A user who answered the earlier coordinator question.
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        try #require(UserDefaults(suiteName: suite)).set(true, forKey: CoordinatorStartOffer.answeredKey)
+        #expect(try Launch(fixture, defaultsSuite: suite).quickEntry.shortcut == .default)
+        // An automation run, which never asks.
+        #expect(try Launch(fixture, defaultsSuite: nil).quickEntry.shortcut == .default)
+
+        // A coordinator opened another way while the question shows.
+        let otherSuite = Self.suite()
+        defer { Self.removeSuite(otherSuite) }
+        let other = try CoordinatorControllerTests.Fixture()
+        let launch = try Launch(other, defaultsSuite: otherSuite)
+        try launch.windowBecameKey()
+        #expect(launch.quickEntry.shortcut == nil)
+        try await other.controller.open()
+        #expect(launch.offer.isShowing == false)
+        #expect(launch.quickEntry.shortcut == .default)
+    }
+
     // MARK: - The words
 
-    @Test func theQuestionSaysWhatTheCoordinatorDoesAndWhereToStartItLater() {
-        #expect(CoordinatorStartOffer.informativeText.contains("follows your tasks"))
-        #expect(CoordinatorStartOffer.informativeText.contains("Open Coordinator in the Agent menu or the command palette"))
-        #expect(CoordinatorStartOffer.informativeText.contains(ToasttyCommandMenus.openCoordinatorTitle))
+    @Test func theSheetNamesTasksQuickEntryAndWhatTheCoordinatorDoes() {
+        typealias Words = WhatsNewSheet.Words
+        #expect(Words.tasks.contains("git worktree"))
+        #expect(Words.useEverywhere(QuickEntryShortcut.default.symbolLabel) == "Use ⌥⇧T in every app")
+        #expect(Words.coordinator.contains("follows your tasks"))
+        #expect(Words.coordinator.contains("asks you a few questions"))
+        #expect(Words.coordinator.contains("run by itself"))
+        #expect(Words.startLater.contains(ToasttyCommandMenus.openCoordinatorTitle))
     }
 }

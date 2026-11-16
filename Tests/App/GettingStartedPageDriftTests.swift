@@ -1,4 +1,5 @@
 @testable import ToasttyApp
+import CoreState
 import Foundation
 import XCTest
 
@@ -22,6 +23,15 @@ final class GettingStartedPageDriftTests: XCTestCase {
         XCTAssertTrue(pageSource.contains(GettingStartedContent.shellIntegrationManualRowBody))
         XCTAssertTrue(pageSource.contains(GettingStartedContent.shellIntegrationRestartNotice))
         XCTAssertTrue(pageSource.contains("toastty://action/open-skills-management"))
+        // Each action link names an action the app performs.
+        for action in ["open-skills-management", "open-agent-profiles", "open-shortcut-reference", "open-coordinator"] {
+            XCTAssertNotNil(GettingStartedPanelNativeAction(rawValue: action), action)
+        }
+        XCTAssertTrue(pageSource.contains("toastty://action/open-coordinator"))
+        // The first task, with the keys the app uses.
+        XCTAssertTrue(pageSource.contains("git repository"))
+        XCTAssertTrue(pageSource.contains("<kbd>\(QuickEntryShortcut.default.symbolLabel)</kbd>"))
+        XCTAssertTrue(pageSource.contains("<kbd>\(ToasttyKeyboardShortcuts.toggleTasksView.symbolLabel)</kbd>"))
         XCTAssertTrue(pageSource.contains("~/.toastty/skills"))
         XCTAssertFalse(pageSource.contains("setup print-skill"))
         XCTAssertFalse(pageSource.contains("setup install-skill"))
@@ -30,7 +40,7 @@ final class GettingStartedPageDriftTests: XCTestCase {
     func testPageHasRequiredAnchorsAndSelfContainedContentPolicy() throws {
         let pageSource = try pageSource()
 
-        for anchorID in ["onboarding", "manual-setup", "codex-hooks", "shortcuts"] {
+        for anchorID in ["onboarding", "tasks", "manual-setup", "codex-hooks", "shortcuts"] {
             XCTAssertTrue(pageSource.contains("id=\"\(anchorID)\""), "Page is missing #\(anchorID)")
         }
 

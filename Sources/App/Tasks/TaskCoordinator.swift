@@ -1985,17 +1985,25 @@ final class TaskCoordinator {
     /// The first terminal, in tab order, whose directory is known and still
     /// exists. This does not follow focus, so the answer stays the same.
     static func firstTerminalDirectory(in workspace: WorkspaceState, fileManager: FileManager = .default) -> String? {
-        for tab in workspace.orderedTabs {
-            for slot in tab.layoutTree.allSlotInfos {
-                guard case .terminal(let terminal) = tab.panels[slot.panelID],
-                      let directory = terminal.agentLaunchWorkingDirectory else { continue }
-                var isDirectory: ObjCBool = false
-                if fileManager.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue {
-                    return directory
-                }
+        firstExistingDirectory(terminalDirectories(in: workspace), fileManager: fileManager)
+    }
+
+    /// The workspace's terminal folders in layout order, read from the
+    /// state alone, without the file system.
+    static func terminalDirectories(in workspace: WorkspaceState) -> [String] {
+        workspace.orderedTabs.flatMap { tab in
+            tab.layoutTree.allSlotInfos.compactMap { slot -> String? in
+                guard case .terminal(let terminal) = tab.panels[slot.panelID] else { return nil }
+                return terminal.agentLaunchWorkingDirectory
             }
         }
-        return nil
+    }
+
+    nonisolated static func firstExistingDirectory(_ directories: [String], fileManager: FileManager = .default) -> String? {
+        directories.first { directory in
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: directory, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
     }
 
     /// A new terminal is not ready at once: it reports itself busy until its

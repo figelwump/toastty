@@ -186,3 +186,62 @@ extension QuickEntryShortcut {
         return KeyboardShortcut(keyEquivalent, modifiers: eventModifiers)
     }
 }
+
+/// Whether Toastty may take the default quick entry shortcut in every app
+/// when `tasks.toml` does not set one.
+enum QuickEntryShortcutPermission: Equatable {
+    case allowed
+    /// The user cleared "Use ⌥⇧T in every app" in the What's new sheet.
+    case declined
+    /// The What's new sheet still waits for its answer.
+    case waiting
+}
+
+/// The user's answer to "Use ⌥⇧T in every app" in the What's new sheet. A
+/// global hot key takes the keys from every app, Toastty's own terminals
+/// too, so Toastty asks before it takes the default.
+enum QuickEntryShortcutAnswer {
+    static let key = "toastty.quickEntry.defaultShortcutAllowed"
+
+    static func saved(in defaults: UserDefaults?) -> Bool? {
+        guard let defaults, defaults.object(forKey: key) != nil else { return nil }
+        return defaults.bool(forKey: key)
+    }
+
+    static func save(_ allowed: Bool, in defaults: UserDefaults?) {
+        defaults?.set(allowed, forKey: key)
+    }
+
+    /// With no saved answer, the default waits only while the sheet still
+    /// has the question to ask. A user who will not see the sheet, such as
+    /// one who answered the earlier coordinator question, keeps the default.
+    static func permission(saved: Bool?, questionWaits: Bool) -> QuickEntryShortcutPermission {
+        if let saved { return saved ? .allowed : .declined }
+        return questionWaits ? .waiting : .allowed
+    }
+}
+
+extension QuickEntryShortcutAnswer {
+    /// Makes the quick entry key wait for the What's new sheet. With no
+    /// saved answer there is no key while the sheet still has its question,
+    /// and the key is read again each time the question stops showing.
+    /// `presentMessage` shows why a key that the user allowed did not work,
+    /// such as another app that holds it.
+    @MainActor
+    static func connect(
+        _ quickEntry: QuickEntryController,
+        to offer: CoordinatorStartOffer?,
+        defaults: UserDefaults?,
+        presentMessage: @escaping @MainActor (String) -> Void
+    ) {
+        quickEntry.defaultShortcutPermission = { [weak offer] in
+            permission(saved: saved(in: defaults), questionWaits: offer?.shouldOffer ?? false)
+        }
+        offer?.questionEnded = { [weak quickEntry] in
+            guard let message = quickEntry?.reloadShortcut() else { return }
+            // Not from inside the store update that can end the question:
+            // the alert runs its own event loop.
+            Task { @MainActor in presentMessage(message) }
+        }
+    }
+}
