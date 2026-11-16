@@ -37,6 +37,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case projectRelease
     case coordinatorSend
     case coordinatorSendWithAttachments
+    case coordinatorChatRead
 
     var path: String {
         switch self {
@@ -73,6 +74,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .projectRelease: RemoteProjectReleasePolicy.releasePath
         case .coordinatorSend: RemoteCoordinatorSendPolicy.sendPath
         case .coordinatorSendWithAttachments: RemoteCoordinatorSendPolicy.sendWithAttachmentsPath
+        case .coordinatorChatRead: RemoteCoordinatorChatReadPolicy.readPath
         }
     }
 }
@@ -163,6 +165,10 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // handler checks the start permission itself.
         .coordinatorSend: .init(route: .coordinatorSend, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .coordinatorSendWithAttachments: .init(route: .coordinatorSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // A read of the coordinator's chat changes only what the chat marks
+        // as new, as a read acknowledgement does, so it needs the read scope
+        // that showing the chat needs.
+        .coordinatorChatRead: .init(route: .coordinatorChatRead, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

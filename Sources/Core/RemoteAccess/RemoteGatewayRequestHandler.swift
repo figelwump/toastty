@@ -92,6 +92,10 @@ public final class RemoteGatewayRequestHandler {
         RemoteConversationReadAcknowledgementRequest,
         RemoteDeviceRecord
     ) -> RemoteConversationReadAcknowledgementResult
+    public typealias CoordinatorChatReadHandler = (
+        RemoteCoordinatorChatReadRequest,
+        RemoteDeviceRecord
+    ) -> RemoteCoordinatorChatReadResult
     public typealias WorkspaceDoneHandler = (
         RemoteWorkspaceDoneRequest,
         RemoteDeviceRecord
@@ -397,6 +401,12 @@ public final class RemoteGatewayRequestHandler {
         }
         return await resolveTaskCreate(deviceID: deviceID, request: request)
     }
+
+    /// Moves the coordinator chat's read point to a device's read.
+    /// Installing it is what advertises
+    /// `RemoteGatewayCapability.coordinatorChatRead`. Invoked on the main
+    /// thread, as the read acknowledgement handler is.
+    public var coordinatorChatReadHandler: CoordinatorChatReadHandler?
 
     /// Sends a quick entry message to the coordinator. Installing it is
     /// what advertises `RemoteGatewayCapability.coordinatorSend`. Invoked
@@ -886,6 +896,8 @@ public final class RemoteGatewayRequestHandler {
             return handleConversationEvents(request)
         case .conversationReadAcknowledge:
             return handleConversationReadAcknowledgement(request, device: authenticated)
+        case .coordinatorChatRead:
+            return handleCoordinatorChatRead(request, device: authenticated)
         case .workspaceDone:
             return handleWorkspaceDone(request, device: authenticated, at: date)
         case .conversationFlag:
@@ -981,6 +993,7 @@ public final class RemoteGatewayRequestHandler {
         if taskCreateHandler != nil { response.capabilities.append(.taskCreate) }
         if projectReleaseHandler != nil { response.capabilities.append(.projectRelease) }
         if coordinatorSendHandler != nil { response.capabilities.append(.coordinatorSend) }
+        if coordinatorChatReadHandler != nil { response.capabilities.append(.coordinatorChatRead) }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))
     }
@@ -1198,6 +1211,36 @@ public final class RemoteGatewayRequestHandler {
         let body = (try? encoder.encode(RemoteConversationReadAcknowledgementResponse(
             result: result
         ))) ?? Data()
+        return .respond(.json(body: body))
+    }
+
+    private func handleCoordinatorChatRead(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord
+    ) -> Outcome {
+        guard request.body.count <= RemoteCoordinatorChatReadPolicy.maximumBodyBytes,
+              let readRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteCoordinatorChatReadRequest.self,
+                from: request.body
+              ),
+              readRequest.isValid else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected coordinator chat read JSON"
+            ))
+        }
+        guard readRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let result = coordinatorChatReadHandler?(readRequest, device) ?? .noCoordinator
+        let body = (try? encoder.encode(RemoteCoordinatorChatReadResponse(result: result))) ?? Data()
         return .respond(.json(body: body))
     }
 

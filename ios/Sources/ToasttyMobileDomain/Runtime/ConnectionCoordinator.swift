@@ -1008,6 +1008,20 @@ public actor ConnectionCoordinator {
         return try await gateway.sendToCoordinator(request)
     }
 
+    /// Tells the Mac that this phone showed the coordinator's chat through
+    /// a row, only while live against a host that advertises the shared
+    /// read point. `nil` means nothing was sent. The conversation need not
+    /// be open: a read is sent once more as the chat closes.
+    public func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorChatRead) else {
+            return nil
+        }
+        return try await gateway.readCoordinatorChat(request)
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

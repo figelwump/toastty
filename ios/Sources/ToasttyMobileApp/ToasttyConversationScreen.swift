@@ -60,6 +60,8 @@ struct ToasttyConversationScreen: View {
     /// title shows Toasty, and the tab bar stays, because Back has nowhere
     /// to go.
     let isCoordinatorRoot: Bool
+    /// The coordinator chat's New line, from the read point the Mac shares.
+    let newMessages: ToasttyNewMessagesMarker?
 
     init(
         conversationID: UUID,
@@ -94,7 +96,8 @@ struct ToasttyConversationScreen: View {
         canAcknowledgeRead: Bool,
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
         openTaskSpace: @escaping (UUID) -> Void = { _ in },
-        isCoordinatorRoot: Bool = false
+        isCoordinatorRoot: Bool = false,
+        newMessages: ToasttyNewMessagesMarker? = nil
     ) {
         self.conversationID = conversationID
         self.controller = controller
@@ -126,6 +129,7 @@ struct ToasttyConversationScreen: View {
         self.onVisibleLiveEdge = onVisibleLiveEdge
         self.openTaskSpace = openTaskSpace
         self.isCoordinatorRoot = isCoordinatorRoot
+        self.newMessages = newMessages
     }
 
     var body: some View {
@@ -153,7 +157,8 @@ struct ToasttyConversationScreen: View {
                     canAcknowledgeRead: canAcknowledgeRead,
                     onVisibleLiveEdge: {
                         onVisibleLiveEdge(conversation.state)
-                    }
+                    },
+                    newMessages: newMessages
                 )
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     composerBar(conversation)

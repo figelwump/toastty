@@ -1440,7 +1440,8 @@ struct ToasttyApp: App {
             },
             promptState: { [weak terminalRuntimeRegistry] panelID in
                 terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
-            }
+            },
+            chatReadDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
         )
         // Task changes and the coordinator's timer wake it from here on.
         if let coordinatorController = taskCoordinator.coordinatorController {

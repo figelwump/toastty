@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 
 /// The coordinator's state as the Coordinator tab shows it, from its
 /// session's status, as the Mac's coordinator row marks it.
@@ -47,6 +48,12 @@ extension MobileHomeSnapshot {
     public var coordinatorConversation: MobileConversation? {
         guard let coordinator, let id = coordinator.coordinatorConversationID else { return nil }
         return coordinator.conversations.first { $0.id == id }
+    }
+
+    /// The newest row of the coordinator's chat that the user read, on the
+    /// Mac or on this phone, as the Mac last sent it.
+    public var coordinatorChatRead: RemoteCoordinatorChatReadPoint? {
+        coordinator?.coordinatorChatRead
     }
 
     /// The coordinator's mark, or `nil` when the phone has no Coordinator

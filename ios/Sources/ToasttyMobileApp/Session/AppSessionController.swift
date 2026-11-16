@@ -32,6 +32,8 @@ protocol AppLiveSessionsControlling: AnyObject {
     func background(lifecycleSequence: UInt64) async -> Duration?
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
     func stopObserving()
+    /// The app became active, or stopped being active.
+    func sceneActivityChanged(isActive: Bool)
 }
 
 extension LiveSessionsController: AppLiveSessionsControlling {
@@ -46,6 +48,7 @@ extension AppLiveSessionsControlling {
     var supportsPushNotifications: Bool { false }
     var connectionGeneration: UInt64 { 0 }
     func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation? { nil }
+    func sceneActivityChanged(isActive: Bool) {}
 }
 
 typealias AppLiveSessionsFactory = @MainActor (
@@ -449,9 +452,11 @@ final class AppSessionController {
 
     func sceneBecameInactive() {
         pairingController?.sceneBecameInactive()
+        liveController?.sceneActivityChanged(isActive: false)
     }
 
     func sceneEnteredBackground() {
+        liveController?.sceneActivityChanged(isActive: false)
         pushController?.enteredBackground()
         isSceneBackgrounded = true
         sceneBackgroundedAt = .now
@@ -520,6 +525,7 @@ final class AppSessionController {
     }
 
     func sceneBecameActive() {
+        liveController?.sceneActivityChanged(isActive: true)
         releaseBackgroundHold()
         pushController?.enteredForeground()
         pairingController?.sceneBecameActive()

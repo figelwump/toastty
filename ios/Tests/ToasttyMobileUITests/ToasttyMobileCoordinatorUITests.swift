@@ -480,6 +480,72 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
             .waitForExistence(timeout: 5))
     }
 
+    // MARK: - The New line
+
+    /// The coordinator's chat opens at the line above the first message
+    /// that neither the Mac nor this phone showed, and Jump to latest
+    /// counts the coordinator's messages below it. The fixture Mac read
+    /// through the chat's second message; three answers came after it.
+    func testTheChatOpensAtTheNewLineAndJumpToLatestCountsWhatIsNew() {
+        let app = launch(coordinator: "working", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH": "2"])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let line = app.descendants(matching: .any)["toastty-transcript-new-messages"]
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        XCTAssertEqual(line.label, "New messages")
+        // At the top of the chat, under the navigation bar, and the
+        // messages above it are scrolled away.
+        let top = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertTrue(waitUntil(timeout: 5) { line.frame.minY >= top - 1 && line.frame.minY < top + 140 },
+                      "The line is at \(line.frame), the navigation bar ends at \(top)")
+        let readAnswer = textView(containing: "Two tasks moved", in: app)
+        XCTAssertTrue(readAnswer.exists == false || readAnswer.frame.maxY <= top + 1,
+                      "The answer read before is at \(readAnswer.frame)")
+        attachScreenshot(named: "coordinator-new-line", of: app)
+
+        // Scrolled up into what was read, Jump to latest says how many are
+        // new.
+        let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
+        for _ in 0..<4 where jump.exists == false {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)),
+                        withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        XCTAssertTrue(jump.waitForExistence(timeout: 5))
+        XCTAssertTrue(jump.label.contains("3 new"), "Jump to latest reads \(jump.label)")
+        attachScreenshot(named: "coordinator-jump-3-new", of: app)
+    }
+
+    /// The user's own message answers: the line goes.
+    func testASendInTheCoordinatorsChatRemovesTheNewLine() {
+        let app = launch(coordinator: "working", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH": "2"])
+        app.tabBars.buttons["Coordinator"].tap()
+        let line = app.descendants(matching: .any)["toastty-transcript-new-messages"]
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("Thanks, start the release")
+        app.buttons["toastty-mobile-composer-send"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-1"]
+            .waitForExistence(timeout: 5))
+        XCTAssertTrue(line.waitForNonExistence(timeout: 5))
+        attachScreenshot(named: "coordinator-new-line-after-send", of: app)
+    }
+
+    /// A Mac that does not share the chat's read point: no line, as before.
+    func testNoNewLineWhenTheMacDoesNotShareItsReadPoint() {
+        let app = launch(coordinator: "working", environment: [
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH": "2",
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_CHAT_READ": "unsupported",
+        ])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(textView(containing: "I made a task for it", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-transcript-new-messages"].exists)
+        let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
+        if jump.exists { XCTAssertFalse(jump.label.contains("new")) }
+    }
+
     // MARK: - Helpers
 
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {

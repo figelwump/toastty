@@ -854,6 +854,19 @@ while you work in the other tabs.
   time and opening of the coordinator's message it answers; a tap shows that
   message. The files stay on the Mac, so the phone shows their names, not
   thumbnails. Other sessions' chats show every message as it was typed.
+- **The New line.** A red-orange **New** line marks the first message from
+  the coordinator that you have not read, on the Mac or on the phone, and the
+  chat opens at it. While you scroll up, **Jump to latest** reads "N new". It
+  follows the Mac chat's rules: your own messages and wake turns that the
+  coordinator marked quiet on the Mac are not new, the line is placed when you
+  come to the chat (the Coordinator tab, Back from a session over the chat, or
+  the app back in the foreground) and stays while you read, and a message you
+  send removes it. What arrives while the chat is on screen and the app is
+  active is read. The phone sends its reads to the Mac about a second after
+  they happen, and when you leave the chat or the app, so a message you read on
+  the phone shows no line when you come back to the Mac's chat, and the other
+  way round. The phone does not fold quiet turns, so the replies of a quiet
+  turn after your last read count as new on the phone, not on the Mac.
 - **Steer and Stop.** While the coordinator works, Send steers into its turn
   by default, as the Mac chat's Send does, and **Queue** is the other choice
   (see [Queue, steer, and stop](#queue-steer-and-stop-while-the-agent-works)).
@@ -862,9 +875,9 @@ while you work in the other tabs.
   coordinator's waiting messages too.
 - **Not on the phone yet.** The coordinator's own queue (the Mac chat's
   Queued and Paused rows with Edit, Remove, Steer now and Send next), quiet
-  turns folded under their digest, thumbnails of attached images, the line
-  above messages you have not read, Reply on the coordinator's messages, and
-  `@` mentions in the composer stay on the Mac.
+  turns folded under their digest, thumbnails of attached images, Reply on
+  the coordinator's messages, and `@` mentions in the composer stay on the
+  Mac.
 - **The tab's icon is Toasty's outline.** While another tab shows, its badge
   says what the coordinator waits for, from its session's status, as the
   Mac's coordinator row marks it: **New** for output you have not read, **!**
@@ -897,6 +910,37 @@ the snapshot also carries the task board: without a board the phone has no tab
 bar and lists the coordinator's workspace as an ordinary one, as it does for an
 older Mac that sends no mark. An older phone ignores both fields and lists the
 workspace as before.
+
+The coordinator's chat has one read point on the Mac, which the Mac's chat and
+paired phones share. It names the newest row read by the row's transcript
+event (`ConversationEvent.eventID`), which the Mac's chat and the phone read
+from the same conversation, with the row's time from the transcript. The event
+decides which rows are read; the time only orders rows that a reader does not
+have, such as one older than the rows it loaded. A runtime event's `rt:` identity
+does not survive a Mac relaunch, so a read point at such a row keeps only its
+time. A time alone would not do: the wire carries times with milliseconds, and
+a time that a device decoded can encode one millisecond earlier, so the Mac
+would show the read row as new. The Mac saves the read point in user defaults:
+`toastty.coordinator.chatReadThrough` keeps the time, as before this change,
+and `toastty.coordinator.chatReadThroughEvent` the event with the time it
+belongs to. A read point saved by an older Toastty, or moved by one since,
+counts by its time until the next read.
+
+A Mac with the coordinator advertises the `coordinator_chat_read` capability.
+It sends the read point on the coordinator's workspace in `coordinatorChatRead`
+(`eventID`, absent for a time-only read point, and `timestamp`), and takes a
+device's read with `POST /api/coordinator.chat.read`: the coordinator's
+`conversationID` and the `eventID` of the newest row the device showed. The
+route needs a paired device's read access only, as showing the chat does. The
+Mac finds that event in its own conversation and moves the read point to it,
+only forward. The answer's `result` is `moved`, `already_read`,
+`event_not_found` (the Mac's conversation no longer has the event, for example
+after a relaunch), or `no_coordinator` (no coordinator workspace, or the
+conversation is not its chat). The existing `conversation_read_acknowledgement`
+route still clears the session's unread mark, which the tab's badge follows; it
+carries no row and needs the transcript's live edge on screen, so it does not
+move the chat's read point. With an older Mac, the phone shows no New line and
+sends no reads. An older phone ignores the field.
 
 ### Starting a session
 

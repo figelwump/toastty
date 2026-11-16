@@ -573,6 +573,10 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     /// On the coordinator's workspace, the coordinator's own session, which
     /// the Mac names because other sessions can share the workspace.
     public let coordinatorConversationID: UUID?
+    /// On the coordinator's workspace, the newest row of the coordinator's
+    /// chat that the user read, on the Mac or on this phone. Absent from an
+    /// older Mac and before the first read.
+    public let coordinatorChatRead: RemoteCoordinatorChatReadPoint?
 
     public init(
         id: UUID,
@@ -586,7 +590,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         isDone: Bool = false,
         acceptsDoneMark: Bool = true,
         isCoordinator: Bool = false,
-        coordinatorConversationID: UUID? = nil
+        coordinatorConversationID: UUID? = nil,
+        coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil
     ) {
         self.id = id
         self.title = title
@@ -600,6 +605,7 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         self.acceptsDoneMark = acceptsDoneMark
         self.isCoordinator = isCoordinator
         self.coordinatorConversationID = coordinatorConversationID
+        self.coordinatorChatRead = coordinatorChatRead
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -621,7 +627,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             isDone: isDone,
             acceptsDoneMark: acceptsDoneMark,
             isCoordinator: isCoordinator,
-            coordinatorConversationID: coordinatorConversationID
+            coordinatorConversationID: coordinatorConversationID,
+            coordinatorChatRead: coordinatorChatRead
         )
     }
 
@@ -638,7 +645,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             isDone: isDone,
             acceptsDoneMark: acceptsDoneMark,
             isCoordinator: isCoordinator,
-            coordinatorConversationID: coordinatorConversationID
+            coordinatorConversationID: coordinatorConversationID,
+            coordinatorChatRead: coordinatorChatRead
         )
     }
 }
