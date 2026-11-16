@@ -2,6 +2,7 @@ import ConversationUI
 import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
+import UIKit
 
 struct ToasttyConversationScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -368,6 +369,11 @@ struct ToasttyConversationScreen: View {
                 .lazy.flatMap(\.panels)
                 .first(where: { $0.workspaceID == panel.workspaceID && $0.id == panel.id }) else { return }
         isComposerFocused = false
+        // The composer drops the keyboard only after the next view update,
+        // and the sheet opens in that update. UIKit gives the focus back to
+        // the responder that had it when a sheet opened, so drop the keyboard
+        // now: this action runs outside any view update.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         selectedPreview = current.selection
     }
 
