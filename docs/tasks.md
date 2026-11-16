@@ -1231,7 +1231,7 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 | File | Written by | What it is |
 | --- | --- | --- |
 | `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
-| `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator), `references/improving.md` the rules for [its two records and its review](#how-the-coordinator-improves-the-work), and `references/first-run.md` the questions of [the first run](#the-policy-file). Your own rules go in `policy.md`. |
+| `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator), `references/improving.md` the rules for [its two records and its review](#how-the-coordinator-improves-the-work), `references/first-run.md` the questions of [the first run](#the-policy-file), and `references/releases.md` the rules for [releases](#releases). Your own rules go in `policy.md`. |
 | `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
 | `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
 | `friction.md` | the coordinator | What slows the work: one line for each pattern, with a count. See [How the coordinator improves the work](#how-the-coordinator-improves-the-work). You can edit it. |

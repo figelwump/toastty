@@ -942,7 +942,7 @@ class Run:
             pass
         for name in ('policy.md', 'ledger.md', 'friction.md', 'decisions.md', 'AGENTS.md', 'CLAUDE.md',
                      'references/merging.md', 'references/improving.md', 'references/first-run.md',
-                     'references/follow-through.md'):
+                     'references/follow-through.md', 'references/releases.md'):
             if (self.folder / name).is_file():
                 shutil.copyfile(self.folder / name, self.artifacts / Path(name).name)
         if (self.folder / '.git').is_dir():
