@@ -326,16 +326,13 @@ struct CoordinatorFolderTests {
         #expect(instructions.contains("\nname: toastty-coordinator") == false)
         // Codex reads at most `project_doc_max_bytes` of its instruction
         // files, all files together, and drops the rest without an error.
-        // Toastty passes `codexProjectDocMaxBytes` to a Codex coordinator
-        // when it can edit the launch arguments. A Codex profile whose
-        // arguments Toastty cannot edit, such as a shell helper, keeps
-        // Codex's default of 32 KiB, so `AGENTS.md` as Toastty writes it
-        // must fit in that default. Move detail into `references/` when it
-        // does not.
-        let codexDefaultProjectDocMaxBytes = 32 * 1024
+        // Toastty passes `codexProjectDocMaxBytes` to a Codex coordinator,
+        // so `AGENTS.md` as Toastty writes it must fit in that value. A
+        // Codex profile whose arguments Toastty cannot edit, such as a shell
+        // helper, keeps Codex's default of 32 KiB; the instructions are not
+        // held to that default.
         let writtenSize = CoordinatorFolder.instructionsHeader.utf8.count + 1 + instructions.utf8.count
-        #expect(writtenSize < codexDefaultProjectDocMaxBytes)
-        #expect(codexDefaultProjectDocMaxBytes <= CoordinatorFolder.codexProjectDocMaxBytes)
+        #expect(writtenSize < CoordinatorFolder.codexProjectDocMaxBytes)
         // The app ships every reference file that the instructions name.
         let shipped = CoordinatorFolder.shippedReferences()
         let named = instructions.matches(of: #/`references/([a-z-]+\.md)`/#).map { String($0.output.1) }
