@@ -249,6 +249,155 @@ struct TaskBoardTests {
         #expect(store.selectedWorkspace?.focusedPanelID == (hasWorkingAgent ? workingPanelID : observedPanelID))
     }
 
+    /// The jump visits what the window's sidebar segment lists: Needs you
+    /// leaves out working sessions and programs, also with an unread turn,
+    /// and later-flagged sessions. All includes them.
+    @Test func jumpFollowsTheSidebarSegment() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let windowID = try #require(store.state.windows.first?.id)
+        let workingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        runtime.startSession(
+            sessionID: "working", agent: .codex, panelID: workingPanelID,
+            windowID: windowID, workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
+            cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+        )
+        runtime.updateStatus(sessionID: "working", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+
+        let reviewTask = try await startTask(fixture, text: "Review the fix")
+        let reviewPanelID = try #require(reviewTask.operation.taskSpace?.panelID)
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(reviewTask.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
+        try fixture.coordinator.readyForReview(taskID: reviewTask.id)
+
+        // A second task's agent works with its last turn unread, and a
+        // third is flagged for later. Needs you lists neither.
+        let busyTask = try await startTask(fixture, text: "Keep working")
+        let busyPanelID = try #require(busyTask.operation.taskSpace?.panelID)
+        let busySessionID = try #require(busyTask.currentSessionID)
+        let busyWorkspaceID = try #require(busyTask.taskSpaceWorkspaceID)
+        runtime.updateStatus(sessionID: busySessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        _ = store.send(.recordDesktopNotification(workspaceID: busyWorkspaceID, panelID: busyPanelID))
+        #expect(store.state.workspacesByID[busyWorkspaceID]?.unreadPanelIDs.contains(busyPanelID) == true)
+        let laterTask = try await startTask(fixture, text: "Look at this later")
+        let laterPanelID = try #require(laterTask.operation.taskSpace?.panelID)
+        let laterSessionID = try #require(laterTask.currentSessionID)
+        runtime.updateStatus(sessionID: laterSessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        runtime.setLaterFlag(sessionID: laterSessionID, isFlagged: true)
+        // A program in another project finished unread, then started again.
+        let before = Set(store.state.workspacesByID.keys)
+        _ = store.send(.createWorkspace(windowID: windowID, title: "builds", activate: false))
+        let programWorkspaceID = try #require(Set(store.state.workspacesByID.keys).subtracting(before).first)
+        let programPanelID = try #require(store.state.workspacesByID[programWorkspaceID]?.focusedPanelID)
+        runtime.handleProgramStatusEvent(.report(.init(state: .done, title: "Build")), panelID: programPanelID)
+        runtime.handleProgramStatusEvent(.report(.init(state: .working, title: "Build")), panelID: programPanelID)
+        let programWorkspace = try #require(store.state.workspacesByID[programWorkspaceID])
+        #expect(runtime.programStatusRows(in: programWorkspace).map(\.status.kind) == [.working])
+        #expect(programWorkspace.unreadPanelIDs.contains(programPanelID))
+
+        _ = store.send(.focusPanel(workspaceID: fixture.workspaceID, panelID: workingPanelID))
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: fixture.workspaceID))
+        #expect(store.selectedWorkspace?.focusedPanelID == workingPanelID)
+
+        // A jump to the panel that already has the focus does nothing, so
+        // each press records where the focus is.
+        func jumps(_ count: Int) throws -> Set<UUID> {
+            var visited = Set<UUID>()
+            for _ in 0..<count {
+                _ = store.focusNextUnreadOrActivePanelFromCommand(
+                    preferredWindowID: windowID, sessionRuntimeStore: runtime
+                )
+                visited.insert(try #require(store.selectedWorkspace?.focusedPanelID))
+            }
+            return visited
+        }
+        func select(_ segment: SidebarSegment) {
+            _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
+        }
+
+        // Needs you, then All, then Needs you again, as the user switches.
+        select(.needsYou)
+        #expect(try jumps(4) == [reviewPanelID])
+        select(.all)
+        #expect(try jumps(7) == [reviewPanelID, workingPanelID, busyPanelID, laterPanelID, programPanelID])
+        select(.needsYou)
+        #expect(try jumps(4) == [reviewPanelID])
+
+        // With only working and later-flagged sessions, Needs you has no
+        // target, and the command is unavailable.
+        try fixture.coordinator.markDone(taskID: reviewTask.id)
+        #expect(store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ) == false)
+        select(.all)
+        #expect(store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ))
+    }
+
+    /// A saved jump cycle from a window that shows All does not carry its
+    /// working sessions into a window that shows Needs you.
+    @Test func jumpUsesTheSegmentOfTheWindowItRunsIn() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let firstWindowID = try #require(store.state.windows.first?.id)
+        let firstWorkingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        func startWorking(_ sessionID: String, panelID: UUID, windowID: UUID, workspaceID: UUID) {
+            runtime.startSession(
+                sessionID: sessionID, agent: .codex, panelID: panelID,
+                windowID: windowID, workspaceID: workspaceID,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+            )
+            runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        }
+        startWorking("first", panelID: firstWorkingPanelID, windowID: firstWindowID, workspaceID: fixture.workspaceID)
+
+        let reviewTask = try await startTask(fixture, text: "Review the fix")
+        let reviewPanelID = try #require(reviewTask.operation.taskSpace?.panelID)
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(reviewTask.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
+        try fixture.coordinator.readyForReview(taskID: reviewTask.id)
+
+        #expect(store.send(.createWindow(seed: nil, initialFrame: nil)))
+        let secondWindow = try #require(store.state.windows.last)
+        let secondWorkspaceID = try #require(secondWindow.selectedWorkspaceID)
+        let secondWorkingPanelID = try #require(store.state.workspacesByID[secondWorkspaceID]?.focusedPanelID)
+        startWorking("second", panelID: secondWorkingPanelID, windowID: secondWindow.id, workspaceID: secondWorkspaceID)
+        _ = store.send(.setSidebarSegment(windowID: secondWindow.id, segment: .needsYou))
+        _ = store.send(.selectWindow(windowID: firstWindowID))
+        _ = store.send(.focusPanel(workspaceID: fixture.workspaceID, panelID: firstWorkingPanelID))
+        _ = store.send(.selectWorkspace(windowID: firstWindowID, workspaceID: fixture.workspaceID))
+
+        func jump() -> UUID? {
+            _ = store.focusNextUnreadOrActivePanelFromCommand(preferredWindowID: nil, sessionRuntimeStore: runtime)
+            return store.state.selectedWindowID.flatMap { store.selectedWorkspace(in: $0)?.focusedPanelID }
+        }
+        // All in the first window visits the review and the second
+        // window's working session.
+        #expect(jump() == reviewPanelID)
+        #expect(jump() == secondWorkingPanelID)
+        #expect(store.state.selectedWindowID == secondWindow.id)
+        // The second window shows Needs you: the next press goes to the
+        // review, not on to the first window's working session.
+        #expect(jump() == reviewPanelID)
+    }
+
     @Test(arguments: [TaskStage.done, .archived, .toShip])
     func jumpSkipsQuietUnreadInCompletedTasks(stage: TaskStage) async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
