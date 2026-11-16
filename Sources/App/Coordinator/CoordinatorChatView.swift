@@ -71,7 +71,7 @@ struct CoordinatorChatView: View {
         // Files and images dropped anywhere on the chat are attached to the
         // composer's message. The terminal under the chat takes none.
         .background {
-            AttachmentDropArea(dropTarget: model.attachmentDropTarget)
+            AttachmentDropArea(dropTarget: model.attachmentDropTarget(host: host))
                 .accessibilityHidden(true)
         }
         .background(ConversationDesignTokens.background)
@@ -148,7 +148,7 @@ struct CoordinatorChatView: View {
                 onChooseQueue: { model.queueSelected = $0 },
                 onStop: { model.stop() },
                 onChooseFiles: { model.chooseFiles() },
-                dropTarget: model.attachmentDropTarget,
+                dropTarget: model.attachmentDropTarget(host: host),
                 onTextView: { [host] in model.setComposerTextView($0, host: host) },
                 mentionCandidates: mentionCandidates
             )

@@ -296,6 +296,57 @@ struct CoordinatorDockTests {
         #expect(controller.dockShortcutAction == .showDock)
     }
 
+    /// A file dropped on the chat, perhaps from Finder, gives that view's
+    /// field the keyboard and makes Toastty the active app, so that the
+    /// user can type the message that goes with it. In the full view the
+    /// coordinator's panel takes the focus; the dock stays beside the
+    /// workspace it shows.
+    @Test func aFileDroppedOnTheChatGivesThatViewsFieldTheKeyboard() throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let store = fixture.store
+        let controller = fixture.controller
+        let chat = fixture.chat
+        let location = try #require(store.state.coordinator)
+        let windowID = location.windowID
+        let image = QuickEntryTests.pasteboard()
+        image.setData(try QuickEntryTests.pngData(), forType: .png)
+
+        // The full view, with another panel focused, as policy.md's can be.
+        controller.openFullView()
+        chat.show(panelID: fixture.panelID, host: .panel)
+        #expect(store.send(.splitFocusedSlot(workspaceID: location.workspaceID, orientation: .horizontal)))
+        #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID != location.panelID)
+
+        // Text is not a file: the chat takes no drop and nothing moves.
+        let text = QuickEntryTests.pasteboard()
+        text.setString("hello", forType: .string)
+        var requests = chat.composerFocusRequest
+        #expect(chat.attachmentDropTarget(host: .panel).performDrop(text) == false)
+        #expect(chat.composerFocusRequest == requests)
+        #expect(fixture.clock.activations == 0)
+
+        #expect(chat.attachmentDropTarget(host: .panel).performDrop(image))
+        #expect(chat.composerFocusRequest == requests + 1)
+        #expect(fixture.clock.activations == 1)
+        #expect(store.selectedWorkspaceID(in: windowID) == location.workspaceID)
+        #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID == location.panelID)
+        chat.hide(panelID: fixture.panelID, host: .panel)
+
+        // The dock beside a task's workspace.
+        #expect(controller.showDock(focusComposer: false))
+        let taskWorkspaceID = try #require(store.selectedWorkspaceID(in: windowID))
+        #expect(taskWorkspaceID != location.workspaceID)
+        chat.show(panelID: fixture.panelID, host: .dock)
+        requests = chat.composerFocusRequest
+        #expect(chat.attachmentDropTarget(host: .dock).performDrop(image))
+        #expect(chat.composerFocusRequest == requests + 1)
+        #expect(fixture.clock.activations == 2)
+        #expect(store.selectedWorkspaceID(in: windowID) == taskWorkspaceID)
+        #expect(controller.dockShows(in: windowID))
+        chat.hide(panelID: fixture.panelID, host: .dock)
+    }
+
     private func addWorkspace(to store: AppStore, windowID: UUID, title: String) throws -> UUID {
         let before = Set(store.window(id: windowID)?.workspaceIDs ?? [])
         #expect(store.send(.createWorkspace(windowID: windowID, title: title, activate: false)))

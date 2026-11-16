@@ -84,8 +84,10 @@ final class CoordinatorChatModel: ObservableObject {
     /// The files attached to the composer's message, kept here with the
     /// text. Their changes are the model's changes.
     let attachmentDraft: DraftAttachments
-    /// Takes files dropped on the chat or on the composer's field.
-    let attachmentDropTarget: AttachmentDropTarget
+    /// Take files dropped on each view's chat or composer's field. A drop
+    /// gives that view's field the keyboard.
+    private let panelDropTarget: AttachmentDropTarget
+    private let dockDropTarget: AttachmentDropTarget
     /// A message with files is being sent: Toastty copies its files into
     /// the coordinator's folder. The composer waits until it is done.
     @Published private(set) var isSendingFiles = false
@@ -131,6 +133,8 @@ final class CoordinatorChatModel: ObservableObject {
     /// Whether Toastty is the active app: a chat on screen behind another
     /// app is not read.
     private let isAppActive: () -> Bool
+    /// Makes Toastty the active app.
+    private let activateApp: () -> Void
     /// The time of the newest row that the user saw in the chat. Saved, so
     /// that it survives a relaunch. `nil` before the user read any.
     private var readThrough: Date?
@@ -178,6 +182,9 @@ final class CoordinatorChatModel: ObservableObject {
         defaults: UserDefaults? = nil,
         now: @escaping () -> Date = Date.init,
         isAppActive: @escaping () -> Bool = { NSApplication.shared.isActive },
+        // A drop from another app is the user's move into Toastty, as a
+        // file dropped on a terminal is.
+        activateApp: @escaping () -> Void = { NSApp.activate(ignoringOtherApps: true) },
         attachmentStagingURL: URL = FileManager.default.temporaryDirectory
             .appending(path: "toastty-coordinator-composer/\(UUID().uuidString)", directoryHint: .isDirectory)
     ) {
@@ -186,18 +193,22 @@ final class CoordinatorChatModel: ObservableObject {
         self.defaults = defaults
         self.now = now
         self.isAppActive = isAppActive
+        self.activateApp = activateApp
         readThrough = (defaults?.object(forKey: Self.readThroughDefaultsKey) as? Double)
             .map(Date.init(timeIntervalSinceReferenceDate:))
         textScale = (defaults?.object(forKey: Self.textScaleDefaultsKey) as? Double)
             .map(Self.normalizedTextScale) ?? Self.defaultTextScale
         let attachmentDraft = DraftAttachments(stagingDirectoryURL: attachmentStagingURL)
         self.attachmentDraft = attachmentDraft
-        attachmentDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
+        panelDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
+        dockDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
         attachmentDraft.isEditable = { [weak self] in self?.isSendingFiles == false }
         attachmentDraft.onError = { [weak self] message in
             self?.transientNotice = .failure(message)
             self?.publishMetadata()
         }
+        panelDropTarget.onDrop = { [weak self] in self?.takeKeyboardAfterDrop(host: .panel) }
+        dockDropTarget.onDrop = { [weak self] in self?.takeKeyboardAfterDrop(host: .dock) }
         attachmentDraft.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -971,6 +982,30 @@ final class CoordinatorChatModel: ObservableObject {
         } else {
             focusOnShow = host
         }
+    }
+
+    /// Takes files dropped on the chat or on the composer's field of the
+    /// view at `host`.
+    func attachmentDropTarget(host: Host) -> AttachmentDropTarget {
+        switch host {
+        case .panel: panelDropTarget
+        case .dock: dockDropTarget
+        }
+    }
+
+    /// Files were dropped on the view at `host`, perhaps from another app:
+    /// Toastty becomes the active app, the view's window comes to the
+    /// front, and the view's field takes the keyboard, so that the user can
+    /// type the message that goes with the files.
+    func takeKeyboardAfterDrop(host: Host) {
+        if host == .panel {
+            // Another panel in the coordinator's workspace, such as
+            // policy.md's, can have the focus.
+            controller?.focusPanelForDrop()
+        }
+        composerTextViews[host]?.view?.window?.makeKeyAndOrderFront(nil)
+        activateApp()
+        requestComposerFocus(host: host)
     }
 
     /// A waiting message's text without its list of files, and the files,
