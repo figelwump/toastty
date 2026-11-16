@@ -2187,7 +2187,10 @@ def dashboard(run):
     exported = run.cli('action', 'run', 'panel.scratchpad.export', f'sessionID={session}',
                        f"documentID={pads[0]['documentID']}")
     path = Path(exported.get('filePath') or '/nonexistent')
-    return exported.get('revision'), path.read_text() if path.is_file() else ''
+    page = path.read_text() if path.is_file() else ''
+    # The page as the coordinator wrote it, for the run's evidence.
+    (run.artifacts / f"dashboard-r{exported.get('revision')}.html").write_text(page)
+    return exported.get('revision'), page
 
 
 def asked_line(run, word):
@@ -2236,8 +2239,9 @@ def daily_list(run):
     run.check('the dashboard shows the follow-up that moves', re.search(r'roll ?out', lower), page[:3000], required=False)
     run.check('the dashboard names the dropped offer', 'screen sharing' in lower, page[:3000], required=False)
     ledger = run.ledger()
-    run.check('the offer that was on 3 lists is dropped from the ledger', 'screen-sharing-check' not in ledger, ledger)
-    run.check('the question the policy answered is gone from the ledger', 'release-rule' not in ledger, ledger)
+    # The list line may name what it dropped or closed; only the asked lines count.
+    run.check('the offer that was on 3 lists is dropped from the ledger', not asked_line(run, 'screen-sharing-check'), ledger)
+    run.check('the question the policy answered is gone from the ledger', not asked_line(run, 'release-rule'), ledger)
     run.check('the counts rise: listed=2 on the question and on the open offer',
               'listed=2' in asked_line(run, question.id) and 'listed=2' in asked_line(run, 'export-docs'), ledger)
     numbered = list_line(run)
@@ -2276,7 +2280,7 @@ def daily_list(run):
         run.check('the answer by number creates the offered task',
                   len(created) == 1 and re.search(r'export', (created[0].get('text') or '').lower()),
                   [(t['title'], t.get('text', '')[:200]) for t in created])
-        run.check('the offer leaves the ledger', 'export-docs' not in run.ledger(), run.ledger(), required=False)
+        run.check('the offer leaves the ledger', not asked_line(run, 'export-docs'), run.ledger(), required=False)
         turns += answered
     return turns + asked
 
