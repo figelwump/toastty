@@ -1,9 +1,9 @@
 import Foundation
 import RemoteProtocol
 
-/// The Tasks tab's groups, as the Mac's Tasks view lists them: To ship
-/// first, one lane per project, then Needs you, Ready to review, Running and
-/// Idle, then the Done count. Each group lists the tasks whose own stage is
+/// The Tasks tab's groups, as the Mac's Tasks view lists them: Needs you,
+/// Ready to review, Running and Idle, then To ship with one lane per
+/// project, then the Done count. Each group lists the tasks whose own stage is
 /// in it, a child under its parent when both are there. A family in Needs
 /// you lists under Ready to review when every member that needs the user
 /// waits only for a review; a member whose own state is calmer is dimmed.

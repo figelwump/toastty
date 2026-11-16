@@ -198,39 +198,46 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["Home"].isSelected)
     }
 
-    func testTheTasksTabListsToShipFirstAndATaskWithoutATaskSpaceOpensItsDetail() {
+    /// The Tasks tab lists its groups in the Mac's Tasks view order: Needs
+    /// you, Ready to review, Running, Idle, To ship, then Done.
+    func testTheTasksTabListsGroupsInTheMacOrderAndATaskWithoutATaskSpaceOpensItsDetail() {
         let app = launchTaskFixture()
         app.tabBars.buttons["Tasks"].tap()
-        let toShip = app.descendants(matching: .any)["toastty-tasks-group-to-ship"]
-        XCTAssertTrue(toShip.waitForExistence(timeout: 5))
-        XCTAssertEqual(toShip.label, "To ship, 3")
-        let lane = app.descendants(matching: .any)["toastty-tasks-lane-toastty"]
-        XCTAssertTrue(lane.exists)
-        let shipped = app.buttons["toastty-task-row-\(shippedTaskID)"]
-        XCTAssertTrue(shipped.exists)
+        let tasks = "toastty-mobile-tasks"
         let needsYou = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
-        XCTAssertTrue(needsYou.exists)
-        XCTAssertGreaterThan(needsYou.frame.minY, shipped.frame.minY)
+        XCTAssertTrue(needsYou.waitForExistence(timeout: 5))
         XCTAssertEqual(needsYou.label, "Needs you, 4")
         // Rows from several projects share the list, so each names its own.
         let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
         XCTAssertTrue(question.label.contains("Should the badge count tasks or sessions?, toastty"))
+        XCTAssertGreaterThan(question.frame.minY, needsYou.frame.minY)
         attachScreenshot(named: "tasks-tab", of: app)
 
         // A review lists under Ready to review, apart from Needs you.
         let review = app.buttons["toastty-subspace-row-\(reviewSubspaceID)"]
-        XCTAssertTrue(scrollTo(review, in: app, list: "toastty-mobile-tasks"))
+        XCTAssertTrue(scrollTo(review, in: app, list: tasks))
         let readyToReview = app.descendants(matching: .any)["toastty-tasks-group-readyToReview"]
         XCTAssertEqual(readyToReview.label, "Ready to review, 1")
         XCTAssertGreaterThan(review.frame.minY, readyToReview.frame.minY)
         // A task Toastty is still setting up lists in Running, apart from
         // the task that started it, which needs the user.
-        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(startingTaskID)"], in: app, list: "toastty-mobile-tasks"))
-        XCTAssertGreaterThan(
-            app.buttons["toastty-task-row-\(startingTaskID)"].frame.minY,
-            app.descendants(matching: .any)["toastty-tasks-group-running"].frame.minY
+        let starting = app.buttons["toastty-task-row-\(startingTaskID)"]
+        XCTAssertTrue(scrollTo(starting, in: app, list: tasks))
+        XCTAssertGreaterThan(starting.frame.minY, app.descendants(matching: .any)["toastty-tasks-group-running"].frame.minY)
+        // The lane's line follows the To ship header, and its tasks follow it.
+        let toShip = app.descendants(matching: .any)["toastty-tasks-group-to-ship"]
+        let shipped = app.buttons["toastty-task-row-\(shippedTaskID)"]
+        XCTAssertTrue(scrollTo(shipped, in: app, list: tasks))
+        XCTAssertTrue(scrollTo(toShip, in: app, list: tasks))
+        XCTAssertEqual(toShip.label, "To ship, 3")
+        let lane = app.descendants(matching: .any)["toastty-tasks-lane-toastty"]
+        XCTAssertGreaterThan(lane.frame.minY, toShip.frame.minY)
+        XCTAssertGreaterThan(shipped.frame.minY, lane.frame.minY)
+        // The groups in the Mac's order, from the top of the list down.
+        XCTAssertEqual(
+            groupOrder(in: app, list: tasks),
+            ["needsYou", "readyToReview", "running", "idle", "to-ship", "done"]
         )
-        XCTAssertTrue(scrollTo(app.descendants(matching: .any)["toastty-tasks-group-done"], in: app, list: "toastty-mobile-tasks"))
         attachScreenshot(named: "tasks-tab-end", of: app)
 
         let failed = app.buttons["toastty-task-row-\(setupFailedTaskID)"]
@@ -356,7 +363,8 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         // The Tasks tab's lane offers the same release.
         app.tabBars.buttons["Tasks"].tap()
         let laneRelease = app.buttons["toastty-tasks-lane-release-toastty"]
-        XCTAssertTrue(waitUntilHittable(laneRelease))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-tasks-group-needsYou"].waitForExistence(timeout: 5))
+        XCTAssertTrue(scrollTo(laneRelease, in: app, list: "toastty-mobile-tasks"))
         XCTAssertEqual(laneRelease.label, "Release toastty")
         attachScreenshot(named: "release-tasks-lane", of: app)
         laneRelease.tap()
@@ -381,21 +389,38 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         attachScreenshot(named: "release-card-releasing", of: app)
     }
 
+    /// At a large text size the groups above To ship are taller than the
+    /// screen, so the tab has to scroll to put the lane's line in view.
     func testACardsToShipAndDoneCountsOpenTheTasksTabAtTheirGroup() {
-        let app = launchTaskFixture()
+        let app = launchTaskFixture(contentSize: .accessibilityMedium)
         select(.all, in: app)
         let toShip = app.buttons["toastty-card-to-ship-\(toasttyWorkspaceID)"]
         XCTAssertTrue(scrollTo(toShip, in: app))
         toShip.tap()
         XCTAssertTrue(app.tabBars.buttons["Tasks"].waitForSelection())
-        XCTAssertTrue(waitUntilHittable(app.descendants(matching: .any)["toastty-tasks-lane-toastty"]))
+        let lane = app.descendants(matching: .any)["toastty-tasks-lane-toastty"]
+        XCTAssertTrue(waitUntilHittable(lane))
+        // The lane's line shows under the navigation bar, and the groups
+        // above it are scrolled off the top.
+        let navigationBar = app.navigationBars["Tasks"]
+        XCTAssertTrue(navigationBar.exists)
+        XCTAssertGreaterThanOrEqual(lane.frame.minY, navigationBar.frame.maxY - 1, "\(lane.frame)")
+        XCTAssertLessThan(lane.frame.maxY, app.tabBars.firstMatch.frame.minY, "\(lane.frame)")
+        let needsYou = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
+        XCTAssertFalse(needsYou.exists && needsYou.isHittable)
+        attachScreenshot(named: "tasks-tab-to-ship", of: app)
 
+        // Back to the top, where Done is off the screen, so the Done tap
+        // has to scroll to it.
+        scrollTasksToTop(in: app)
+        let doneGroup = app.descendants(matching: .any)["toastty-tasks-group-done"]
+        XCTAssertFalse(doneGroup.exists && doneGroup.isHittable)
         app.tabBars.buttons["Home"].tap()
         let done = app.buttons["toastty-card-done-\(toasttyWorkspaceID)"]
-        XCTAssertTrue(waitUntilHittable(done))
+        XCTAssertTrue(scrollTo(done, in: app))
         done.tap()
         XCTAssertTrue(app.tabBars.buttons["Tasks"].waitForSelection())
-        XCTAssertTrue(waitUntilHittable(app.descendants(matching: .any)["toastty-tasks-group-done"]))
+        XCTAssertTrue(waitUntilHittable(doneGroup))
         attachScreenshot(named: "tasks-tab-done", of: app)
     }
 
@@ -530,7 +555,8 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(notice.waitForExistence(timeout: 5))
         XCTAssertTrue(notice.label.hasPrefix("Reconnecting"), notice.label)
         XCTAssertTrue(app.buttons["toastty-mobile-connection-retry"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-tasks-lane-toastty"].exists)
+        let lane = app.descendants(matching: .any)["toastty-tasks-lane-toastty"]
+        XCTAssertTrue(scrollTo(lane, in: app, list: "toastty-mobile-tasks"))
         XCTAssertFalse(app.buttons["toastty-tasks-lane-release-toastty"].exists)
         attachScreenshot(named: "tasks-tab-reconnecting", of: app)
     }
@@ -675,6 +701,37 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         let tabBar = app.tabBars.firstMatch
         if tabBar.exists, element.frame.maxY > tabBar.frame.minY { return false }
         return true
+    }
+
+    /// The Tasks tab's group headers in the order they first show while
+    /// the list scrolls down from its top. Rows above a header can leave
+    /// the list as it scrolls, so frames are compared only on one screen.
+    private func groupOrder(in app: XCUIApplication, list identifier: String) -> [String] {
+        let groups = ["needsYou", "readyToReview", "running", "idle", "to-ship", "done"]
+        let list = app.collectionViews[identifier]
+        scrollTasksToTop(in: app)
+        var order: [String] = []
+        for _ in 0..<16 {
+            let visible = groups
+                .filter { order.contains($0) == false }
+                .map { ($0, app.descendants(matching: .any)["toastty-tasks-group-\($0)"]) }
+                .filter { $0.1.exists && $0.1.isHittable }
+                .sorted { $0.1.frame.minY < $1.1.frame.minY }
+            order += visible.map(\.0)
+            if order.count == groups.count { break }
+            list.swipeUp(velocity: .slow)
+        }
+        return order
+    }
+
+    /// Scrolls the Tasks tab until its first group, Needs you, shows.
+    private func scrollTasksToTop(in app: XCUIApplication) {
+        let list = app.collectionViews["toastty-mobile-tasks"]
+        let first = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
+        for _ in 0..<12 where (first.exists && first.isHittable) == false {
+            list.swipeDown(velocity: .fast)
+        }
+        XCTAssertTrue(first.exists && first.isHittable)
     }
 
     /// The tab bar is off the screen: gone, or not reachable by a tap.
