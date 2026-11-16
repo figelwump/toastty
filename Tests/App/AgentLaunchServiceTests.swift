@@ -50,6 +50,36 @@ struct AgentLaunchServiceTests {
         }
     }
 
+    /// A Codex coordinator starts with a larger `project_doc_max_bytes`, so
+    /// it reads all of its instructions. The setting is on the command
+    /// only. A Claude coordinator and a task agent's launch do not get it.
+    @Test
+    func onlyACodexCoordinatorStartsWithTheLargerProjectDocLimit() async throws {
+        let docLimit = "--config project_doc_max_bytes=\(CoordinatorFolder.codexProjectDocMaxBytes)"
+        for agent in [AgentKind.codex, .claude] {
+            for isCoordinator in [true, false] {
+                let fixture = try makeLaunchUITestFixture()
+                let root = try makeProjectRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let result = if isCoordinator {
+                    try await fixture.service.launchCoordinator(
+                        profileID: agent.rawValue, workspaceID: fixture.workspaceID, panelID: fixture.panelID,
+                        cwd: root.path, environment: [:], model: nil, reasoningEffort: nil
+                    )
+                } else {
+                    try await fixture.service.launchAsync(
+                        profileID: agent.rawValue, workspaceID: fixture.workspaceID, panelID: fixture.panelID,
+                        cwd: root.path
+                    )
+                }
+                #expect(
+                    result.commandLine.contains(docLimit) == (agent == .codex && isCoordinator),
+                    "agent: \(agent.rawValue), isCoordinator: \(isCoordinator): \(result.commandLine)"
+                )
+            }
+        }
+    }
+
     @Test
     func forksFailClosedForUnconfirmedStaleMissingAndMismatchedSources() throws {
         for failure in ["inactive", "unconfirmed", "stale", "missing-file", "provider", "same-panel", "missing-cwd", "initial-commands"] {

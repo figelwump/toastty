@@ -609,65 +609,82 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
     /// After a relaunch the coordinator's agent resumes in its restored
     /// terminal through a typed command. That command sets the
     /// coordinator's git ceiling, so the shell's startup files cannot
-    /// replace it. Another restored agent's command does not set it.
+    /// replace it. A Codex coordinator's command also raises
+    /// `project_doc_max_bytes`, as its first start does, so it reads all of
+    /// its instructions. Another restored agent's command gets neither.
     func testRestoredCoordinatorResumeCommandSetsTheCoordinatorEnvironmentOnly() async throws {
-        for isCoordinator in [true, false] {
-            let fixture = try makeRuntimeResumeFixture()
-            defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
-            let panelID = UUID()
-            let workspaceID = UUID()
-            let record = ManagedAgentResumeRecord(
-                agent: .claude,
-                nativeSessionID: "db4f311b-12d0-4f61-ba81-0ae44ed10492",
-                sessionFilePath: fixture.sessionFileURL.path,
-                cwd: fixture.cwdURL.path,
-                capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
-            )
-            var state = makeRuntimeResumeState(
-                windowID: UUID(),
-                workspaceID: workspaceID,
-                panelID: panelID,
-                resumeRecord: record,
-                profileBinding: nil
-            )
-            if isCoordinator {
-                state.workspacesByID[workspaceID]?.isCoordinator = true
-                state.workspacesByID[workspaceID]?.coordinatorPanelID = panelID
-            }
-            let store = AppStore(state: state, persistTerminalFontPreference: false)
-            let registry = TerminalRuntimeRegistry()
-            let sessionRuntimeStore = SessionRuntimeStore()
-            sessionRuntimeStore.bind(store: store)
-            // The registry holds both weakly.
-            let profileProvider = makeRuntimeResumeProfileProvider()
-            let restoredManagedLaunchPlanner = makeRestoredManagedLaunchPlanner(
-                store: store,
-                sessionRuntimeStore: sessionRuntimeStore
-            )
-            registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
-            registry.bind(sessionLifecycleTracker: sessionRuntimeStore)
-            registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
-            registry.setCoordinatorLaunchEnvironment(["GIT_CEILING_DIRECTORIES": "/Users/someone/.toastty"])
-            registry.bind(store: store)
-            var submittedCommand: String?
-            registry.setRestoredManagedLaunchSubmitterForTesting { command, _, _ in
-                submittedCommand = command
-                return true
-            }
+        let docLimit = "--config project_doc_max_bytes=\(CoordinatorFolder.codexProjectDocMaxBytes)"
+        for agent in [AgentKind.claude, .codex] {
+            for isCoordinator in [true, false] {
+                let label = "agent: \(agent.rawValue), isCoordinator: \(isCoordinator)"
+                let fixture = try makeRuntimeResumeFixture()
+                defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+                let panelID = UUID()
+                let workspaceID = UUID()
+                let nativeSessionID = agent == .codex
+                    ? "019e2823-f520-7690-91b6-cd84eb52dd8a"
+                    : "db4f311b-12d0-4f61-ba81-0ae44ed10492"
+                let record = ManagedAgentResumeRecord(
+                    agent: agent,
+                    nativeSessionID: nativeSessionID,
+                    sessionFilePath: fixture.sessionFileURL.path,
+                    cwd: fixture.cwdURL.path,
+                    capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+                )
+                var state = makeRuntimeResumeState(
+                    windowID: UUID(),
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    resumeRecord: record,
+                    profileBinding: nil
+                )
+                if isCoordinator {
+                    state.workspacesByID[workspaceID]?.isCoordinator = true
+                    state.workspacesByID[workspaceID]?.coordinatorPanelID = panelID
+                }
+                let store = AppStore(state: state, persistTerminalFontPreference: false)
+                let registry = TerminalRuntimeRegistry()
+                let sessionRuntimeStore = SessionRuntimeStore()
+                sessionRuntimeStore.bind(store: store)
+                // The registry holds both weakly.
+                let profileProvider = makeRuntimeResumeProfileProvider()
+                let restoredManagedLaunchPlanner = makeRestoredManagedLaunchPlanner(
+                    store: store,
+                    sessionRuntimeStore: sessionRuntimeStore
+                )
+                registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+                registry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+                registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
+                registry.setCoordinatorLaunchEnvironment(["GIT_CEILING_DIRECTORIES": "/Users/someone/.toastty"])
+                registry.bind(store: store)
+                var submittedCommand: String?
+                registry.setRestoredManagedLaunchSubmitterForTesting { command, _, _ in
+                    submittedCommand = command
+                    return true
+                }
 
-            _ = registry.surfaceLaunchConfiguration(for: panelID)
-            registry.markInitialSurfaceLaunchCompleted(for: panelID)
-            await Task.yield()
-            await Task.yield()
+                _ = registry.surfaceLaunchConfiguration(for: panelID)
+                registry.markInitialSurfaceLaunchCompleted(for: panelID)
+                await Task.yield()
+                await Task.yield()
 
-            let command = try XCTUnwrap(submittedCommand, "isCoordinator: \(isCoordinator)")
-            withExtendedLifetime((profileProvider, restoredManagedLaunchPlanner)) {}
-            XCTAssertTrue(command.contains("--resume db4f311b-12d0-4f61-ba81-0ae44ed10492"))
-            XCTAssertEqual(
-                command.contains("GIT_CEILING_DIRECTORIES=/Users/someone/.toastty"),
-                isCoordinator,
-                command
-            )
+                let command = try XCTUnwrap(submittedCommand, label)
+                withExtendedLifetime((profileProvider, restoredManagedLaunchPlanner)) {}
+                XCTAssertTrue(
+                    command.contains(agent == .codex ? "resume \(nativeSessionID)" : "--resume \(nativeSessionID)"),
+                    command
+                )
+                XCTAssertEqual(
+                    command.contains("GIT_CEILING_DIRECTORIES=/Users/someone/.toastty"),
+                    isCoordinator,
+                    "\(label): \(command)"
+                )
+                XCTAssertEqual(
+                    command.contains(docLimit),
+                    agent == .codex && isCoordinator,
+                    "\(label): \(command)"
+                )
+            }
         }
     }
 

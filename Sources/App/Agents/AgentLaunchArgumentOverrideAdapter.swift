@@ -225,6 +225,25 @@ enum AgentLaunchArgumentOverrideAdapter {
         }
     }
 
+    /// Sets Codex's `project_doc_max_bytes` for this launch only, replacing
+    /// any value the profile sets. Codex reads at most that many bytes of
+    /// its `AGENTS.md` files and drops the rest without an error. Other
+    /// agents have no such limit, so their argv is returned unchanged.
+    static func applying(
+        codexProjectDocMaxBytes: Int?,
+        to argv: [String],
+        agent: AgentKind,
+        profileID: String
+    ) throws -> [String] {
+        guard let codexProjectDocMaxBytes, agent == .codex else { return argv }
+        var editor = try ProviderArgvEditor(argv: argv, agent: agent, profileID: profileID)
+        try editor.removeCodexConfigAssignments(
+            key: "project_doc_max_bytes",
+            parameter: "projectDocMaxBytes"
+        )
+        return editor.inserting(["--config", "project_doc_max_bytes=\(codexProjectDocMaxBytes)"])
+    }
+
     private static func validatedValue(
         _ value: String?,
         parameter: String
