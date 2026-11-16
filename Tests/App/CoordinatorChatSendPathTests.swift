@@ -845,7 +845,7 @@ struct CoordinatorChatSendPathTests {
         #expect(draft.pasteAttachments(from: image))
         let drop = QuickEntryTests.pasteboard()
         drop.writeObjects([notes as NSURL])
-        #expect(fixture.chat.attachmentDropTarget.performDrop(drop))
+        #expect(fixture.chat.attachmentDropTarget(host: .panel).performDrop(drop))
         fixture.chat.draft = "What is wrong here?"
         // A file still being copied holds the message back.
         #expect(fixture.chat.canSend == false)
@@ -1423,6 +1423,8 @@ final class CoordinatorChatFixture {
         /// Whether Toastty is the active app, as the chat sees it. A test
         /// host is not always the active app.
         var appIsActive = true
+        /// How many times the chat made Toastty the active app.
+        var activations = 0
     }
 
     /// Where the chat saves what it keeps over a relaunch, or `nil` to keep
@@ -1499,7 +1501,8 @@ final class CoordinatorChatFixture {
             access: conversations.service,
             defaults: defaults,
             now: { clock.now },
-            isAppActive: { clock.appIsActive }
+            isAppActive: { clock.appIsActive },
+            activateApp: { clock.activations += 1 }
         )
         controller.chat = chat
         return (controller, chat)

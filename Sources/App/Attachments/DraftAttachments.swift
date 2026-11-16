@@ -525,6 +525,8 @@ final class DraftAttachments: ObservableObject {
 @MainActor
 final class AttachmentDropTarget {
     weak var attachments: DraftAttachments?
+    /// Called after a drop that the draft took.
+    var onDrop: (() -> Void)?
 
     init(attachments: DraftAttachments?) {
         self.attachments = attachments
@@ -556,6 +558,8 @@ final class AttachmentDropTarget {
 
     func performDrop(_ pasteboard: NSPasteboard) -> Bool {
         attachments?.isDropTargeted = false
-        return attachments?.handleDrop(from: pasteboard) ?? false
+        guard attachments?.handleDrop(from: pasteboard) == true else { return false }
+        onDrop?()
+        return true
     }
 }
