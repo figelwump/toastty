@@ -153,6 +153,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     private var fixtureSnapshot: MobileHomeSnapshot? {
         if taskFixture == "1" { return ToasttyMobileFixture.taskHome }
         if taskFixture == "quiet" { return ToasttyMobileFixture.quietTaskHome }
+        if taskFixture == "pick-workspace" { return ToasttyMobileFixture.pickWorkspaceTaskHome }
         if taskFixture == "long-names" { return ToasttyMobileFixture.longNamesTaskHome }
         return runtimeMode == .fixture && coordinatorFixture != nil ? ToasttyMobileFixture.home : nil
     }

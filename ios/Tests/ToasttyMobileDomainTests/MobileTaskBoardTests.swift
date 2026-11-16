@@ -13,7 +13,7 @@ final class MobileTaskBoardTests: XCTestCase {
         XCTAssertEqual(snapshot.presentation().coordinator?.id, uuid(210))
         XCTAssertFalse(snapshot.presentation().topLevelWorkspaces.contains { $0.id == uuid(210) })
 
-        XCTAssertEqual(board.tasks.count, 6)
+        XCTAssertEqual(board.tasks.count, 7)
         let question = try XCTUnwrap(board.task(taskSpaceID: uuid(201)))
         XCTAssertEqual(question.title, "iOS task support")
         XCTAssertEqual(question.group, .needsYou)
@@ -35,11 +35,16 @@ final class MobileTaskBoardTests: XCTestCase {
         XCTAssertEqual(question.actions.map(\.action), [.markDone, .archive])
         XCTAssertEqual(board.task(id: uuid(304))?.actions.map(\.title), ["Retry Setup", "Delete Task"])
         XCTAssertNil(board.task(id: uuid(304))?.mergeControl)
+        // Only the Mac picks a task's workspace, and it says where.
+        XCTAssertEqual(board.task(id: uuid(307))?.macStep,
+                       "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace.")
+        XCTAssertEqual(board.task(id: uuid(307))?.actions.map(\.action), [.delete])
+        XCTAssertNil(board.task(id: uuid(304))?.macStep)
 
-        XCTAssertEqual(board.needsYou.map(\.taskID), [uuid(301), uuid(305), uuid(302), uuid(304)])
+        XCTAssertEqual(board.needsYou.map(\.taskID), [uuid(301), uuid(305), uuid(302), uuid(304), uuid(307)])
         XCTAssertEqual(board.needsYou[1], RemoteTaskBoardEntry(taskID: uuid(305), isLinkedChild: true, isContext: true))
         // The dimmed child's own stage is Running, so it does not count.
-        XCTAssertEqual(board.count(.needsYou), 3)
+        XCTAssertEqual(board.count(.needsYou), 4)
         XCTAssertEqual(board.toShip, [
             RemoteTaskShipLane(id: "/Users/example/toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [uuid(306)]),
         ])
