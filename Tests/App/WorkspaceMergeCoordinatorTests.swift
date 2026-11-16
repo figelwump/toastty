@@ -80,8 +80,11 @@ private final class MergeFixture {
     }
     /// The cause, the commit and the target branch of the last merge that stopped.
     var lastMergeFailure: (cause: TaskMergeFailure.Cause, head: String?, base: String?)? {
-        events.compactMap {
-            if case .mergeFailed(_, let cause, let head, let base) = $0 { (cause, head, base) } else { nil }
+        events.compactMap { event -> (cause: TaskMergeFailure.Cause, head: String?, base: String?)? in
+            if case .mergeFailed(_, let cause, let head, let base) = event {
+                return (cause: cause, head: head, base: base)
+            }
+            return nil
         }.last
     }
     private(set) var coordinator: WorkspaceMergeCoordinator!
