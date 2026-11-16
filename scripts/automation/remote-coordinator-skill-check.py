@@ -2125,22 +2125,23 @@ def review_empty(run):
 # Work that a task names for after its merge, under the heading the task skills give it.
 REMAINING_AFTER_MERGE = """
 ## Remaining after merge
-Step 3, the rollout of this change to the 24 computers, is not in this pull request. Plan: release version 0.9.1,
-update the canary computer first, then the others in two groups. Open questions: which version to release, and who
-confirms the cloud access policy before the canary.
+Step 3, the rollout of the same fix to the iPhone app, is not in this pull request. Plan: port the read tracking to
+the phone's sidebar, try it on the test phone first, then ship it in the next TestFlight build. Open questions: on by
+default or behind a setting, and which TestFlight group gets it first.
 """
 
 
 def followup_merge(run):
     """A merged change leaves work: the coordinator follows the task, and after the merge it creates the next task."""
-    task = run.create_task('Move links to the new domain', status='working')
+    # The proof fits the change (GOOD_PROOF and REPORT are about the unread dot), so the review is good.
+    task = run.create_task('Fix the unread dot', status='working')
     head = f'{0xd0a1:040x}'
     run.set_pr(task, 61, head=head, body=GOOD_PROOF.format(head=head) + REMAINING_AFTER_MERGE,
-               files=['Sources/App/Links.swift', 'Tests/App/LinksTests.swift'])
+               files=['Sources/App/SidebarView.swift', 'Tests/App/SidebarViewTests.swift'])
     publish_report(run, task, head)
     run.seed_policy()
     run.open_coordinator()
-    run.reply(task, 'The pull request is open and its checks pass. The rollout to the computers remains after the '
+    run.reply(task, 'The pull request is open and its checks pass. The rollout to the iPhone app remains after the '
                     'merge: the plan and its open questions are in the description, under Remaining after merge.')
     to_review(run, task)
     first = run.new_turns(wake=True)
@@ -2162,12 +2163,15 @@ def followup_merge(run):
         new = created[0]
         text = (new.get('text') or '').lower()
         run.check('the new task names the remaining work and the merged task',
-                  re.search(r'rollout|step 3|computers', text) and (task.id.lower() in text or 'pull/61' in text),
+                  re.search(r'rollout|step 3|iphone|phone', text) and (task.id.lower() in text or 'pull/61' in text),
                   new.get('text'))
         run.check('the new task does not start work in a worktree', new.get('worktree') is None, new.get('worktree'))
         run.check('it tells the user, with the new task link', f"toastty://task/{new['taskID']}" in run.said(later),
                   run.said(later))
-        run.check('the followup line names the new task', new['taskID'] in run.ledger(), run.ledger(), required=False)
+        merged_line = next((line for line in run.ledger().splitlines()
+                            if re.match(r'- \S+ merged\b', line) and task.id in line), '')
+        run.check('a merged line for the task names the new task, so a later digest makes no second one',
+                  new['taskID'] in merged_line, run.ledger())
     commands = [c for t in later for c in t['commands']]
     run.check('it starts no release', not [c for c in commands if re.search(r'task\s+release\b', c)], commands)
     return first + later
@@ -2203,6 +2207,7 @@ def daily_list(run):
     run.ask(question, 'CSV or JSON for the export?', 'Which format should the export use, CSV or JSON? I suggest CSV.')
     merged = run.create_task('Move links to the new domain', done=True)
     moving = run.create_task('Roll out the new domain', status='working')
+    # The list time passed 2 minutes ago, and the ledger has no list line: the list is due at the first wake.
     run.seed_policy(talking=f"- The coordinator's defaults.\n- Waiting on you list each day at {review_time(-2)}.",
                     releases='- app: on merge.')
     stamp = '%Y-%m-%dT%H:%MZ'
@@ -2215,7 +2220,7 @@ def daily_list(run):
         f'- {day(2, stamp)} asked offer export-docs: offered a task to document the export command in docs/export.md '
         '(app); create it when the user says yes. listed=1',
         f'- {day(2, stamp)} asked release-rule app: on merge or in batches?',
-        f'- {day(1, stamp)} followup [Move links to the new domain]({merged.link}): step 3, the rollout; held by '
+        f'- {day(1, stamp)} merged [Move links to the new domain]({merged.link}): step 3, the rollout, continues in '
         f'[Roll out the new domain]({moving.link}).',
     ]) + '\n')
     run.open_coordinator()
@@ -2254,14 +2259,17 @@ def daily_list(run):
     again, _ = dashboard(run)
     run.check('a list that the user asked for changes no count', counted == [line for line in run.ledger().splitlines()
                                                                            if 'listed=' in line], run.ledger())
-    run.check('a list that the user asked for keeps the list line', list_line(run) == numbered, run.ledger())
+    run.check('a list that the user asked for keeps the time of the list line',
+              list_line(run).split()[1:2] == numbered.split()[1:2], run.ledger())
     run.check('it shows the list again in the dashboard', again is not None and revision is not None and again > revision,
               [revision, again], required=False)
     run.check('it answers with the question that waits', question.link in run.said(asked), run.said(asked), required=False)
 
     # The user answers with the number of the offer.
-    number = re.search(r'(\d+)\s+[^;]*?(export-docs|document)', numbered)
-    run.check('the list line names the offer with its number', number, numbered)
+    # The list that the user asked for numbered the items again: answer by its numbers.
+    current = list_line(run)
+    number = re.search(r'(\d+)\s+[^;]*?(export-docs|document)', current)
+    run.check('the list line names the offer with its number', number, current)
     if number:
         answered = run.tell(f'{number.group(1)} yes')
         created = created_since(run, before)

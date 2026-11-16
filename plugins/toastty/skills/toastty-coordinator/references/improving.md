@@ -211,8 +211,10 @@ Steps:
    In place of a Merging rule, you may propose one rule for a kind of
    question whose last 3 answers were all `same`, in the section that fits.
 6. Tell the user in one short message, with a number for each proposal, so
-   that the user can answer "1 and 3". Write an `asked review` line in the
-   ledger, and remove it when the user answers.
+   that the user can answer "1 and 3". When your daily list came in the same
+   turn, number the proposals after its last number. Write an `asked review`
+   line in the ledger, with the number of each proposal, and remove it when
+   the user answers.
 7. Set `Last review:` to the time now. Remove Closed lines that are older
    than 30 days, but keep each line that the user closed as not a problem.
    Remove lines of `decisions.md` that are older than 90 days.

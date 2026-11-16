@@ -35,13 +35,14 @@ stops, so nothing else keeps that work.
    - 2026-11-13T20:51Z followup [Domain migration](toastty://task/<id>): step 3, the rollout to the computers; questions on the version and the canary.
    ```
 
-2. **When a digest says that a task merged** and the ledger has no `followup`
-   line for it, read its `lastReply` and its pull request description once,
-   for that heading. A merge that you did not watch shows in a later digest.
+2. **When a digest says that a task merged** and the ledger has no
+   `followup` or `merged` line for it, read its `lastReply` and its pull
+   request description for that heading. A merge that you did not watch
+   shows in a later digest. When nothing remains, do nothing more.
 3. **After the merge,** find the task that holds the remaining work: an open
-   task that the reply names, or one whose text has that work. If one exists,
-   name it in the `followup` line. If none exists, create it now. Do not wait
-   for a yes: the user's request covers the rest of its work.
+   task that the reply names, or one whose text has that work. If none
+   exists, create it now. Do not wait for a yes: the user's request covers
+   the rest of its work.
    - Create it in the same project, as New tasks says, without
      `--start-work`.
    - Its text is yours, not the user's. Say that it continues the user's
@@ -50,12 +51,22 @@ stops, so nothing else keeps that work.
      it to bring each open question to the user with `task needs-reply` and
      the answer it suggests. A release, a deployment or another production
      step still needs the user's approval, as always.
-   - Tell the user in one line, with the new task's link, and name the new
-     task in the `followup` line.
-4. When the only remaining step is the release of the merged change, make no
-   task: see Releases.
-5. Remove the `followup` line when its task is Done or archived, or when the
-   user says that the rest is not needed. Then do not create it again.
+   - Tell the user in one line, with the new task's link.
+4. **Then replace the `followup` line with a `merged` line** that names the
+   task that continues the work. A `merged` line stays for 30 days, also
+   after the task is Done, so a later digest about the same task, such as
+   its release, starts no second follow-up:
+
+   ```text
+   - 2026-11-14T02:10Z merged [Domain migration](toastty://task/<id>): step 3 continues in [Finish the rollout](toastty://task/<id>).
+   ```
+
+5. When the only remaining step is the release of the merged change, make no
+   task: see Releases. Write the `merged` line all the same.
+6. When the user says that the rest is not needed, write that in the
+   `merged` line, and archive no task without the user's yes. When the task
+   ends without a merge, remove its `followup` line: the user stopped that
+   work.
 
 Create no follow-up for work that the user declined, for ideas that the agent
 only suggests ("could also"), or for work that another open task holds.
@@ -72,13 +83,16 @@ is due when that time has passed since the time of the ledger's `list` line;
 with no `list` line, it is due. Make it in a turn that a digest started,
 after the work for the tasks, and before a review that is due in the same
 turn. Your next check makes sure that such a turn comes: set it for the next
-list time, unless a deadline comes earlier. When a turn of the user writes or
-changes the time in Talking, read `"$TOASTTY_CLI_PATH" --json coordinator
-status`. If `wake.nextWakeAt` is null or later than the next list time, set
-your check for that time with `coordinator wake --at`.
+list time, unless a deadline comes earlier. A turn of the user can also leave
+something waiting, and then no digest may come for days. So in any turn in
+which you write an `asked`, `told` or `followup` line, or write or change the
+time in Talking, read `"$TOASTTY_CLI_PATH" --json coordinator status`. If
+`wake.nextWakeAt` is null or later than the next list time, set your check
+for that time with `coordinator wake --at`.
 
 **When the user asks** what waits for them, make the list in that turn. That
-list counts for no limit below, and it does not change the `list` line.
+list counts for no limit below. In the `list` line, it changes the numbered
+items and keeps the time.
 
 1. **Collect** what waits for the user:
    - each open task that you brought to the user, such as a review, a
@@ -91,8 +105,8 @@ list counts for no limit below, and it does not change the `list` line.
      whether the user answered somewhere else: in a task (a later
      `lastUserInputAt`, a new stage or a new reply), in `policy.md`, or with
      a task that now exists. Remove each line that the user answered;
-   - each `followup` line. When no task holds its work, or its task's agent
-     does not run and asks nothing, first make it move, as section 1 says.
+   - each `followup` line. When its task merged, do section 1 for it now:
+     a wake can have missed the merge.
 2. **Sort** each item into one group. Inside a group, put first the item
    that waited longest.
    - **Blocks work you started:** a decision without which a task, a
@@ -103,9 +117,10 @@ list counts for no limit below, and it does not change the `list` line.
      Dropped on that day's list; the user can ask for it again.
    - **Closes by default:** a question with a default for no answer, such as
      the first-run question or a question about a rule. It is on one list,
-     which names the default. Then remove its line.
-   - **Moving:** each `followup` line whose work moves, as one short line
-     with no number. It shows the user that nothing was lost.
+     which names the default. Keep its line, with `listed=1`, and do not list
+     it again: the `asked first-run` line also keeps you from asking again.
+   - **Moving:** each `merged` line whose continuing task is open, as one
+     short line with no number. It shows the user that nothing was lost.
 3. **Mark what gets no attention:** an item that was on 2 lists or more, or
    a task in which the user typed nothing since it began to wait.
 4. **Count.** Add ` listed=1` to each `asked` and `told` line on the list,
@@ -126,8 +141,10 @@ list counts for no limit below, and it does not change the `list` line.
    you.", write the `list` line, mark the turn quiet if nothing else needs
    the user, and answer only "Nothing needs you."
 
-When the user answers with a number, find the item in the `list` line, and
-act on it as the section that asked says.
+When a review follows the list in the same turn, it numbers its proposals
+after the list's last number. When the user answers with a number, find the
+item in the `list` line or in the `asked review` line, and act on it as the
+section that asked says.
 
 ## 3. The dashboard
 
@@ -147,9 +164,10 @@ Find your dashboard first:
 "$TOASTTY_CLI_PATH" --json query run panel.scratchpad.list "sessionID=$TOASTTY_SESSION_ID"
 ```
 
-If the result has a Scratchpad titled "Waiting on you", pass its
-`documentID`. If it has none, leave `documentID=` out: Toastty then opens a
-new one. Publish the page through a quoted here-document:
+If the result has a Scratchpad titled "Waiting on you", pass
+`documentID=<its documentID>`. If it has none, pass `createPolicy=additional`
+instead: Toastty then opens a new one, and leaves any other Scratchpad as it
+is. Publish the page through a quoted here-document:
 
 ```bash
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.set-content --stdin content \
