@@ -379,12 +379,17 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertFalse(needsYou.exists && needsYou.isHittable)
         attachScreenshot(named: "tasks-tab-to-ship", of: app)
 
+        // Back to the top, where Done is off the screen, so the Done tap
+        // has to scroll to it.
+        scrollTasksToTop(in: app)
+        let doneGroup = app.descendants(matching: .any)["toastty-tasks-group-done"]
+        XCTAssertFalse(doneGroup.exists && doneGroup.isHittable)
         app.tabBars.buttons["Home"].tap()
         let done = app.buttons["toastty-card-done-\(toasttyWorkspaceID)"]
         XCTAssertTrue(scrollTo(done, in: app))
         done.tap()
         XCTAssertTrue(app.tabBars.buttons["Tasks"].waitForSelection())
-        XCTAssertTrue(waitUntilHittable(app.descendants(matching: .any)["toastty-tasks-group-done"]))
+        XCTAssertTrue(waitUntilHittable(doneGroup))
         attachScreenshot(named: "tasks-tab-done", of: app)
     }
 
@@ -673,10 +678,7 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private func groupOrder(in app: XCUIApplication, list identifier: String) -> [String] {
         let groups = ["needsYou", "readyToReview", "running", "idle", "to-ship", "done"]
         let list = app.collectionViews[identifier]
-        let first = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
-        for _ in 0..<12 where (first.exists && first.isHittable) == false {
-            list.swipeDown(velocity: .fast)
-        }
+        scrollTasksToTop(in: app)
         var order: [String] = []
         for _ in 0..<16 {
             let visible = groups
@@ -689,6 +691,16 @@ final class ToasttyMobileTaskUITests: XCTestCase {
             list.swipeUp(velocity: .slow)
         }
         return order
+    }
+
+    /// Scrolls the Tasks tab until its first group, Needs you, shows.
+    private func scrollTasksToTop(in app: XCUIApplication) {
+        let list = app.collectionViews["toastty-mobile-tasks"]
+        let first = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
+        for _ in 0..<12 where (first.exists && first.isHittable) == false {
+            list.swipeDown(velocity: .fast)
+        }
+        XCTAssertTrue(first.exists && first.isHittable)
     }
 
     /// The tab bar is off the screen: gone, or not reachable by a tap.
