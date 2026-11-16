@@ -1,7 +1,7 @@
 import XCTest
 
 /// The Coordinator tab, from a fixture Mac that runs the task system and has
-/// a coordinator: the third tab, its badge, its chat as the tab's own
+/// a coordinator: the second tab, its badge, its chat as the tab's own
 /// screen, what shows while the coordinator does not run, Home without the
 /// coordinator's workspace, and notifications from the coordinator.
 final class ToasttyMobileCoordinatorUITests: XCTestCase {
@@ -14,17 +14,17 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// The third tab shows only while the Mac has a coordinator, and the tab
-    /// bar itself only with a task board. Without a board, the coordinator's
+    /// The Coordinator tab shows only while the Mac has a coordinator, second
+    /// between Home and Tasks, and the tab bar itself only with a task
+    /// board. Without a board, the coordinator's
     /// workspace lists as an ordinary one, as an older Mac's does.
     func testTheCoordinatorTabShowsOnlyWithACoordinatorAndATaskBoard() {
         let withoutCoordinator = launch(coordinator: nil)
-        XCTAssertTrue(withoutCoordinator.tabBars.buttons["Tasks"].exists)
-        XCTAssertFalse(withoutCoordinator.tabBars.buttons["Coordinator"].exists)
+        XCTAssertEqual(withoutCoordinator.tabBars.buttons.allElementsBoundByIndex.map { $0.label }, ["Home", "Tasks"])
         withoutCoordinator.terminate()
 
         let app = launch(coordinator: "quiet")
-        XCTAssertEqual(app.tabBars.buttons.allElementsBoundByIndex.map { $0.label }, ["Home", "Tasks", "Coordinator"])
+        XCTAssertEqual(app.tabBars.buttons.allElementsBoundByIndex.map { $0.label }, ["Home", "Coordinator", "Tasks"])
         XCTAssertTrue(app.tabBars.buttons["Home"].isSelected)
         attachScreenshot(named: "tab-bar-three-tabs", of: app)
         app.terminate()
@@ -382,17 +382,40 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(textView(containing: "I asked it to keep the old API", in: app)))
     }
 
-    /// A chip opens its task over the chat, inside the Coordinator tab: the
-    /// task's space, or its detail when the phone lists no space for it. A
-    /// task that the Mac does not list stays text. Back returns to the chat
-    /// with the tab bar.
+    /// A chip opens its task over the chat, inside the Coordinator tab, as
+    /// the task's row opens it: a task space's one session, the screen of a
+    /// task space with several, or the task's detail when the phone lists no
+    /// space for it. A task that the Mac does not list stays text. Back
+    /// returns to the chat with the tab bar.
     func testATaskChipInTheCoordinatorsChatOpensItsTaskOverTheChat() {
         let app = launch(coordinator: "quiet")
         app.tabBars.buttons["Coordinator"].tap()
-        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let coordinatorTitle = app.staticTexts["toastty-mobile-coordinator-title"]
+        XCTAssertTrue(coordinatorTitle.waitForExistence(timeout: 5))
         let unlisted = textView(containing: "Old export spike", in: app)
         XCTAssertTrue(unlisted.waitForExistence(timeout: 5))
         XCTAssertFalse(link(containing: "Old export spike", in: app).exists)
+
+        // early-session-titles's space holds one session: the chip opens its
+        // transcript, with no tab bar, as every session screen.
+        let oneSession = link(containing: "early-session-titles", in: app)
+        XCTAssertTrue(oneSession.waitForExistence(timeout: 5))
+        for _ in 0..<4 where oneSession.isHittable == false { app.swipeDown() }
+        XCTAssertTrue(waitUntilHittable(oneSession))
+        attachScreenshot(named: "coordinator-chip-one-session-before", of: app)
+        oneSession.tap()
+        let taskBar = app.descendants(matching: .any)["toastty-task-bar"]
+        XCTAssertTrue(taskBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].exists)
+        XCTAssertFalse(coordinatorTitle.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+        XCTAssertTrue(waitUntilTheTabBarLeaves(app))
+        attachScreenshot(named: "coordinator-chip-one-session-after", of: app)
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(coordinatorTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(app.tabBars.buttons["Home"]))
+        XCTAssertTrue(app.tabBars.buttons["Coordinator"].isSelected)
+        XCTAssertFalse(app.navigationBars.firstMatch.buttons["Back"].exists)
 
         for _ in 0..<4 { app.swipeDown() }
         let noSpace = link(containing: "#259", in: app)
@@ -523,6 +546,16 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
     /// iOS 27 reports a tab's badge as the tab's value.
     private func showsBadge(_ text: String, on tab: XCUIElement, in app: XCUIApplication) -> Bool {
         ((tab.value as? String) ?? "").contains(text)
+    }
+
+    private func waitUntilTheTabBarLeaves(_ app: XCUIApplication, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let home = app.tabBars.buttons["Home"]
+            if home.exists == false || home.isHittable == false { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return false
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {

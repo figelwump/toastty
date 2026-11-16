@@ -407,10 +407,36 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         app.navigationBars["Task"].buttons["Done"].tap()
         XCTAssertTrue(title.waitForNonExistence(timeout: 5))
 
-        // A tap opens the task's space in place of the conversation, so Back
-        // returns to the workspace the conversation opened from.
+        // A chip opens the task's space as its row does, in place of the
+        // conversation, so Back returns to the workspace the conversation
+        // opened from. early-session-titles's space holds one session, so
+        // its transcript opens.
+        let taskBar = app.descendants(matching: .any)["toastty-task-bar"]
+        XCTAssertFalse(taskBar.exists)
         question.tap()
-        let taskSpace = app.navigationBars["early-session-titles"]
+        XCTAssertTrue(taskBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+        attachScreenshot(named: "task-link-chip-opens-one-session", of: app)
+        // That session's own chip opens nothing more: Back still returns to
+        // the workspace.
+        let sameSession = link(containing: "early-session-titles", in: app)
+        XCTAssertTrue(waitUntilHittable(sameSession))
+        sameSession.tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(taskBar.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(waitUntilHittable(session))
+
+        // compact-session-rows's space holds two sessions, so its screen
+        // opens.
+        session.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+        let severalSessions = link(containing: "compact-session-rows", in: app)
+        XCTAssertTrue(waitUntilHittable(severalSessions))
+        severalSessions.tap()
+        let taskSpace = app.navigationBars["compact-session-rows"]
         XCTAssertTrue(taskSpace.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].exists)
         XCTAssertFalse(app.staticTexts["toastty-mobile-conversation-title"].exists)

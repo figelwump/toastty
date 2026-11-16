@@ -628,6 +628,7 @@ enum ToasttyConversationFixture {
             .userMessage(.init(text: reply, origin: .remote)),
             .assistantMessage(.init(
                 text: "Noted. I will start the release right after it merges. "
+                    + "\(link("Early titles", ToasttyMobileFixture.questionTaskID)) keeps the old API for now. "
                     + "\(link("Old export spike", unlistedTaskID)) was archived, so it stays out.",
                 phase: .final
             )),

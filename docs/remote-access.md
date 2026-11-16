@@ -581,8 +581,8 @@ checkbox. An older phone ignores them and keeps its flat list.
 ### Tasks
 
 When the Mac runs the task system (see [Tasks](tasks.md)), the phone shows a
-tab bar with **Home** and **Tasks**, and **Coordinator** while the Mac has a
-coordinator (see [The Coordinator tab](#the-coordinator-tab)). Home's
+tab bar with **Home** and **Tasks**, and **Coordinator** between them while the
+Mac has a coordinator (see [The Coordinator tab](#the-coordinator-tab)). Home's
 **All | Active** switch becomes **All | Needs you**, as in the Mac sidebar.
 Each tab keeps its own stack of screens. The tab bar stays on list screens, such as a workspace. A session's
 screen has no tab bar, as a chat has none, so the transcript and the composer
@@ -820,7 +820,7 @@ Compatibility:
 
 While the Mac runs the task system and has a coordinator (see
 [The coordinator](tasks.md#the-coordinator)), the phone's tab bar reads
-**Home | Tasks | Coordinator**. The tab is the phone's form of the Mac's dock:
+**Home | Coordinator | Tasks**. The tab is the phone's form of the Mac's dock:
 it keeps the coordinator's chat one tap away from any list, and keeps its place
 while you work in the other tabs.
 
@@ -828,11 +828,20 @@ while you work in the other tabs.
   screen as any session, with its composer. Its title shows the golden Toasty,
   with steam while the coordinator works, and the name **Coordinator**; the
   line under it shows the status and the agent. The tab bar stays on this
-  screen, because Back has nowhere to go. A task chip opens the task's space
-  over the chat, or the task's detail when the phone lists no space for it;
-  a link to a task that the Mac does not list stays text. **Next** opens
-  another session over the chat, which hides the bar as every session screen
-  does. Back returns to the chat.
+  screen, because Back has nowhere to go. A task chip opens over the chat
+  (see **Task chips** below). **Next** opens another session over the chat,
+  which hides the bar as every session screen does. Back returns to the chat.
+- **Task chips.** A link `[title](toastty://task/<id>)` in a chat shows as a
+  chip with the task's stage color, its current title and its pull request
+  number. A tap opens the task's space as its row in Task Spaces opens it:
+  a task space with exactly one session and no task spaces of its own opens
+  that session's transcript; any other task space opens its screen. A task
+  whose space the phone does not list, such as a done or archived one, opens
+  its detail sheet. A link to a task that the Mac does not list stays text.
+  In the coordinator's chat the session or task space opens over the chat,
+  and Back returns to the chat with the tab bar. In another session's chat
+  it opens in place of that conversation, so Back goes to the screen under
+  it. A chip to the session already on screen does nothing.
 - **Toastty's messages show as on the Mac.** In the coordinator's chat only,
   the phone reads the first line that Toastty writes on a message it types
   into the coordinator ("Who a message is from" in
