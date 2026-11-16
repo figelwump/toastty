@@ -776,7 +776,17 @@ struct ToasttyMobileRootView: View {
                 && liveConversation?.canAcknowledgeRead == true,
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID),
             openTaskSpace: openTaskSpaceInPlaceOfConversation,
-            isCoordinatorRoot: isCoordinatorRoot
+            isCoordinatorRoot: isCoordinatorRoot,
+            reply: isCoordinatorRoot ? composerDraftState.replies[conversationID] : nil,
+            replyNotice: isCoordinatorRoot ? composerDraftState.replyNotices[conversationID] : nil,
+            replyToMessage: { target in
+                guard composerDraftState.generation == generation else { return false }
+                return composerDraftState.reply(to: target, for: conversationID)
+            },
+            cancelReply: {
+                guard composerDraftState.generation == generation else { return }
+                composerDraftState.cancelReply(for: conversationID)
+            }
         )
         .id(conversationID)
 #if DEBUG
@@ -895,9 +905,13 @@ struct ToasttyMobileRootView: View {
                 sendItems: isFixtureWorkingConversation(conversationID)
                     ? ToasttySendPresentationAdapter.makeItems(
                         from: SendReconciliationState(),
-                        inputControl: fixtureInputControl
-                    ) + fixtureSendItems
-                    : []
+                        inputControl: fixtureInputControl,
+                        readsCoordinatorMessages: true
+                    ) + fixtureSendItems.map(ToasttySendPresentationAdapter.coordinatorItem)
+                    : [],
+                hasLongMessage: ProcessInfo.processInfo.environment[
+                    "TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"
+                ] == "1"
             )
         }
         switch fixtureScenario {
@@ -1040,7 +1054,7 @@ struct ToasttyMobileRootView: View {
             }
             Task { @MainActor in
                 let outcome = await controller.send(
-                    submission.text,
+                    submission.sentText,
                     attachments: submission.attachments,
                     deliveryMode: deliveryMode
                 )
@@ -1092,23 +1106,50 @@ struct ToasttyMobileRootView: View {
 #endif
                 return
             }
+            // The bubble can show other text than was sent, such as a reply
+            // without its first line and quote; the Mac's queue holds it.
+            let readsReplies = conversationID == coordinatorConversationID
             Task { @MainActor in
                 switch action {
                 case .remove(let clientRequestID):
                     _ = await controller.removeQueuedMessage(clientRequestID)
-                case .edit(let clientRequestID, let text):
-                    guard await controller.removeQueuedMessage(clientRequestID) else { return }
-                    composerDraftState.restoreDraft(text, for: conversationID)
-                case .steer(let clientRequestID, let text):
+                case .edit(let clientRequestID, let shown):
+                    let text = controller.queuedMessageText(clientRequestID) ?? shown
+                    guard queuedEditIsAllowed(text, readsReplies: readsReplies, for: conversationID),
+                          await controller.removeQueuedMessage(clientRequestID) else { return }
+                    restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID)
+                case .steer(let clientRequestID, let shown):
+                    let text = controller.queuedMessageText(clientRequestID) ?? shown
                     guard await controller.removeQueuedMessage(clientRequestID) else { return }
                     let outcome = await controller.send(text, deliveryMode: .steer)
                     if case .notEnqueued = outcome {
-                        composerDraftState.restoreDraft(text, for: conversationID)
+                        restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID)
                     }
                 case .resume:
                     await controller.resumeQueue()
                 }
             }
+        }
+    }
+
+    /// In the coordinator's chat the draft answers one message at most, so
+    /// Edit leaves a waiting reply where it is while the draft answers
+    /// another, and says why.
+    private func queuedEditIsAllowed(_ text: String, readsReplies: Bool, for conversationID: UUID) -> Bool {
+        guard readsReplies, let refusal = composerDraftState.queuedReplyEditRefusal(text, for: conversationID) else {
+            return true
+        }
+        composerDraftState.showReplyNotice(refusal, for: conversationID)
+        return false
+    }
+
+    /// A waiting message back in the draft. In the coordinator's chat a
+    /// reply comes back as a reply.
+    private func restoreQueuedMessage(_ text: String, readsReplies: Bool, for conversationID: UUID) {
+        if readsReplies {
+            composerDraftState.restoreQueuedReply(text, for: conversationID)
+        } else {
+            composerDraftState.restoreDraft(text, for: conversationID)
         }
     }
 
@@ -1323,10 +1364,14 @@ struct ToasttyMobileRootView: View {
         switch action {
         case .remove(let clientRequestID):
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
-        case .edit(let clientRequestID, let text):
+        case .edit(let clientRequestID, let shown):
+            let text = fixtureQueuedMessages.first { $0.clientRequestID == clientRequestID }?.text ?? shown
+            let readsReplies = conversationID == coordinatorConversationID
+            guard queuedEditIsAllowed(text, readsReplies: readsReplies, for: conversationID) else { return }
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
-            composerDraftState.restoreDraft(text, for: conversationID)
-        case .steer(let clientRequestID, let text):
+            restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID)
+        case .steer(let clientRequestID, let shown):
+            let text = fixtureQueuedMessages.first { $0.clientRequestID == clientRequestID }?.text ?? shown
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
             fixtureSendItems.append(ToasttySendPresentationItem(
                 clientRequestID: "fixture-steered-\(fixtureSendItems.count + 1)",
@@ -1408,13 +1453,13 @@ struct ToasttyMobileRootView: View {
             if deliveryMode == .steer {
                 fixtureSendItems.append(ToasttySendPresentationItem(
                     clientRequestID: clientRequestID,
-                    text: submission.text,
+                    text: submission.sentText,
                     content: .optimistic(response: .accepted)
                 ))
             } else {
                 fixtureQueuedMessages.append(RemoteQueuedMessage(
                     clientRequestID: clientRequestID,
-                    text: submission.text,
+                    text: submission.sentText,
                     attachmentCount: submission.attachments.count,
                     enqueuedAt: Date()
                 ))
@@ -1476,7 +1521,7 @@ struct ToasttyMobileRootView: View {
         }
         fixtureSendItems.append(ToasttySendPresentationItem(
             clientRequestID: clientRequestID,
-            text: submission.text,
+            text: submission.sentText,
             content: .optimistic(response: .accepted)
         ))
         fixtureComposerIsReserved = true

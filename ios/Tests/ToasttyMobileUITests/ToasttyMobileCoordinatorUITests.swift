@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// The Coordinator tab, from a fixture Mac that runs the task system and has
@@ -480,7 +481,188 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
             .waitForExistence(timeout: 5))
     }
 
+    // MARK: - Copy and Reply
+
+    /// As in the Mac's coordinator chat: Copy under the user's and the
+    /// coordinator's messages, Reply under the coordinator's, always shown
+    /// on a phone. A long message has them once, under its last row, and
+    /// Copy takes all of it. Digests and sender cards have neither, and
+    /// another session's chat has neither.
+    @MainActor
+    func testCopyAndReplyAreUnderTheCoordinatorsMessagesOnly() {
+        UIPasteboard.general.string = ""
+        let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE": "1"])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+
+        // Row 10 is the long message, drawn as several rows; row 9 is the
+        // user's question.
+        let ending = textView(containing: "That is everything that moved this week.", in: app)
+        XCTAssertTrue(ending.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript-row-10-c1"].exists,
+                      "The fixture's long message must draw as several rows")
+        let copyLong = app.buttons["toastty-mobile-transcript-copy-10"]
+        let replyLong = app.buttons["toastty-mobile-transcript-reply-10"]
+        XCTAssertTrue(waitUntilHittable(copyLong))
+        XCTAssertEqual(app.buttons.matching(identifier: "toastty-mobile-transcript-copy-10").count, 1)
+        XCTAssertEqual(app.buttons.matching(identifier: "toastty-mobile-transcript-reply-10").count, 1)
+        XCTAssertGreaterThanOrEqual(copyLong.frame.minY, ending.frame.maxY - 2, "The buttons sit under the last row")
+        XCTAssertEqual(replyLong.frame.minY, copyLong.frame.minY, accuracy: 1)
+        XCTAssertTrue(app.buttons["toastty-mobile-transcript-copy-9"].exists)
+        XCTAssertFalse(app.buttons["toastty-mobile-transcript-reply-9"].exists, "The user's own message has no Reply")
+        // The digest's line and the task's card.
+        for row in [1, 3] {
+            XCTAssertFalse(app.buttons["toastty-mobile-transcript-copy-\(row)"].exists, "row \(row)")
+            XCTAssertFalse(app.buttons["toastty-mobile-transcript-reply-\(row)"].exists, "row \(row)")
+        }
+        attachScreenshot(named: "coordinator-copy-reply-buttons", of: app)
+
+        // Another session's chat has neither button.
+        let oneSession = link(containing: "early-session-titles", in: app)
+        XCTAssertTrue(oneSession.waitForExistence(timeout: 5))
+        for _ in 0..<10 where oneSession.isHittable == false { app.swipeDown() }
+        XCTAssertTrue(waitUntilHittable(oneSession))
+        oneSession.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-transcript"].waitForExistence(timeout: 5))
+        let anyCopy = NSPredicate(format: "identifier BEGINSWITH 'toastty-mobile-transcript-copy-'")
+        let anyReply = NSPredicate(format: "identifier BEGINSWITH 'toastty-mobile-transcript-reply-'")
+        XCTAssertGreaterThan(app.textViews.count, 0, "The session's chat shows its messages")
+        XCTAssertEqual(app.buttons.matching(anyCopy).count, 0)
+        XCTAssertEqual(app.buttons.matching(anyReply).count, 0)
+        attachScreenshot(named: "ordinary-session-no-copy-reply", of: app)
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+
+        // Copy shows its mark for a moment, and the pasteboard holds the
+        // whole message, not the last row's part.
+        for _ in 0..<8 where copyLong.isHittable == false { app.swipeUp() }
+        XCTAssertTrue(waitUntilHittable(copyLong))
+        copyLong.tap()
+        XCTAssertTrue(waitUntil(timeout: 1.4) { copyLong.label == "Copied" })
+        attachScreenshot(named: "coordinator-copy-copied", of: app)
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"]
+        guard paste.waitForExistence(timeout: 5) else {
+            return XCTFail("Paste menu did not open: \(app.debugDescription)")
+        }
+        paste.tap()
+        let pasted = (input.value as? String) ?? ""
+        XCTAssertTrue(pasted.hasPrefix("Here is the week, task by task."), pasted)
+        XCTAssertTrue(pasted.hasSuffix("That is everything that moved this week."), pasted)
+        XCTAssertTrue(waitUntil(timeout: 5) { copyLong.label == "Copy message" })
+    }
+
+    /// Reply puts the coordinator's message above the field, and the field
+    /// takes the keyboard; a second Reply replaces it, and ✕ removes it.
+    /// Sent, the message shows under its quote and the bar goes. A queued
+    /// reply shows its quote too, and Edit brings it back as a reply.
+    func testReplyShowsItsMessageAboveTheFieldAndSendsWithItsQuote() {
+        let app = launch(coordinator: "working")
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let bar = app.descendants(matching: .any)["toastty-mobile-composer-reply"]
+        let excerpt = app.staticTexts["toastty-mobile-composer-reply-excerpt"]
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+
+        let replyLast = app.buttons["toastty-mobile-transcript-reply-8"]
+        XCTAssertTrue(waitUntilHittable(replyLast))
+        attachScreenshot(named: "coordinator-reply-buttons-working", of: app)
+        replyLast.tap()
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(excerpt.label.hasPrefix("I made a task for it in toastty"), excerpt.label)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "The field takes the keyboard")
+        attachScreenshot(named: "coordinator-reply-bar", of: app)
+
+        // With the keyboard up, the chat scrolls above it.
+        let replyEarlier = app.buttons["toastty-mobile-transcript-reply-6"]
+        XCTAssertTrue(scrollUntilHittable(replyEarlier, toOlder: true, in: app))
+        replyEarlier.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { excerpt.label.hasPrefix("Noted. I will start the release") }, excerpt.label)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "toastty-mobile-composer-reply").count, 1)
+        app.buttons["toastty-mobile-composer-reply-cancel"].tap()
+        XCTAssertTrue(bar.waitForNonExistence(timeout: 5))
+
+        // Steer, the default while the coordinator works.
+        XCTAssertTrue(scrollUntilHittable(replyLast, toOlder: false, in: app))
+        replyLast.tap()
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText("Only on click.")
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertEqual(send.label, "Steer message")
+        send.tap()
+        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-1"]
+        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        XCTAssertTrue(bar.waitForNonExistence(timeout: 5), "The bar goes with the send")
+        XCTAssertTrue(steered.label.hasPrefix("Only on click."), steered.label)
+        XCTAssertFalse(steered.label.contains("[Toastty]"), steered.label)
+        XCTAssertTrue(quote(containing: "I made a task for it in toastty", in: app).waitForExistence(timeout: 5))
+        attachScreenshot(named: "coordinator-reply-sent", of: app)
+
+        // Queue: the waiting message shows its quote, and Edit brings it
+        // back as a reply.
+        XCTAssertTrue(scrollUntilHittable(replyLast, toOlder: true, in: app))
+        replyLast.tap()
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText("Then summarize")
+        let mode = app.buttons["toastty-mobile-composer-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.tap()
+        let queueChoice = app.buttons["toastty-mobile-composer-mode-queue"]
+        XCTAssertTrue(queueChoice.waitForExistence(timeout: 5))
+        queueChoice.tap()
+        XCTAssertTrue(waitForLabel("Queue selected", of: mode))
+        send.tap()
+        let queued = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-2"]
+        XCTAssertTrue(queued.waitForExistence(timeout: 5))
+        XCTAssertTrue(bar.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(textView(containing: "[Toastty]", in: app).exists == false)
+        XCTAssertGreaterThanOrEqual(
+            app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier == 'toastty-transcript-reply-quote' AND label CONTAINS %@",
+                                      "I made a task for it in toastty"))
+                .count,
+            2,
+            "The steered and the queued reply each show the quote"
+        )
+        attachScreenshot(named: "coordinator-reply-queued", of: app)
+        let edit = app.buttons["toastty-mobile-queued-edit-fixture-queued-2"]
+        XCTAssertTrue(scrollUntilHittable(edit, toOlder: false, in: app))
+        edit.tap()
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertTrue(excerpt.label.hasPrefix("I made a task for it in toastty"), excerpt.label)
+        XCTAssertEqual(input.value as? String, "Then summarize")
+        XCTAssertTrue(queued.waitForNonExistence(timeout: 5))
+        attachScreenshot(named: "coordinator-reply-edit", of: app)
+    }
+
     // MARK: - Helpers
+
+    /// Drags the chat in its upper part, clear of the composer and the
+    /// keyboard, until `element` can be tapped.
+    private func scrollUntilHittable(_ element: XCUIElement, toOlder: Bool, in app: XCUIApplication) -> Bool {
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42))
+        for _ in 0..<8 where element.isHittable == false {
+            if toOlder {
+                upper.press(forDuration: 0.05, thenDragTo: lower)
+            } else {
+                lower.press(forDuration: 0.05, thenDragTo: upper)
+            }
+        }
+        return waitUntilHittable(element)
+    }
+
+    private func quote(containing text: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'toastty-transcript-reply-quote' AND label CONTAINS %@", text))
+            .firstMatch
+    }
 
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)

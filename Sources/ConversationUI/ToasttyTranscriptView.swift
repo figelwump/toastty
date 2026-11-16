@@ -1753,7 +1753,13 @@ private struct ToasttySendScrollItem: Equatable {
 /// The size of a message's copy button. A message that is still sending
 /// keeps the same space, so its bubble does not move when it is sent.
 private enum ToasttyMessageCopyButtonMetrics {
+    #if os(macOS)
     static let size = CGSize(width: 24, height: 20)
+    #else
+    /// A phone shows the buttons all the time and a finger taps them, so
+    /// they take more room than the pointer's.
+    static let size = CGSize(width: 36, height: 30)
+    #endif
     static let spacing: CGFloat = 2
 }
 

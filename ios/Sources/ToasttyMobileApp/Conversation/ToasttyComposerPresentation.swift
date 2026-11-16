@@ -351,8 +351,19 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
 struct ToasttyComposerSubmission: Equatable, Sendable {
     let id: UUID
     let conversationID: UUID
+    /// The draft as the user wrote it.
     let text: String
     var attachments: [RemoteMessageAttachment] = []
+    /// The coordinator's message that this one answers.
+    var reply: CoordinatorReplyTarget?
+
+    /// The text to send. A reply is written in the Mac's format without
+    /// its files: the Mac adds the paths of the files it stores, as for any
+    /// message, so the coordinator gets the Mac's own reply.
+    var sentText: String {
+        guard let reply else { return text }
+        return reply.message(text: text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 }
 
 /// A native edit is published as text; only an explicit request may replace the field.
@@ -381,11 +392,17 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     private(set) var submissions: [UUID: ToasttyComposerSubmission] = [:]
     private(set) var editRevisions: [UUID: UInt64] = [:]
     private(set) var replacements: [UUID: ToasttyComposerReplacement] = [:]
+    /// The coordinator's message that each draft answers, from Reply.
+    private(set) var replies: [UUID: CoordinatorReplyTarget] = [:]
+    /// Why the last Reply or Edit could not make or keep a reply.
+    private(set) var replyNotices: [UUID: String] = [:]
     private var replacementRevision: UInt64 = 0
     private struct RestoredRecovery: Equatable, Sendable {
         let requestID: String
         let submission: ToasttyComposerSubmission
         var wasDismissed = false
+        /// The restore also put the submission's reply back.
+        var restoredReply = false
     }
     private var restoredRecoveries: [UUID: RestoredRecovery] = [:]
 
@@ -424,6 +441,7 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     }
 
     mutating func updateDraft(_ text: String, for conversationID: UUID, editRevision: UInt64? = nil) {
+        if draft(for: conversationID) != text { replyNotices.removeValue(forKey: conversationID) }
         if let editRevision {
             editRevisions[conversationID] = editRevision
         } else if draft(for: conversationID) != text {
@@ -449,6 +467,71 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         replaceDraft(combined, for: conversationID)
     }
 
+    // MARK: - Reply, in the coordinator's chat
+
+    static let otherHeaderReplyRefusal =
+        "Your message starts with Toastty's line for another sender, so it cannot be a reply. Send or clear it first."
+    static let otherReplyEditRefusal =
+        "This message is a reply, and the message you are writing replies to another message. Remove that reply first."
+    static let otherHeaderEditRefusal =
+        "This message starts with Toastty's line for another sender, and the message you are writing is a reply. "
+            + "Remove the reply first."
+
+    /// Reply on one of the coordinator's messages: the draft answers it. A
+    /// second Reply replaces the first. A draft that starts with Toastty's
+    /// line for another sender cannot become a reply, as on the Mac.
+    @discardableResult
+    mutating func reply(to target: CoordinatorReplyTarget, for conversationID: UUID) -> Bool {
+        guard CoordinatorMessageHeader.hasOtherHeader(draft(for: conversationID)) == false else {
+            replyNotices[conversationID] = Self.otherHeaderReplyRefusal
+            return false
+        }
+        replies[conversationID] = target
+        replyNotices.removeValue(forKey: conversationID)
+        return true
+    }
+
+    mutating func cancelReply(for conversationID: UUID) {
+        replies.removeValue(forKey: conversationID)
+        replyNotices.removeValue(forKey: conversationID)
+    }
+
+    /// Why Edit cannot take this waiting message back into the draft, which
+    /// answers at most one message. `text` is the message as sent.
+    func queuedReplyEditRefusal(_ text: String, for conversationID: UUID) -> String? {
+        guard let current = replies[conversationID] else { return nil }
+        if let parts = CoordinatorMessageHeader.replyParts(of: text) {
+            return CoordinatorReplyTarget(text: parts.quote, time: parts.time) == current
+                ? nil : Self.otherReplyEditRefusal
+        }
+        return CoordinatorMessageHeader.hasOtherHeader(text) ? Self.otherHeaderEditRefusal : nil
+    }
+
+    /// Edit on a waiting message in the coordinator's chat: a reply comes
+    /// back as its text, with the message it answers above the field. The
+    /// draft answers one message at most: Edit checks that first with
+    /// `queuedReplyEditRefusal`, and a Steer now that failed while the draft
+    /// answers another message puts the whole text back, quote included.
+    mutating func restoreQueuedReply(_ text: String, for conversationID: UUID) {
+        guard isSubmitting(conversationID) == false else { return }
+        guard let parts = CoordinatorMessageHeader.replyParts(of: text) else {
+            restoreDraft(text, for: conversationID)
+            return
+        }
+        let target = CoordinatorReplyTarget(text: parts.quote, time: parts.time)
+        guard replies[conversationID] == nil || replies[conversationID] == target else {
+            restoreDraft(text, for: conversationID)
+            return
+        }
+        replies[conversationID] = target
+        replyNotices.removeValue(forKey: conversationID)
+        restoreDraft(parts.body, for: conversationID)
+    }
+
+    mutating func showReplyNotice(_ notice: String, for conversationID: UUID) {
+        replyNotices[conversationID] = notice
+    }
+
     private mutating func replaceDraft(_ text: String, for conversationID: UUID) {
         replacementRevision += 1
         replacements[conversationID] = ToasttyComposerReplacement(
@@ -472,6 +555,9 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
             // A subsequent send already owns these attachments. Do not create
             // a second recovery for the same files when this callback arrives.
             guard !isSubmitting(conversationID) else { return }
+            if recovery.restoredReply, replies[conversationID] == recovery.submission.reply {
+                replies.removeValue(forKey: conversationID)
+            }
             let restoredIDs = Set(recovery.submission.attachments.map(\.id))
             attachmentDrafts[conversationID]?.removeAll { restoredIDs.contains($0.id) }
             if attachmentDrafts[conversationID]?.isEmpty == true {
@@ -497,7 +583,8 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
             id: submissionID,
             conversationID: conversationID,
             text: text,
-            attachments: attachments(for: conversationID)
+            attachments: attachments(for: conversationID),
+            reply: replies[conversationID]
         )
         submissions[conversationID] = submission
         return submission
@@ -517,6 +604,10 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         if draft(for: submission.conversationID) == submission.text {
             replaceDraft("", for: submission.conversationID)
         }
+        // A Reply on another message during the send stays for the next.
+        if let reply = submission.reply, replies[submission.conversationID] == reply {
+            replies.removeValue(forKey: submission.conversationID)
+        }
         let submittedIDs = Set(submission.attachments.map(\.id))
         attachmentDrafts[submission.conversationID]?.removeAll { submittedIDs.contains($0.id) }
         if attachmentDrafts[submission.conversationID]?.isEmpty == true {
@@ -535,8 +626,11 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
                 if !isSubmitting(conversationID), attachments(for: conversationID).isEmpty,
                    currentText.isEmpty || currentText == submission.text {
                     replaceDraft(submission.text, for: conversationID)
+                    // A rejected reply comes back as a reply.
+                    let restoresReply = submission.reply != nil && replies[conversationID] == nil
+                    if restoresReply { replies[conversationID] = submission.reply }
                     restoredRecoveries[conversationID] = RestoredRecovery(
-                        requestID: record.clientRequestID, submission: submission
+                        requestID: record.clientRequestID, submission: submission, restoredReply: restoresReply
                     )
                     attachmentDrafts[conversationID] = submission.attachments
                     attachmentRecoveries.removeValue(forKey: record.clientRequestID)
@@ -576,6 +670,8 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         editRevisions = editRevisions.filter { conversationIDs.contains($0.key) }
         replacements = replacements.filter { conversationIDs.contains($0.key) }
         restoredRecoveries = restoredRecoveries.filter { conversationIDs.contains($0.key) }
+        replies = replies.filter { conversationIDs.contains($0.key) }
+        replyNotices = replyNotices.filter { conversationIDs.contains($0.key) }
     }
 
     mutating func reset() {
@@ -588,16 +684,43 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         editRevisions.removeAll(keepingCapacity: false)
         replacements.removeAll(keepingCapacity: false)
         restoredRecoveries.removeAll(keepingCapacity: false)
+        replies.removeAll(keepingCapacity: false)
+        replyNotices.removeAll(keepingCapacity: false)
     }
 }
 
 enum ToasttySendPresentationAdapter {
     /// Reconciliation records first, then the Mac's queue in delivery order.
     /// A queued record the host still lists renders from the host's list,
-    /// so the two never show the same message twice.
+    /// so the two never show the same message twice. In the coordinator's
+    /// chat (`readsCoordinatorMessages`) a reply shows as its row will.
     static func makeItems(
         from state: SendReconciliationState,
-        inputControl: RemoteConversationInputControl? = nil
+        inputControl: RemoteConversationInputControl? = nil,
+        readsCoordinatorMessages: Bool = false
+    ) -> [ToasttySendPresentationItem] {
+        let items = recordAndQueueItems(from: state, inputControl: inputControl)
+        return readsCoordinatorMessages ? items.map(coordinatorItem) : items
+    }
+
+    /// A message for the coordinator as its row in the coordinator's chat
+    /// will show it: a reply as the user's text under its quote. Edit and
+    /// Steer now still act on the text as sent, which the Mac's queue holds.
+    static func coordinatorItem(_ item: ToasttySendPresentationItem) -> ToasttySendPresentationItem {
+        guard let quote = CoordinatorChatTranscript.quote(of: item.text) else { return item }
+        return ToasttySendPresentationItem(
+            clientRequestID: item.clientRequestID,
+            text: CoordinatorMessageHeader.displayText(of: item.text),
+            content: item.content,
+            sentCaption: item.sentCaption,
+            quote: quote,
+            attachments: item.attachments
+        )
+    }
+
+    private static func recordAndQueueItems(
+        from state: SendReconciliationState,
+        inputControl: RemoteConversationInputControl?
     ) -> [ToasttySendPresentationItem] {
         let queued = inputControl?.queuedMessages ?? []
         let queuedIDs = Set(queued.map(\.clientRequestID))

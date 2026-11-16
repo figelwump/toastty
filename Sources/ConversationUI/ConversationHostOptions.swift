@@ -107,6 +107,18 @@ public struct ToasttyMessageReplyRequest: Equatable, Sendable {
     }
 }
 
+extension CoordinatorReplyTarget {
+    /// The message that Reply chose. Its time is written as the reply's
+    /// first line writes it, so a waiting reply that comes back with Edit
+    /// is the same reply.
+    public init(_ request: ToasttyMessageReplyRequest) {
+        self.init(
+            text: request.text,
+            time: CoordinatorMessageHeader.replyTime(request.timestamp.formatted(date: .omitted, time: .shortened))
+        )
+    }
+}
+
 /// The transcript's Reply action on an agent's message. The host's action
 /// is not compared: it is the same for the life of one transcript.
 struct ToasttyMessageReplyAction {

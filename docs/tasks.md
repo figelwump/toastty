@@ -656,6 +656,7 @@ text:
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
+| `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. |
 | no `[Toastty]` line | You, in the chat or in the terminal. |
 
 The sender's text starts on the second line, and the coordinator's
@@ -835,6 +836,20 @@ relaunch resumes does not show it.
   message is then typed there. The same holds after you answered a login or
   a folder-trust question in the terminal before the agent started: Toastty
   cannot tell those keys from a draft, so choose **Send Anyway**.
+- **Copy and Reply.** Copy under your message or the coordinator's copies
+  the whole message, and Reply under the coordinator's answers it. Both show
+  while the pointer is over the message. After Reply the field shows
+  "Replying to the coordinator" with the time and start of the message, and
+  ✕, or Escape in an empty field, removes it. A second Reply replaces the
+  first. The message is typed with Toastty's reply line (see "Who a message
+  is from"), then the whole quoted message, your text, and the paths of its
+  files. It steers or waits as any message from the chat does, and its
+  bubble shows your text under one quote line; a click on that line shows
+  the quoted message. **Edit** on a waiting reply brings it back as a reply.
+  A message that starts with Toastty's line for another sender, such as
+  one that Edit took back, cannot become a reply. The coordinator's chat on
+  a paired iPhone has both buttons too, always shown: see
+  [The Coordinator tab](remote-access.md#the-coordinator-tab).
 - **Digests.** A message that Toastty typed (see below) shows as one muted
   line, such as "Toastty · 2 updates · 14:05". A click opens the full text.
 - **Quiet wakes.** When a wake found nothing for you, the coordinator marks
