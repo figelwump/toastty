@@ -424,7 +424,9 @@ final class QuickEntryPicker: ObservableObject {
                 searchText: "\(title) \(shown.model ?? "") \(shown.effort ?? "") \(shown.agent)"
             )
         }
-        let other = [
+        // With no agent, the columns would be empty too; the list then
+        // says how to add an agent.
+        let other = profiles.isEmpty ? [] : [
             Row(
                 id: "columns",
                 section: "Other",
