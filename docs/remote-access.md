@@ -995,6 +995,8 @@ notice, and you open the session from the list when it arrives.
   session from the phone.
 - **Agents.** The sheet lists the profiles from `~/.toastty/agents.toml` whose
   sessions the phone can show: Codex, Claude Code, OpenCode, MiMo Code, Pi, and Cursor.
+  With no profile in that file, it lists those built-in agents that are
+  installed on the Mac.
   A profile whose command is not installed, or that cannot take a first message
   on its command line, is listed struck through and cannot be chosen. Tap it
   to see the reason.

@@ -15,9 +15,13 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
 Automation can also launch managed `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, or `pi` sessions through
-`agent.launch` without an `agents.toml` profile. Configure `agents.toml` when
+`agent.launch` without an `agents.toml` profile. While `agents.toml` has no
+profile, [tasks](tasks.md) also offer the installed built-in agents that take a
+first message (Claude Code, Codex, Cursor, Grok Build and Pi), and Toastty
+Mobile the installed ones whose sessions it can show. Configure `agents.toml` when
 you want manual UI launch entries, shortcuts, custom argv, wrapper shim names,
-or custom initial-prompt support.
+or custom initial-prompt support. Once it has a profile, tasks and Toastty
+Mobile offer only its profiles.
 
 ## agents.toml
 

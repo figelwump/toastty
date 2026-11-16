@@ -658,15 +658,23 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     /// What a caller that offers profiles to a person needs to know about
     /// each configured profile, resolved the same way a launch resolves it.
+    /// With no profile in agents.toml, as on a fresh install, these are the
+    /// built-in agents that are installed, which a launch accepts by name.
     func launchProfileSummaries() -> [AgentLaunchProfileSummary] {
-        agentCatalogProvider.catalog.profiles.compactMap { profile in
+        let configured = agentCatalogProvider.catalog.profiles
+        let profiles = configured.isEmpty ? Self.implicitProfileAgents.map(Self.implicitProfile(for:)) : configured
+        return profiles.compactMap { profile in
             guard let agent = AgentKind(rawValue: profile.id) else { return nil }
             let executable = try? profileExecutableState(profileID: profile.id)
+            let isInstalled = executable?.executablePath != nil
+            // A configured profile shows even when its command is missing, so
+            // the user sees it; a built-in agent shows only when installed.
+            guard isInstalled || configured.isEmpty == false else { return nil }
             return AgentLaunchProfileSummary(
                 profileID: profile.id,
                 displayName: profile.displayName,
                 agent: agent,
-                isInstalled: executable?.executablePath != nil,
+                isInstalled: isInstalled,
                 acceptsInitialPrompt: initialPromptPlacement(for: profile, agent: agent) == .trailing,
                 acceptsLeadingDashPrompt: Self.argvRunsFirstPartyPromptCommand(profile.argv, for: agent),
                 supportsModel: AgentLaunchArgumentOverrideAdapter.modelSupportedAgents.contains(agent),
@@ -675,14 +683,13 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         }
     }
 
+    /// The built-in agents a launch accepts without a profile, in the order
+    /// Toastty offers them. Claude Code is first because the coordinator
+    /// runs it by default.
+    private static let implicitProfileAgents: [AgentKind] = [.claude, .codex, .cursor, .grok, .mimocode, .opencode, .pi]
+
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
-        agent == .codex
-            || agent == .claude
-            || agent == .cursor
-            || agent == .grok
-            || agent == .mimocode
-            || agent == .opencode
-            || agent == .pi
+        implicitProfileAgents.contains(agent)
     }
 
     private static func implicitProfile(for agent: AgentKind) -> AgentProfile {

@@ -262,14 +262,17 @@ struct TaskRoutingTests {
             #expect(error.localizedDescription.contains("one word"))
         }
 
-        // Without triage or a default agent, nothing could ever start it.
-        fixture.config.defaults = .init()
-        do {
-            _ = try await fixture.coordinator.create(TaskCreateRequest(text: "no agent"))
-            Issue.record("a task with no possible agent was accepted")
-        } catch {
-            #expect(error.localizedDescription.contains("[defaults]"))
-        }
+        // Without triage or a default agent, the task takes the first
+        // installed agent, with that agent's own model and effort.
+        fixture.config.defaults = .init(model: "claude-opus-5-5", effort: "high")
+        let unnamed = try await fixture.coordinator.create(TaskCreateRequest(text: "no agent"))
+        #expect(unnamed.setup == .needsWorkspace(reason: TaskCoordinator.noWorkspaceReason))
+        try fixture.coordinator.setWorkspace(taskID: unnamed.id, choice: .open(fixture.workspaceID))
+        await fixture.waitUntil("the task with no agent starts") { fixture.record(unnamed.id)?.setup == .started }
+        let started = try #require(fixture.record(unnamed.id))
+        #expect(started.resolved?.agent == "claude")
+        #expect(started.resolved?.model == nil)
+        #expect(started.resolved?.effort == nil)
     }
 
     @Test func pickingARecentWorkspaceOpensItAgainAndStartsThere() async throws {

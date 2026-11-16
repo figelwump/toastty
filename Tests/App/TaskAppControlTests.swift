@@ -93,8 +93,8 @@ struct TaskAppControlTests {
     @Test func errorsComeBackAsInvalidPayload() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
-        await expectInvalidPayload("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.") {
-            _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x")], context: context())
+        await expectInvalidPayload("Agent gemini is not a profile in agents.toml (available: claude, codex).") {
+            _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x"), "agent": .string("gemini")], context: context())
         }
         await expectInvalidPayload("workspace must be a workspace ID") {
             _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x"), "workspace": .string("toastty")], context: context())
