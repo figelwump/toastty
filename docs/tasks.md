@@ -1546,6 +1546,12 @@ toastty coordinator wake --clear --quiet
   that Toastty's last digest started, while no other message has come into
   that turn. Otherwise the command fails and changes nothing, not even the
   time. So a turn that answers you is never quiet.
+- The last `coordinator wake` call of a turn decides. If the coordinator
+  marks the turn quiet and then runs `coordinator wake` again without
+  `--quiet` in the same turn, Toastty removes the mark: the chat does not fold
+  the turn, and its end alerts as usual. A call in a later turn does not
+  change the mark of a turn that has ended. After a relaunch in the middle of
+  a quiet turn, a later call without `--quiet` cannot remove the mark.
 - The chat folds a quiet turn under Toastty's line for its digest. A click
   on the line opens the digest, the coordinator's work and its answer. A
   question or an approval prompt in the turn stays visible.
