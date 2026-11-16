@@ -367,6 +367,13 @@ extension AppControlExecutor {
             "interruptedAtQuit": .bool(coordinator.wasInterruptedAtQuit(record)),
         ])
         snapshot["pullRequest"] = stage?.pullRequest.map { .object(Self.pullRequestSnapshot($0, record: record)) } ?? .null
+        // Why GitHub has not answered, while it has not.
+        snapshot["pullRequestLookupError"] = stage?.pullRequestLookupProblem.map { problem in
+            .object([
+                "problem": .string(Self.lookupProblemName(problem)),
+                "message": .string(TaskBoardPresentation.lookupProblemReason(problem)),
+            ])
+        } ?? .null
         if includeReply {
             snapshot["lastReply"] = coordinator.lastReply(of: record).map { reply in
                 .object([
@@ -396,6 +403,14 @@ extension AppControlExecutor {
         }
         snapshot["lastUserInputAt"] = date(coordinator.lastUserInputAt(of: record))
         return snapshot
+    }
+
+    private static func lookupProblemName(_ problem: PullRequestLookupProblem) -> String {
+        switch problem {
+        case .ghMissing: "ghMissing"
+        case .notSignedIn: "notSignedIn"
+        case .other: "other"
+        }
     }
 
     /// `pullRequest`: GitHub's last answer. `checks` is `pending`, `failing`
@@ -668,7 +683,8 @@ extension AppControlExecutor {
                 ($0, TaskStageSnapshot(
                     stage: item.stage,
                     finishedThroughChildren: item.finishedThroughChildren,
-                    pullRequest: item.pullRequest.flatMap { pullRequests?.answer(for: $0) }
+                    pullRequest: item.pullRequest.flatMap { pullRequests?.answer(for: $0) },
+                    pullRequestLookupProblem: item.pullRequestLookupProblem
                 ))
             }
         }, uniquingKeysWith: { first, _ in first })
@@ -701,6 +717,7 @@ extension AppControlExecutor {
                 result["reason"] = .string(reason)
             case .taskSpaceClosed: result["attention"] = .string("taskSpaceClosed")
             case .agentNeedsInput: result["attention"] = .string("agentNeedsInput")
+            case .startWaitsInTerminal: result["attention"] = .string("startWaitsInTerminal")
             case .awaitingReply: result["attention"] = .string("awaitingReply")
             case .agentError: result["attention"] = .string("agentError")
             case .review: result["attention"] = .string("review")
@@ -891,4 +908,6 @@ struct TaskStageSnapshot: Equatable {
     var finishedThroughChildren = false
     /// GitHub's last answer about the task's pull request, if any.
     var pullRequest: TaskPullRequestState?
+    /// Why GitHub has not answered about it, while it has not.
+    var pullRequestLookupProblem: PullRequestLookupProblem?
 }

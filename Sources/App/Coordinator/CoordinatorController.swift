@@ -150,6 +150,11 @@ final class CoordinatorController: ObservableObject {
     let attachments: CoordinatorAttachments
     /// Where the user's waiting messages are saved, or `nil` to save none.
     private let queueFileURL: URL?
+    /// Where the coordinator's workspace and terminal are saved, or `nil`
+    /// to save nothing; see `CoordinatorWorkspaceRecord`.
+    private let workspaceFileURL: URL?
+    /// What the file at `workspaceFileURL` holds.
+    private var savedWorkspaceRecord: CoordinatorWorkspaceRecord?
     private let configLoader: () throws -> TasksConfig
     /// Tells the agent of the given profile that the coordinator's folder
     /// is trusted, before that agent starts there. See `ClaudeFolderTrust`.
@@ -311,6 +316,7 @@ final class CoordinatorController: ObservableObject {
         directoryURL: URL,
         folder: CoordinatorFolder? = nil,
         queueFileURL: URL? = nil,
+        workspaceFileURL: URL? = nil,
         configLoader: @escaping () throws -> TasksConfig,
         trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in },
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
@@ -326,12 +332,16 @@ final class CoordinatorController: ObservableObject {
         self.folder = folder ?? CoordinatorFolder(directoryURL: directoryURL)
         self.attachments = CoordinatorAttachments(coordinatorDirectoryURL: directoryURL)
         self.queueFileURL = queueFileURL
+        self.workspaceFileURL = workspaceFileURL
         self.configLoader = configLoader
         self.trustFolder = trustFolder
         self.deliverText = deliverText
         self.promptState = promptState
         self.terminalReadinessTimeout = terminalReadinessTimeout
         self.now = now
+        // First, so that a coordinator whose mark the layout lost comes
+        // back as one the layout restored.
+        restoreWorkspaceMark()
         // A session that starts, ends a turn or stops can open the prompt
         // for the next queued entry. `sink` runs before the new value is
         // stored, so the queue is looked at on the next main-actor turn.
@@ -354,6 +364,7 @@ final class CoordinatorController: ObservableObject {
             }
             if previousState.coordinator != nextState.coordinator {
                 self?.syncConversationSubscription()
+                self?.saveWorkspaceRecord()
             }
             let workspaceID = nextState.coordinatorWorkspaceID
             guard previousState.coordinatorWorkspaceID != workspaceID else { return }
@@ -375,6 +386,42 @@ final class CoordinatorController: ObservableObject {
             now: now()
         )
         refreshFolderOfARestoredCoordinator()
+        saveWorkspaceRecord()
+    }
+
+    /// Puts the coordinator's mark back on its workspace when the layout has
+    /// none: a Toastty that does not know the coordinator, such as v0.9.2,
+    /// saved the layout last. The reducer checks that the saved workspace
+    /// can still hold the mark.
+    private func restoreWorkspaceMark() {
+        guard let workspaceFileURL else { return }
+        savedWorkspaceRecord = CoordinatorWorkspaceRecord.load(from: workspaceFileURL)
+        guard store.state.coordinator == nil, let saved = savedWorkspaceRecord,
+              store.send(.restoreCoordinatorWorkspace(workspaceID: saved.workspaceID, panelID: saved.panelID)) else { return }
+        ToasttyLog.warning("Restored the coordinator's mark, which the saved layout had lost", category: .tasks, metadata: [
+            "workspace_id": saved.workspaceID.uuidString,
+            "panel_id": store.state.coordinator?.panelID?.uuidString ?? "",
+        ])
+    }
+
+    /// Saves where the coordinator lives now, or removes the file when
+    /// there is no coordinator.
+    private func saveWorkspaceRecord() {
+        guard let workspaceFileURL else { return }
+        let record = location.map { CoordinatorWorkspaceRecord(workspaceID: $0.workspaceID, panelID: $0.panelID) }
+        guard record != savedWorkspaceRecord else { return }
+        do {
+            if let record {
+                try record.save(to: workspaceFileURL)
+            } else {
+                try CoordinatorWorkspaceRecord.remove(at: workspaceFileURL)
+            }
+            savedWorkspaceRecord = record
+        } catch {
+            ToasttyLog.warning("Could not save where the coordinator lives", category: .tasks, metadata: [
+                "path": workspaceFileURL.path, "error": error.localizedDescription,
+            ])
+        }
     }
 
     /// After a relaunch, Toastty resumes the agent of a restored coordinator

@@ -53,10 +53,13 @@ enum TaskBoardPresentation {
             case .moveFailed: return "⚠ worktree failed"
             case .taskSpaceClosed: return "Task space closed before the task finished"
             case .agentNeedsInput: return "\(agentName(item)) is waiting for your input"
+            case .startWaitsInTerminal: return "\(agentName(item)) may be waiting in its terminal"
             case .awaitingReply: return replyLine(item)
             case .agentError: return "\(agentName(item)) stopped with an error"
             case .review, .readyForReview:
-                return item.record?.mergeFailure == nil ? "Ready for your review" : "⚠ merge stopped"
+                if item.record?.mergeFailure != nil { return "⚠ merge stopped" }
+                if attention == .review, let problem = item.pullRequestLookupProblem { return lookupProblemLine(problem) }
+                return "Ready for your review"
             case .agentFinished: return "\(agentName(item)) finished · waiting for you"
             case .cleanupStopped:
                 switch item.record?.cleanup?.kind {
@@ -86,6 +89,29 @@ enum TaskBoardPresentation {
         case .toShip: return item.finishedThroughChildren ? "Child tasks merged · waiting for a release" : "Merged · waiting for a release"
         case .done: return item.record?.shippedAt != nil ? "Shipped" : "Done"
         case .archived: return "Archived"
+        }
+    }
+
+    /// The status line of a task whose pull request Toastty cannot read
+    /// from GitHub, with what to do.
+    static func lookupProblemLine(_ problem: PullRequestLookupProblem) -> String {
+        switch problem {
+        case .ghMissing: "⚠ install gh to check the PR"
+        case .notSignedIn: "⚠ run gh auth login to check the PR"
+        case .other: "⚠ PR check failed"
+        }
+    }
+
+    /// Why Toastty cannot read the pull request, and what to do, for the
+    /// detail pane and `task get`.
+    static func lookupProblemReason(_ problem: PullRequestLookupProblem) -> String {
+        switch problem {
+        case .ghMissing:
+            "gh is not installed, or not on your login shell's PATH: install it (brew install gh), then run gh auth login"
+        case .notSignedIn:
+            "gh is not signed in to GitHub: run gh auth login in a terminal"
+        case .other(let message):
+            "gh could not read the PR: \(message)"
         }
     }
 
@@ -129,6 +155,8 @@ enum TaskBoardPresentation {
                 return ("Needs you", reason)
             case .taskSpaceClosed: return ("Needs you", "task space closed")
             case .agentNeedsInput: return ("Needs you", "the agent asked for input")
+            case .startWaitsInTerminal:
+                return ("Needs you", "the agent has not started its first prompt; it may wait for an answer in its terminal, such as a login or a folder-trust question")
             case .awaitingReply: return ("Needs you", "the agent asked a question")
             case .agentError: return ("Needs you", "the agent stopped with an error")
             case .review, .readyForReview:
@@ -136,6 +164,7 @@ enum TaskBoardPresentation {
                     return ("Review", "the last merge stopped: \(failure.reason)")
                 }
                 if attention == .readyForReview { return ("Review", "marked ready, agent idle") }
+                if let problem = item.pullRequestLookupProblem { return ("Review", lookupProblemReason(problem)) }
                 return ("Review", item.pullRequestState == nil ? "PR linked, agent idle" : "PR open, agent idle")
             case .agentFinished: return ("Needs you", "the agent finished its turn")
             case .cleanupStopped(let reason): return ("Needs you", reason)
@@ -521,7 +550,7 @@ struct TaskStageMark: View {
                 case .agentFinished:
                     // The sidebar's ready square for an unread turn.
                     RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionReadyText).frame(width: 7, height: 7)
-                case .agentNeedsInput, .taskSpaceClosed, .cleanupStopped:
+                case .agentNeedsInput, .startWaitsInTerminal, .taskSpaceClosed, .cleanupStopped:
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(ToastyTheme.sessionNeedsApprovalText)
                         .frame(width: 7, height: 7)

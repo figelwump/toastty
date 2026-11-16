@@ -1,6 +1,38 @@
 import CoreState
 import Foundation
 
+/// Why Toastty could not read a pull request with `gh`, sorted by what the
+/// user does about it.
+enum PullRequestLookupProblem: Equatable {
+    /// `gh` is not installed, or not on the login shell's PATH.
+    case ghMissing
+    /// `gh` has no usable GitHub login.
+    case notSignedIn
+    /// Another failure, with `gh`'s last line or Toastty's reason.
+    case other(String)
+
+    /// `env` exits 127 when it cannot find `gh`. `gh` exits 4 when it needs
+    /// a login, and names `gh auth login` when GitHub refuses its token.
+    init(_ result: WorkspaceMergeCommandResult) {
+        if result.exitCode == 127 {
+            self = .ghMissing
+        } else if result.exitCode == 4 || result.stderr.contains("gh auth login") {
+            self = .notSignedIn
+        } else {
+            self = .other(result.problemSummary)
+        }
+    }
+
+    /// Whether every request fails the same way until the user acts, so
+    /// asking again with fewer fields cannot help.
+    var failsEveryRequest: Bool {
+        switch self {
+        case .ghMissing, .notSignedIn: true
+        case .other: false
+        }
+    }
+}
+
 /// GitHub's last answer for each task pull request, so a task's stage can be
 /// worked out without waiting on `gh`. It only reports what it sees: merges
 /// are still run, and cleaned up after, by `WorkspaceMergeCoordinator`.
@@ -25,6 +57,11 @@ final class PullRequestStateCache: ObservableObject {
         /// Includes failed requests, so failures cannot cause a tight retry loop.
         var requestedAt: Date?
         var lastError: String?
+        /// Why the last request failed, while `lastError` is set.
+        var lookupProblem: PullRequestLookupProblem?
+        /// Requests that failed since the last answer; see
+        /// `failedRefreshInterval(failures:)`.
+        var failureCount = 0
 
         /// The entry without the times of its requests. `state(for:)` and
         /// `answer(for:)` can give another answer only when this part
@@ -34,6 +71,7 @@ final class PullRequestStateCache: ObservableObject {
             entry.knownAt = nil
             entry.answeredAt = nil
             entry.requestedAt = nil
+            entry.failureCount = 0
             return entry
         }
     }
@@ -85,6 +123,22 @@ final class PullRequestStateCache: ObservableObject {
 
     func state(for link: WorkspacePullRequestLink) -> TaskPullRequestState? {
         entries[link.url].flatMap { Self.resolved($0, at: now()).state }
+    }
+
+    /// Why GitHub has not answered for this pull request: set while the
+    /// cache has no answer for it and the last request failed.
+    func lookupProblem(for link: WorkspacePullRequestLink) -> PullRequestLookupProblem? {
+        guard let entry = entries[link.url], entry.answer == nil, entry.lastError != nil else { return nil }
+        return entry.lookupProblem
+    }
+
+    /// How long a pull request whose requests keep failing waits before
+    /// the next one: 15 seconds after the first failure, then twice as long
+    /// after each further one, up to the two minutes of a settled answer.
+    /// Without `gh`, or without its login, each request fails at once.
+    static func failedRefreshInterval(failures: Int) -> TimeInterval {
+        let doublings = Double(min(max(failures - 1, 0), 8))
+        return min(pendingRefreshInterval * pow(2, doublings), settledRefreshInterval)
     }
 
     /// The state an entry gives at `time`, and the moment at which that
@@ -166,7 +220,11 @@ final class PullRequestStateCache: ObservableObject {
         let needsFrequentRefresh = entry?.lastError != nil || answer == nil
             || (answer?.state == .open && (entry?.readinessWasReported != true
                 || answer?.mergeability?.isKnown != true || answer?.mergeability?.checks == .running))
-        let interval = needsFrequentRefresh ? Self.pendingRefreshInterval : Self.settledRefreshInterval
+        let interval = if let entry, entry.lastError != nil {
+            Self.failedRefreshInterval(failures: entry.failureCount)
+        } else {
+            needsFrequentRefresh ? Self.pendingRefreshInterval : Self.settledRefreshInterval
+        }
         if let requestedAt = entry?.requestedAt, now().timeIntervalSince(requestedAt) < interval {
             return nil
         }
@@ -192,7 +250,10 @@ final class PullRequestStateCache: ObservableObject {
                 directory: directory,
                 timeout: Self.requestTimeout
             )
-            if result.exitCode != 0 {
+            // A token that cannot read checks fails the whole request, so
+            // fewer fields can still work. Without `gh` or its login, no
+            // request can.
+            if result.exitCode != 0, PullRequestLookupProblem(result).failsEveryRequest == false {
                 result = await runner.run(
                     arguments: ["gh", "pr", "view", link.url, "--json", Self.viewFields],
                     directory: directory,
@@ -223,6 +284,8 @@ final class PullRequestStateCache: ObservableObject {
                 if let answeredAt = entry.answeredAt, answeredAt > startedAt { return }
                 entry.requestedAt = startedAt
                 entry.lastError = result.problemSummary
+                entry.lookupProblem = PullRequestLookupProblem(result)
+                entry.failureCount += 1
                 self.setEntry(entry, for: link.url)
             }
         }
@@ -258,6 +321,8 @@ final class PullRequestStateCache: ObservableObject {
         entry.answeredAt = observedAt
         entry.requestedAt = max(entry.requestedAt ?? observedAt, observedAt)
         entry.lastError = nil
+        entry.lookupProblem = nil
+        entry.failureCount = 0
         setEntry(entry, for: link.url)
         if let state = self.state(for: link), previous != state {
             answerObserver?(link, state)

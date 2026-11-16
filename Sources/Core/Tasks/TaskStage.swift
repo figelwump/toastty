@@ -31,6 +31,11 @@ public enum TaskStage: Equatable, Sendable {
         case taskSpaceClosed
         /// The agent asked a question or wants an approval.
         case agentNeedsInput
+        /// The agent was started with the task's first prompt and never
+        /// reported that it began it. It most likely waits for an answer
+        /// that only its terminal can take, such as a login or a
+        /// folder-trust question, which comes before its first report.
+        case startWaitsInTerminal
         /// The agent ended its turn with a question and marked the task as
         /// waiting for the user's reply (`task.needs-reply`).
         case awaitingReply
@@ -54,6 +59,7 @@ public enum TaskStage: Equatable, Sendable {
             case .moveFailed: "moveFailed"
             case .taskSpaceClosed: "taskSpaceClosed"
             case .agentNeedsInput: "agentNeedsInput"
+            case .startWaitsInTerminal: "startWaitsInTerminal"
             case .awaitingReply: "awaitingReply"
             case .agentError: "agentError"
             case .review: "review"
@@ -68,8 +74,8 @@ public enum TaskStage: Equatable, Sendable {
         public var isBeforeStart: Bool {
             switch self {
             case .pickWorkspace, .setupFailed, .moveFailed: true
-            case .taskSpaceClosed, .agentNeedsInput, .awaitingReply, .agentError, .review, .readyForReview, .agentFinished,
-                 .cleanupStopped: false
+            case .taskSpaceClosed, .agentNeedsInput, .startWaitsInTerminal, .awaitingReply, .agentError, .review,
+                 .readyForReview, .agentFinished, .cleanupStopped: false
             }
         }
     }
@@ -224,6 +230,11 @@ public enum TaskStage: Equatable, Sendable {
             return .running
         case .finished, .idle, .none:
             break
+        }
+        // An agent that never began its first prompt has done nothing yet,
+        // so nothing below can apply to it.
+        if live.startWaitsInTerminal {
+            return .needsYou(.startWaitsInTerminal)
         }
         // An accepted merge that is still under way is not waiting for a
         // review. A merge skill that stopped on a blocker ended its turn, so
@@ -414,6 +425,10 @@ public struct TaskLiveFacts: Equatable, Sendable {
     /// Whether the task holds a pending watch on another task: its agent
     /// ended its turn to wait, so the task is still running.
     public var waitsOnTask: Bool
+    /// Whether an agent in the task space was started with its first
+    /// prompt and never reported that it began it, in the time Toastty
+    /// waits for that report.
+    public var startWaitsInTerminal: Bool
 
     public init(
         taskSpaceOpen: Bool,
@@ -422,7 +437,8 @@ public struct TaskLiveFacts: Equatable, Sendable {
         hasPullRequestLink: Bool = false,
         merge: TaskMergeActivity? = nil,
         cleanupProblem: String? = nil,
-        waitsOnTask: Bool = false
+        waitsOnTask: Bool = false,
+        startWaitsInTerminal: Bool = false
     ) {
         self.taskSpaceOpen = taskSpaceOpen
         self.agent = agent
@@ -431,6 +447,7 @@ public struct TaskLiveFacts: Equatable, Sendable {
         self.merge = merge
         self.cleanupProblem = cleanupProblem
         self.waitsOnTask = waitsOnTask
+        self.startWaitsInTerminal = startWaitsInTerminal
     }
 }
 

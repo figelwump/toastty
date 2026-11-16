@@ -4632,6 +4632,9 @@ struct SidebarView: View {
             summary: boardItem.flatMap { item in
                 // The agent's question replaces its last status line.
                 if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
+                // So does a start that may wait in the terminal: the session
+                // itself only shows that it waits.
+                if case .needsYou(.startWaitsInTerminal) = item.stage { return TaskBoardPresentation.statusLine(item) }
                 // A merged task's held task space says when it closes.
                 return item.stage.isBeforeStart || item.cleanupHeldUntil != nil ? TaskBoardPresentation.statusLine(item) : nil
             } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),

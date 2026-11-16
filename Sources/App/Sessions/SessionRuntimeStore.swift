@@ -220,6 +220,12 @@ final class SessionRuntimeStore: ObservableObject {
     /// Sessions launched with their first prompt whose agent has not
     /// reported that turn yet, each with the timer that ends the wait.
     private var initialPromptTurnTimeoutTasksBySessionID: [String: Task<Void, Never>] = [:]
+    /// Sessions whose wait for the first prompt's turn ran out with no
+    /// report from the agent, until the agent reports or the session stops.
+    /// Such an agent most likely waits for an answer in its terminal, as a
+    /// login or a folder-trust question comes before its first report.
+    /// Each change comes with a change of the session's status.
+    private(set) var sessionIDsWithUnstartedFirstPrompt: Set<String> = []
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private var codexSubagentReconcilerBySessionID: [String: CodexSubagentReconciler] = [:]
     /// Teammate metadata outlives each active turn so a resumed teammate can
@@ -982,11 +988,17 @@ final class SessionRuntimeStore: ObservableObject {
             category: .terminal,
             metadata: ["session_id": sessionID, "agent": record.agent.rawValue]
         )
+        // Before the status changes, so that a reader of the new status
+        // sees both.
+        sessionIDsWithUnstartedFirstPrompt.insert(sessionID)
         updateSynthesizedStatus(sessionID: sessionID, status: Self.interruptedIdleStatus, at: Date())
     }
 
+    /// Ends the wait for the first prompt's turn, and forgets that the wait
+    /// ran out: the agent reported, was interrupted, or stopped.
     private func endInitialPromptTurnWait(sessionID: String) {
         initialPromptTurnTimeoutTasksBySessionID.removeValue(forKey: sessionID)?.cancel()
+        sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
     }
 
     private enum StatusUpdateOrigin {
@@ -1016,6 +1028,10 @@ final class SessionRuntimeStore: ObservableObject {
         codexHookEvent: CodexHookEvent?,
         at now: Date
     ) {
+        // The agent's own report after the wait ran out: it started.
+        if origin == .provider {
+            sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
+        }
         if initialPromptTurnTimeoutTasksBySessionID[sessionID] != nil {
             guard status.kind != .idle else {
                 ToasttyLog.debug(
