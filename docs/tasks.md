@@ -2001,14 +2001,15 @@ review. The choice is saved for each window.
   Click the chevron left of a card's name to collapse the card to that name
   line and its counts; the choice is saved with the window.
   A task and the tasks it started list together, in the bucket of the most
-  urgent one: an idle parent whose child needs you lists in Needs you, dimmed,
-  with the child under it. A bucket's count includes only the rows whose own
+  urgent one: an idle parent whose child needs you lists in Needs you, with
+  the child under it. Each row keeps its own status mark, so the parent still
+  shows that it is idle. A bucket's count includes only the rows whose own
   state is in it. Inside a bucket, the project's sessions come first in the
   card's order, then its task spaces in the order they opened, then its tasks
   without a task space in the order they were created, so a row moves only
   when its bucket changes. The selected row, and its family, keep their
-  bucket while you read a finished turn, so the row dims instead of moving
-  from under the pointer. Selecting another row releases it; the selected row
+  bucket while you read a finished turn, so the row does not move from under
+  the pointer. Selecting another row releases it; the selected row
   resuming work moves to Running at once unless a relative still needs you.
   A row that starts to need you also moves at once.
   A parent without a pull request moves to To ship or Done when its
