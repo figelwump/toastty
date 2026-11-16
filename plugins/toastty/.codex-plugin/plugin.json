@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Toastty",
     "shortDescription": "Control and support Toastty from managed agent sessions.",
-    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, sibling-terminal reads, redacted diagnostics, and moving tasks into their own git worktrees. Toastty exposes these skills only to supported managed agent sessions.",
+    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, sibling-terminal reads, redacted diagnostics, taking tasks from request to review in their own git worktrees, merging a task's pull request once the user accepts it, and the coordinator session that follows the user's tasks. Toastty exposes these skills only to supported managed agent sessions.",
     "developerName": "Giant Things",
     "category": "Developer Tools",
     "capabilities": [
@@ -21,7 +21,8 @@
       "Create a visual summary in Scratchpad.",
       "Check what the dev server in the other terminal is printing.",
       "Send Toastty diagnostics.",
-      "Implement this task in its own worktree."
+      "Implement this task in its own worktree.",
+      "Merge this task's pull request."
     ]
   }
 }
