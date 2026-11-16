@@ -517,6 +517,12 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         }
         attachScreenshot(named: "coordinator-copy-reply-buttons", of: app)
 
+        // Copy shows its mark for a moment.
+        copyLong.tap()
+        XCTAssertTrue(waitUntil(timeout: 1.4) { copyLong.label == "Copied" })
+        attachScreenshot(named: "coordinator-copy-copied", of: app)
+        XCTAssertTrue(waitUntil(timeout: 5) { copyLong.label == "Copy message" })
+
         // Another session's chat has neither button.
         let oneSession = link(containing: "early-session-titles", in: app)
         XCTAssertTrue(oneSession.waitForExistence(timeout: 5))
@@ -534,13 +540,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
 
-        // Copy shows its mark for a moment, and the pasteboard holds the
-        // whole message, not the last row's part.
-        for _ in 0..<8 where copyLong.isHittable == false { app.swipeUp() }
-        XCTAssertTrue(waitUntilHittable(copyLong))
-        copyLong.tap()
-        XCTAssertTrue(waitUntil(timeout: 1.4) { copyLong.label == "Copied" })
-        attachScreenshot(named: "coordinator-copy-copied", of: app)
+        // The pasteboard holds the whole message, not the last row's part.
         let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
@@ -553,7 +553,6 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         let pasted = (input.value as? String) ?? ""
         XCTAssertTrue(pasted.hasPrefix("Here is the week, task by task."), pasted)
         XCTAssertTrue(pasted.hasSuffix("That is everything that moved this week."), pasted)
-        XCTAssertTrue(waitUntil(timeout: 5) { copyLong.label == "Copy message" })
     }
 
     /// Reply puts the coordinator's message above the field, and the field
