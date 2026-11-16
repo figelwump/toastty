@@ -41,6 +41,8 @@ h1 em { display: block; color: var(--amber); font-style: normal; }
 .sub { text-wrap: balance; max-width: 620px; margin: 22px auto 0; font-size: 18.5px; line-height: 1.55; color: var(--ink-2); }
 .ctas { display: flex; gap: 12px; justify-content: center; margin-top: 28px; flex-wrap: wrap; }
 .meta { margin-top: 14px; font-size: 13px; color: var(--ink-3); }
+.hero .tasks-line { text-wrap: balance; max-width: 620px; margin: 12px auto 0; font-size: 15.5px; line-height: 1.55; color: var(--ink-3); }
+.hero .tasks-line a { color: var(--amber-text); text-decoration-thickness: 1px; text-underline-offset: 2px; }
 
 /* ---------- Video stage ---------- */
 .video { padding: 18px 0 8px; }

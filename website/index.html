@@ -68,6 +68,7 @@
   <div class="eyebrow">A native macOS terminal multiplexer for coding agents</div>
   <h1>Any agent.<em>Any workflow.</em></h1>
   <p class="sub">Toastty gives your agents building blocks they can drive. Shape them into the workflow that fits how you work, with any agent that runs in a terminal.</p>
+  <p class="tasks-line">Built-in <a href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">tasks</a> give each piece of work its own agent, task space and worktree, and a coordinator agent follows them for you. The coordinator's chat needs macOS 15 or later.</p>
   <div class="ctas">
     <a class="btn btn-dark" href="https://github.com/figelwump/toastty/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg>Download for macOS</a>
   </div>
@@ -353,7 +354,7 @@
       <div class="cli"><span class="badge" style="position:static;display:inline-block;width:20px;height:20px;line-height:20px;font-size:11px;margin-right:8px">5</span>toastty action run workspace.create  ·  panel.create.local-document  ·  workspace.set-annotation</div>
     </div>
     <ol class="blist">
-      <li><b>Workspaces and task spaces</b><span>One per project or task, in the sidebar. A task space nests new work under the session that started it.</span></li>
+      <li><b>Workspaces and tasks</b><span>One workspace per project, in the sidebar. Each task gets a task space under its project, and the Tasks view lists them all.</span></li>
       <li><b>Tabs and splits</b><span>Any terminal layout, with any agent or command in each pane. Layouts persist across restarts.</span></li>
       <li><b>Right panel</b><span>Scratchpad pages, local files, and a browser beside the terminal: plans, mockups, handoffs, previews.</span></li>
       <li><b>Status and chips</b><span>Live agent status and notifications, plus links like PR #128 or ENG-412 pinned to a workspace.</span></li>
@@ -365,16 +366,16 @@
 <section class="shell block-sec" id="workflows">
   <div class="sec-eyebrow">Workflows</div>
   <h2>Put the pieces together however you work.</h2>
-  <p class="lead">A workflow is a short skill file that tells your agent which pieces to use and when. Start from the worktree examples, or describe how you work and let your agent write one.</p>
+  <p class="lead">A workflow is a short skill file that tells your agent which pieces to use and when. Tasks are built in. For anything else you do the same way each time, describe how you work and let your agent write one.</p>
   <div class="flows">
-    <div class="flow"><div><h4>Worktree handoff</h4><span class="ask">"hand this off"</span><a class="tag" href="https://github.com/figelwump/toastty/tree/main/examples/skills">Example included</a></div><p>Packages the conversation into a handoff, opens a worktree in a new task space, and comes back with a screenshot report and a PR chip.</p><div class="tools">git · GitHub</div></div>
+    <div class="flow"><div><h4>Tasks</h4><span class="ask">⌥⇧T from any app</span><a class="tag" href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">Built in</a></div><p>Starts an agent on the task in a new task space and moves the work into its own worktree. The task shows as ready for review when its PR opens. Press Merge, and Toastty merges the PR and removes the worktree.</p><div class="tools">git · GitHub</div></div>
     <div class="flow"><div><h4>Issue to PR</h4><span class="ask">"start ENG-412"</span></div><p>Reads the issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it's up.</p><div class="tools">Linear · GitHub Issues</div></div>
     <div class="flow"><div><h4>Review queue</h4><span class="ask">"review my PRs"</span></div><p>Opens a task space per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies you as each one is ready.</p><div class="tools">GitHub</div></div>
     <div class="flow"><div><h4>Spec to tasks</h4><span class="ask">"build from this spec"</span></div><p>Opens the spec beside the terminal, splits it into tasks, starts a task space for each, and keeps a progress page up to date.</p><div class="tools">Google Docs · Notion · Markdown</div></div>
     <div class="flow"><div><h4>Crash to fix</h4><span class="ask">"fix this crash"</span></div><p>Reproduces the report in a worktree with the dev server in a split the agent can read, then shows before and after screenshots.</p><div class="tools">Sentry · logs</div></div>
     <div class="flow"><div><h4>Second opinion</h4><span class="ask">"ask another model"</span></div><p>Runs two agents side by side on the same question and compares their answers in a Scratchpad.</p><div class="tools">Any two CLI agents</div></div>
   </div>
-  <p class="fine">The worktree handoff ships as <a href="https://github.com/figelwump/toastty/tree/main/examples/skills">example skills</a>; the others are ideas to describe to your agent. Issue trackers and documents are reached through your agent's own tools, such as MCP servers or <code>gh</code>. Toastty provides the workspace around them.</p>
+  <p class="fine">Tasks are built into Toastty; see <a href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">Tasks</a>. The others are ideas to describe to your agent. Issue trackers and documents are reached through your agent's own tools, such as MCP servers or <code>gh</code>. Toastty provides the workspace around them.</p>
 </section>
 
 <section class="shell block-sec" id="features">
@@ -384,7 +385,7 @@
       <h2>See what needs you next.</h2>
       <p class="lead">Every workspace is a card in the sidebar. Sessions report live status, and the rows that want you are tinted: green when ready, amber when waiting for approval, red on an error.</p>
       <ul class="feats">
-        <li><b>Task spaces</b><span>Task workspaces nest under the session that started them, each with its own status and PR chip.</span></li>
+        <li><b>Task spaces</b><span>Each task gets a task space under its project, with its own status and PR chip.</span></li>
         <li><b>Jump to what's next</b><span><kbd>⌘⇧A</kbd> cycles through unread, approval, and active sessions.</span></li>
         <li><b>Mark for later</b><span><kbd>⌘⇧L</kbd> flags a session; the flag clears when it moves forward.</span></li>
         <li><b>OSC 7501 support</b><span>Programs that report <a href="https://mitchellh.com/writing/program-status-osc7501">OSC 7501</a> status appear in the sidebar with progress and approval, input, or login labels.</span><small class="watch-note">You can also watch any command with <kbd>⌘⇧M</kbd> and get notified when it exits.</small></li>
@@ -608,7 +609,7 @@
   <div class="steps">
     <div><h3>Download Toastty</h3><p>Open the <a href="https://github.com/figelwump/toastty/releases/latest">latest release</a> and drag Toastty to Applications. Your Ghostty config carries over.</p></div>
     <div><h3>Paste the setup prompt</h3><p>Copy it from <b>Toastty ▸ Get Started with Toastty…</b> and give it to any agent in a Toastty pane. It previews every change before writing anything.</p></div>
-    <div><h3>Pick a workflow</h3><p>Copy the <a href="https://github.com/figelwump/toastty/tree/main/examples/skills">worktree handoff examples</a> into <code>~/.toastty/skills</code>, or describe how you work and let your agent write a skill there.</p></div>
+    <div><h3>Start a task</h3><p>Press <kbd>⌥⇧T</kbd> from any app and describe the work. <a href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">Tasks</a> start, merge and clean up with skills that ship with Toastty. For anything else you do the same way each time, let your agent write a skill in <code>~/.toastty/skills</code>.</p></div>
   </div>
   <div class="promptbox"><button type="button" class="copy" id="copy-prompt">Copy</button><span id="setup-prompt">You are helping me set up Toastty. Please run:
 
@@ -623,6 +624,7 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
   <div class="found">
     <div><b>Ghostty rendering</b><span>GPU-accelerated, and your existing <a href="https://ghostty.org">Ghostty</a> config just works.</span></div>
     <div><b>Keyboard first</b><span><kbd>⌘⇧P</kbd> command palette, <kbd>⌘D</kbd> to split, <kbd>⌥1</kbd>–<kbd>9</kbd> to switch workspaces. <a class="reference" href="https://github.com/figelwump/toastty/blob/main/docs/keyboard-shortcuts.md">Full keyboard reference <span aria-hidden="true">↗</span></a></span></div>
+    <div><b>Tasks from anywhere</b><span><kbd>⌥⇧T</kbd> opens quick entry to create a task from any app. <kbd>⌘⇧K</kbd> puts the keyboard in the coordinator's message field, on macOS 15 and later.</span></div>
     <div><b>Terminal profiles</b><span>One-key launchers for tmux, herdr, SSH, or any startup command.</span></div>
     <div><b>Layouts that persist</b><span>Workspaces, tabs, and splits come back after a restart, and with shell integration, so does each pane's history.</span></div>
     <div><b>Local first</b><span>No usage analytics or telemetry. Beyond update checks, Toastty only connects out for features you use, such as Remote Access or a diagnostics report you choose to send.</span></div>
