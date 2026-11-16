@@ -458,7 +458,7 @@ struct CoordinatorTaskChips {
             switch attention {
             case .review, .readyForReview: ToastyTheme.sidebarTaskReviewMark
             case .awaitingReply, .pickWorkspace, .setupFailed, .moveFailed,
-                 .agentNeedsInput, .taskSpaceClosed, .cleanupStopped: ToastyTheme.sessionNeedsApprovalText
+                 .agentNeedsInput, .startWaitsInTerminal, .taskSpaceClosed, .cleanupStopped: ToastyTheme.sessionNeedsApprovalText
             case .agentError: ToastyTheme.sessionErrorText
             case .agentFinished: ToastyTheme.sessionReadyText
             }

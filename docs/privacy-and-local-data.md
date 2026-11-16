@@ -93,6 +93,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
     entry, that its prompt has not taken yet. A message leaves the file when
     it is typed or removed. Closing the coordinator's workspace removes the
     file.
+- `~/.toastty/coordinator-workspace.json`
+  - The IDs of the coordinator's workspace and terminal, so that Toastty can
+    mark that workspace as the coordinator's again after an older Toastty
+    saved the layout without the mark. Closing the coordinator's workspace
+    removes the file.
 - `~/.toastty/recent-workspaces.json`
   - The title, root directory and close time of up to 20 recently closed
     top-level workspaces, for the task workspace picker.
@@ -238,7 +243,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/recent-workspaces.json`
   - `<runtime-home>/task-last-workspace.json` and `<runtime-home>/task-preset-usage.json`
   - `<runtime-home>/task-webhooks.json` and `<runtime-home>/task-webhook-outbox.json`
-  - `<runtime-home>/coordinator/` and `<runtime-home>/coordinator-queue.json`
+  - `<runtime-home>/coordinator/`, `<runtime-home>/coordinator-queue.json` and `<runtime-home>/coordinator-workspace.json`
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`

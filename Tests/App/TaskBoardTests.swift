@@ -1,5 +1,6 @@
 import Combine
 import CoreState
+import RemoteProtocol
 import Foundation
 import Testing
 @testable import ToasttyApp
@@ -20,6 +21,8 @@ struct TaskBoardTests {
         /// cannot read checks.
         var rejectsReadinessFields = false
         var failsRequests = false
+        /// Every request ends this way, as without `gh` or its login.
+        var failure: WorkspaceMergeCommandResult?
         var defaultBranch: String? = "main"
 
         /// `checks` is the `statusCheckRollup` array as JSON.
@@ -63,6 +66,9 @@ struct TaskBoardTests {
                 await withCheckedContinuation { continuation in
                     lock.withLock { held.append(continuation) }
                 }
+            }
+            if let failure = lock.withLock({ self.failure }) {
+                return failure
             }
             if lock.withLock({ failsRequests }) {
                 return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "gh: offline", failure: nil)
@@ -811,6 +817,150 @@ struct TaskBoardTests {
         #expect(cache.entries[other.url]?.lastError == "gh: not found")
         await cache.refresh(link).value
         #expect(cache.state(for: link)?.state == .open)
+    }
+
+    /// What `/usr/bin/env gh` gives without `gh`, and `gh` without a login.
+    static let ghMissing = WorkspaceMergeCommandResult(
+        exitCode: 127, stdout: "", stderr: "env: gh: No such file or directory", failure: nil)
+    static let ghSignedOut = WorkspaceMergeCommandResult(
+        exitCode: 4, stdout: "",
+        stderr: "To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.",
+        failure: nil)
+
+    /// The bug this guards: without `gh`, or with `gh` signed out, every
+    /// lookup failed, and the task only said "Ready for your review".
+    @Test func aFailedPullRequestLookupShowsOnTheTaskWithTheNextStep() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        let task = try await startTask(fixture, text: "Fix the unread dot")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        for kind in [SessionStatusKind.working, .idle] {
+            fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date())
+        }
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+        func lookup(_ result: WorkspaceMergeCommandResult?) async {
+            gitHub.failure = result
+            await board.pullRequests?.refresh(link).value
+        }
+
+        // No gh: one request, no second one with fewer fields.
+        let callsBefore = gitHub.calls.count
+        await lookup(Self.ghMissing)
+        #expect(gitHub.calls.count == callsBefore + 1)
+        var current = try item()
+        #expect(current.stage == .needsYou(.review))
+        #expect(current.pullRequestLookupProblem == .ghMissing)
+        #expect(TaskBoardPresentation.statusLine(current) == "⚠ install gh to check the PR")
+        #expect(TaskBoardPresentation.stageDescription(current).why.contains("brew install gh"))
+
+        await lookup(Self.ghSignedOut)
+        current = try item()
+        #expect(current.pullRequestLookupProblem == .notSignedIn)
+        #expect(TaskBoardPresentation.statusLine(current) == "⚠ run gh auth login to check the PR")
+
+        await lookup(WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "HTTP 502: Bad Gateway", failure: nil))
+        current = try item()
+        #expect(current.pullRequestLookupProblem == .other("HTTP 502: Bad Gateway"))
+        #expect(TaskBoardPresentation.statusLine(current) == "⚠ PR check failed")
+        #expect(TaskBoardPresentation.stageDescription(current).why == "gh could not read the PR: HTTP 502: Bad Gateway")
+
+        // GitHub answers: the task waits for review, with nothing to fix.
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        await lookup(nil)
+        current = try item()
+        #expect(current.pullRequestLookupProblem == nil)
+        #expect(TaskBoardPresentation.statusLine(current) == "Ready for your review")
+        // A later failure keeps GitHub's answer and shows none.
+        await lookup(Self.ghSignedOut)
+        #expect(try item().pullRequestLookupProblem == nil)
+        #expect(try item().pullRequestState?.state == .open)
+    }
+
+    /// Without `gh` or its login every request fails at once, so a failing
+    /// pull request is asked about less often, up to the settled interval,
+    /// until GitHub answers.
+    @Test func failedLookupsAskLessOftenUntilGitHubAnswers() async throws {
+        let gitHub = FakeGitHub()
+        gitHub.failure = Self.ghMissing
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        await cache.refresh(link).value
+        for wait: TimeInterval in [15, 30, 60, 120, 120] {
+            let calls = gitHub.calls.count
+            clock = clock.addingTimeInterval(wait - 1)
+            #expect(cache.refreshIfNeeded(link) == nil)
+            clock = clock.addingTimeInterval(1)
+            await cache.refreshIfNeeded(link)?.value
+            #expect(gitHub.calls.count == calls + 1)
+        }
+
+        // An answer ends the back-off; a new failure starts it again.
+        gitHub.failure = nil
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        clock = clock.addingTimeInterval(120)
+        await cache.refreshIfNeeded(link)?.value
+        #expect(cache.state(for: link)?.state == .open)
+        gitHub.failure = Self.ghSignedOut
+        await cache.refresh(link).value
+        let calls = gitHub.calls.count
+        clock = clock.addingTimeInterval(15)
+        await cache.refreshIfNeeded(link)?.value
+        #expect(gitHub.calls.count == calls + 1)
+    }
+
+    /// The bug this guards: a task whose agent stopped at a login or a
+    /// folder-trust question before its first report showed Idle once
+    /// Toastty stopped waiting for that report, and nothing told the user.
+    @Test func aTaskWhoseAgentNeverBeginsItsFirstPromptNeedsTheUser() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture(initialPromptTurnTimeoutNanoseconds: 300_000_000)
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        let task = try await startTask(fixture, text: "Fix the trust prompt")
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+        // The launch carries the first prompt, as for an agent that reports
+        // its own status, and the agent never reports.
+        fixture.sessionRuntimeStore.startInitialPromptTurn(sessionID: session, at: Date())
+        #expect(try item().stage == .running)
+        await waitUntil { (try? item().stage) == .needsYou(.startWaitsInTerminal) }
+        let waiting = try item()
+        #expect(waiting.stage.needsUser)
+        #expect(TaskBoardPresentation.statusLine(waiting) == "Codex may be waiting in its terminal")
+        #expect(TaskBoardPresentation.stageDescription(waiting).why.contains("folder-trust question"))
+        #expect(SidebarSubspacePresentation.rowStatus(sessionStatus: .idle, isDone: false, stage: waiting.stage) == .needsApproval)
+        let executor = TaskAppControlTests().makeExecutor(fixture, coordinator: fixture.coordinator)
+        let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(task.id.uuidString)])
+        guard case .object(let stage)? = got["stage"] else {
+            Issue.record("task get has no stage")
+            return
+        }
+        #expect(stage["attention"] == .string("startWaitsInTerminal"))
+        // The phone gets values it knows: the Needs you group, no mark of
+        // its own, and the words. The attention itself is not on the wire.
+        let summary = RemoteTaskBoardProjection.summary(
+            waiting, context: RemoteTaskBoardProjection.Context(state: fixture.store.state))
+        #expect(summary.group == .needsYou)
+        #expect(summary.mark == nil)
+        #expect(summary.rowSummary == "Codex may be waiting in its terminal")
+        let wire = try JSONEncoder().encode(summary)
+        #expect(String(decoding: wire, as: UTF8.self).contains("startWaitsInTerminal") == false)
+        #expect(try JSONDecoder().decode(RemoteTaskSummary.self, from: wire) == summary)
+
+        // The user answers in the terminal and the agent reports its turn;
+        // after it, an idle agent is only idle.
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(try item().stage == .running)
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .idle, summary: "Waiting"), at: Date())
+        #expect(try item().stage == .idle)
     }
 
     @Test func pendingChecksRefreshSoonerThanSettledPullRequests() async throws {

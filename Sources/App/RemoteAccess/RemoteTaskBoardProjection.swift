@@ -287,6 +287,7 @@ enum RemoteTaskBoardProjection {
     /// the sidebar's task space row does.
     static func rowSummary(_ item: TaskBoardItem) -> String? {
         if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
+        if case .needsYou(.startWaitsInTerminal) = item.stage { return TaskBoardPresentation.statusLine(item) }
         return item.stage.isBeforeStart ? TaskBoardPresentation.statusLine(item) : nil
     }
 
