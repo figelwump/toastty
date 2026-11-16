@@ -196,6 +196,7 @@ struct CoordinatorControllerTests {
                 sessionRuntimeStore: fixture.sessions,
                 launcher: nil,
                 directoryURL: fixture.directory,
+                queueFileURL: fixture.queueFileURL,
                 workspaceFileURL: recordURL,
                 configLoader: { TasksConfig() },
                 deliverText: { _, _ in .unavailable },
@@ -216,14 +217,19 @@ struct CoordinatorControllerTests {
         #expect(fixture.store.send(.setCoordinatorPanel(panelID: panelID)))
         #expect(CoordinatorWorkspaceRecord.load(from: recordURL)?.panelID == panelID)
         #expect(first.location?.panelID == panelID)
+        // A message of the user's waits for the coordinator's prompt.
+        try CoordinatorQueueSnapshot(
+            workspaceID: workspaceID, queued: [.init(id: "waiting", text: "Create the export task")], paused: []
+        ).save(to: fixture.queueFileURL)
 
         fixture.store.replaceState(try TaskCoordinatorTests.layoutSavedByV092(fixture.store.state))
         #expect(fixture.store.state.coordinator == nil)
 
-        // The next launch.
+        // The next launch: the coordinator and its waiting message are back.
         let relaunched = launch()
         #expect(relaunched.location == CoordinatorLocation(windowID: windowID, workspaceID: workspaceID, panelID: panelID))
         #expect(fixture.store.state.topLevelWorkspaceIDs(in: windowID) == [fixture.tasks.workspaceID])
+        #expect(relaunched.queuedEntries.map(\.id) == ["waiting"])
 
         // A coordinator closed in v0.9.2 stays closed, and its record goes.
         fixture.store.replaceState(try TaskCoordinatorTests.layoutSavedByV092(fixture.store.state))

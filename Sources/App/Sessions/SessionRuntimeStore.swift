@@ -221,10 +221,11 @@ final class SessionRuntimeStore: ObservableObject {
     /// reported that turn yet, each with the timer that ends the wait.
     private var initialPromptTurnTimeoutTasksBySessionID: [String: Task<Void, Never>] = [:]
     /// Sessions whose wait for the first prompt's turn ran out with no
-    /// report from the agent, until the agent reports or the session stops.
-    /// Such an agent most likely waits for an answer in its terminal, as a
-    /// login or a folder-trust question comes before its first report.
-    /// Each change comes with a change of the session's status.
+    /// report from the agent, until the agent reports a status or the
+    /// session stops. Such an agent most likely waits for an answer in its
+    /// terminal, as a login or a folder-trust question comes before its
+    /// first report. Each change comes with a change of the session's
+    /// status or a stop, so readers that follow the registry see it.
     private(set) var sessionIDsWithUnstartedFirstPrompt: Set<String> = []
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private var codexSubagentReconcilerBySessionID: [String: CodexSubagentReconciler] = [:]
@@ -994,11 +995,8 @@ final class SessionRuntimeStore: ObservableObject {
         updateSynthesizedStatus(sessionID: sessionID, status: Self.interruptedIdleStatus, at: Date())
     }
 
-    /// Ends the wait for the first prompt's turn, and forgets that the wait
-    /// ran out: the agent reported, was interrupted, or stopped.
     private func endInitialPromptTurnWait(sessionID: String) {
         initialPromptTurnTimeoutTasksBySessionID.removeValue(forKey: sessionID)?.cancel()
-        sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
     }
 
     private enum StatusUpdateOrigin {
@@ -3299,6 +3297,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func clearSessionRuntimeState(sessionID: String) {
         endInitialPromptTurnWait(sessionID: sessionID)
+        sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
         invalidateClaudeQuestionBinding(sessionID: sessionID)
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
