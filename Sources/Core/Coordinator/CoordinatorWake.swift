@@ -30,10 +30,20 @@ import RemoteProtocol
 /// which the coordinator found nothing for the user and said so with
 /// `coordinator wake --quiet`. The chat folds such a turn, and its end
 /// alerts nobody.
+///
+/// A digest whose turn ends with an error, such as an API error or a sleep
+/// of the Mac in the middle of the turn, is told again: its changes wait
+/// as if it was never typed (`tellAgain`), and the next digest says that
+/// the turn failed. The app decides which turn a digest started and how
+/// many times in a row it tells one again.
 public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// The soonest time the coordinator can ask for, so a timer cannot
     /// become a loop of turns.
     public static let minimumDelay: TimeInterval = 60
+    /// How long a digest whose turn failed waits before it is typed again.
+    /// The error can come at the moment the Mac wakes, before its network
+    /// is back, and a rate limit refuses a turn at once.
+    public static let failedTurnRetryDelay: TimeInterval = 60
     /// The task lines one digest lists. The rest are counted in one line.
     public static let maximumListedTasks = 40
     /// The tasks and the projects the coordinator can watch, each.
@@ -103,6 +113,20 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// `digestKey` of each digest whose turn the coordinator marked quiet,
     /// oldest first.
     public private(set) var quietDigestKeys: [String] = []
+    /// When the turn of the digest typed last ended with an error. Its
+    /// changes wait again, the next digest says so, and it is not typed
+    /// before `failedTurnRetryDelay` has passed. `nil` once a digest is
+    /// typed.
+    public private(set) var failedTurnAt: Date?
+
+    /// What a typed digest told the coordinator: its changes, and the time
+    /// the coordinator set that had come. The app keeps it until the turn
+    /// the digest started ends, so that a turn that fails can tell it
+    /// again.
+    public struct Delivered: Equatable, Sendable {
+        public var changes: [TaskChange]
+        public var scheduledCheck: Date?
+    }
 
     public init(workspaceID: UUID, startedAt: Date) {
         self.workspaceID = workspaceID
@@ -198,12 +222,54 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// The digest was typed. Its changes are told, and a time the
     /// coordinator set before this wake is gone, whether it had come or
     /// not. The coordinator sets or clears its next check in the turn this
-    /// wake starts; until it sets one, no timer runs.
-    public mutating func markDelivered(_ digest: String, at: Date) {
+    /// wake starts; until it sets one, no timer runs. Returns what the
+    /// digest told, for `tellAgain`.
+    @discardableResult
+    public mutating func markDelivered(_ digest: String, at: Date) -> Delivered {
+        let delivered = Delivered(changes: changes, scheduledCheck: requestedWakeAt.flatMap { $0 <= at ? $0 : nil })
         changes = []
         requestedWakeAt = nil
+        failedTurnAt = nil
         lastWakeAt = at
         lastDigestKey = Self.digestKey(digest)
+        return delivered
+    }
+
+    /// The turn that a digest started ended with an error, so the
+    /// coordinator may not have acted on it. What it told waits again, as
+    /// if it was never typed: its changes, and its scheduled check unless
+    /// the coordinator set a new time. A task that changed since keeps its
+    /// newer line, which also wakes for what the told line said and still
+    /// holds, as a newer change of a waiting line does in `record`. The
+    /// next digest says that the turn failed, and is not typed before
+    /// `failedTurnRetryDelay` has passed.
+    public mutating func tellAgain(_ delivered: Delivered, failedAt: Date) {
+        var restored: [TaskChange] = []
+        for told in delivered.changes {
+            guard let index = changes.firstIndex(where: { $0.taskID == told.taskID }) else {
+                restored.append(told)
+                continue
+            }
+            let newer = changes[index]
+            changes[index].stageWakes = newer.stageWakes || Self.stillWakes(told, newer: newer)
+            changes[index].newAlerts = newer.alerts.filter { newer.newAlerts.contains($0) || told.newAlerts.contains($0) }
+        }
+        // The told lines are older than every line recorded since.
+        changes = restored + changes
+        if requestedWakeAt == nil {
+            requestedWakeAt = delivered.scheduledCheck
+        }
+        failedTurnAt = failedAt
+    }
+
+    /// Whether a told line's stage wake still holds for the task's newer
+    /// line: the stage is the same, or the line woke for something that
+    /// happened, such as a merge (`holdsEventWake`).
+    private static func stillWakes(_ told: TaskChange, newer: TaskChange) -> Bool {
+        guard told.stageWakes else { return false }
+        let sameStage = told.group == newer.group && told.attention == newer.attention
+            && told.merged == newer.merged && told.deleted == newer.deleted
+        return sameStage || holdsEventWake(told)
     }
 
     // MARK: - Watches
@@ -278,14 +344,19 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     public static let digestFooter = "Read `toastty task list` for details."
 
     /// The message to type now, or `nil` when no change that wakes the
-    /// coordinator waits and the time it set has not come. A digest lists
-    /// every change that waits, also the ones that wake nothing on their
-    /// own. It names tasks, stages and alerts only: never an agent's reply,
-    /// a prompt, a question or an attachment.
+    /// coordinator waits and the time it set has not come, or while a
+    /// digest whose turn failed waits for `failedTurnRetryDelay`. A digest
+    /// lists every change that waits, also the ones that wake nothing on
+    /// their own. It names tasks, stages and alerts only: never an agent's
+    /// reply, a prompt, a question or an attachment.
     public func digest(now: Date) -> String? {
+        if let failedTurnAt, now < failedTurnAt.addingTimeInterval(Self.failedTurnRetryDelay) { return nil }
         let dueTimer = requestedWakeAt.flatMap { $0 <= now ? $0 : nil }
         guard changes.contains(where: \.wakes) || dueTimer != nil else { return nil }
         var lines = [Self.digestHeader]
+        if let failedTurnAt {
+            lines.append("- Your turn for Toastty's last wake ended with an error at \(Self.timestamp(failedTurnAt)). Its changes are listed again.")
+        }
         lines += changes.prefix(Self.maximumListedTasks).map(Self.line)
         if changes.count > Self.maximumListedTasks {
             lines.append("- \(changes.count - Self.maximumListedTasks) more tasks changed.")
@@ -318,7 +389,8 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
 }
 
 extension CoordinatorWakeState {
-    /// A state saved before watches and quiet turns has neither.
+    /// A state saved before watches, quiet turns and failed turns has none
+    /// of them.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         workspaceID = try container.decode(UUID.self, forKey: .workspaceID)
@@ -330,6 +402,7 @@ extension CoordinatorWakeState {
         watchedProjectRoots = try container.decodeIfPresent([String].self, forKey: .watchedProjectRoots) ?? []
         lastDigestKey = try container.decodeIfPresent(String.self, forKey: .lastDigestKey)
         quietDigestKeys = try container.decodeIfPresent([String].self, forKey: .quietDigestKeys) ?? []
+        failedTurnAt = try container.decodeIfPresent(Date.self, forKey: .failedTurnAt)
     }
 }
 

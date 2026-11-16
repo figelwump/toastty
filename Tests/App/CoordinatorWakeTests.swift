@@ -319,6 +319,169 @@ struct CoordinatorWakeTests {
         #expect(fixture.typedTexts[1].contains("needsYou (agentError)"))
     }
 
+    // MARK: - Failed wake turns
+
+    /// The coordinator runs the turn that the last typed text started, and
+    /// the turn ends with an error, as Claude Code's StopFailure hook
+    /// reports an API error. Its prompt opens again.
+    private func failTurn(_ fixture: Fixture) async throws {
+        try fixture.setStatus(.working)
+        try fixture.setStatus(.error)
+        await fixture.settle()
+    }
+
+    private func failedTurnLine(at date: Date) -> String {
+        "- Your turn for Toastty's last wake ended with an error at \(date.formatted(.iso8601)). Its changes are listed again."
+    }
+
+    /// What the service tells the user.
+    private final class Notices {
+        var titles: [String] = []
+    }
+
+    @Test func aWakeTurnThatEndsWithAnErrorIsTypedAgainAfterAMinute() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let current = States([task: state("running")])
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock) { current.value }
+        let notices = Notices()
+        service.notifyUser = { title, _ in notices.titles.append(title) }
+        service.pass()
+        clock.advance(30)
+        current.value[task] = state("needsYou", "agentError")
+        service.pass()
+        let changedAt = clock.now
+        #expect(fixture.typedTexts == [digest(line(task, "Wake design", "needsYou (agentError)", at: changedAt))])
+
+        // The Mac sleeps in the middle of the wake turn, and the turn ends
+        // with an error when it wakes. The prompt is open again, and the
+        // digest's change waits again for a minute.
+        clock.advance(3600)
+        try await failTurn(fixture)
+        let failedAt = clock.now
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
+        service.pass()
+        clock.advance(59)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+        clock.advance(1)
+        service.pass()
+        #expect(fixture.typedTexts.last == digest(
+            failedTurnLine(at: failedAt),
+            line(task, "Wake design", "needsYou (agentError)", at: changedAt)
+        ))
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 0)
+
+        // That turn ends normally: it is not typed again.
+        try await runTurn(fixture)
+        clock.advance(600)
+        service.pass()
+        #expect(fixture.typedTexts.count == 2)
+
+        // A turn for the user's message that fails is the user's to see:
+        // no digest started it, so nothing is typed again.
+        #expect(try fixture.controller.send("Check the release", byUser: true) == .sent)
+        try await failTurn(fixture)
+        clock.advance(600)
+        service.pass()
+        #expect(fixture.typedTexts.count == 3)
+        #expect(notices.titles.isEmpty)
+    }
+
+    @Test func wakeTurnsThatKeepFailingStopTheDigestsAndTellTheUserOnce() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let current = States([task: state("running"), other: state("running", title: "Other task")])
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock) { current.value }
+        let notices = Notices()
+        service.notifyUser = { title, _ in notices.titles.append(title) }
+        service.pass()
+        clock.advance(30)
+        current.value[task] = state("needsYou", "review")
+        service.pass()
+        let changedAt = clock.now
+        #expect(fixture.typedTexts.count == 1)
+
+        // The coordinator is logged out: each wake turn fails at once. The
+        // digest is typed again twice, a minute after each failure.
+        for retry in 1 ... TaskWebhookService.CoordinatorWakeTurns.maximumRetries {
+            try await failTurn(fixture)
+            clock.advance(60)
+            service.pass()
+            #expect(fixture.typedTexts.count == 1 + retry)
+            #expect(fixture.typedTexts.last?.contains("needsYou (review)") == true)
+        }
+        #expect(notices.titles.isEmpty)
+
+        // The third failure in a row stops the digests and tells the user
+        // once. Changes keep waiting, also a new one.
+        try await failTurn(fixture)
+        let failedAt = clock.now
+        #expect(notices.titles == ["Toastty stopped waking the coordinator"])
+        clock.advance(60)
+        service.pass()
+        clock.advance(10)
+        current.value[other] = state("needsYou", "awaitingReply", title: "Other task")
+        service.pass()
+        let otherChangedAt = clock.now
+        clock.advance(3600)
+        service.pass()
+        #expect(fixture.typedTexts.count == 3)
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 2)
+        #expect(notices.titles.count == 1)
+
+        // The user sends the coordinator a message, and that turn ends
+        // without an error: the waiting digest goes at the next prompt.
+        #expect(try fixture.controller.send("Are you logged in now?", byUser: true) == .sent)
+        try await runTurn(fixture)
+        service.pass()
+        #expect(fixture.typedTexts.count == 5)
+        #expect(fixture.typedTexts.last == digest(
+            failedTurnLine(at: failedAt),
+            line(task, "Wake design", "needsYou (review)", at: changedAt),
+            line(other, "Other task", "needsYou (awaitingReply)", at: otherChangedAt)
+        ))
+        #expect(notices.titles.count == 1)
+    }
+
+    @Test func aFailedWakeTurnIsTypedAgainAlsoWhenAWaitingMessageStartsTheNextTurnAtOnce() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        let current = States([task: state("running")])
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock) { current.value }
+        service.pass()
+        clock.advance(30)
+        current.value[task] = state("needsYou", "review")
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+
+        // A message waits for the wake turn, which fails. The message is
+        // typed as soon as the prompt opens, and its turn starts before the
+        // next pass: no pass sees the error status.
+        try fixture.setStatus(.working)
+        #expect(try fixture.controller.send("from quick entry") == .queued(position: 1, hold: .busy))
+        try fixture.setStatus(.error)
+        await fixture.waitUntil("the waiting message is typed") { fixture.typedTexts.count == 2 }
+        try fixture.setStatus(.working)
+        clock.advance(5)
+        service.pass()
+        #expect(fixture.typedTexts.count == 2)
+        try fixture.setStatus(.idle)
+        await fixture.settle()
+
+        // The digest's change still waits, and goes a minute after the
+        // failure.
+        #expect(service.coordinatorWakeStatus?.pendingTaskCount == 1)
+        clock.advance(60)
+        service.pass()
+        #expect(fixture.typedTexts.count == 3)
+        #expect(fixture.typedTexts.last?.contains("ended with an error") == true)
+        #expect(fixture.typedTexts.last?.contains("needsYou (review)") == true)
+    }
+
     // MARK: - Relaunch
 
     @Test func aQuitWithADigestWaitingTypesItOnceAfterTheRelaunch() async throws {

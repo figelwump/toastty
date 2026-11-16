@@ -619,6 +619,139 @@ struct CoordinatorWakeStateTests {
         #expect(wake.digest(now: at(30 * 86_400)) == nil)
     }
 
+    // MARK: - Failed turns
+
+    @Test func aDigestWhoseTurnFailedIsToldAgainAfterADelayWithWhatItTold() throws {
+        var wake = wake()
+        wake.setRequestedWake(at(100))
+        for change in changes(from: [first: state("running")], to: [first: state("needsYou", "agentError")]) {
+            wake.record(change, at: at(30))
+        }
+        let digest = try #require(wake.digest(now: at(120)))
+        let delivered = wake.markDelivered(digest, at: at(120))
+        #expect(delivered.changes.map(\.taskID) == [first])
+        #expect(delivered.scheduledCheck == at(100))
+
+        // The turn ends with an error at 600 s: the digest waits a minute,
+        // then lists the same changes and the check again, and says why.
+        wake.tellAgain(delivered, failedAt: at(600))
+        #expect(wake.changes.map(\.taskID) == [first])
+        #expect(wake.digest(now: at(659)) == nil)
+        let again = try #require(wake.digest(now: at(660)))
+        #expect(again == """
+        [Toastty] Wake: this message is from Toastty, not from the user.
+        - Your turn for Toastty's last wake ended with an error at 2027-01-15T08:10:00Z. Its changes are listed again.
+        - [Fix the login](toastty://task/11111111-1111-1111-1111-111111111111): needsYou (agentError) at 2027-01-15T08:00:30Z
+        - Scheduled check: the time you set, 2027-01-15T08:01:40Z, has come.
+        Read `toastty task list` for details.
+        """)
+        // A new text, so a quiet mark of one turn does not fold the other.
+        #expect(CoordinatorWakeState.digestKey(again) != CoordinatorWakeState.digestKey(digest))
+
+        // Typed: told, and nothing waits or holds any more.
+        wake.markDelivered(again, at: at(660))
+        #expect(wake.failedTurnAt == nil)
+        #expect(wake.digest(now: at(30 * 86_400)) == nil)
+    }
+
+    @Test func aTaskThatChangedAfterTheFailedDigestKeepsItsNewerLineAndTheWakeThatStillHolds() throws {
+        var wake = wake()
+        wake.watch(taskID: second)
+        for change in changes(from: [first: state("running"), second: state("running", title: "Add the API")],
+                              to: [first: state("needsYou", "review"), second: state("done", title: "Add the API")]) {
+            wake.record(change, at: at(30))
+        }
+        let delivered = wake.markDelivered(try #require(wake.digest(now: at(30))), at: at(30))
+        // While the turn runs, the user answers the first task, and the
+        // second one is archived.
+        for change in changes(from: [first: state("needsYou", "review"), second: state("done", title: "Add the API")],
+                              to: [first: state("running"), second: state("archived", title: "Add the API")]) {
+            wake.record(change, at: at(90))
+        }
+        #expect(wake.changes.map(\.wakes) == [false, false])
+
+        wake.tellAgain(delivered, failedAt: at(120))
+        // One line for each task, the newer one. A task that needed
+        // something and runs again needs nothing now; the end of a watched
+        // task still wakes the coordinator.
+        #expect(wake.changes.map(\.taskID) == [first, second])
+        #expect(wake.changes.map(\.group) == ["running", "archived"])
+        #expect(wake.changes.map(\.wakes) == [false, true])
+
+        // Only a running task waits: the failed digest wakes nothing.
+        var answered = self.wake()
+        for change in changes(from: [first: state("running")], to: [first: state("needsYou", "review")]) {
+            answered.record(change, at: at(30))
+        }
+        let told = answered.markDelivered(try #require(answered.digest(now: at(30))), at: at(30))
+        for change in changes(from: [first: state("needsYou", "review")], to: [first: state("running")]) {
+            answered.record(change, at: at(90))
+        }
+        answered.tellAgain(told, failedAt: at(120))
+        #expect(answered.digest(now: at(3600)) == nil)
+        #expect(answered.changes.count == 1)
+    }
+
+    @Test func aFailedDigestsAlertsAndStageStillWakeWhenTheTaskKeepsItsStage() throws {
+        var wake = wake()
+        for change in changes(from: [first: state("needsYou", "review"), second: state("running", title: "Add the API")],
+                              to: [first: state("needsYou", "review", alerts: [.checksFailing]),
+                                   second: state("needsYou", "awaitingReply", title: "Add the API")]) {
+            wake.record(change, at: at(30))
+        }
+        let delivered = wake.markDelivered(try #require(wake.digest(now: at(30))), at: at(30))
+        // After the digest, the first task's agent goes silent too, and the
+        // second task's alert-only change keeps its stage.
+        for change in changes(from: [first: state("needsYou", "review", alerts: [.checksFailing]),
+                                     second: state("needsYou", "awaitingReply", title: "Add the API")],
+                              to: [first: state("needsYou", "review", alerts: [.checksFailing, .silent]),
+                                   second: state("needsYou", "awaitingReply", alerts: [.checksSlow], title: "Add the API")]) {
+            wake.record(change, at: at(90))
+        }
+        wake.tellAgain(delivered, failedAt: at(120))
+        // The alert the failed digest told wakes again with the new one,
+        // and a stage it told that the task keeps still wakes.
+        #expect(wake.changes.map(\.newAlerts) == [[.checksFailing, .silent], [.checksSlow]])
+        #expect(wake.changes.map(\.stageWakes) == [false, true])
+    }
+
+    @Test func theFailedDigestsScheduledCheckComesBackOnlyWhenTheCoordinatorSetNoNewTime() throws {
+        var wake = wake()
+        wake.setRequestedWake(at(100))
+        let delivered = wake.markDelivered(try #require(wake.digest(now: at(100))), at: at(100))
+        // In the turn that failed, the coordinator set its next check.
+        wake.setRequestedWake(at(5000))
+        wake.tellAgain(delivered, failedAt: at(200))
+        #expect(wake.requestedWakeAt == at(5000))
+        #expect(wake.digest(now: at(4999)) == nil)
+
+        // A time that had not come is not part of what the digest told.
+        var early = self.wake()
+        early.setRequestedWake(at(5000))
+        for change in changes(from: [first: state("running")], to: [first: state("needsYou", "review")]) {
+            early.record(change, at: at(30))
+        }
+        let told = early.markDelivered(try #require(early.digest(now: at(30))), at: at(30))
+        #expect(told.scheduledCheck == nil)
+        early.tellAgain(told, failedAt: at(60))
+        #expect(early.requestedWakeAt == nil)
+    }
+
+    @Test func aFailedTurnSurvivesASave() throws {
+        var wake = wake()
+        for change in changes(from: [first: state("running")], to: [first: state("needsYou", "review")]) {
+            wake.record(change, at: at(30))
+        }
+        let delivered = wake.markDelivered(try #require(wake.digest(now: at(30))), at: at(30))
+        wake.tellAgain(delivered, failedAt: at(600))
+        let restored = try decoder.decode(CoordinatorWakeState.self, from: try encoder.encode(wake))
+        #expect(restored == wake)
+        #expect(restored.failedTurnAt == at(600))
+        // The wait after the failure goes on after a relaunch.
+        #expect(restored.digest(now: at(630)) == nil)
+        #expect(restored.digest(now: at(660)) == wake.digest(now: at(660)))
+    }
+
     @Test func theStateSurvivesASave() throws {
         var wake = wake()
         wake.markDelivered("An earlier digest", at: at(1))
@@ -682,6 +815,7 @@ struct CoordinatorWakeStateTests {
         #expect(restored.workspaceID == workspace)
         #expect(restored.isFollowing)
         #expect(restored.requestedWakeAt == nil)
+        #expect(restored.failedTurnAt == nil)
         #expect(restored.lastWakeAt == at(-7200))
         #expect(restored.changes.map(\.attention) == [nil, "review"])
         #expect(restored.changes.map(\.wakes) == [true, true])
