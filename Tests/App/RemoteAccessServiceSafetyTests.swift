@@ -1068,11 +1068,12 @@ struct RemoteAccessServiceSafetyTests {
 
     @Test func remoteDoneRefusesALateRequestWhileWorkIsInProgress() {
         func result(
-            done: Bool, isSubspace: Bool = true, isDone: Bool = false, busy: Bool = false, accepts: Bool = true
+            done: Bool, isSubspace: Bool = true, isDone: Bool = false, busy: Bool = false, accepts: Bool = true,
+            knows: Bool = true
         ) -> RemoteWorkspaceDoneResult {
             RemoteAccessService.workspaceDoneResult(
                 requestedDone: done, isSubspace: isSubspace, isDone: isDone, hasWorkInProgress: busy,
-                acceptsDoneMark: accepts)
+                acceptsDoneMark: accepts, clientKnowsOpenPullRequestResult: knows)
         }
         #expect(result(done: true) == .updated)
         // An agent started new work after the tap; its turn cleared or will
@@ -1086,6 +1087,9 @@ struct RemoteAccessServiceSafetyTests {
         #expect(result(done: true, accepts: false) == .hasOpenPullRequest)
         #expect(result(done: false, isDone: true, accepts: false) == .updated)
         #expect(result(done: true, isDone: true, accepts: false) == .unchanged)
+        // A client that cannot decode that refusal gets one it can.
+        #expect(result(done: true, accepts: false, knows: false) == .workInProgress)
+        #expect(result(done: false, isDone: true, accepts: false, knows: false) == .updated)
     }
 
     /// The bug this guards: a phone's done checkbox finished a task in
@@ -1161,8 +1165,26 @@ struct RemoteAccessServiceSafetyTests {
 
         // The task finishes through Merge: the Mac refuses the mark and
         // tells clients to hide the box. A subspace without a task keeps it.
-        let refused = service.setWorkspaceDone(.init(workspaceID: taskSpace, done: true), device: device)
+        let refused = service.setWorkspaceDone(
+            .init(workspaceID: taskSpace, done: true, knowsOpenPullRequestResult: true), device: device)
         #expect(refused == .hasOpenPullRequest)
+        // The v0.9.2 iPhone app shows the box anyway and cannot decode that
+        // refusal. Its request gets the refusal it shipped with, so it says
+        // the task can't be marked done, not that the connection failed.
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Tests/RemoteProtocol/Fixtures/v1", isDirectory: true)
+        var oldRequest = try ConversationEventCoding.makeDecoder().decode(
+            RemoteWorkspaceDoneRequest.self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("workspace-done-request.json"))
+        )
+        oldRequest.workspaceID = taskSpace
+        let oldResponse = try ConversationEventCoding.makeEncoder().encode(
+            RemoteWorkspaceDoneResponse(result: service.setWorkspaceDone(oldRequest, device: device)))
+        let releasedRefusal = try Data(contentsOf: fixtures.appendingPathComponent(
+            "workspace-done-response-work_in_progress.json"))
+        #expect(oldResponse == releasedRefusal)
+        #expect(try JSONDecoder().decode(ReleasedWorkspaceDoneResponse.self, from: oldResponse).result == .workInProgress)
         #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
         #expect(board.items().first { $0.id == .task(taskID) }?.stage.group != .done)
         #expect(try summary(taskSpace).acceptsDoneMark == false)
@@ -1189,6 +1211,83 @@ struct RemoteAccessServiceSafetyTests {
         #expect(server.sessionListSnapshots.last?.workspaces.first { $0.id == taskSpace }?.acceptsDoneMark == true)
         #expect(service.setWorkspaceDone(.init(workspaceID: taskSpace, done: true), device: device) == .updated)
         #expect(board.items().first { $0.id == .task(taskID) }?.stage == .done)
+    }
+
+    /// A phone reads the Mac's capabilities when it connects. The Mac makes
+    /// the coordinator's controller at launch, not at the first Open
+    /// Coordinator, so a phone that connects before the coordinator ever
+    /// started is offered its sends and its chat's read point. Built as
+    /// `ToasttyApp` builds it.
+    @MainActor
+    @Test func aCoordinatorThatNeverStartedIsStillOfferedToPhones() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        let controller = CoordinatorController(
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            launcher: nil,
+            directoryURL: fixture.root.appendingPathComponent("coordinator", isDirectory: true),
+            configLoader: { TasksConfig() },
+            deliverText: { _, _ in .unavailable },
+            promptState: { _ in .unavailable }
+        )
+        fixture.coordinator.coordinatorController = controller
+        let quickEntry = QuickEntryController(
+            store: fixture.store,
+            agentProfiles: { [unowned fixture] in fixture.launcher.launchProfileSummaries() },
+            presetUsage: QuickEntryPresetUsage(runtimePaths: .resolve(homeDirectoryPath: fixture.root.path, environment: [:])),
+            create: { _ in throw TaskError("not used") },
+            configLoader: { TasksConfig() },
+            stagingRootURL: fixture.root.appendingPathComponent("quick-entry", isDirectory: true),
+            registersGlobalHotKey: false,
+            frontmostApplication: { nil }
+        )
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: fixture.root.path,
+            environment: [ToasttyRuntimePaths.environmentKey: fixture.root.appendingPathComponent("runtime").path]
+        )
+        let server = RemoteAccessGatewayServerSpy()
+        var capturedHandler: RemoteGatewayRequestHandler?
+        let service = RemoteAccessService(
+            store: fixture.store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            taskBoard: board,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            taskCoordinator: fixture.coordinator,
+            quickEntryController: quickEntry,
+            port: 42_994,
+            initiallyEnabled: false,
+            gatewayServerFactory: { handler in
+                capturedHandler = handler
+                return server
+            }
+        )
+        defer { service.setEnabled(false, persist: false) }
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_994)
+        let handler = try #require(capturedHandler)
+
+        let hello = RemoteGatewayHTTPRequest(method: "GET", path: "/api/hello", headers: [:], body: Data())
+        guard case .respond(let response) = handler.handle(hello, at: .now) else {
+            Issue.record("The hello request got no response")
+            return
+        }
+        let capabilities = try ConversationEventCoding.makeDecoder()
+            .decode(RemoteGatewayHelloResponse.self, from: response.body).capabilities
+        #expect(controller.location == nil, "The coordinator has never started")
+        #expect(capabilities.contains(.coordinatorSend))
+        #expect(capabilities.contains(.coordinatorChatRead))
+        #expect(capabilities.contains(.taskCreate))
     }
 
     @MainActor
@@ -3903,6 +4002,21 @@ private final class RemoteBootstrapFixture {
 
 private enum RemoteBootstrapFixtureError: Error {
     case couldNotPublishResumeRecord
+}
+
+/// The done-mark response as the v0.9.2 iPhone app decodes it: a result
+/// outside these cases fails the decode, and the app reports a failed
+/// connection.
+private struct ReleasedWorkspaceDoneResponse: Decodable {
+    enum Result: String, Decodable {
+        case updated, unchanged
+        case notSubspace = "not_subspace"
+        case workInProgress = "work_in_progress"
+        case workspaceNotFound = "workspace_not_found"
+    }
+
+    var protocolVersion: String
+    var result: Result
 }
 
 extension RemoteAccessServiceSafetyTests {

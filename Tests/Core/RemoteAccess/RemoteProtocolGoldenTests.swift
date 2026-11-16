@@ -326,6 +326,20 @@ private extension RemoteProtocolGoldenTests {
                     blockedReason: nil
                 )))
             ),
+            // The v0.9.2 iPhone app sends the first request and decodes
+            // only the results it shipped with, `work_in_progress` among them.
+            try fixture(
+                "workspace-done-request.json",
+                RemoteWorkspaceDoneRequest(workspaceID: numberedUUID(310), done: true)
+            ),
+            try fixture(
+                "workspace-done-request-knows-open-pull-request.json",
+                RemoteWorkspaceDoneRequest(workspaceID: numberedUUID(310), done: true, knowsOpenPullRequestResult: true)
+            ),
+            try fixture(
+                "workspace-done-response-work_in_progress.json",
+                RemoteWorkspaceDoneResponse(result: .workInProgress)
+            ),
             try fixture(
                 "events-request.json",
                 RemoteGatewayEventsRequest(
