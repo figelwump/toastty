@@ -70,15 +70,24 @@ public struct RemoteCoordinatorChatReadRequest: Codable, Equatable, Sendable {
     public var conversationID: RemoteConversationID
     /// The transcript event of the newest row the device showed.
     public var eventID: String
+    /// The run and generation of the Mac's conversation reader that sent
+    /// the row. A runtime event's `rt:` identity names a row only in its
+    /// own run, so the Mac takes such a read only from its current run.
+    public var projectionRunID: RemoteProjectionRunID
+    public var projectionGeneration: UInt64
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
         conversationID: RemoteConversationID,
-        eventID: String
+        eventID: String,
+        projectionRunID: RemoteProjectionRunID,
+        projectionGeneration: UInt64
     ) {
         self.protocolVersion = protocolVersion
         self.conversationID = conversationID
         self.eventID = eventID
+        self.projectionRunID = projectionRunID
+        self.projectionGeneration = projectionGeneration
     }
 
     public var isValid: Bool {
@@ -92,7 +101,8 @@ public enum RemoteCoordinatorChatReadResult: String, Codable, Equatable, Sendabl
     /// The read point already was at the row or after it.
     case alreadyRead = "already_read"
     /// The conversation has no event with this identity now: the Mac's
-    /// reader started again, or the event left its history.
+    /// reader started again, or the event left its history. Also a runtime
+    /// event from an earlier run of the reader.
     case eventNotFound = "event_not_found"
     /// The Mac has no coordinator, or the conversation is not its chat.
     case noCoordinator = "no_coordinator"

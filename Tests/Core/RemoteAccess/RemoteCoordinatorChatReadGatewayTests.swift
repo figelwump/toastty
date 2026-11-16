@@ -13,6 +13,9 @@ struct RemoteCoordinatorChatReadGatewayTests {
     private static let conversationID = RemoteConversationID(
         rawValue: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
     )
+    private static let runID = RemoteProjectionRunID(
+        rawValue: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!
+    )
 
     private static func encode<Value: Encodable>(_ value: Value) throws -> Data {
         try ConversationEventCoding.makeEncoder().encode(value)
@@ -33,7 +36,10 @@ struct RemoteCoordinatorChatReadGatewayTests {
         let runtime = Data(#"{"eventID":"rt:2:9","timestamp":"2026-08-11T00:00:00.500Z"}"#.utf8)
         #expect(try decoder.decode(RemoteCoordinatorChatReadPoint.self, from: runtime).eventID == nil)
 
-        let request = RemoteCoordinatorChatReadRequest(conversationID: Self.conversationID, eventID: "codex:msg_7")
+        let request = RemoteCoordinatorChatReadRequest(
+            conversationID: Self.conversationID, eventID: "codex:msg_7",
+            projectionRunID: Self.runID, projectionGeneration: 3
+        )
         #expect(try decoder.decode(RemoteCoordinatorChatReadRequest.self, from: Self.encode(request)) == request)
         for result in [RemoteCoordinatorChatReadResult.moved, .alreadyRead, .eventNotFound, .noCoordinator] {
             let encoded = try Self.encode(RemoteCoordinatorChatReadResponse(result: result))
@@ -92,7 +98,10 @@ struct RemoteCoordinatorChatReadGatewayTests {
         func result(_ response: RemoteGatewayHTTPResponse) throws -> RemoteCoordinatorChatReadResult {
             try ConversationEventCoding.makeDecoder().decode(RemoteCoordinatorChatReadResponse.self, from: response.body).result
         }
-        let request = RemoteCoordinatorChatReadRequest(conversationID: Self.conversationID, eventID: "codex:msg_7")
+        let request = RemoteCoordinatorChatReadRequest(
+            conversationID: Self.conversationID, eventID: "codex:msg_7",
+            projectionRunID: Self.runID, projectionGeneration: 3
+        )
 
         // A Mac without the coordinator installs no handler.
         let noHandler = try respond(try Self.encode(request))
@@ -117,11 +126,14 @@ struct RemoteCoordinatorChatReadGatewayTests {
         // paired device's credential is refused before it: see
         // `CoordinatorChatNewMessagesTests`.
         #expect(try respond(Data("{}".utf8)).status == 400)
-        let empty = RemoteCoordinatorChatReadRequest(conversationID: Self.conversationID, eventID: "")
+        let empty = RemoteCoordinatorChatReadRequest(
+            conversationID: Self.conversationID, eventID: "", projectionRunID: Self.runID, projectionGeneration: 3
+        )
         #expect(try respond(try Self.encode(empty)).status == 400)
         let long = RemoteCoordinatorChatReadRequest(
             conversationID: Self.conversationID,
-            eventID: String(repeating: "a", count: RemoteCoordinatorChatReadPolicy.maximumEventIDLength + 1)
+            eventID: String(repeating: "a", count: RemoteCoordinatorChatReadPolicy.maximumEventIDLength + 1),
+            projectionRunID: Self.runID, projectionGeneration: 3
         )
         #expect(try respond(try Self.encode(long)).status == 400)
         var older = request

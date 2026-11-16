@@ -779,7 +779,9 @@ final class LiveConversationController {
     private func chatReadRequest(_ report: ToasttyCoordinatorChatReading.Report) -> RemoteCoordinatorChatReadRequest {
         RemoteCoordinatorChatReadRequest(
             conversationID: RemoteConversationID(rawValue: conversationID),
-            eventID: report.eventID
+            eventID: report.eventID,
+            projectionRunID: RemoteProjectionRunID(rawValue: report.rowID.projectionRunID),
+            projectionGeneration: report.rowID.projectionGeneration
         )
     }
 

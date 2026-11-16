@@ -34,6 +34,8 @@ struct ToasttyCoordinatorChatReading: Equatable {
         /// The row's event as the Mac named it, also a runtime event's,
         /// which the Mac finds in its current conversation.
         var eventID: String
+        /// The run of the Mac's conversation reader that sent the row.
+        var rowID: ToasttyTranscriptRowID
     }
 
     /// The read point as the Mac last sent it.
@@ -41,7 +43,11 @@ struct ToasttyCoordinatorChatReading: Equatable {
     /// The newest row that this phone showed. It counts here until the
     /// Mac's read point reaches it.
     private(set) var phoneReadPoint: RemoteCoordinatorChatReadPoint?
-    private var phoneReadEventID: String?
+    private var phoneReadRow: ReadRow?
+    private struct ReadRow: Equatable {
+        var eventID: String
+        var id: ToasttyTranscriptRowID
+    }
     /// The read last sent to the Mac.
     private var reported: RemoteCoordinatorChatReadPoint?
     /// The line on screen, or `nil`.
@@ -118,9 +124,9 @@ struct ToasttyCoordinatorChatReading: Equatable {
     /// The read to send to the Mac: this phone's newest read, when the
     /// Mac's read point is earlier and it was not sent yet.
     func report(in rows: [ToasttyTranscriptRow]) -> Report? {
-        guard let phoneReadPoint, let phoneReadEventID, phoneReadPoint != reported,
+        guard let phoneReadPoint, let phoneReadRow, phoneReadPoint != reported,
               CoordinatorChatReadPoint.isNewer(phoneReadPoint, than: macReadPoint, in: rows) else { return nil }
-        return Report(readPoint: phoneReadPoint, eventID: phoneReadEventID)
+        return Report(readPoint: phoneReadPoint, eventID: phoneReadRow.eventID, rowID: phoneReadRow.id)
     }
 
     /// The Mac answered `report`: it moved its read point, or already had
@@ -134,7 +140,7 @@ struct ToasttyCoordinatorChatReading: Equatable {
               let candidate = CoordinatorChatReadPoint.readPoint(through: rows),
               CoordinatorChatReadPoint.isNewer(candidate, than: readPoint(in: rows), in: rows) else { return }
         phoneReadPoint = candidate
-        phoneReadEventID = row.eventID
+        phoneReadRow = row.eventID.map { ReadRow(eventID: $0, id: row.id) }
     }
 
     /// Whether to ask for an older page now. Placing the line ends when

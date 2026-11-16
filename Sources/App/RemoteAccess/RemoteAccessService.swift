@@ -2212,8 +2212,14 @@ final class RemoteAccessService: ObservableObject {
         if isReady, isEnabled, let readThrough = coordinatorChatReadThrough,
            let coordinatorPanelID = store.state.coordinator?.panelID,
            panelIDByConversationID[request.conversationID] == coordinatorPanelID {
-            let events = projectionStore.projectorState(for: request.conversationID)?.events ?? []
-            if let event = events.last(where: { $0.eventID == request.eventID }) {
+            let projector = projectionStore.projectorState(for: request.conversationID)
+            let events = projector?.events ?? []
+            // A runtime event's identity counts up again in each run of the
+            // reader: from an earlier run it can name another event now.
+            let isFromThisRun = request.projectionRunID == projectionStore.runID
+                && request.projectionGeneration == projector?.generation
+            if RemoteCoordinatorChatReadPoint.durableEventID(request.eventID) != nil || isFromThisRun,
+               let event = events.last(where: { $0.eventID == request.eventID }) {
                 let candidate = RemoteCoordinatorChatReadPoint(eventID: event.eventID, timestamp: event.timestamp)
                 let moved = readThrough.advance(to: candidate) { point in
                     point.eventID.flatMap { eventID in events.lastIndex { $0.eventID == eventID } }

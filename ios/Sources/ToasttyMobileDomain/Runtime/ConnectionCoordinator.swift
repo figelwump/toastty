@@ -1026,6 +1026,14 @@ public actor ConnectionCoordinator {
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.
     public func loadOlder(_ conversationID: RemoteConversationID) async {
+        // A page publishes its end before its operation retires. A request
+        // that came after that end waits for the retirement, so it starts
+        // the next page instead of being dropped.
+        if let previous = conversationOlderTasks[conversationID],
+           let runtime = conversationRuntimes[conversationID],
+           await runtime.currentState().isLoadingOlder == false {
+            await previous.task.value
+        }
         guard state.phase == .live,
               activeCapabilities.contains(.conversationBackwardPaging),
               activeConversationIDs.contains(conversationID),

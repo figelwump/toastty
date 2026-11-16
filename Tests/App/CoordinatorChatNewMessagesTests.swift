@@ -153,20 +153,37 @@ struct CoordinatorChatNewMessagesTests {
 
     // MARK: - Reads on a paired device
 
-    /// The event of the coordinator's message `text`, as a device that
-    /// shows it would name it.
+    /// The coordinator's newest event that `matches`, as a device that
+    /// shows its row names it.
     @MainActor
-    private func eventID(of text: String, in fixture: CoordinatorChatFixture) throws -> String {
+    private func phoneRead(
+        in fixture: CoordinatorChatFixture,
+        where matches: (ConversationEvent) -> Bool
+    ) throws -> RemoteCoordinatorChatReadRequest {
         let subscription = fixture.conversations.service.subscribeToConversation(inPanel: fixture.panelID)
         defer { subscription.cancel() }
         guard case .page(let page) = subscription.events(before: nil, limit: 200) else {
             throw LocalConversationFixtureError.timedOut
         }
-        let event = page.events.last { event in
+        let event = try #require(page.events.last(where: matches))
+        return RemoteCoordinatorChatReadRequest(
+            conversationID: page.conversationID, eventID: event.eventID,
+            projectionRunID: page.projectionRunID, projectionGeneration: page.projectionGeneration
+        )
+    }
+
+    @MainActor
+    private func phoneRead(of text: String, in fixture: CoordinatorChatFixture) throws -> RemoteCoordinatorChatReadRequest {
+        try phoneRead(in: fixture) { event in
             if case .assistantMessage(let payload) = event.payload { return payload.text == text }
             return false
         }
-        return try #require(event?.eventID)
+    }
+
+    /// The event of the coordinator's message `text`.
+    @MainActor
+    private func eventID(of text: String, in fixture: CoordinatorChatFixture) throws -> String {
+        try phoneRead(of: text, in: fixture).eventID
     }
 
     @MainActor
@@ -174,10 +191,8 @@ struct CoordinatorChatNewMessagesTests {
         _ text: String,
         in fixture: CoordinatorChatFixture
     ) throws -> (status: Int, result: RemoteCoordinatorChatReadResult?) {
-        let conversationID = try #require(fixture.conversations.conversationID(ofPanel: fixture.panelID))
-        return try fixture.conversations.gatewayCoordinatorChatRead(
-            RemoteCoordinatorChatReadRequest(conversationID: conversationID, eventID: try eventID(of: text, in: fixture)),
-            credential: fixture.conversations.nativeCredential
+        try fixture.conversations.gatewayCoordinatorChatRead(
+            phoneRead(of: text, in: fixture), credential: fixture.conversations.nativeCredential
         )
     }
 
@@ -313,7 +328,10 @@ struct CoordinatorChatNewMessagesTests {
         defer { subscription.cancel() }
         let plainConversation = try #require(subscription.conversationID)
         let noCoordinator = try plain.gatewayCoordinatorChatRead(
-            RemoteCoordinatorChatReadRequest(conversationID: plainConversation, eventID: "codex:msg_1"),
+            RemoteCoordinatorChatReadRequest(
+                conversationID: plainConversation, eventID: "codex:msg_1",
+                projectionRunID: RemoteProjectionRunID(rawValue: UUID()), projectionGeneration: 1
+            ),
             credential: plain.nativeCredential
         )
         #expect(noCoordinator.status == 200)
@@ -329,10 +347,7 @@ struct CoordinatorChatNewMessagesTests {
         try fixture.endTurn(1)
         _ = try await waitForRow("Two tasks are open.", in: fixture)
         fixture.chat.hide()
-        let conversationID = try #require(fixture.conversations.conversationID(ofPanel: fixture.panelID))
-        let request = RemoteCoordinatorChatReadRequest(
-            conversationID: conversationID, eventID: try eventID(of: "Two tasks are open.", in: fixture)
-        )
+        let request = try phoneRead(of: "Two tasks are open.", in: fixture)
         let before = fixture.controller.chatReadThrough.point
 
         // Without a paired device's credential nothing moves.
@@ -343,12 +358,26 @@ struct CoordinatorChatNewMessagesTests {
         #expect(unknown.status == 401)
         #expect(unknown.result == nil)
         // An event that the conversation does not have.
+        var missingEvent = request
+        missingEvent.eventID = "codex:not-in-this-conversation"
         let missing = try fixture.conversations.gatewayCoordinatorChatRead(
-            RemoteCoordinatorChatReadRequest(conversationID: conversationID, eventID: "codex:not-in-this-conversation"),
-            credential: fixture.conversations.nativeCredential
+            missingEvent, credential: fixture.conversations.nativeCredential
         )
         #expect(missing.result == .eventNotFound)
+        // A runtime event's identity from another run of the Mac's reader
+        // can name another event now: refused. From this run it counts.
+        var runtimeEvent = try phoneRead(in: fixture) { $0.eventID.hasPrefix("rt:") }
+        let thisRun = runtimeEvent
+        runtimeEvent.projectionRunID = RemoteProjectionRunID(rawValue: UUID())
+        let earlierRun = try fixture.conversations.gatewayCoordinatorChatRead(
+            runtimeEvent, credential: fixture.conversations.nativeCredential
+        )
+        #expect(earlierRun.result == .eventNotFound)
         #expect(fixture.controller.chatReadThrough.point == before)
+        let sameRun = try fixture.conversations.gatewayCoordinatorChatRead(
+            thisRun, credential: fixture.conversations.nativeCredential
+        )
+        #expect(sameRun.result == .alreadyRead || sameRun.result == .moved)
 
         // A revoked device is refused.
         let device = try #require(fixture.conversations.service.devices.first { $0.authKind == .native })
