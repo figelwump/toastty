@@ -45,8 +45,9 @@ public struct RemoteTaskBoardEntry: Codable, Equatable, Sendable {
     public var taskID: UUID
     /// Drawn under the task that started it.
     public var isLinkedChild: Bool
-    /// Drawn dimmed: the task's own stage is in a calmer group, and it lists
-    /// here to keep its family together.
+    /// The task's own stage is in a calmer group, and it lists here to keep
+    /// its family together. Kept on the wire for older apps; the phone draws
+    /// the row like any other.
     public var isContext: Bool
 
     public init(taskID: UUID, isLinkedChild: Bool = false, isContext: Bool = false) {
