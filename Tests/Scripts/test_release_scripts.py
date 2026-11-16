@@ -12,12 +12,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 
 REPO = Path(__file__).resolve().parents[2]
 PIN_SCRIPT = REPO / "scripts/release/check-ghostty-pin.sh"
 PUBLISH_SCRIPT = REPO / "scripts/release/publish-github-release.sh"
+HIGHLIGHTS_SCRIPT = REPO / "scripts/release/release_notes_highlights.py"
+
+sys.path.insert(0, str(HIGHLIGHTS_SCRIPT.parent))
+import release_notes_highlights as highlights  # noqa: E402
 
 PIN = "13dc86d4c663e0a8b1b3569417f5ceeb6934f5a7"
 OTHER = "8bc4f5354d334b2f3d743261faf87cdb4637155c"
@@ -132,6 +137,7 @@ class PublishNotesTests(unittest.TestCase):
         script_dir = self.root / "scripts/release"
         script_dir.mkdir(parents=True)
         shutil.copy2(PUBLISH_SCRIPT, script_dir / PUBLISH_SCRIPT.name)
+        shutil.copy2(HIGHLIGHTS_SCRIPT, script_dir / HIGHLIGHTS_SCRIPT.name)
 
         origin = self.tmp / "origin.git"
         run(["git", "init", "-q", "--bare", str(origin)])
@@ -193,13 +199,39 @@ class PublishNotesTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
-    def publish(self, notes):
+    def publish(self, notes, *extra):
         self.notes.write_text(notes)
         result = run([str(self.root / "scripts/release/publish-github-release.sh"),
-                      "--dry-run", "--create-tag", "--repo", "example/toastty"],
+                      "--dry-run", "--create-tag", "--repo", "example/toastty", *extra],
                      env=self.env, cwd=self.root)
-        self.assertFalse(self.gh_log.exists(), "a dry run must not call gh")
+        calls = self.gh_log.read_text().splitlines() if self.gh_log.exists() else []
+        # A dry run may only read the current feed, which the fake gh refuses.
+        self.assertTrue(all(call.startswith("api repos/example/toastty-updates/contents/appcast.xml?")
+                            for call in calls), calls)
         return result
+
+    def test_feed_item_carries_the_highlights(self):
+        result = self.publish(VALID_NOTES, "--publish")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        feed = ET.parse(self.release_dir / "appcast-dry-run.xml")
+        item = feed.getroot().find("channel/item")
+        sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+        release_url = "https://github.com/example/toastty/releases/tag/v0.10.0"
+        self.assertIsNone(item.find(sparkle + "releaseNotesLink"),
+                          "Sparkle shows the linked page instead of the description")
+        self.assertEqual(item.findtext("description"),
+                         "<ul><li>Tasks: describe work once and Toastty runs it in its own worktree.</li></ul>\n"
+                         f'<p><a href="{release_url}">Full release notes on GitHub</a></p>')
+        self.assertEqual(item.findtext("link"), release_url)
+        self.assertEqual(item.findtext(sparkle + "fullReleaseNotesLink"),
+                         "https://github.com/example/toastty/releases")
+
+    def test_unsupported_highlights_stop_before_the_tag(self):
+        notes = VALID_NOTES.replace("- Tasks:", "1. Tasks:")
+        result = self.publish(notes, "--publish")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("only bullets", result.stderr)
+        self.assertNotIn("Dry run tag command", result.stdout)
 
     def test_notes_with_highlights_pass(self):
         result = self.publish(VALID_NOTES)
@@ -245,7 +277,8 @@ class PublishNotesTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no '## Highlights' section", result.stderr)
 
-        result = self.publish(VALID_NOTES.replace("## Changes", example + "## Changes"))
+        # The same example in another section does not repeat the heading.
+        result = self.publish(VALID_NOTES.replace("- A change.\n", "- A change.\n\n" + example))
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_repeated_highlights_stop_the_publish(self):
@@ -259,6 +292,61 @@ class PublishNotesTests(unittest.TestCase):
         result = self.publish(notes)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("template placeholder", result.stderr)
+
+
+class HighlightsHTMLTests(unittest.TestCase):
+    """The prompt shows this HTML as is, so unsupported Markdown must stop."""
+
+    URL = "https://github.com/example/toastty/releases/tag/v1"
+    LINK = f'<p><a href="{URL}">Full release notes on GitHub</a></p>'
+
+    def convert(self, section):
+        return highlights.to_html(
+            highlights.highlights_lines(f"# v1\n\n## Highlights\n\n{section}\n\n## Changes\n\n- x\n"),
+            self.URL)
+
+    def rejects(self, section, message):
+        with self.assertRaises(highlights.NotesError) as raised:
+            self.convert(section)
+        self.assertIn(message, str(raised.exception))
+
+    def test_bullets_subheadings_and_paragraphs(self):
+        html = self.convert("### Tasks\n\nOne task per worktree,\nfrom start to merge.\n\n- First\n- Second\n  continues here\n* Third")
+        self.assertEqual(html, "\n".join([
+            "<h3>Tasks</h3>",
+            "<p>One task per worktree, from start to merge.</p>",
+            "<ul><li>First</li><li>Second continues here</li><li>Third</li></ul>",
+            self.LINK]))
+
+    def test_inline_code_bold_and_links(self):
+        html = self.convert("- Press `<Opt>⌥⇧T` for **quick entry**; see [the docs](https://toastty.dev/#tasks).")
+        self.assertIn("<code>&lt;Opt&gt;⌥⇧T</code>", html)
+        self.assertIn("<strong>quick entry</strong>", html)
+        self.assertIn('<a href="https://toastty.dev/#tasks">the docs</a>', html)
+
+    def test_text_is_escaped(self):
+        html = self.convert("- Fix <script>alert(1)</script> & \"quotes\"")
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertIn("&amp;", html)
+
+    def test_unsupported_markdown_stops(self):
+        cases = {
+            "1. Numbered": "only bullets",
+            "#### Deep heading": "only bullets",
+            "> Quote": "only bullets",
+            "| a | b |": "only bullets",
+            "<div>raw</div>": "only bullets",
+            "- Item\n  - Nested": "nested lists",
+            "```\ncode\n```": "code blocks",
+            "- ![image](https://example.com/a.png)": "images",
+            "- [mail](mailto:a@example.com)": "links in Highlights",
+            "- Unmatched `tick": "unmatched backtick",
+            "### Heading\n  indented": "indented text",
+        }
+        for section, message in cases.items():
+            with self.subTest(section=section):
+                self.rejects(section, message)
 
 
 if __name__ == "__main__":

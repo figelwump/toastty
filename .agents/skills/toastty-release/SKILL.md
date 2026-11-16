@@ -139,7 +139,8 @@ When the source path is inside a Ghostty git checkout, the installer auto-detect
   - concise, direct, product-facing prose
   - lightly enthusiastic only when a flagship feature genuinely warrants it
   - minimal filler, minimal implementation jargon, no commit-log dump
-- Every release has a `## Highlights` section, and `scripts/release/publish-github-release.sh` stops without it. It is the first thing an updating user reads, so lead with what is new for them and what to try first. A narrow release can have one bullet; a release with a broader product shift can use short `###` subsections.
+- Every release has a `## Highlights` section, and `scripts/release/publish-github-release.sh` stops without it. The publish step puts it in the update feed, and the Sparkle update prompt shows it in a box of about 640 × 235 points, so it is the first thing an updating user reads. Lead with what is new for them and what to try first, and keep it short enough to fit: a few bullets. A release with a broader product shift can use short `###` subsections.
+- In `## Highlights`, use only `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publish step stops on other Markdown, such as numbered or nested lists, code blocks, or images, because the prompt would show it as raw text.
 - Represent changes since the last version as a curated summary of the actual diff, not a chronological list of commits:
   - group related commits into a single user-facing bullet
   - order bullets by user impact, not commit order

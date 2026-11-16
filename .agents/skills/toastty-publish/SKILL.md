@@ -50,7 +50,8 @@ release the Mac app, then publish the website change.
   - `RELEASE_NOTES_PATH`
   - `RELEASE_GHOSTTY_COMMIT_SHORT`
   - `RELEASE_GHOSTTY_BUILD_FLAGS`
-- `scripts/release/publish-github-release.sh` expects the notes file to exist, be non-empty, have exactly one `## Highlights` section with content, have no `{{placeholder}}` tokens, and include exact canonical Ghostty commit and build-flags lines before publication.
+- `scripts/release/publish-github-release.sh` expects the notes file to exist, be non-empty, have exactly one `## Highlights` section with content in the supported Markdown subset, have no `{{placeholder}}` tokens, and include exact canonical Ghostty commit and build-flags lines before publication.
+- With `--publish`, the update feed item's `description` is the Highlights as HTML, and the Sparkle update prompt shows it. To see the item before going live, run with `--publish --dry-run` and read `artifacts/release/<version>-<build>/appcast-dry-run.xml`.
 - The release directory under `artifacts/release/<version>-<build>/` must remain intact from the earlier build phase.
 
 ## Validation

@@ -35,6 +35,9 @@ SPARKLE_DMG_FILENAME=""
 SPARKLE_ENCLOSURE_LENGTH=""
 SPARKLE_ED_SIGNATURE=""
 APPCAST_CONTENT_SHA=""
+RELEASE_PAGE_URL=""
+RELEASES_URL=""
+SPARKLE_DESCRIPTION_HTML=""
 
 usage() {
   cat <<'EOF'
@@ -193,6 +196,9 @@ resolve_defaults() {
     TITLE="v${TOASTTY_VERSION}"
   fi
 
+  RELEASE_PAGE_URL="https://github.com/$REPO/releases/tag/$TAG"
+  RELEASES_URL="https://github.com/$REPO/releases"
+
   RELEASE_LABEL="${TOASTTY_VERSION}-${TOASTTY_BUILD_NUMBER}"
   RELEASE_DIR="$ROOT_DIR/artifacts/release/$RELEASE_LABEL"
   DMG_PATH="$RELEASE_DIR/${APP_NAME}-${TOASTTY_VERSION}.dmg"
@@ -250,40 +256,11 @@ load_sparkle_metadata() {
 }
 
 # Every release needs a "## Highlights" section with content: it is the first
-# thing an updating user reads about the release.
+# thing an updating user reads. The same section, as HTML, is the update feed
+# item's description, which the Sparkle update prompt shows.
 verify_release_notes_highlights() {
-  local placeholder_line=""
-  local highlights_state=""
-
-  placeholder_line="$(grep -n -m1 -E '\{\{[^}]*\}\}' "$NOTES_FILE" || true)"
-  [[ -z "$placeholder_line" ]] \
-    || fail "release notes still contain a template placeholder at line ${placeholder_line%%:*}: $NOTES_FILE"
-
-  # HTML comments do not render, and a heading inside a code fence is an
-  # example, so neither counts as a section heading.
-  highlights_state="$(awk '
-    in_comment { if ($0 ~ /-->/) in_comment = 0; next }
-    /^[[:space:]]*<!--/ { if ($0 !~ /-->/) in_comment = 1; next }
-    /^[[:space:]]*(```|~~~)/ { in_fence = !in_fence; if (in_section) content += 1; next }
-    in_fence { if (in_section) content += 1; next }
-    /^##[[:space:]]+Highlights[[:space:]]*$/ { headings += 1; in_section = 1; next }
-    /^##[[:space:]]/ { in_section = 0; next }
-    in_section && /[^[:space:]]/ { content += 1 }
-    END {
-      if (headings == 0) print "missing"
-      else if (headings > 1) print "repeated"
-      else if (content == 0) print "empty"
-      else print "ok"
-    }
-  ' "$NOTES_FILE")"
-
-  case "$highlights_state" in
-    ok) ;;
-    missing) fail "release notes have no '## Highlights' section; every release needs one (see .agents/skills/toastty-release/SKILL.md)" ;;
-    repeated) fail "release notes have more than one '## Highlights' section" ;;
-    empty) fail "the '## Highlights' section of the release notes is empty" ;;
-    *) fail "could not read the '## Highlights' section of the release notes" ;;
-  esac
+  SPARKLE_DESCRIPTION_HTML="$(/usr/bin/python3 "$ROOT_DIR/scripts/release/release_notes_highlights.py" html "$NOTES_FILE" "$RELEASE_PAGE_URL")" \
+    || fail "release notes Highlights check failed: $NOTES_FILE"
 }
 
 verify_inputs() {
@@ -349,7 +326,7 @@ validate_published_appcast() {
   local expected_download_url="$2"
   local expected_release_url="$3"
 
-  /usr/bin/python3 - "$appcast_path" "$TOASTTY_VERSION" "$TOASTTY_BUILD_NUMBER" "$expected_download_url" "$expected_release_url" "$SPARKLE_ED_SIGNATURE" <<'PY'
+  /usr/bin/python3 - "$appcast_path" "$TOASTTY_VERSION" "$TOASTTY_BUILD_NUMBER" "$expected_download_url" "$expected_release_url" "$SPARKLE_ED_SIGNATURE" "$SPARKLE_DESCRIPTION_HTML" "$RELEASES_URL" <<'PY'
 import pathlib
 import sys
 import xml.etree.ElementTree as ET
@@ -362,6 +339,8 @@ build_number = sys.argv[3]
 download_url = sys.argv[4]
 release_url = sys.argv[5]
 signature = sys.argv[6]
+description = sys.argv[7]
+releases_url = sys.argv[8]
 
 
 def fail(message: str) -> None:
@@ -394,17 +373,22 @@ for item in items:
         and enclosure.get(f"{{{SPARKLE_NS}}}shortVersionString") == short_version
         and enclosure.get(f"{{{SPARKLE_NS}}}edSignature") == signature
     ):
-        release_notes_link = item.find(f"{{{SPARKLE_NS}}}releaseNotesLink")
-        if release_notes_link is None:
-            fail("appcast release item is missing <sparkle:releaseNotesLink>")
+        # Sparkle shows <description> in the update prompt only when the item
+        # has no releaseNotesLink; with one, it shows that page instead.
+        if item.find(f"{{{SPARKLE_NS}}}releaseNotesLink") is not None:
+            fail("appcast release item has <sparkle:releaseNotesLink>, which hides the Highlights")
 
-        actual_release_url = (release_notes_link.text or "").strip()
-        if actual_release_url != release_url:
-            fail(
-                "appcast release notes link mismatch: "
-                f"expected {release_url}, got {actual_release_url or '<empty>'}"
-            )
+        actual_description = item.findtext("description") or ""
+        if actual_description != description:
+            fail("appcast release item description does not match the release notes Highlights")
 
+        def expect(tag, expected, label):
+            actual = (item.findtext(tag) or "").strip()
+            if actual != expected:
+                fail(f"appcast {label} mismatch: expected {expected}, got {actual or '<empty>'}")
+
+        expect("link", release_url, "release link")
+        expect(f"{{{SPARKLE_NS}}}fullReleaseNotesLink", releases_url, "version history link")
         raise SystemExit(0)
 
 fail(
@@ -415,7 +399,7 @@ PY
 }
 
 smoke_test_published_sparkle_feed() {
-  local release_page_url="https://github.com/$REPO/releases/tag/$TAG"
+  local release_page_url="$RELEASE_PAGE_URL"
   local release_download_url="https://github.com/$REPO/releases/download/$TAG/$SPARKLE_DMG_FILENAME"
   local max_attempts=24
   local retry_delay_seconds=5
@@ -647,7 +631,7 @@ generate_updated_appcast() {
   local download_url="$4"
   local published_at="$5"
 
-  /usr/bin/python3 - "$current_appcast_path" "$updated_appcast_path" "$TOASTTY_VERSION" "$TOASTTY_BUILD_NUMBER" "$download_url" "$SPARKLE_ED_SIGNATURE" "$SPARKLE_ENCLOSURE_LENGTH" "$SPARKLE_MINIMUM_SYSTEM_VERSION" "$SPARKLE_FEED_URL" "$release_page_url" "$published_at" <<'PY'
+  /usr/bin/python3 - "$current_appcast_path" "$updated_appcast_path" "$TOASTTY_VERSION" "$TOASTTY_BUILD_NUMBER" "$download_url" "$SPARKLE_ED_SIGNATURE" "$SPARKLE_ENCLOSURE_LENGTH" "$SPARKLE_MINIMUM_SYSTEM_VERSION" "$SPARKLE_FEED_URL" "$release_page_url" "$published_at" "$SPARKLE_DESCRIPTION_HTML" "$RELEASES_URL" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -669,6 +653,8 @@ ET.register_namespace("dc", DC_NS)
     feed_url,
     release_url,
     published_at,
+    description,
+    releases_url,
 ) = sys.argv[1:]
 
 tree = ET.parse(current_path)
@@ -709,8 +695,11 @@ new_item = ET.Element("item")
 ET.SubElement(new_item, "title").text = f"Version {short_version}"
 ET.SubElement(new_item, "pubDate").text = published_at
 ET.SubElement(new_item, "link").text = release_url
-ET.SubElement(new_item, f"{{{SPARKLE_NS}}}releaseNotesLink").text = release_url
-ET.SubElement(new_item, "description").text = f"Toastty {short_version} is available."
+# The update prompt shows the description (the release's Highlights as HTML)
+# only when the item has no releaseNotesLink. The Version History button of
+# the "up to date" alert opens fullReleaseNotesLink.
+ET.SubElement(new_item, f"{{{SPARKLE_NS}}}fullReleaseNotesLink").text = releases_url
+ET.SubElement(new_item, "description").text = description
 ET.SubElement(
     new_item,
     "enclosure",
@@ -737,7 +726,7 @@ PY
 }
 
 publish_sparkle_appcast() {
-  local release_page_url="https://github.com/$REPO/releases/tag/$TAG"
+  local release_page_url="$RELEASE_PAGE_URL"
   local download_url="https://github.com/$REPO/releases/download/$TAG/$SPARKLE_DMG_FILENAME"
 
   if [[ "$PUBLISH_MODE" != "publish" ]]; then
@@ -762,6 +751,8 @@ publish_sparkle_appcast() {
       printf '  feed URL: %s\n' "$SPARKLE_FEED_URL"
       printf '  release URL: %s\n' "$release_page_url"
       printf '  download URL: %s\n' "$download_url"
+      cp "$updated_appcast_path" "$RELEASE_DIR/appcast-dry-run.xml"
+      printf '  updated appcast: %s\n' "$RELEASE_DIR/appcast-dry-run.xml"
       return 0
     fi
 

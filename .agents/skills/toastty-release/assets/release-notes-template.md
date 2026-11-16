@@ -4,7 +4,7 @@ Release date: {{release_date_pretty}}
 Toastty commit: `{{release_source_commit_short}}`
 {{previous_release_line}}
 
-<!-- Required: what is new for an updating user, and what to try first. A narrow release can have one bullet; a broader release can use short ### subsections. -->
+<!-- Required. The update prompt shows this section, so keep it to a few bullets: what is new for an updating user, and what to try first. Use only - bullets, ### subheadings, paragraphs, `code`, **bold** and [text](https://...) links. -->
 ## Highlights
 
 - {{highlight_1}}
