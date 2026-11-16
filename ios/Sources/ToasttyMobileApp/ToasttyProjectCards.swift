@@ -272,15 +272,15 @@ extension VerticalAlignment {
     static let cardName = VerticalAlignment(CardName.self)
 }
 
-/// A bucket row under the task that started it, or dimmed because its own
-/// state is calmer than its bucket's.
+/// A bucket row, indented under the task that started it. A row whose own
+/// state is calmer than its bucket's draws at full strength, as on the Mac
+/// sidebar: its status mark shows its own state.
 private struct ToasttyBucketEntryStyle: ViewModifier {
     let entry: MobileHomeBucketEntry
 
     func body(content: Content) -> some View {
         content
             .padding(.leading, entry.isLinkedChild ? 18 : 0)
-            .opacity(entry.isContext ? 0.55 : 1)
     }
 }
 

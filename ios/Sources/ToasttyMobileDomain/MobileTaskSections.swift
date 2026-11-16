@@ -6,14 +6,15 @@ import RemoteProtocol
 /// project, then the Done count. Each group lists the tasks whose own stage is
 /// in it, a child under its parent when both are there. A family in Needs
 /// you lists under Ready to review when every member that needs the user
-/// waits only for a review; a member whose own state is calmer is dimmed.
+/// waits only for a review. A member whose own state is calmer draws like
+/// any other row; its status mark shows its own state.
 public struct MobileTaskSections: Equatable, Sendable {
     public struct Entry: Equatable, Identifiable, Sendable {
         public let task: RemoteTaskSummary
         /// Drawn under the task that started it.
         public var isLinkedChild = false
-        /// Drawn dimmed: the task's own state is in a calmer group, and it
-        /// lists here to keep its family together.
+        /// The task's own state is in a calmer group, and it lists here to
+        /// keep its family together. The phone draws it like any other row.
         public var isContext = false
 
         public var id: UUID { task.id }
@@ -94,8 +95,8 @@ public struct MobileTaskSections: Equatable, Sendable {
     }
 
     /// A group's header count: every row it lists, as the Mac's Tasks view
-    /// counts. Only Needs you and Ready to review list a dimmed relative,
-    /// which is a task in Needs you either way.
+    /// counts. Only Needs you and Ready to review list a relative whose own
+    /// state is calmer, which is a task in Needs you either way.
     public func count(_ bucket: TaskBucket) -> Int {
         entries(bucket).count
     }

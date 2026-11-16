@@ -109,7 +109,7 @@ public struct MobileTaskBoard: Equatable, Sendable {
     }
 
     /// A group's header count: rows whose own stage is in the group, so a
-    /// dimmed relative listed with its family does not count.
+    /// relative listed with its family does not count.
     public func count(_ group: RemoteTaskGroup) -> Int {
         entries(group).filter { tasksByID[$0.taskID]?.group == group }.count
     }
