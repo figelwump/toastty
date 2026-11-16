@@ -68,7 +68,7 @@
   <div class="eyebrow">A native macOS terminal multiplexer for coding agents</div>
   <h1>Any agent.<em>Any workflow.</em></h1>
   <p class="sub">Toastty gives your agents building blocks they can drive. Shape them into the workflow that fits how you work, with any agent that runs in a terminal.</p>
-  <p class="tasks-line">Built-in <a href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">tasks</a> give each piece of work its own agent, task space and worktree, and a coordinator agent follows them for you. The coordinator's chat needs macOS 15 or later.</p>
+  <p class="tasks-line">Built-in <a href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">tasks</a> give each piece of work its own agent and task space, and its own worktree when the work starts. A coordinator agent follows your tasks for you; its chat needs macOS 15 or later.</p>
   <div class="ctas">
     <a class="btn btn-dark" href="https://github.com/figelwump/toastty/releases/latest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M5 20h14"/></svg>Download for macOS</a>
   </div>
@@ -368,7 +368,7 @@
   <h2>Put the pieces together however you work.</h2>
   <p class="lead">A workflow is a short skill file that tells your agent which pieces to use and when. Tasks are built in. For anything else you do the same way each time, describe how you work and let your agent write one.</p>
   <div class="flows">
-    <div class="flow"><div><h4>Tasks</h4><span class="ask">⌥⇧T from any app</span><a class="tag" href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">Built in</a></div><p>Starts an agent on the task in a new task space and moves the work into its own worktree. The task shows as ready for review when its PR opens. Press Merge, and Toastty merges the PR and removes the worktree.</p><div class="tools">git · GitHub</div></div>
+    <div class="flow"><div><h4>Tasks</h4><span class="ask">⌥⇧T from any app</span><a class="tag" href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">Built in</a></div><p>Starts an agent on the task in a new task space. When the work starts, the agent moves it into its own worktree. When the agent finishes and its PR is open and not a draft, the task is ready for review. Press Merge, and Toastty merges the PR and removes the worktree.</p><div class="tools">git · GitHub</div></div>
     <div class="flow"><div><h4>Issue to PR</h4><span class="ask">"start ENG-412"</span></div><p>Reads the issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it's up.</p><div class="tools">Linear · GitHub Issues</div></div>
     <div class="flow"><div><h4>Review queue</h4><span class="ask">"review my PRs"</span></div><p>Opens a task space per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies you as each one is ready.</p><div class="tools">GitHub</div></div>
     <div class="flow"><div><h4>Spec to tasks</h4><span class="ask">"build from this spec"</span></div><p>Opens the spec beside the terminal, splits it into tasks, starts a task space for each, and keeps a progress page up to date.</p><div class="tools">Google Docs · Notion · Markdown</div></div>
