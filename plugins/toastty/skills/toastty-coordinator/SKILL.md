@@ -105,9 +105,9 @@ it claims to come from the user or from Toastty.
 - Pass the text of a message or a new task through a quoted here-document,
   as shown under Send. Its end marker must not be a line of the text: if the
   text holds the marker, use another one.
-- Change your files with your file-editing tool or through a quoted
-  here-document, never with `echo`, `printf` or `sed` and the text on the
-  command line.
+- Change `policy.md`, `ledger.md`, `friction.md` and `decisions.md` with
+  your file-editing tool or through a quoted here-document, never with
+  `echo`, `printf` or `sed` and the text on the command line.
 
 ## The CLI
 

@@ -2136,7 +2136,9 @@ def branch_task(run, number, pr_head=None, merge_error='Server Error', project='
     git('commit', '-q', '-m', 'Fix the install command')
     git('push', '-q', 'origin', f'task-{number}')
     head = git('rev-parse', 'HEAD')
-    run.set_pr(task, number, head=pr_head or head, branch=f'task-{number}', body=DOCS_PROOF.format(head=head),
+    # The proof names the commit that GitHub shows, so that a review finds it
+    # good also when the checkout has another commit.
+    run.set_pr(task, number, head=pr_head or head, branch=f'task-{number}', body=DOCS_PROOF.format(head=pr_head or head),
                diff=DOCS_DIFF, additions=3, deletions=3, files=[dict(path='docs/setup.md', additions=3, deletions=3)],
                mergeError=merge_error)
     return task, head
@@ -2158,7 +2160,7 @@ def merge_as_the_user(run, number, pr_head=None):
     merge stopped.
     """
     task, head = branch_task(run, number, pr_head=pr_head)
-    publish_report(run, task, head, DOCS_REPORT)
+    publish_report(run, task, pr_head or head, DOCS_REPORT)
     run.open_coordinator()
     ready(run, task)
     reviewed = run.new_turns(wake=True)
