@@ -69,11 +69,13 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/coordinator/`
   - The working directory of the coordinator's agent, created when you first
     open the coordinator, and a git repository of its own. Toastty writes the
-    agent's instructions there (`AGENTS.md`, `CLAUDE.md`) and creates
-    `policy.md` and `ledger.md` once; see
-    [The coordinator's folder](tasks.md#the-coordinators-folder). The policy
-    holds your rules for your tasks, and the ledger holds task titles and
-    what the coordinator did. Closing the coordinator's workspace leaves it.
+    agent's instructions there (`AGENTS.md`, `CLAUDE.md`, `references/`) and
+    creates `policy.md`, `ledger.md`, `friction.md` and `decisions.md` once;
+    see [The coordinator's folder](tasks.md#the-coordinators-folder). The
+    policy holds your rules for your tasks, and the ledger holds task titles
+    and what the coordinator did. `friction.md` holds what the coordinator
+    saw slow your work, with task titles, and `decisions.md` holds task IDs,
+    pull request addresses and what you decided. Closing the coordinator's workspace leaves it.
   - `attachments/<message-id>/` holds Toastty's copies of the files you
     attached to a quick entry message for the coordinator. Toastty removes
     a message's copies when you remove the waiting message, and otherwise

@@ -13,8 +13,9 @@ import Foundation
 ///   such as the rules for a merge, which the instructions tell the agent to
 ///   read when it needs them. By default, Codex reads 32 KiB of its
 ///   instruction files, so the instructions cannot hold everything.
-/// - `policy.md` and `ledger.md` are the user's and the coordinator's.
-///   Toastty creates each one when it is missing and never writes it again.
+/// - `policy.md`, `ledger.md`, `friction.md` and `decisions.md` are the
+///   user's and the coordinator's. Toastty creates each one when it is
+///   missing and never writes it again.
 /// - The folder is a git repository, so the coordinator can commit each
 ///   change of the policy and undo it with a revert.
 struct CoordinatorFolder: Sendable {
@@ -22,6 +23,8 @@ struct CoordinatorFolder: Sendable {
     static let claudeInstructionsFileName = "CLAUDE.md"
     static let policyFileName = "policy.md"
     static let ledgerFileName = "ledger.md"
+    static let frictionFileName = "friction.md"
+    static let decisionsFileName = "decisions.md"
     static let referencesDirectoryName = "references"
 
     static let instructionsHeader = """
@@ -51,6 +54,8 @@ struct CoordinatorFolder: Sendable {
 
     ## Merging
 
+    ## Improving
+
     ## Unblocking
 
     ## Releases
@@ -64,10 +69,34 @@ struct CoordinatorFolder: Sendable {
 
     """
 
-    /// Kept out of the repository: Toastty's own files, the ledger, which
-    /// changes on most wakes, and an agent's local settings. A commit then
-    /// holds a change of the policy and nothing else.
-    static let repositoryExcludes = ["AGENTS.md", "CLAUDE.md", "ledger.md", ".claude/", "references/"]
+    /// What slows the work: one line for each pattern, which the
+    /// coordinator sorts into these sections. `Last review:` is the time of
+    /// its last review; "never" makes the first review due at once.
+    static let frictionTemplate = """
+    # Coordinator friction
+    Last review: never
+
+    ## Open
+
+    ## Sent on
+
+    ## Closed
+
+    """
+
+    /// What waited for the user: one line of fixed fields for each review
+    /// and each question, which the coordinator's review counts.
+    static let decisionsTemplate = """
+    # Coordinator decisions
+
+    """
+
+    /// Kept out of the repository: Toastty's own files, the coordinator's
+    /// records, which change on many wakes, and an agent's local settings. A
+    /// commit then holds a change of the policy and nothing else.
+    static let repositoryExcludes = [
+        "AGENTS.md", "CLAUDE.md", "ledger.md", "friction.md", "decisions.md", ".claude/", "references/",
+    ]
 
     /// The environment of the coordinator's agent. Without its own `.git`,
     /// the folder would use the first repository git finds in a folder
@@ -134,7 +163,8 @@ struct CoordinatorFolder: Sendable {
     // MARK: - Files
 
     /// Creates the folder, writes Toastty's instruction files when they
-    /// differ, and creates the policy and the ledger when they are missing.
+    /// differ, and creates the policy, the ledger and the coordinator's two
+    /// records when they are missing.
     /// Returns the folder's path.
     @discardableResult
     func prepareFiles() throws -> String {
@@ -162,6 +192,8 @@ struct CoordinatorFolder: Sendable {
             }
             try createIfMissing(Self.policyTemplate, at: Self.policyFileName)
             try createIfMissing(Self.ledgerTemplate, at: Self.ledgerFileName)
+            try createIfMissing(Self.frictionTemplate, at: Self.frictionFileName)
+            try createIfMissing(Self.decisionsTemplate, at: Self.decisionsFileName)
         } catch {
             throw CoordinatorError("Toastty could not write the coordinator's files in \(directoryURL.path): \(error.localizedDescription)")
         }

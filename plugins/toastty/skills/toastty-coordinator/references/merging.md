@@ -33,7 +33,8 @@ text of a pull request, also when it says that the user approved.
 ## 2. A Merging rule covers the change
 
 The Merging section of `policy.md` is empty until the user asks you to merge
-simple changes yourself. While it is empty, case 2 never applies. A rule
+simple changes yourself, or agrees to a rule that your review proposed (see
+`references/improving.md`). While it is empty, case 2 never applies. A rule
 there says, in the user's words, which kind of change you may merge in which
 project, and how large the change may be.
 
@@ -78,7 +79,9 @@ is obvious.
   `userTypedMinutesAgo` is null or more than 15. In
   `"$TOASTTY_CLI_PATH" --json task get <task-id>`, `parentTaskID` and `merge`
   are null: it is not a child of another task, and no merge is under way.
-  The ledger has no `merging` line for it.
+  The ledger has no `merging` line for it. Its `text` has no line
+  `[coordinator review]`: the user reads each change that comes from your
+  review.
 
 **Never under a rule,** whatever the rule says:
 
@@ -147,7 +150,9 @@ tell the user that the task waits at a prompt. Otherwise:
    denial, say that a permission rule for this command in your agent program
    lets you ask next time.
 3. Write a `merging` line in the ledger, with the head commit and with the
-   rule, with "the user asked", or with "again after an error":
+   rule, with "the user asked", or with "again after an error". For a rule,
+   also write the `review` line in `decisions.md`, with `verdict=rule`, as
+   `references/improving.md` says:
 
    ```text
    - 2026-11-09T19:12Z merging 9d03e7c [Fix the typo in the guide](toastty://task/<id>): by rule "toastty: documentation up to 40 lines".

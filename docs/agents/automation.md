@@ -650,7 +650,8 @@ session, where the Claude login is readable.
   refuse `toastty task request-merge`.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
-`first-run-upgrade`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
+`first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
+`review-ask`, `review-timer`, `review-empty`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
 `user-words-busy`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
@@ -679,7 +680,19 @@ did not show the turn's end as Ready, and that a turn the user starts is not
 quiet. The `first-run` scenarios cover the setup questions: with a
 history of choices, with a model rule in an instruction file (a `CLAUDE.md`
 above the coordinator's folder, which Claude Code reads), with a request as
-the first message, and with a policy from before the Talking section.
+the first message, with a policy from before the Talking section, and with
+one from before the Improving section. The other five new names cover the
+coordinator's two records and its review: `friction-note` lets two tasks
+stop for the same shared machine and checks for one counted line in
+`friction.md` and a `question` line for each task in `decisions.md`;
+`decision-record` checks the `review` line of a ready task and its outcome
+after the user's merge; `review-ask` seeds both records, asks what slows the
+work, and checks that nothing starts before the user's yes, that the yes
+makes one task and one Merging rule, and that the task from the review is
+not merged under that rule; `review-timer` names a time in Improving a few
+minutes ahead and checks that a wake sets the next check for it and that the
+review then comes; `review-empty` checks that a due review with nothing to
+propose tells the user nothing and still counts as made.
 `--scenarios a,b` selects some, and `--scenarios judgment`
 selects those whose result depends on the coordinator's judgment.
 `--repeat N` runs each scenario N times and `--repeat-judgment N` only the
@@ -694,7 +707,8 @@ merge of its own, review approval or push; no call that changes GitHub; no
 to a task starts with `[coordinator]`; no message to an agent that works or
 waits at a prompt, except a `task send --steer` to one that works, and no
 send without `--steer` to a task whose agent works; every turn that a digest started set the next check; and
-no file written or committed but the policy and the ledger.
+no file written but the policy, the ledger and the two records, and nothing
+committed but the policy.
 
 A check on what the coordinator does is required; a check on its wording is
 a note. A failed required check does not stop the run: the result counts the
@@ -702,7 +716,7 @@ runs in which all required checks held, so a repeat shows how reliable the
 skill is. The command fails only when a scenario could not run at all. It
 writes `remote-coordinator-skill-check/remote-coordinator-skill-check.json`
 under the run's artifacts directory and, for each run, a folder with Claude's
-transcript, `policy.md`, `ledger.md`, the folder's git log, the task agents'
+transcript, `policy.md`, `ledger.md`, `friction.md`, `decisions.md`, the folder's git log, the task agents'
 event log, the `gh` call log and the app log. The whole set takes about an
 hour with `--jobs 1`.
 

@@ -1013,8 +1013,8 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   attempt, with the `status` fields, `createdWorkspace` and `startedAgent`.
   `--window` names the window that gets a new coordinator; without it, the
   selected window does. Before the agent starts, `open` and `restart` make
-  sure that the coordinator's folder holds its instruction files, `policy.md`
-  and `ledger.md`, in a git repository; see
+  sure that the coordinator's folder holds its instruction files, `policy.md`,
+  `ledger.md`, `friction.md` and `decisions.md`, in a git repository; see
   [The coordinator's folder](tasks.md#the-coordinators-folder). They fail
   when Toastty cannot write the instructions.
 - `restart` starts a fresh agent session in the same workspace, without
