@@ -238,7 +238,9 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// The turn that a digest started ended with an error, so the
     /// coordinator may not have acted on it. What it told waits again, as
     /// if it was never typed: its changes, and its scheduled check unless
-    /// the coordinator set a new time. A task that changed since keeps its
+    /// the coordinator set a new time. The app leaves the check out of
+    /// `delivered` when the coordinator cleared its time in that turn. A
+    /// task that changed since keeps its
     /// newer line, which also wakes for what the told line said and still
     /// holds, as a newer change of a waiting line does in `record`. The
     /// next digest says that the turn failed, and is not typed before

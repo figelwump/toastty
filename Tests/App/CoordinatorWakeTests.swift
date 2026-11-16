@@ -446,6 +446,40 @@ struct CoordinatorWakeTests {
         #expect(notices.titles.count == 1)
     }
 
+    @Test func aFailedTimerWakeComesBackUnlessTheCoordinatorDecidedItsNextCheckInThatTurn() async throws {
+        let fixture = try Fixture()
+        let clock = Clock()
+        try await fixture.openAtPrompt()
+        let service = makeService(fixture, clock: clock) { [:] }
+        service.pass()
+        let check = try service.setCoordinatorWake(.after(120)).nextWakeAt
+        clock.advance(120)
+        service.pass()
+        #expect(fixture.typedTexts.count == 1)
+
+        // The timer's turn fails: the scheduled check comes back a minute
+        // later.
+        try await failTurn(fixture)
+        let failedAt = clock.now
+        clock.advance(60)
+        service.pass()
+        #expect(fixture.typedTexts.last == digest(
+            failedTurnLine(at: failedAt),
+            "- Scheduled check: the time you set, \(try #require(check).formatted(.iso8601)), has come."
+        ))
+
+        // In this turn the coordinator clears its next check, and then the
+        // turn fails: the check it cleared does not come back.
+        try fixture.setStatus(.working)
+        try service.setCoordinatorWake(.clear)
+        try fixture.setStatus(.error)
+        await fixture.settle()
+        clock.advance(3600)
+        service.pass()
+        #expect(fixture.typedTexts.count == 2)
+        #expect(service.coordinatorWakeStatus?.nextWakeAt == nil)
+    }
+
     @Test func aFailedWakeTurnIsTypedAgainAlsoWhenAWaitingMessageStartsTheNextTurnAtOnce() async throws {
         let fixture = try Fixture()
         let clock = Clock()

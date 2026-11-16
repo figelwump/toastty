@@ -1313,15 +1313,18 @@ final class CoordinatorController: ObservableObject {
     /// The coordinator's session and the end of its last turn, as the last
     /// change of the session store showed them.
     private var observedTurnEnd: (sessionID: String, endedAt: Date?)?
-    /// The message typed last at an open prompt, until the turn that it
-    /// starts ends.
-    private var promptAwaitingTurnEnd: (sessionID: String, key: String, at: Date)?
+    /// The messages typed at an open prompt whose turns have not ended,
+    /// oldest first.
+    private var promptsAwaitingTurnEnd: [(sessionID: String, key: String, at: Date)] = []
+    private static let rememberedPromptsAwaitingTurnEnd = 20
 
     /// Finds the end of a turn of the coordinator's agent in a change of
     /// the session store: its session's `lastTurnEndedAt` moves. The
-    /// session's status then says how the turn ended. The first turn that
-    /// started after a message was typed at the open prompt is that
-    /// message's turn.
+    /// session's status then says how the turn ended. A turn belongs to
+    /// the last message typed at an open prompt before the turn started.
+    /// The agent's transcript can open the prompt before its status ends
+    /// the turn, so the next message can be typed before the end is seen;
+    /// that message waits for a later turn.
     private func noteTurnEnd(in registry: SessionRegistry) {
         guard let panelID = location?.panelID, let record = registry.activeSession(for: panelID) else {
             observedTurnEnd = nil
@@ -1335,9 +1338,10 @@ final class CoordinatorController: ObservableObject {
         // the turn's start exactly.
         let startedAt = endedAt.addingTimeInterval(-(record.lastTurnDuration ?? 0))
         var startedByKey: String?
-        if let prompt = promptAwaitingTurnEnd, prompt.sessionID == record.sessionID, startedAt >= prompt.at {
-            startedByKey = prompt.key
-            promptAwaitingTurnEnd = nil
+        if let index = promptsAwaitingTurnEnd.lastIndex(where: { $0.sessionID == record.sessionID && $0.at <= startedAt }) {
+            startedByKey = promptsAwaitingTurnEnd[index].key
+            // Older messages had their turns, or none that was seen.
+            promptsAwaitingTurnEnd.removeFirst(index + 1)
         }
         onTurnEnd?(TurnEnd(sessionID: record.sessionID, failed: record.status?.kind == .error, startedByKey: startedByKey))
     }
@@ -1547,7 +1551,10 @@ final class CoordinatorController: ObservableObject {
         lastTyped = typed
         // A steer goes into a turn that runs already.
         if steered == false {
-            promptAwaitingTurnEnd = (session.sessionID, typed.key, typed.at)
+            promptsAwaitingTurnEnd.append((session.sessionID, typed.key, typed.at))
+            if promptsAwaitingTurnEnd.count > Self.rememberedPromptsAwaitingTurnEnd {
+                promptsAwaitingTurnEnd.removeFirst()
+            }
         }
         ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
             "session_id": session.sessionID,

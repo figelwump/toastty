@@ -242,6 +242,10 @@ extension TaskWebhookService {
         // Whole seconds, as the digest and the status print the time.
         wake.setRequestedWake(date.map { Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)) })
         coordinatorWake = wake
+        // The coordinator decided its next check in the last digest's turn,
+        // also when it cleared it: a failure of that turn does not tell the
+        // digest's scheduled check again.
+        coordinatorWakeTurns.unanswered?.delivered.scheduledCheck = nil
         saveOutbox()
         if quiet {
             ToasttyLog.info("Marked a coordinator wake turn quiet", category: .tasks)
