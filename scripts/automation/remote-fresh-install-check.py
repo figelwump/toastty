@@ -15,7 +15,8 @@ remote-coordinator-quick-entry-check.py: `claude` on the instance's PATH is
 the real, authenticated Claude CLI in the coordinator's folder and a fake
 task agent anywhere else; GitHub is a fake `gh`. The other agents installed
 on the remote Mac stay on the PATH, as on a user's Mac. The user home is a
-git repository, so the first workspace starts in a project.
+git repository with a commit and an origin, so the first workspace starts in
+a project where a task can start work in a worktree.
 
 Every action a person makes goes through the real UI: the first-launch
 question, File > New Task…, the quick entry keys and Agent > Open
@@ -82,7 +83,23 @@ class Run(qe.Run):
         # The app makes the coordinator's folder when it starts the
         # coordinator, and asks the first-launch question only before that.
         shutil.rmtree(self.folder)
-        subprocess.run(['git', 'init', '-q', str(self.user_home)], check=True)
+        # The first workspace's project: a repository with a commit and an
+        # origin, so a task can start work in a worktree.
+        origin = self.root / 'origins' / 'home.git'
+        origin.parent.mkdir(exist_ok=True)
+
+        def git(*arguments):
+            subprocess.run(['git', '-C', str(self.user_home), *arguments], check=True, capture_output=True, text=True)
+
+        subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(origin)], check=True)
+        git('init', '-q', '-b', 'main')
+        git('config', 'user.name', 'Fresh Install Check')
+        git('config', 'user.email', 'fresh-install-check@example.invalid')
+        (self.user_home / 'README.md').write_text('A first project.\n')
+        git('add', 'README.md')
+        git('commit', '-q', '-m', 'First commit')
+        git('remote', 'add', 'origin', str(origin))
+        git('push', '-q', '-u', 'origin', 'main')
 
     def write_config(self):
         """A fresh install has no tasks.toml."""
