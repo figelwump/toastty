@@ -249,6 +249,39 @@ load_sparkle_metadata() {
   SPARKLE_ED_SIGNATURE="${SPARKLE_ED_SIGNATURE:-}"
 }
 
+# Every release needs a "## Highlights" section with content: it is the first
+# thing an updating user reads about the release.
+verify_release_notes_highlights() {
+  local placeholder_line=""
+  local highlights_state=""
+
+  placeholder_line="$(grep -n -m1 -E '\{\{[^}]*\}\}' "$NOTES_FILE" || true)"
+  [[ -z "$placeholder_line" ]] \
+    || fail "release notes still contain a template placeholder at line ${placeholder_line%%:*}: $NOTES_FILE"
+
+  highlights_state="$(awk '
+    /^##[[:space:]]+Highlights[[:space:]]*$/ { headings += 1; in_section = 1; next }
+    /^##[[:space:]]/ { in_section = 0; next }
+    in_section && in_comment { if ($0 ~ /-->/) in_comment = 0; next }
+    in_section && /^[[:space:]]*<!--/ { if ($0 !~ /-->/) in_comment = 1; next }
+    in_section && /[^[:space:]]/ { content += 1 }
+    END {
+      if (headings == 0) print "missing"
+      else if (headings > 1) print "repeated"
+      else if (content == 0) print "empty"
+      else print "ok"
+    }
+  ' "$NOTES_FILE")"
+
+  case "$highlights_state" in
+    ok) ;;
+    missing) fail "release notes have no '## Highlights' section; every release needs one (see .agents/skills/toastty-release/SKILL.md)" ;;
+    repeated) fail "release notes have more than one '## Highlights' section" ;;
+    empty) fail "the '## Highlights' section of the release notes is empty" ;;
+    *) fail "could not read the '## Highlights' section of the release notes" ;;
+  esac
+}
+
 verify_inputs() {
   local expected_ghostty_build_flags_line=""
   local expected_ghostty_commit_line=""
@@ -260,6 +293,8 @@ verify_inputs() {
   if [[ ! -s "$NOTES_FILE" ]]; then
     fail "release notes file is empty: $NOTES_FILE (author it before publishing; see .agents/skills/toastty-release/SKILL.md for the default workflow)"
   fi
+
+  verify_release_notes_highlights
 
   [[ -s "$DMG_PATH" ]] || fail "release DMG not found or empty: $DMG_PATH"
   [[ "$RELEASE_VERSION" == "$TOASTTY_VERSION" ]] || fail "release metadata version mismatch: expected $TOASTTY_VERSION, got ${RELEASE_VERSION:-<unset>}"
