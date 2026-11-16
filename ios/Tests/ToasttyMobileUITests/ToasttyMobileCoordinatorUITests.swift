@@ -578,7 +578,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
 
         // With the keyboard up, the chat scrolls above it.
         let replyEarlier = app.buttons["toastty-mobile-transcript-reply-6"]
-        XCTAssertTrue(scrollUntilHittable(replyEarlier, toOlder: true, in: app))
+        XCTAssertTrue(scrollIntoView(replyEarlier, in: app))
         replyEarlier.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { excerpt.label.hasPrefix("Noted. I will start the release") }, excerpt.label)
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "toastty-mobile-composer-reply").count, 1)
@@ -586,7 +586,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(bar.waitForNonExistence(timeout: 5))
 
         // Steer, the default while the coordinator works.
-        XCTAssertTrue(scrollUntilHittable(replyLast, toOlder: false, in: app))
+        XCTAssertTrue(scrollIntoView(replyLast, in: app))
         replyLast.tap()
         XCTAssertTrue(bar.waitForExistence(timeout: 5))
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
@@ -604,7 +604,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
 
         // Queue: the waiting message shows its quote, and Edit brings it
         // back as a reply.
-        XCTAssertTrue(scrollUntilHittable(replyLast, toOlder: true, in: app))
+        XCTAssertTrue(scrollIntoView(replyLast, in: app))
         replyLast.tap()
         XCTAssertTrue(bar.waitForExistence(timeout: 5))
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
@@ -631,7 +631,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         )
         attachScreenshot(named: "coordinator-reply-queued", of: app)
         let edit = app.buttons["toastty-mobile-queued-edit-fixture-queued-2"]
-        XCTAssertTrue(scrollUntilHittable(edit, toOlder: false, in: app))
+        XCTAssertTrue(scrollIntoView(edit, in: app))
         edit.tap()
         XCTAssertTrue(bar.waitForExistence(timeout: 5))
         XCTAssertTrue(excerpt.label.hasPrefix("I made a task for it in toastty"), excerpt.label)
@@ -643,18 +643,39 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
     // MARK: - Helpers
 
     /// Drags the chat in its upper part, clear of the composer and the
-    /// keyboard, until `element` can be tapped.
-    private func scrollUntilHittable(_ element: XCUIElement, toOlder: Bool, in app: XCUIApplication) -> Bool {
+    /// keyboard, until `element` shows between the navigation bar and the
+    /// composer. The chat scrolls under the composer, and XCUITest calls a
+    /// button there hittable although a tap reaches the composer. Each drag
+    /// holds before it lifts, so the chat does not fling past the element.
+    private func scrollIntoView(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
         let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
-        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42))
-        for _ in 0..<8 where element.isHittable == false {
-            if toOlder {
-                upper.press(forDuration: 0.05, thenDragTo: lower)
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.32))
+        for _ in 0..<12 {
+            let navigationBar = app.navigationBars.firstMatch
+            let top = navigationBar.exists ? navigationBar.frame.maxY : app.frame.minY
+            let bottom = composerTop(in: app)
+            let frame = element.frame
+            if element.exists, frame.minY >= top, frame.maxY <= bottom {
+                return waitUntilHittable(element)
+            }
+            if element.exists, frame.maxY > bottom {
+                lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0.3)
             } else {
-                lower.press(forDuration: 0.05, thenDragTo: upper)
+                upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.3)
             }
         }
-        return waitUntilHittable(element)
+        return false
+    }
+
+    /// The top of the composer: the reply bar, the attach line or the field,
+    /// whichever shows highest.
+    private func composerTop(in app: XCUIApplication) -> CGFloat {
+        let parts = [
+            app.descendants(matching: .any)["toastty-mobile-composer-reply"],
+            app.staticTexts["Update Toastty on your Mac to attach files."],
+            app.descendants(matching: .any)["toastty-mobile-composer-input"],
+        ]
+        return parts.filter { $0.exists }.map { $0.frame.minY }.min() ?? app.frame.maxY
     }
 
     private func quote(containing text: String, in app: XCUIApplication) -> XCUIElement {
