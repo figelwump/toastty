@@ -89,6 +89,7 @@ protocol LiveConnectionRuntime: Sendable {
     func readCoordinatorChat(
         _ request: RemoteCoordinatorChatReadRequest
     ) async throws -> RemoteCoordinatorChatReadResponse?
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests?
 }
 
 extension LiveConnectionRuntime {
@@ -178,6 +179,10 @@ extension LiveConnectionRuntime {
     func readCoordinatorChat(
         _ request: RemoteCoordinatorChatReadRequest
     ) async throws -> RemoteCoordinatorChatReadResponse? {
+        nil
+    }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
         nil
     }
 
@@ -382,6 +387,10 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteCoordinatorChatReadResponse? {
         try await coordinator.readCoordinatorChat(request)
     }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        try await coordinator.coordinatorQuietDigests()
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -432,6 +441,10 @@ final class LiveSessionsController {
     private var conversationRequestID = UUID()
     private var conversationOpenOperations: [UUID: ConversationOpenOperation] = [:]
     private var conversationRuntimeOwners: [RemoteConversationID: UUID] = [:]
+    /// Which of the coordinator's wake turns are quiet, as the Mac last
+    /// answered. Its chat folds them.
+    private var quietDigests = ToasttyCoordinatorQuietDigests()
+    private var quietDigestsReadTask: Task<Void, Never>?
 
     init(
         runtime: any LiveConnectionRuntime,
@@ -766,6 +779,7 @@ final class LiveSessionsController {
             isSupported: acceptsCoordinatorChatRead,
             readPoint: homeController.snapshot.coordinatorChatRead
         )
+        controller.consumeCoordinatorQuietDigests(quietDigests.keys)
         activeConversationController = controller
         await controller.start()
 
@@ -833,6 +847,12 @@ final class LiveSessionsController {
         coordinatorState.capabilities.contains(.coordinatorChatRead) && deviceScopes.contains(.read)
     }
 
+    /// The Mac shares which wake turns are quiet. Showing the chat needs
+    /// only read access.
+    private var acceptsCoordinatorQuietDigests: Bool {
+        coordinatorState.capabilities.contains(.coordinatorQuietDigests) && deviceScopes.contains(.read)
+    }
+
     private var acceptsCoordinatorSend: Bool {
         coordinatorState.capabilities.contains(.coordinatorSend) && deviceScopes.contains(.send)
     }
@@ -862,6 +882,9 @@ final class LiveSessionsController {
         let activeConversationID = activeConversationController?.conversationID
         activeConversationController?.stop()
         activeConversationController = nil
+        quietDigestsReadTask?.cancel()
+        quietDigestsReadTask = nil
+        quietDigests = ToasttyCoordinatorQuietDigests()
         if let activeConversationID {
             conversationRuntimeOwners[RemoteConversationID(rawValue: activeConversationID)] = nil
         }
@@ -910,6 +933,7 @@ final class LiveSessionsController {
             isSupported: acceptsCoordinatorChatRead,
             readPoint: homeController.snapshot.coordinatorChatRead
         )
+        updateQuietDigests()
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403
         // must not overwrite the paired authorization-denied explanation.
@@ -934,6 +958,29 @@ final class LiveSessionsController {
                 isSupported: acceptsCoordinatorChatRead,
                 readPoint: homeController.snapshot.coordinatorChatRead
             )
+        }
+        updateQuietDigests()
+    }
+
+    /// Reads the quiet turns' keys when the snapshot names a revision this
+    /// phone does not have, and gives the open chat the keys it has.
+    private func updateQuietDigests() {
+        let revision = acceptsCoordinatorQuietDigests ? homeController.snapshot.coordinatorQuietDigestsRevision : nil
+        if quietDigests.consume(revision: revision) {
+            readQuietDigests()
+        }
+        activeConversationController?.consumeCoordinatorQuietDigests(quietDigests.keys)
+    }
+
+    private func readQuietDigests() {
+        quietDigests.willRead()
+        quietDigestsReadTask = Task { @MainActor [weak self, runtime] in
+            let answer = try? await runtime.coordinatorQuietDigests()
+            guard let self, Task.isCancelled == false else { return }
+            quietDigestsReadTask = nil
+            let readsAgain = quietDigests.didRead(answer)
+            activeConversationController?.consumeCoordinatorQuietDigests(quietDigests.keys)
+            if readsAgain { readQuietDigests() }
         }
     }
 

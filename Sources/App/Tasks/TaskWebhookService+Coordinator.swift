@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// The coordinator as a destination of task events.
 ///
@@ -47,7 +48,7 @@ extension TaskWebhookService {
         /// The failure after that stops the digests.
         static let maximumRetries = 2
 
-        /// The digest typed last, by its `CoordinatorWakeState.digestKey`,
+        /// The digest typed last, by its `CoordinatorMessageHeader.digestKey`,
         /// and what it told, until the turn it started ends.
         var unanswered: (key: String, delivered: CoordinatorWakeState.Delivered)?
         /// The wake turns in a row that ended with an error.
@@ -92,8 +93,8 @@ extension TaskWebhookService {
         coordinator.onWorkspaceChange = { [weak self] workspaceID in
             self?.coordinatorWorkspaceChanged(to: workspaceID)
         }
-        coordinator.isQuietDigest = { [weak self] text in
-            self?.coordinatorWake?.isQuietDigest(text) ?? false
+        coordinator.quietDigestKeys = { [weak self] in
+            self?.coordinatorWake?.quietDigestKeys ?? []
         }
         coordinator.onTurnEnd = { [weak self] end in
             self?.coordinatorTurnEnded(end)
@@ -158,7 +159,7 @@ extension TaskWebhookService {
         let isRetry = wake.failedTurnAt != nil
         let delivered = wake.markDelivered(digest, at: at)
         coordinatorWake = wake
-        coordinatorWakeTurns.unanswered = (CoordinatorWakeState.digestKey(digest), delivered)
+        coordinatorWakeTurns.unanswered = (CoordinatorMessageHeader.digestKey(digest), delivered)
         // Saved at once: after a quit, a digest that was typed is not
         // typed again.
         saveOutbox()

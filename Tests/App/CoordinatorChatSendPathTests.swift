@@ -311,7 +311,7 @@ struct CoordinatorChatSendPathTests {
         #expect(ends == [CoordinatorController.TurnEnd(
             sessionID: fixture.conversations.sessionID,
             failed: true,
-            startedByKey: CoordinatorWakeState.digestKey(Self.digest)
+            startedByKey: CoordinatorMessageHeader.digestKey(Self.digest)
         )])
 
         // The message's own turn is its own.
@@ -319,7 +319,7 @@ struct CoordinatorChatSendPathTests {
         #expect(ends.last == CoordinatorController.TurnEnd(
             sessionID: fixture.conversations.sessionID,
             failed: false,
-            startedByKey: CoordinatorWakeState.digestKey("From the composer")
+            startedByKey: CoordinatorMessageHeader.digestKey("From the composer")
         ))
         #expect(ends.count == 2)
     }
@@ -1204,6 +1204,92 @@ struct CoordinatorChatSendPathTests {
         fixture.report(.ready)
         #expect(statusKind(fixture) == .ready)
         try fixture.endTurn(4)
+    }
+
+    /// A paired device folds the quiet wake turns as this chat does. The
+    /// coordinator's workspace carries only the revision of the quiet set,
+    /// for every snapshot, and the route serves the keys. A mark that comes
+    /// or goes changes the revision and sends a session list at once. The
+    /// digest's text, as the gateway sends it to a device, has the key that
+    /// the Mac keeps.
+    @MainActor
+    @Test func pairedDevicesLearnWhichWakeTurnsAreQuiet() async throws {
+        let fixture = try CoordinatorChatFixture(pairsNativeDevice: true)
+        defer { fixture.tearDown() }
+        let conversations = fixture.conversations
+        conversations.enableGateway()
+        #expect(conversations.gatewayCapabilities().contains(.coordinatorQuietDigests) == false)
+        #expect(conversations.service.facadeSessionList(at: .now).workspaces
+            .allSatisfy { $0.coordinatorQuietDigestsRevision == nil })
+        conversations.service.installCoordinatorQuietDigests(from: fixture.controller)
+        #expect(conversations.gatewayCapabilities().contains(.coordinatorQuietDigests))
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        let wakes = Wakes(fixture)
+        func published() -> [RemoteWorkspaceSummary] {
+            conversations.service.facadeSessionList(at: .now).workspaces.filter { $0.coordinatorQuietDigestsRevision != nil }
+        }
+        func broadcastRevisions(after count: Int) -> [String?] {
+            conversations.server.broadcasts.dropFirst(count).compactMap { message in
+                guard case .sessionList(let snapshot) = message else { return nil }
+                return snapshot.workspaces.first(where: \.isCoordinator)?.coordinatorQuietDigestsRevision
+            }
+        }
+
+        // Nothing is quiet yet. Only the coordinator's workspace carries
+        // the revision, and only a paired device reads the keys.
+        let none = RemoteCoordinatorQuietDigests(keys: [])
+        #expect(published().map(\.isCoordinator) == [true])
+        #expect(published().first?.coordinatorQuietDigestsRevision == none.revision)
+        let first = try conversations.gatewayCoordinatorQuietDigests(credential: conversations.nativeCredential)
+        #expect(first.status == 200)
+        #expect(first.digests == none)
+        #expect(try conversations.gatewayCoordinatorQuietDigests(credential: nil).status == 401)
+        #expect(try conversations.gatewayCoordinatorQuietDigests(credential: "not-a-paired-device").status == 401)
+
+        // A wake turn that the coordinator marks quiet.
+        wakes.taskNeedsYou("agentFinished")
+        let digest = try #require(fixture.delivered.texts.last)
+        try fixture.startTurn(1, userText: digest)
+        try await fixture.waitUntil("the wake turn") {
+            fixture.chat.presentation.rows.contains { if case .hostMessage = $0.content { true } else { false } }
+                && fixture.chat.summary?.state == .working
+        }
+        let beforeMark = conversations.server.broadcasts.count
+        try wakes.service.setCoordinatorWake(.clear, quiet: true)
+        let quiet = RemoteCoordinatorQuietDigests(keys: [CoordinatorMessageHeader.digestKey(digest)])
+        #expect(quiet.revision != none.revision)
+        #expect(published().first?.coordinatorQuietDigestsRevision == quiet.revision)
+        try await fixture.waitUntil("a session list with the new revision") {
+            broadcastRevisions(after: beforeMark).contains(quiet.revision)
+        }
+        #expect(try conversations.gatewayCoordinatorQuietDigests(credential: conversations.nativeCredential).digests == quiet)
+
+        // The device finds the key from the text that the gateway sends.
+        let conversationID = try #require(conversations.conversationID(ofPanel: fixture.panelID))
+        let sentDigests = try conversations.gatewayLatestEvents(of: conversationID, credential: conversations.nativeCredential)
+            .compactMap { event -> String? in
+                guard case .userMessage(let message) = event.payload,
+                      message.text.hasPrefix(CoordinatorMessageHeader.digestPrefix) else { return nil }
+                return message.text
+            }
+        #expect(sentDigests.count == 1)
+        #expect(Set(sentDigests.map(CoordinatorMessageHeader.digestKey)) == Set(quiet.keys))
+        try fixture.recordAgentMessage("Nothing needs you.")
+        try fixture.endTurn(1)
+
+        // The marks go with the coordinator's wake state, as when another
+        // coordinator starts: the revision goes back, and a session list
+        // says so.
+        let beforeRemoval = conversations.server.broadcasts.count
+        fixture.controller.onWorkspaceChange?(nil)
+        #expect(published().first?.coordinatorQuietDigestsRevision == none.revision)
+        try await fixture.waitUntil("a session list without the mark") {
+            broadcastRevisions(after: beforeRemoval).contains(none.revision)
+        }
+        #expect(try conversations.gatewayCoordinatorQuietDigests(credential: conversations.nativeCredential).digests == none)
     }
 
     // MARK: - How long the conversation is read

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import RemoteProtocol
 
@@ -108,10 +107,11 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// project that releases on merge. Each is a project root as
     /// `TasksConfigFile.normalizedPath` writes it.
     public private(set) var watchedProjectRoots: [String] = []
-    /// `digestKey` of the digest Toastty typed last. `nil` before the first.
+    /// `CoordinatorMessageHeader.digestKey` of the digest Toastty typed
+    /// last. `nil` before the first.
     public private(set) var lastDigestKey: String?
-    /// `digestKey` of each digest whose turn the coordinator marked quiet,
-    /// oldest first.
+    /// `CoordinatorMessageHeader.digestKey` of each digest whose turn the
+    /// coordinator marked quiet, oldest first.
     public private(set) var quietDigestKeys: [String] = []
     /// When the turn of the digest typed last ended with an error. Its
     /// changes wait again, the next digest says so, and it is not typed
@@ -231,7 +231,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         requestedWakeAt = nil
         failedTurnAt = nil
         lastWakeAt = at
-        lastDigestKey = Self.digestKey(digest)
+        lastDigestKey = CoordinatorMessageHeader.digestKey(digest)
         return delivered
     }
 
@@ -324,17 +324,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// Whether the message is a digest whose turn the coordinator marked
     /// quiet.
     public func isQuietDigest(_ text: String) -> Bool {
-        quietDigestKeys.isEmpty == false && quietDigestKeys.contains(Self.digestKey(text))
-    }
-
-    /// Names a digest by its text: the SHA-256 of the text without leading
-    /// and trailing white space, in hex. The agent's transcript keeps the
-    /// text Toastty typed, so the key survives a relaunch, which forgets
-    /// which message Toastty sent. Every digest names the time of each
-    /// change it lists, so two digests do not share a text.
-    public static func digestKey(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return SHA256.hash(data: Data(trimmed.utf8)).map { String(format: "%02x", $0) }.joined()
+        quietDigestKeys.isEmpty == false && quietDigestKeys.contains(CoordinatorMessageHeader.digestKey(text))
     }
 
     // MARK: - Digest

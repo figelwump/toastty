@@ -712,6 +712,82 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    /// The coordinator's chat folds the wake turns that the Mac shares as
+    /// quiet. The phone reads their keys when a snapshot names a revision
+    /// it does not have, also after a failed read, and gives the open chat
+    /// the keys. A Mac without the capability gets no read, and no turn
+    /// folds.
+    func testTheCoordinatorChatReadsTheQuietTurnsWhenTheirRevisionChanges() async throws {
+        let runtime = LiveRuntimeSpy()
+        let first = RemoteCoordinatorQuietDigests(keys: ["key-1"])
+        let second = RemoteCoordinatorQuietDigests(keys: ["key-1", "key-2"])
+        await runtime.scriptQuietDigests([.success(first), .failure(.network(reason: .timedOut)), .success(second)])
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        await subject.updateDeviceScopes([.read])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks]
+        ))
+        func announce(_ revision: String?) {
+            var list = snapshot(titles: ["Alpha"])
+            let alpha = list.conversations[0]
+            list.workspaces = [RemoteWorkspaceSummary(
+                id: try! XCTUnwrap(alpha.placement.workspaceID), title: "Coordinator", panels: [],
+                isCoordinator: true, coordinatorConversationID: alpha.conversationID,
+                coordinatorQuietDigestsRevision: revision
+            )]
+            list.tasks = RemoteTaskBoard(doneCount: 0)
+            subject.consumeSessionsState(SessionsRuntime.State(connectionGeneration: 7, snapshot: list, phase: .live))
+        }
+        func waitForKeys(_ keys: Set<String>?, of controller: LiveConversationController) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while controller.quietDigestKeys != keys, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertEqual(controller.quietDigestKeys, keys)
+        }
+        announce(first.revision)
+        let coordinatorID = try XCTUnwrap(home.snapshot.coordinatorConversation?.id)
+        await subject.openConversation(coordinatorID)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+
+        // A Mac without the capability: no read, and nothing folds.
+        try await Task.sleep(for: .milliseconds(100))
+        let readsByAnOlderMac = await runtime.quietDigestReadCount()
+        XCTAssertEqual(readsByAnOlderMac, 0)
+        XCTAssertNil(controller.quietDigestKeys)
+
+        // The capability comes with a connection state: one read.
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks, .coordinatorQuietDigests]
+        ))
+        try await waitForKeys(Set(first.keys), of: controller)
+        // The same revision again reads nothing.
+        announce(first.revision)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsForTheFirstRevision = await runtime.quietDigestReadCount()
+        XCTAssertEqual(readsForTheFirstRevision, 1)
+
+        // A mark comes: a new revision. The read fails, and the chat keeps
+        // the keys it has. The next snapshot tries again.
+        announce(second.revision)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsAfterTheFailure = await runtime.quietDigestReadCount()
+        XCTAssertEqual(readsAfterTheFailure, 2)
+        XCTAssertEqual(controller.quietDigestKeys, Set(first.keys))
+        announce(second.revision)
+        try await waitForKeys(Set(second.keys), of: controller)
+
+        // The Mac stops sharing them: nothing folds.
+        announce(nil)
+        XCTAssertNil(controller.quietDigestKeys)
+        subject.stopObserving()
+    }
+
     func testSessionStartTreatsEveryUnansweredRequestAsUnconfirmed() async {
         let runtime = LiveRuntimeSpy()
         let conversationID = RemoteConversationID()
@@ -1231,6 +1307,22 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     func scriptTaskActions(_ scripts: [Result<RemoteTaskActionResponse?, GatewayFailure>]) {
         taskActionScripts = scripts
     }
+
+    private var quietDigestAnswers: [Result<RemoteCoordinatorQuietDigests, GatewayFailure>] = []
+    private var quietDigestReads = 0
+
+    /// What each read of the quiet digests answers, in turn.
+    func scriptQuietDigests(_ answers: [Result<RemoteCoordinatorQuietDigests, GatewayFailure>]) {
+        quietDigestAnswers = answers
+    }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        quietDigestReads += 1
+        guard quietDigestAnswers.isEmpty == false else { throw GatewayFailure.invalidResponse }
+        return try quietDigestAnswers.removeFirst().get()
+    }
+
+    func quietDigestReadCount() -> Int { quietDigestReads }
 
     func taskAction(
         _ request: RemoteTaskActionRequest

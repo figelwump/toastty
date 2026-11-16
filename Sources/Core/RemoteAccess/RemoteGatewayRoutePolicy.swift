@@ -38,6 +38,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case coordinatorSend
     case coordinatorSendWithAttachments
     case coordinatorChatRead
+    case coordinatorQuietDigests
 
     var path: String {
         switch self {
@@ -75,6 +76,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .coordinatorSend: RemoteCoordinatorSendPolicy.sendPath
         case .coordinatorSendWithAttachments: RemoteCoordinatorSendPolicy.sendWithAttachmentsPath
         case .coordinatorChatRead: RemoteCoordinatorChatReadPolicy.readPath
+        case .coordinatorQuietDigests: RemoteCoordinatorQuietDigestsPolicy.path
         }
     }
 }
@@ -169,6 +171,9 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // as new, as a read acknowledgement does, so it needs the read scope
         // that showing the chat needs.
         .coordinatorChatRead: .init(route: .coordinatorChatRead, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        // Which wake turns are quiet changes only how the coordinator's chat
+        // folds, so it needs the read scope that showing the chat needs.
+        .coordinatorQuietDigests: .init(route: .coordinatorQuietDigests, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

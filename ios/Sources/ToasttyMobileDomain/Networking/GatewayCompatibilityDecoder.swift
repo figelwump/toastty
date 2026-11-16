@@ -262,7 +262,10 @@ public struct GatewayCompatibilityDecoder: Sendable {
                 (try? read.requiredDate("timestamp")).map {
                     RemoteCoordinatorChatReadPoint(eventID: read.lossyString("eventID"), timestamp: $0)
                 }
-            })
+            },
+            // Absent from an older Mac, whose quiet wake turns then show
+            // open, as before.
+            coordinatorQuietDigestsRevision: object.lossyString("coordinatorQuietDigestsRevision"))
     }
 
     /// Annotations are display-only, so a malformed chip is dropped rather

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The first line that Toastty writes on a message it types into the
@@ -30,6 +31,18 @@ public enum CoordinatorMessageHeader {
     /// The first words of a digest. The Mac's `CoordinatorWakeState`
     /// writes it, and a chat folds the message it starts.
     public static let digestPrefix = "[Toastty] Wake"
+
+    /// Names a digest by its text: the SHA-256 of the text without leading
+    /// and trailing white space, in hex. The agent's transcript keeps the
+    /// text Toastty typed, so the key survives a relaunch, which forgets
+    /// which message Toastty sent. Every digest names the time of each
+    /// change it lists, so two digests do not share a text. A paired device
+    /// gets the same text from the Mac's conversation reader, so it finds
+    /// the same key (`RemoteCoordinatorQuietDigests`).
+    public static func digestKey(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SHA256.hash(data: Data(trimmed.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
     public static let senderPrefix = "[Toastty] From "
     public static let quickEntryPrefix = "[Toastty] Quick entry"
     public static let replyPrefix = "[Toastty] Reply from the user"

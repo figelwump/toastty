@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 
 /// What waits for the coordinator and how it reads: one line for each task,
@@ -646,7 +647,7 @@ struct CoordinatorWakeStateTests {
         Read `toastty task list` for details.
         """)
         // A new text, so a quiet mark of one turn does not fold the other.
-        #expect(CoordinatorWakeState.digestKey(again) != CoordinatorWakeState.digestKey(digest))
+        #expect(CoordinatorMessageHeader.digestKey(again) != CoordinatorMessageHeader.digestKey(digest))
 
         // Typed: told, and nothing waits or holds any more.
         wake.markDelivered(again, at: at(660))

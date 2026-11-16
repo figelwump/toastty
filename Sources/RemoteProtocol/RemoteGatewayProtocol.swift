@@ -88,6 +88,13 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// `RemoteCoordinatorChatReadRequest`. Only a Mac with the coordinator
     /// advertises it.
     case coordinatorChatRead = "coordinator_chat_read"
+    /// The Mac shares which wake turns the coordinator marked quiet, so a
+    /// device's chat folds them as the Mac's does. The coordinator's
+    /// workspace carries `coordinatorQuietDigestsRevision`, and a native
+    /// client reads the digests' keys from
+    /// `RemoteCoordinatorQuietDigestsPolicy.path` when it changes. Only a Mac
+    /// with the coordinator advertises it.
+    case coordinatorQuietDigests = "coordinator_quiet_digests"
 }
 
 /// Public compatibility probe used before a client has credentials.
