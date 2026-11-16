@@ -854,6 +854,19 @@ while you work in the other tabs.
   time and opening of the coordinator's message it answers; a tap shows that
   message. The files stay on the Mac, so the phone shows their names, not
   thumbnails. Other sessions' chats show every message as it was typed.
+- **Copy and Reply.** As in the Mac's coordinator chat, Copy is under your
+  messages and the coordinator's, and Reply is under the coordinator's. A
+  phone has no pointer, so both always show. Copy shows a check mark for a
+  moment. A long message has them once, under its end, and Copy takes the
+  whole message. Reply shows the message it answers above the field, with
+  ✕ to remove it, and the field takes the keyboard; a second Reply replaces
+  the first. Send sends a reply in the Mac's format (see "Reply" in
+  [The coordinator's chat](tasks.md#the-coordinators-chat)), with your
+  files, and steers or queues as any message does. The bubble shows your
+  text under the quote, on the phone and on the Mac, also while it waits.
+  **Edit** on a waiting reply brings it back as a reply. A message that
+  starts with Toastty's line for another sender cannot become a reply.
+  Digests, sender cards and other sessions' chats have neither button.
 - **The New line.** A red-orange **New** line marks the first message from
   the coordinator that you have not read, on the Mac or on the phone, and the
   chat opens at it. While you scroll up, **Jump to latest** reads "N new". It
@@ -875,9 +888,8 @@ while you work in the other tabs.
   coordinator's waiting messages too.
 - **Not on the phone yet.** The coordinator's own queue (the Mac chat's
   Queued and Paused rows with Edit, Remove, Steer now and Send next), quiet
-  turns folded under their digest, thumbnails of attached images, Reply on
-  the coordinator's messages, and `@` mentions in the composer stay on the
-  Mac.
+  turns folded under their digest, thumbnails of attached images, and `@`
+  mentions in the composer stay on the Mac.
 - **The tab's icon is Toasty's outline.** While another tab shows, its badge
   says what the coordinator waits for, from its session's status, as the
   Mac's coordinator row marks it: **New** for output you have not read, **!**

@@ -58,8 +58,17 @@ struct ToasttyConversationScreen: View {
     let openTaskSpace: (UUID) -> Void
     /// The coordinator's chat as the Coordinator tab's own screen: its
     /// title shows Toasty, and the tab bar stays, because Back has nowhere
-    /// to go.
+    /// to go. Its messages have Copy, and the coordinator's have Reply, as
+    /// in the Mac's coordinator chat.
     let isCoordinatorRoot: Bool
+    /// The coordinator's message that the draft answers.
+    let reply: CoordinatorReplyTarget?
+    /// Why the last Reply or Edit could not make a reply.
+    let replyNotice: String?
+    /// Reply on a coordinator's message. False when the draft cannot
+    /// become a reply; `replyNotice` then says why.
+    let replyToMessage: (CoordinatorReplyTarget) -> Bool
+    let cancelReply: () -> Void
     /// The coordinator chat's New line, from the read point the Mac shares.
     let newMessages: ToasttyNewMessagesMarker?
 
@@ -97,6 +106,10 @@ struct ToasttyConversationScreen: View {
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
         openTaskSpace: @escaping (UUID) -> Void = { _ in },
         isCoordinatorRoot: Bool = false,
+        reply: CoordinatorReplyTarget? = nil,
+        replyNotice: String? = nil,
+        replyToMessage: @escaping (CoordinatorReplyTarget) -> Bool = { _ in false },
+        cancelReply: @escaping () -> Void = {},
         newMessages: ToasttyNewMessagesMarker? = nil
     ) {
         self.conversationID = conversationID
@@ -129,8 +142,16 @@ struct ToasttyConversationScreen: View {
         self.onVisibleLiveEdge = onVisibleLiveEdge
         self.openTaskSpace = openTaskSpace
         self.isCoordinatorRoot = isCoordinatorRoot
+        self.reply = reply
+        self.replyNotice = replyNotice
+        self.replyToMessage = replyToMessage
+        self.cancelReply = cancelReply
         self.newMessages = newMessages
     }
+
+    /// The coordinator's chat has Copy under each message, always shown on
+    /// a phone, as the Mac's coordinator chat has it under the pointer.
+    static let coordinatorTranscriptOptions = ToasttyTranscriptOptions(showsMessageCopyButton: true)
 
     var body: some View {
         let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard)
@@ -158,6 +179,11 @@ struct ToasttyConversationScreen: View {
                     onVisibleLiveEdge: {
                         onVisibleLiveEdge(conversation.state)
                     },
+                    options: isCoordinatorRoot ? Self.coordinatorTranscriptOptions : ToasttyTranscriptOptions(),
+                    replyToMessage: isCoordinatorRoot ? { request in
+                        // The field takes the keyboard, as on the Mac.
+                        if replyToMessage(CoordinatorReplyTarget(request)) { isComposerFocused = true }
+                    } : nil,
                     newMessages: newMessages
                 )
                 .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -499,6 +525,16 @@ struct ToasttyConversationScreen: View {
                 tabTitle: conversation.workspaceTabTitle,
                 isLastReported: controller.freshness != .live
             )
+            if let reply {
+                ToasttyComposerReplyBar(reply: reply, canCancel: !isSubmitting, cancel: cancelReply)
+            }
+            if let replyNotice {
+                Label(replyNotice, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(ToasttyDesignTokens.amberText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("toastty-mobile-composer-reply-notice")
+            }
             if ToasttyAttachmentTray.isVisible(
                 attachments: attachments,
                 supportsAttachments: supportsAttachments,
@@ -988,5 +1024,63 @@ struct ToasttyComposerFocusLifecyclePolicy: Equatable {
         @unknown default:
             return currentFocus
         }
+    }
+}
+
+/// The coordinator's message that the draft answers, above the field, as
+/// the Mac's reply bar shows it: who and when, the start of the message on
+/// two lines, and ✕. The text follows the phone's text size, and ✕ is a
+/// finger's size.
+private struct ToasttyComposerReplyBar: View {
+    let reply: CoordinatorReplyTarget
+    let canCancel: Bool
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label {
+                    Text(reply.time.map { "Replying to the coordinator · \($0)" } ?? "Replying to the coordinator")
+                } icon: {
+                    Image(systemName: "arrowshape.turn.up.left")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .lineLimit(1)
+                Text(ToasttyMessageQuote.excerpt(of: reply.text))
+                    .font(.caption)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .accessibilityIdentifier("toastty-mobile-composer-reply-excerpt")
+            }
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: cancel) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(canCancel == false)
+            .accessibilityLabel("Remove reply")
+            .accessibilityHint("Sends the message as a new message")
+            .accessibilityIdentifier("toastty-mobile-composer-reply-cancel")
+        }
+        .padding(.leading, 12)
+        .background(
+            ToasttyDesignTokens.amber.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius, style: .continuous)
+        )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(ToasttyDesignTokens.amber)
+                .frame(width: 3)
+                .padding(.vertical, 4)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("toastty-mobile-composer-reply")
     }
 }

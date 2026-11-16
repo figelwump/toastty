@@ -84,8 +84,10 @@ final class CoordinatorChatModel: ObservableObject {
     /// The files attached to the composer's message, kept here with the
     /// text. Their changes are the model's changes.
     let attachmentDraft: DraftAttachments
-    /// Takes files dropped on the chat or on the composer's field.
-    let attachmentDropTarget: AttachmentDropTarget
+    /// Take files dropped on each view's chat or composer's field. A drop
+    /// gives that view's field the keyboard.
+    private let panelDropTarget: AttachmentDropTarget
+    private let dockDropTarget: AttachmentDropTarget
     /// A message with files is being sent: Toastty copies its files into
     /// the coordinator's folder. The composer waits until it is done.
     @Published private(set) var isSendingFiles = false
@@ -131,6 +133,8 @@ final class CoordinatorChatModel: ObservableObject {
     /// Whether Toastty is the active app: a chat on screen behind another
     /// app is not read.
     private let isAppActive: () -> Bool
+    /// Makes Toastty the active app.
+    private let activateApp: () -> Void
     /// The user left the chat, or has not read it yet in this run: the next
     /// read of the rows places the new messages' line again.
     private var placesNewMessagesLine = true
@@ -175,6 +179,9 @@ final class CoordinatorChatModel: ObservableObject {
         defaults: UserDefaults? = nil,
         now: @escaping () -> Date = Date.init,
         isAppActive: @escaping () -> Bool = { NSApplication.shared.isActive },
+        // A drop from another app is the user's move into Toastty, as a
+        // file dropped on a terminal is.
+        activateApp: @escaping () -> Void = { NSApp.activate(ignoringOtherApps: true) },
         attachmentStagingURL: URL = FileManager.default.temporaryDirectory
             .appending(path: "toastty-coordinator-composer/\(UUID().uuidString)", directoryHint: .isDirectory)
     ) {
@@ -183,16 +190,20 @@ final class CoordinatorChatModel: ObservableObject {
         self.defaults = defaults
         self.now = now
         self.isAppActive = isAppActive
+        self.activateApp = activateApp
         textScale = (defaults?.object(forKey: Self.textScaleDefaultsKey) as? Double)
             .map(Self.normalizedTextScale) ?? Self.defaultTextScale
         let attachmentDraft = DraftAttachments(stagingDirectoryURL: attachmentStagingURL)
         self.attachmentDraft = attachmentDraft
-        attachmentDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
+        panelDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
+        dockDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
         attachmentDraft.isEditable = { [weak self] in self?.isSendingFiles == false }
         attachmentDraft.onError = { [weak self] message in
             self?.transientNotice = .failure(message)
             self?.publishMetadata()
         }
+        panelDropTarget.onDrop = { [weak self] in self?.takeKeyboardAfterDrop(host: .panel) }
+        dockDropTarget.onDrop = { [weak self] in self?.takeKeyboardAfterDrop(host: .dock) }
         attachmentDraft.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -497,7 +508,7 @@ final class CoordinatorChatModel: ObservableObject {
                 sentCaption: pending.steered
                     ? ToasttyUserMessageCaption.text(origin: .local, deliveryMode: .steer)
                     : nil,
-                quote: Self.quote(of: pending.text),
+                quote: CoordinatorChatTranscript.quote(of: pending.text),
                 attachments: parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
             )
         }
@@ -515,26 +526,28 @@ final class CoordinatorChatModel: ObservableObject {
                     isPaused: true,
                     canSteer: turnTakesSteer && entry.canBeSteered
                 )),
-                quote: Self.quote(of: entry.text)
+                quote: CoordinatorChatTranscript.quote(of: entry.text)
             ))
         }
         // A phone's queue is in the conversation. Its messages go first:
         // Toastty types them as the prompt opens, before the controller
-        // looks. The chat cannot change them.
+        // looks. The chat cannot change them. A phone's reply shows with
+        // its quote, as the Mac's own does.
         var position = 0
         let control = summary?.inputControl
         for message in control?.queuedMessages ?? [] {
             position += 1
             items.append(ToasttySendPresentationItem(
                 clientRequestID: message.clientRequestID,
-                text: message.text,
+                text: CoordinatorMessageHeader.displayText(of: message.text),
                 content: .queued(ToasttyQueuedSendPresentation(
                     position: position,
                     attachmentCount: message.attachmentCount,
                     isPaused: control?.isQueuePaused ?? false,
                     canSteer: false,
                     canChange: false
-                ))
+                )),
+                quote: CoordinatorChatTranscript.quote(of: message.text)
             ))
         }
         if control?.isQueuePaused == true { position = 0 }
@@ -550,17 +563,10 @@ final class CoordinatorChatModel: ObservableObject {
                     canSteer: turnTakesSteer && entry.canBeSteered,
                     waitingCaption: Self.waitingCaption(position: position, hold: controller.hold)
                 )),
-                quote: Self.quote(of: entry.text)
+                quote: CoordinatorChatTranscript.quote(of: entry.text)
             ))
         }
         return items
-    }
-
-    /// The quote that a reply's bubble shows, from the text as Toastty
-    /// types it. A waiting message's quote does not open its message.
-    static func quote(of text: String) -> ToasttyMessageQuote? {
-        guard case .reply(let quote, let time, _, _) = CoordinatorMessageHeader.kind(of: text) else { return nil }
-        return ToasttyMessageQuote(text: quote, timeText: time)
     }
 
     /// The files that a waiting message names, as Toastty wrote them.
@@ -833,32 +839,17 @@ final class CoordinatorChatModel: ObservableObject {
         guard isSendingFiles == false else { return }
         // The field holds another sender's message, taken back with Edit.
         // As a reply it would read as the user's.
-        guard Self.hasOtherHeader(draft) == false else {
+        guard CoordinatorMessageHeader.hasOtherHeader(draft) == false else {
             transientNotice = .failure(Self.otherHeaderReplyRefusal)
             return
         }
-        replyTarget = CoordinatorReplyTarget(
-            text: request.text,
-            // As the reply's first line writes it, so a waiting reply that
-            // comes back with Edit is the same reply.
-            time: CoordinatorMessageHeader.replyTime(request.timestamp.formatted(date: .omitted, time: .shortened))
-        )
+        replyTarget = CoordinatorReplyTarget(request)
         requestComposerFocus()
     }
 
     static let otherHeaderReplyRefusal =
         "The message you are writing starts with Toastty's line for another sender, so it cannot be a reply. "
             + "Send or clear it first."
-
-    /// The text starts with Toastty's line for a digest, another sender or
-    /// the quick entry panel. A reply puts its own line first, which would
-    /// change whose message it is.
-    static func hasOtherHeader(_ text: String) -> Bool {
-        switch CoordinatorMessageHeader.kind(of: text) {
-        case .digest, .fromSender, .quickEntry: true
-        case .reply, .plain: false
-        }
-    }
 
     /// The composer's message answers no message anymore.
     func cancelReply() {
@@ -907,7 +898,7 @@ final class CoordinatorChatModel: ObservableObject {
                 )
                 break
             }
-            if replyTarget != nil, Self.hasOtherHeader(entry.text) {
+            if replyTarget != nil, CoordinatorMessageHeader.hasOtherHeader(entry.text) {
                 transientNotice = .failure(
                     "This message starts with Toastty's line for another sender, and the message you are writing "
                         + "is a reply. Remove the reply first."
@@ -966,6 +957,30 @@ final class CoordinatorChatModel: ObservableObject {
         } else {
             focusOnShow = host
         }
+    }
+
+    /// Takes files dropped on the chat or on the composer's field of the
+    /// view at `host`.
+    func attachmentDropTarget(host: Host) -> AttachmentDropTarget {
+        switch host {
+        case .panel: panelDropTarget
+        case .dock: dockDropTarget
+        }
+    }
+
+    /// Files were dropped on the view at `host`, perhaps from another app:
+    /// Toastty becomes the active app, the view's window comes to the
+    /// front, and the view's field takes the keyboard, so that the user can
+    /// type the message that goes with the files.
+    func takeKeyboardAfterDrop(host: Host) {
+        if host == .panel {
+            // Another panel in the coordinator's workspace, such as
+            // policy.md's, can have the focus.
+            controller?.focusPanelForDrop()
+        }
+        composerTextViews[host]?.view?.window?.makeKeyAndOrderFront(nil)
+        activateApp()
+        requestComposerFocus(host: host)
     }
 
     /// A waiting message's text without its list of files, and the files,

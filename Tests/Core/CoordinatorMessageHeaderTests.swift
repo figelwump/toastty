@@ -323,6 +323,34 @@ struct CoordinatorMessageHeaderTests {
         #expect(CoordinatorMessageHeader.replyParts(of: message)?.body.hasPrefix("This one.") == true)
     }
 
+    /// A phone sends its reply without files, and the Mac adds the paths of
+    /// the files it stored as it does for any message. That must give the
+    /// Mac's own reply, also for files without text, so the coordinator and
+    /// both chats read one format.
+    @Test(arguments: ["This one.", ""])
+    func aReplysFilesFollowItAsTheyFollowAnyMessage(text: String) {
+        let paths = ["/tmp/remote/A/shot.png", "/tmp/remote/A/notes.txt"]
+        let reply = CoordinatorReplyTarget(text: "Which screenshot?", time: "14:05")
+        let fromPhone = RemoteAttachmentDeliveryText.text(reply.message(text: text), paths: paths)
+        #expect(fromPhone == reply.message(text: text, attachmentPaths: paths))
+        #expect(CoordinatorMessageHeader.kind(of: fromPhone)
+            == .reply(quote: "Which screenshot?", time: "14:05", text: text, fileNames: ["shot.png", "notes.txt"]))
+        #expect(CoordinatorMessageHeader.displayParts(of: fromPhone).attachmentPaths == paths)
+    }
+
+    /// Only text that starts with Toastty's line for a digest, another
+    /// sender or quick entry cannot become a reply.
+    @Test func onlyAnotherSendersLineKeepsTextFromBecomingAReply() {
+        #expect(CoordinatorMessageHeader.hasOtherHeader(CoordinatorMessageHeader.message(from: .unknown, text: "Hi")))
+        #expect(CoordinatorMessageHeader.hasOtherHeader(
+            CoordinatorMessageHeader.quickEntryMessage(.init(), text: "Add a CSV export")
+        ))
+        #expect(CoordinatorMessageHeader.hasOtherHeader("Merge it.") == false)
+        #expect(CoordinatorMessageHeader.hasOtherHeader(
+            CoordinatorMessageHeader.replyMessage(quote: "Merge?", time: nil, text: "Yes.")
+        ) == false)
+    }
+
     /// The text is typed into a terminal: the quote keeps no control
     /// character but a tab, and a CR line end becomes a plain one.
     @Test func aReplyQuoteKeepsNoControlCharacters() {

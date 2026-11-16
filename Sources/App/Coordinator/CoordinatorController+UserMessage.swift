@@ -2,20 +2,6 @@ import CoreState
 import Foundation
 import RemoteProtocol
 
-/// The coordinator's message that the user's message answers.
-struct CoordinatorReplyTarget: Equatable {
-    /// The whole message.
-    var text: String
-    /// When the coordinator wrote it, as the chat shows a time: "14:05".
-    var time: String?
-
-    /// The text to type: Toastty's first line, this message as a quote,
-    /// then the user's text and the paths of the attached files.
-    func message(text userText: String, attachmentPaths: [String] = []) -> String {
-        CoordinatorMessageHeader.replyMessage(quote: text, time: time, text: userText, attachmentPaths: attachmentPaths)
-    }
-}
-
 /// The user's message for the coordinator, from the chat's composer or from
 /// the quick entry panel, with the files attached to it.
 struct CoordinatorUserMessage: Equatable {

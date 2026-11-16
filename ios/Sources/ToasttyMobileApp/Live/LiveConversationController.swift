@@ -270,6 +270,12 @@ final class LiveConversationController {
         return response.result == .updated
     }
 
+    /// A message that waits in the Mac's queue, as this phone sent it. Its
+    /// bubble can show other text, such as a reply without its quote.
+    func queuedMessageText(_ clientRequestID: String) -> String? {
+        inputControl?.queuedMessages.first { $0.clientRequestID == clientRequestID }?.text
+    }
+
     func resumeQueue() async {
         let request = RemoteConversationQueueUpdateRequest(
             conversationID: RemoteConversationID(rawValue: conversationID),
@@ -665,7 +671,8 @@ final class LiveConversationController {
             transcriptPresentation = transcriptPresentation.updatingMetadata(
                 sendItems: ToasttySendPresentationAdapter.makeItems(
                     from: sendReconciliationForPresentation,
-                    inputControl: inputControl
+                    inputControl: inputControl,
+                    readsCoordinatorMessages: isCoordinatorChat
                 ),
                 phase: transcriptPhase,
                 revision: transcriptRevision,
@@ -686,7 +693,8 @@ final class LiveConversationController {
             historyTruncated: historyTruncated,
             sendItems: ToasttySendPresentationAdapter.makeItems(
                 from: sendReconciliationForPresentation,
-                inputControl: inputControl
+                inputControl: inputControl,
+                readsCoordinatorMessages: isCoordinatorChat
             ),
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,

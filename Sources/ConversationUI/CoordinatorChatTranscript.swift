@@ -249,6 +249,14 @@ public enum CoordinatorChatTranscript {
         )
     }
 
+    /// The quote that a reply's bubble shows while the message waits or
+    /// sends, from the text as Toastty types it. It does not open its
+    /// message: the chat's rows may not hold it.
+    public static func quote(of text: String) -> ToasttyMessageQuote? {
+        guard case .reply(let quote, let time, _, _) = CoordinatorMessageHeader.kind(of: text) else { return nil }
+        return ToasttyMessageQuote(text: quote, timeText: time)
+    }
+
     static func userMessage(
         _ payload: ConversationUserMessagePayload,
         at timestamp: Date,

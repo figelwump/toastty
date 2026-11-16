@@ -597,6 +597,14 @@ final class CoordinatorController: ObservableObject {
         }
     }
 
+    /// Files were dropped on the full view's chat: its window and workspace
+    /// are selected, and the coordinator's panel takes the focus, as a
+    /// terminal does for a file dropped on it.
+    func focusPanelForDrop() {
+        guard let location, let panelID = location.panelID else { return }
+        _ = store.focusDroppedFilePanel(windowID: location.windowID, workspaceID: location.workspaceID, panelID: panelID)
+    }
+
     /// Opens the coordinator's workspace, where the chat shows in full.
     /// `showingTerminal` shows its terminal in place of the chat, for an
     /// answer that only the terminal takes.

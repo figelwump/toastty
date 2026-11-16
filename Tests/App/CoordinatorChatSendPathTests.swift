@@ -845,7 +845,7 @@ struct CoordinatorChatSendPathTests {
         #expect(draft.pasteAttachments(from: image))
         let drop = QuickEntryTests.pasteboard()
         drop.writeObjects([notes as NSURL])
-        #expect(fixture.chat.attachmentDropTarget.performDrop(drop))
+        #expect(fixture.chat.attachmentDropTarget(host: .panel).performDrop(drop))
         fixture.chat.draft = "What is wrong here?"
         // A file still being copied holds the message back.
         #expect(fixture.chat.canSend == false)
@@ -987,6 +987,39 @@ struct CoordinatorChatSendPathTests {
         try fixture.runTurn(2, userText: "From the phone")
         try await fixture.waitUntil("the Mac's message") { fixture.delivered.texts.count == 2 }
         #expect(fixture.delivered.texts == ["From the phone", "From the Mac"])
+    }
+
+    /// A phone's reply is the Mac's reply text. While it waits in the
+    /// phone's queue, the Mac's chat shows it as the Mac's own waiting reply:
+    /// the user's text under its quote. Toastty types it as it came.
+    @MainActor
+    @Test func aPhonesWaitingReplyShowsItsQuoteAndIsTypedAsItCame() async throws {
+        let fixture = try CoordinatorChatFixture(pairsNativeDevice: true)
+        defer { fixture.tearDown() }
+        fixture.conversations.enableGateway()
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        let turnEpoch = try await fixture.waitFor("the running turn") {
+            fixture.chat.summary?.inputControl?.turnEpoch
+        }
+        let conversationID = try #require(fixture.chat.summary?.conversationID)
+
+        let reply = CoordinatorReplyTarget(text: "Merge it now?\n\nIts checks passed.", time: "14:05")
+            .message(text: "Not yet.")
+        let fromPhone = try fixture.conversations.gatewaySend(RemoteMessageSendRequest(
+            conversationID: conversationID, clientRequestID: "phone-reply",
+            expectedInputEpoch: turnEpoch, text: reply, deliveryMode: .queue
+        ), credential: fixture.conversations.nativeCredential)
+        #expect(fromPhone.result == .queued(position: 1))
+        let waiting = try await fixture.waitFor("the chat to list the phone's reply") {
+            fixture.chat.presentation.sendItems.first(where: \.isQueued)
+        }
+        #expect(waiting.text == "Not yet.")
+        #expect(waiting.quote == ToasttyMessageQuote(text: "Merge it now?\n\nIts checks passed.", timeText: "14:05"))
+
+        try fixture.endTurn(1)
+        try await fixture.waitUntil("the phone's reply") { fixture.delivered.texts.count == 1 }
+        #expect(fixture.delivered.texts == [reply])
     }
 
     // MARK: - Quiet wake turns
@@ -1423,6 +1456,8 @@ final class CoordinatorChatFixture {
         /// Whether Toastty is the active app, as the chat sees it. A test
         /// host is not always the active app.
         var appIsActive = true
+        /// How many times the chat made Toastty the active app.
+        var activations = 0
     }
 
     /// Where the chat saves what it keeps over a relaunch, or `nil` to keep
@@ -1500,7 +1535,8 @@ final class CoordinatorChatFixture {
             access: conversations.service,
             defaults: defaults,
             now: { clock.now },
-            isAppActive: { clock.appIsActive }
+            isAppActive: { clock.appIsActive },
+            activateApp: { clock.activations += 1 }
         )
         controller.chat = chat
         return (controller, chat)

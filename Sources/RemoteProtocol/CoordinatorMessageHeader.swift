@@ -150,11 +150,28 @@ public enum CoordinatorMessageHeader {
     /// messages: Toastty's first line, the whole message as a Markdown
     /// quote, then the user's text and the paths of the attached files.
     /// `time` is when the coordinator wrote the message, such as "14:05".
+    ///
+    /// The files follow the reply as they follow any message
+    /// (`RemoteAttachmentDeliveryText`). So a phone sends the reply without
+    /// files as its text, the Mac adds the paths of the files it stored,
+    /// and the result is the same text as the Mac's own reply.
     public static func replyMessage(quote: String, time: String?, text: String, attachmentPaths: [String] = []) -> String {
         let lines = quoteLines(quote)
         let quoted = lines.map { $0.isEmpty ? ">" : "> " + $0 }.joined(separator: "\n")
-        let delivered = RemoteAttachmentDeliveryText.text(text, paths: attachmentPaths)
-        return replyLine(quoteLineCount: lines.count, time: time) + "\n" + quoted + "\n" + delivered
+        let reply = [replyLine(quoteLineCount: lines.count, time: time), quoted, text]
+            .filter { $0.isEmpty == false }
+            .joined(separator: "\n")
+        return RemoteAttachmentDeliveryText.text(reply, paths: attachmentPaths)
+    }
+
+    /// The text starts with Toastty's line for a digest, another sender or
+    /// the quick entry panel. A reply puts its own line first, which would
+    /// change whose message it is, so such text cannot become a reply.
+    public static func hasOtherHeader(_ text: String) -> Bool {
+        switch kind(of: text) {
+        case .digest, .fromSender, .quickEntry: true
+        case .reply, .plain: false
+        }
     }
 
     /// The quoted message's lines, as a reply quotes them. Control
@@ -426,5 +443,25 @@ public enum CoordinatorMessageHeader {
             }
         }
         return String(scalars).split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+    }
+}
+
+/// The coordinator's message that the user's message answers, on the Mac
+/// and on a phone.
+public struct CoordinatorReplyTarget: Hashable, Sendable {
+    /// The whole message.
+    public var text: String
+    /// When the coordinator wrote it, as the chat shows a time: "14:05".
+    public var time: String?
+
+    public init(text: String, time: String?) {
+        self.text = text
+        self.time = time
+    }
+
+    /// The text to type: Toastty's first line, this message as a quote,
+    /// then the user's text and the paths of the attached files.
+    public func message(text userText: String, attachmentPaths: [String] = []) -> String {
+        CoordinatorMessageHeader.replyMessage(quote: text, time: time, text: userText, attachmentPaths: attachmentPaths)
     }
 }

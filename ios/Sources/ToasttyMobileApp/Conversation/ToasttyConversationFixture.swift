@@ -567,12 +567,16 @@ enum ToasttyConversationFixture {
     /// `coordinator send` brought, a reply to the coordinator, and a quick
     /// entry message with its choices and a file. They show as the Mac's
     /// coordinator chat shows them.
+    /// `hasLongMessage` ends the chat with a coordinator message long
+    /// enough that the transcript draws it as several rows.
     static func coordinatorPresentation(
         for conversationID: UUID,
-        sendItems: [ToasttySendPresentationItem] = []
+        sendItems: [ToasttySendPresentationItem] = [],
+        hasLongMessage: Bool = false
     ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationAdapter.makeState(
-            events: coordinatorEvents(for: conversationID).map(CompatibleConversationEvent.known),
+            events: coordinatorEvents(for: conversationID, hasLongMessage: hasLongMessage)
+                .map(CompatibleConversationEvent.known),
             projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
             projectionGeneration: projectionGeneration,
             phase: .live,
@@ -583,7 +587,12 @@ enum ToasttyConversationFixture {
         )
     }
 
-    static func coordinatorEvents(for conversationID: UUID) -> [ConversationEvent] {
+    /// The opening and the last line of the long message that
+    /// `hasLongMessage` adds.
+    static let coordinatorLongMessageOpening = "Here is the week, task by task."
+    static let coordinatorLongMessageEnding = "That is everything that moved this week."
+
+    static func coordinatorEvents(for conversationID: UUID, hasLongMessage: Bool = false) -> [ConversationEvent] {
         // Event `n` is `n - 1` times two minutes after the first.
         func time(_ sequence: Int) -> Date {
             Date(timeIntervalSince1970: 1_786_406_400).addingTimeInterval(TimeInterval((sequence - 1) * 2 * 60))
@@ -616,7 +625,12 @@ enum ToasttyConversationFixture {
             text: "Add a CSV export to the Tasks tab, like this mockup.",
             attachmentPaths: ["/Users/me/.toastty/coordinator/attachments/A1/csv-mockup.png"]
         )
-        let payloads: [ConversationEventPayload] = [
+        // Over the transcript's chunk threshold, so it draws as several rows.
+        let longMessage = ([coordinatorLongMessageOpening] + (1...20).map { index in
+            "Task \(index) moved from Running to Ready to review after its checks passed on the remote test Mac. "
+                + "Its agent wrote the report, opened the pull request and asked for a review, and nothing waits for you."
+        } + [coordinatorLongMessageEnding]).joined(separator: "\n\n")
+        var payloads: [ConversationEventPayload] = [
             .userMessage(.init(text: digest, origin: .remote)),
             .assistantMessage(.init(
                 text: "Two tasks moved. \(link("Compact session rows", ToasttyMobileFixture.reviewTaskID)) "
@@ -635,6 +649,10 @@ enum ToasttyConversationFixture {
             .userMessage(.init(text: quickEntry, origin: .remote)),
             .assistantMessage(.init(text: "I made a task for it in toastty, with Codex.", phase: .final)),
         ]
+        if hasLongMessage {
+            payloads.append(.userMessage(.init(text: "What moved this week?", origin: .remote)))
+            payloads.append(.assistantMessage(.init(text: longMessage, phase: .final)))
+        }
         return payloads.enumerated().map { index, payload in
             ConversationEvent(
                 conversationID: RemoteConversationID(rawValue: conversationID),
