@@ -354,8 +354,8 @@ struct ToasttyMobileRootView: View {
     }
 
     /// Home and Tasks tabs while the Mac sends a task board, and Coordinator
-    /// while it also has a coordinator; otherwise Home alone, with no tab
-    /// bar.
+    /// between them while it also has a coordinator; otherwise Home alone,
+    /// with no tab bar.
     @ViewBuilder
     private var tabContent: some View {
         if showsTasksTab {
@@ -365,16 +365,7 @@ struct ToasttyMobileRootView: View {
                 Tab("Home", systemImage: "house", value: ToasttyMobileTab.home) {
                     navigationStack(.home) { homeView }
                 }
-                Tab("Tasks", systemImage: "checklist", value: ToasttyMobileTab.tasks) {
-                    navigationStack(.tasks) {
-                        ToasttyTasksTabView(
-                            controller: sessionController.homeController,
-                            refresh: sessionController.refreshLiveSessions,
-                            openWorkspace: openWorkspace,
-                            scrollRequest: $tasksScrollRequest
-                        )
-                    }
-                }
+                // Second, between Home and Tasks, while the Mac has one.
                 if showsCoordinatorTab {
                     Tab(value: ToasttyMobileTab.coordinator) {
                         navigationStack(.coordinator) { coordinatorRoot }
@@ -389,6 +380,16 @@ struct ToasttyMobileRootView: View {
                         sessionController.homeController.snapshot.coordinatorMark,
                         isOnScreen: tabs.selected == .coordinator
                     ).map { Text($0) })
+                }
+                Tab("Tasks", systemImage: "checklist", value: ToasttyMobileTab.tasks) {
+                    navigationStack(.tasks) {
+                        ToasttyTasksTabView(
+                            controller: sessionController.homeController,
+                            refresh: sessionController.refreshLiveSessions,
+                            openWorkspace: openWorkspace,
+                            scrollRequest: $tasksScrollRequest
+                        )
+                    }
                 }
             }
         } else {
@@ -530,11 +531,22 @@ struct ToasttyMobileRootView: View {
         navigationPath.append(.workspace(workspaceID))
     }
 
-    /// Opens a workspace from a conversation. The conversation route always
-    /// sits on top of the stack, so the conversation closes and the
-    /// workspace takes its place, as a workspace link opens one.
-    private func openWorkspaceInPlaceOfConversation(_ workspaceID: UUID) {
-        sessionController.homeController.dismissConversation()
+    /// Opens a task space from a task chip in a conversation, by the rule a
+    /// task space row uses: a task space with one session and no task
+    /// spaces of its own opens that session, else the task space's screen.
+    /// The conversation route always sits on top of the stack, so either
+    /// takes the conversation's place, and Back goes to the screen under
+    /// it. On the Coordinator tab's own screen nothing is under the chat,
+    /// so the session or task space is pushed over it.
+    private func openTaskSpaceInPlaceOfConversation(_ workspaceID: UUID) {
+        let home = sessionController.homeController
+        if let row = home.snapshot.subspaceRow(id: workspaceID),
+           let session = ToasttySubspaceGroupPresentation.directConversation(for: row, in: home.snapshot) {
+            // The selection change puts the session in the conversation's
+            // place (`syncNavigationPath`).
+            if session.id == screenConversationID || home.openConversation(id: session.id) { return }
+        }
+        home.dismissConversation()
         var path = navigationPath.synchronized(with: nil)
         if path.last != .workspace(workspaceID) { path.append(.workspace(workspaceID)) }
         navigationPath = path
@@ -763,7 +775,7 @@ struct ToasttyMobileRootView: View {
             canAcknowledgeRead: liveConversation?.conversationID == conversationID
                 && liveConversation?.canAcknowledgeRead == true,
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID),
-            openTaskSpace: openWorkspaceInPlaceOfConversation,
+            openTaskSpace: openTaskSpaceInPlaceOfConversation,
             isCoordinatorRoot: isCoordinatorRoot
         )
         .id(conversationID)

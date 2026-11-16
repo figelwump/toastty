@@ -177,8 +177,9 @@ struct ToasttyConversationScreen: View {
         .environment(\.openURL, OpenURLAction { url in
             if CoordinatorTaskLink.isToasttyURL(url) {
                 // The text is an agent's: only a task chip opens anything. It
-                // opens the task's space, or the task's detail when the phone
-                // has no task space to open.
+                // opens the task's space as its row does (its one session, or
+                // its screen), or the task's detail when the phone has no
+                // task space to open.
                 guard let taskID = taskChips.taskID(for: url) else { return .discarded }
                 if let task = controller.snapshot.taskBoard?.task(id: taskID),
                    let taskSpaceID = controller.snapshot.openableTaskSpaceID(of: task) {
@@ -203,8 +204,10 @@ struct ToasttyConversationScreen: View {
         .toolbar(.visible, for: .navigationBar)
         // A session takes the whole screen, as a chat does. The tab bar
         // comes back on the list that Back returns to. The coordinator's
-        // chat is its tab's own screen, so it keeps the bar.
-        .toolbar(isCoordinatorRoot ? .visible : .hidden, for: .tabBar)
+        // chat is its tab's own screen, so it keeps the bar. It leaves the
+        // bar to the default rather than `.visible`, which would also show
+        // the bar over a session pushed onto the chat.
+        .toolbar(isCoordinatorRoot ? .automatic : .hidden, for: .tabBar)
         .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
