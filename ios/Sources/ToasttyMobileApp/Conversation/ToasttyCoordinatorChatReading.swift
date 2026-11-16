@@ -93,7 +93,9 @@ struct ToasttyCoordinatorChatReading: Equatable {
         isLoadingOlder: Bool,
         isReading: Bool
     ) -> Step {
-        if arrives {
+        // While the user does not read, each update places the line again,
+        // as on the Mac.
+        if arrives || isReading == false {
             arrives = false
             arrival = readPoint(in: rows)
             isPlacingLine = true
