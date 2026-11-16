@@ -33,7 +33,9 @@ checklist in the release pull request or handoff:
    while the app is open no banner shows.
 5. Release the Mac app: this skill, then `../toastty-publish/SKILL.md`.
 6. Publish the website change: merge its pull request into `main` after the
-   Mac release is live, then check toastty.dev.
+   Mac release is live, then check toastty.dev. For `0.10.0` that is the
+   website text change (#392) and the "Tasks and the Coordinator" section
+   stacked on it; retarget #392 to `main` after step 2.
 
 Before step 5 goes live, confirm that steps 3 and 4 are done for a release
 that changes the relay or the phone. Read the release checklist; ask the user

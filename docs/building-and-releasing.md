@@ -303,7 +303,13 @@ must find the parts it talks to already updated. Do the steps in this order:
    `scripts/release/publish-github-release.sh`. Only `--publish` changes the
    update feed, so existing users get the update at that point.
 6. **Publish the website change.** Merge its pull request into `main` after the
-   Mac release is live, then confirm on toastty.dev that the change shows.
+   Mac release is live, then confirm on toastty.dev that the change shows. For
+   `0.10.0` the website change is two stacked pull requests that land together:
+   the website text change (#392), and the new "Tasks and the Coordinator"
+   section stacked on it. #392 targets `feat/task-system-coordinator` today;
+   retarget it to `main` after step 2, so that it does not merge with the
+   release branch. The coordinator tracks this step until the site shows the
+   new page.
 
 Do not change the order when only some parts change. A step for a part that did
 not change is a no-op.
@@ -321,7 +327,7 @@ have yet, for as long as steps 3 to 5 take. Choose one way to prevent that:
 
 - **Keep the website change in its own pull request into `main`, and merge it at
   step 6.** Nothing to change in Render. The website pull request must not be
-  part of the release branch. Recommended. Cost: from step 2 to step 6 the old
+  part of the release branch. Chosen for `0.10.0` on 2026-11-16. Cost: from step 2 to step 6 the old
   page stays live, and its links to the worktree handoff examples in
   `tree/main/examples/skills` find a folder that holds only the `toastty-tasks`
   skill.
