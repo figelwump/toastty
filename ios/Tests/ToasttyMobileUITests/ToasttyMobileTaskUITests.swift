@@ -300,6 +300,37 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(homeSession))
     }
 
+    /// Send in a task's session, under its task bar and without the tab bar,
+    /// with the keyboard up: the message shows, the keyboard leaves, and the
+    /// screen keeps answering. The app used to hang here: the composer
+    /// dropped the keyboard inside SwiftUI's update, and the responder lookup
+    /// that this starts spun in an AttributeGraph cycle.
+    func testSendInATaskSessionDropsTheKeyboardAndTheAppKeepsAnswering() {
+        let app = launchTaskFixture(environment: ["TOASTTY_MOBILE_FIXTURE_TASK_SESSION_SEND": "1"])
+        app.tabBars.buttons["Tasks"].tap()
+        let question = app.buttons["toastty-subspace-row-\(questionSubspaceID)"]
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        question.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-task-bar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilTheTabBarLeaves(app))
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let keyboard = app.keyboards.firstMatch
+        let send = app.buttons["toastty-mobile-composer-send"]
+        for (index, message) in ["Check the composer after a send.", "And once more."].enumerated() {
+            input.tap()
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+            input.typeText(message)
+            send.tap()
+            let sent = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-task-session-\(index + 1)"]
+            XCTAssertTrue(sent.waitForExistence(timeout: 5), message)
+            XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5), message)
+        }
+        attachScreenshot(named: "task-session-after-two-sends", of: app)
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(waitUntilHittable(question))
+    }
+
     /// Release… on a card's expanded To ship line and on the Tasks tab's
     /// lane: the phone asks first, Cancel sends nothing, and once the Mac
     /// starts the release both read Releasing… and are off.

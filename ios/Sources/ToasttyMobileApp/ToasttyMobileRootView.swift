@@ -889,6 +889,9 @@ struct ToasttyMobileRootView: View {
                 for: conversationID, mode: entryLoadFixture, step: fixtureEntryLoadStep
             )
         }
+        if isFixtureTaskSession(conversationID) {
+            return ToasttyConversationFixture.gatedSendPresentation(for: conversationID, sendItems: fixtureSendItems)
+        }
         if conversationID == ToasttyMobileFixture.coordinatorConversationID {
             return ToasttyConversationFixture.coordinatorPresentation(
                 for: conversationID,
@@ -1312,6 +1315,15 @@ struct ToasttyMobileRootView: View {
         }
     }
 
+    /// The session in the task fixture's early-session-titles task space
+    /// takes messages at an open prompt with
+    /// TOASTTY_MOBILE_FIXTURE_TASK_SESSION_SEND=1, so a test can send from a
+    /// task's session, under its task bar.
+    private func isFixtureTaskSession(_ conversationID: UUID) -> Bool {
+        conversationID == Self.fixtureTaskSessionConversationID
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_TASK_SESSION_SEND"] == "1"
+    }
+
     private func fixtureInterrupt(_ conversationID: UUID) {
         guard isFixtureWorkingConversation(conversationID) else { return }
         fixtureTurnStopped = true
@@ -1352,10 +1364,12 @@ struct ToasttyMobileRootView: View {
         if fixtureScenario == .localDraftRelease {
             return conversationID == Self.fixtureLocalDraftConversationID ? fixtureLocalDraftComposer() : nil
         }
-        // The coordinator's chat takes messages, as in the proposal's mockup.
-        let isCoordinatorFixture = fixtureScenario == .home
-            && conversationID == ToasttyMobileFixture.coordinatorConversationID
-        guard isCoordinatorFixture
+        // The coordinator's chat takes messages, as in the proposal's mockup,
+        // and so does a task's session when a test asks for it.
+        let isOpenClaudeSession = fixtureScenario == .home
+            && (conversationID == ToasttyMobileFixture.coordinatorConversationID
+                || isFixtureTaskSession(conversationID))
+        guard isOpenClaudeSession
             || (fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt)
             && conversationID == Self.fixtureOpenPromptConversationID else { return nil }
         let epoch = RemoteInputEpoch(
@@ -1384,7 +1398,7 @@ struct ToasttyMobileRootView: View {
                 inputAvailability: availability
             )
         return ToasttyComposerPresentation.make(
-            agentDisplayName: isCoordinatorFixture ? "Claude" : "Codex",
+            agentDisplayName: isOpenClaudeSession ? "Claude" : "Codex",
             authority: authority
         )
 #else
@@ -1419,6 +1433,16 @@ struct ToasttyMobileRootView: View {
                     enqueuedAt: Date()
                 ))
             }
+            finishSubmission(submission, outcome: .enqueued(clientRequestID: clientRequestID))
+            return true
+        }
+        if isFixtureTaskSession(submission.conversationID) {
+            let clientRequestID = "fixture-task-session-\(fixtureSendItems.count + 1)"
+            fixtureSendItems.append(ToasttySendPresentationItem(
+                clientRequestID: clientRequestID,
+                text: submission.text,
+                content: .optimistic(response: .accepted)
+            ))
             finishSubmission(submission, outcome: .enqueued(clientRequestID: clientRequestID))
             return true
         }
@@ -1547,6 +1571,11 @@ struct ToasttyMobileRootView: View {
     /// The fixture home's working Codex session ("Sparkle updater fix").
     private static let fixtureWorkingConversationID = UUID(
         uuidString: "B1000000-0000-0000-0000-000000000002"
+    )!
+
+    /// The task fixture's one session in early-session-titles.
+    private static let fixtureTaskSessionConversationID = UUID(
+        uuidString: "B1000000-0000-0000-0000-000000000010"
     )!
 
     /// The fixture home's Claude session paused by a Mac draft ("Smoke test triage").

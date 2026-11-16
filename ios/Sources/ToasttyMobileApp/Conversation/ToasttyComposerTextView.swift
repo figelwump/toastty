@@ -67,15 +67,7 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         #endif
 
         context.coordinator.receiveReplacement(replacement, in: textView)
-
-        if isFocused, isEnabled {
-            if textView.isFirstResponder == false {
-                textView.becomeFirstResponder()
-                textView.requestSelectionVisibility()
-            }
-        } else if textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
+        context.coordinator.scheduleFocusSync(for: textView)
     }
 
     func sizeThatFits(
@@ -181,6 +173,7 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         var parent: ToasttyComposerTextView
         var lastReplacementRevision: UInt64 = 0
         var isActive = true
+        private var isFocusSyncScheduled = false
         private var pendingReplacement: ToasttyComposerReplacement?
         private var isReplacingText = false
         private var editRevision: UInt64
@@ -250,6 +243,38 @@ struct ToasttyComposerTextView: UIViewRepresentable {
             reportCompletion(replacement, in: textView, rejected: false)
             textView.textDidChange()
             textView.requestSelectionVisibility()
+        }
+
+        /// Moves the keyboard focus to match `isFocused` once the current
+        /// SwiftUI update has finished. A responder change asks the hosting
+        /// view whether it can take the focus, and SwiftUI answers with a
+        /// nested view-graph update; inside `updateUIView` that update can
+        /// depend on this view's own update and spin in an AttributeGraph
+        /// cycle, which froze the app on Send in a task's session.
+        func scheduleFocusSync(for textView: ToasttyComposerUIKitTextView) {
+            guard needsFocusChange(textView), isFocusSyncScheduled == false else { return }
+            isFocusSyncScheduled = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.isFocusSyncScheduled = false
+                guard self.isActive, let textView else { return }
+                self.syncFocus(of: textView)
+            }
+        }
+
+        private func needsFocusChange(_ textView: ToasttyComposerUIKitTextView) -> Bool {
+            parent.isFocused && parent.isEnabled ? !textView.isFirstResponder : textView.isFirstResponder
+        }
+
+        private func syncFocus(of textView: ToasttyComposerUIKitTextView) {
+            // The latest state wins: a focus change and its reversal in one
+            // update cycle leave the keyboard as it is.
+            guard needsFocusChange(textView) else { return }
+            if textView.isFirstResponder {
+                textView.resignFirstResponder()
+            } else if textView.becomeFirstResponder() {
+                textView.requestSelectionVisibility()
+            }
         }
 
         func reportCompletion(_ replacement: ToasttyComposerReplacement, in textView: ToasttyComposerUIKitTextView, rejected: Bool) {
