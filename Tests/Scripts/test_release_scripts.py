@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Tests for the release checks that stop a release before it ships: the
-Ghostty pin check and the publish step's release notes checks. Disposable
-directories and Git repositories with a fake gh; never contacts GitHub.
+Ghostty pin check, the third-party notices check, and the publish step's
+release notes checks. Disposable directories and Git repositories with a fake
+gh; never contacts GitHub.
 
 Run: python3 Tests/Scripts/test_release_scripts.py
 """
+import json
 import os
 from pathlib import Path
 import shutil
@@ -20,6 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 PIN_SCRIPT = REPO / "scripts/release/check-ghostty-pin.sh"
 PUBLISH_SCRIPT = REPO / "scripts/release/publish-github-release.sh"
 HIGHLIGHTS_SCRIPT = REPO / "scripts/release/release_notes_highlights.py"
+NOTICES_SCRIPT = REPO / "scripts/release/generate-third-party-notices.mjs"
 
 sys.path.insert(0, str(HIGHLIGHTS_SCRIPT.parent))
 import release_notes_highlights as highlights  # noqa: E402
@@ -347,6 +350,106 @@ class HighlightsHTMLTests(unittest.TestCase):
         for section, message in cases.items():
             with self.subTest(section=section):
                 self.rejects(section, message)
+
+
+class NoticesGeneratorTests(unittest.TestCase):
+    """Runs the real notices generator in a disposable tree with two production
+    packages: "licensed" ships a LICENSE file and "bare" ships none."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="toastty-notices-"))
+        release = self.root / "scripts/release"
+        release.mkdir(parents=True)
+        shutil.copy(NOTICES_SCRIPT, release)
+        (self.root / "LICENSE").write_text("Toastty license\n")
+        sparkle = self.root / "Tuist/.build/checkouts/Sparkle"
+        sparkle.mkdir(parents=True)
+        (sparkle / "LICENSE").write_text("Sparkle license\n")
+        (self.root / "Tuist/Package.resolved").write_text(json.dumps({"pins": [
+            {"identity": "sparkle", "state": {"version": "2.8.1", "revision": "abc"}},
+        ]}))
+        ghostty = self.root / "ghostty"
+        (ghostty / "vendor/nerd-fonts").mkdir(parents=True)
+        (ghostty / "LICENSE").write_text("Ghostty license\n")
+        (ghostty / "vendor/nerd-fonts/LICENSE").write_text("Nerd Fonts license\n")
+        self.web = self.root / "WebPanels/LocalDocumentApp"
+        self.web.mkdir(parents=True)
+        self.install("licensed", "1.0.0", license_text="Licensed license\n")
+        self.install("bare", "1.0.0")
+
+    def tearDown(self):
+        shutil.rmtree(self.root)
+
+    def install(self, name, version, license_text=None):
+        package = self.web / "node_modules" / name
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "package.json").write_text(json.dumps({"name": name, "version": version}))
+        if license_text:
+            (package / "LICENSE").write_text(license_text)
+        lock_path = self.web / "package-lock.json"
+        lock = json.loads(lock_path.read_text()) if lock_path.exists() else {"packages": {"": {}}}
+        lock["packages"][f"node_modules/{name}"] = {"version": version}
+        lock_path.write_text(json.dumps(lock))
+
+    def override(self, entries):
+        release = self.root / "scripts/release"
+        for label in entries:
+            entries[label] = {
+                "license": "MIT",
+                "file": f"third-party-licenses/{label}.txt",
+                "source": f"https://example.invalid/{label}/License.md",
+                "reason": "The package ships no license file.",
+                **entries[label],
+            }
+            (release / "third-party-licenses").mkdir(exist_ok=True)
+            (release / f"third-party-licenses/{label}.txt").write_text(f"Upstream license for {label}\n")
+        (release / "third-party-license-overrides.json").write_text(json.dumps(entries))
+
+    def generate(self, *args):
+        env = {k: v for k, v in os.environ.items() if k != "GHOSTTY_COMMIT"}
+        env["GHOSTTY_SOURCE_REPO"] = str(self.root / "ghostty")
+        return run(["node", str(self.root / "scripts/release" / NOTICES_SCRIPT.name), *args], env=env)
+
+    def test_package_without_a_license_file_stops_the_check(self):
+        result = self.generate("--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("no license or notice file found for bare@1.0.0", result.stderr)
+        self.assertIn("third-party-license-overrides.json", result.stderr)
+
+    def test_entry_supplies_the_license_of_a_package_without_one(self):
+        self.override({"bare@1.0.0": {}})
+        result = self.generate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        notices = (self.root / "Sources/App/Resources/ThirdPartyNotices.txt").read_text()
+        self.assertIn("Packages: bare@1.0.0\n" + "=" * 80 + "\nUpstream license for bare@1.0.0", notices)
+        self.assertIn("Packages: licensed@1.0.0\n" + "=" * 80 + "\nLicensed license", notices)
+        check = self.generate("--check")
+        self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_entry_names_one_exact_version(self):
+        self.override({"bare@1.0.0": {}})
+        self.install("bare", "1.0.1")
+        result = self.generate("--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("no license or notice file found for bare@1.0.1", result.stderr)
+
+    def test_entry_for_a_package_that_ships_a_license_stops(self):
+        self.override({"bare@1.0.0": {}, "licensed@1.0.0": {}})
+        result = self.generate("--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("licensed@1.0.0 ships a license file; remove its entry", result.stderr)
+
+    def test_unused_entry_stops(self):
+        self.override({"bare@1.0.0": {}, "gone@2.0.0": {}})
+        result = self.generate("--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("gone@2.0.0 is not a production WebPanel package", result.stderr)
+
+    def test_entry_without_a_source_stops(self):
+        self.override({"bare@1.0.0": {"source": ""}})
+        result = self.generate("--check")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('license override for bare@1.0.0 needs a "source"', result.stderr)
 
 
 if __name__ == "__main__":

@@ -375,6 +375,14 @@ Before the archive is built, the release workflow verifies the generated
 third-party notices against the pinned production web-panel dependencies,
 Ghostty, Sparkle, and the checked-in Toastty license. The verified notices are
 bundled at `Contents/Resources/ThirdPartyNotices.txt` in the app.
+Each production web-panel package must ship a license or notice file. A package
+that ships none needs an entry for its exact `name@version` in
+`scripts/release/third-party-license-overrides.json`: the license, the license
+text under `scripts/release/third-party-licenses/`, its source, and the reason.
+The check stops when an entry is missing, when the package ships a license file
+after all, or when no installed package uses the entry, for example after a
+version change. `format@0.2.2` has such an entry: the npm package ships no
+license file, and the text is the MIT `License.md` its author added upstream.
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags

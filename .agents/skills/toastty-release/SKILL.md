@@ -59,7 +59,13 @@ then; the iPhone real-device check uses that build.
    Toastty license. `scripts/release/release.sh` installs production web-panel
    packages and runs `scripts/release/generate-third-party-notices.mjs --check`.
    If the check is stale, regenerate and commit the notice file before retrying,
-   because the release script requires a clean Toastty checkout.
+   because the release script requires a clean Toastty checkout. If a package
+   ships no license file, the check stops. Add an entry for that exact
+   `name@version` to `scripts/release/third-party-license-overrides.json` only
+   when its author published the license text elsewhere, such as a license file
+   added to its repository later. Store that text under
+   `scripts/release/third-party-licenses/` and name its source. If the license
+   text cannot be established, ask the user; do not write one.
 4. Run automated validation before building the release artifact. Prefer the remote validation wrappers:
    - `sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui`
    - `sv exec -- scripts/remote/test.sh --`
