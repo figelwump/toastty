@@ -150,11 +150,11 @@ the same fields with another tool.
 **Send** a message to a task's agent only when all of this is true. Check it
 in a read of the open tasks that is less than a minute old:
 
-- `agent` is `idle`. Never `waiting`; see Never. `busy` only for the user's
-  own words (below);
+- `agent` is `idle`, or `error` for Stopped with an error (see Unblock).
+  Never `waiting`; see Never. `busy` only for the user's own words (below);
 - `userTypedMinutesAgo` is null or more than 15: the user works in a task
   they typed in. This rule does not apply to the user's own words, or to the
-  message that continues a turn a restart cut off (see Unblock);
+  message that continues a turn a restart or an error cut off (see Unblock);
 - the ledger shows no earlier nudge for the same task and condition.
 
 Start every message to a task with `[coordinator]`, and say in it who decided:
@@ -265,7 +265,8 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 | Merge conflict | `mergeState` is `DIRTY` and the agent is `idle` | Tell the task to rebase onto its base branch and resolve the conflicts. |
 | Busy but silent | `agent` is `busy` and `silentMinutes` passes 30. Toastty wakes you then. | Never interrupt. Read its screen with `toastty --json query run terminal.visible-text --panel <panelID> tail=40`, and tell the user which command seems to hang. A long build or a sub-agent can be silent and healthy. |
 | Setup failed | stage `needsYou (setupFailed)` | Run `toastty task retry <task-id>` once. If it fails again, tell the user with `reason`. |
-| Agent not running, or stopped with an error | `agent` is `notRunning` or `error` on an open task that is not To ship; or stage `needsYou (agentError)` or `needsYou (taskSpaceClosed)` | Tell the user what you found. Offer to archive the task, or to wait while the user restarts its agent in the task space. Do nothing until the user answers. |
+| Stopped with an error | `agent` is `error` on an open task that is not To ship, stage `needsYou (agentError)`. An error, such as the computer's sleep, ended the turn; the agent waits at its prompt. Toastty wakes you then. | With a `question` or `mergeFailure`, use its own row first. Else send at once: "Your turn stopped with an error. Continue where you stopped." Then tell the user. The 15-minute and 2-minute rules work as for a restart. |
+| Agent not running | `agent` is `notRunning` on an open task that is not To ship; stage `needsYou (taskSpaceClosed)`; or Stopped with an error after your continue (see One nudge) | Tell the user what you found. Offer to archive the task, or to wait while the user restarts its agent in the task space. Do nothing until the user answers. |
 | Merge stopped | `mergeFailure` | See Merge for the user. |
 | Anything else stopped | stage `needsYou (moveFailed)`, `(cleanupStopped)` or `(pickWorkspace)` | Tell the user with the reason. |
 
@@ -281,6 +282,9 @@ A turn that a restart cut off is the exception: each restart is a new
 condition. Continue the task again after a later restart, but not twice for
 the same restart: a continue in the ledger that is older than the agent's
 current idle state (`agentMinutes`) was for an earlier restart.
+An error is also an exception: continue once for each error. An error that
+started (`agentMinutes`) less than an hour after your continue is the same
+error: do not continue it.
 
 **Tell once, then list it.** Write in the ledger what you told or asked the
 user, and do not repeat it in later answers unless it changed. What still

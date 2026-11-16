@@ -934,7 +934,8 @@ sets its next check.
 | The pull request has merge conflicts | Tells the task to rebase and resolve them. |
 | An agent is busy, with no output for 30 minutes | Never interrupts. Tells you which command seems to hang. |
 | Setup failed | Retries it once, then tells you. |
-| No agent runs, an agent stopped with an error, or a merge or cleanup stopped | Tells you, with the reason. |
+| An agent stopped with an error, for example when the computer slept | Tells the task to continue, and tells you. If the agent asked a question or a merge stopped, it handles that first, as for any question or stopped merge. If the task stops with an error again within an hour, it tells you and sends nothing more. It waits for your typing as after a restart. |
+| No agent runs, or a merge or cleanup stopped | Tells you, with the reason. |
 
 - **New tasks.** Tell the coordinator what you want done, in its chat or
   with [quick entry](#quick-entry-with-the-coordinator). It chooses the
