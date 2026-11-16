@@ -108,12 +108,12 @@ public struct ToasttyMessageReplyRequest: Equatable, Sendable {
 }
 
 extension CoordinatorReplyTarget {
-    /// The message that Reply chose. Its time is written as the reply's
-    /// first line writes it, so a waiting reply that comes back with Edit
-    /// is the same reply.
+    /// The message that Reply chose. Its text and time are kept as the
+    /// reply writes them, so a waiting reply that comes back with Edit is
+    /// the same reply, also for a message that ends with a blank line.
     public init(_ request: ToasttyMessageReplyRequest) {
         self.init(
-            text: request.text,
+            text: CoordinatorMessageHeader.quoteText(request.text),
             time: CoordinatorMessageHeader.replyTime(request.timestamp.formatted(date: .omitted, time: .shortened))
         )
     }

@@ -499,19 +499,25 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     /// Why Edit cannot take this waiting message back into the draft, which
     /// answers at most one message. `text` is the message as sent.
     func queuedReplyEditRefusal(_ text: String, for conversationID: UUID) -> String? {
-        guard let current = replies[conversationID] else { return nil }
+        let current = replies[conversationID]
         if let parts = CoordinatorMessageHeader.replyParts(of: text) {
-            return CoordinatorReplyTarget(text: parts.quote, time: parts.time) == current
-                ? nil : Self.otherReplyEditRefusal
+            if let current, CoordinatorReplyTarget(text: parts.quote, time: parts.time) != current {
+                return Self.otherReplyEditRefusal
+            }
+            // The draft stays first, so it would start the reply.
+            return CoordinatorMessageHeader.hasOtherHeader(draft(for: conversationID))
+                ? Self.otherHeaderReplyRefusal : nil
         }
+        guard current != nil else { return nil }
         return CoordinatorMessageHeader.hasOtherHeader(text) ? Self.otherHeaderEditRefusal : nil
     }
 
     /// Edit on a waiting message in the coordinator's chat: a reply comes
     /// back as its text, with the message it answers above the field. The
-    /// draft answers one message at most: Edit checks that first with
-    /// `queuedReplyEditRefusal`, and a Steer now that failed while the draft
-    /// answers another message puts the whole text back, quote included.
+    /// draft answers one message at most, and a draft that starts with
+    /// another sender's line cannot become a reply: Edit checks both first
+    /// with `queuedReplyEditRefusal`, and a Steer now that failed puts the
+    /// whole text back, quote included.
     mutating func restoreQueuedReply(_ text: String, for conversationID: UUID) {
         guard isSubmitting(conversationID) == false else { return }
         guard let parts = CoordinatorMessageHeader.replyParts(of: text) else {
@@ -519,7 +525,8 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
             return
         }
         let target = CoordinatorReplyTarget(text: parts.quote, time: parts.time)
-        guard replies[conversationID] == nil || replies[conversationID] == target else {
+        guard replies[conversationID] == nil || replies[conversationID] == target,
+              CoordinatorMessageHeader.hasOtherHeader(draft(for: conversationID)) == false else {
             restoreDraft(text, for: conversationID)
             return
         }
@@ -623,11 +630,15 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
             case .pending(.awaitingResponse): continue
             case .rejected:
                 let currentText = draft(for: conversationID)
+                // The text answers the message it was written for, or none: it
+                // waits while the draft answers another message.
+                let currentReply = replies[conversationID]
                 if !isSubmitting(conversationID), attachments(for: conversationID).isEmpty,
-                   currentText.isEmpty || currentText == submission.text {
+                   currentText.isEmpty || currentText == submission.text,
+                   currentReply == nil || currentReply == submission.reply {
                     replaceDraft(submission.text, for: conversationID)
                     // A rejected reply comes back as a reply.
-                    let restoresReply = submission.reply != nil && replies[conversationID] == nil
+                    let restoresReply = submission.reply != nil && currentReply == nil
                     if restoresReply { replies[conversationID] = submission.reply }
                     restoredRecoveries[conversationID] = RestoredRecovery(
                         requestID: record.clientRequestID, submission: submission, restoredReply: restoresReply

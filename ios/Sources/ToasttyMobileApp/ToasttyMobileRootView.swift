@@ -786,6 +786,9 @@ struct ToasttyMobileRootView: View {
             cancelReply: {
                 guard composerDraftState.generation == generation else { return }
                 composerDraftState.cancelReply(for: conversationID)
+                // A rejected message with files waits while the draft
+                // answers another message.
+                reconcileAttachmentDrafts()
             }
         )
         .id(conversationID)

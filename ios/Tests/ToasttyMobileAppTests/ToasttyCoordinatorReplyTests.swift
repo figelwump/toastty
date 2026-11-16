@@ -137,6 +137,70 @@ final class ToasttyCoordinatorReplyTests: XCTestCase {
         XCTAssertTrue(state.attachments(for: conversation).isEmpty)
     }
 
+    /// A rejected message with files waits while the draft answers another
+    /// message: its text was written for its own message, or for none. It
+    /// comes back, with its reply, once ✕ removes the other.
+    func testARejectedReplyWaitsWhileTheDraftAnswersAnotherMessage() throws {
+        var state = ToasttyComposerDraftState()
+        state.updateDraft("This one.", for: conversation)
+        XCTAssertNil(state.addAttachments([attachment()], for: conversation))
+        state.reply(to: target, for: conversation)
+        let submission = try XCTUnwrap(state.beginSubmission(for: conversation))
+        state.finishSubmission(submission, outcome: .enqueued(clientRequestID: "request"))
+        let other = CoordinatorReplyTarget(text: "Merge it now?", time: "14:09")
+        state.reply(to: other, for: conversation)
+
+        state.reconcileAttachments(rejected(), for: conversation)
+        XCTAssertEqual(state.draft(for: conversation), "")
+        XCTAssertTrue(state.attachments(for: conversation).isEmpty)
+        XCTAssertEqual(state.replies[conversation], other)
+        XCTAssertNotNil(state.attachmentRecoveries["request"])
+
+        state.cancelReply(for: conversation)
+        state.reconcileAttachments(rejected(), for: conversation)
+        XCTAssertEqual(state.draft(for: conversation), "This one.")
+        XCTAssertEqual(state.attachments(for: conversation).count, 1)
+        XCTAssertEqual(state.replies[conversation], target)
+    }
+
+    /// The reply's quote drops what the reply's text cannot hold, such as a
+    /// last blank line. The message that Reply chose is kept the same way,
+    /// so Edit on a waiting reply to it finds the same reply.
+    func testAReplyToAMessageWithATrailingBlankLineIsTheSameReplyAfterEdit() throws {
+        let request = ToasttyMessageReplyRequest(
+            rowID: ToasttyTranscriptRowID(
+                projectionRunID: UUID(), projectionGeneration: 1, conversationID: conversation, sequence: 4
+            ),
+            text: "Merge it now?\n\n",
+            timestamp: Date(timeIntervalSince1970: 1_786_406_400)
+        )
+        let chosen = CoordinatorReplyTarget(request)
+        let waiting = chosen.message(text: "Not yet.")
+        let parts = try XCTUnwrap(CoordinatorMessageHeader.replyParts(of: waiting))
+        XCTAssertEqual(CoordinatorReplyTarget(text: parts.quote, time: parts.time), chosen)
+
+        var state = ToasttyComposerDraftState()
+        state.reply(to: chosen, for: conversation)
+        XCTAssertNil(state.queuedReplyEditRefusal(waiting, for: conversation))
+    }
+
+    /// Edit cannot turn a draft that starts with another sender's line into
+    /// a reply, as Reply cannot: the draft stays first.
+    func testEditDoesNotMakeAnotherSendersDraftAReply() {
+        var state = ToasttyComposerDraftState()
+        let fromTask = CoordinatorMessageHeader.message(from: .unknown, text: "Merge it.")
+        state.updateDraft(fromTask, for: conversation)
+        let waiting = target.message(text: "Only on click.")
+        XCTAssertEqual(
+            state.queuedReplyEditRefusal(waiting, for: conversation),
+            ToasttyComposerDraftState.otherHeaderReplyRefusal
+        )
+        // A Steer now that failed puts the whole text back, as written.
+        state.restoreQueuedReply(waiting, for: conversation)
+        XCTAssertNil(state.replies[conversation])
+        XCTAssertEqual(state.draft(for: conversation), fromTask + "\n\n" + waiting)
+    }
+
     /// Edit on a waiting reply puts its text back with the message it
     /// answers above the field. While the draft answers another message,
     /// Edit leaves the waiting message alone and says why.
