@@ -1,5 +1,9 @@
 # Back and forward across Toastty
 
+> **Historical plan.** It records the design as planned when it was written and is
+> not kept up to date. For current behavior, see the reference documents listed in
+> [the README](../../README.md#documentation).
+
 Status: implemented. Build, focused tests and remote smoke passed; native GUI and physical mouse verification remain incomplete.
 
 ## User behavior

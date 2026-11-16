@@ -869,7 +869,7 @@ toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root 
 toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>]
-toastty task send <task-id> (<text> | --text-file <path>) [--steer]
+toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer]
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
@@ -940,7 +940,9 @@ calling agent's task space.
 
 `task send`, `task watch` and `task list --changed-since` let an agent follow
 and talk to other tasks by task ID; see
-[Coordinate tasks](tasks.md#coordinate-tasks). `task send` types its message
+[Coordinate tasks](tasks.md#coordinate-tasks). `task send` and
+`coordinator send` take the message in exactly one way: as one argument, with
+`--text`, or from a UTF-8 file with `--text-file`. `task send` types its message
 whatever the agent does. With `--steer`, it checks the agent first: the message
 goes to the agent's open prompt or into its running turn, or Toastty holds it
 for the next open prompt, and nothing is typed into a permission prompt.
@@ -1000,7 +1002,7 @@ Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 toastty coordinator open [--window <id>] [--no-select]
 toastty coordinator restart [--window <id>]
 toastty coordinator status
-toastty coordinator send (<text> | --text-file <path>)
+toastty coordinator send (<text> | --text <text> | --text-file <path>)
 toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
 toastty coordinator watch (--task <task-id> | --workspace <id>) [--remove]
 ```
