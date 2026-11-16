@@ -259,11 +259,15 @@ verify_release_notes_highlights() {
   [[ -z "$placeholder_line" ]] \
     || fail "release notes still contain a template placeholder at line ${placeholder_line%%:*}: $NOTES_FILE"
 
+  # HTML comments do not render, and a heading inside a code fence is an
+  # example, so neither counts as a section heading.
   highlights_state="$(awk '
+    in_comment { if ($0 ~ /-->/) in_comment = 0; next }
+    /^[[:space:]]*<!--/ { if ($0 !~ /-->/) in_comment = 1; next }
+    /^[[:space:]]*(```|~~~)/ { in_fence = !in_fence; if (in_section) content += 1; next }
+    in_fence { if (in_section) content += 1; next }
     /^##[[:space:]]+Highlights[[:space:]]*$/ { headings += 1; in_section = 1; next }
     /^##[[:space:]]/ { in_section = 0; next }
-    in_section && in_comment { if ($0 ~ /-->/) in_comment = 0; next }
-    in_section && /^[[:space:]]*<!--/ { if ($0 !~ /-->/) in_comment = 1; next }
     in_section && /[^[:space:]]/ { content += 1 }
     END {
       if (headings == 0) print "missing"

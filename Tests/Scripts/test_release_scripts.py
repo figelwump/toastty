@@ -228,6 +228,26 @@ class PublishNotesTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("section of the release notes is empty", result.stderr)
 
+    def test_commented_out_highlights_stop_the_publish(self):
+        notes = VALID_NOTES.replace(
+            "## Highlights\n\n- Tasks: describe work once and Toastty runs it in its own worktree.\n",
+            "<!--\n## Highlights\n\n- Hidden.\n-->\n")
+        result = self.publish(notes)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no '## Highlights' section", result.stderr)
+
+    def test_heading_inside_a_code_fence_is_not_a_section(self):
+        example = "```markdown\n## Highlights\n```\n\n"
+        only_example = VALID_NOTES.replace(
+            "## Highlights\n\n- Tasks: describe work once and Toastty runs it in its own worktree.\n\n",
+            "")
+        result = self.publish(only_example.replace("## Changes", example + "## Changes"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no '## Highlights' section", result.stderr)
+
+        result = self.publish(VALID_NOTES.replace("## Changes", example + "## Changes"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_repeated_highlights_stop_the_publish(self):
         notes = VALID_NOTES.replace("## Changes", "## Highlights\n\n- Again.\n\n## Changes")
         result = self.publish(notes)
