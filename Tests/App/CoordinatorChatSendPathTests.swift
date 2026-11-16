@@ -290,6 +290,41 @@ struct CoordinatorChatSendPathTests {
     }
 
     @MainActor
+    @Test func aTurnEndBelongsToTheMessageThatStartedItAlsoWhenTheNextMessageWentInFirst() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        var ends: [CoordinatorController.TurnEnd] = []
+        fixture.controller.onTurnEnd = { ends.append($0) }
+        try await fixture.waitUntil("the open prompt") { fixture.controller.promptIsOpenForTesting }
+        #expect(try fixture.controller.send(Self.digest, queueWhenHeld: false) == .sent)
+        try fixture.startTurn(1, userText: Self.digest)
+        try await fixture.waitUntil("the digest's turn") { fixture.controller.promptIsOpenForTesting == false }
+        #expect(try fixture.controller.send("From the composer", byUser: true, id: "composer-1")
+            == .queued(position: 1, hold: .busy))
+
+        // The transcript ends the digest's turn before the agent's status
+        // does, so the waiting message goes in first. Then the status says
+        // that the digest's turn failed.
+        try fixture.endTurnInTranscript(1)
+        try await fixture.waitUntil("the composer's message") { fixture.delivered.texts.count == 2 }
+        fixture.report(.error)
+        #expect(ends == [CoordinatorController.TurnEnd(
+            sessionID: fixture.conversations.sessionID,
+            failed: true,
+            startedByKey: CoordinatorWakeState.digestKey(Self.digest)
+        )])
+
+        // The message's own turn is its own.
+        try fixture.runTurn(2, userText: "From the composer")
+        #expect(ends.last == CoordinatorController.TurnEnd(
+            sessionID: fixture.conversations.sessionID,
+            failed: false,
+            startedByKey: CoordinatorWakeState.digestKey("From the composer")
+        ))
+        #expect(ends.count == 2)
+    }
+
+    @MainActor
     @Test func aDigestIsTypedOnceWhenTheCallerOffersItManyTimes() async throws {
         let fixture = try CoordinatorChatFixture()
         defer { fixture.tearDown() }
@@ -1569,6 +1604,13 @@ final class CoordinatorChatFixture {
 
     func endTurn(_ turn: Int) throws {
         report(.idle)
+        try endTurnInTranscript(turn)
+    }
+
+    /// The transcript records the end of turn `turn`, and the agent's
+    /// status does not change yet: Codex reports its status on a route of
+    /// its own, which can come later.
+    func endTurnInTranscript(_ turn: Int) throws {
         try append(#"{"type":"task_complete","turn_id":"turn-\#(turn)","last_agent_message":"Done.","started_at":1786000805,"completed_at":1786000821,"duration_ms":16000}"#)
     }
 

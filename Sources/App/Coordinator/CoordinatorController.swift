@@ -328,8 +328,12 @@ final class CoordinatorController: ObservableObject {
         // A session that starts, ends a turn or stops can open the prompt
         // for the next queued entry. `sink` runs before the new value is
         // stored, so the queue is looked at on the next main-actor turn.
+        // The end of a turn is found in the new value at once: each change
+        // of the session store comes here on its own, also a failed turn
+        // that a new turn follows at once.
         sessionObserver = sessionRuntimeStore.$sessionRegistry
-            .sink { [weak self] _ in
+            .sink { [weak self] registry in
+                MainActor.assumeIsolated { self?.noteTurnEnd(in: registry) }
                 Task { @MainActor [weak self] in self?.drain() }
             }
         storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
@@ -1287,6 +1291,61 @@ final class CoordinatorController: ObservableObject {
         return onlyTheDigestReached(quietTurn.digestKey, subscription: subscription)
     }
 
+    // MARK: - Turn ends
+
+    /// A turn of the coordinator's agent ended, as its session reports it.
+    struct TurnEnd: Equatable {
+        let sessionID: String
+        /// The turn ended with an error, such as an API error, and not
+        /// normally.
+        let failed: Bool
+        /// `CoordinatorWakeState.digestKey` of the message that this
+        /// controller typed at the open prompt and that started the turn.
+        /// `nil` when something else started it, such as text typed in the
+        /// terminal.
+        let startedByKey: String?
+    }
+
+    /// Called at the end of each turn of the coordinator's agent. The
+    /// service that keeps the wake state sets it.
+    var onTurnEnd: ((TurnEnd) -> Void)?
+
+    /// The coordinator's session and the end of its last turn, as the last
+    /// change of the session store showed them.
+    private var observedTurnEnd: (sessionID: String, endedAt: Date?)?
+    /// The messages typed at an open prompt whose turns have not ended,
+    /// oldest first.
+    private var promptsAwaitingTurnEnd: [(sessionID: String, key: String, at: Date)] = []
+    private static let rememberedPromptsAwaitingTurnEnd = 20
+
+    /// Finds the end of a turn of the coordinator's agent in a change of
+    /// the session store: its session's `lastTurnEndedAt` moves. The
+    /// session's status then says how the turn ended. A turn belongs to
+    /// the last message typed at an open prompt before the turn started.
+    /// The agent's transcript can open the prompt before its status ends
+    /// the turn, so the next message can be typed before the end is seen;
+    /// that message waits for a later turn.
+    private func noteTurnEnd(in registry: SessionRegistry) {
+        guard let panelID = location?.panelID, let record = registry.activeSession(for: panelID) else {
+            observedTurnEnd = nil
+            return
+        }
+        let previous = observedTurnEnd
+        observedTurnEnd = (record.sessionID, record.lastTurnEndedAt)
+        guard let previous, previous.sessionID == record.sessionID,
+              let endedAt = record.lastTurnEndedAt, endedAt != previous.endedAt else { return }
+        // The session store sets both from the same two times, so this is
+        // the turn's start exactly.
+        let startedAt = endedAt.addingTimeInterval(-(record.lastTurnDuration ?? 0))
+        var startedByKey: String?
+        if let index = promptsAwaitingTurnEnd.lastIndex(where: { $0.sessionID == record.sessionID && $0.at <= startedAt }) {
+            startedByKey = promptsAwaitingTurnEnd[index].key
+            // Older messages had their turns, or none that was seen.
+            promptsAwaitingTurnEnd.removeFirst(index + 1)
+        }
+        onTurnEnd?(TurnEnd(sessionID: record.sessionID, failed: record.status?.kind == .error, startedByKey: startedByKey))
+    }
+
     /// Types the first queued entry when the prompt is open. Returns that
     /// delivery's result, or `nil` when nothing was typed.
     @discardableResult
@@ -1488,7 +1547,15 @@ final class CoordinatorController: ObservableObject {
         if typedMessageIDs.count > Self.rememberedTypedMessages {
             typedMessageIDs.removeFirst(typedMessageIDs.count - Self.rememberedTypedMessages)
         }
-        lastTyped = (CoordinatorWakeState.digestKey(entry.text), now())
+        let typed = (key: CoordinatorWakeState.digestKey(entry.text), at: now())
+        lastTyped = typed
+        // A steer goes into a turn that runs already.
+        if steered == false {
+            promptsAwaitingTurnEnd.append((session.sessionID, typed.key, typed.at))
+            if promptsAwaitingTurnEnd.count > Self.rememberedPromptsAwaitingTurnEnd {
+                promptsAwaitingTurnEnd.removeFirst()
+            }
+        }
         ToasttyLog.info("Typed a message into the coordinator", category: .tasks, metadata: [
             "session_id": session.sessionID,
             "submit_confirmed": result == .delivered ? "true" : "false",

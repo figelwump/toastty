@@ -31,7 +31,33 @@ import Foundation
 /// same command that sets the timer. The mark is saved with the digest it
 /// belongs to, so the chat folds that turn also after a relaunch, and the
 /// end of the turn alerts nobody (`SessionRuntimeStore`).
+///
+/// A wake turn that ends with an error, such as an API error or a sleep of
+/// the Mac in the middle of the turn, does not lose its digest: what the
+/// digest told waits again, and is typed again after
+/// `CoordinatorWakeState.failedTurnRetryDelay`. When wake turns keep
+/// failing, as for a coordinator that is logged out or rate limited,
+/// Toastty stops typing digests and tells the user once. A turn of the
+/// coordinator that ends without an error lets the digests go again.
 extension TaskWebhookService {
+    /// What Toastty follows of the coordinator's wake turns in this run. A
+    /// relaunch starts again from nothing.
+    struct CoordinatorWakeTurns {
+        /// A wake turn that fails is told again this many times in a row.
+        /// The failure after that stops the digests.
+        static let maximumRetries = 2
+
+        /// The digest typed last, by its `CoordinatorWakeState.digestKey`,
+        /// and what it told, until the turn it started ends.
+        var unanswered: (key: String, delivered: CoordinatorWakeState.Delivered)?
+        /// The wake turns in a row that ended with an error.
+        var failures = 0
+
+        /// Toastty types no digest until a turn of the coordinator ends
+        /// without an error. The changes keep waiting.
+        var stopped: Bool { failures > Self.maximumRetries }
+    }
+
     /// The coordinator's next check, as it asks for it.
     enum CoordinatorWakeRequest: Equatable {
         case after(TimeInterval)
@@ -69,6 +95,9 @@ extension TaskWebhookService {
         coordinator.isQuietDigest = { [weak self] text in
             self?.coordinatorWake?.isQuietDigest(text) ?? false
         }
+        coordinator.onTurnEnd = { [weak self] end in
+            self?.coordinatorTurnEnded(end)
+        }
         coordinatorWorkspaceChanged(to: coordinator.location?.workspaceID)
     }
 
@@ -90,6 +119,7 @@ extension TaskWebhookService {
     private func followCoordinator(workspaceID: UUID?, at: Date) {
         guard workspaceID != coordinatorWake?.workspaceID else { return }
         coordinatorWake = workspaceID.map { CoordinatorWakeState(workspaceID: $0, startedAt: at) }
+        coordinatorWakeTurns = CoordinatorWakeTurns()
         guard workspaceID != nil else { return }
         // As for a first webhook: when nothing followed the tasks until
         // now, the detector starts from now. With a webhook that keeps it
@@ -118,20 +148,66 @@ extension TaskWebhookService {
 
     /// Types the digest when one waits and the coordinator's prompt is
     /// open. A coordinator that works, has the user's draft, starts or
-    /// does not run gets nothing: the digest stays here.
+    /// does not run gets nothing: the digest stays here. So does a digest
+    /// while wake turns keep failing (`CoordinatorWakeTurns.stopped`).
     func wakeCoordinator(at: Date) {
+        guard coordinatorWakeTurns.stopped == false else { return }
         guard let coordinator, var wake = coordinatorWake, let digest = wake.digest(now: at) else { return }
         guard let result = try? coordinator.send(digest, queueWhenHeld: false), result.wasTyped else { return }
         let taskCount = wake.changes.count
-        wake.markDelivered(digest, at: at)
+        let isRetry = wake.failedTurnAt != nil
+        let delivered = wake.markDelivered(digest, at: at)
         coordinatorWake = wake
+        coordinatorWakeTurns.unanswered = (CoordinatorWakeState.digestKey(digest), delivered)
         // Saved at once: after a quit, a digest that was typed is not
         // typed again.
         saveOutbox()
         ToasttyLog.info("Typed a wake digest into the coordinator", category: .tasks, metadata: [
             "task_count": String(taskCount),
             "submit_confirmed": result == .sent ? "true" : "false",
+            "after_failed_turn": isRetry ? "true" : "false",
         ])
+    }
+
+    /// A turn of the coordinator's agent ended. A turn that ends without an
+    /// error shows that the coordinator works: the count of failed wake
+    /// turns starts again, and digests go again if they had stopped. A
+    /// digest whose turn ends with an error is told again
+    /// (`CoordinatorWakeState.tellAgain`), at most
+    /// `CoordinatorWakeTurns.maximumRetries` times in a row. The failure
+    /// after that stops the digests, and the user is told once. A failed
+    /// turn that no digest started, such as one for the user's message,
+    /// changes nothing here: the user sees that error.
+    func coordinatorTurnEnded(_ end: CoordinatorController.TurnEnd) {
+        let startedByDigest = end.startedByKey != nil && end.startedByKey == coordinatorWakeTurns.unanswered?.key
+        guard end.failed else {
+            if coordinatorWakeTurns.stopped {
+                ToasttyLog.info("A coordinator turn ended without an error; wake digests go again", category: .tasks)
+            }
+            coordinatorWakeTurns.failures = 0
+            if startedByDigest { coordinatorWakeTurns.unanswered = nil }
+            return
+        }
+        guard startedByDigest, let unanswered = coordinatorWakeTurns.unanswered, var wake = coordinatorWake else { return }
+        coordinatorWakeTurns.unanswered = nil
+        coordinatorWakeTurns.failures += 1
+        wake.tellAgain(unanswered.delivered, failedAt: now())
+        coordinatorWake = wake
+        saveOutbox()
+        let metadata = [
+            "failures_in_a_row": String(coordinatorWakeTurns.failures),
+            "task_count": String(unanswered.delivered.changes.count),
+        ]
+        guard coordinatorWakeTurns.stopped else {
+            ToasttyLog.info("A coordinator wake turn ended with an error; its digest waits to be typed again", category: .tasks, metadata: metadata)
+            return
+        }
+        ToasttyLog.warning("Stopped waking the coordinator: its wake turns keep ending with an error", category: .tasks, metadata: metadata)
+        notifyUser(
+            "Toastty stopped waking the coordinator",
+            "Its last \(coordinatorWakeTurns.failures) wake turns ended with an error. The task changes wait. "
+                + "When one of its turns ends without an error, such as a turn for your next message, Toastty wakes it again."
+        )
     }
 
     /// Sets, moves or removes the coordinator's next check. With `quiet`,
@@ -166,6 +242,10 @@ extension TaskWebhookService {
         // Whole seconds, as the digest and the status print the time.
         wake.setRequestedWake(date.map { Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)) })
         coordinatorWake = wake
+        // The coordinator decided its next check in the last digest's turn,
+        // also when it cleared it: a failure of that turn does not tell the
+        // digest's scheduled check again.
+        coordinatorWakeTurns.unanswered?.delivered.scheduledCheck = nil
         saveOutbox()
         if quiet {
             ToasttyLog.info("Marked a coordinator wake turn quiet", category: .tasks)

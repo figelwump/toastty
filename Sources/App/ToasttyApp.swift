@@ -1445,6 +1445,19 @@ struct ToasttyApp: App {
         // Task changes and the coordinator's timer wake it from here on.
         if let coordinatorController = taskCoordinator.coordinatorController {
             taskWebhooks.attach(coordinator: coordinatorController)
+            // When wake turns keep failing, a click on the notice opens
+            // the coordinator.
+            taskWebhooks.notifyUser = { [weak coordinatorController] title, body in
+                let location = coordinatorController?.location
+                Task {
+                    await SystemNotificationSender.send(
+                        title: title,
+                        body: body,
+                        workspaceID: location?.workspaceID,
+                        panelID: location?.panelID
+                    )
+                }
+            }
             // A wake turn the coordinator marked quiet ends without an
             // unread mark, a notification or a push.
             sessionRuntimeStore.isQuietTurnEnd = { [weak coordinatorController] sessionID in

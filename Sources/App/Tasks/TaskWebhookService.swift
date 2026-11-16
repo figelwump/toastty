@@ -74,6 +74,12 @@ final class TaskWebhookService: ObservableObject {
     /// What waits for the coordinator, and its timer. `nil` while there is
     /// no coordinator.
     var coordinatorWake: CoordinatorWakeState?
+    /// The turns that Toastty's digests started in this run, and how many
+    /// failed in a row. See `coordinatorTurnEnded`.
+    var coordinatorWakeTurns = CoordinatorWakeTurns()
+    /// Tells the user something once, such as that Toastty stopped waking
+    /// the coordinator. The app sets it.
+    var notifyUser: @MainActor (_ title: String, _ body: String) -> Void = { _, _ in }
     /// Events being sent now, one per webhook at most.
     private var inFlight: [UUID: UUID] = [:]
     /// The settings and secret each in-flight send used. A refusal of an
