@@ -157,8 +157,19 @@ enum RemoteTaskBoardProjection {
             releaseAfterMergeRequestedAt: TaskBoardPresentation.releaseAfterMergeRequestedAt(item),
             parentTaskID: parent?.taskID,
             parentTaskTitle: parent?.title,
-            childProgress: family.childProgress(of: item)
+            childProgress: family.childProgress(of: item),
+            macStep: macStep(item)
         )
+    }
+
+    static let pickWorkspaceMacStep =
+        "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace."
+
+    /// What only the Mac can do for the task. The workspace picker is in the
+    /// task's setup card in the Tasks view; no task action picks one.
+    static func macStep(_ item: TaskBoardItem) -> String? {
+        if case .needsYou(.pickWorkspace) = item.stage { return pickWorkspaceMacStep }
+        return nil
     }
 
     // MARK: - Actions
