@@ -716,8 +716,12 @@ Checks**.
 
 Acting on tasks needs a native paired device with send access and its **Task
 actions** switch on under **Paired Devices** in Remote Access settings. The
-switch is on by default, also for devices paired before this feature. You can
-turn it off per device, and that choice survives restarting the Mac app.
+switch is on by default, also for devices paired before this feature: after
+an update, every paired phone can merge, archive (which can also close the
+pull request on GitHub) and delete tasks. To turn this off for one phone, open
+Remote Access settings on the Mac and turn off **Task actions** in that
+device's row under **Paired Devices**. The choice survives restarting the Mac
+app.
 Older versions omitted the saved setting when it was off, so those devices
 adopt the new default after an upgrade. Turn it off again if needed.
 Without it, the phone still shows the control, and the Mac refuses each
@@ -1246,6 +1250,28 @@ The Mac must remain connected while loading previews. Missing content,
 unsupported previews, and files exceeding the preview size limits show an
 unavailable message. Hosts without the preview capabilities continue to
 support conversations; update Toastty on the Mac to enable previews.
+
+## Mac and phone compatibility
+
+The Mac and the phone can be updated in either order. Pairing, the connection,
+sessions, replies and approvals work in every combination. The features
+that came with tasks need both sides, and the notification service for task
+alerts. A new Mac with an older phone means a Toastty Mobile build from before
+tasks; an older Mac means Toastty 0.9.x.
+
+| Feature | New Mac, older phone | Older Mac, new phone |
+| --- | --- | --- |
+| Sessions, replies, approvals | As before | As before |
+| Task board (All \| Needs you, the Tasks tab) | The phone ignores the board and keeps its list | **All \| Active** with no tab bar ([Tasks](#tasks)) |
+| Coordinator tab | The phone lists the coordinator's workspace as an ordinary one | No Coordinator tab |
+| **+** on Home and Share to Toastty | Start a session | Start a session; shared content opens the new-session sheet ([Creating a task](#creating-a-task)) |
+| Task actions: Merge, Archive…, Mark Done, Delete | Not offered | The task's detail stays read-only ([Acting on tasks](#acting-on-tasks)) |
+| Release… from the phone | Not offered | Not offered |
+| Done checkbox on a task space with an open pull request | The Mac refuses the mark, and the phone says it could not update it | As before |
+| Task alerts | The alert text shows; a tap only opens the app, and no banner shows while the app is open ([Task alerts](#task-alerts)) | Session alerts only |
+
+Task alerts also need a notification service version that accepts them. An
+older one refuses them, and the Mac sends the session's Ready alert instead.
 
 ## Privacy and security
 

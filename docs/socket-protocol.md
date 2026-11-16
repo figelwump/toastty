@@ -268,6 +268,10 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.send`
 - `coordinator.wake`
 - `coordinator.watch`
+- `webhook.add`
+- `webhook.set`
+- `webhook.remove`
+- `webhook.test`
 - `window.tasks.show`
 - `window.tasks.hide`
 - `window.sidebar.set-segment`
@@ -541,6 +545,25 @@ Notable action-specific behavior:
     session reaches only workspaces in its scope. A task space that already has
     a record returns that task; a top-level workspace fails with
     `INVALID_PAYLOAD`.
+- `webhook.add`, `webhook.set`, `webhook.remove`, `webhook.test`
+  - manage task webhooks; see
+    [Webhooks for task events](tasks.md#webhooks-for-task-events). All four
+    require `args.name` (lowercase letters, digits, `-` and `_`) and are
+    refused for workspace-scoped sessions.
+  - `webhook.add` requires `args.url` (`https://`, or `http://` only for
+    127.0.0.1 and localhost) and takes optional `events`, `roots`
+    (repeatable), `externalRefPrefix`, `auth` (`bearer`, `header:<Name>`,
+    `hmac`, the default, or `none` for loopback only), `secret` (16 to 4096
+    printable ASCII bytes, kept in the login Keychain and never returned) and
+    `secretHint`. The webhook waits for the user's approval in the Tasks view
+    and receives nothing until then; no request can approve it.
+  - `webhook.set` takes the same optional fields. A change to the URL,
+    events, filters or auth needs approval again. A new secret alone keeps
+    the approval and starts a webhook that stopped after HTTP 401, 403 or
+    410. An empty `externalRefPrefix` or `secretHint` clears it.
+  - `webhook.remove` removes the webhook, its Keychain secret and its unsent
+    events. `webhook.test` sends an approved webhook a `task.test` event now
+    and returns the HTTP status, or the class of failure.
 - `window.tasks.show`, `window.tasks.hide`, `window.sidebar.set-segment`
   - take the `windowID` selector. `window.sidebar.set-segment` requires
     `segment` (`all` or `needsYou`; the earlier names `projects` and `status`
@@ -747,6 +770,7 @@ Common query IDs include:
 - `task.workspace-choices`
 - `task.watches`
 - `coordinator.get`
+- `webhook.list`
 
 `coordinator.get` returns `exists`, and for an open coordinator `windowID`,
 `workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
@@ -774,6 +798,11 @@ optional `args.remove`; a watched task's merge or end, or any merge in a
 watched project, then wakes the coordinator. It returns the
 `coordinator.get` fields. See [The coordinator](tasks.md#the-coordinator) and
 [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator).
+
+`webhook.list` returns each task webhook with its status (`pendingApproval`,
+`approved` or `disabled`), a shortened URL, its events, filters and auth mode,
+and its last delivery. It never returns a secret or the full URL path. With
+`args.name`, it returns only that webhook.
 
 `task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
@@ -826,7 +855,8 @@ terminal in the task space or sent its agent a message from Toastty Mobile.
 `passing` or `null`) and `checksPendingSince`. See
 [How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state). `task.list` returns `tasks`, oldest first, with the same
 scope rule as `task.retry`, with `agentState` but without `lastReply` unless
-`args.includeReply` is `true`. It also returns `cursor`, `deletedTaskIDs`, and
+`args.includeReply` is `true`. With `args.parent` set to a task ID, it lists
+only the tasks that task started. It also returns `cursor`, `deletedTaskIDs`, and
 `reset`. With `args.changedSince` set to an earlier `cursor`, `tasks` holds only
 the tasks whose record, `stage`, `agentState` or `pullRequest` changed since
 (a change of only `lastOutputAt` or `lastUserInputAt` does not count), and `deletedTaskIDs` the

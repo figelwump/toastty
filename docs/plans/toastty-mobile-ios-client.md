@@ -1,5 +1,9 @@
 # Plan: Toastty Mobile — Native iOS Client
 
+> **Historical plan.** It records the design as planned when it was written and is
+> not kept up to date. For current behavior, see the reference documents listed in
+> [the README](../../README.md#documentation).
+
 **Branch name:** `feat/mobile-remote-access-ios`, stacked on `feat/mobile-remote-access`
 **Short name:** `mobile-ios`
 **Created:** 2026-08-07
@@ -303,8 +307,8 @@ Cut from earlier drafts: early native implementation before web evidence; a clie
 - UI prototypes: `docs/design/toastty-mobile-merged.html` (navigation and conversation shell) and `docs/design/toastty-mobile-home-affordances.html` (accepted home ordering and shared session-card refinement)
 - Host contract (implemented, on `feat/mobile-remote-access`): `Sources/Core/RemoteAccess/` (wire types to extract), `Sources/App/RemoteAccess/` (gateway/service/settings — gains the native pairing slice + QR UI), `Sources/App/Resources/RemoteWebClient/app.js` (reference client), `Sources/Core/Sessions/AgentKind.swift`, root `Project.swift`, and the new `.github/workflows/` iOS/mac contract gate
 - Decision artifacts: `artifacts/reviews/mobile-ios-branch-strategy.txt` (stacked-branch proposal), `artifacts/reviews/mobile-roadmap-decision.txt` (next host slice; pending live-phone E2E)
-- EmptyOS reference roots: `/Users/vishal/GiantThings/repos/emptyos/ios/` (app + scripts), `docs/plans/native-ios-client-parity.md` (plan format; 1k-line architecture record), `docs/deferred.md`
-- Plate reference roots: `/Users/vishal/GiantThings/repos/plate/scripts/ci/ios-testflight.sh`, `.github/workflows/ios-testflight.yml`, `docs/ios-release-ci.md` (signing failure→fix playbook), `scripts/remote/`, `scripts/automation/native-check.sh`, `Project.swift`, `docs/plans/plate-realtime-audio-proof.md` (device-signing wart)
+- EmptyOS reference roots: the EmptyOS repository's `ios/` (app + scripts), `docs/plans/native-ios-client-parity.md` (plan format; 1k-line architecture record), `docs/deferred.md`
+- Plate reference roots: the Plate repository's `scripts/ci/ios-testflight.sh`, `.github/workflows/ios-testflight.yml`, `docs/ios-release-ci.md` (signing failure→fix playbook), `scripts/remote/`, `scripts/automation/native-check.sh`, `Project.swift`, `docs/plans/plate-realtime-audio-proof.md` (device-signing wart)
 
 ## Notes
 
