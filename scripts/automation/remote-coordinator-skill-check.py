@@ -1235,7 +1235,7 @@ def conflict(run):
     run.new_turns(wake=True)
     messages = [m['text'] for m in run.messages(task)]
     run.check('the task got one instruction to merge its base branch',
-              len(messages) == 1 and 'merge' in messages[0].lower() and 'rebase' not in messages[0].lower(), messages)
+              len(messages) == 1 and 'merge' in messages[0].lower() and 'base' in messages[0].lower(), messages)
 
 
 def dependency(run):

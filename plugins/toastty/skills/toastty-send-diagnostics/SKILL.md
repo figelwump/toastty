@@ -157,8 +157,8 @@ Shell-quote every substituted value as one argument. Omit `--contact` entirely
 when the user did not provide contact text. Do not edit the diagnostics JSON,
 re-run collection, or choose another diagnostics file before submitting.
 
-Do not wrap the user-side submit command in a secrets wrapper, `sudo`, or
-repository helpers. The installed Toastty CLI carries its upload configuration.
+Do not wrap the user-side submit command in `sv exec`, `sudo`, or repository
+helpers. The installed Toastty CLI carries its upload configuration.
 
 ## Submission Failures
 
@@ -167,8 +167,8 @@ repository helpers. The installed Toastty CLI carries its upload configuration.
 - If submission fails before any request reaches the server specifically
   because hostname resolution failed or the runtime denied network access,
   retry the exact same command at most once with network access allowed only
-  for that command. Do not use `sudo` or a secrets wrapper, disable the
-  sandbox, or change the endpoint, file, contact, or other arguments.
+  for that command. Do not use `sudo`, `sv exec`, disable the sandbox, or change
+  the endpoint, file, contact, or other arguments.
 - Do not retry HTTP, authentication, TLS, connection-timeout, or other failures
   that could occur after an upload began; the server may already have received
   the report.

@@ -132,18 +132,18 @@ limited publication. Keep it a draft while required checks run, and mark it
 ready when they pass. Readiness does not authorize a merge.
 
 Toastty reads pull requests only from GitHub, through `gh`. Before you publish
-the first time, check that `gh auth status` succeeds and that the remote you
-push to is on `github.com`.
+the first time, check whether the remote you push to is on `github.com`.
 
-- **`gh` is missing or not signed in:** push the branch, then ask the user to
-  install `gh` or run `gh auth login`, with `task needs-reply` (step 7). Do not
-  open the pull request another way.
 - **The pull request is not on GitHub:** open it as the repository's
-  instructions say. Annotate the workspace with another key, such as
-  `merge-request`, never `github-pr`. Toastty cannot read it, so when the pull
-  request is ready, run `task ready-for-review` as step 7 describes. The user
-  merges it on its host; Toastty's Merge does not apply. Skip the GitHub
-  steps below.
+  instructions say; `gh` is not needed. Annotate the workspace with another
+  key, such as `merge-request`, never `github-pr`. Toastty cannot read it, so
+  when the pull request is ready, run `task ready-for-review` as step 7
+  describes. The user merges it on its host; Toastty's Merge does not apply.
+  Skip the GitHub steps below.
+- **On GitHub, check `gh auth status` once.** If `gh` is missing or not signed
+  in, push the branch, then ask the user to install `gh` or run
+  `gh auth login`, with `task needs-reply` (step 7). Do not open the pull
+  request another way.
 
 On GitHub:
 
