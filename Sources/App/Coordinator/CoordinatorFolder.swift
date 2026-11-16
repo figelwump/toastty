@@ -11,8 +11,10 @@ import Foundation
 ///   an older Toastty. Toastty writes both files again whenever they differ.
 /// - `references/` is Toastty's too. It holds the skill's reference files,
 ///   such as the rules for a merge, which the instructions tell the agent to
-///   read when it needs them. By default, Codex reads 32 KiB of its
-///   instruction files, so the instructions cannot hold everything.
+///   read when it needs them. Codex reads at most `project_doc_max_bytes` of
+///   its instruction files (32 KiB by default), so Toastty starts and resumes
+///   a Codex coordinator with `codexProjectDocMaxBytes`, and the instructions
+///   stay under that value.
 /// - `policy.md`, `ledger.md`, `friction.md` and `decisions.md` are the
 ///   user's and the coordinator's. Toastty creates each one when it is
 ///   missing and never writes it again.
@@ -26,6 +28,11 @@ struct CoordinatorFolder: Sendable {
     static let frictionFileName = "friction.md"
     static let decisionsFileName = "decisions.md"
     static let referencesDirectoryName = "references"
+
+    /// The `project_doc_max_bytes` that a Codex coordinator runs with, at its
+    /// first start and when a relaunch resumes it. Codex's default, 32 KiB,
+    /// would drop the end of the instructions without an error.
+    static let codexProjectDocMaxBytes = 128 * 1024
 
     static let instructionsHeader = """
     <!-- Toastty writes this file and replaces it when Toastty changes. Do not edit it. Your own rules go in policy.md. -->

@@ -8,7 +8,8 @@ import RemoteProtocol
 @MainActor
 protocol CoordinatorAgentLaunching: AnyObject {
     /// Launches into the given terminal without moving focus and with no
-    /// first message.
+    /// first message. A Codex agent reads all of the coordinator's
+    /// instructions (`CoordinatorFolder.codexProjectDocMaxBytes`).
     func launchCoordinator(
         profileID: String,
         workspaceID: UUID,
@@ -38,7 +39,8 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
             environment: environment,
             model: model,
             reasoningEffort: reasoningEffort,
-            focusPolicy: .preserveFirstResponder
+            focusPolicy: .preserveFirstResponder,
+            codexProjectDocMaxBytes: CoordinatorFolder.codexProjectDocMaxBytes
         )
     }
 }

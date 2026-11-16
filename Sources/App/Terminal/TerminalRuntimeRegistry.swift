@@ -1901,11 +1901,22 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
         guard let restoredManagedLaunchPlanner,
               let record = terminalState.resumeRecord,
-              let argv = ManagedAgentResumeResolver.resumeArgv(
+              var argv = ManagedAgentResumeResolver.resumeArgv(
                   for: record,
                   agentCatalog: agentCatalogProvider?.catalog ?? .empty
               ) else {
             return nil
+        }
+        let isCoordinator = store?.state.coordinator?.panelID == panelID
+        if isCoordinator {
+            // A resumed Codex coordinator reads all of its instructions, as
+            // at its first start.
+            argv = AgentLaunchArgumentOverrideAdapter.applying(
+                codexProjectDocMaxBytes: CoordinatorFolder.codexProjectDocMaxBytes,
+                to: argv,
+                agent: record.agent,
+                profileID: record.agent.rawValue
+            )
         }
 
         do {
@@ -1921,7 +1932,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
 
             var commandEnvironment = plan.environment
-            if store?.state.coordinator?.panelID == panelID {
+            if isCoordinator {
                 commandEnvironment.merge(coordinatorLaunchEnvironment, uniquingKeysWith: { _, new in new })
             }
             commandEnvironment[ToasttyLaunchContextEnvironment.launchReasonKey] = TerminalLaunchReason.restore.rawValue

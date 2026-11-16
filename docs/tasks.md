@@ -1244,10 +1244,14 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   and a new version of Toastty brings new instructions to a conversation
   that began under the old one. Toastty replaces both files, and the files
   in `references/`, whenever their text differs, so do not edit them: put
-  your rules in `policy.md`. The instruction file stays under 32 KiB: by
-  default, Codex reads that much of its instruction files, all files
-  together (`project_doc_max_bytes` in its configuration). The reference
-  files hold the rest. An agent
+  your rules in `policy.md`. By default, Codex reads only 32 KiB of its
+  instruction files, all files together (`project_doc_max_bytes` in its
+  configuration). So when `[coordinator] agent` names a Codex profile,
+  Toastty starts the agent, and resumes it after a relaunch, with
+  `project_doc_max_bytes` set to 128 KiB for that command only. Your
+  `~/.codex/config.toml` and the task agents do not change. The
+  instruction file stays under 128 KiB, and the reference files hold the
+  rules that the coordinator reads only when it needs them. An agent
   that reads neither file can load the `toastty-coordinator` skill by name.
   If Toastty cannot write the instructions, it does not start the
   coordinator's agent, and after a relaunch it does not resume it: the row
@@ -2185,7 +2189,9 @@ effort = "high"
 runs your `claude` profile with that profile's own model and effort.
 `[defaults]` does not apply to it. Toastty reads the table each time it starts
 the coordinator's agent, and a resumed conversation keeps what it started
-with.
+with. With a Codex profile, Toastty also raises `project_doc_max_bytes` for
+the coordinator, so that Codex reads all of its instructions (see
+[The coordinator's folder](#the-coordinators-folder)).
 
 ```toml
 [quick_entry]

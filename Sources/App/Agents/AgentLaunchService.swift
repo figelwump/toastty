@@ -309,6 +309,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
         parentSessionID: String? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget,
+        codexProjectDocMaxBytes: Int? = nil,
         beforeDispatch: (@MainActor () throws -> Void)? = nil
     ) async throws -> AgentLaunchResult {
         let preparation = try makeLaunchPreparation(
@@ -325,6 +326,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             additionalDirectories: additionalDirectories,
             parentSessionID: parentSessionID,
             focusPolicy: focusPolicy,
+            codexProjectDocMaxBytes: codexProjectDocMaxBytes,
             validatePromptState: false
         )
         guard let terminalCommandRouter else {
@@ -365,6 +367,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         additionalDirectories: [String],
         parentSessionID: String?,
         focusPolicy: TerminalInputFocusPolicy,
+        codexProjectDocMaxBytes: Int? = nil,
         validatePromptState: Bool = true
     ) throws -> AgentLaunchPreparation {
         guard let terminalCommandRouter else {
@@ -405,6 +408,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             applyingModel: model,
             applyingReasoningEffort: reasoningEffort,
             applyingInitialPrompt: initialPrompt,
+            applyingCodexProjectDocMaxBytes: codexProjectDocMaxBytes,
             forkRecord: forkRecord,
             cwd: explicitCWD,
             additionalDirectories: directories
@@ -843,14 +847,20 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         applyingModel model: String?,
         applyingReasoningEffort reasoningEffort: String?,
         applyingInitialPrompt initialPrompt: String?,
+        applyingCodexProjectDocMaxBytes codexProjectDocMaxBytes: Int? = nil,
         forkRecord: ManagedAgentResumeRecord? = nil,
         cwd: String? = nil,
         additionalDirectories: [String] = []
     ) throws -> [String] {
-        let selectedArgv = try AgentLaunchArgumentOverrideAdapter.applying(
-            model: model,
-            reasoningEffort: reasoningEffort,
-            to: profile.argv,
+        let selectedArgv = AgentLaunchArgumentOverrideAdapter.applying(
+            codexProjectDocMaxBytes: codexProjectDocMaxBytes,
+            to: try AgentLaunchArgumentOverrideAdapter.applying(
+                model: model,
+                reasoningEffort: reasoningEffort,
+                to: profile.argv,
+                agent: agent,
+                profileID: profile.id
+            ),
             agent: agent,
             profileID: profile.id
         )

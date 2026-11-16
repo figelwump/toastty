@@ -24,6 +24,31 @@ struct AgentLaunchArgumentOverrideAdapterTests {
     }
 
     @Test
+    func codexProjectDocLimitReplacesTheProfileValueAndKeepsTheResumedSession() throws {
+        let nativeID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let argv = try AgentLaunchArgumentOverrideAdapter.applying(
+            codexProjectDocMaxBytes: 131_072,
+            to: ["codex", "resume", nativeID, "-c", "project_doc_max_bytes=1000", "--search"],
+            agent: .codex,
+            profileID: "codex"
+        )
+        #expect(argv == ["codex", "--config", "project_doc_max_bytes=131072", "resume", nativeID, "--search"])
+        #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .codex, argv: argv) == nativeID)
+        // Claude Code has no such limit.
+        let claudeArgv = ["claude", "--resume", nativeID]
+        #expect(AgentLaunchArgumentOverrideAdapter.applying(
+            codexProjectDocMaxBytes: 131_072, to: claudeArgv, agent: .claude, profileID: "claude"
+        ) == claudeArgv)
+        // A shell helper hides the Codex executable, and an attached `-c`
+        // cannot be replaced safely: the agent still starts, unchanged.
+        for unchanged in [["scodex"], ["codex", "-cproject_doc_max_bytes=4096"]] {
+            #expect(AgentLaunchArgumentOverrideAdapter.applying(
+                codexProjectDocMaxBytes: 131_072, to: unchanged, agent: .codex, profileID: "codex"
+            ) == unchanged)
+        }
+    }
+
+    @Test
     func codexForkPreservesConfiguredAutomaticApprovalAndStrictConfig() throws {
         let nativeID = UUID().uuidString
         let record = ManagedAgentResumeRecord(agent: .codex, nativeSessionID: nativeID, sessionFilePath: "/source/\(nativeID).jsonl", cwd: "/source", capturedAt: Date())
