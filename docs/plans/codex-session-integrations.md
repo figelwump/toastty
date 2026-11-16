@@ -1,8 +1,12 @@
 # Managed Codex and Claude Skills Plan
 
+> **Historical plan.** It records the design as planned when it was written and is
+> not kept up to date. For current behavior, see the reference documents listed in
+> [the README](../../README.md#documentation).
+
 > September 2026 update: Plugin 0.4.2 keeps four built-in app skills.
 > `worktree-create` and `finisher` are now opt-in personal workflows in
-> [examples/skills/](../../examples/skills/README.md). Earlier packaging and
+> `examples/skills/`, which later releases removed (see tag `v0.9.2`). Earlier packaging and
 > exclusion decisions below are historical; see the
 > [current workflow](../running-agents.md#worktree-tasks).
 

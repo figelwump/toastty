@@ -1482,8 +1482,8 @@ struct SidebarView: View {
     }
 
     /// "NEEDS YOU 4" over a bucket's rows. The count is the rows whose own
-    /// state is in the bucket; a dimmed relative or a held row counts where
-    /// its own state is.
+    /// state is in the bucket; a relative listed with its family, or a held
+    /// row, counts where its own state is.
     private func bucketHeader(_ bucket: SidebarBucket, count: Int) -> some View {
         SidebarGroupTitle(title: bucket.title, count: count)
             .foregroundStyle(Self.bucketTitleColor(bucket))
@@ -1588,8 +1588,6 @@ struct SidebarView: View {
                 }
             }
         }
-        // Its own state is in a calmer bucket; see `SidebarBucketEntry.isContext`.
-        .opacity(entry.isContext ? 0.55 : 1)
     }
 
     private static func bucketedSubspaceRow(

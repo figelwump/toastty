@@ -2,7 +2,7 @@
 
 The repeatable probe at `scripts/agents/probe-pi-session-scoped-skills.sh`
 ran against `pi` CLI `0.70.2` (`@mariozechner/pi-coding-agent`, binary at
-`/Users/vishal/.nvm/versions/node/v22.13.1/bin/pi`): 8/8 no-model checks
+`~/.nvm/versions/node/v22.13.1/bin/pi`): 8/8 no-model checks
 pass standalone, and 24/24 checks pass with `--with-model` (real
 `claude-haiku-4-5` calls via `sv exec --`, which injects `ANTHROPIC_API_KEY`).
 Every scenario used a temporary `HOME`, a temporary `PI_CODING_AGENT_DIR`
@@ -17,7 +17,7 @@ launch without touching the user's real `~/.pi`.
 ## Environment
 
 - `pi --version`: `0.70.2`
-- Binary: `/Users/vishal/.nvm/versions/node/v22.13.1/bin/pi` →
+- Binary: `~/.nvm/versions/node/v22.13.1/bin/pi` →
   `@mariozechner/pi-coding-agent` npm package, `dist/cli.js` → `main.js`.
 - Relevant env vars (from `pi --help` and package source):
   - `PI_CODING_AGENT_DIR` — overrides the agent config dir (default
