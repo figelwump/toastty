@@ -115,10 +115,13 @@ Tested with Claude Code 2.1.325 in its default permission mode, with stand-in
 - `Bash(git push *)` and `Bash(gh pr create *)` rules work.
 
 Save this hook as `~/.claude/hooks/toastty-task-commands.py` and make it
-executable (`chmod +x`). It approves one plain Toastty `task`, `coordinator` or
-`query run` command. It leaves the merge, archive, delete, done and clean-up
-commands to ask, and any command with a variable after the first word, a
-command substitution, a chain, a pipe or a redirect.
+executable (`chmod +x`). It approves one plain Toastty command from a fixed
+list: the `task` commands that read, create, start, message and watch tasks,
+the coordinator's `status`, `send`, `wake` and `watch`, and `query run`,
+which only reads. Every other command asks as before, among them `task merge`,
+`task request-merge`, `task archive`, `task delete` and `task mark-done`, and
+any command with a variable after the first word, a command substitution, a
+chain, a pipe or a redirect.
 
 ```python
 #!/usr/bin/env python3
@@ -128,9 +131,11 @@ import json, re, sys
 
 ALLOWED = re.compile(
     r'"\$TOASTTY_CLI_PATH" (--json )?'
-    r'(task (?!(merge|request-merge|archive|delete|mark-done|clean-up)( |$))'
-    r'|coordinator |query run )'
-    r'[^$`;&|<>()\\\n]*'
+    r'(task (get|list|workspace-choices|watches|create|start-work|send'
+    r'|watch|unwatch|needs-reply|ready-for-review)'
+    r'|coordinator (status|send|wake|watch)'
+    r'|query run)'
+    r'( [^$`;&|<>()\\\n]*)?'
 )
 
 command = json.load(sys.stdin).get("tool_input", {}).get("command", "")

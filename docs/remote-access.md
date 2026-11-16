@@ -1267,7 +1267,7 @@ tasks; an older Mac means Toastty 0.9.x.
 | **+** on Home and Share to Toastty | Start a session | Start a session; shared content opens the new-session sheet ([Creating a task](#creating-a-task)) |
 | Task actions: Merge, Archive…, Mark Done, Delete | Not offered | The task's detail stays read-only ([Acting on tasks](#acting-on-tasks)) |
 | Release… from the phone | Not offered | Not offered |
-| Done checkbox on a task space with an open pull request | The Mac refuses the mark, and the phone says it could not update it | As before |
+| Done checkbox on a task's space while its pull request is open | The Mac refuses the mark, and the phone says it could not update it. A task space without a task record keeps its checkbox | As before |
 | Task alerts | The alert text shows; a tap only opens the app, and no banner shows while the app is open ([Task alerts](#task-alerts)) | Session alerts only |
 
 Task alerts also need a notification service version that accepts them. An

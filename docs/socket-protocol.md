@@ -554,7 +554,7 @@ Notable action-specific behavior:
     127.0.0.1 and localhost) and takes optional `events`, `roots`
     (repeatable), `externalRefPrefix`, `auth` (`bearer`, `header:<Name>`,
     `hmac`, the default, or `none` for loopback only), `secret` (16 to 4096
-    printable ASCII bytes, kept in the login Keychain and never returned) and
+    printable ASCII bytes without spaces, kept in the login Keychain and never returned) and
     `secretHint`. The webhook waits for the user's approval in the Tasks view
     and receives nothing until then; no request can approve it.
   - `webhook.set` takes the same optional fields. A change to the URL,
