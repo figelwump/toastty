@@ -113,9 +113,9 @@ struct RemoteCoordinatorChatReadGatewayTests {
         #expect(received.map(\.0) == [request])
         #expect(received.map(\.1) == [native.device.id])
 
-        // Without a paired device's credential, or with a malformed read,
-        // the handler is not asked.
-        #expect(try respond(try Self.encode(request), headers: [("tailscale-user-login", Self.identity)]).status == 403)
+        // A malformed read does not reach the handler. A request without a
+        // paired device's credential is refused before it: see
+        // `CoordinatorChatNewMessagesTests`.
         #expect(try respond(Data("{}".utf8)).status == 400)
         let empty = RemoteCoordinatorChatReadRequest(conversationID: Self.conversationID, eventID: "")
         #expect(try respond(try Self.encode(empty)).status == 400)

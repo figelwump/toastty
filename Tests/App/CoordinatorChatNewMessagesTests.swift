@@ -337,7 +337,7 @@ struct CoordinatorChatNewMessagesTests {
 
         // Without a paired device's credential nothing moves.
         let unpaired = try fixture.conversations.gatewayCoordinatorChatRead(request, credential: nil)
-        #expect(unpaired.status == 403)
+        #expect(unpaired.status == 401)
         #expect(unpaired.result == nil)
         let unknown = try fixture.conversations.gatewayCoordinatorChatRead(request, credential: "not-a-paired-device")
         #expect(unknown.status == 401)
@@ -435,19 +435,16 @@ struct CoordinatorChatNewMessagesTests {
             == ToasttyNewMessagesMarker(firstRowID: Self.rowID(2), count: 2))
         #expect(CoordinatorChatReadPoint.marker(in: rows, after: Self.readPoint(rows[2])) == nil)
 
-        // A read row older than the loaded rows: the rows after its time.
+        // A read row older than the loaded rows: the rows after its time
+        // are new, and the chat reads older pages to reach it.
         let older = RemoteCoordinatorChatReadPoint(eventID: "claude:not-loaded", timestamp: Self.start)
         #expect(CoordinatorChatReadPoint.marker(in: rows, after: older)
             == ToasttyNewMessagesMarker(firstRowID: Self.rowID(1), count: 3))
-        #expect(CoordinatorChatReadPoint.needsOlderRows(rows, toReach: older) == false)
-        let beforeTheLoadedRows = RemoteCoordinatorChatReadPoint(
-            eventID: "claude:not-loaded", timestamp: Self.start.addingTimeInterval(-60)
-        )
+        #expect(CoordinatorChatReadPoint.needsOlderRows(rows, toReach: older))
+        // The rows have the read row, or reach back past its time.
         #expect(CoordinatorChatReadPoint.needsOlderRows(rows, toReach: Self.readPoint(rows[1])) == false)
-        let laterRows = rows.map { row in
-            Self.row(row.id.sequence + 10, row.content, at: Self.start.addingTimeInterval(60))
-        }
-        #expect(CoordinatorChatReadPoint.needsOlderRows(laterRows, toReach: beforeTheLoadedRows))
+        let byTimeOnly = RemoteCoordinatorChatReadPoint(eventID: nil, timestamp: sameTime.addingTimeInterval(30))
+        #expect(CoordinatorChatReadPoint.needsOlderRows(rows, toReach: byTimeOnly) == false)
 
         // A runtime event's identity restarts with each run of the Mac's
         // reader, so the read point keeps only its time.
