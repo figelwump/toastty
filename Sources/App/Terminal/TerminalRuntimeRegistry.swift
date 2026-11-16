@@ -1909,7 +1909,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         }
         let isCoordinator = store?.state.coordinator?.panelID == panelID
         if isCoordinator {
-            argv = coordinatorResumeArgv(argv, record: record, panelID: panelID)
+            // A resumed Codex coordinator reads all of its instructions, as
+            // at its first start.
+            argv = AgentLaunchArgumentOverrideAdapter.applying(
+                codexProjectDocMaxBytes: CoordinatorFolder.codexProjectDocMaxBytes,
+                to: argv,
+                agent: record.agent,
+                profileID: record.agent.rawValue
+            )
         }
 
         do {
@@ -1972,35 +1979,6 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 ]
             )
             return nil
-        }
-    }
-
-    /// A resumed Codex coordinator reads all of its instructions, as at its
-    /// first start. When the profile's argv cannot take the setting, the
-    /// coordinator still resumes, with Codex's default limit.
-    private func coordinatorResumeArgv(
-        _ argv: [String],
-        record: ManagedAgentResumeRecord,
-        panelID: UUID
-    ) -> [String] {
-        do {
-            return try AgentLaunchArgumentOverrideAdapter.applying(
-                codexProjectDocMaxBytes: CoordinatorFolder.codexProjectDocMaxBytes,
-                to: argv,
-                agent: record.agent,
-                profileID: record.agent.rawValue
-            )
-        } catch {
-            ToasttyLog.warning(
-                "Resuming the coordinator with Codex's default instruction size limit",
-                category: .terminal,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                    "agent": record.agent.rawValue,
-                    "error": error.localizedDescription,
-                ]
-            )
-            return argv
         }
     }
 

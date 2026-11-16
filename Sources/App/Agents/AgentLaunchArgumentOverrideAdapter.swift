@@ -229,19 +229,37 @@ enum AgentLaunchArgumentOverrideAdapter {
     /// any value the profile sets. Codex reads at most that many bytes of
     /// its `AGENTS.md` files and drops the rest without an error. Other
     /// agents have no such limit, so their argv is returned unchanged.
+    ///
+    /// When Toastty cannot find the Codex executable in the argv, such as a
+    /// shell helper (`argv = ["scodex"]`), or cannot replace the profile's
+    /// value, the argv is returned unchanged and a warning is logged: the
+    /// agent still starts, with the limit of its own configuration, as
+    /// other managed launch flags are skipped for such a profile.
     static func applying(
         codexProjectDocMaxBytes: Int?,
         to argv: [String],
         agent: AgentKind,
         profileID: String
-    ) throws -> [String] {
+    ) -> [String] {
         guard let codexProjectDocMaxBytes, agent == .codex else { return argv }
-        var editor = try ProviderArgvEditor(argv: argv, agent: agent, profileID: profileID)
-        try editor.removeCodexConfigAssignments(
-            key: "project_doc_max_bytes",
-            parameter: "projectDocMaxBytes"
-        )
-        return editor.inserting(["--config", "project_doc_max_bytes=\(codexProjectDocMaxBytes)"])
+        do {
+            var editor = try ProviderArgvEditor(argv: argv, agent: agent, profileID: profileID)
+            try editor.removeCodexConfigAssignments(
+                key: "project_doc_max_bytes",
+                parameter: "projectDocMaxBytes"
+            )
+            return editor.inserting(["--config", "project_doc_max_bytes=\(codexProjectDocMaxBytes)"])
+        } catch {
+            ToasttyLog.warning(
+                "Launching Codex without project_doc_max_bytes because its argv cannot take it",
+                category: .terminal,
+                metadata: [
+                    "profile_id": profileID,
+                    "error": error.localizedDescription,
+                ]
+            )
+            return argv
+        }
     }
 
     private static func validatedValue(

@@ -852,9 +852,9 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         cwd: String? = nil,
         additionalDirectories: [String] = []
     ) throws -> [String] {
-        let selectedArgv = try AgentLaunchArgumentOverrideAdapter.applying(
+        let selectedArgv = AgentLaunchArgumentOverrideAdapter.applying(
             codexProjectDocMaxBytes: codexProjectDocMaxBytes,
-            to: AgentLaunchArgumentOverrideAdapter.applying(
+            to: try AgentLaunchArgumentOverrideAdapter.applying(
                 model: model,
                 reasoningEffort: reasoningEffort,
                 to: profile.argv,

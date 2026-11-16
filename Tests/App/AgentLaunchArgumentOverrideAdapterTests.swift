@@ -36,9 +36,16 @@ struct AgentLaunchArgumentOverrideAdapterTests {
         #expect(ManagedAgentResumeResolver.expectedNativeSessionID(agent: .codex, argv: argv) == nativeID)
         // Claude Code has no such limit.
         let claudeArgv = ["claude", "--resume", nativeID]
-        #expect(try AgentLaunchArgumentOverrideAdapter.applying(
+        #expect(AgentLaunchArgumentOverrideAdapter.applying(
             codexProjectDocMaxBytes: 131_072, to: claudeArgv, agent: .claude, profileID: "claude"
         ) == claudeArgv)
+        // A shell helper hides the Codex executable, and an attached `-c`
+        // cannot be replaced safely: the agent still starts, unchanged.
+        for unchanged in [["scodex"], ["codex", "-cproject_doc_max_bytes=4096"]] {
+            #expect(AgentLaunchArgumentOverrideAdapter.applying(
+                codexProjectDocMaxBytes: 131_072, to: unchanged, agent: .codex, profileID: "codex"
+            ) == unchanged)
+        }
     }
 
     @Test
