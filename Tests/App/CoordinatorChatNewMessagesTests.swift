@@ -165,7 +165,8 @@ struct CoordinatorChatNewMessagesTests {
         guard case .page(let page) = subscription.events(before: nil, limit: 200) else {
             throw LocalConversationFixtureError.timedOut
         }
-        let event = try #require(page.events.last(where: matches))
+        let found = page.events.last(where: matches)
+        let event = try #require(found)
         return RemoteCoordinatorChatReadRequest(
             conversationID: page.conversationID, eventID: event.eventID,
             projectionRunID: page.projectionRunID, projectionGeneration: page.projectionGeneration
