@@ -342,7 +342,10 @@ targets its own workspace rather than the selected one; a caller whose session
 Toastty no longer runs must name the workspace. Only subspaces and a task's
 task space hold the mark: `workspace.set-done` rejects any other top-level
 workspace, and moving a subspace that is not a task's task space to top level
-drops it. The sidebar shows a done task space with a check in place of its
+drops it. It also rejects a task with an open pull request, or one GitHub has
+not answered for yet, and a task with a merge under way: such a task finishes
+when you merge or archive it, as the sidebar's box and Toastty Mobile already
+require. The sidebar shows a done task space with a check in place of its
 idle box and keeps its place; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn
@@ -932,7 +935,9 @@ They also report how long the task has been in its state: `stage.changedAt`,
 when Toastty quit or crashed, and has not started one since),
 `agentState.lastOutputAt`, `lastUserInputAt`, and `pullRequest` with `checks`
 (`pending`, `failing` or `passing`), `checksPendingSince` and
-`mergeStateStatus`. `task list --changed-since` does not list a task when only
+`mergeStateStatus`. While GitHub has not answered about the pull request
+because the request failed, `pullRequestLookupError` gives the `problem`
+(`ghMissing`, `notSignedIn` or `other`) and a `message` that says what to do. `task list --changed-since` does not list a task when only
 `lastOutputAt` or `lastUserInputAt` changed. See
 [How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state).
 `task adopt` gives a task space without a record one; it defaults to the

@@ -1,5 +1,6 @@
 import Combine
 import CoreState
+import RemoteProtocol
 import Foundation
 import Testing
 @testable import ToasttyApp
@@ -943,6 +944,16 @@ struct TaskBoardTests {
             return
         }
         #expect(stage["attention"] == .string("startWaitsInTerminal"))
+        // The phone gets values it knows: the Needs you group, no mark of
+        // its own, and the words. The attention itself is not on the wire.
+        let summary = RemoteTaskBoardProjection.summary(
+            waiting, context: RemoteTaskBoardProjection.Context(state: fixture.store.state))
+        #expect(summary.group == .needsYou)
+        #expect(summary.mark == nil)
+        #expect(summary.rowSummary == "Codex may be waiting in its terminal")
+        let wire = try JSONEncoder().encode(summary)
+        #expect(String(decoding: wire, as: UTF8.self).contains("startWaitsInTerminal") == false)
+        #expect(try JSONDecoder().decode(RemoteTaskSummary.self, from: wire) == summary)
 
         // The user answers in the terminal and the agent reports its turn;
         // after it, an idle agent is only idle.
