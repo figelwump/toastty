@@ -121,7 +121,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             case "not-running": nil
             default: .idle
             }
-            return ToasttyMobileFixture.withCoordinator(base, status: status)
+            return ToasttyMobileFixture.withCoordinator(base, status: status, chatRead: fixtureCoordinatorChatRead)
         }
         if let fixtureSnapshot { return fixtureSnapshot }
 #endif
@@ -136,6 +136,18 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     }
 
 #if DEBUG
+    /// The fixture Mac's read point of the coordinator's chat:
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH=<n>` reads through
+    /// the fixture chat's event `n`.
+    private var fixtureCoordinatorChatRead: RemoteCoordinatorChatReadPoint? {
+        guard let value = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH"],
+              let sequence = Int(value) else { return nil }
+        let events = ToasttyConversationFixture.coordinatorEvents(for: ToasttyMobileFixture.coordinatorConversationID)
+        guard events.indices.contains(sequence - 1) else { return nil }
+        let event = events[sequence - 1]
+        return RemoteCoordinatorChatReadPoint(eventID: event.eventID, timestamp: event.timestamp)
+    }
+
     /// The fixture Mac's snapshot before any coordinator: with the task
     /// system when `taskFixture` names a board, otherwise `home`.
     private var fixtureSnapshot: MobileHomeSnapshot? {

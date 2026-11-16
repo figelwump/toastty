@@ -135,20 +135,17 @@ final class CoordinatorChatModel: ObservableObject {
     private let isAppActive: () -> Bool
     /// Makes Toastty the active app.
     private let activateApp: () -> Void
-    /// The time of the newest row that the user saw in the chat. Saved, so
-    /// that it survives a relaunch. `nil` before the user read any.
-    private var readThrough: Date?
     /// The user left the chat, or has not read it yet in this run: the next
     /// read of the rows places the new messages' line again.
     private var placesNewMessagesLine = true
-    /// The line marks the rows after this time until the user leaves the
-    /// chat again. `nil` while the chat draws no line.
-    private var newMessagesAfter: Date?
+    /// The line marks the rows after this read point until the user leaves
+    /// the chat again. `nil` while the chat draws no line.
+    private var newMessagesAfter: RemoteCoordinatorChatReadPoint?
     /// Older pages are being read so that the line can go where the user
     /// stopped reading.
     private var isLoadingOlderForReadPoint = false
     /// The most older pages read to place the line after a relaunch.
-    static let maximumOlderPagesForReadPoint = 5
+    static let maximumOlderPagesForReadPoint = CoordinatorChatReadPoint.maximumOlderPages
     /// Where the text size is saved, or `nil` for a run that saves no
     /// preferences, such as an automation run.
     private let defaults: UserDefaults?
@@ -194,8 +191,6 @@ final class CoordinatorChatModel: ObservableObject {
         self.now = now
         self.isAppActive = isAppActive
         self.activateApp = activateApp
-        readThrough = (defaults?.object(forKey: Self.readThroughDefaultsKey) as? Double)
-            .map(Date.init(timeIntervalSinceReferenceDate:))
         textScale = (defaults?.object(forKey: Self.textScaleDefaultsKey) as? Double)
             .map(Self.normalizedTextScale) ?? Self.defaultTextScale
         let attachmentDraft = DraftAttachments(stagingDirectoryURL: attachmentStagingURL)
@@ -1007,8 +1002,6 @@ final class CoordinatorChatModel: ObservableObject {
 
     // MARK: - What the user has read
 
-    static let readThroughDefaultsKey = "toastty.coordinator.chatReadThrough"
-
     /// The user reads the chat while it is on screen and Toastty is the
     /// active app.
     private var isReading: Bool { viewers.isEmpty == false && isAppActive() }
@@ -1022,12 +1015,17 @@ final class CoordinatorChatModel: ObservableObject {
         // while Toastty replays the transcript after a launch.
         guard loaded != nil, subscription?.isReadingInitialTranscript != true,
               isLoadingOlderForReadPoint == false else { return }
+        // The read point is the coordinator's: a read on a paired device
+        // moves it too. On screen, the line stays where it was placed.
+        let readThrough = controller?.chatReadThrough.point
         if placesNewMessagesLine, let readThrough {
             // After a relaunch the chat reads only the newest page. The
             // line goes where the user stopped, so read back to it.
             isLoadingOlderForReadPoint = true
             for _ in 0 ..< Self.maximumOlderPagesForReadPoint {
-                guard hasOlder, let oldest = presentation.rows.first?.timestamp, oldest > readThrough else { break }
+                guard hasOlder, CoordinatorChatReadPoint.needsOlderRows(presentation.rows, toReach: readThrough) else {
+                    break
+                }
                 loadOlder()
             }
             isLoadingOlderForReadPoint = false
@@ -1043,19 +1041,20 @@ final class CoordinatorChatModel: ObservableObject {
             return
         }
         placesNewMessagesLine = false
-        noteRead(through: rows.last?.timestamp)
+        noteRead(through: rows)
     }
 
     private func markAllRead() {
         newMessagesAfter = nil
         if newMessages != nil { newMessages = nil }
-        noteRead(through: presentation.rows.last?.timestamp)
+        noteRead(through: presentation.rows)
     }
 
-    private func noteRead(through timestamp: Date?) {
-        guard let timestamp, timestamp > (readThrough ?? .distantPast) else { return }
-        readThrough = timestamp
-        defaults?.set(timestamp.timeIntervalSinceReferenceDate, forKey: Self.readThroughDefaultsKey)
+    /// The user saw `rows` through the newest. A later read, here or on a
+    /// paired device, stays.
+    private func noteRead(through rows: [ToasttyTranscriptRow]) {
+        guard let readPoint = CoordinatorChatReadPoint.readPoint(through: rows) else { return }
+        controller?.chatReadThrough.advance(to: readPoint) { CoordinatorChatReadPoint.index(of: $0, in: rows) }
     }
 
     /// Toastty became the active app or stopped being it. Leaving it for

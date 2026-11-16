@@ -199,7 +199,8 @@ public enum ToasttyMobileFixture {
     /// Home leaves it out.
     public static func withCoordinator(
         _ snapshot: MobileHomeSnapshot,
-        status: RemoteSessionPresentationStatus?
+        status: RemoteSessionPresentationStatus?,
+        chatRead: RemoteCoordinatorChatReadPoint? = nil
     ) -> MobileHomeSnapshot {
         let conversations = status.map { status in
             [MobileConversation(
@@ -221,7 +222,8 @@ public enum ToasttyMobileFixture {
             title: "Coordinator",
             conversations: conversations,
             isCoordinator: true,
-            coordinatorConversationID: status == nil ? nil : coordinatorConversationID
+            coordinatorConversationID: status == nil ? nil : coordinatorConversationID,
+            coordinatorChatRead: chatRead
         )
         return MobileHomeSnapshot(
             hostName: snapshot.hostName,

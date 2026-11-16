@@ -87,6 +87,21 @@ final class RemoteAccessReadAcknowledgementBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges a device's read of the coordinator's chat into the main-actor-owned
+/// read point.
+final class RemoteAccessCoordinatorChatReadBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func read(
+        _ request: RemoteCoordinatorChatReadRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteCoordinatorChatReadResult {
+        MainActor.assumeIsolated {
+            service?.readCoordinatorChat(request, device: device) ?? .noCoordinator
+        }
+    }
+}
+
 /// Bridges the gateway's authenticated done request into the main-actor-owned
 /// workspace state.
 final class RemoteAccessWorkspaceDoneBridge: @unchecked Sendable {
@@ -546,6 +561,12 @@ final class RemoteAccessService: ObservableObject {
     private let taskCreateBridge = RemoteAccessTaskCreateBridge()
     private var taskCreator: RemoteTaskCreator?
     private var coordinatorSender: RemoteCoordinatorSender?
+    private let coordinatorChatReadBridge = RemoteAccessCoordinatorChatReadBridge()
+    /// The coordinator chat's read point, which the coordinator's workspace
+    /// carries to devices. `nil` on a Mac without the coordinator, which
+    /// does not advertise it.
+    private var coordinatorChatReadThrough: CoordinatorChatReadThrough?
+    private var coordinatorChatReadObserver: AnyCancellable?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -807,6 +828,7 @@ final class RemoteAccessService: ObservableObject {
         sendBridge.service = self
         questionAnswerBridge.service = self
         readAcknowledgementBridge.service = self
+        coordinatorChatReadBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
         conversationCloseBridge.service = self
@@ -916,6 +938,11 @@ final class RemoteAccessService: ObservableObject {
                     return await sender.send(request, device: device)
                 }
             }
+        }
+        // The coordinator chat's read point lives with the coordinator's
+        // controller, so only a Mac with one advertises it.
+        if let coordinatorController = taskBoard?.coordinator?.coordinatorController {
+            installCoordinatorChatRead(coordinatorController.chatReadThrough)
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -1719,7 +1746,8 @@ final class RemoteAccessService: ObservableObject {
                     },
                     uniquingKeysWith: { first, _ in first }
                 ),
-                acceptsDoneMark: { refusals.contains($0) == false }),
+                acceptsDoneMark: { refusals.contains($0) == false },
+                coordinatorChatRead: coordinatorChatReadThrough?.point),
             tasks: makeTaskBoard()
         )
     }
@@ -1786,7 +1814,8 @@ final class RemoteAccessService: ObservableObject {
         annotationColorTokens: [String: AnnotationColorToken] = [:],
         conversationIDsBySessionID: [String: RemoteConversationID] = [:],
         liveConversationIDsByPanelID: [UUID: RemoteConversationID] = [:],
-        acceptsDoneMark: (UUID) -> Bool = { _ in true }
+        acceptsDoneMark: (UUID) -> Bool = { _ in true },
+        coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil
     ) -> [RemoteWorkspaceSummary] {
         let parentIDs = state.subspaceParentIDsByWorkspaceID()
         // The coordinator's own session, by its panel, while its agent runs:
@@ -1856,7 +1885,9 @@ final class RemoteAccessService: ObservableObject {
                 acceptsDoneMark: parentID == nil || acceptsDoneMark(id),
                 isCoordinator: workspace.isCoordinator,
                 coordinatorConversationID: workspace.isCoordinator && coordinator?.workspaceID == id
-                    ? coordinatorConversationID : nil)
+                    ? coordinatorConversationID : nil,
+                coordinatorChatRead: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorChatRead : nil)
         }
     }
 
@@ -2147,6 +2178,69 @@ final class RemoteAccessService: ObservableObject {
         // coalesced store-action broadcast scheduled for the same mutation.
         broadcastSessionList()
         return .acknowledged
+    }
+
+    /// Shares the coordinator chat's read point with paired devices: the
+    /// coordinator's workspace carries it, and a device's read moves it.
+    /// Installing it advertises `coordinatorChatRead`. The app installs the
+    /// coordinator controller's read point once, at launch.
+    func installCoordinatorChatRead(_ readThrough: CoordinatorChatReadThrough) {
+        coordinatorChatReadThrough = readThrough
+        handler.coordinatorChatReadHandler = { [coordinatorChatReadBridge] request, device in
+            coordinatorChatReadBridge.read(request, device: device)
+        }
+        // A read on this Mac or on a device moves it. Reads come with each
+        // new message while a chat is on screen, so they are sent together.
+        coordinatorChatReadObserver = readThrough.moves
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isEnabled else { return }
+                self.scheduleSessionListBroadcast()
+            }
+    }
+
+    /// A paired device showed the coordinator's chat through the row of
+    /// `request.eventID`. The gateway checked the device's read access. The
+    /// read point moves to that row, by the event this Mac has for it, so
+    /// the device's rounded times never decide which row was read. It only
+    /// moves forward: a late or repeated read leaves it.
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteCoordinatorChatReadResult {
+        let result: RemoteCoordinatorChatReadResult
+        if isReady, isEnabled, let readThrough = coordinatorChatReadThrough,
+           let coordinatorPanelID = store.state.coordinator?.panelID,
+           panelIDByConversationID[request.conversationID] == coordinatorPanelID {
+            let projector = projectionStore.projectorState(for: request.conversationID)
+            let events = projector?.events ?? []
+            // A runtime event's identity counts up again in each run of the
+            // reader: from an earlier run it can name another event now.
+            let isFromThisRun = request.projectionRunID == projectionStore.runID
+                && request.projectionGeneration == projector?.generation
+            if RemoteCoordinatorChatReadPoint.durableEventID(request.eventID) != nil || isFromThisRun,
+               let event = events.last(where: { $0.eventID == request.eventID }) {
+                let candidate = RemoteCoordinatorChatReadPoint(eventID: event.eventID, timestamp: event.timestamp)
+                let moved = readThrough.advance(to: candidate) { point in
+                    point.eventID.flatMap { eventID in events.lastIndex { $0.eventID == eventID } }
+                }
+                result = moved ? .moved : .alreadyRead
+            } else {
+                result = .eventNotFound
+            }
+        } else {
+            result = .noCoordinator
+        }
+        ToasttyLog.info(
+            "Coordinator chat read evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": request.conversationID.rawValue.uuidString,
+                "device_id": device.id.uuidString,
+                "result": result.rawValue,
+            ]
+        )
+        return result
     }
 
     /// Marks a subspace done or open again for a remote client, through the

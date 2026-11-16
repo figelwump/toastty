@@ -86,6 +86,9 @@ protocol LiveConnectionRuntime: Sendable {
     func sendToCoordinator(
         _ request: RemoteCoordinatorSendRequest
     ) async throws -> RemoteCoordinatorSendResponse?
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse?
 }
 
 extension LiveConnectionRuntime {
@@ -169,6 +172,12 @@ extension LiveConnectionRuntime {
     func sendToCoordinator(
         _ request: RemoteCoordinatorSendRequest
     ) async throws -> RemoteCoordinatorSendResponse? {
+        nil
+    }
+
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse? {
         nil
     }
 
@@ -367,6 +376,12 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteCoordinatorSendResponse? {
         try await coordinator.sendToCoordinator(request)
     }
+
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse? {
+        try await coordinator.readCoordinatorChat(request)
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -382,6 +397,8 @@ final class LiveSessionsController {
     private(set) var projectionRunID: String?
     private(set) var projectionGeneration: UInt64?
     private(set) var activeConversationController: LiveConversationController?
+    /// Whether the app is active, for the conversation that opens next.
+    private var isSceneActive = true
 
     var activeConversationCursor: UInt64? {
         activeConversationController?.cursor?.afterSequence
@@ -735,12 +752,20 @@ final class LiveSessionsController {
             },
             releaseLocalDraft: { [runtime] request in
                 try await runtime.releaseLocalDraft(request)
+            },
+            readCoordinatorChat: { [runtime] request in
+                try await runtime.readCoordinatorChat(request)
             }
         )
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
         controller.consumeConnectionState(coordinatorState)
         controller.consumeInputControl(inputControl(for: conversationID))
         controller.consumeIsCoordinatorChat(isCoordinatorConversation(conversationID))
+        controller.consumeSceneActivity(isActive: isSceneActive)
+        controller.consumeCoordinatorChatRead(
+            isSupported: acceptsCoordinatorChatRead,
+            readPoint: homeController.snapshot.coordinatorChatRead
+        )
         activeConversationController = controller
         await controller.start()
 
@@ -802,6 +827,12 @@ final class LiveSessionsController {
     }
     /// The coordinator makes a task from the message, so it is gated as a
     /// task create is.
+    /// The Mac shares the coordinator chat's read point. Showing the chat
+    /// needs only read access.
+    private var acceptsCoordinatorChatRead: Bool {
+        coordinatorState.capabilities.contains(.coordinatorChatRead) && deviceScopes.contains(.read)
+    }
+
     private var acceptsCoordinatorSend: Bool {
         coordinatorState.capabilities.contains(.coordinatorSend) && deviceScopes.contains(.send)
     }
@@ -875,6 +906,10 @@ final class LiveSessionsController {
         }
         activeConversationController?.consumeConnectionState(state)
         applyPresentation()
+        activeConversationController?.consumeCoordinatorChatRead(
+            isSupported: acceptsCoordinatorChatRead,
+            readPoint: homeController.snapshot.coordinatorChatRead
+        )
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403
         // must not overwrite the paired authorization-denied explanation.
@@ -895,7 +930,18 @@ final class LiveSessionsController {
         applyPresentation()
         if let controller = activeConversationController {
             controller.consumeIsCoordinatorChat(isCoordinatorConversation(controller.conversationID))
+            controller.consumeCoordinatorChatRead(
+                isSupported: acceptsCoordinatorChatRead,
+                readPoint: homeController.snapshot.coordinatorChatRead
+            )
         }
+    }
+
+    /// The app became active, or stopped being active: a chat on screen
+    /// behind another app, or under Notification Center, is not read.
+    func sceneActivityChanged(isActive: Bool) {
+        isSceneActive = isActive
+        activeConversationController?.consumeSceneActivity(isActive: isActive)
     }
 
     /// Whether the conversation is the coordinator's own, as the Coordinator

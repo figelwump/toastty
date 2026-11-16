@@ -69,6 +69,8 @@ struct ToasttyConversationScreen: View {
     /// become a reply; `replyNotice` then says why.
     let replyToMessage: (CoordinatorReplyTarget) -> Bool
     let cancelReply: () -> Void
+    /// The coordinator chat's New line, from the read point the Mac shares.
+    let newMessages: ToasttyNewMessagesMarker?
 
     init(
         conversationID: UUID,
@@ -107,7 +109,8 @@ struct ToasttyConversationScreen: View {
         reply: CoordinatorReplyTarget? = nil,
         replyNotice: String? = nil,
         replyToMessage: @escaping (CoordinatorReplyTarget) -> Bool = { _ in false },
-        cancelReply: @escaping () -> Void = {}
+        cancelReply: @escaping () -> Void = {},
+        newMessages: ToasttyNewMessagesMarker? = nil
     ) {
         self.conversationID = conversationID
         self.controller = controller
@@ -143,6 +146,7 @@ struct ToasttyConversationScreen: View {
         self.replyNotice = replyNotice
         self.replyToMessage = replyToMessage
         self.cancelReply = cancelReply
+        self.newMessages = newMessages
     }
 
     /// The coordinator's chat has Copy under each message, always shown on
@@ -179,7 +183,8 @@ struct ToasttyConversationScreen: View {
                     replyToMessage: isCoordinatorRoot ? { request in
                         // The field takes the keyboard, as on the Mac.
                         if replyToMessage(CoordinatorReplyTarget(request)) { isComposerFocused = true }
-                    } : nil
+                    } : nil,
+                    newMessages: newMessages
                 )
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     composerBar(conversation)

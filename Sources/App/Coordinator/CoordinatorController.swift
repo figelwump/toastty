@@ -221,6 +221,9 @@ final class CoordinatorController: ObservableObject {
     /// What the coordinator's chat shows. Set once the app has the
     /// conversation access the chat reads through.
     var chat: CoordinatorChatModel?
+    /// The newest row of the coordinator's chat that the user read, on this
+    /// Mac or on a paired device. The chat and Remote Access share it.
+    let chatReadThrough: CoordinatorChatReadThrough
 
     /// The question whether to start the coordinator, in a run that asks it.
     var startOffer: CoordinatorStartOffer?
@@ -311,8 +314,10 @@ final class CoordinatorController: ObservableObject {
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
         terminalReadinessTimeout: Duration = .seconds(10),
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        chatReadDefaults: UserDefaults? = nil
     ) {
+        chatReadThrough = CoordinatorChatReadThrough(defaults: chatReadDefaults)
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
         self.launcher = launcher

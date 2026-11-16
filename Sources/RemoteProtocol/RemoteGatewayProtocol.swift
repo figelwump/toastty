@@ -82,6 +82,12 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// start permission, as task creation does. The task-create options
     /// carry the coordinator's state while the Mac has a coordinator.
     case coordinatorSend = "coordinator_send"
+    /// The coordinator's chat has one read point on the Mac, shared with
+    /// paired devices: the coordinator's workspace carries it in
+    /// `coordinatorChatRead`, and a native client sends what it read with
+    /// `RemoteCoordinatorChatReadRequest`. Only a Mac with the coordinator
+    /// advertises it.
+    case coordinatorChatRead = "coordinator_chat_read"
 }
 
 /// Public compatibility probe used before a client has credentials.

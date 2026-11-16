@@ -255,7 +255,14 @@ public struct GatewayCompatibilityDecoder: Sendable {
             // workspace as an ordinary one.
             isCoordinator: ((try? object.optionalBool("isCoordinator")) ?? nil) ?? false,
             coordinatorConversationID: ((try? object.optionalUUID("coordinatorConversationID")) ?? nil)
-                .map(RemoteConversationID.init(rawValue:)))
+                .map(RemoteConversationID.init(rawValue:)),
+            // Absent from an older Mac, whose coordinator chat then shows no
+            // New line. One this client cannot read is left out too.
+            coordinatorChatRead: object.lossyObject("coordinatorChatRead").flatMap { read in
+                (try? read.requiredDate("timestamp")).map {
+                    RemoteCoordinatorChatReadPoint(eventID: read.lossyString("eventID"), timestamp: $0)
+                }
+            })
     }
 
     /// Annotations are display-only, so a malformed chip is dropped rather

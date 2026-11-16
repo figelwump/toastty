@@ -120,7 +120,8 @@ public enum ToasttyTranscriptRows {
                 id: rowID,
                 timestamp: event.timestamp,
                 provider: event.provider,
-                content: content
+                content: content,
+                eventID: event.eventID
             )
         }
     }

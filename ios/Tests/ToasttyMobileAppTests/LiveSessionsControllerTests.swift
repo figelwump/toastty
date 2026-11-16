@@ -662,6 +662,56 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertFalse(home.supportsCoordinatorSend)
     }
 
+    /// The coordinator chat's New line needs the Mac's capability and its
+    /// read point. Each can change while the chat is open: the capability
+    /// comes with a connection state, the read point with a session list.
+    func testTheCoordinatorChatTakesTheMacsReadPointAndCapabilityFromBothPaths() async throws {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        await subject.updateDeviceScopes([.read])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks]
+        ))
+        let readPoint = RemoteCoordinatorChatReadPoint(eventID: "claude:read", timestamp: Date(timeIntervalSince1970: 90))
+        func coordinatorSnapshot(readPoint: RemoteCoordinatorChatReadPoint?) -> CompatibleSessionListSnapshot {
+            var list = snapshot(titles: ["Alpha"])
+            let alpha = list.conversations[0]
+            list.workspaces = [RemoteWorkspaceSummary(
+                id: try! XCTUnwrap(alpha.placement.workspaceID), title: "Coordinator", panels: [],
+                isCoordinator: true, coordinatorConversationID: alpha.conversationID, coordinatorChatRead: readPoint
+            )]
+            list.tasks = RemoteTaskBoard(doneCount: 0)
+            return list
+        }
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: coordinatorSnapshot(readPoint: nil), phase: .live
+        ))
+        let coordinatorID = try XCTUnwrap(home.snapshot.coordinatorConversation?.id)
+        await subject.openConversation(coordinatorID)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+        XCTAssertTrue(controller.isCoordinatorChat)
+        XCTAssertFalse(controller.readsCoordinatorChat, "An older Mac shares no read point")
+
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks, .coordinatorChatRead]
+        ))
+        XCTAssertTrue(controller.readsCoordinatorChat)
+        XCTAssertNil(controller.chatReading.macReadPoint)
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: coordinatorSnapshot(readPoint: readPoint), phase: .live
+        ))
+        XCTAssertEqual(controller.chatReading.macReadPoint, readPoint)
+        subject.stopObserving()
+    }
+
     func testSessionStartTreatsEveryUnansweredRequestAsUnconfirmed() async {
         let runtime = LiveRuntimeSpy()
         let conversationID = RemoteConversationID()

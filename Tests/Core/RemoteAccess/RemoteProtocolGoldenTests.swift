@@ -656,9 +656,13 @@ private extension RemoteProtocolGoldenTests {
             doneCount: 12,
             finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)]
         )
-        // The coordinator's workspace: only it carries the mark.
+        // The coordinator's workspace: only it carries the mark, and the
+        // read point of the coordinator's chat.
         snapshot.workspaces.append(
-            RemoteWorkspaceSummary(id: numberedUUID(210), title: "Coordinator", panels: [], isCoordinator: true)
+            RemoteWorkspaceSummary(
+                id: numberedUUID(210), title: "Coordinator", panels: [], isCoordinator: true,
+                coordinatorChatRead: RemoteCoordinatorChatReadPoint(eventID: "codex:msg_read", timestamp: timestamp)
+            )
         )
         return snapshot
     }

@@ -752,6 +752,14 @@ that Toastty started has no message, as for a new coordinator or after
 Restart, the chat shows Toasty and a short introduction. A conversation that a
 relaunch resumes does not show it.
 
+- **What you have not read.** A red-orange **New** line marks the first
+  message from the coordinator since you last read the chat, and the chat
+  opens at it. While you scroll up, **Jump to latest** reads "N new". Your own
+  messages and quiet wake turns are not new. The line is placed when you come
+  back to the chat or to Toastty, stays while you read, and goes when you
+  send. A message that you read in the coordinator's chat on a paired iPhone is
+  read here too (see
+  [The Coordinator tab](remote-access.md#the-coordinator-tab)).
 - **Send.** Type in the field under the conversation and press Return.
   Shift-Return or Option-Return starts a new line. At an open prompt the
   message is typed there. The field's hint names the quick entry shortcut,

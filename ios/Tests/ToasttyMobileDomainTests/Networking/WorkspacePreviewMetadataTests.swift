@@ -259,6 +259,36 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         }
     }
 
+    /// The coordinator's workspace carries the read point of the
+    /// coordinator's chat. An older Mac sends none, and one this phone
+    /// cannot read counts as none, so the chat shows no New line.
+    func testTheCoordinatorsReadPointDecodesAndAnOlderOrMalformedOneIsNone() throws {
+        let coordinatorID = UUID()
+        func decoded(_ read: Any?) throws -> MobileHomeSnapshot {
+            var coordinator: [String: Any] = [
+                "id": coordinatorID.uuidString, "title": "Coordinator", "panels": [], "isCoordinator": true,
+            ]
+            coordinator["coordinatorChatRead"] = read
+            return try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(
+                workspaces: [coordinator], tasks: [:]
+            )).presentation()
+        }
+        let read = try decoded(["eventID": "claude:msg_7", "timestamp": "2026-09-06T12:00:00.250Z"])
+        XCTAssertEqual(read.coordinatorChatRead, RemoteCoordinatorChatReadPoint(
+            eventID: "claude:msg_7", timestamp: Date(timeIntervalSince1970: 1_788_696_000.25)
+        ))
+        // A read point that an older Toastty saved names no event.
+        XCTAssertNil(try decoded(["timestamp": "2026-09-06T12:00:00.250Z"]).coordinatorChatRead?.eventID)
+        XCTAssertNotNil(try decoded(["timestamp": "2026-09-06T12:00:00.250Z"]).coordinatorChatRead)
+        // A runtime event's identity does not survive a Mac relaunch.
+        XCTAssertNil(try decoded(["eventID": "rt:1:4", "timestamp": "2026-09-06T12:00:00.250Z"]).coordinatorChatRead?.eventID)
+        for value: Any? in [nil, "yes", ["eventID": "claude:msg_7"], ["timestamp": 12]] {
+            let snapshot = try decoded(value)
+            XCTAssertNotNil(snapshot.coordinator)
+            XCTAssertNil(snapshot.coordinatorChatRead, "value: \(String(describing: value))")
+        }
+    }
+
     private func snapshotData(workspaces: [[String: Any]]?, tasks: [String: Any]? = nil) throws -> Data {
         var snapshot: [String: Any] = ["projectionRunID": UUID().uuidString, "conversations": [],
                                         "generatedAt": "2026-09-06T12:00:00.000Z"]

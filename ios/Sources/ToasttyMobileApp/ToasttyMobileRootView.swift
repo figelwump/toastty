@@ -36,6 +36,8 @@ struct ToasttyMobileRootView: View {
     @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
     @State private var fixtureSentText: String?
     @State private var fixtureSendUpdateCount = 0
+    /// A send in the fixture coordinator chat removed its New line.
+    @State private var fixtureCoordinatorLineCleared = false
 #endif
     @State private var fixtureInteractionAnswerState: ToasttyInteractionAnswerState?
     @State private var fixtureInteractionAcceptedAnswers: [RemoteInteractionAnswer]?
@@ -789,7 +791,8 @@ struct ToasttyMobileRootView: View {
                 // A rejected message with files waits while the draft
                 // answers another message.
                 reconcileAttachmentDrafts()
-            }
+            },
+            newMessages: conversationNewMessages(for: conversationID)
         )
         .id(conversationID)
 #if DEBUG
@@ -996,6 +999,37 @@ struct ToasttyMobileRootView: View {
             return nil
         }
         return controller.transcriptPresentation
+    }
+
+#if DEBUG
+    /// The fixture coordinator chat's New line: the shared rule over the
+    /// fixture's rows and the fixture Mac's read point, until a send.
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_CHAT_READ=unsupported` is a Mac
+    /// that does not share the read point.
+    private var fixtureCoordinatorNewMessages: ToasttyNewMessagesMarker? {
+        guard fixtureCoordinatorLineCleared == false,
+              ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_CHAT_READ"] != "unsupported"
+        else { return nil }
+        let rows = ToasttyConversationFixture.coordinatorPresentation(
+            for: ToasttyMobileFixture.coordinatorConversationID,
+            hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1"
+        ).rows
+        return CoordinatorChatReadPoint.marker(in: rows, after: sessionController.homeController.snapshot.coordinatorChatRead)
+    }
+#endif
+
+    /// The coordinator chat's New line, from the read point the Mac shares.
+    private func conversationNewMessages(for conversationID: UUID) -> ToasttyNewMessagesMarker? {
+#if DEBUG
+        if conversationID == ToasttyMobileFixture.coordinatorConversationID, fixtureScenario != nil {
+            return fixtureCoordinatorNewMessages
+        }
+#endif
+        guard let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else {
+            return nil
+        }
+        return controller.coordinatorNewMessages
     }
 
     private func conversationSendFeedback(for conversationID: UUID) -> ToasttyOutcomeFeedback? {
@@ -1466,6 +1500,9 @@ struct ToasttyMobileRootView: View {
                 return false
             }
             fixtureQueueSubmissionCount += 1
+            if submission.conversationID == ToasttyMobileFixture.coordinatorConversationID {
+                fixtureCoordinatorLineCleared = true
+            }
             let clientRequestID = "fixture-queued-\(fixtureQueueSubmissionCount)"
             if deliveryMode == .steer {
                 fixtureSendItems.append(ToasttySendPresentationItem(

@@ -45,12 +45,23 @@ public struct ToasttyTranscriptRow: Identifiable, Equatable, Sendable {
     public let timestamp: Date
     public let provider: AgentKind
     public let content: Content
+    /// The transcript event of the row (`ConversationEvent.eventID`): the
+    /// same for this row on the Mac and on every device that reads the
+    /// conversation. `nil` for a row that no event made.
+    public let eventID: String?
 
-    public init(id: ToasttyTranscriptRowID, timestamp: Date, provider: AgentKind, content: Content) {
+    public init(
+        id: ToasttyTranscriptRowID,
+        timestamp: Date,
+        provider: AgentKind,
+        content: Content,
+        eventID: String? = nil
+    ) {
         self.id = id
         self.timestamp = timestamp
         self.provider = provider
         self.content = content
+        self.eventID = eventID
     }
 
     /// The row is a message to the agent, which starts a turn.
