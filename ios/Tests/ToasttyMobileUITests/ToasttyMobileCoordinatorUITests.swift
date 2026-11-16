@@ -144,7 +144,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-tab-task-space-over-chat", of: app)
 
         app.tabBars.buttons["Tasks"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-tasks-group-to-ship"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-tasks-group-needsYou"].waitForExistence(timeout: 5))
         app.tabBars.buttons["Coordinator"].tap()
         XCTAssertTrue(taskSpace.waitForExistence(timeout: 5))
         taskSpace.buttons.element(boundBy: 0).tap()

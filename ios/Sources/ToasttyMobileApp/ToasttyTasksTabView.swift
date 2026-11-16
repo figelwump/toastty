@@ -2,11 +2,11 @@ import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 
-/// The Tasks tab: every task by where it stands, as the Mac's Tasks view
-/// lists them. To ship comes first, one lane per project, because this is
-/// where a release starts; then Needs you, Ready to review, Running and
-/// Idle, then the Done count. Emits sibling rows so the List gives each its
-/// own cell; a plain List's section headers would pin and cover rows.
+/// The Tasks tab: every task by where it stands, in the Mac's Tasks view
+/// order: Needs you, Ready to review, Running, Idle, then To ship with one
+/// lane per project, then the Done count. Emits sibling rows so the List
+/// gives each its own cell; a plain List's section headers would pin and
+/// cover rows.
 struct ToasttyTasksTabView: View {
     let controller: HomeScreenController
     let refresh: () async -> Void
@@ -120,6 +120,21 @@ struct ToasttyTasksTabView: View {
             .padding(.vertical, 32)
             .toasttyListRow()
         }
+        ForEach(TaskBucket.allCases, id: \.self) { bucket in
+            let entries = sections.entries(bucket)
+            if entries.isEmpty == false {
+                ToasttyTaskGroupHeader(title: bucket.title, count: sections.count(bucket), tint: bucket.tint)
+                    .padding(.top, 10)
+                    .accessibilityIdentifier("toastty-tasks-group-\(bucket)")
+                    .toasttyListRow(vertical: 0)
+                ForEach(entries) { entry in
+                    ToasttyTaskListRow(
+                        task: entry.task, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext,
+                        controller: controller, openWorkspace: openWorkspace, openTask: openTask
+                    )
+                }
+            }
+        }
         if sections.toShip.isEmpty == false {
             toShipHeader(count: sections.toShipCount)
                 .padding(.top, 10)
@@ -133,21 +148,6 @@ struct ToasttyTasksTabView: View {
                     // The lane's line names the project.
                     ToasttyTaskListRow(
                         task: task, showsProject: false,
-                        controller: controller, openWorkspace: openWorkspace, openTask: openTask
-                    )
-                }
-            }
-        }
-        ForEach(TaskBucket.allCases, id: \.self) { bucket in
-            let entries = sections.entries(bucket)
-            if entries.isEmpty == false {
-                ToasttyTaskGroupHeader(title: bucket.title, count: sections.count(bucket), tint: bucket.tint)
-                    .padding(.top, 10)
-                    .accessibilityIdentifier("toastty-tasks-group-\(bucket)")
-                    .toasttyListRow(vertical: 0)
-                ForEach(entries) { entry in
-                    ToasttyTaskListRow(
-                        task: entry.task, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext,
                         controller: controller, openWorkspace: openWorkspace, openTask: openTask
                     )
                 }

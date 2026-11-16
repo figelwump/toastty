@@ -649,10 +649,10 @@ in Home, except one for the coordinator, which opens its tab.
   The task bar drops its pull request chip before it shortens the stage. In the Tasks tab, a lane's **Release…** moves
   under the project's name when the line has no room for both.
 - The **Tasks** tab lists every task by where it stands, as the Mac's Tasks
-  view does: **To ship** first, one lane per project with all of its merged
-  tasks and **Release…** when the project can release, then **Needs you**,
-  **Ready to review**, **Running** and **Idle**,
-  then the **Done** count. A family in Needs you whose members only wait for a
+  view does, in the same order: **Needs you**, **Ready to review**,
+  **Running** and **Idle**, then **To ship**, one lane per project with all
+  of its merged tasks and **Release…** when the project can release, then
+  the **Done** count. A family in Needs you whose members only wait for a
   review lists under Ready to review. A task with an open task space shows
   that task space's row. Any other task, such as one whose setup failed, opens
   its detail: the stage and why, the status line, the pull request, and the
