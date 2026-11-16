@@ -708,9 +708,11 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         return XCTWaiter().wait(for: [expectation], timeout: 5) == .completed
     }
 
+    /// Waits 15 s: on a slow hosted runner one accessibility snapshot with the
+    /// keyboard up took over 4 s, after the label had already changed.
     private func waitForLabel(_ label: String, of element: XCUIElement) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", label), object: element)
-        return XCTWaiter().wait(for: [expectation], timeout: 5) == .completed
+        return XCTWaiter().wait(for: [expectation], timeout: 15) == .completed
     }
 
     /// Waits until the tab shows exactly `badge`, or no badge for `nil`.
