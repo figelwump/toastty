@@ -321,13 +321,18 @@ have yet, for as long as steps 3 to 5 take. Choose one way to prevent that:
 
 - **Keep the website change in its own pull request into `main`, and merge it at
   step 6.** Nothing to change in Render. The website pull request must not be
-  part of the release branch. Recommended.
+  part of the release branch. Recommended. Cost: from step 2 to step 6 the old
+  page stays live, and its links to the worktree handoff examples in
+  `tree/main/examples/skills` find a folder that holds only the `toastty-tasks`
+  skill.
 - **Merge to `main` and publish the Mac release close together.** No extra pull
   request, but the site is ahead of the download for hours or more: the relay
   deploy, the TestFlight build, and the real-device check all come between.
 - **Turn off automatic deploys in Render before step 2, and deploy by hand at
   step 6.** The website change can stay on the release branch, but the repository
-  owner must change the Render settings and turn them back on afterwards.
+  owner must change the Render settings and turn them back on afterwards. The
+  old page and its stale links to `tree/main/examples/skills` stay live from
+  step 2 to step 6, as in the first option.
 
 ## Build a signed release DMG
 
