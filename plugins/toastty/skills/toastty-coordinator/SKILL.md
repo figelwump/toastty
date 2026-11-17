@@ -466,7 +466,7 @@ you first write a rule to it, add its heading where the list above puts
 it. It can also end with a Notes section. Its lines still apply, and you add
 nothing to it. In a turn that the user started, ask once, with an `asked
 notes` ledger line, whether to move them: each fact to the ledger, and each
-rule to its section.
+rule to its section. Keep that line while the Notes section stays.
 
 ### Change the policy
 

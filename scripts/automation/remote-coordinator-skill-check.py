@@ -1262,7 +1262,8 @@ def ci_rerun_passes(run):
     run.reply(task, 'I reran the failed jobs with `gh run rerun --failed`. They passed.')
     to_review(run, task, checks=[dict(name='macOS tests', conclusion='SUCCESS'), dict(name='lint', conclusion='SUCCESS')])
     run.new_turns(wake=True)
-    run.check('the ledger names the test that passed on the rerun', 'testLongSidebarScroll' in run.ledger(), run.ledger())
+    run.check('the ledger has a flake line for the test that passed on the rerun',
+              re.search(r'^- \S+ flake .*testLongSidebarScroll', run.ledger(), re.M), run.ledger())
     run.check('the policy is still unchanged, with no Notes section', run.policy() == policy
               and '## Notes' not in run.policy(), run.policy())
 
