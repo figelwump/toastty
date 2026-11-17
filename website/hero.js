@@ -118,7 +118,7 @@
       // Toasty's chips for the task follow it, as the app's do: its stage mark and, once it has one, its PR.
       crChips.forEach(function (c) {
         c.classList.toggle('run', working && !starting && t >= 4.0);
-        c.classList.toggle('rev', ready || merging);
+        c.classList.toggle('rev', ready);
         c.classList.toggle('done', done);
         c.classList.toggle('has-pr', ready || merging || done);
       });
