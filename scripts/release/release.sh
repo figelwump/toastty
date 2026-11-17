@@ -338,6 +338,9 @@ ensure_ghostty_release_metadata() {
   [[ -d "$GHOSTTY_SOURCE_REPO" ]] || fail "Ghostty source checkout is unavailable: $GHOSTTY_SOURCE_REPO"
   git -C "$GHOSTTY_SOURCE_REPO" cat-file -e "${GHOSTTY_COMMIT}^{commit}" 2>/dev/null \
     || fail "Ghostty source checkout does not contain the recorded release commit: $GHOSTTY_COMMIT"
+  # A stale artifact still builds, so compare it with the documented pin.
+  "$ROOT_DIR/scripts/release/check-ghostty-pin.sh" "$GHOSTTY_COMMIT" \
+    || fail "the Ghostty release artifact does not match the documented pin"
 
   if [[ -z "$GHOSTTY_COMMIT_SHORT" ]]; then
     GHOSTTY_COMMIT_SHORT="${GHOSTTY_COMMIT:0:12}"
