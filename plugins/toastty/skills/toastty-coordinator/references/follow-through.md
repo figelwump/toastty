@@ -32,7 +32,7 @@ stops, so nothing else keeps that work.
    task's merge or its end wakes you:
 
    ```text
-   - 2026-11-13T20:51Z followup [Domain migration](toastty://task/<id>): step 3, the rollout to the computers; questions on the version and the canary.
+   - 2026-11-13T20:51Z followup [Billing migration](toastty://task/<id>): step 3, the rollout to production; questions on the version and the canary.
    ```
 
 2. **When a digest says that a task merged** and the ledger has no
@@ -58,7 +58,7 @@ stops, so nothing else keeps that work.
    its release, starts no second follow-up:
 
    ```text
-   - 2026-11-14T02:10Z merged [Domain migration](toastty://task/<id>): step 3 continues in [Finish the rollout](toastty://task/<id>).
+   - 2026-11-14T02:10Z merged [Billing migration](toastty://task/<id>): step 3 continues in [Finish the rollout](toastty://task/<id>).
    ```
 
 5. When the only remaining step is the release of the merged change, make no
@@ -128,7 +128,7 @@ items and keeps the time.
    numbers the items, so that a later turn knows what "2 yes" answers:
 
    ```text
-   - 2026-11-16T17:00Z list 1 release toastty; 2 question [Domain rollout](toastty://task/<id>); 3 offer screen-sharing-check.
+   - 2026-11-16T17:00Z list 1 release webapp; 2 question [Billing rollout](toastty://task/<id>); 3 offer safari-check.
    ```
 
 5. **Publish** the dashboard, as section 3 says.
@@ -206,11 +206,11 @@ li{display:grid;grid-template-columns:26px 1fr;gap:2px 8px;padding:9px 0;border-
 <p class="meta">2026-11-16 09:00 · 6 items · the oldest waits 4 days · answer in the chat with the number</p>
 <h2>Blocks work you started</h2>
 <ol>
-<li><span class="n">1</span><div><div class="what">Release toastty: 5 merged tasks wait in To ship.</div><div class="sug">Suggested: start the release now.</div></div><div class="facts">toastty · waits 4 days · <span class="cold">on 3 lists, no answer</span></div></li>
+<li><span class="n">1</span><div><div class="what">Release webapp: 5 merged tasks wait in To ship.</div><div class="sug">Suggested: start the release now.</div></div><div class="facts">webapp · waits 4 days · <span class="cold">on 3 lists, no answer</span></div></li>
 </ol>
 <h2>Offers</h2>
 <ol>
-<li><span class="n">4</span><div><div class="what">A task for a check of Screen Sharing on the validation Mac.</div><div class="sug">Suggested: yes, in toastty.</div></div><div class="facts">offered 2 days ago · list 2 of 3</div></li>
+<li><span class="n">4</span><div><div class="what">A task for a check of the sign-up page in Safari.</div><div class="sug">Suggested: yes, in webapp.</div></div><div class="facts">offered 2 days ago · list 2 of 3</div></li>
 </ol>
 <h2>Closes by default</h2>
 <ol>
@@ -218,7 +218,7 @@ li{display:grid;grid-template-columns:26px 1fr;gap:2px 8px;padding:9px 0;border-
 </ol>
 <h2>Moving</h2>
 <ol>
-<li><span class="n"></span><div><div class="what">Finish domain support (emptyos) plans the rollout.</div></div><div class="facts">follows the merge of the domain migration</div></li>
+<li><span class="n"></span><div><div class="what">Finish the rollout plans the billing rollout.</div></div><div class="facts">follows the merge of the billing migration</div></li>
 </ol>
 <p class="meta">Dropped after 3 lists: a task for the local test fallback.</p>
 </main></body></html>
