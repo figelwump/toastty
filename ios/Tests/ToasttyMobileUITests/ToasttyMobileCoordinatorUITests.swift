@@ -624,11 +624,12 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
 
     /// The chat opens at its New line, also when what is new is shorter than
     /// the screen: the chat then shows its end, with the line on screen, and
-    /// no empty space under the last message. The line at the top of the
-    /// screen left the rest of it empty until the user dragged.
+    /// no empty space under the last message. In a long chat, which the
+    /// transcript lays out lazily, the line went to the top of the screen
+    /// and left the rest of it empty until the user dragged.
     func testTheNewLineOverAShortEndLeavesNoEmptySpace() {
         let app = launch(coordinator: "quiet", environment: [
-            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS": "20",
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS": "60",
             // Through the last wake turn's tool call: only its answer is new.
             "TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH": "-2",
             "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
@@ -637,7 +638,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
         let line = app.descendants(matching: .any)["toastty-transcript-new-messages"]
         XCTAssertTrue(line.waitForExistence(timeout: 5))
-        let answer = textView(containing: "Wake 20.", in: app)
+        let answer = textView(containing: "Wake 60.", in: app)
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
         // The opening moves for a moment after the chat shows.
         RunLoop.current.run(until: Date().addingTimeInterval(1))

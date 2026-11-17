@@ -224,12 +224,13 @@ public struct ToasttyTranscriptView: View {
                         )
                     }
                     if scrollPhase == .idle, new.isPastContentEnd, lastScrollTarget != nil {
-                        // A move to a row's top near the end, such as the
-                        // new messages' line or a short latest response,
-                        // can leave iOS's scroll view resting past the
-                        // content's end, with the rest of the screen blank
-                        // until a gesture bounces it back. Show the end of
-                        // the transcript instead, which still shows the row.
+                        // In a lazy transcript, a move to a row's top near
+                        // the end, such as the new messages' line, left
+                        // iOS's scroll view resting past the content's end
+                        // by the bottom inset, with the screen blank under
+                        // the last row until a gesture bounced it back. Show
+                        // the transcript's end instead, which still shows
+                        // the row.
                         scrollWithoutAnimation(
                             to: ToasttyConversationScrollTarget.liveEdge,
                             anchor: .bottom,
