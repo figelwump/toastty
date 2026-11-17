@@ -94,20 +94,51 @@ extension TaskBuckets where Key == SidebarRowKey {
     /// `isFinished` accepts and that lists under its parent. The rule for
     /// "lists under its parent" is the one `TaskBuckets` uses for families:
     /// the parent is among the rows and has no parent among them itself.
-    /// A finished row without a listed parent stays a row of its own.
+    /// A finished row without a listed parent does not fold; see
+    /// `finishedFamilyKeys`.
     static func foldedKeys<Payload>(
         _ candidates: [Candidate<Payload>],
         isFinished: (Candidate<Payload>) -> Bool
     ) -> Set<Key> {
+        let parents = listedParents(candidates)
+        return Set(candidates.filter { parents[$0.key] != nil && isFinished($0) }.map(\.key))
+    }
+
+    /// The rows that leave the buckets for the card's To ship and Done
+    /// lines: each family whose every row `isFinished` accepts. A family is
+    /// a row and the rows that list under it, by the rule `foldedKeys`
+    /// uses; a row alone is a family of one. A family with an open row
+    /// keeps its finished rows, which fold under the parent. The family of
+    /// `keeping`, the pinned row, stays in the buckets while it is
+    /// selected, as a pinned row keeps its bucket.
+    static func finishedFamilyKeys<Payload>(
+        _ candidates: [Candidate<Payload>],
+        keeping: Key? = nil,
+        isFinished: (Candidate<Payload>) -> Bool
+    ) -> Set<Key> {
+        let parents = listedParents(candidates)
+        let families = Dictionary(grouping: candidates) { parents[$0.key] ?? $0.key }
+        return Set(families.values.filter { family in
+            family.allSatisfy(isFinished) && family.contains { $0.key == keeping } == false
+        }.flatMap { $0.map(\.key) })
+    }
+
+    /// Each row that lists under its parent, with that parent: the parent
+    /// is among the rows and has no parent among them itself.
+    private static func listedParents<Payload>(_ candidates: [Candidate<Payload>]) -> [Key: Key] {
         let keys = Set(candidates.map(\.key))
         func parent(_ candidate: Candidate<Payload>) -> Key? {
             guard let parent = candidate.parent, parent != candidate.key, keys.contains(parent) else { return nil }
             return parent
         }
         let rootKeys = Set(candidates.filter { parent($0) == nil }.map(\.key))
-        return Set(candidates.filter { candidate in
-            parent(candidate).map(rootKeys.contains) == true && isFinished(candidate)
-        }.map(\.key))
+        var parents: [Key: Key] = [:]
+        for candidate in candidates {
+            if let parent = parent(candidate), rootKeys.contains(parent) {
+                parents[candidate.key] = parent
+            }
+        }
+        return parents
     }
 
     /// A bucket's entries with each family's folded children moved into

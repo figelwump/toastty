@@ -2073,7 +2073,11 @@ review. The choice is saved for each window.
   starts collapsed; click it to show the merged tasks as rows, then **Show N
   more** when some merged children's task spaces already closed, which opens
   the parent in the Tasks view. A folded task does not count in a bucket.
-  Without a listed parent, a kept task space lists in Idle until it closes.
+  A kept task space that has no open task beside it, such as one without a
+  parent, or a parent whose children all merged, leaves the buckets with
+  its family: To ship tasks list under the To ship line, Done tasks under
+  the Done line. A selected row keeps its place until you select another
+  row, as when it merges while you look at it.
   After the buckets, a To ship line with
   the purple To ship mark lists the project's other To ship tasks, with
   **Release** when the project can release (see [Release](#release)) and the
@@ -2082,7 +2086,13 @@ review. The choice is saved for each window.
   Expanded, the 3 most recently merged To ship tasks show as rows, then
   **Show N more** when the project has more. When every To ship task shows
   as a task space row, the footer counts To ship tasks instead. A parent in
-  To ship counts in its project's To ship line with its children.
+  To ship counts in its project's To ship line with its children. While
+  Toastty keeps Done tasks' task spaces open after their merge, the Done
+  count says how many, such as **Done 91 · 9 open**, and expands the same
+  way: their task space rows, newest merge first, then **Show N more**,
+  which opens the Tasks view at Done. It also expands while one of those
+  task spaces is selected. Without such task spaces, the Done count opens
+  the Tasks view at Done.
 - **Needs you** lists only the rows that need you, from every project, under
   each project's name and counts, in two sections: **Needs you**, then
   **Ready to review**. Each row takes one line: its mark, its title and one
@@ -2102,8 +2112,8 @@ closed at the merge; if you kept it open, the row opens it instead. **Show N mor
 opens the Tasks view at To ship with the first task the sidebar did not show
 selected, and the To ship and Done counts open it at their group. The newest
 merge comes first; a task with no merge time uses its latest change. A To ship
-task whose task space is still open keeps its task space row and does not show
-a second time.
+task whose task space row the card lists, such as one whose agent works or one
+folded under its parent, does not show a second time.
 
 Task space rows use square marks: green for a finished turn (filled while it
 is unread, when the Tasks view also shows the title in bold), amber ? for a
