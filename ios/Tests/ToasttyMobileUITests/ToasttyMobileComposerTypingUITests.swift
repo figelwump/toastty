@@ -107,8 +107,8 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
     // MARK: - What the Mac sends while the user types
 
     /// The coordinator's chat, the Coordinator tab's own screen: a response
-    /// and the turn's end leave the keyboard and the draft where the user
-    /// had them.
+    /// and the turn's end leave the keyboard, the draft and the insertion
+    /// point where the user had them.
     func testTheKeyboardStaysWhileAResponseArrivesInTheCoordinatorsChat() {
         let app = launchIncomingFixture(taskSession: false)
         app.tabBars.buttons["Coordinator"].tap()
@@ -138,14 +138,20 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         input.tap()
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        input.typeText("draft.")
+        // Put the insertion point at the start, where a field that was made
+        // again or lost its place would not type. A tap right after typing
+        // can be lost, so let the keyboard settle first.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
         input.typeText("One ")
-        XCTAssertEqual(input.value as? String, "One ")
+        XCTAssertEqual(input.value as? String, "One draft.")
 
         deliver("response", in: app)
         XCTAssertTrue(waitForTranscriptText("Incoming response 1", in: app))
         XCTAssertTrue(keyboard.exists, "A response took the keyboard")
         input.typeText("two ")
-        XCTAssertEqual(input.value as? String, "One two ")
+        XCTAssertEqual(input.value as? String, "One two draft.")
 
         deliver("turn-end", in: app)
         XCTAssertTrue(waitForTranscriptText("Incoming response 2", in: app))
@@ -155,7 +161,7 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
         XCTAssertFalse(send.isEnabled)
         XCTAssertTrue(keyboard.exists, "The turn's end took the keyboard")
         input.typeText("three ")
-        XCTAssertEqual(input.value as? String, "One two three ")
+        XCTAssertEqual(input.value as? String, "One two three draft.")
         attachScreenshot(named: "\(name)-typing-while-the-prompt-is-closed", of: app)
 
         deliver("prompt-opens", in: app)
@@ -163,7 +169,7 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
         XCTAssertTrue(send.isEnabled)
         XCTAssertTrue(keyboard.exists, "The prompt's opening took the keyboard")
         input.typeText("four ")
-        XCTAssertEqual(input.value as? String, "One two three four ")
+        XCTAssertEqual(input.value as? String, "One two three four draft.")
         XCTAssertEqual(log.value as? String, "0", "The keyboard went down: \(log.label)")
         attachScreenshot(named: "\(name)-after-the-prompt-opens", of: app)
     }
