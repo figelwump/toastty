@@ -1269,9 +1269,10 @@ struct CoordinatorChatSendPathTests {
     /// A paired device folds the quiet wake turns as this chat does. The
     /// coordinator's workspace carries only the revision of the quiet set,
     /// for every snapshot, and the route serves the keys. A mark that comes
-    /// or goes changes the revision and sends a session list at once. The
-    /// digest's text, as the gateway sends it to a device, has the key that
-    /// the Mac keeps.
+    /// or goes, also one that a later wake call removes, changes the
+    /// revision and sends a session list at once. The device's copy of the
+    /// key rule gives the Mac's key for the digest's text as the gateway
+    /// sends it.
     @MainActor
     @Test func pairedDevicesLearnWhichWakeTurnsAreQuiet() async throws {
         let fixture = try CoordinatorChatFixture(pairsNativeDevice: true)
@@ -1326,6 +1327,23 @@ struct CoordinatorChatSendPathTests {
             broadcastRevisions(after: beforeMark).contains(quiet.revision)
         }
         #expect(try conversations.gatewayCoordinatorQuietDigests(credential: conversations.nativeCredential).digests == quiet)
+
+        // A later `coordinator wake` without --quiet in the same turn removes
+        // the mark (PR #403): the revision goes back and a session list says
+        // so, so the device opens the turn again. Marked again, it folds.
+        let beforeUnmark = conversations.server.broadcasts.count
+        try wakes.service.setCoordinatorWake(.clear)
+        #expect(published().first?.coordinatorQuietDigestsRevision == none.revision)
+        try await fixture.waitUntil("a session list without the removed mark") {
+            broadcastRevisions(after: beforeUnmark).contains(none.revision)
+        }
+        #expect(try conversations.gatewayCoordinatorQuietDigests(credential: conversations.nativeCredential).digests == none)
+        let beforeRemark = conversations.server.broadcasts.count
+        try wakes.service.setCoordinatorWake(.clear, quiet: true)
+        #expect(published().first?.coordinatorQuietDigestsRevision == quiet.revision)
+        try await fixture.waitUntil("a session list with the mark again") {
+            broadcastRevisions(after: beforeRemark).contains(quiet.revision)
+        }
 
         // The device finds the key, with its own copy of the rule, from the
         // text that the gateway sends.
