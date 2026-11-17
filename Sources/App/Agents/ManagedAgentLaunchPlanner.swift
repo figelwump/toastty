@@ -19,6 +19,9 @@ protocol ManagedAgentLaunchPlanning: AnyObject {
     ) throws -> ManagedAgentLaunchPlan
     func discardManagedLaunch(sessionID: String)
     func cancelNativeSessionObservation(sessionID: String)
+    /// Toastty knows that the session's launch did not give the agent its
+    /// shipped skills (`ManagedAgentLaunchPlan.lacksShippedSkills`).
+    func lacksShippedSkills(sessionID: String) -> Bool
 }
 
 extension ManagedAgentLaunchPlanning {
@@ -76,6 +79,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private var sessionRegistryObservation: AnyCancellable?
     private var lastSweptActiveSessionIDs: Set<String>?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
+    /// Sessions whose launch did not give the agent its shipped skills.
+    private var sessionIDsWithoutShippedSkills: Set<String> = []
     private var codexRolloutWatchersBySessionID: [String: CodexRolloutSessionLogWatcherRegistration] = [:]
     private var desiredCodexRolloutLogURLsBySessionID: [String: URL] = [:]
     private var codexRolloutWatcherTransitionsBySessionID: [String: CodexRolloutWatcherTransition] = [:]
@@ -219,7 +224,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         )
         postSkillsProvisionedNoticeIfNeeded(
             request: request,
-            windowID: target.windowID,
+            plan: plan,
             codexSkillsDecision: codexSkillsDecision,
             stagedSkillsConfiguration: stagedSkillsConfiguration,
             userSkillSnapshot: userSkillResolution?.snapshot
@@ -262,7 +267,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         )
         postSkillsProvisionedNoticeIfNeeded(
             request: request,
-            windowID: target.windowID,
+            plan: plan,
             codexSkillsDecision: codexSkillsDecision,
             stagedSkillsConfiguration: stagedSkillsConfiguration,
             userSkillSnapshot: userSkillResolution?.snapshot
@@ -358,15 +363,20 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
     private func postSkillsProvisionedNoticeIfNeeded(
         request: ManagedAgentLaunchRequest,
-        windowID: UUID,
+        plan: ManagedAgentLaunchPlan,
         codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
         stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
         userSkillSnapshot: UserSkillPluginSnapshot?
     ) {
+        let windowID = plan.windowID
         // Grok discovers staged skills only after native folder trust permits
         // it, and preserves caller-owned workspace variables at exec time.
         // Preparation alone cannot establish that its skills are loaded.
         guard request.agent != .grok else { return }
+        // A launch that left the skills out, such as a wrapper command or a
+        // refused Codex profile, did not get them, whatever was prepared;
+        // its unavailable notice must stay.
+        guard plan.lacksShippedSkills == false else { return }
         let isAvailable: Bool
         if request.agent == .codex {
             isAvailable = codexSkillsDecision?.configuration != nil
@@ -468,6 +478,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             decision: codexSkillsDecision,
             effectiveConfiguration: effectiveCodexSkillsConfiguration,
             injectionResult: preparedLaunch.codexSkillsInjectionResult
+        )
+        reportMissingClaudeSkillsIfNeeded(
+            request: request,
+            target: target,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            preparedLaunch: preparedLaunch
         )
         let launchStart = nowProvider()
         let parentSessionID = resolvedParentSessionID(
@@ -584,7 +600,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             environment[ToasttyLaunchContextEnvironment.repoRootKey] = repoRoot
         }
 
-        return ManagedAgentLaunchPlan(
+        let plan = ManagedAgentLaunchPlan(
             sessionID: sessionID,
             agent: request.agent,
             panelID: target.panelID,
@@ -595,6 +611,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             argv: preparedLaunch.argv,
             environment: environment
         )
+        if plan.lacksShippedSkills {
+            sessionIDsWithoutShippedSkills.insert(sessionID)
+        }
+        return plan
+    }
+
+    func lacksShippedSkills(sessionID: String) -> Bool {
+        sessionIDsWithoutShippedSkills.contains(sessionID)
     }
 
     private static func defaultRepositoryRootResolver(_ cwd: String?) -> RepositoryRootResolution {
@@ -645,6 +669,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
         let abandonedArtifacts = managedArtifactsBySessionID.removeValue(forKey: sessionID)
+        sessionIDsWithoutShippedSkills.remove(sessionID)
         nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         sessionRuntimeStore.stopSession(sessionID: sessionID, at: nowProvider())
         Task { @MainActor in
@@ -805,9 +830,52 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             ]
         )
         NotificationCenter.default.post(
-            name: .toasttyManagedCodexSkillsUnavailable,
-            object: ManagedCodexSkillsUnavailableNotice(
+            name: .toasttyManagedAgentSkillsUnavailable,
+            object: ManagedAgentSkillsUnavailableNotice(
                 windowID: target.windowID,
+                agent: .codex,
+                reasonCode: reasonCode,
+                detail: detail
+            )
+        )
+    }
+
+    /// The banner Codex shows for a launch without its skills, for Claude.
+    /// The prepared launch tells the agent where its skills are exactly when
+    /// it gives them (`ManagedAgentLaunchPlan.lacksShippedSkills`).
+    private func reportMissingClaudeSkillsIfNeeded(
+        request: ManagedAgentLaunchRequest,
+        target: ManagedLaunchTarget,
+        stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
+        preparedLaunch: PreparedAgentLaunchCommand
+    ) {
+        guard request.agent == .claude,
+              preparedLaunch.environment[ToasttyLaunchContextEnvironment.skillsRootKey] == nil else { return }
+        let reasonCode: String
+        let detail: String
+        if stagedSkillsConfiguration == nil {
+            // Staging failed, or, for a launch that only reuses a staged
+            // plugin, such as one through the command shim, none is staged.
+            reasonCode = "plugin_unavailable"
+            detail = "Toastty's skills plugin for Claude was not ready for this launch. Open Skills to see its state, or check the Toastty log."
+        } else {
+            reasonCode = "command_not_supported"
+            detail = "This Claude profile runs a command that Toastty does not add its skills plugin to, such as a wrapper script."
+        }
+        ToasttyLog.warning(
+            "Managed Claude launch is proceeding without Toastty skills",
+            category: .automation,
+            metadata: [
+                "reason": reasonCode,
+                "panel_id": target.panelID.uuidString,
+                "window_id": target.windowID.uuidString,
+            ]
+        )
+        NotificationCenter.default.post(
+            name: .toasttyManagedAgentSkillsUnavailable,
+            object: ManagedAgentSkillsUnavailableNotice(
+                windowID: target.windowID,
+                agent: .claude,
                 reasonCode: reasonCode,
                 detail: detail
             )
@@ -1952,4 +2020,35 @@ private func normalizedNonEmpty(_ value: String?) -> String? {
         return nil
     }
     return trimmed
+}
+
+extension ManagedAgentLaunchPlan {
+    /// Toastty knows that this launch does not give the agent its shipped
+    /// skills. Every launch that gives them tells the agent where they are
+    /// in `TOASTTY_SKILLS_ROOT`, a key that a caller's environment cannot
+    /// set. Grok's own wrapper sets it, and Grok loads the skills only once
+    /// the user trusts the folder, so a Grok launch is not known either way.
+    var lacksShippedSkills: Bool {
+        agent != .grok && environment[ToasttyLaunchContextEnvironment.skillsRootKey] == nil
+    }
+
+    /// The plan with the last argument equal to `argument` replaced, such
+    /// as a first message that has to say more. Unchanged when argv has no
+    /// such argument.
+    func replacingLastArgument(_ argument: String, with replacement: String) -> ManagedAgentLaunchPlan {
+        guard let index = argv.lastIndex(of: argument) else { return self }
+        var argv = argv
+        argv[index] = replacement
+        return ManagedAgentLaunchPlan(
+            sessionID: sessionID,
+            agent: agent,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            cwd: cwd,
+            repoRoot: repoRoot,
+            argv: argv,
+            environment: environment
+        )
+    }
 }

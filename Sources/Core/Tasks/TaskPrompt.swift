@@ -48,10 +48,37 @@ public enum TaskPrompt {
     /// `start_skill`.
     public static let defaultStartSkill = "toastty-task-start"
 
+    /// Whether the agent that reads a message has Toastty's skills.
+    public enum SkillDelivery: Equatable, Sendable {
+        /// It has them, or Toastty does not know that it lacks them.
+        case delivered
+        /// Toastty knows that the launch did not give the agent its
+        /// skills. `shippedSkillFiles` maps each skill that Toastty ships
+        /// to its `SKILL.md`, which the agent can read instead.
+        case missing(shippedSkillFiles: [String: String])
+    }
+
+    /// The skill line, and, for an agent without its skills, where the
+    /// instructions of a skill that Toastty ships are.
+    private static func skillSections(_ skill: String?, _ skills: SkillDelivery) -> [String] {
+        guard let skill else { return [] }
+        guard case .missing(let files) = skills, let file = files[skill] else {
+            return [skillLine(skill)]
+        }
+        return [
+            skillLine(skill),
+            "Toastty could not give this session its skills. The \(skill) skill's instructions are in \(file): "
+                + "read that file and follow it.",
+        ]
+    }
+
     /// The skill line, when there is a skill, then the worktree, the task
-    /// that created this one, `start_prompt`, the first prompt, the task text exactly as written,
+    /// that created this one, `start_prompt`, the first prompt, the task
+    /// text exactly as written,
     /// the attached files, and the coordinator and reply guidance unless
-    /// the skill is the shipped start skill.
+    /// the skill is the shipped start skill and the agent has it. With
+    /// `skills` missing, a skill that Toastty ships also gets the path of
+    /// its instructions.
     /// Toastty adds the text and files itself, so nothing that writes the
     /// first prompt can drop or reword them. The text keeps its own spacing
     /// and indentation.
@@ -63,12 +90,10 @@ public enum TaskPrompt {
         attachmentPaths: [String],
         worktree: TaskOperation.Worktree? = nil,
         base: TaskOperation.Base? = nil,
-        parent: ParentTask? = nil
+        parent: ParentTask? = nil,
+        skills: SkillDelivery = .delivered
     ) -> String {
-        var sections: [String] = []
-        if let skill {
-            sections.append(skillLine(skill))
-        }
+        var sections = skillSections(skill, skills)
         if let worktree {
             sections.append(worktreeLine(worktree, base: base))
         }
@@ -80,7 +105,8 @@ public enum TaskPrompt {
             startPrompt: startPrompt,
             firstPrompt: firstPrompt,
             text: text,
-            attachmentPaths: attachmentPaths
+            attachmentPaths: attachmentPaths,
+            skills: skills
         )
         return sections.joined(separator: "\n\n")
     }
@@ -93,7 +119,8 @@ public enum TaskPrompt {
         startPrompt: String?,
         firstPrompt: String?,
         text: String,
-        attachmentPaths: [String]
+        attachmentPaths: [String],
+        skills: SkillDelivery
     ) -> [String] {
         var sections: [String] = []
         if let startPrompt = startPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), startPrompt.isEmpty == false {
@@ -112,20 +139,21 @@ public enum TaskPrompt {
                 "Attached files:\n" + attachmentPaths.map { "- \($0)" }.joined(separator: "\n")
             )
         }
-        if skill != defaultStartSkill {
+        if skill != defaultStartSkill || skills != .delivered {
             sections.append(coordinatorLine)
             sections.append(replyLine)
         }
         return sections
     }
 
-    private static func taskSections(_ record: TaskRecord, skill: String?) -> [String] {
+    private static func taskSections(_ record: TaskRecord, skill: String?, skills: SkillDelivery) -> [String] {
         taskSections(
             skill: skill,
             startPrompt: record.resolved?.startPrompt,
             firstPrompt: record.resolved?.prompt ?? record.pinned.prompt,
             text: record.text,
-            attachmentPaths: record.attachments.map(\.path)
+            attachmentPaths: record.attachments.map(\.path),
+            skills: skills
         )
     }
 
@@ -139,10 +167,11 @@ public enum TaskPrompt {
         worktree: TaskOperation.Worktree,
         base: TaskOperation.Base?,
         forked: Bool,
-        parent: ParentTask? = nil
+        parent: ParentTask? = nil,
+        skills: SkillDelivery = .delivered
     ) -> String {
         let skill = forked ? nil : record.resolved?.skill ?? record.pinned.skill
-        var sections = skill.map { [skillLine($0)] } ?? []
+        var sections = skillSections(skill, skills)
         sections.append(worktreeLine(worktree, base: base))
         if forked {
             sections.append(
@@ -157,7 +186,7 @@ public enum TaskPrompt {
             if let parent {
                 sections.append(parentLine(parent))
             }
-            sections += taskSections(record, skill: skill)
+            sections += taskSections(record, skill: skill, skills: skills)
         }
         return sections.joined(separator: "\n\n")
     }
@@ -175,10 +204,11 @@ public enum TaskPrompt {
         sourceWorkspaceID: UUID?,
         worktree: TaskOperation.Worktree?,
         base: TaskOperation.Base?,
-        parent: ParentTask?
+        parent: ParentTask?,
+        skills: SkillDelivery = .delivered
     ) -> String {
         let skill = record.resolved?.skill ?? record.pinned.skill
-        var sections = skill.map { [skillLine($0)] } ?? []
+        var sections = skillSections(skill, skills)
         sections.append(
             "You are now the agent of the task \"\(record.title)\" (task ID \(record.id.uuidString)), "
                 + "in its task space \(record.slug) (workspace \(taskSpaceWorkspaceID.uuidString)). "
@@ -193,7 +223,7 @@ public enum TaskPrompt {
                 + "do not do them, and do not act for the session that created this task. "
                 + forkReportLine(record, parent: parent, sourceWorkspaceID: sourceWorkspaceID)
         )
-        sections += taskSections(record, skill: skill)
+        sections += taskSections(record, skill: skill, skills: skills)
         return sections.joined(separator: "\n\n")
     }
 
@@ -215,11 +245,17 @@ public enum TaskPrompt {
     /// What Merge sends the task's agent: the skill line, then
     /// `merge_prompt`, then the pull request the user accepted. With
     /// neither set, the skill is `toastty-task-merge`. A `merge_prompt`
-    /// without a skill is sent as written.
-    public static func merge(skill: String?, prompt: String?, pullRequestURL: String) -> String {
+    /// without a skill is sent as written. With `skills` missing, a skill
+    /// that Toastty ships also gets the path of its instructions.
+    public static func merge(
+        skill: String?,
+        prompt: String?,
+        pullRequestURL: String,
+        skills: SkillDelivery = .delivered
+    ) -> String {
         let skill = skill ?? (prompt == nil ? defaultMergeSkill : nil)
-        let sections = [skill.map(skillLine), prompt] + ["The user accepted \(pullRequestURL) for merging."]
-        return sections.compactMap { $0 }.joined(separator: "\n\n")
+        let sections = skillSections(skill, skills) + [prompt, "The user accepted \(pullRequestURL) for merging."].compactMap { $0 }
+        return sections.joined(separator: "\n\n")
     }
 
     public static let defaultMergeSkill = "toastty-task-merge"

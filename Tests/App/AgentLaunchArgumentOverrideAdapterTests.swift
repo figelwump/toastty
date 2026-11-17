@@ -45,7 +45,12 @@ struct AgentLaunchArgumentOverrideAdapterTests {
             #expect(AgentLaunchArgumentOverrideAdapter.applying(
                 codexProjectDocMaxBytes: 131_072, to: unchanged, agent: .codex, profileID: "codex"
             ) == unchanged)
+            // The coordinator's chat says so for such a profile.
+            #expect(AgentLaunchArgumentOverrideAdapter.canApplyCodexProjectDocMaxBytes(to: unchanged, profileID: "codex") == false)
         }
+        #expect(AgentLaunchArgumentOverrideAdapter.canApplyCodexProjectDocMaxBytes(
+            to: ["codex", "resume", nativeID, "-c", "project_doc_max_bytes=1000"], profileID: "codex"
+        ))
     }
 
     @Test

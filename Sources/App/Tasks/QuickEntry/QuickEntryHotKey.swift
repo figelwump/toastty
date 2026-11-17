@@ -225,25 +225,31 @@ extension QuickEntryShortcutAnswer {
     /// Makes the quick entry key wait for the What's new sheet. With no
     /// saved answer there is no key while the sheet still has its question,
     /// and the key is read again each time the question stops showing.
-    /// `presentMessage` shows why the key is not set up as the user chose:
-    /// a `tasks.toml` that cannot be read, a shortcut that is not valid, or
-    /// a registration that the system refuses. Carbon does not refuse a key
-    /// that another app also registered, so Toastty cannot tell that case.
+    /// The message that says why the key is not set up as the user chose
+    /// (a `tasks.toml` that cannot be read, a shortcut that is not valid,
+    /// or a registration that the system refuses) waits in the controller's
+    /// `launchMessage` while the question waits, and `presentMessage` shows
+    /// it, as at launch, when the question ends. So the user sees it once.
+    /// Carbon does not refuse a key that another app also registered, so
+    /// Toastty cannot tell that case.
     @MainActor
     static func connect(
         _ quickEntry: QuickEntryController,
         to offer: CoordinatorStartOffer?,
         defaults: UserDefaults?,
-        presentMessage: @escaping @MainActor (String) -> Void
+        presentMessage: @escaping @MainActor () -> Void
     ) {
         quickEntry.defaultShortcutPermission = { [weak offer] in
             permission(saved: saved(in: defaults), questionWaits: offer?.shouldOffer ?? false)
         }
+        quickEntry.launchMessageWaits = { [weak offer] in
+            offer?.shouldOffer ?? false
+        }
         offer?.questionEnded = { [weak quickEntry] in
-            guard let message = quickEntry?.reloadShortcut() else { return }
-            // Not from inside the store update that can end the question:
-            // the alert runs its own event loop.
-            Task { @MainActor in presentMessage(message) }
+            quickEntry?.loadShortcutAtLaunch()
+            // Not from inside the store update that can end the question,
+            // and after the sheet has left its window.
+            Task { @MainActor in presentMessage() }
         }
     }
 }

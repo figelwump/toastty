@@ -356,8 +356,9 @@ Other ways to open the same panel:
 Change the shortcut with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`,
 or turn it off with `shortcut = "none"`. Toastty reads it at launch and on
 Reload Configuration. The shortcut needs no Accessibility permission. If
-another app already uses it, Reload Configuration says so, and the shortcut
-still works inside Toastty from the File menu. Smoke runs and test hosts do
+Toastty cannot register it, a message says so at launch or on Reload
+Configuration, and the shortcut still works inside Toastty from the File
+menu. Smoke runs and test hosts do
 not register it.
 
 Toastty Mobile has the same form: **+** on its Home screen and content shared
@@ -1507,7 +1508,14 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   instruction files, all files together (`project_doc_max_bytes` in its
   configuration). So when `[coordinator] agent` names a Codex profile,
   Toastty starts the agent, and resumes it after a relaunch, with
-  `project_doc_max_bytes` set to 128 KiB for that command only. Your
+  `project_doc_max_bytes` set to 128 KiB for that command only. When the
+  profile's arguments cannot take it, as for a shell helper or an attached
+  `-c`, the coordinator's chat says that Codex may read only part of the
+  instructions and how to fix it: a `codex` profile that runs `codex`
+  itself, or `project_doc_max_bytes` in Codex's own configuration. When
+  the helper or that configuration already sets it, choose Don't Show
+  Again: Toastty then hides the notice until the profile's arguments
+  change. Your
   `~/.codex/config.toml` and the task agents do not change. The
   instruction file stays under 128 KiB, and the reference files hold the
   rules that the coordinator reads only when it needs them. An agent
@@ -2457,9 +2465,17 @@ release_prompt = "Wait for my approval before any production change."  # optiona
 - With only `merge_prompt` set, Merge sends that prompt as written, with no
   skill line. Each key is looked up on its own, so a `merge_skill` in
   `[defaults]` also comes before a project's own `merge_prompt`.
-- Toastty does not check that the skill is installed. Name a skill the task's
-  agent can load: one in `~/.toastty/skills/`, the repository's
+- Toastty does not check that a skill you name is installed. Name a skill the
+  task's agent can load: one in `~/.toastty/skills/`, the repository's
   `.agents/skills/`, or one Toastty ships.
+- Some launches do not give the agent the skills that Toastty ships: Toastty
+  could not prepare Claude's skills plugin or Codex's profile, the profile
+  runs a wrapper script, or pi runs with `--no-skills`. When Toastty knows
+  this, the first message and Merge's message also give the path of the
+  shipped skill's `SKILL.md` in the app, and the first message keeps the
+  `coordinator send` and `task needs-reply` lines. For Claude and Codex, a
+  banner over the window also says that the agent launched without
+  Toastty's skills.
 
 ## `~/.toastty/tasks.toml`
 
@@ -2491,7 +2507,12 @@ effort = "high"
 runs your `claude` profile with that profile's own model and effort.
 `[defaults]` does not apply to it. Toastty reads the table each time it starts
 the coordinator's agent, and a resumed conversation keeps what it started
-with. With a Codex profile, Toastty also raises `project_doc_max_bytes` for
+with. Before a start, Toastty checks that the agent's command is installed.
+If it is not, the start stops with an error that names the agent and this
+setting, and makes no Coordinator workspace. When Claude Code or Codex is
+installed, the error offers to start with it, with its own model and
+effort. That choice applies to that start only: Toastty does not change
+`tasks.toml`. With a Codex profile, Toastty also raises `project_doc_max_bytes` for
 the coordinator, so that Codex reads all of its instructions (see
 [The coordinator's folder](#the-coordinators-folder)).
 

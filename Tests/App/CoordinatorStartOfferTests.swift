@@ -65,13 +65,26 @@ struct CoordinatorStartOfferTests {
         private let failureLog = FailureLog()
         /// The titles of the failures that the offer showed.
         var failures: [String] { failureLog.titles }
+        /// The failures that offered another agent, and the agents offered.
+        var agentOffers: [(message: String, choice: CoordinatorAgentChoice)] { failureLog.agentOffers }
+        /// What the user answers when a failure offers another agent.
+        var startsWithOfferedAgent: Bool {
+            get { failureLog.startsWithOfferedAgent }
+            set { failureLog.startsWithOfferedAgent = newValue }
+        }
 
         @MainActor
         final class FailureLog {
             var titles: [String] = []
+            var agentOffers: [(message: String, choice: CoordinatorAgentChoice)] = []
+            var startsWithOfferedAgent = false
         }
 
-        init(_ fixture: CoordinatorControllerTests.Fixture, defaultsSuite: String?) throws {
+        init(
+            _ fixture: CoordinatorControllerTests.Fixture,
+            defaultsSuite: String?,
+            configLoader: @escaping @MainActor () throws -> TasksConfig = { .empty }
+        ) throws {
             self.fixture = fixture
             let sheet = sheet
             let failureLog = failureLog
@@ -84,20 +97,35 @@ struct CoordinatorStartOfferTests {
                 defaults: defaults,
                 coordinatorDirectoryURL: fixture.directory,
                 present: { windowID, answer in sheet.present(windowID: windowID, answer: answer) },
-                presentFailure: { title, _ in failureLog.titles.append(title) }
+                presentFailure: { title, _ in failureLog.titles.append(title) },
+                offerAgent: { title, message, choice, _ in
+                    failureLog.titles.append(title)
+                    failureLog.agentOffers.append((message, choice))
+                    return failureLog.startsWithOfferedAgent
+                }
             )
             quickEntry = QuickEntryController(
                 store: fixture.store,
                 agentProfiles: { [] },
                 create: { _ in throw TaskError("Not used") },
-                configLoader: { .empty },
+                configLoader: configLoader,
                 registersGlobalHotKey: false
             )
-            QuickEntryShortcutAnswer.connect(quickEntry, to: offer, defaults: defaults) { [weak self] message in
-                self?.shortcutMessages.append(message)
+            QuickEntryShortcutAnswer.connect(quickEntry, to: offer, defaults: defaults) { [weak self] in
+                self?.showShortcutMessage()
             }
             // As at launch.
-            quickEntry.reloadShortcut()
+            quickEntry.loadShortcutAtLaunch()
+        }
+
+        /// Shows the quick entry key's message over the window, as the app
+        /// does.
+        private func showShortcutMessage() {
+            guard let windowID = try? windowID else { return }
+            quickEntry.presentLaunchMessageIfNeeded(windowID: windowID) { [weak self] _, message in
+                self?.shortcutMessages.append(message)
+                return true
+            }
         }
 
         /// The sheet saves the state of "Use ⌥⇧T in every app" before it
@@ -111,9 +139,12 @@ struct CoordinatorStartOfferTests {
             get throws { try #require(fixture.store.state.windows.first?.id) }
         }
 
-        /// A window got the keyboard, as at launch.
+        /// A window got the keyboard, as at launch: the message first, then
+        /// the question.
         func windowBecameKey() throws {
-            offer.offerIfNeeded(windowID: try windowID)
+            let windowID = try windowID
+            showShortcutMessage()
+            offer.offerIfNeeded(windowID: windowID)
         }
     }
 
@@ -287,6 +318,82 @@ struct CoordinatorStartOfferTests {
         #expect(relaunch.sheet.shownOverWindowIDs.isEmpty)
     }
 
+    /// A user with no `claude` and no `codex` installed.
+    @Test func aStartWithoutAnInstalledAgentSaysWhichAndAsksAgainAtTheNextLaunch() async throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        try fixture.uninstall("claude")
+        try fixture.uninstall("codex")
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        try launch.windowBecameKey()
+        launch.sheet.choose(.start)
+        await fixture.waitUntil("the failure") { launch.failures.isEmpty == false }
+        #expect(launch.failures == [CoordinatorController.UserCommand.open.failureTitle])
+        #expect(launch.agentOffers.isEmpty, "No other agent is installed")
+        // Nothing half made: no workspace, no folder, no command typed.
+        #expect(fixture.controller.location == nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.path) == false)
+        #expect(fixture.tasks.router.sendAttemptCount == 0)
+        // Not again in this launch, after the alert gives the keyboard back.
+        #expect(launch.offer.shouldOffer == false)
+        try launch.windowBecameKey()
+        #expect(launch.sheet.shownOverWindowIDs.count == 1)
+
+        // The next launch asks again.
+        let relaunch = try Launch(fixture, defaultsSuite: suite)
+        #expect(relaunch.offer.shouldOffer)
+        try relaunch.windowBecameKey()
+        #expect(relaunch.sheet.shownOverWindowIDs.count == 1)
+    }
+
+    /// A user with only Codex installed.
+    @Test func aStartWithoutClaudeOffersCodexAndStartsWithIt() async throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        try fixture.uninstall("claude")
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        launch.startsWithOfferedAgent = true
+        try launch.windowBecameKey()
+        launch.sheet.choose(.start)
+        await fixture.waitUntil("the coordinator's agent") { fixture.controller.session != nil }
+        #expect(try fixture.session().agent == .codex)
+        let offer = try #require(launch.agentOffers.first)
+        #expect(launch.agentOffers.count == 1)
+        #expect(offer.choice == CoordinatorAgentChoice(profileID: "codex", displayName: "Codex", configuredProfileID: "claude"))
+        #expect(offer.message.contains("claude is not installed"))
+        #expect(offer.message.contains("[coordinator] in ~/.toastty/tasks.toml"))
+        #expect(offer.message.contains("Start with Codex starts the coordinator with Codex now"))
+        #expect(offer.message.contains("a later start tries claude again"))
+        #expect(launch.failures == [CoordinatorController.UserCommand.open.failureTitle])
+        // A start that worked is saved, once the start returns. The offer
+        // stops asking in this launch at once, so wait for the saved key.
+        let saved = try #require(UserDefaults(suiteName: suite))
+        await fixture.waitUntil("the answer is saved") { saved.bool(forKey: CoordinatorStartOffer.answeredKey) }
+        #expect(saved.bool(forKey: CoordinatorStartOffer.answeredKey))
+    }
+
+    @Test func cancellingTheOfferedAgentAsksAgainAtTheNextLaunch() async throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        try fixture.uninstall("claude")
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        try launch.windowBecameKey()
+        launch.sheet.choose(.start)
+        await fixture.waitUntil("the offer") { launch.agentOffers.isEmpty == false }
+        // Let the start finish its answer.
+        await fixture.settle()
+        #expect(fixture.controller.location == nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.path) == false)
+        #expect(UserDefaults(suiteName: suite)?.bool(forKey: CoordinatorStartOffer.answeredKey) == false)
+
+        let relaunch = try Launch(fixture, defaultsSuite: suite)
+        try relaunch.windowBecameKey()
+        #expect(relaunch.sheet.shownOverWindowIDs.count == 1)
+    }
+
     // MARK: - The quick entry key
 
     /// Toastty takes ⌥⇧T from every app only after the user allowed it in
@@ -332,6 +439,37 @@ struct CoordinatorStartOfferTests {
         try launch.windowBecameKey()
         launch.sheet.choose(.notNow)
         #expect(launch.quickEntry.shortcut == .default)
+    }
+
+    /// A `tasks.toml` that cannot be read shows its message once: after
+    /// the question, with the key the answer chose, and at a later launch
+    /// when the window first gets the keyboard.
+    @Test func aBrokenTasksFileShowsItsMessageOncePerLaunch() async throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        let broken: @MainActor () throws -> TasksConfig = {
+            throw TasksConfigParseError(line: 2, message: "[quick_entry] the shortcut \"t\" needs Command")
+        }
+        let expected = "tasks.toml line 2: [quick_entry] the shortcut \"t\" needs Command. "
+            + "The quick entry shortcut is ⌥⇧T until the file is fixed."
+        let launch = try Launch(fixture, defaultsSuite: suite, configLoader: broken)
+        try launch.windowBecameKey()
+        #expect(launch.sheet.isUp)
+        #expect(launch.shortcutMessages.isEmpty, "The message waits for the question")
+        launch.choose(.notNow, allowingTheKey: true)
+        await fixture.waitUntil("the message") { launch.shortcutMessages.isEmpty == false }
+        #expect(launch.shortcutMessages == [expected])
+        // The window gets the keyboard back after the sheets.
+        try launch.windowBecameKey()
+        await fixture.settle()
+        #expect(launch.shortcutMessages == [expected])
+
+        let relaunch = try Launch(fixture, defaultsSuite: suite, configLoader: broken)
+        try relaunch.windowBecameKey()
+        try relaunch.windowBecameKey()
+        #expect(relaunch.sheet.shownOverWindowIDs.isEmpty)
+        #expect(relaunch.shortcutMessages == [expected])
     }
 
     @Test func aUserWhoWillNotSeeTheQuestionKeepsTheKey() async throws {
