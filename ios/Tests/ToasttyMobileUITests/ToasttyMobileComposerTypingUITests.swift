@@ -112,6 +112,17 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
         // UIKit can add an inline prediction to the value after the last word.
         XCTAssertTrue((input.value as? String)?.lowercased().hasPrefix("ship it today") == true)
         XCTAssertLessThanOrEqual(after - before, 2, "\(keys.count) keys ran the transcript's body \(after - before) times")
+
+        // The app keeps the draft, not the composer: it is still there after
+        // another tab shows. A drag on the transcript drops the keyboard,
+        // which covers the tab bar.
+        app.descendants(matching: .any)["toastty-mobile-transcript"].swipeDown()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue((input.value as? String)?.lowercased().hasPrefix("ship it today") == true)
     }
 
     func testTypingThroughFirstWrapAndContinuedLinesPreservesTextOrder() {
