@@ -14,6 +14,8 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private let reviewSubspaceID = "A1000000-0000-0000-0000-000000000022"
     private let archiveSubspaceID = "A1000000-0000-0000-0000-000000000026"
     private let setupFailedTaskID = "D1000000-0000-0000-0000-000000000003"
+    /// The task that waits for its workspace on the "pick-workspace" board.
+    private let pickWorkspaceTaskID = "D1000000-0000-0000-0000-000000000020"
     private let startingTaskID = "D1000000-0000-0000-0000-000000000004"
     private let shippedTaskID = "D1000000-0000-0000-0000-000000000005"
     private let otherProjectTaskID = "D1000000-0000-0000-0000-000000000012"
@@ -421,7 +423,81 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         done.tap()
         XCTAssertTrue(app.tabBars.buttons["Tasks"].waitForSelection())
         XCTAssertTrue(waitUntilHittable(doneGroup))
+        // The Mac sends a count for Done, not the tasks, so the group says
+        // where they are listed.
+        let doneOnMac = app.staticTexts["toastty-tasks-done-on-mac"]
+        XCTAssertTrue(scrollTo(doneOnMac, in: app, list: "toastty-mobile-tasks"))
+        XCTAssertEqual(doneOnMac.label, "Done tasks are listed on your Mac, in Tasks (⌘⇧T).")
+        XCTAssertGreaterThan(doneOnMac.frame.minY, doneGroup.frame.maxY - 1)
         attachScreenshot(named: "tasks-tab-done", of: app)
+    }
+
+    /// Until the Mac has a coordinator, the end of All says where it
+    /// starts. The Coordinator tab takes the card's place once it exists.
+    func testHomeSaysWhereTheCoordinatorStartsUntilItExists() {
+        let app = launchTaskFixture()
+        XCTAssertFalse(app.tabBars.buttons["Coordinator"].exists)
+        let hint = app.descendants(matching: .any)["toastty-mobile-home-coordinator-hint"]
+        XCTAssertTrue(scrollTo(hint, in: app, attempts: 16))
+        XCTAssertEqual(
+            hint.label,
+            "Coordinator, Not started yet. It starts on your Mac: choose Open Coordinator in the Agent menu."
+        )
+        attachScreenshot(named: "home-coordinator-hint", of: app)
+        // Needs you lists only what needs the user.
+        select(.needsYou, in: app)
+        XCTAssertTrue(hint.waitForNonExistence(timeout: 5))
+        app.terminate()
+
+        let withCoordinator = launchTaskFixture(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR": "quiet"])
+        XCTAssertTrue(withCoordinator.tabBars.buttons["Coordinator"].waitForExistence(timeout: 5))
+        let list = withCoordinator.collectionViews["toastty-mobile-home"]
+        for _ in 0..<16 { list.swipeUp(velocity: .fast) }
+        XCTAssertFalse(withCoordinator.descendants(matching: .any)["toastty-mobile-home-coordinator-hint"].exists)
+    }
+
+    /// A Mac from before tasks sends no task board and no `tasks`
+    /// capability: Home asks the user to update Toastty on the Mac.
+    func testHomeAsksToUpdateAMacFromBeforeTasks() {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_HOST_TASKS"] = "unsupported"
+        app.launch()
+        XCTAssertTrue(app.segmentedControls["toastty-mobile-workspace-session-filter"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.tabBars.buttons["Tasks"].exists)
+        let hint = app.descendants(matching: .any)["toastty-mobile-home-update-mac-hint"]
+        XCTAssertTrue(scrollTo(hint, in: app, attempts: 16))
+        XCTAssertEqual(hint.label, "Tasks and the coordinator, Update Toastty on your Mac to see them here.")
+        attachScreenshot(named: "home-update-mac-hint", of: app)
+    }
+
+    /// No action on the phone picks a task's workspace, so its detail says
+    /// where to pick it on the Mac, above the actions the phone can take.
+    func testATaskThatWaitsForAWorkspaceSaysToPickItOnTheMac() {
+        let app = launchTaskFixture(tasks: "pick-workspace")
+        app.tabBars.buttons["Tasks"].tap()
+        let row = app.buttons["toastty-task-row-\(pickWorkspaceTaskID)"]
+        XCTAssertTrue(scrollTo(row, in: app, list: "toastty-mobile-tasks"))
+        XCTAssertEqual(row.label, "Fix the settings typo, ⚠ pick a workspace")
+        row.tap()
+        let step = app.descendants(matching: .any)["toastty-task-detail-mac-step"]
+        XCTAssertTrue(step.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            step.label,
+            "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace."
+        )
+        let delete = app.buttons["Delete Task"]
+        XCTAssertTrue(delete.exists)
+        XCTAssertLessThan(step.frame.maxY, delete.frame.minY + 1)
+        attachScreenshot(named: "task-detail-pick-workspace", of: app)
+
+        // A task the phone can act on has no Mac step.
+        app.buttons["Done"].tap()
+        let starting = app.buttons["toastty-task-row-\(startingTaskID)"]
+        XCTAssertTrue(scrollTo(starting, in: app, list: "toastty-mobile-tasks"))
+        starting.tap()
+        XCTAssertTrue(app.staticTexts["toastty-task-detail-title"].waitForExistence(timeout: 5))
+        XCTAssertFalse(step.exists)
     }
 
     func testTaskLinksDrawAsChipsThatOpenTheTaskSpace() {

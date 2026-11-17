@@ -697,6 +697,7 @@ with your policy.
 | `agentState.lastOutputAt` | When the agent's transcript last changed. |
 | `lastUserInputAt` | When you last worked in the task space. |
 | `pullRequest` | GitHub's last answer about the task's pull request: `state`, `isDraft`, `mergeStateStatus`, `checks` and `checksPendingSince`. |
+| `pullRequestLookupError` | Why GitHub has not answered about the pull request, while it has not: `problem` is `ghMissing`, `notSignedIn` or `other`, and `message` says what to do. `null` otherwise. |
 
 - **Stage.** A stage that lasts under 3 seconds does not move
   `stage.changedAt`: when an agent's status flickers between two tool calls
@@ -1926,6 +1927,7 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, or an agent asked for input or stopped with an error |
 | Starting | setup, or triage when it is on, is still running, or it is moving into a worktree. Lists show it with Running |
 | Running | an agent that works or waits on its sub-agents; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
+| Needs you | an agent started with the task's first prompt has not reported that it began it, 60 seconds after its launch: "Claude may be waiting in its terminal". It most likely waits for an answer there, such as a login or a folder-trust question. It clears when the agent reports, usually after your answer |
 | Needs you | its agent ended a turn with a question and marked it with `task needs-reply`: "Asks: <question>". Reading the turn does not clear it. It clears when the task's agent starts its next turn, usually your answer, or when the agent runs `task ready-for-review` |
 | Needs you | its pull request is open and not a draft while no agent works on it, or its agent marked work without a pull request ready with `task ready-for-review` |
 | Running | its agent ended its turn to wait on another task through `task watch`, shown as "waiting for <task>" |
@@ -1951,15 +1953,21 @@ you decide.
 The pull request comes from the task space's `github-pr` annotation. Toastty
 asks `gh` about open tasks at launch, when an agent's turn ends in the task
 space, and when the Tasks view opens. It checks for updates every 15 seconds:
-pending checks, unknown readiness and failed requests are retried after 15
-seconds; settled results are refreshed after two minutes. It copies the link
+pending checks and unknown readiness are retried after 15 seconds; settled
+results are refreshed after two minutes. Failed requests are retried after 15
+seconds, then 30, then 60, then every two minutes until GitHub answers. It copies the link
 and the merge onto the task record. The Merge button can keep the previous
 readiness for up to 30 seconds while GitHub returns unknown readiness or
 requests fail, only for the same head commit. A new commit never inherits the
 previous commit's readiness. Task status and alerts still keep the last
 reported checks for the same commit when a reply omits check fields; that
-reply does not prove that checks cleared. Without `gh`, a linked pull request
-with no agent working counts as waiting for review. A merge made on GitHub
+reply does not prove that checks cleared. Without an answer from GitHub, a
+linked pull request with no agent working counts as waiting for review. When
+the request failed, the task's status line and the Tasks view's Stage row say
+why and what to do: "⚠ install gh to check the PR" when `gh` is not installed
+or not on your login shell's `PATH`, "⚠ run gh auth login to check the PR"
+when `gh` is not signed in, else "⚠ PR check failed" with `gh`'s message.
+`task get` reports it as `pullRequestLookupError`. A merge made on GitHub
 also cleans up the task space when that is safe; see
 [Merge a task](#merge-a-task).
 

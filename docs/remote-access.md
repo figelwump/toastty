@@ -652,11 +652,14 @@ in Home, except one for the coordinator, which opens its tab.
   view does, in the same order: **Needs you**, **Ready to review**,
   **Running** and **Idle**, then **To ship**, one lane per project with all
   of its merged tasks and **Release…** when the project can release, then
-  the **Done** count. A family in Needs you whose members only wait for a
+  the **Done** count, with a line that says done tasks are listed in the
+  Mac's Tasks view: the Mac sends the count, not the tasks. A family in Needs you whose members only wait for a
   review lists under Ready to review. A task with an open task space shows
   that task space's row. Any other task, such as one whose setup failed, opens
   its detail: the stage and why, the status line, the pull request, and the
-  project. As in Home, the tab says above its list when the connection is not
+  project. A task that waits for its workspace says to pick it on the Mac, in
+  the Tasks view: no action on the phone picks one. The Mac sends that step
+  as the task's `macStep`. As in Home, the tab says above its list when the connection is not
   live, with **Retry** while it reconnects, and shows what a release or a task
   action started. Its navigation bar has the same **+** as Home: it opens
   [New Task](#creating-a-task), or the new-session sheet with an older Mac.
@@ -665,7 +668,8 @@ The Mac computes every stage, group and line, so both apps show the same
 thing. It sends a `tasks` board in the session snapshot and advertises the
 `tasks` capability. The phone shows the tab bar and switches to All | Needs
 you only when a snapshot carries the board. An older Mac omits it, and the
-phone keeps **All | Active** with no tab bar. An older phone ignores the board.
+phone keeps **All | Active** with no tab bar. When a live Mac does not
+advertise `tasks`, the end of Home asks you to update Toastty on the Mac. An older phone ignores the board.
 When the Mac turns its task system on or off while the phone is connected, the
 tab bar shows or leaves. A session open in Home stays open, and its transcript
 returns to the latest message.
@@ -826,7 +830,9 @@ While the Mac runs the task system and has a coordinator (see
 [The coordinator](tasks.md#the-coordinator)), the phone's tab bar reads
 **Home | Coordinator | Tasks**. The tab is the phone's form of the Mac's dock:
 it keeps the coordinator's chat one tap away from any list, and keeps its place
-while you work in the other tabs.
+while you work in the other tabs. Until the coordinator's workspace exists,
+the end of Home's **All** says that the coordinator starts on the Mac, with
+**Open Coordinator** in the **Agent** menu.
 
 - **The tab's own screen is the coordinator's chat**, the same conversation
   screen as any session, with its composer. Its title shows the golden Toasty,
@@ -1293,7 +1299,7 @@ tasks; an older Mac means Toastty 0.9.x.
 | Feature | New Mac, older phone | Older Mac, new phone |
 | --- | --- | --- |
 | Sessions, replies, approvals | As before | As before |
-| Task board (All \| Needs you, the Tasks tab) | The phone ignores the board and keeps its list | **All \| Active** with no tab bar ([Tasks](#tasks)) |
+| Task board (All \| Needs you, the Tasks tab) | The phone ignores the board and keeps its list | **All \| Active** with no tab bar, and a card that asks you to update Toastty on the Mac ([Tasks](#tasks)) |
 | Coordinator tab | The phone lists the coordinator's workspace as an ordinary one | No Coordinator tab |
 | **+** on Home and Share to Toastty | Start a session | Start a session; shared content opens the new-session sheet ([Creating a task](#creating-a-task)) |
 | Task actions: Merge, Archive…, Mark Done, Delete | Not offered | The task's detail stays read-only ([Acting on tasks](#acting-on-tasks)) |

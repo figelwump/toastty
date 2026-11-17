@@ -556,6 +556,44 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertFalse(home.canFlagConversations)
     }
 
+    /// Home asks the user to update the Mac only while a live Mac's
+    /// capabilities lack `tasks`. Empty capabilities, before a hello or
+    /// between connections, keep what Home knew.
+    func testHomeAsksToUpdateOnlyALiveMacWithoutTasks() {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: []
+        ))
+        XCTAssertTrue(home.hostSupportsTasks)
+        XCTAssertFalse(home.asksToUpdateMacForTasks)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.workspacePanels]
+        ))
+        XCTAssertTrue(home.asksToUpdateMacForTasks)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .reconnecting(failureCount: 1, showsBanner: false), capabilities: []
+        ))
+        XCTAssertFalse(home.hostSupportsTasks)
+        XCTAssertFalse(home.asksToUpdateMacForTasks)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.workspacePanels, .tasks]
+        ))
+        XCTAssertTrue(home.hostSupportsTasks)
+        XCTAssertFalse(home.asksToUpdateMacForTasks)
+    }
+
     func testSessionStartNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),

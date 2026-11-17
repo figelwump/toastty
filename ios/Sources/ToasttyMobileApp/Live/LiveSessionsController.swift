@@ -839,8 +839,6 @@ final class LiveSessionsController {
     private var acceptsTaskCreate: Bool {
         coordinatorState.capabilities.contains(.taskCreate) && deviceScopes.contains(.send)
     }
-    /// The coordinator makes a task from the message, so it is gated as a
-    /// task create is.
     /// The Mac shares the coordinator chat's read point. Showing the chat
     /// needs only read access.
     private var acceptsCoordinatorChatRead: Bool {
@@ -853,6 +851,15 @@ final class LiveSessionsController {
         coordinatorState.capabilities.contains(.coordinatorQuietDigests) && deviceScopes.contains(.read)
     }
 
+    /// Whether the Mac has the task system, once its capabilities are
+    /// known. Nil before the first hello and between connections, so Home
+    /// keeps what it knew.
+    private var hostHasTasks: Bool? {
+        coordinatorState.capabilities.isEmpty ? nil : coordinatorState.capabilities.contains(.tasks)
+    }
+
+    /// The coordinator makes a task from the message, so it is gated as a
+    /// task create is.
     private var acceptsCoordinatorSend: Bool {
         coordinatorState.capabilities.contains(.coordinatorSend) && deviceScopes.contains(.send)
     }
@@ -1051,6 +1058,7 @@ final class LiveSessionsController {
             hostSupportsTaskActions: acceptsTaskActions,
             hostSupportsProjectRelease: acceptsProjectRelease,
             hostSupportsCoordinatorSend: acceptsCoordinatorSend,
+            hostSupportsTasks: hostHasTasks,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

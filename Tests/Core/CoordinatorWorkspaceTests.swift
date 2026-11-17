@@ -267,6 +267,39 @@ struct CoordinatorWorkspaceTests {
     }
 
     @Test
+    func aLostMarkComesBackOnlyWhereACoordinatorCanLive() throws {
+        let fixture = Fixture()
+        let coordinatorID = UUID()
+        let panelID = UUID()
+        fixture.createCoordinator(workspaceID: coordinatorID, panelID: panelID)
+        // An older Toastty saved the layout without the mark.
+        fixture.state.workspacesByID[coordinatorID]?.isCoordinator = false
+        fixture.state.workspacesByID[coordinatorID]?.coordinatorPanelID = nil
+        #expect(fixture.state.coordinator == nil)
+
+        // Not on a subspace, a task space, a workspace with a subspace, or a
+        // workspace that is gone.
+        let taskSpaceID = fixture.projectIDs[1]
+        fixture.state.workspacesByID[taskSpaceID]?.taskID = UUID()
+        #expect(fixture.send(.restoreCoordinatorWorkspace(workspaceID: taskSpaceID, panelID: nil)) == false)
+        fixture.state.workspacesByID[taskSpaceID]?.taskID = nil
+        fixture.state.workspacesByID[taskSpaceID]?.parentWorkspaceID = coordinatorID
+        #expect(fixture.send(.restoreCoordinatorWorkspace(workspaceID: taskSpaceID, panelID: nil)) == false)
+        #expect(fixture.send(.restoreCoordinatorWorkspace(workspaceID: coordinatorID, panelID: panelID)) == false)
+        fixture.state.workspacesByID[taskSpaceID]?.parentWorkspaceID = nil
+        #expect(fixture.send(.restoreCoordinatorWorkspace(workspaceID: UUID(), panelID: nil)) == false)
+
+        // A panel that is not its terminal is left out.
+        #expect(fixture.send(.restoreCoordinatorWorkspace(workspaceID: coordinatorID, panelID: UUID())))
+        #expect(fixture.state.coordinator == CoordinatorLocation(windowID: fixture.windowID, workspaceID: coordinatorID, panelID: nil))
+        // One coordinator only.
+        #expect(fixture.send(.restoreCoordinatorWorkspace(workspaceID: fixture.projectIDs[0], panelID: nil)) == false)
+        #expect(fixture.send(.setCoordinatorPanel(panelID: panelID)))
+        #expect(try fixture.restored().coordinator == CoordinatorLocation(
+            windowID: fixture.windowID, workspaceID: coordinatorID, panelID: panelID))
+    }
+
+    @Test
     func aSavedLayoutFileRestoresThePinnedCoordinatorAfterARelaunch() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-coordinator-layout-\(UUID().uuidString)", isDirectory: true)

@@ -78,6 +78,11 @@ public enum AppAction: Equatable, Sendable {
     /// Names the terminal panel in the coordinator's workspace that its
     /// agent runs in, after a restart moved the agent to a new terminal.
     case setCoordinatorPanel(panelID: UUID)
+    /// Marks an open workspace as the coordinator's again, with the terminal
+    /// panel its agent runs in, while there is no coordinator. A Toastty
+    /// that does not know the coordinator, such as v0.9.2, saves the layout
+    /// without the mark.
+    case restoreCoordinatorWorkspace(workspaceID: UUID, panelID: UUID?)
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
@@ -221,6 +226,8 @@ public extension AppAction {
             return "createCoordinatorWorkspace"
         case .setCoordinatorPanel:
             return "setCoordinatorPanel"
+        case .restoreCoordinatorWorkspace:
+            return "restoreCoordinatorWorkspace"
         case .createWindow:
             return "createWindow"
         case .closeWindow:

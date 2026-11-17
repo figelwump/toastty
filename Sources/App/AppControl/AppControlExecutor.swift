@@ -255,11 +255,21 @@ final class AppControlExecutor {
 
         case .workspaceSetDone, .workspaceClearDone:
             let workspaceID = try resolveWorkspaceIDDefaultingToCallerSession(args: args)
-            if action == .workspaceSetDone,
-               try requiredStore().state.workspacesByID[workspaceID]?.canHoldDoneMark == false {
-                throw AutomationSocketError.invalidPayload(
-                    "workspace.set-done applies to task spaces; this workspace is top-level"
-                )
+            if action == .workspaceSetDone, let workspace = try requiredStore().state.workspacesByID[workspaceID] {
+                if workspace.canHoldDoneMark == false {
+                    throw AutomationSocketError.invalidPayload(
+                        "workspace.set-done applies to task spaces; this workspace is top-level"
+                    )
+                }
+                // The rule of the done checkbox, on the Mac and on a phone:
+                // a task with an open pull request or a merge under way
+                // finishes through Merge or Archive. A mark it already has
+                // stays as it is.
+                if workspace.doneAt == nil, sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: workspaceID) == false {
+                    throw AutomationSocketError.invalidPayload(
+                        "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+                    )
+                }
             }
             let doneAt: Date? = action == .workspaceSetDone ? Date() : nil
             return .init(
