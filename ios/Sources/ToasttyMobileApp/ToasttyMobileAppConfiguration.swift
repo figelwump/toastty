@@ -138,13 +138,18 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
 #if DEBUG
     /// The fixture Mac's read point of the coordinator's chat:
     /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH=<n>` reads through
-    /// the fixture chat's event `n`.
+    /// the fixture chat's event `n`, or with a negative `n`, through the
+    /// event `-n` before the chat's end.
     private var fixtureCoordinatorChatRead: RemoteCoordinatorChatReadPoint? {
         let environment = ProcessInfo.processInfo.environment
         guard let value = environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH"],
               var sequence = Int(value) else { return nil }
+        // The chat as the fixture shows it, so that the end is its end.
         let events = ToasttyConversationFixture.coordinatorEvents(
             for: ToasttyMobileFixture.coordinatorConversationID,
+            hasLongMessage: environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
+            quietTurns: ["1", "unsupported"].contains(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS"] ?? "")
+                ? .shared : .none,
             wakeTurns: Int(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? "") ?? 0
         )
         // A negative value counts from the chat's end.
