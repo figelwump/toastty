@@ -229,6 +229,7 @@ struct TaskRecordTests {
             sourceWorkspaceID: nil,
             worktree: worktree,
             base: nil,
+            parent: nil,
             skills: missing
         )
         #expect(forked.contains("instructions are in /App/skills/toastty-task-start/SKILL.md"))

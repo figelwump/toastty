@@ -231,14 +231,16 @@ when you update:
   them off for one phone, open **Remote Access** in Toastty's settings and
   turn off **Task actions** for that device under **Paired Devices**. See
   [Acting on tasks](remote-access.md#acting-on-tasks).
-- **`Option+Shift+T` is taken in every app.** It opens quick entry, so other
-  apps, a terminal that uses Option as Meta among them, no longer get it.
-  Change it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`, or turn
-  it off with `shortcut = "none"`, then choose **Toastty > Reload
-  Configuration**. See [Quick entry](#quick-entry).
+- **Toastty asks before it takes `Option+Shift+T` in every app.** The key
+  opens quick entry, so other apps, a terminal that uses Option as Meta among
+  them, no longer get it. The What's new sheet at the first launch after the
+  update has **Use ⌥⇧T in every app**, on by default; clear it to leave the
+  key to other apps. Change the key later with `[quick_entry] shortcut` in
+  `~/.toastty/tasks.toml`, or turn it off with `shortcut = "none"`, then
+  choose **Toastty > Reload Configuration**. See [Quick entry](#quick-entry).
 - **Toastty offers the coordinator once.** At the first launch after the
-  update, it asks whether to start the coordinator. **Not Now** is saved; open
-  it later from **Agent > Open Coordinator**. See
+  update, the What's new sheet asks whether to start the coordinator.
+  **Not Now** is saved; open it later from **Agent > Open Coordinator**. See
   [Then start the coordinator](#then-start-the-coordinator).
 - **The sidebar groups by state.** Each project card lists its sessions and
   task spaces under **Needs you**, **Ready to review**, **Running** and
@@ -258,6 +260,12 @@ Press `Option+Shift+T` from any app, Toastty included, to open the quick entry
 panel. Write the task, attach what helps, and press `Cmd+Return` or Create
 Task. Toastty saves the task at once and shows "Task created".
 Focus goes back to the app you were in.
+
+The key works in every app, so other apps and Toastty's own terminals no
+longer get it. Toastty asks first: the What's new sheet at the first launch
+has **Use ⌥⇧T in every app**, on by default. Until you answer, and after you
+clear it, **File ▸ New Task…** opens the panel. A `shortcut` in
+[`tasks.toml`](#toasttytaskstoml) wins over that answer.
 
 While [the coordinator](#the-coordinator) exists, the same panel sends your
 text to it, and the coordinator makes the task; see
@@ -348,8 +356,9 @@ Other ways to open the same panel:
 Change the shortcut with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`,
 or turn it off with `shortcut = "none"`. Toastty reads it at launch and on
 Reload Configuration. The shortcut needs no Accessibility permission. If
-another app already uses it, Reload Configuration says so, and the shortcut
-still works inside Toastty from the File menu. Smoke runs and test hosts do
+Toastty cannot register it, a message says so at launch or on Reload
+Configuration, and the shortcut still works inside Toastty from the File
+menu. Smoke runs and test hosts do
 not register it.
 
 Toastty Mobile has the same form: **+** on its Home screen and content shared
@@ -458,7 +467,9 @@ When an agent creates a task, the new task space joins that agent's workspace
 scope if the agent is scoped, and the agent session is recorded as the one that
 spawned it. A task
 created from an agent in another task's task space records that task as its
-parent (`parentTaskID`).
+parent (`parentTaskID`). The new task's first message names the parent as a
+link, `[title](toastty://task/<parent-id>)`, and says how to report to it with
+`toastty task send <parent-id>`.
 
 ## Work in a git worktree
 
@@ -564,7 +575,8 @@ The calling session keeps running: Toastty does not close it or type into it.
 - The fork's first message starts with the start skill, if one is set. Then it
   names the task, its ID and task space, and the worktree and branch, if any.
   It tells the fork that it owns only this task, and how to report back: with
-  `toastty task send <parent-task-id>` when the caller is a task's agent, else
+  `toastty task send <parent-task-id>`, after the parent task as a link, when
+  the caller is a task's agent, else
   with `terminal.send-text` to the caller's terminal. The prompt, the task text
   and the attached files follow.
 - `task create` returns at once. You cannot use `--wait` with `--fork`, because
@@ -599,8 +611,16 @@ worktree.
   `reset: true`. `--include-reply` adds each task's `lastReply`.
 - Both commands report how long the task has been in its state; see
   [How long a task has been in its state](#how-long-a-task-has-been-in-its-state).
+- Each task in `task get` and `task list` has `markdownLink`, the task as
+  `[title](toastty://task/<task-id>)`. An agent names another task in text
+  with it, and uses the ID only in commands. The shipped task skills say so.
 - `toastty task send <task-id> "<message>"` types the message into the task's
-  agent and submits it, whatever the agent does. A busy agent queues it as typed
+  agent and submits it, whatever the agent does. Its first line names the
+  sender as `coordinator send` does, such as
+  `[Toastty] From task [title](toastty://task/<id>): not from the user.`, so
+  the agent that reads it can name the task that sent it. A message from the
+  coordinator's own session starts with
+  `[Toastty] From the coordinator: not from the user.` A busy agent queues it as typed
   input, and the Return key can answer a permission prompt that is on screen. It
   fails when the task has no running agent, and says so when the message was
   typed but may not have been submitted; check that terminal before you send it
@@ -785,9 +805,10 @@ name in its first answer. It runs in its own workspace, named **Coordinator**, w
 [What the coordinator does](#what-the-coordinator-does), and your rules for
 it are in [the policy file](#the-policy-file).
 
-- **At a first launch**, when no coordinator was ever opened, Toastty asks
-  once whether to start it. **Start Coordinator** does what Open Coordinator
-  does. **Not Now** is saved, and Toastty does not ask again. The question
+- **At a first launch**, when no coordinator was ever opened, Toastty shows
+  the What's new sheet once. It names tasks, quick entry and the coordinator,
+  and asks whether to start the coordinator. **Start Coordinator** does what
+  Open Coordinator does. **Not Now** is saved, and Toastty does not ask again. The question
   shows over the window that has the keyboard, and the rest of the app stays
   in use. An automation run asks nothing.
 - **Open Coordinator**, in the **Agent** menu and the command palette, creates
@@ -891,6 +912,7 @@ text:
 | --- | --- |
 | `[Toastty] Wake: …` | Toastty: a [digest](#when-toastty-wakes-the-coordinator). |
 | `[Toastty] From task [title](toastty://task/<id>): not from the user.` | `coordinator send` from a session in that task's space. |
+| `[Toastty] From the coordinator: not from the user.` | `coordinator send` or `task send` from the coordinator's own agent session. |
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
@@ -1717,7 +1739,7 @@ changes no stage. Most have a fixed limit of 30 minutes:
 
 | Alert | When | Digest text |
 | --- | --- | --- |
-| `silent` | The task's agent is `busy` and its `lastOutputAt` is 30 minutes old or more. | `busy, no output for 30 minutes` |
+| `silent` | The task's agent is `busy`, and 30 minutes or more have passed since the later of its `lastOutputAt` and the time it became `busy`. Without a `lastOutputAt`, no alert. | `busy, no output for 30 minutes` |
 | `checksFailing` | The checks of the task's open pull request fail, in GitHub's last answer. | `pull request checks failing` |
 | `checksSlow` | The checks have been pending for 30 minutes on the same commit (`checksPendingSince`). | `pull request checks pending for 30 minutes` |
 | `interrupted` | A quit or a crash cut off the agent's turn (`interruptedAtQuit`), and the restored agent is `idle` at its prompt. It clears when the agent starts its next turn. | `interrupted by the quit` |
@@ -1799,7 +1821,10 @@ toastty coordinator wake --clear --quiet
   a quiet turn, a later call without `--quiet` cannot remove the mark.
 - The chat folds a quiet turn under Toastty's line for its digest. A click
   on the line opens the digest, the coordinator's work and its answer. A
-  question or an approval prompt in the turn stays visible.
+  question or an approval prompt in the turn stays visible. The
+  coordinator's chat on a paired iPhone folds it the same way, and its New
+  line does not count it (see
+  [The Coordinator tab](remote-access.md#the-coordinator-tab)).
 - The end of a quiet turn does not mark the coordinator unread and sends no
   notification to the Mac and no push to a phone. If you send a message into
   the turn after the mark, or type in the coordinator's terminal, its end
@@ -2039,7 +2064,15 @@ review. The choice is saved for each window.
   A parent without a pull request moves to To ship or Done when its
   children finish, so the whole family leaves Idle.
   A task space whose task is To ship or Done leaves its card unless an agent
-  in it is working or waiting for you. After the buckets, a To ship line with
+  in it is working or waiting for you, or Toastty still keeps it open after
+  its merge. Under its parent task, a kept task space with nothing working or
+  waiting folds into one line after the parent's open children, such as
+  **13/15 merged**, which takes the place of the parent's merged count. It
+  starts collapsed; click it to show the merged tasks as rows, then **Show N
+  more** when some merged children's task spaces already closed, which opens
+  the parent in the Tasks view. A folded task does not count in a bucket.
+  Without a listed parent, a kept task space lists in Idle until it closes.
+  After the buckets, a To ship line with
   the purple To ship mark lists the project's other To ship tasks, with
   **Release** when the project can release (see [Release](#release)) and the
   Done count on its right. It starts collapsed; click it to expand it in
@@ -2474,6 +2507,9 @@ the coordinator, so that Codex reads all of its instructions (see
 [quick_entry]
 shortcut = "opt+shift+t"   # the default; "none" turns it off
 ```
+
+A `shortcut` written here wins over the answer to **Use ⌥⇧T in every app** in
+the What's new sheet.
 
 A shortcut joins modifiers and one key with `+`. Modifiers are `cmd`,
 `ctrl`, `opt` (or `alt`) and `shift`. The key is a letter, a digit,

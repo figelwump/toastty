@@ -725,7 +725,19 @@ struct AutomationSocketServerBackgroundActivityTests: AutomationSocketServerTest
         )
         #expect(try sendRootStatus(originalRootStatus).ok)
 
-        // An ordinary child still signals root work through its tool hook.
+        // Outside a main turn, a tool hook from an agent Toastty does not
+        // track (such as Claude Code's away-summary query) changes nothing.
+        #expect(try sendChildEvent(phase: "tool_use", agentID: "side-query").ok)
+        let sideQueryRootRecord = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[sessionID]
+        }
+        #expect(sideQueryRootRecord?.status == originalRootStatus)
+        #expect(sideQueryRootRecord?.turnStartedAt == nil)
+
+        // Inside a main turn, an ordinary child still signals root work
+        // through its tool hook, also after an approval pause.
+        #expect(try sendRootStatus(SessionStatus(kind: .working, summary: "Working", detail: "Root turn")).ok)
+        #expect(try sendRootStatus(SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Root asks")).ok)
         #expect(try sendChildEvent(phase: "tool_use", agentID: "ordinary-child").ok)
         let ordinaryChildRootStatus = await MainActor.run {
             server.sessionRuntimeStore.sessionRegistry.sessionsByID[sessionID]?.status

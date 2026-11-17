@@ -239,8 +239,9 @@ struct AppWindowSceneView: View {
     }
 
     /// After this notification, as the coordinator's question, because the
-    /// message is a sheet, which takes the keyboard itself. It goes first:
-    /// the question then waits until the window gets the keyboard back.
+    /// message is a sheet, which takes the keyboard itself. While the
+    /// question still waits, the message waits too and shows when the
+    /// question ends; otherwise it shows here.
     private func presentLaunchMessagesIfNeeded() {
         guard let presentLaunchMessages else { return }
         let windowID = windowID

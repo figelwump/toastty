@@ -114,12 +114,14 @@ extension TaskCoordinator {
                 return false
             }
             let sourceWorkspaceID = store.state.workspaceSelection(containingPanelID: source.panelID)?.workspace.id
+            let parent = parentTask(of: record)
             let prompt = TaskPrompt.forkedTask(
                 record: record,
                 taskSpaceWorkspaceID: taskSpace.workspaceID,
                 sourceWorkspaceID: sourceWorkspaceID,
                 worktree: worktree,
-                base: record.operation.base
+                base: record.operation.base,
+                parent: parent
             )
             let promptWithoutSkills = Self.promptWithoutSkills(prompt, TaskPrompt.forkedTask(
                 record: record,
@@ -127,6 +129,7 @@ extension TaskCoordinator {
                 sourceWorkspaceID: sourceWorkspaceID,
                 worktree: worktree,
                 base: record.operation.base,
+                parent: parent,
                 skills: Self.skillsMissing()
             ))
             let result: AgentLaunchResult

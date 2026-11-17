@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 extension AppControlActionID {
     var isTaskAction: Bool {
@@ -92,10 +93,8 @@ extension AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action")
             }
             let record = try visibleTask(args: args, coordinator: coordinator)
-            guard let text = args.taskString("text") else {
-                throw AutomationSocketError.invalidPayload("text is required")
-            }
-            let session = try perform { try coordinator.send(taskID: record.id, text: text) }
+            let message = try taskSendMessage(args: args)
+            let session = try perform { try coordinator.send(taskID: record.id, text: message) }
             return .init(didMutateState: false, result: [
                 "taskID": .string(record.id.uuidString),
                 "sessionID": .string(session.sessionID),
@@ -165,10 +164,20 @@ extension AppControlExecutor {
         guard try args.taskBool("steer") == true else { return nil }
         let coordinator = try requiredTaskCoordinator()
         let record = try visibleTask(args: args, coordinator: coordinator)
+        return (coordinator, record.id, try taskSendMessage(args: args))
+    }
+
+    /// The text `task.send` types: a first line that names the sender, from
+    /// the caller and never from the text, then the caller's text. An empty
+    /// text is refused here, before the first line makes it look full.
+    private func taskSendMessage(args: [String: AutomationJSONValue]) throws -> String {
         guard let text = args.taskString("text") else {
             throw AutomationSocketError.invalidPayload("text is required")
         }
-        return (coordinator, record.id, text)
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw AutomationSocketError.invalidPayload("The message is empty.")
+        }
+        return CoordinatorMessageHeader.message(from: messageSender(), text: text)
     }
 
     func finishTaskSteerSend(_ coordinator: TaskCoordinator, taskID: UUID, text: String) async throws -> AppControlActionOutcome {
@@ -790,6 +799,8 @@ extension AppControlExecutor {
             "taskID": .string(record.id.uuidString),
             "parentTaskID": optional(record.parentTaskID?.uuidString),
             "title": .string(record.title),
+            // The task as an agent names it in text; the ID is for commands.
+            "markdownLink": .string(CoordinatorTaskLink.markdown(taskID: record.id, title: record.title)),
             "slug": .string(record.slug),
             "text": .string(record.text),
             "createdAt": .string(ISO8601DateFormatter().string(from: record.createdAt)),

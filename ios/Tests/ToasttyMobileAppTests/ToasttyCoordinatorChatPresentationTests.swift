@@ -190,7 +190,7 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
             phase: .live,
             revision: .initial,
             historyTruncated: false,
-            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages
+            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages()
         ).rows
     }
 
@@ -211,6 +211,6 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
 
     /// The time of event `sequence` as the phone's coordinator chat writes it.
     private func time(_ sequence: UInt64) -> String {
-        ToasttyConversationPresentationAdapter.coordinatorMessages.timeText(date(sequence))
+        ToasttyConversationPresentationAdapter.coordinatorMessages().timeText(date(sequence))
     }
 }

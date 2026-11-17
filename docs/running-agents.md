@@ -369,7 +369,7 @@ When the profile ID is `claude`, Toastty:
    - `SubagentStart` — tracks Workflow children and resumes known teammates
    - `SubagentStop` — removes completed Claude subagent rows
    - `TeammateIdle` — removes an idle teammate's active row when Claude supplies its agent ID
-   - `PreToolUse` (wildcard matcher) — fires before any tool use
+   - `PreToolUse` (wildcard matcher) — fires before any tool use. A main-agent tool call shows **Working**. A tool call from an agent that Toastty does not track shows **Working** only during a main turn; see below
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready** (except after a failed turn, whose **Error** stays until the next turn), `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
 5. **Writes a private process-lifetime settings file** and passes `--settings <path>` to Claude
@@ -1082,6 +1082,15 @@ main session to **Working**. Child approval requests still show **Needs approval
 When the child continues or finishes, Toastty restores the prior main status
 unless a newer main event has replaced it. New managed launches receive the
 updated hooks; an already-running Claude process must be relaunched to use them.
+
+A tool event from an agent ID that Toastty does not track (not a known teammate
+and not a tracked background sub-agent) sets the main session to **Working**
+only while the main session is in a turn, including an approval pause. Outside
+a turn, Toastty ignores it. Claude Code runs side queries, such as the away
+summary (recap) when the terminal loses focus and prompt suggestions, under a
+new agent ID. Such a query can send `PreToolUse`, and no later hook ends it, so
+it is not the agent's turn. Verified with Claude Code 2.1.325. A tool event from
+a tracked background sub-agent still sets the main session to **Working**.
 
 Toastty-owned provider integrations report this activity through internal
 provider events such as `session.claude_subagent_event`, or through the

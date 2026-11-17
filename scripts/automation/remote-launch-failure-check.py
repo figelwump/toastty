@@ -12,16 +12,19 @@ production app or the host's Claude or Codex settings. Every action a person
 makes goes through the real UI, as in remote-coordinator-first-run-check.py.
 
 - no-claude: a Mac with Codex but no `claude` on the PATH, as a user who has
-  only Codex. The first launch asks whether to start the coordinator; Start
-  shows an alert that names `claude` and `[coordinator] agent` and offers
-  Start with Codex; Cancel leaves no Coordinator workspace and no folder, and
-  the question does not come back in that launch; the next launch asks again;
-  Start with Codex then starts the coordinator with Codex.
+  only Codex. The first launch shows the What's new sheet, which asks
+  whether to start the coordinator; Start Coordinator shows an alert that
+  names `claude` and `[coordinator] agent` and offers Start with Codex;
+  Cancel leaves no Coordinator workspace and no folder, and the sheet does
+  not come back in that launch; the next launch asks again; Start with Codex
+  then starts the coordinator with Codex.
 - bad-shortcut: tasks.toml sets a quick entry shortcut that is not valid.
-  The first window shows the message as a sheet, and once it is closed, the
-  question whether to start the coordinator still comes. (Another app that
-  holds the shortcut does not make Toastty's registration fail: Carbon
-  refuses a hot key only when both apps ask for it exclusively.)
+  At the first launch the message waits for the What's new sheet; after Not
+  Now it shows once, as a sheet, with the key that the answer chose, and not
+  again in that launch. The next launch shows it once when the window gets
+  the keyboard, with no question. (Another app that holds the shortcut does
+  not make Toastty's registration fail: Carbon refuses a hot key only when
+  both apps ask for it exclusively.)
 
 Evidence goes to remote-launch-failure-check.json and the app logs in the
 artifacts directory. Under '--gui-session' the check also keeps still
@@ -54,8 +57,9 @@ chat = load('coordinator_chat_check', 'remote-coordinator-chat-check.py')
 coordinator_check = chat.coordinator_check
 require, wait_for = chat.require, chat.wait_for
 
-QUESTION = 'Start the coordinator?'
-START = 'Start Coordinator'
+# The What's new sheet asks the question (WhatsNewSheet.Words.title).
+QUESTION = 'New in Toastty: tasks'
+START, NOT_NOW = 'whats-new.start', 'whats-new.not-now'
 AGENT_ALERT = 'coordinator.agent-not-installed'
 # Homebrew's folder holds `codex` and the `node` it runs on; `claude` is in
 # the host user's ~/.local/bin, which this PATH and the throwaway home leave
@@ -127,6 +131,18 @@ class App:
             require(not self.question(), f'The question showed: {self.question()}')
             time.sleep(1)
 
+    def message(self):
+        text = self.sheet()
+        return text if 'banana' in text else ''
+
+    def no_message_or_question_for(self, seconds):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            self.ui.run('activate')
+            sheet = self.sheet()
+            require('banana' not in sheet and QUESTION not in sheet, f'A sheet showed again: {sheet}')
+            time.sleep(1)
+
     def log_contains(self, text):
         log = self.runtime_home / 'logs/toastty.log'
         return log.is_file() and text in log.read_text(errors='replace')
@@ -176,7 +192,7 @@ def no_claude(check):
         app.ui.run('activate')
         wait_for('the question at the first launch', app.question, timeout=30)
         app.capture('question')
-        app.ui.run('click-label', START)
+        app.ui.run('click', START)
         alert = wait_for('the alert', app.agent_alert, timeout=30)
         for text in ('Unable to Start the Coordinator',
                      "The coordinator's agent claude is not installed: Toastty did not find the claude command.",
@@ -207,7 +223,7 @@ def no_claude(check):
         step('the next launch asked again', question=question)
 
         # 4. Start with Codex starts the coordinator with Codex.
-        app.ui.run('click-label', START)
+        app.ui.run('click', START)
         wait_for('the alert', app.agent_alert, timeout=30)
         app.ui.run('click-label', 'Start with Codex')
         opened = wait_for('the coordinator with Codex',
@@ -220,27 +236,49 @@ def no_claude(check):
         app.finish()
 
 
+def require_message(sheet):
+    for text in ('Configuration Warnings', 'line 2: [quick_entry] the shortcut "opt+shift+banana"',
+                 'unknown key "banana"', 'The quick entry shortcut is ⌥⇧T until the file is fixed.'):
+        require(text in sheet, f'The message does not say "{text}": {sheet}')
+    require('tasks.toml: tasks.toml' not in sheet, f'The message names the file twice: {sheet}')
+    require(QUESTION not in sheet, 'The question showed in place of the message')
+
+
 def bad_shortcut(check):
     step = check.step
     app = App(check, 'bad-shortcut', f'[quick_entry]\nshortcut = "{BAD_SHORTCUT}"\n')
     try:
         app.launch()
+        # 1. A new user: the message waits for the What's new sheet.
         app.ui.run('activate')
-        sheet = wait_for('the message at launch', lambda: (t := app.sheet()) and 'banana' in t and t, timeout=30)
-        for text in ('Configuration Warnings', 'line 2: [quick_entry] the shortcut "opt+shift+banana"',
-                     'unknown key "banana"', 'The quick entry shortcut is ⌥⇧T until the file is fixed.'):
-            require(text in sheet, f'The message does not say "{text}": {sheet}')
-        require(QUESTION not in sheet, 'The question showed in place of the message')
-        app.capture('launch-message')
-        step('the first window showed the message', sheet=sheet)
+        question = wait_for('the What\'s new sheet at the first launch', app.question, timeout=30)
+        require('banana' not in question, f'The message showed with the question: {question}')
+        app.capture('question')
+        step('the first launch showed the What\'s new sheet and held the message', question=question)
 
+        # 2. Not Now: the message shows once, with the key the answer chose.
+        app.ui.run('click', NOT_NOW)
+        sheet = wait_for('the message after the question', app.message, timeout=30)
+        require_message(sheet)
+        app.capture('message-after-question')
+        step('the message showed after the question', sheet=sheet)
         app.ui.run('key', 'return')
-        wait_for('the message to go', lambda: 'banana' not in app.sheet(), timeout=30)
-        # The question comes when the window has the keyboard again.
-        question = wait_for('the question after the message', lambda: app.ui.run('activate') and app.question(),
-                            timeout=30)
-        app.capture('question-after-message')
-        step('the question whether to start the coordinator came after the message', question=question)
+        wait_for('the message to go', lambda: not app.message(), timeout=30)
+        app.no_message_or_question_for(6)
+        step('the message and the question did not show again in this launch')
+
+        # 3. The next launch: the message when the window gets the keyboard,
+        # once, and no question.
+        app.relaunch()
+        app.ui.run('activate')
+        sheet = wait_for('the message at the next launch', app.message, timeout=30)
+        require_message(sheet)
+        app.capture('launch-message')
+        step('the next launch showed the message', sheet=sheet)
+        app.ui.run('key', 'return')
+        wait_for('the message to go', lambda: not app.message(), timeout=30)
+        app.no_message_or_question_for(6)
+        step('the message showed once in the next launch, with no question')
     finally:
         app.finish()
 

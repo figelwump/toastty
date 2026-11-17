@@ -431,6 +431,13 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         var held = row("held", status: .done, doneAt: Date())
         held.isCleanupHeld = true
         XCTAssertFalse(P.isHiddenAsFinished(held))
+        // Under its parent, such a row folds into the parent's merged line,
+        // unless something in it still runs or waits for the user.
+        XCTAssertTrue(P.isHeldFinished(held))
+        XCTAssertFalse(P.isHeldFinished(row("done", status: .done)))
+        var heldAndWorking = mixed
+        heldAndWorking.isCleanupHeld = true
+        XCTAssertFalse(P.isHeldFinished(heldAndWorking))
 
         XCTAssertEqual(P.tally([row("a", status: .review), row("b", status: .review)]).review, 2)
         XCTAssertTrue(P.showsDoneToggle(row("review", status: .review)))

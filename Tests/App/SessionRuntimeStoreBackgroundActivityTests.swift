@@ -433,6 +433,70 @@ extension SessionRuntimeStoreTests {
         #expect(store.sessionRegistry.sessionsByID[sessionID]?.status == rootStatus)
     }
 
+    @Test
+    func claudeUntrackedAgentToolUseCountsAsWorkOnlyInsideARootTurn() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_215)
+        let sessionID = "sess-claude-untracked-tool-use"
+        let readyStatus = SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn complete")
+        // Claude Code's away summary (recap) sends a PreToolUse with a new
+        // agent ID and no agent type, and no later hook.
+        let recapToolUse = ClaudeSubagentEvent(phase: .toolUse, agentID: "ad30dea07ed45e084", detail: "Running git status")
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            codexStatusTrackingSource: .externallyReported,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: now)
+        store.updateStatus(sessionID: sessionID, status: readyStatus, at: now.addingTimeInterval(1))
+
+        // At rest: the side query does not start a turn or change the status.
+        #expect(store.handleClaudeSubagentEvent(sessionID: sessionID, event: recapToolUse, at: now.addingTimeInterval(200)) == false)
+        var record = try #require(store.sessionRegistry.sessionsByID[sessionID])
+        #expect(record.status == readyStatus)
+        #expect(record.statusUpdatedAt == now.addingTimeInterval(1))
+        #expect(record.turnStartedAt == nil)
+
+        // Inside a root turn: an untracked sub-agent's tool keeps Working.
+        store.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: now.addingTimeInterval(300))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .toolUse, agentID: "child-1", detail: "Running tests"),
+            at: now.addingTimeInterval(301)
+        ))
+        record = try #require(store.sessionRegistry.sessionsByID[sessionID])
+        #expect(record.status == SessionStatus(kind: .working, summary: "Working", detail: "Running tests"))
+        #expect(record.turnStartedAt == now.addingTimeInterval(300))
+
+        // A tracked background sub-agent keeps setting Working, also at rest.
+        store.updateStatus(sessionID: sessionID, status: readyStatus, at: now.addingTimeInterval(400))
+        #expect(store.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: "background-child",
+                kind: .subagent,
+                displayName: "general-purpose",
+                startedAt: now.addingTimeInterval(400),
+                lastUpdatedAt: now.addingTimeInterval(400)
+            ),
+            at: now.addingTimeInterval(400)
+        ))
+        #expect(store.handleClaudeSubagentEvent(
+            sessionID: sessionID,
+            event: ClaudeSubagentEvent(phase: .toolUse, agentID: "background-child", detail: "Reading files"),
+            at: now.addingTimeInterval(401)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?.status?.kind == .working)
+    }
+
     @Test(arguments: [false, true])
     func claudeTeammateRuntimeStateDoesNotCrossSessionLifecycles(resetStore: Bool) {
         let store = SessionRuntimeStore()

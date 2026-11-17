@@ -114,6 +114,28 @@ struct TasksConfigFileTests {
         #expect(try parse("[quick_entry]\nshortcut = \"None\"").quickEntry.shortcut == nil)
         #expect(try parse("[quick_entry]\nshortcut = \"ctrl+opt+space\"").quickEntry.shortcut
             == QuickEntryShortcut(modifiers: [.control, .option], key: .space))
+        // Only a written shortcut wins over the answer in the What's new
+        // sheet, "none" included.
+        #expect(try parse("").quickEntry.isShortcutSet == false)
+        #expect(try parse("[quick_entry]\n").quickEntry.isShortcutSet == false)
+        #expect(try parse("[quick_entry]\nshortcut = \"none\"").quickEntry.isShortcutSet)
+        #expect(try parse("[quick_entry]\nshortcut = \"opt+shift+t\"").quickEntry.isShortcutSet)
+    }
+
+    /// "Change the key…" in the What's new sheet writes this file when there
+    /// is none; it must change nothing until the user edits it.
+    @Test
+    func theTemplateSetsNothingAndIsNotWrittenOverAFile() throws {
+        #expect(try parse(TasksConfigFile.templateContents) == .empty)
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-tasks-template-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try TasksConfigFile.ensureTemplateExists(homeDirectoryPath: home.path)
+        let url = TasksConfigFile.fileURL(homeDirectoryPath: home.path)
+        #expect(try String(contentsOf: url, encoding: .utf8) == TasksConfigFile.templateContents)
+        try "[quick_entry]\nshortcut = \"none\"\n".write(to: url, atomically: true, encoding: .utf8)
+        try TasksConfigFile.ensureTemplateExists(homeDirectoryPath: home.path)
+        #expect(try TasksConfigFile.load(homeDirectoryPath: home.path).quickEntry.shortcut == nil)
     }
 
     @Test

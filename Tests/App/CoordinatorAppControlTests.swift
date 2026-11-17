@@ -109,9 +109,11 @@ struct CoordinatorAppControlTests {
             #expect(CoordinatorDigestFold.updateCount(inMessage: typed) == nil)
         }
 
-        // An agent outside a task: here the coordinator's own session.
-        let fromSession = try await send("A note to myself.", as: coordinatorSessionID)
-        #expect(fromSession == "[Toastty] From agent session \(coordinatorSessionID) (claude, workspace \"Coordinator\"): not from the user.\nA note to myself.")
+        // The coordinator's own session is named as the coordinator, not
+        // by its session and workspace title, which any session could share.
+        let fromCoordinator = try await send("A note to myself.", as: coordinatorSessionID)
+        #expect(fromCoordinator == "[Toastty] From the coordinator: not from the user.\nA note to myself.")
+        #expect(CoordinatorMessageHeader.kind(of: fromCoordinator) == .fromSender(sender: "the coordinator"))
         // No session, or a session that does not run: Toastty cannot tell.
         for caller in [nil, "not-a-session"] as [String?] {
             let fromTerminal = try await send(digest, as: caller)

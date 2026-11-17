@@ -547,6 +547,79 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         if jump.exists { XCTAssertFalse(jump.label.contains("new")) }
     }
 
+    // MARK: - Quiet wake turns
+
+    /// The chat of the user's report: two wake turns in which the
+    /// coordinator found nothing for the user. With a Mac that shares which
+    /// turns are quiet, each folds whole under its digest's line, as on the
+    /// Mac: no work strip and no answer. The line opens the digest, the work
+    /// and the answer, and closes them again.
+    func testAQuietWakeTurnFoldsWholeUnderItsDigestsLine() {
+        let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS": "1"])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        // The row's identifier covers the line's own, so the line is found
+        // by what it says.
+        let lines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Toastty · 1 update · "))
+        XCTAssertTrue(lines.element(boundBy: 1).waitForExistence(timeout: 5), "Both quiet digests show their line")
+        let last = lines.element(boundBy: 1)
+        XCTAssertTrue(waitUntilHittable(last))
+        XCTAssertEqual(last.value as? String, "Collapsed")
+        XCTAssertEqual(lines.element(boundBy: 0).value as? String, "Collapsed")
+        for answer in ToasttyQuietTurnText.answers {
+            XCTAssertFalse(textView(containing: answer, in: app).exists, "\(answer) shows while its turn is folded")
+        }
+        XCTAssertFalse(workStrips(in: app).firstMatch.exists, "A quiet turn has no work strip")
+        // The answer before the quiet turns still shows.
+        XCTAssertTrue(textView(containing: "I made a task for it", in: app).exists)
+        attachScreenshot(named: "coordinator-quiet-turns-folded", of: app)
+
+        last.tap()
+        XCTAssertTrue(waitForValue("Expanded", of: last))
+        XCTAssertTrue(textView(containing: "Nothing needs you.", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(textView(containing: "[Toastty] Wake", in: app).exists)
+        XCTAssertFalse(textView(containing: "Nothing new needs you.", in: app).exists, "The other quiet turn opened too")
+        attachScreenshot(named: "coordinator-quiet-turn-open", of: app)
+
+        tapTheLine(of: last)
+        XCTAssertTrue(waitForValue("Collapsed", of: last))
+        XCTAssertTrue(textView(containing: "Nothing needs you.", in: app).waitForNonExistence(timeout: 5))
+    }
+
+    /// An older Mac does not share which turns are quiet: they show open,
+    /// with their work strip and answer, as before.
+    func testQuietWakeTurnsStayOpenWithAMacThatDoesNotShareTheMarks() {
+        let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS": "unsupported"])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(textView(containing: "Nothing needs you.", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(workStrips(in: app).firstMatch.exists)
+        attachScreenshot(named: "coordinator-quiet-turns-older-mac", of: app)
+    }
+
+    /// The New line's count leaves the quiet turns out, as on the Mac: the
+    /// fixture Mac read through the chat's second message, and three
+    /// answers and two quiet turns came after it.
+    func testTheNewLineDoesNotCountQuietWakeTurns() {
+        for (marks, count) in [("1", 3), ("unsupported", 5)] {
+            let app = launch(coordinator: "working", environment: [
+                "TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH": "2",
+                "TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS": marks,
+            ])
+            app.tabBars.buttons["Coordinator"].tap()
+            XCTAssertTrue(app.descendants(matching: .any)["toastty-transcript-new-messages"].waitForExistence(timeout: 5))
+            let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
+            for _ in 0..<4 where jump.exists == false {
+                let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+                start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 160)),
+                            withVelocity: .slow, thenHoldForDuration: 0.3)
+            }
+            XCTAssertTrue(jump.waitForExistence(timeout: 5))
+            XCTAssertTrue(jump.label.contains("\(count) new"), "With marks \(marks), Jump to latest reads \(jump.label)")
+            if marks == "1" { attachScreenshot(named: "coordinator-jump-new-without-quiet-turns", of: app) }
+            app.terminate()
+        }
+    }
+
     // MARK: - Copy and Reply
 
     /// As in the Mac's coordinator chat: Copy under the user's and the
@@ -835,12 +908,28 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
+    /// Taps a digest's line. While its turn is open the row's element covers
+    /// the digest's text too, and a tap in its middle lands on the text.
+    private func tapTheLine(of row: XCUIElement) {
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).tap()
+    }
+
+    /// The work strips of turns that do not fold whole.
+    private func workStrips(in app: XCUIApplication) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toastty-mobile-transcript-turn-"))
+    }
+
     private func attachScreenshot(named name: String, of app: XCUIApplication) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+}
+
+/// The fixture's quiet turns, as `ToasttyConversationFixture` writes them.
+private enum ToasttyQuietTurnText {
+    static let answers = ["Nothing new needs you.", "Nothing needs you."]
 }
 
 private extension XCUIElement {

@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 
 /// The messages Toastty sends a task's agent.
 public enum TaskPrompt {
@@ -21,6 +22,27 @@ public enum TaskPrompt {
         + #"`"$TOASTTY_CLI_PATH" coordinator send "<question>"` (or `--text-file <path>` for a long message). "#
         + "Toastty identifies this task as the sender. `sent` means submitted, not read; `queued` waits for an open prompt. "
         + "The answer appears in Coordinator chat. It reaches this task only if the coordinator sends it here with `toastty task send`."
+
+    /// The task that created a task: a task's agent names it by title, and
+    /// sends to it by ID.
+    public struct ParentTask: Equatable, Sendable {
+        public var id: UUID
+        public var title: String
+
+        public init(id: UUID, title: String) {
+            self.id = id
+            self.title = title
+        }
+    }
+
+    /// Names the task that created this one, as a link, and how to report
+    /// to it. Toastty writes it, so every child gets the parent's title and
+    /// link, whatever the brief says.
+    public static func parentLine(_ parent: ParentTask) -> String {
+        "The task \(CoordinatorTaskLink.markdown(taskID: parent.id, title: parent.title)) created this task. "
+            + "Report progress, questions and results to it with "
+            + "`toastty task send \(parent.id.uuidString) \"<message>\"`."
+    }
 
     /// The skill a task's first message names when tasks.toml sets no
     /// `start_skill`.
@@ -50,8 +72,9 @@ public enum TaskPrompt {
         ]
     }
 
-    /// The skill line, when there is a skill, then the worktree,
-    /// `start_prompt`, the first prompt, the task text exactly as written,
+    /// The skill line, when there is a skill, then the worktree, the task
+    /// that created this one, `start_prompt`, the first prompt, the task
+    /// text exactly as written,
     /// the attached files, and the coordinator and reply guidance unless
     /// the skill is the shipped start skill and the agent has it. With
     /// `skills` missing, a skill that Toastty ships also gets the path of
@@ -67,11 +90,15 @@ public enum TaskPrompt {
         attachmentPaths: [String],
         worktree: TaskOperation.Worktree? = nil,
         base: TaskOperation.Base? = nil,
+        parent: ParentTask? = nil,
         skills: SkillDelivery = .delivered
     ) -> String {
         var sections = skillSections(skill, skills)
         if let worktree {
             sections.append(worktreeLine(worktree, base: base))
+        }
+        if let parent {
+            sections.append(parentLine(parent))
         }
         sections += taskSections(
             skill: skill,
@@ -140,6 +167,7 @@ public enum TaskPrompt {
         worktree: TaskOperation.Worktree,
         base: TaskOperation.Base?,
         forked: Bool,
+        parent: ParentTask? = nil,
         skills: SkillDelivery = .delivered
     ) -> String {
         let skill = forked ? nil : record.resolved?.skill ?? record.pinned.skill
@@ -155,6 +183,9 @@ public enum TaskPrompt {
                 "Toastty moved the task \"\(record.title)\" here. The conversation that shaped it "
                     + "stays in the previous session, which this agent cannot continue."
             )
+            if let parent {
+                sections.append(parentLine(parent))
+            }
             sections += taskSections(record, skill: skill, skills: skills)
         }
         return sections.joined(separator: "\n\n")
@@ -173,6 +204,7 @@ public enum TaskPrompt {
         sourceWorkspaceID: UUID?,
         worktree: TaskOperation.Worktree?,
         base: TaskOperation.Base?,
+        parent: ParentTask?,
         skills: SkillDelivery = .delivered
     ) -> String {
         let skill = record.resolved?.skill ?? record.pinned.skill
@@ -189,16 +221,15 @@ public enum TaskPrompt {
         sections.append(
             "You own only this task. The conversation above can plan other tasks and other work: "
                 + "do not do them, and do not act for the session that created this task. "
-                + forkReportLine(record, sourceWorkspaceID: sourceWorkspaceID)
+                + forkReportLine(record, parent: parent, sourceWorkspaceID: sourceWorkspaceID)
         )
         sections += taskSections(record, skill: skill, skills: skills)
         return sections.joined(separator: "\n\n")
     }
 
-    private static func forkReportLine(_ record: TaskRecord, sourceWorkspaceID: UUID?) -> String {
-        if let parentTaskID = record.parentTaskID {
-            return "Report progress, questions and results to the task that created this one with "
-                + "`toastty task send \(parentTaskID.uuidString) \"<message>\"`."
+    private static func forkReportLine(_ record: TaskRecord, parent: ParentTask?, sourceWorkspaceID: UUID?) -> String {
+        if let parent {
+            return parentLine(parent)
         }
         guard let source = record.forkSource else { return "" }
         var line = "Report progress, questions and results to the session that created this task with "

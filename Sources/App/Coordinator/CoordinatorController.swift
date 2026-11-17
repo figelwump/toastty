@@ -1508,9 +1508,22 @@ final class CoordinatorController: ObservableObject {
 
     // MARK: - Quiet turns
 
+    /// The keys of the digests whose turn the coordinator marked quiet,
+    /// oldest first (`CoordinatorWakeState.quietDigestKeys`). The service
+    /// that keeps the wake state sets it, and sends `quietDigestChanges`
+    /// when the keys change.
+    var quietDigestKeys: () -> [String] = { [] }
+    /// Sends when `quietDigestKeys` changes: a turn is marked quiet, a mark
+    /// is removed or forgotten, or another coordinator starts. Paired
+    /// devices fold the turns with the Mac's chat (`RemoteAccessService`).
+    let quietDigestChanges = PassthroughSubject<Void, Never>()
+
     /// Whether the message is a digest whose turn the coordinator marked
-    /// quiet. The service that keeps the wake state sets it.
-    var isQuietDigest: (String) -> Bool = { _ in false }
+    /// quiet.
+    func isQuietDigest(_ text: String) -> Bool {
+        let keys = quietDigestKeys()
+        return keys.isEmpty == false && keys.contains(CoordinatorWakeState.digestKey(text))
+    }
 
     /// The newest text this controller typed into the agent, from any
     /// sender, as `CoordinatorWakeState.digestKey`, and when.
