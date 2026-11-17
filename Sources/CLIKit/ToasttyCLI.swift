@@ -976,7 +976,7 @@ public enum ToasttyCLI {
         }
         let parsed = try parseCommandArguments(
             Array(arguments.dropFirst()),
-            valueOptions: ["--window", "--text", "--text-file", "--in", "--at", "--task", "--workspace"],
+            valueOptions: ["--window", "--text", "--text-file", "--from", "--in", "--at", "--task", "--workspace"],
             flagOptions: ["--no-select", "--clear", "--quiet", "--remove"]
         )
         func windowArgs() throws -> [String: AutomationJSONValue] {
@@ -995,6 +995,9 @@ public enum ToasttyCLI {
             || parsed.hasFlag("--remove")
         guard verb == "watch" || hasWatchOption == false else {
             throw ToasttyCLIError.usage("--task, --workspace and --remove belong to coordinator watch\n\n\(usage)")
+        }
+        guard verb == "send" || parsed.singleValue("--from") == nil else {
+            throw ToasttyCLIError.usage("--from belongs to coordinator send\n\n\(usage)")
         }
         switch verb {
         case "open":
@@ -1029,7 +1032,11 @@ public enum ToasttyCLI {
             if let file = parsed.singleValue("--text-file") {
                 text = try textFileContents(file, environment: environment)
             }
-            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.send", args: ["text": .string(text)]))
+            var args: [String: AutomationJSONValue] = ["text": .string(text)]
+            if let from = parsed.singleValue("--from") {
+                args["from"] = .string(from)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.send", args: args))
 
         case "wake":
             let wakeUsage = "usage: toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]"
@@ -1131,7 +1138,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>]
       toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>]
-      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer]
+      toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer] [--from <name>]
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
       toastty [--json] [--socket-path <path>] task watches [--task <task-id>] [--notify <task-id>]
@@ -1139,7 +1146,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] coordinator open [--window <id>] [--no-select]
       toastty [--json] [--socket-path <path>] coordinator restart [--window <id>]
       toastty [--json] [--socket-path <path>] coordinator status
-      toastty [--json] [--socket-path <path>] coordinator send (<text> | --text-file <path>)
+      toastty [--json] [--socket-path <path>] coordinator send (<text> | --text-file <path>) [--from <name>]
       toastty [--json] [--socket-path <path>] coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
       toastty [--json] [--socket-path <path>] coordinator watch (--task <task-id> | --workspace <id>) [--remove]
       toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]
@@ -2566,7 +2573,7 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.release", args: args))
 
         case "send":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--text", "--text-file"], flagOptions: ["--steer"])
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--text", "--text-file", "--from"], flagOptions: ["--steer"])
             guard let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
                 throw ToasttyCLIError.usage("task send requires a task ID\n\n\(usage)")
             }
@@ -2584,6 +2591,9 @@ public enum ToasttyCLI {
             var args: [String: AutomationJSONValue] = ["taskID": .string(taskID), "text": .string(text)]
             if parsed.hasFlag("--steer") {
                 args["steer"] = .bool(true)
+            }
+            if let from = parsed.singleValue("--from") {
+                args["from"] = .string(from)
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.send", args: args))
 

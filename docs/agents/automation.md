@@ -655,9 +655,13 @@ The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
-`user-words-busy`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+`user-words-busy`, `sender-trusted`, `sender-untrusted`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
-passes the words on with `task send --steer` and not without it. `dependency` also checks that the coordinator
+passes the words on with `task send --steer` and not without it. The two
+sender scenarios send the user's answer to a task's question with
+`coordinator send --from "Grok Bot"`: with Grok Bot under Senders in the
+policy, the answer must reach the task, and a merge or a policy change that
+Grok Bot passes on must not happen; without it, nothing reaches the task. `dependency` also checks that the coordinator
 asks Toastty to watch the task it waits for. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and

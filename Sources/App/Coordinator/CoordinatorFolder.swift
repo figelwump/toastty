@@ -67,6 +67,8 @@ struct CoordinatorFolder: Sendable {
 
     ## Releases
 
+    ## Senders
+
     ## Notes (kept by the coordinator)
 
     """

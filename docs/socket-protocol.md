@@ -427,7 +427,9 @@ Notable action-specific behavior:
     never from the text, as for `coordinator.send`: `[Toastty] From task
     [title](toastty://task/<id>): not from the user.` for a caller in a task's
     space, and `[Toastty] From the coordinator: not from the user.` for the
-    coordinator's own agent session. The text starts on the second line.
+    coordinator's own agent session. Optional `args.from` names a caller in no
+    session, also as for `coordinator.send`. The text starts on the second
+    line.
   - optional `args.steer=true` checks the agent before it types, and types
     nothing into a permission prompt or a question. The result adds
     `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
@@ -804,7 +806,10 @@ fields with `createdWorkspace` and `startedAgent`, after the start attempt.
 `sentUnconfirmed` or `queued`), `queuedCount`, and for a queued message
 `position` and `hold`. Toastty types the text after a first line that names
 the sender, from the request's `callerSessionID`: the task whose space that
-session is in, else the session, else "a terminal command". `coordinator.wake` takes exactly one of
+session is in, else the session, else the name in optional `args.from` as
+`[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran
+it.`, else "a terminal command". Toastty does not check `args.from`, and a
+non-empty string is required when it is present. `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
 fields. With `args.quiet` it also marks the wake turn that runs now as one
