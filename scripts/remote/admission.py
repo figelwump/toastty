@@ -640,7 +640,7 @@ def probe(args, root: Path) -> int:
         record = read_request(record_path)
         exit_path = run_dir / "detached-exit.json"
         value = {"detached": True, "finished": exit_path.exists(), "running": keeper_alive(record),
-                 "followed": followed(run_dir)}
+                 "followed": followed(run_dir), "cancelled": (run_dir / "CANCELLED").exists()}
         if value["finished"]:
             value["exitCode"] = read_request(exit_path).get("exitCode")
     print(json.dumps(value))
@@ -660,6 +660,8 @@ def cancel(args, root: Path) -> int:
         if (run_dir / "detached-exit.json").exists() or not keeper_alive(record):
             print(f"[admission] {args.label} has already ended")
             return 0
+        # A cancelled run is never reattached: the same command starts anew.
+        write_json(run_dir / "CANCELLED", {"cancelledAt": time.time()})
         os.killpg(record["pid"], signal.SIGTERM)
         print(f"[admission] asked {args.label} to stop; its cleanup runs before it ends")
         return 0

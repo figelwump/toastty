@@ -276,7 +276,7 @@ EOF
 toastty_remote_run_reattachable() {
   local state
   state="$(toastty_remote_detached probe "$1" 2>/dev/null)" || return 1
-  jq -e '.detached == true and .followed == false' <<<"$state" >/dev/null 2>&1
+  jq -e '.detached == true and .followed == false and .cancelled != true' <<<"$state" >/dev/null 2>&1
 }
 
 # Wraps a remote session script (printed by the function named in $1) so that

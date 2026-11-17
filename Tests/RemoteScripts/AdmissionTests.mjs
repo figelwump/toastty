@@ -263,7 +263,7 @@ test("a detached run survives its follower, accepts a new follower and stops on 
   const result = await second.finished;
   assert.equal(result.code, 143);
   assert.match(result.stdout, /stopping/);
-  assert.deepEqual({ ...probe(root, dir), running: undefined }, { detached: true, finished: true, running: undefined, followed: false, exitCode: 143 });
+  assert.deepEqual({ ...probe(root, dir), running: undefined }, { detached: true, finished: true, running: undefined, followed: false, cancelled: true, exitCode: 143 });
   assert.equal(admission("follow", "--root", root, "--dir", join(root, "runs")).code, 69);
 });
 
