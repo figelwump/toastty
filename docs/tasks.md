@@ -2087,12 +2087,13 @@ review. The choice is saved for each window.
   **Show N more** when the project has more. When every To ship task shows
   as a task space row, the footer counts To ship tasks instead. A parent in
   To ship counts in its project's To ship line with its children. While
-  Toastty keeps Done tasks' task spaces open after their merge, the Done
-  count says how many, such as **Done 91 · 9 open**, and expands the same
-  way: their task space rows, newest merge first, then **Show N more**,
-  which opens the Tasks view at Done. It also expands while one of those
-  task spaces is selected. Without such task spaces, the Done count opens
-  the Tasks view at Done.
+  Toastty keeps Done tasks' task spaces open after their merge, Done takes
+  a line of its own under the To ship line, such as **Done 91** with **9
+  open** on its right, and expands the same way: their task space rows,
+  newest merge first, then **Show N more**, which opens the Tasks view at
+  Done. It also expands while one of those task spaces is selected.
+  Without such task spaces, the Done count stays on the To ship line and
+  opens the Tasks view at Done.
 - **Needs you** lists only the rows that need you, from every project, under
   each project's name and counts, in two sections: **Needs you**, then
   **Ready to review**. Each row takes one line: its mark, its title and one

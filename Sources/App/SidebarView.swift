@@ -2131,43 +2131,40 @@ struct SidebarView: View {
                     }
                 }
             )
+            // While Done tasks' task spaces are open, Done takes a toggle line
+            // of its own under the To ship line; otherwise it is a count on it.
+            let doneCountOnLine = done > 0 && openDone.isEmpty
             if listed > 0 || toShip > 0 || done > 0 {
                 VStack(alignment: .leading, spacing: 3) {
-                    // A To ship toggle takes the width the Release button and
-                    // the Done count leave. Each count opens the Tasks view
-                    // at its own group.
-                    HStack(spacing: 12) {
-                        if listed > 0 {
-                            cardToShipToggle(count: listed, projectWorkspaceID: projectWorkspaceID)
-                        } else if toShip > 0 {
-                            finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
-                                Label("To ship \(toShip)", systemImage: "arrow.up.square")
-                                    .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                    if listed > 0 || toShip > 0 || doneCountOnLine {
+                        // A To ship toggle takes the width the Release button
+                        // and the Done count leave. Each count opens the
+                        // Tasks view at its own group.
+                        HStack(spacing: 12) {
+                            if listed > 0 {
+                                cardToShipToggle(count: listed, projectWorkspaceID: projectWorkspaceID)
+                            } else if toShip > 0 {
+                                finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
+                                    Label("To ship \(toShip)", systemImage: "arrow.up.square")
+                                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                                }
                             }
-                        }
-                        if let releaseWorkspaceID {
-                            cardReleaseButton(releaseWorkspaceID, projectWorkspaceID: projectWorkspaceID)
-                        }
-                        if done > 0 {
-                            if openDone.isEmpty {
+                            if let releaseWorkspaceID {
+                                cardReleaseButton(releaseWorkspaceID, projectWorkspaceID: projectWorkspaceID)
+                            }
+                            if doneCountOnLine {
                                 finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
-                            } else {
-                                cardDoneToggle(
-                                    count: done, openCount: openDone.count,
-                                    isExpanded: isDoneExpanded, projectWorkspaceID: projectWorkspaceID
-                                )
+                            }
+                            if listed == 0 {
+                                Spacer(minLength: 0)
                             }
                         }
-                        if listed == 0 {
-                            Spacer(minLength: 0)
-                        }
+                        .font(ToastyTheme.fontWorkspaceSessionChip)
+                        .labelStyle(.titleAndIcon)
+                        // A toggle lines up with the card's other toggles; a
+                        // count lines up its mark with the rows' marks.
+                        .padding(.horizontal, listed > 0 ? 10 : 18)
                     }
-                    .font(ToastyTheme.fontWorkspaceSessionChip)
-                    .labelStyle(.titleAndIcon)
-                    // A line that starts with a chevron lines up with the
-                    // card's other toggles; one that starts with a count
-                    // lines up its mark with the rows' marks.
-                    .padding(.horizontal, listed > 0 || (toShip == 0 && openDone.isEmpty == false) ? 10 : 18)
                     if listed > 0, expandedToShipProjectIDs.contains(projectWorkspaceID) {
                         VStack(alignment: .leading, spacing: 1) {
                             ForEach(recent.shown) { item in
@@ -2184,6 +2181,13 @@ struct SidebarView: View {
                                 .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipMore.\(projectWorkspaceID.uuidString)")
                             }
                         }
+                        .padding(.horizontal, 10)
+                    }
+                    if done > 0, openDone.isEmpty == false {
+                        cardDoneToggle(
+                            count: done, openCount: openDone.count,
+                            isExpanded: isDoneExpanded, projectWorkspaceID: projectWorkspaceID
+                        )
                         .padding(.horizontal, 10)
                     }
                     if let card, done > 0, openDone.isEmpty == false, isDoneExpanded.wrappedValue {
@@ -2257,49 +2261,23 @@ struct SidebarView: View {
         .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipToggle.\(projectWorkspaceID.uuidString)")
     }
 
-    /// "› ☑ Done 91 · 9 open" under a project card while Toastty keeps
-    /// merged Done tasks' task spaces open: it expands to list them. The
-    /// open count drops when the line is too narrow for it.
+    /// "› ☑ DONE 91   9 open" under a project card while Toastty keeps
+    /// merged Done tasks' task spaces open: it expands to list them.
     private func cardDoneToggle(
         count: Int,
         openCount: Int,
         isExpanded: Binding<Bool>,
         projectWorkspaceID: UUID
     ) -> some View {
-        let accessibilityText = Self.cardDoneToggleLabel(count: count, openCount: openCount, isExpanded: isExpanded.wrappedValue)
-        let mark = Label("Done \(count)", systemImage: "checkmark.square")
-            .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
-        return Button {
-            isExpanded.wrappedValue.toggle()
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .frame(width: 9)
-                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 4) {
-                        mark
-                        Text("· \(openCount) open")
-                            .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    }
-                    mark
-                }
-            }
-            .lineLimit(1)
-            .frame(minHeight: 16)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(isExpanded.wrappedValue ? "Hide the done tasks" : "Show the done tasks whose task spaces are still open")
-        .accessibilityLabel(accessibilityText)
-        .accessibilityAddTraits(.isHeader)
+        SidebarToShipGroupToggle(
+            count: count,
+            isExpanded: isExpanded,
+            summary: Text("\(openCount) open").foregroundStyle(ToastyTheme.sidebarSessionPathText),
+            showsMark: true,
+            group: .done,
+            accessibilityText: Self.cardDoneToggleLabel(count: count, openCount: openCount, isExpanded: isExpanded.wrappedValue)
+        )
         .accessibilityIdentifier("sidebar.workspace.finishedTasks.doneToggle.\(projectWorkspaceID.uuidString)")
-        .background {
-            SidebarSemanticTextBridge(text: accessibilityText)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-        }
     }
 
     static func cardDoneToggleLabel(count: Int, openCount: Int, isExpanded: Bool) -> String {
