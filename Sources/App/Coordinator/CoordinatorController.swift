@@ -265,6 +265,37 @@ final class CoordinatorController: ObservableObject {
         supportsChat && chat != nil && showsTerminal == false && location?.panelID == panelID
     }
 
+    /// The app's terminals, which give the coordinator's terminal the
+    /// keyboard. Set by `connectKeyboard(to:)`.
+    private weak var terminals: TerminalRuntimeRegistry?
+
+    /// Connects the keyboard of the chat and the terminal under it:
+    /// keyboard focus meant for the covered terminal goes to the chat's
+    /// field, and Show Terminal gives the terminal the keyboard.
+    func connectKeyboard(to terminals: TerminalRuntimeRegistry) {
+        self.terminals = terminals
+        terminals.coveringInputFocus = { [weak self] panelID in
+            guard let self, self.coversTerminal(panelID: panelID) else { return nil }
+            return { [weak self] in self?.chat?.focusComposer() ?? false }
+        }
+    }
+
+    /// Show Terminal, in the chat's notice or in the panel's header: the
+    /// panel shows the terminal in place of the chat, and the terminal
+    /// takes the keyboard, so that the user can answer a login or a
+    /// folder-trust question with the keys at once. The chat's field had
+    /// the keyboard and leaves the window with the chat. A terminal that
+    /// shows does not take the keyboard from that field by itself (see
+    /// `TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus`), so
+    /// without this the keys reach nothing until the user clicks.
+    func showTerminal() {
+        showsTerminal = true
+        guard let location, let panelID = location.panelID else { return }
+        // policy.md beside it can have the focus.
+        _ = store.send(.focusPanel(workspaceID: location.workspaceID, panelID: panelID))
+        terminals?.takeKeyboardFocus(panelID: panelID)
+    }
+
     /// Reads and sends to agent conversations inside the app. Set once the
     /// app has it. Without it every agent gets its text through
     /// `CoordinatorSendGate`.
@@ -655,8 +686,8 @@ final class CoordinatorController: ObservableObject {
     }
 
     /// Opens the coordinator's workspace, where the chat shows in full.
-    /// `showingTerminal` shows its terminal in place of the chat, for an
-    /// answer that only the terminal takes.
+    /// `showingTerminal` shows its terminal in place of the chat, with the
+    /// keyboard, for an answer that only the terminal takes.
     func openFullView(showingTerminal: Bool = false) {
         guard let location else { return }
         if showingTerminal {
@@ -667,6 +698,9 @@ final class CoordinatorController: ObservableObject {
             workspaceID: location.workspaceID,
             preferringUnreadSessionPanelIn: sessionRuntimeStore
         )
+        if showingTerminal {
+            showTerminal()
+        }
     }
 
     /// A click on a task's chip in the chat: the task's space opens, and

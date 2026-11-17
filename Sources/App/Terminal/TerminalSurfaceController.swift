@@ -788,14 +788,24 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     func applyGhosttyScrollbarPreferenceChange() {}
     #endif
 
+    /// The view that takes the keyboard for this terminal.
+    private var keyboardFocusTarget: NSView {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        return terminalHostView
+        #else
+        return hostedView
+        #endif
+    }
+
+    /// Whether this terminal has the keyboard in its window.
+    var hasKeyboardFocus: Bool {
+        hostedView.window?.firstResponder === keyboardFocusTarget
+    }
+
     @discardableResult
     func focusHostViewIfNeeded() -> Bool {
         guard let window = hostedView.window else { return false }
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        let focusTarget = terminalHostView
-        #else
-        let focusTarget = hostedView
-        #endif
+        let focusTarget = keyboardFocusTarget
         let didFocus: Bool
         if window.firstResponder === focusTarget {
             didFocus = true
@@ -1799,11 +1809,7 @@ extension TerminalSurfaceController {
         guard focused else { return }
         guard let window = hostedView.window else { return }
         guard window.isKeyWindow else { return }
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        let focusTarget = terminalHostView
-        #else
-        let focusTarget = hostedView
-        #endif
+        let focusTarget = keyboardFocusTarget
         let firstResponder = window.firstResponder
         guard firstResponder !== focusTarget else { return }
         guard !TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus(
