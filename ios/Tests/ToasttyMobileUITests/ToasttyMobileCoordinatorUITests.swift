@@ -120,6 +120,85 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-not-running", of: app)
     }
 
+    /// The tab's … menu, in Panels' place left of Next, opens the
+    /// coordinator's policy, ledger and friction notes read-only. It lists
+    /// the workspace's panels after them, without the panel that already
+    /// shows the policy. The ledger opens at its newest entry, the others at
+    /// their top, and only the policy says how to change it.
+    func testTheMenuOpensThePolicyLedgerAndFrictionNotes() {
+        let app = openCoordinatorChat()
+        let menu = app.buttons["toastty-coordinator-menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["toastty-conversation-panels"].exists)
+        let next = app.buttons["toastty-conversation-next"]
+        if next.exists { XCTAssertLessThanOrEqual(menu.frame.maxX, next.frame.minX) }
+
+        menu.tap()
+        let entries = ["Policy", "Ledger", "Friction Notes", "Waiting on you"].map { menuItem($0, in: app) }
+        XCTAssertTrue(entries[0].waitForExistence(timeout: 5))
+        XCTAssertTrue(entries.allSatisfy(\.exists))
+        XCTAssertEqual(entries.map(\.frame.minY), entries.map(\.frame.minY).sorted())
+        XCTAssertTrue(app.staticTexts["Your rules for the coordinator"].exists)
+        XCTAssertFalse(menuItem("policy.md", in: app).exists)
+        attachScreenshot(named: "coordinator-menu", of: app)
+
+        entries[0].tap()
+        XCTAssertTrue(sheetTitle(in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(sheetTitle(in: app).label.contains("policy.md · on your Mac"))
+        XCTAssertTrue(webText(containing: "Name tasks by title", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntilHittable(webText(containing: "Coordinator policy", in: app)))
+        let footer = app.staticTexts["toastty-preview-footer"]
+        XCTAssertTrue(footer.exists)
+        XCTAssertEqual(footer.label, "To change a rule, ask the coordinator in the chat.")
+        attachScreenshot(named: "coordinator-policy-sheet", of: app)
+        closeSheet(in: app)
+
+        menu.tap()
+        menuItem("Ledger", in: app).tap()
+        let newest = webText(containing: "17:29 created", in: app)
+        XCTAssertTrue(newest.waitForExistence(timeout: 10))
+        // The reveal scrolls a frame or two after the text appears.
+        XCTAssertTrue(waitUntilHittable(newest))
+        XCTAssertFalse(webText(containing: "09:02 started", in: app).isHittable)
+        XCTAssertFalse(app.staticTexts["toastty-preview-footer"].exists)
+        attachScreenshot(named: "coordinator-ledger-sheet", of: app)
+        closeSheet(in: app)
+
+        menu.tap()
+        menuItem("Friction Notes", in: app).tap()
+        XCTAssertTrue(webText(containing: "Remote checks wait", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntilHittable(webText(containing: "Friction notes", in: app)))
+        attachScreenshot(named: "coordinator-friction-sheet", of: app)
+        closeSheet(in: app)
+
+        menu.tap()
+        menuItem("Waiting on you", in: app).tap()
+        XCTAssertTrue(app.buttons["toastty-scratchpad-fit"].waitForExistence(timeout: 10))
+        closeSheet(in: app)
+    }
+
+    /// A folder from before the coordinator wrote a file says so instead of
+    /// the generic text. A Mac without file previews gets no file entries,
+    /// and its policy panel lists as before.
+    func testTheMenuSaysWhenAFileIsMissingAndHidesFilesWithoutPreviews() {
+        let missing = openCoordinatorChat(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_FILES": "missing"])
+        missing.buttons["toastty-coordinator-menu"].tap()
+        menuItem("Ledger", in: missing).tap()
+        let message = missing.staticTexts["The coordinator has not written its ledger yet."]
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        XCTAssertTrue(missing.buttons["Retry"].exists)
+        attachScreenshot(named: "coordinator-ledger-missing", of: missing)
+        missing.terminate()
+
+        let older = openCoordinatorChat(environment: ["TOASTTY_MOBILE_FIXTURE_FILE_PREVIEW": "unsupported"])
+        older.buttons["toastty-coordinator-menu"].tap()
+        XCTAssertTrue(menuItem("Waiting on you", in: older).waitForExistence(timeout: 5))
+        XCTAssertTrue(menuItem("policy.md", in: older).exists)
+        XCTAssertFalse(menuItem("Ledger", in: older).exists)
+        XCTAssertFalse(menuItem("Policy", in: older).exists)
+        attachScreenshot(named: "coordinator-menu-without-file-previews", of: older)
+    }
+
     /// Each tab keeps its own stack. A task the coordinator's chat links to
     /// opens over the chat, and Back returns to the chat.
     func testEachTabKeepsItsStackWhileSwitching() {
@@ -842,6 +921,32 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 10))
         return app
+    }
+
+    private func openCoordinatorChat(environment: [String: String] = [:]) -> XCUIApplication {
+        let app = launch(coordinator: "quiet", environment: environment)
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        return app
+    }
+
+    /// Native menu actions expose their title, with any subtitle after it,
+    /// and not the SwiftUI identifier.
+    private func menuItem(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", title, "\(title),")).firstMatch
+    }
+
+    private func sheetTitle(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["toastty-preview-title"]
+    }
+
+    private func webText(containing text: String, in app: XCUIApplication) -> XCUIElement {
+        app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    private func closeSheet(in app: XCUIApplication) {
+        app.buttons["toastty-preview-close"].tap()
+        XCTAssertTrue(app.buttons["toastty-preview-close"].waitForNonExistence(timeout: 5))
     }
 
     private func select(_ segment: String, in app: XCUIApplication) {
