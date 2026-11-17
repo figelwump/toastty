@@ -26,8 +26,9 @@ GitHub jobs use disposable runners and no production host. Manual macOS jobs bui
 
 ## Remote worker capacity
 
-Agent-driven native builds, macOS suites, iOS Simulator and GUI checks run on
-toastty-mini. Cheap source checks and read-only inspection may run locally;
+Agent-driven native builds, macOS suites, focused iOS Simulator tests and GUI
+checks run on toastty-mini. The full iOS suite runs on hosted CI (see CI
+Coverage in `.agents/skills/toastty-verify/SKILL.md`). Cheap source checks and read-only inspection may run locally;
 remote failures never authorize local native execution.
 
 The wrappers share two worker slots and one desktop reservation. macOS tests,
@@ -900,13 +901,14 @@ node ios/scripts/toastty-ios.mjs generate
 node ios/scripts/toastty-ios.mjs test
 ```
 
-Each dispatcher command accepts `--dry-run`. For agent-driven testing, keep simulator work on toastty-mini:
+Each dispatcher command accepts `--dry-run`. For agent-driven focused testing (`-only-testing`), keep simulator work on toastty-mini. Run the full iOS suite through a `Toastty CI` dispatch instead; see CI Coverage in `.agents/skills/toastty-verify/SKILL.md` for the rule and its exceptions.
 
 ```bash
 sv exec -- scripts/remote/test.sh \
   --platform ios \
   --scope working-tree \
-  --run-label <label>
+  --run-label <label> \
+  -- -only-testing:<target>/<class>
 ```
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
