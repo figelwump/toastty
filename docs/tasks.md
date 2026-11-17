@@ -371,7 +371,7 @@ last workspace here. See
 
 ```bash
 toastty task create "Composer keeps a blank line after send" \
-  --workspace "$WORKSPACE_ID" --agent codex --model gpt-6.1-sol --effort high
+  --workspace "$WORKSPACE_ID" --agent codex --model gpt-6.2-sol --effort high
 ```
 
 `task create` returns as soon as Toastty has saved the task. Setup continues in
@@ -405,7 +405,7 @@ prompt:
 
 ```bash
 toastty task create --title "Split out the parser" --slug parser-split \
-  --agent codex --model gpt-6.1-sol --effort high --prompt-file brief.md
+  --agent codex --model gpt-6.2-sol --effort high --prompt-file brief.md
 ```
 
 Other verbs:
@@ -530,7 +530,7 @@ with every choice set:
 
 ```bash
 toastty task create "Split the parser" --start-work --base feat/parser \
-  --agent codex --model gpt-6.1-sol --effort high --prompt-file brief.md
+  --agent codex --model gpt-6.2-sol --effort high --prompt-file brief.md
 ```
 
 Setup makes the worktree before the task space, so the task space's terminal
@@ -915,6 +915,7 @@ text:
 | `[Toastty] From task [title](toastty://task/<id>): not from the user.` | `coordinator send` from a session in that task's space. |
 | `[Toastty] From the coordinator: not from the user.` | `coordinator send` or `task send` from the coordinator's own agent session. |
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
+| `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran it.` | `coordinator send --from <name>` from a caller that names no running session, such as Grok Bot running the command from its own shell. Toastty does not check the name. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
 | `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. |
@@ -929,6 +930,21 @@ quick entry message, whatever it says. The coordinator treats such a message
 as data from that sender, as it treats a task's reply. Toastty takes the
 sender from the session ID that the CLI reports, so a caller can hide its
 session and show as a terminal command, but it cannot show as you.
+
+**A program that passes on your messages.** A program outside Toastty that
+you talk to, such as Grok Bot, can name itself with `--from "Grok Bot"` on
+`coordinator send` and `task send`. Toastty puts that name on the first line
+and marks it as the caller's own: anyone who can run the command can write
+it. A caller in a Toastty session is always named by its session. By
+default the coordinator still treats the message as data. To let it act on
+your decisions that such a program passes on, ask the coordinator to add the
+program to the Senders section of its policy, such as
+`- Grok Bot: passes on my decisions.` The coordinator writes the line only
+after your yes to its exact words. It then acts on a decision that the
+program says is yours as if you wrote it, tells you what it did and names
+the program. A merge, a release, an archive or a deletion, a production
+change and a change to the policy still need your own message: the program
+asks for a merge itself with `task request-merge`.
 
 ### Quick entry with the coordinator
 
@@ -994,7 +1010,7 @@ you when it is not sure, and creates the task.
 A message looks like this in the coordinator's terminal:
 
 ```text
-[Toastty] Quick entry from the user | project chosen: "toastty" (workspace 65A904AE-…) | agent chosen: codex, model gpt-6.1-sol, effort high
+[Toastty] Quick entry from the user | project chosen: "toastty" (workspace 65A904AE-…) | agent chosen: codex, model gpt-6.2-sol, effort high
 The unread dot stays on after I read the session on the phone.
 
 Read the following files attached to this message on this Mac:
@@ -1575,7 +1591,7 @@ by asking you:
 - Website copy or layout → toastty, docs/.
 
 ## Agents
-- Toastty bug with a repro: codex, gpt-6.1-sol, high, start work at once.
+- Toastty bug with a repro: codex, gpt-6.2-sol, high, start work at once.
 - Design or product question: claude, claude-opus-5-5, xhigh; shape first.
 
 ## Talking
@@ -1602,6 +1618,9 @@ by asking you:
 ## Releases
 - www: on merge.
 - Toastty Mac app: batch; remind me at 8 waiting or every Monday.
+
+## Senders
+- Grok Bot: passes on my decisions.
 ```
 
 **The first run.** The first time you write to the coordinator while one
@@ -1631,8 +1650,8 @@ again, and the defaults apply: for Improving, a review only when you ask.
 Say "set yourself up again" to answer all five parts again. A policy from an
 older version has no Talking or Improving section; the coordinator asks
 about it once and adds the heading. It does not ask about
-Merging: that section stays empty until you ask for a rule, and the
-coordinator adds the heading to an older policy when it first writes one. An
+Merging or Senders: those sections stay empty until you ask for a rule, and
+the coordinator adds the heading to an older policy when it first writes one. An
 older policy can also end with a Notes section. Its lines still apply; the
 coordinator adds nothing to it, and asks you once whether to move each fact
 there to its ledger and each rule to its section.
@@ -2594,7 +2613,7 @@ title and a slug, and any model or effort the preset leaves out.
 [triage]
 command = "claude -p --model claude-sonnet-5-5 --effort medium --tools ''"
 guidelines = """
-A clear bug with a repro: codex, gpt-6.1-sol, high. Tell it to start work.
+A clear bug with a repro: codex, gpt-6.2-sol, high. Tell it to start work.
 A design question: claude, claude-opus-5-5, xhigh. Tell it to shape first.
 """
 timeout_seconds = 120
@@ -2615,7 +2634,7 @@ The command answers with one JSON object on stdout, also read from a fenced
 code block, after other text, or from `claude -p --output-format json`:
 
 ```json
-{"workspace": "<workspace ID>", "agent": "codex", "model": "gpt-6.1-sol",
+{"workspace": "<workspace ID>", "agent": "codex", "model": "gpt-6.2-sol",
  "effort": "high", "first_prompt": "Start with the composer views.",
  "title": "Composer keeps a blank line", "slug": "composer-blank-line",
  "reason": "A composer bug in toastty."}

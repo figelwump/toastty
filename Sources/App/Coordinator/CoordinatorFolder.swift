@@ -103,6 +103,8 @@ struct CoordinatorFolder: Sendable {
 
     ## Releases
 
+    ## Senders
+
     """
 
     static let ledgerTemplate = """

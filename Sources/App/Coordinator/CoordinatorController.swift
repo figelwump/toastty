@@ -1297,7 +1297,9 @@ final class CoordinatorController: ObservableObject {
         byUser: Bool = false,
         id: String = UUID().uuidString
     ) throws -> SendResult {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The entry keeps the text as it is typed, which is also how the
+        // agent's conversation echoes it.
+        let text = AgentPasteText.keepingImagePathsAsText(text.trimmingCharacters(in: .whitespacesAndNewlines))
         guard text.isEmpty == false else {
             throw CoordinatorError("The message is empty.")
         }
@@ -1386,7 +1388,7 @@ final class CoordinatorController: ObservableObject {
         steering: Bool,
         id: String = UUID().uuidString
     ) throws -> SendResult {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = AgentPasteText.keepingImagePathsAsText(text.trimmingCharacters(in: .whitespacesAndNewlines))
         if steering, text.isEmpty == false {
             switch steer(QueuedEntry(id: id, text: text, byUser: true)) {
             case .delivered?: return .steered
