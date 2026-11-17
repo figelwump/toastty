@@ -36,6 +36,11 @@ struct ToasttyCLICoordinatorTests {
             == .appControlRun(kind: .action, id: "coordinator.send", args: ["text": .string("-- starts with dashes")]))
         #expect(try command(["send", "--text-file", "wake.md"], environment: ["PWD": directory.path])
             == .appControlRun(kind: .action, id: "coordinator.send", args: ["text": .string("Two tasks changed.\nLook at the first.")]))
+        // A program outside Toastty names itself for the first line.
+        #expect(try command(["send", "--from", "Grok Bot", "The user says: move it."])
+            == .appControlRun(kind: .action, id: "coordinator.send", args: [
+                "text": .string("The user says: move it."), "from": .string("Grok Bot"),
+            ]))
     }
 
     @Test
@@ -92,6 +97,9 @@ struct ToasttyCLICoordinatorTests {
             ["open", "--in", "5m"],
             ["wake", "--quiet"],
             ["send", "hello", "--quiet"],
+            ["send", "hello", "--from"],
+            ["status", "--from", "Grok Bot"],
+            ["wake", "--in", "5m", "--from", "Grok Bot"],
             ["watch"],
             ["watch", "--task", "not-an-id"],
             ["watch", "--workspace", "not-an-id"],
