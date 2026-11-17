@@ -30,11 +30,14 @@ that:
 - `coordinator wake --in` sets the timer, `coordinator status` shows it,
   `--clear` removes it, and the timer wake arrives at its time as a digest
   with the scheduled-check line;
-- a busy task agent whose transcript last changed 31 minutes ago wakes the
-  coordinator once, by the clock alone, with the silent alert in its line;
-  the agent writing clears the alert and wakes nothing; silence again wakes
-  it again. The check moves the transcript's modification time back, so the
-  real 30-minute limit applies and no setting is changed;
+- a task agent that became busy a short time ago, whose transcript last
+  changed 31 minutes ago, raises no silent alert and wakes nothing: silence
+  counts from the later of the transcript change and the start of the busy
+  state. The check moves the transcript's modification time back, so the
+  real 30-minute limit applies and no setting is changed. When the turn
+  ends, one digest tells the stage, with no alert. The alert's start, its
+  clearing and its return by the clock are covered by the CoordinatorWake
+  unit tests, which use a fake clock;
 - after the app is killed with a digest waiting, a timer set and a task's
   agent in the middle of a turn, and stays down until the timer's time
   passed, the relaunched app types the waiting change once and the
@@ -463,10 +466,12 @@ def run_fake(check):
         quiet(seen + 1, 6, 'after the timer fired once')
         step('the timer fired at its time', timer=timer, digest=scheduled['text'], after=after_timer)
 
-        # 6. A busy agent that writes nothing for 30 minutes wakes the
-        # coordinator once, by the clock alone. The fake agent writes its
-        # transcript only when it starts, so moving that file's
-        # modification time back is the agent's silence.
+        # 6. A busy agent whose transcript is 31 minutes old, but that
+        # became busy a short time ago, is not silent: silence counts from
+        # the later of the two. The fake agent writes its transcript only
+        # when it starts, so moving that file's modification time back is
+        # old output. Without this rule, a Claude Code side query that set
+        # an idle agent busy raised the alert at once.
         wait_for('the coordinator at its prompt', at_prompt)
         native_a = next(event['native'] for event in events()
                         if event['event'] == 'started' and event['session'] == session_a)
@@ -479,42 +484,29 @@ def run_fake(check):
         seen = len(digests())
         quiet(seen, SETTLE + 3, 'for a busy agent that wrote recently')
 
-        def go_silent():
-            moved_to = time.time() - 31 * 60
-            os.utime(transcript, (moved_to, moved_to))
-            return wait_for('the silence to show', lambda: (t := task(task_a))['agentState'].get('lastOutputAt')
-                            and time.time() - parse_time(t['agentState']['lastOutputAt']) > 30 * 60 and t)
-
-        silent_task = go_silent()
-        silent_at = time.time()
-        (silent,) = new_digests(seen, timeout=30)
-        require(list(silent['tasks']) == [task_a] and silent['tasks'][task_a]['stage'] == 'running'
-                and silent['tasks'][task_a]['alerts'] == [SILENT] and not silent['other'] and silent['requestedCheck'] is None,
-                f'Unexpected digest for a silent agent: {silent}')
-        require(silent['receivedAt'] - silent_at < SETTLE + 8, f'The silent alert came late: {silent_at} {silent}')
-        wait_for('the coordinator at its prompt', at_prompt)
-        quiet(seen + 1, SETTLE + 6, 'while the agent stayed silent')
-
-        # The agent writes: the alert clears and wakes nothing.
-        os.utime(transcript, None)
-        wait_for('the cleared alert to wait', lambda: saved_changes() == [(task_a, 'running', False)])
-        quiet(seen + 1, SETTLE + 3, 'when the silent agent wrote')
-        cleared_status = status()
-        # Silent again: one more wake.
-        go_silent()
-        (again,) = new_digests(seen + 1, timeout=30)
-        require(list(again['tasks']) == [task_a] and again['tasks'][task_a]['alerts'] == [SILENT],
-                f'Unexpected digest for the second silence: {again}')
-        wait_for('the coordinator at its prompt', at_prompt)
-        quiet(seen + 2, SETTLE + 3, 'after the second silence was told')
+        moved_to = time.time() - 31 * 60
+        os.utime(transcript, (moved_to, moved_to))
+        old_output_task = wait_for(
+            'the old output to show',
+            lambda: (t := task(task_a))['agentState'].get('lastOutputAt')
+            and time.time() - parse_time(t['agentState']['lastOutputAt']) > 30 * 60 and t)
+        busy_since = parse_time(old_output_task['agentState']['changedAt'])
+        require(old_output_task['agentState']['state'] == 'busy' and time.time() - busy_since < 30 * 60,
+                f'The agent is not busy for less than 30 minutes: {old_output_task}')
+        quiet(seen, SETTLE + 8, 'for a busy agent with old output that became busy recently')
+        require(not any(wakes for (_, _, wakes) in saved_changes()),
+                f'A waiting change wakes for old output: {saved_changes()}')
         # The turn ends: a stage change, and no alert.
         hold(session_a, on=False)
         wait_for_stage(task_a, 'needsYou', 'agentFinished')
-        (ended,) = new_digests(seen + 2)
+        (ended,) = new_digests(seen)
         require(ended['tasks'][task_a]['stage'] == 'needsYou (agentFinished)' and ended['tasks'][task_a]['alerts'] == [],
-                f'Unexpected digest for the end of the silent turn: {ended}')
-        step('a silent busy agent woke the coordinator once per silence', task=silent_task['agentState'],
-             digests=[silent['text'], again['text'], ended['text']], afterWriting=cleared_status)
+                f'Unexpected digest for the end of the turn with old output: {ended}')
+        require(all(SILENT not in d['tasks'].get(task_a, {}).get('alerts', []) for d in digests()[seen:]),
+                f'A digest has the silent alert: {digests()[seen:]}')
+        os.utime(transcript, None)
+        step('a recently busy agent with old output woke the coordinator only for its stage',
+             task=old_output_task['agentState'], digests=[ended['text']])
 
         # 7. Kill with a digest waiting, a timer set and a task's agent in a
         # turn; stay down past the timer's time; relaunch. The early task's
