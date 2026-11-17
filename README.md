@@ -42,7 +42,7 @@ Updating from 0.9.x? See [what changes](docs/tasks.md#updating-from-09x). To bui
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/readme/workflow-1.png" alt="The quick entry panel over another app, with a message for the coordinator and an attached screenshot"></td>
+    <td width="33%"><img src="docs/assets/readme/workflow-1.png" alt="The quick entry panel over another app, with a message for the coordinator, an attached screenshot, and its Create and Send buttons"></td>
     <td width="33%"><img src="docs/assets/readme/workflow-2.png" alt="The sidebar's project card with the checkout-redesign task under Ready to review, its PR #128 chip beside it"></td>
     <td width="33%"><img src="docs/assets/readme/workflow-3.png" alt="The checkout-redesign task space open, with the Merge PR #128 button in its top bar, the agent's terminal, and its verification report in the right panel"></td>
   </tr>
