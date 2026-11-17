@@ -590,11 +590,13 @@ enum ToasttyConversationFixture {
         sendItems: [ToasttySendPresentationItem] = [],
         hasLongMessage: Bool = false,
         quietTurns: CoordinatorQuietTurns = .none,
+        wakeTurns: Int = 0,
         responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationAdapter.makeState(
             events: coordinatorEvents(
-                for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns, responses: responses
+                for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns,
+                wakeTurns: wakeTurns, responses: responses
             )
                 .map(CompatibleConversationEvent.known),
             projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
@@ -633,6 +635,15 @@ enum ToasttyConversationFixture {
         """,
     ]
 
+    /// The digest of the fixture's wake turn `index`.
+    static func wakeDigest(_ index: Int) -> String {
+        """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - [wake-task-\(index + 1)](toastty://task/\(ToasttyMobileFixture.reviewTaskID.uuidString)): running at 2026-08-11T15:\(10 + index % 50):00Z
+        Read `toastty task list` for details.
+        """
+    }
+
     static var coordinatorQuietDigestKeys: Set<String> {
         Set(coordinatorQuietDigests.map(CoordinatorChatTranscript.digestKey))
     }
@@ -649,6 +660,7 @@ enum ToasttyConversationFixture {
         for conversationID: UUID,
         hasLongMessage: Bool = false,
         quietTurns: CoordinatorQuietTurns = .none,
+        wakeTurns: Int = 0,
         responses: Int = 0
     ) -> [ConversationEvent] {
         // Event `n` is `n - 1` times two minutes after the first.
@@ -707,6 +719,19 @@ enum ToasttyConversationFixture {
             .userMessage(.init(text: quickEntry, origin: .remote)),
             .assistantMessage(.init(text: "I made a task for it in toastty, with Codex.", phase: .final)),
         ]
+        // A long chat, as a coordinator's grows: wake turns that each read
+        // the tasks and answer, at different lengths.
+        for index in 0..<max(0, wakeTurns) {
+            payloads.append(.userMessage(.init(text: wakeDigest(index), origin: .remote)))
+            let callID = "wake-\(index + 1)"
+            payloads.append(.toolStarted(.init(callID: callID, toolName: "Bash", detail: "toastty task list")))
+            payloads.append(.toolFinished(.init(callID: callID, toolName: "Bash", outcome: .succeeded)))
+            let sentence = "Task \(index + 1) is still running its checks on the remote test Mac, and nothing waits for you. "
+            payloads.append(.assistantMessage(.init(
+                text: "Wake \(index + 1). " + String(repeating: sentence, count: 1 + index % 4),
+                phase: .final
+            )))
+        }
         if hasLongMessage {
             payloads.append(.userMessage(.init(text: "What moved this week?", origin: .remote)))
             payloads.append(.assistantMessage(.init(text: longMessage, phase: .final)))

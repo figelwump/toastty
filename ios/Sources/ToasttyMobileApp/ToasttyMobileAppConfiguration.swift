@@ -140,9 +140,15 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH=<n>` reads through
     /// the fixture chat's event `n`.
     private var fixtureCoordinatorChatRead: RemoteCoordinatorChatReadPoint? {
-        guard let value = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH"],
-              let sequence = Int(value) else { return nil }
-        let events = ToasttyConversationFixture.coordinatorEvents(for: ToasttyMobileFixture.coordinatorConversationID)
+        let environment = ProcessInfo.processInfo.environment
+        guard let value = environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH"],
+              var sequence = Int(value) else { return nil }
+        let events = ToasttyConversationFixture.coordinatorEvents(
+            for: ToasttyMobileFixture.coordinatorConversationID,
+            wakeTurns: Int(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? "") ?? 0
+        )
+        // A negative value counts from the chat's end.
+        if sequence < 0 { sequence += events.count }
         guard events.indices.contains(sequence - 1) else { return nil }
         let event = events[sequence - 1]
         return RemoteCoordinatorChatReadPoint(eventID: event.eventID, timestamp: event.timestamp)
