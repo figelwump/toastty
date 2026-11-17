@@ -142,7 +142,7 @@ you to.
 
 ## Pass a message to the coordinator
 
-When Toastty runs a coordinator (`toastty --json coordinator status` shows
+When Toastty runs a coordinator (`toastty coordinator status --json` shows
 `exists: true`) and the user asks you to tell it something, send it with
 `toastty coordinator send --from "<your name>" "<message>"`. Quote the
 user's words and mark your own notes apart from them. The coordinator acts

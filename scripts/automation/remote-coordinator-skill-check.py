@@ -905,11 +905,17 @@ class Run:
         # `task send --steer` may reach an agent that works: Toastty checks
         # the agent before it types. It never types at a prompt.
         steered = [c for c in commands if re.search(r'task\s+send\b', c) and '--steer' in c]
+        # A send with --text-file holds its text in message.md, which the
+        # coordinator wrote in the same turn.
+        steered_texts = [text for turn in turns
+                         if any(re.search(r'task\s+send\b', c) and '--steer' in c for c in turn['commands'])
+                         for text in turn['messages']]
         interrupted = []
         for task, message in received:
             before = [kind for at, kind in task.statuses if at <= message['at']]
+            snippet = typed_text(message['text']).strip()[:60]
             checked = before and before[-1] == 'working' and any(
-                task.id in c and typed_text(message['text']).strip()[:60] in c for c in steered)
+                task.id in c and (snippet in c or any(snippet in text for text in steered_texts)) for c in steered)
             if before and before[-1] in ('working', 'needs_approval') and not checked:
                 interrupted.append(f'{task.title} was {before[-1]}: {message["text"][:120]}')
         self.check('no message to an agent that works or waits at a prompt, but a --steer send to one that works',
