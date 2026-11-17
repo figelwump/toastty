@@ -1226,7 +1226,7 @@ def ci_failed(run):
 
 
 def conflict(run):
-    """Merge conflicts: the task is told to rebase."""
+    """Merge conflicts: the task is told to merge its base, not to rebase."""
     task = run.create_task('Rename the settings keys', status='working')
     run.set_pr(task, 12, body=GOOD_PROOF.format(head='0' * 39 + 'c'))
     run.seed_policy()
@@ -1234,7 +1234,8 @@ def conflict(run):
     to_review(run, task, mergeStateStatus='DIRTY')
     run.new_turns(wake=True)
     messages = [m['text'] for m in run.messages(task)]
-    run.check('the task got one instruction to rebase', len(messages) == 1 and 'rebase' in messages[0].lower(), messages)
+    run.check('the task got one instruction to merge its base branch',
+              len(messages) == 1 and 'merge' in messages[0].lower() and 'base' in messages[0].lower(), messages)
 
 
 def dependency(run):

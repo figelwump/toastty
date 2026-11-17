@@ -194,6 +194,9 @@ enum SidebarSubspacePresentation {
         switch stage {
         case .needsYou(.awaitingReply)?:
             return .question
+        case .needsYou(.startWaitsInTerminal)?:
+            // The agent's session shows idle, but it never began.
+            return .needsApproval
         case .needsYou(.review)?, .needsYou(.readyForReview)?:
             return .review
         case .toShip?:
@@ -219,7 +222,17 @@ enum SidebarSubspacePresentation {
     /// The Tasks view still lists it. A merged task's task space that
     /// Toastty holds open stays listed until it closes.
     static func isHiddenAsFinished(_ row: Row) -> Bool {
-        guard row.isCleanupHeld == false else { return false }
+        row.isCleanupHeld == false && isFinishedAndQuiet(row)
+    }
+
+    /// A merged task whose task space Toastty holds open, with nothing in
+    /// it running or waiting for the user. Under its parent task, the
+    /// sidebar folds it into one "N/M merged" line.
+    static func isHeldFinished(_ row: Row) -> Bool {
+        row.isCleanupHeld && isFinishedAndQuiet(row)
+    }
+
+    private static func isFinishedAndQuiet(_ row: Row) -> Bool {
         switch row.status {
         case .done, .toShip:
             // The row's status shows one session; any other agent that is

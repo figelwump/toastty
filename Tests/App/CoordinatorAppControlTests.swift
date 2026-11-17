@@ -109,9 +109,11 @@ struct CoordinatorAppControlTests {
             #expect(CoordinatorDigestFold.updateCount(inMessage: typed) == nil)
         }
 
-        // An agent outside a task: here the coordinator's own session.
-        let fromSession = try await send("A note to myself.", as: coordinatorSessionID)
-        #expect(fromSession == "[Toastty] From agent session \(coordinatorSessionID) (claude, workspace \"Coordinator\"): not from the user.\nA note to myself.")
+        // The coordinator's own session is named as the coordinator, not
+        // by its session and workspace title, which any session could share.
+        let fromCoordinator = try await send("A note to myself.", as: coordinatorSessionID)
+        #expect(fromCoordinator == "[Toastty] From the coordinator: not from the user.\nA note to myself.")
+        #expect(CoordinatorMessageHeader.kind(of: fromCoordinator) == .fromSender(sender: "the coordinator"))
         // No session, or a session that does not run: Toastty cannot tell.
         for caller in [nil, "not-a-session"] as [String?] {
             let fromTerminal = try await send(digest, as: caller)
@@ -196,14 +198,29 @@ struct CoordinatorAppControlTests {
     @Test func aFailedStartComesBackAsAnErrorAndGetReportsIt() async throws {
         let fixture = try Fixture()
         let executor = executor(fixture)
+        // An agent that is not installed is found before the workspace is
+        // made; the error names the setting and an installed agent.
         fixture.tasks.config.coordinator = TasksConfig.Coordinator(agent: "nobody")
-        await expectInvalidPayload(containing: "nobody") {
+        await expectInvalidPayload(containing: "nobody is not an agent profile") {
+            _ = try await executor.runActionAsync(id: "coordinator.open", args: [:], context: context())
+        }
+        await expectInvalidPayload(containing: "Set agent under [coordinator] in ~/.toastty/tasks.toml to an agent profile that is installed, such as claude") {
+            _ = try await executor.runActionAsync(id: "coordinator.open", args: [:], context: context())
+        }
+        #expect(try executor.runQuery(id: "coordinator.get", args: [:])["exists"] == .bool(false))
+
+        // A start that fails in the workspace leaves the workspace, and get
+        // says why.
+        fixture.tasks.config.coordinator = TasksConfig.Coordinator()
+        fixture.tasks.router.failingSendCount = 1
+        fixture.tasks.router.sendFailure = .uncertain
+        await expectInvalidPayload(containing: "may not have reached the terminal") {
             _ = try await executor.runActionAsync(id: "coordinator.open", args: [:], context: context())
         }
         let status = try executor.runQuery(id: "coordinator.get", args: [:])
         #expect(status["exists"] == .bool(true))
         #expect(status["agentState"] == .string("notRunning"))
-        #expect(string(status, "startFailure")?.contains("nobody") == true)
+        #expect(string(status, "startFailure")?.contains("may not have reached the terminal") == true)
         await expectInvalidPayload(containing: "windowID does not exist") {
             _ = try await executor.runActionAsync(
                 id: "coordinator.restart", args: ["windowID": .string(UUID().uuidString)], context: context()
@@ -385,10 +402,16 @@ struct CoordinatorAppControlTests {
         let board = attachBoard(fixture)
         defer { withExtendedLifetime(board) {} }
         var failures: [String] = []
+        var agentOffers: [CoordinatorAgentChoice] = []
         let palette = CommandPaletteTaskActions(
             store: fixture.store,
             sessionRuntimeStore: fixture.sessions,
             presentFailure: { title, message in failures.append("\(title): \(message)") },
+            offerCoordinatorAgent: { title, message, choice, _ in
+                failures.append("\(title): \(message)")
+                agentOffers.append(choice)
+                return false
+            },
             afterPaletteCloses: { $0() }
         )
         let windowID = try #require(fixture.store.state.selectedWindowID)
@@ -418,6 +441,8 @@ struct CoordinatorAppControlTests {
         await fixture.waitUntil("the failure is shown") { failures.isEmpty == false }
         #expect(failures.first?.hasPrefix("Unable to Restart the Coordinator: ") == true)
         #expect(failures.first?.contains("nobody") == true)
+        // It offers the installed agent; the user cancels.
+        #expect(agentOffers.map(\.profileID) == ["claude"])
         // The agent that ran keeps running.
         #expect(fixture.controller.session != nil)
     }

@@ -255,11 +255,21 @@ final class AppControlExecutor {
 
         case .workspaceSetDone, .workspaceClearDone:
             let workspaceID = try resolveWorkspaceIDDefaultingToCallerSession(args: args)
-            if action == .workspaceSetDone,
-               try requiredStore().state.workspacesByID[workspaceID]?.canHoldDoneMark == false {
-                throw AutomationSocketError.invalidPayload(
-                    "workspace.set-done applies to task spaces; this workspace is top-level"
-                )
+            if action == .workspaceSetDone, let workspace = try requiredStore().state.workspacesByID[workspaceID] {
+                if workspace.canHoldDoneMark == false {
+                    throw AutomationSocketError.invalidPayload(
+                        "workspace.set-done applies to task spaces; this workspace is top-level"
+                    )
+                }
+                // The rule of the done checkbox, on the Mac and on a phone:
+                // a task with an open pull request or a merge under way
+                // finishes through Merge or Archive. A mark it already has
+                // stays as it is.
+                if workspace.doneAt == nil, sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: workspaceID) == false {
+                    throw AutomationSocketError.invalidPayload(
+                        "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+                    )
+                }
             }
             let doneAt: Date? = action == .workspaceSetDone ? Date() : nil
             return .init(
@@ -898,10 +908,17 @@ final class AppControlExecutor {
             }
         }
         if AppControlActionID.resolve(rawID) == .taskArchive {
-            let (coordinator, taskID, options) = try withRequestContext(context) {
+            let (coordinator, taskID, options, dryRun) = try withRequestContext(context) {
                 try prepareTaskArchive(args: args)
             }
-            return try await finishTaskArchive(coordinator, taskID: taskID, options: options)
+            return try await finishTaskArchive(coordinator, taskID: taskID, options: options, dryRun: dryRun)
+        }
+        if AppControlActionID.resolve(rawID) == .taskMerge {
+            let preparation = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskMerge.descriptor)
+                return try prepareTaskMerge(args: args)
+            }
+            return try await finishTaskMerge(preparation)
         }
         if let action = AppControlActionID.resolve(rawID), action == .coordinatorOpen || action == .coordinatorRestart {
             let preparation = try withRequestContext(context) {

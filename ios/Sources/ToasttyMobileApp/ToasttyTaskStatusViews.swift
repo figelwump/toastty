@@ -54,7 +54,6 @@ extension View {
 struct ToasttyTaskListRow: View {
     let task: RemoteTaskSummary
     var isLinkedChild = false
-    var isContext = false
     /// Off under a heading that already names the project, such as a To
     /// ship lane.
     var showsProject = true
@@ -81,7 +80,6 @@ struct ToasttyTaskListRow: View {
             }
         }
         .padding(.leading, isLinkedChild ? 18 : 0)
-        .opacity(isContext ? 0.55 : 1)
         .toasttyListRow()
     }
 }
@@ -562,6 +560,9 @@ struct ToasttyTaskDetailSheet: View {
                         .font(.callout.monospaced())
                         .foregroundStyle(ToasttyDesignTokens.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let macStep = task.macStep {
+                        ToasttyTaskMacStepNote(text: macStep)
+                    }
                     // The live task's actions; a task the Mac no longer
                     // lists offers none.
                     if let controller, let current = controller.snapshot.taskBoard?.task(id: task.id) {
@@ -637,5 +638,31 @@ struct ToasttyOptionalTaskActionPresenter: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// What only the Mac can do for a task, such as picking its workspace, in
+/// the task's detail above the actions the phone can take.
+struct ToasttyTaskMacStepNote: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "desktopcomputer")
+                .font(.subheadline)
+                .foregroundStyle(ToasttyDesignTokens.amberText)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(ToasttyDesignTokens.raisedSurface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(ToasttyDesignTokens.border))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("toastty-task-detail-mac-step")
     }
 }

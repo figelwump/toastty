@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import RemoteProtocol
 
@@ -247,6 +248,19 @@ public enum CoordinatorChatTranscript {
                 isQuietDigest: isQuietDigest
             )
         )
+    }
+
+    /// Names a digest by its text, as the Mac's `CoordinatorWakeState.digestKey`
+    /// does: the SHA-256, in hex, of the text without leading and trailing
+    /// white space. A device that shows the coordinator's chat gets the
+    /// digest's text from the Mac's conversation reader and finds the key of
+    /// a quiet turn the Mac shares (`RemoteCoordinatorQuietDigests`). The Mac's
+    /// copy lives in Core, which the phone does not link, and RemoteProtocol
+    /// stays Foundation-only; `CoordinatorChatSendPathTests` checks that the
+    /// two agree on the text the gateway sends.
+    public static func digestKey(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SHA256.hash(data: Data(trimmed.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// The quote that a reply's bubble shows while the message waits or

@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 extension AppControlActionID {
     var isTaskAction: Bool {
@@ -60,11 +61,7 @@ extension AppControlExecutor {
             let updated = try perform { try coordinator.setReleaseAfterMerge(taskID: record.id, requested: afterMerge) }
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskMerge:
-            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
-            let merged = try perform {
-                try coordinator.merge(taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller())
-            }
-            return .init(didMutateState: true, result: Self.taskSnapshot(merged))
+            throw AutomationSocketError.invalidPayload("task.merge waits for the merge's first answer; send it through app_control.run_action")
         case .taskRequestMerge:
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.requestMergeFromOutside(taskID: record.id) }
@@ -96,10 +93,8 @@ extension AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action")
             }
             let record = try visibleTask(args: args, coordinator: coordinator)
-            guard let text = args.taskString("text") else {
-                throw AutomationSocketError.invalidPayload("text is required")
-            }
-            let session = try perform { try coordinator.send(taskID: record.id, text: text) }
+            let message = try taskSendMessage(args: args)
+            let session = try perform { try coordinator.send(taskID: record.id, text: message) }
             return .init(didMutateState: false, result: [
                 "taskID": .string(record.id.uuidString),
                 "sessionID": .string(session.sessionID),
@@ -169,10 +164,20 @@ extension AppControlExecutor {
         guard try args.taskBool("steer") == true else { return nil }
         let coordinator = try requiredTaskCoordinator()
         let record = try visibleTask(args: args, coordinator: coordinator)
+        return (coordinator, record.id, try taskSendMessage(args: args))
+    }
+
+    /// The text `task.send` types: a first line that names the sender, from
+    /// the caller and never from the text, then the caller's text. An empty
+    /// text is refused here, before the first line makes it look full.
+    private func taskSendMessage(args: [String: AutomationJSONValue]) throws -> String {
         guard let text = args.taskString("text") else {
             throw AutomationSocketError.invalidPayload("text is required")
         }
-        return (coordinator, record.id, text)
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw AutomationSocketError.invalidPayload("The message is empty.")
+        }
+        return CoordinatorMessageHeader.message(from: messageSender(), text: text)
     }
 
     func finishTaskSteerSend(_ coordinator: TaskCoordinator, taskID: UUID, text: String) async throws -> AppControlActionOutcome {
@@ -199,7 +204,7 @@ extension AppControlExecutor {
 
     /// The checks that need only the request's context; the git checks run
     /// after an await.
-    func prepareTaskArchive(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, TaskArchiveOptions) {
+    func prepareTaskArchive(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, TaskArchiveOptions, dryRun: Bool) {
         let coordinator = try requiredTaskCoordinator()
         let record = try visibleTask(args: args, coordinator: coordinator)
         let options = TaskArchiveOptions(
@@ -207,13 +212,56 @@ extension AppControlExecutor {
             deleteUnpushedCommits: try args.taskBool("deleteUnpushedCommits") ?? false,
             discardChanges: try args.taskBool("discardChanges") ?? false
         )
-        return (coordinator, record.id, options)
+        return (coordinator, record.id, options, try args.taskBool("dryRun") ?? false)
     }
 
-    func finishTaskArchive(_ coordinator: TaskCoordinator, taskID: UUID, options: TaskArchiveOptions) async throws -> AppControlActionOutcome {
+    func finishTaskArchive(
+        _ coordinator: TaskCoordinator, taskID: UUID, options: TaskArchiveOptions, dryRun: Bool
+    ) async throws -> AppControlActionOutcome {
         do {
+            if dryRun {
+                let preview = try await coordinator.archivePreview(taskID: taskID, options: options)
+                return .init(didMutateState: false, result: [
+                    "taskID": .string(taskID.uuidString),
+                    "dryRun": .bool(true),
+                    "summary": .array(preview.summary.map(AutomationJSONValue.string)),
+                    "refusal": preview.refusal.map(AutomationJSONValue.string) ?? .null,
+                ])
+            }
             let record = try await coordinator.archive(taskID: taskID, options: options)
             return .init(didMutateState: true, result: Self.taskSnapshot(record))
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
+    struct TaskMergePreparation {
+        var coordinator: TaskCoordinator
+        var taskID: UUID
+        var expectedHead: String?
+        var caller: TaskCaller
+    }
+
+    /// The checks that need the request's context: which task, and who asks.
+    func prepareTaskMerge(args: [String: AutomationJSONValue]) throws -> TaskMergePreparation {
+        let coordinator = try requiredTaskCoordinator()
+        let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+        return TaskMergePreparation(
+            coordinator: coordinator, taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller()
+        )
+    }
+
+    /// Starts the merge and answers once the pull request script has, with
+    /// `merge` as `task.get` reports it. A refusal is an error with its reason.
+    func finishTaskMerge(_ preparation: TaskMergePreparation) async throws -> AppControlActionOutcome {
+        let coordinator = preparation.coordinator
+        do {
+            let record = try await coordinator.mergeAndAwaitAnswer(
+                taskID: preparation.taskID, expectedHead: preparation.expectedHead, caller: preparation.caller
+            )
+            var result = Self.taskSnapshot(record)
+            result["merge"] = coordinator.board?.mergeActivity(taskID: record.id).map { .string("\($0)") } ?? .null
+            return .init(didMutateState: true, result: result)
         } catch let error as TaskError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
@@ -355,6 +403,14 @@ extension AppControlExecutor {
     ) -> [String: AutomationJSONValue] {
         var snapshot = Self.taskSnapshot(record, stage: stage)
         snapshot["merge"] = coordinator.board?.mergeActivity(taskID: record.id).map { .string("\($0)") } ?? .null
+        // After a merge, the earliest time Toastty closes the task space and
+        // removes the worktree, so the task's agent can hand its work over.
+        if let taskSpaceID = record.taskSpaceWorkspaceID,
+           case .holdingCleanup(let until)? = coordinator.merges?.request(workspaceID: taskSpaceID)?.phase,
+           case .object(var cleanup)? = snapshot["cleanup"] {
+            cleanup["taskSpaceClosesAt"] = .string(ISO8601DateFormatter().string(from: until))
+            snapshot["cleanup"] = .object(cleanup)
+        }
         let status = coordinator.agentStatus(of: record)
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         snapshot["agentState"] = .object([
@@ -367,6 +423,13 @@ extension AppControlExecutor {
             "interruptedAtQuit": .bool(coordinator.wasInterruptedAtQuit(record)),
         ])
         snapshot["pullRequest"] = stage?.pullRequest.map { .object(Self.pullRequestSnapshot($0, record: record)) } ?? .null
+        // Why GitHub has not answered, while it has not.
+        snapshot["pullRequestLookupError"] = stage?.pullRequestLookupProblem.map { problem in
+            .object([
+                "problem": .string(Self.lookupProblemName(problem)),
+                "message": .string(TaskBoardPresentation.lookupProblemReason(problem)),
+            ])
+        } ?? .null
         if includeReply {
             snapshot["lastReply"] = coordinator.lastReply(of: record).map { reply in
                 .object([
@@ -396,6 +459,14 @@ extension AppControlExecutor {
         }
         snapshot["lastUserInputAt"] = date(coordinator.lastUserInputAt(of: record))
         return snapshot
+    }
+
+    private static func lookupProblemName(_ problem: PullRequestLookupProblem) -> String {
+        switch problem {
+        case .ghMissing: "ghMissing"
+        case .notSignedIn: "notSignedIn"
+        case .other: "other"
+        }
     }
 
     /// `pullRequest`: GitHub's last answer. `checks` is `pending`, `failing`
@@ -668,7 +739,8 @@ extension AppControlExecutor {
                 ($0, TaskStageSnapshot(
                     stage: item.stage,
                     finishedThroughChildren: item.finishedThroughChildren,
-                    pullRequest: item.pullRequest.flatMap { pullRequests?.answer(for: $0) }
+                    pullRequest: item.pullRequest.flatMap { pullRequests?.answer(for: $0) },
+                    pullRequestLookupProblem: item.pullRequestLookupProblem
                 ))
             }
         }, uniquingKeysWith: { first, _ in first })
@@ -701,6 +773,7 @@ extension AppControlExecutor {
                 result["reason"] = .string(reason)
             case .taskSpaceClosed: result["attention"] = .string("taskSpaceClosed")
             case .agentNeedsInput: result["attention"] = .string("agentNeedsInput")
+            case .startWaitsInTerminal: result["attention"] = .string("startWaitsInTerminal")
             case .awaitingReply: result["attention"] = .string("awaitingReply")
             case .agentError: result["attention"] = .string("agentError")
             case .review: result["attention"] = .string("review")
@@ -745,6 +818,8 @@ extension AppControlExecutor {
             "taskID": .string(record.id.uuidString),
             "parentTaskID": optional(record.parentTaskID?.uuidString),
             "title": .string(record.title),
+            // The task as an agent names it in text; the ID is for commands.
+            "markdownLink": .string(CoordinatorTaskLink.markdown(taskID: record.id, title: record.title)),
             "slug": .string(record.slug),
             "text": .string(record.text),
             "createdAt": .string(ISO8601DateFormatter().string(from: record.createdAt)),
@@ -891,4 +966,6 @@ struct TaskStageSnapshot: Equatable {
     var finishedThroughChildren = false
     /// GitHub's last answer about the task's pull request, if any.
     var pullRequest: TaskPullRequestState?
+    /// Why GitHub has not answered about it, while it has not.
+    var pullRequestLookupProblem: PullRequestLookupProblem?
 }

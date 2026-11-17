@@ -241,7 +241,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Mark a task space's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. An agent in the workspace starting new work clears the mark.",
+                summary: "Mark a task space's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected, and so is a task with an open pull request or a merge under way, which finishes through Merge or Archive. An agent in the workspace starting new work clears the mark.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClearDone:
@@ -663,7 +663,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Merge a task's pull request: what a merge skill calls once its checks pass. It records the user's acceptance and hands the merge to Toastty's merge owner, then returns. Toastty merges at the checkout's commit with GitHub's merge API (never auto-merge), waits for checks that still run, and after the agent's turn ends closes the task space, removes the worktree and deletes the branch. With head, it refuses unless the checkout is still at that commit. Without taskID, a task's agent merges its own task. Only an agent session in the task's task space, or in its parent task's task space, may call it; other callers use task.request-merge. Refused after the user cancelled the merge, for the agent turn that was checking it.",
+                summary: "Merge a task's pull request: what a merge skill calls once its checks pass. It records the user's acceptance, hands the merge to Toastty's merge owner, and waits up to 8 seconds for the pull request script's first answer: a refusal or a failure is an error with its reason; otherwise merge is waitingForChecks, cleaningUp (merged), or merging when the script has not answered yet. Toastty merges at the checkout's commit with GitHub's merge API (never auto-merge), waits for checks that still run, and after the agent's turn ends closes the task space, removes the worktree and deletes the branch. With head, it refuses unless the checkout is still at that commit. Without taskID, a task's agent merges its own task. Only an agent session in the task's task space, or in its parent task's task space, may call it; other callers use task.request-merge. Refused after the user cancelled the merge, for the agent turn that was checking it.",
                 selectors: [],
                 parameters: [.taskID(required: false), .taskHead(required: false)]
             )
@@ -722,13 +722,14 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Close a task without merging. Checks first and refuses with the reason: unsaved documents, a merge under way, uncommitted changes without discardChanges, or a detached worktree whose commit is on no remote branch or tag without deleteUnpushedCommits. Then, in the background and each step saved: closes the pull request only with closePullRequest, closes the task space, removes the worktree, and deletes the local branch when the remote has all its commits (or with deleteUnpushedCommits). The remote branch stays. Running it again continues a stopped archive.",
+                summary: "Close a task without merging. Checks first and refuses with the reason: unsaved documents, a merge under way, uncommitted changes without discardChanges, or a detached worktree whose commit is on no remote branch or tag without deleteUnpushedCommits. Then, in the background and each step saved: closes the pull request only with closePullRequest, closes the task space, removes the worktree, and deletes the local branch when the remote has all its commits (or with deleteUnpushedCommits). The remote branch stays. Running it again continues a stopped archive. With dryRun, changes nothing and returns summary, the lines that say what the archive would close, remove and keep, and refusal, the reason it would refuse, or null.",
                 selectors: [],
                 parameters: [
                     .taskID(required: true),
                     .init(name: "closePullRequest", summary: "true also closes the task's pull request on GitHub.", valueType: .boolean, required: false),
                     .init(name: "deleteUnpushedCommits", summary: "true deletes the local branch, or a detached worktree, even with commits no remote has.", valueType: .boolean, required: false),
                     .init(name: "discardChanges", summary: "true removes the worktree even with uncommitted changes.", valueType: .boolean, required: false),
+                    .init(name: "dryRun", summary: "true only reports what the archive would do, with the other options.", valueType: .boolean, required: false),
                 ]
             )
         case .taskRelease:
@@ -918,7 +919,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session, when it entered that state, interruptedAtQuit when a quit or a crash cut off its turn, and lastOutputAt), stage with changedAt, lastUserInputAt, pullRequest (GitHub's last answer: state, isDraft, mergeStateStatus, checks and checksPendingSince), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
+                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session, when it entered that state, interruptedAtQuit when a quit or a crash cut off its turn, and lastOutputAt), stage with changedAt, lastUserInputAt, cleanup (kind, stepsDone, problem, finishedAt, and taskSpaceClosesAt while a merged task space waits for its cleanup), pullRequest (GitHub's last answer: state, isDraft, mergeStateStatus, checks and checksPendingSince), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
                 selectors: [],
                 parameters: [.taskID(required: false)]
             )

@@ -16,6 +16,7 @@ enum GettingStartedPanelNativeAction: String, Equatable {
     case openAgentProfiles = "open-agent-profiles"
     case openSkillsManagement = "open-skills-management"
     case openShortcutReference = "open-shortcut-reference"
+    case openCoordinator = "open-coordinator"
 }
 
 enum GettingStartedPanelRequest: Equatable {
@@ -30,7 +31,7 @@ extension Notification.Name {
     static let toasttyManagedAgentSkillsProvisioned = Notification.Name(
         "dev.toastty.managed-agent-skills-provisioned"
     )
-    static let toasttyManagedCodexSkillsUnavailable = Notification.Name(
-        "dev.toastty.managed-codex-skills-unavailable"
+    static let toasttyManagedAgentSkillsUnavailable = Notification.Name(
+        "dev.toastty.managed-agent-skills-unavailable"
     )
 }

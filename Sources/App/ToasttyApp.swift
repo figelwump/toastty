@@ -177,6 +177,26 @@ enum ToasttyMenuActions {
         )
     }
 
+    static func openTasksConfigurationResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, ToasttyMenuActionError> {
+        openConfigurationFile(
+            prepareFile: {
+                try TasksConfigFile.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath
+                )
+            },
+            fileURL: TasksConfigFile.fileURL(homeDirectoryPath: homeDirectoryPath),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        )
+    }
+
     static func openToasttyConfigResult(
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
@@ -1161,7 +1181,8 @@ struct ToasttyApp: App {
                   currentExecutable == executablePath, codexProcessPathStore.currentPath() == processPath else { return [] }
             return models
         }
-        quickEntryController.reloadShortcut()
+        // The shortcut is read once the coordinator's question exists, below:
+        // until the user answers it, Toastty takes no key from other apps.
         self.quickEntryController = quickEntryController
         taskBoard.newTask = { [weak quickEntryController] in
             quickEntryController?.present(prefill: .empty)
@@ -1418,6 +1439,7 @@ struct ToasttyApp: App {
             launcher: agentLaunchService,
             directoryURL: runtimePaths.coordinatorDirectoryURL,
             queueFileURL: runtimePaths.coordinatorQueueFileURL,
+            workspaceFileURL: runtimePaths.coordinatorWorkspaceFileURL,
             configLoader: { try TasksConfigFile.load() },
             // The agent's terminal inherits this process's environment.
             trustFolder: { [weak agentCatalogStore] profileID, directory in
@@ -1441,7 +1463,7 @@ struct ToasttyApp: App {
             promptState: { [weak terminalRuntimeRegistry] panelID in
                 terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
             },
-            chatReadDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
         )
         // Task changes and the coordinator's timer wake it from here on.
         if let coordinatorController = taskCoordinator.coordinatorController {
@@ -1470,13 +1492,44 @@ struct ToasttyApp: App {
         quickEntryController.coordinatorController = taskCoordinator.coordinatorController
         // A run without saved preferences, such as an automation run, asks
         // nothing.
+        // The question is the What's new sheet, which also names tasks and
+        // quick entry, and asks before Toastty takes the quick entry key.
+        let whatsNewActions = WhatsNewSheetActions()
+        let userDefaults = persistUserSettings ? ToasttyAppDefaults.current : nil
         if let coordinatorController = taskCoordinator.coordinatorController {
             coordinatorController.startOffer = CoordinatorStartOffer(
                 controller: coordinatorController,
                 store: store,
-                defaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
-                coordinatorDirectoryURL: runtimePaths.coordinatorDirectoryURL
+                defaults: userDefaults,
+                coordinatorDirectoryURL: runtimePaths.coordinatorDirectoryURL,
+                present: WhatsNewSheet.presenter(actions: whatsNewActions)
             )
+        }
+        QuickEntryShortcutAnswer.connect(
+            quickEntryController,
+            to: taskCoordinator.coordinatorController?.startOffer,
+            defaults: userDefaults
+        ) { [weak quickEntryController] in
+            // As at launch, over the window in front. A window that cannot
+            // show it now leaves it for the next window that gets the
+            // keyboard.
+            guard let windowID = currentToasttyWorkspaceCommandWindowID(in: store) else { return }
+            quickEntryController?.presentLaunchMessageIfNeeded(
+                windowID: windowID,
+                present: Self.presentLaunchConfigurationWarning
+            )
+        }
+        quickEntryController.loadShortcutAtLaunch()
+        whatsNewActions.chooseDefaultShortcut = { allowed in
+            QuickEntryShortcutAnswer.save(allowed, in: userDefaults)
+        }
+        // The sheet blocks its window, so the file opens in the user's text
+        // editor, not in a panel behind the sheet. The key is read again
+        // when the sheet gets its answer.
+        whatsNewActions.openTasksConfiguration = { _ in
+            if case .failure(let error) = ToasttyMenuActions.openTasksConfigurationResult(openExternally: Self.openInTextEditor) {
+                TaskActions.presentFailure("Unable to Open tasks.toml", error.localizedDescription)
+            }
         }
         let remoteAccessService = RemoteAccessService(
             store: store,
@@ -1492,6 +1545,18 @@ struct ToasttyApp: App {
             quickEntryController: quickEntryController
         )
         self.remoteAccessService = remoteAccessService
+        whatsNewActions.facts = { [weak taskBoard, weak remoteAccessService] in
+            let quickEntry = (try? TasksConfigFile.load())?.quickEntry ?? TasksConfig.QuickEntry()
+            return WhatsNewFacts(
+                shortcut: quickEntry.isShortcutSet
+                    ? .written(label: quickEntry.shortcut?.symbolLabel)
+                    : .askForDefault(label: QuickEntryShortcut.default.symbolLabel),
+                allowsDefaultShortcut: QuickEntryShortcutAnswer.saved(in: userDefaults) ?? true,
+                hasTaskSpacesFromBefore: taskBoard?.items().contains { $0.record == nil } ?? false,
+                hasPhoneWithTaskActions: remoteAccessService?.devices.contains(where: \.canActOnTasks) ?? false,
+                oldExampleSkills: OldExampleSkills.included(in: userSkillCatalog.scan())
+            )
+        }
         // `task send --steer` types through the same path.
         taskSessions.conversationAccess = remoteAccessService
         // The coordinator types through its agent's conversation, the path
@@ -1504,15 +1569,8 @@ struct ToasttyApp: App {
                 defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
             )
             // Keyboard focus meant for the terminal under the chat goes to
-            // the chat's composer.
-            terminalRuntimeRegistry.coveringInputFocus = { [weak coordinatorController] panelID in
-                guard let coordinatorController, coordinatorController.coversTerminal(panelID: panelID) else {
-                    return nil
-                }
-                return { [weak coordinatorController] in
-                    coordinatorController?.chat?.focusComposer() ?? false
-                }
-            }
+            // the chat's composer, and Show Terminal gives it back.
+            coordinatorController.connectKeyboard(to: terminalRuntimeRegistry)
         }
         // The quick entry Agent picker offers the models the iPhone's
         // start-session screen offers.
@@ -1917,7 +1975,13 @@ struct ToasttyApp: App {
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
-                disableAnimations: disableAnimations
+                disableAnimations: disableAnimations,
+                presentLaunchMessages: { [quickEntryController] windowID in
+                    quickEntryController.presentLaunchMessageIfNeeded(
+                        windowID: windowID,
+                        present: Self.presentLaunchConfigurationWarning
+                    )
+                }
             )
             .frame(minWidth: 980, minHeight: 620)
             .onAppear {
@@ -2142,14 +2206,38 @@ struct ToasttyApp: App {
 
         guard failureMessages.isEmpty == false || warningMessages.isEmpty == false else { return }
 
+        makeConfigurationAlert(
+            title: failureMessages.isEmpty ? "Configuration Reload Warnings" : "Unable to Reload Configuration",
+            messages: failureMessages + warningMessages,
+            style: failureMessages.isEmpty ? .informational : .warning
+        ).runModal()
+    }
+
+    /// The alert that lists what reading the configuration found, after
+    /// Reload Configuration and at launch.
+    private static func makeConfigurationAlert(
+        title: String,
+        messages: [String],
+        style: NSAlert.Style
+    ) -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = failureMessages.isEmpty
-            ? "Configuration Reload Warnings"
-            : "Unable to Reload Configuration"
-        alert.informativeText = (failureMessages + warningMessages).joined(separator: "\n")
-        alert.alertStyle = failureMessages.isEmpty ? .informational : .warning
+        alert.messageText = title
+        alert.informativeText = messages.joined(separator: "\n")
+        alert.alertStyle = style
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        return alert
+    }
+
+    /// Shows what reading the configuration at launch found, as a sheet
+    /// over the window, so restored terminals and agents carry on while it
+    /// shows. Returns false when the window cannot show a sheet now.
+    @MainActor
+    static func presentLaunchConfigurationWarning(windowID: UUID, message: String) -> Bool {
+        guard let window = AgentLaunchUI.window(for: windowID), window.attachedSheet == nil else { return false }
+        let alert = makeConfigurationAlert(title: "Configuration Warnings", messages: [message], style: .informational)
+        alert.window.setAccessibilityIdentifier("configuration.launch-warnings")
+        alert.beginSheetModal(for: window)
+        return true
     }
 
     nonisolated private static func resolveCodexProcessPath(
@@ -2177,6 +2265,16 @@ struct ToasttyApp: App {
 
     @MainActor
     @discardableResult
+    /// Opens a file in the app macOS uses for it, or in TextEdit when no
+    /// app is set for its type, such as `.toml`.
+    private static func openInTextEditor(_ url: URL) -> Bool {
+        let workspace = NSWorkspace.shared
+        guard let editor = workspace.urlForApplication(toOpen: url)
+            ?? workspace.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") else { return false }
+        workspace.open([url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
+        return true
+    }
+
     private static func openAgentProfilesConfiguration(
         store: AppStore,
         preferredWindowID: UUID?

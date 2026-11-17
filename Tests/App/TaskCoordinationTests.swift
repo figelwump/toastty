@@ -351,9 +351,10 @@ struct TaskCoordinationTests {
         fixture.coordinator.evaluateWatches()
         let sent = try messages(fixture, to: watcher)
         #expect(sent.count == 3)
-        #expect(sent.contains("[Toastty watch \(done.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) was archived, so your watch until done can never fire."))
-        #expect(sent.contains { $0.hasPrefix("[Toastty watch \(idle.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) was archived,") })
-        #expect(sent.contains { $0.hasPrefix("[Toastty watch \(archived.id.uuidString)] Task \"\(target.title)\" (\(target.id.uuidString)) is archived.") })
+        let link = "[\(target.title)](toastty://task/\(target.id.uuidString))"
+        #expect(sent.contains("[Toastty watch \(done.id.uuidString)] Task \(link) was archived, so your watch until done can never fire."))
+        #expect(sent.contains { $0.hasPrefix("[Toastty watch \(idle.id.uuidString)] Task \(link) was archived,") })
+        #expect(sent.contains { $0.hasPrefix("[Toastty watch \(archived.id.uuidString)] Task \(link) is archived.") })
         #expect(throws: TaskError("Task \(target.title) was archived, so it can never be done.")) {
             try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .done, notifyTaskID: watcher.id)
         }

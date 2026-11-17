@@ -73,10 +73,11 @@ chat = load('coordinator_chat_check', 'remote-coordinator-chat-check.py')
 coordinator_check, steer = chat.coordinator_check, chat.steer
 require, wait_for = chat.require, chat.wait_for
 
-QUESTION = 'Start the coordinator?'
+# The What's new sheet asks the question (WhatsNewSheet.Words.title).
+QUESTION = 'New in Toastty: tasks'
 # How many times each Claude Code process beside the app saves.
 SIDE_WRITES = 12
-START, NOT_NOW = 'Start Coordinator', 'Not Now'
+START, NOT_NOW = 'whats-new.start', 'whats-new.not-now'
 TRUST_QUESTION = 'trust this folder'
 CLAUDE_CONFIG = Path.home() / '.claude.json'
 
@@ -275,6 +276,22 @@ class Run:
                 f'Claude asked whether to trust the coordinator\'s folder: {(seen or [self.screen()])[0][-600:]}')
         return current
 
+    def wait_for_no_notice(self, timeout=30):
+        """The chat shows no notice once Claude reported its start, and
+        returns the notices it showed before. The status says that the
+        agent runs as soon as Toastty starts Claude; the chat says that the
+        agent starts until Claude's first report, a moment later."""
+        seen = []
+
+        def no_notice():
+            text = self.ui.texts('coordinator.chat.notice')
+            if text and text not in seen:
+                seen.append(text)
+            return not text
+
+        wait_for('the chat to show no notice', no_notice, timeout=timeout, interval=0.5)
+        return seen
+
     def window_rect(self):
         """The part of the window that is on the screen, as "x,y,width,height", or None."""
         code, output = self.ui.run('window-frame', check=False)
@@ -346,7 +363,7 @@ def start(check, claude, host_environment):
         require(not run.directory.exists(), 'The coordinator\'s folder exists before the first launch')
         run.ui.run('activate')
         question = wait_for('the question at the first launch', run.question, timeout=30)
-        require(START in question and NOT_NOW in question and 'follows your tasks' in question,
+        require('Start Coordinator' in question and 'Not Now' in question and 'follows your tasks' in question,
                 f'The question does not say what the coordinator does: {question}')
         require(not run.status()['exists'], 'A coordinator exists before the answer')
         run.capture('question')
@@ -370,7 +387,7 @@ def start(check, claude, host_environment):
             sides.append(dict(folder=folder, names=names, process=process, startedAt=time.time()))
 
         # 2. Start Coordinator opens it, and Claude asks nothing about the folder.
-        run.ui.run('click-label', START)
+        run.ui.run('click', START)
         wait_for('the question to go', lambda: not run.question(), timeout=30)
         opened = wait_for('the coordinator', lambda: (s := run.status())['exists'] and s, timeout=60)
         wait_for('the chat', lambda: run.ui.exists('coordinator.chat') and run.ui.exists('coordinator.chat.composer'), timeout=60)
@@ -381,12 +398,12 @@ def start(check, claude, host_environment):
         if run.ui.has_label('Dismiss'):
             run.ui.run('click-label', 'Dismiss', check=False)
             time.sleep(0.5)
-        require(not run.ui.exists('coordinator.chat.notice'), f'The chat shows a notice: {run.ui.texts()[-400:]}')
+        start_notices = run.wait_for_no_notice()
         run.capture('started')
         terminal = run.show_terminal_for_a_picture('terminal-at-first-prompt')
         require(TRUST_QUESTION not in terminal, f'Claude asked about the folder: {terminal[-400:]}')
         step('Start opened the coordinator and Claude asked nothing about the folder', opened=opened, prompt=prompt,
-             terminal=terminal[-700:])
+             startNotices=start_notices, terminal=terminal[-700:])
 
         # 3. The first message is answered.
         run.ui.send('Reply with exactly this one word and nothing else: FIRST-ONE')
@@ -430,7 +447,7 @@ def not_now(check, claude, _host_environment):
         run.ui.run('activate')
         wait_for('the question at the first launch', run.question, timeout=30)
         run.capture('question')
-        run.ui.run('click-label', NOT_NOW)
+        run.ui.run('click', NOT_NOW)
         wait_for('the question to go', lambda: not run.question(), timeout=30)
         time.sleep(2)
         require(not run.status()['exists'] and not run.directory.exists(), f'Not Now started something: {run.status()}')
@@ -556,10 +573,9 @@ def notice(check, claude, _host_environment, expect_notice=True):
         time.sleep(1)
         run.capture('terminal')
         require(TRUST_QUESTION in run.screen(), f'The terminal does not show Claude\'s question: {run.screen()[-400:]}')
-        # The terminal has the keyboard. Real keys choose "Yes, I trust this
-        # folder": which choice Claude selects first differs by version.
-        run.instance.request('app_control.run_action', dict(id='workspace.focus-panel', args=dict(panelID=run.status()['panelID'])))
-        time.sleep(0.5)
+        # Show Terminal gave the terminal the keyboard: nothing else moves it
+        # there, as a user does nothing else. Real keys choose "Yes, I trust
+        # this folder": which choice Claude selects first differs by version.
         run.ui.run('activate')
         choices = [line.strip() for line in run.screen().splitlines() if 'trust this folder' in line or 'No, exit' in line]
         selected = next((index for index, line in enumerate(choices) if line.startswith('\u276f')), None)

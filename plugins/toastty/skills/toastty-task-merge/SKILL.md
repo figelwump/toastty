@@ -11,12 +11,25 @@ what the user cannot see at a glance, resolve routine Git merge conflicts, then
 either merge or report what blocks the merge. Toastty does the merge itself:
 `toastty task merge` merges at the commit you checked, waits for GitHub's checks
 if they still run, never turns on
-auto-merge, and closes the task space and removes its worktree a day after the
-merge, once your turn has ended. Do not merge with `gh`, close this workspace,
-or remove the worktree.
+auto-merge, and closes the task space and removes its worktree 24 hours after
+the merge, at the first check when no agent turn runs. `toastty task get`
+reports that time as `cleanup.taskSpaceClosesAt`. Do not merge with `gh`,
+close this workspace, or remove the worktree.
 
 Run the commands below with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
 this skill must run inside a Toastty-managed agent session, and stop.
+
+## Sandbox permissions
+
+Each Toastty CLI command connects to the app's local socket, and `git fetch`,
+`git push` and `gh` need the network. In a sandboxed runtime, request the
+runtime's per-command escalation for these commands on the first attempt; do
+not try them sandboxed first. In Codex, use
+`sandbox_permissions="require_escalated"` with a short justification that the
+command needs Toastty's local socket or the network. Limit each request to the
+exact command. Do not request a broad approval prefix, change sandbox
+settings, or widen Toastty's workspace scope. If escalation is unavailable or
+denied, report the restriction and stop without merging.
 
 ## Check the pull request
 
@@ -25,6 +38,10 @@ request with
 `gh pr view --json number,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeStateStatus,statusCheckRollup,reviewDecision,body`.
 Stop and report, without merging, when:
 
+- `gh` is missing or not signed in (`gh auth status` fails). Ask the user to
+  install it or run `gh auth login`;
+- the pull request is not on GitHub. Toastty merges only GitHub pull
+  requests: the user merges it on its host;
 - there is no pull request, or it is closed or already merged;
 - `git status --porcelain` shows uncommitted or untracked changes;
 - after `git fetch`, local `HEAD` differs from `headRefOid` before you start
@@ -99,11 +116,11 @@ do not bypass them to complete a merge.
 Before you merge, check for work in this task's scope that goes on after the
 merge, such as a rollout or a later step that your answers or the description
 name. It does not block the merge. But Toastty removes the worktree after the
-merge, with its ignored files, such as a plan under `artifacts/`. When such
-work exists, make sure that the description has a `## Remaining after merge`
-section with what remains, its plan and its open questions. If the section is
-missing, add it with `gh pr edit --body-file` and keep the rest of the
-description.
+merge, with its ignored files, such as a plan in an ignored `artifacts/`
+folder. When such work exists, make sure that the description has a
+`## Remaining after merge` section with what remains, its plan and its open
+questions. If the section is missing, add it with `gh pr edit --body-file` and
+keep the rest of the description.
 
 If nothing blocks, run:
 
@@ -111,15 +128,31 @@ If nothing blocks, run:
 "$TOASTTY_CLI_PATH" task merge --head <headRefOid>
 ```
 
-It returns at once. Report the pull request, the commit, and whether Toastty
-merges it now or after the checks that are still running. Then end your turn
-and run nothing else: Toastty cleans up later, after this turn ends.
+It waits a few seconds for Toastty's first answer, then reports it:
+
+- **The command fails:** the error gives the reason. When Toastty refused the
+  merge, for example over an untracked file in the worktree, nothing changed.
+  Otherwise read the pull request with `gh pr view` to learn whether it
+  merged. Report the reason and end your turn; do not say that Toastty
+  accepted the merge.
+- **`merge` is `waitingForChecks`:** Toastty merges when the checks that
+  still run pass.
+- **`merge` is `cleaningUp`, or `mergedAt` is set:** the pull request merged.
+- **`merge` is `merging`:** Toastty has not answered yet. Read the task again
+  with `"$TOASTTY_CLI_PATH" --json task get` before you report.
+
+Report the pull request, the commit, and that answer. Then end your turn and
+run nothing else: Toastty cleans up later, after this turn ends. If the user
+asks about the merge later, read `mergedAt`, `merge` and `mergeFailure` with
+`task get` before you answer: a merge that waited for checks can still stop.
 
 If something blocks, report each blocker with its link and end your turn. Do
 not run `task merge`. The task then waits for the user in the Tasks view, who can
 fix the blocker and press Merge again, or choose Merge Without Checks.
 
 If `task merge` refuses because the user cancelled the merge, do not retry it.
+Do not run `task merge` again for any other refusal in the same turn either:
+report it, so that the user can fix the cause.
 
 ## Coordinating tasks
 
@@ -128,5 +161,6 @@ with `"$TOASTTY_CLI_PATH" task list --parent <this-task-id>`. For each child,
 check it as above from its own pull request and worktree, then run
 `"$TOASTTY_CLI_PATH" task merge <child-task-id> --head <sha>`. Wait for one
 child's merge before you merge a child that builds on it, for example with
-`"$TOASTTY_CLI_PATH" task watch <child-task-id> --until merged` where that
-command exists.
+`"$TOASTTY_CLI_PATH" task watch <child-task-id> --until merged`.
+In your report, name each child by its title, as its `markdownLink` from
+`task list` gives it, not by its ID.

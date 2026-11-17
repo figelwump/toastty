@@ -11,7 +11,12 @@ struct CoordinatorPanelModeToggle: View {
     var body: some View {
         let showsTerminal = store.coordinatorShowsTerminal
         Button {
-            controller.showsTerminal = showsTerminal == false
+            if showsTerminal {
+                // The chat's field takes the keyboard when the chat shows.
+                controller.showsTerminal = false
+            } else {
+                controller.showTerminal()
+            }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: showsTerminal ? "bubble.left.and.text.bubble.right" : "terminal")

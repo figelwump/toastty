@@ -1128,7 +1128,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
       toastty [--json] [--socket-path <path>] task needs-reply [<task-id>] [--question <text>]
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
-      toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
+      toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>]
       toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>]
       toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer]
@@ -2538,7 +2538,7 @@ public enum ToasttyCLI {
             let parsed = try parseCommandArguments(
                 remaining,
                 valueOptions: [],
-                flagOptions: ["--close-pr", "--delete-unpushed", "--discard-changes"]
+                flagOptions: ["--close-pr", "--delete-unpushed", "--discard-changes", "--dry-run"]
             )
             guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil else {
                 throw ToasttyCLIError.usage("task archive requires a task ID\n\n\(usage)")
@@ -2548,6 +2548,7 @@ public enum ToasttyCLI {
                 "closePullRequest": .bool(parsed.hasFlag("--close-pr")),
                 "deleteUnpushedCommits": .bool(parsed.hasFlag("--delete-unpushed")),
                 "discardChanges": .bool(parsed.hasFlag("--discard-changes")),
+                "dryRun": .bool(parsed.hasFlag("--dry-run")),
             ]))
 
         case "release":

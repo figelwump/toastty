@@ -2397,6 +2397,155 @@ final class SidebarViewTests: XCTestCase {
         try attachSidebarRender(root, name: "buckets-5-needs-you-segment")
     }
 
+    /// The report behind this: merged child tasks whose task spaces
+    /// Toastty keeps open for a day listed as full rows under their parent,
+    /// in the parent's bucket, so done work filled Needs you and Running.
+    /// They now fold into one "N/M merged" line after the parent's open
+    /// children, and do not count as Idle. A merged task with no parent
+    /// still lists in Idle until its task space closes.
+    func testMergedChildTasksFoldUnderTheirParent() throws {
+        let now = Date()
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "toastty")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var mergeRequests: [UUID: WorkspaceMergeRequest] = [:]
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        func task(
+            _ title: String, parent: UUID? = nil, pullRequest: Int? = nil, question: String? = nil,
+            merged: Bool = false, taskSpaceOpen: Bool = true
+        ) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, setup: .started,
+                parentTaskID: parent, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            let link = pullRequest.map { "https://github.com/example/repo/pull/\($0)" }
+            if merged {
+                record.mergedAt = now.addingTimeInterval(-600)
+                record.pullRequestURL = link
+            }
+            records.append(record)
+            guard taskSpaceOpen else { return taskID }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID,
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: project.id
+            )
+            workspace.taskID = taskID
+            if merged {
+                // The merge marks the task space done; Toastty holds it
+                // open for a day.
+                workspace.doneAt = now.addingTimeInterval(-600)
+                mergeRequests[workspaceID] = WorkspaceMergeRequest(
+                    pullRequest: WorkspacePullRequestLink(annotationURL: link)!, repoPath: "/repo",
+                    phase: .holdingCleanup(until: now.addingTimeInterval(20 * 3_600))
+                )
+            }
+            workspaces.append(workspace)
+            panelByTitle[title] = (workspaceID, panelID)
+            return taskID
+        }
+        let parentID = task("iOS parity", question: "Test build ready?")
+        _ = task("iPhone fixes", parent: parentID, pullRequest: 379, merged: true)
+        _ = task("iPhone fold", parent: parentID, pullRequest: 407)
+        _ = task("iPhone tab groups", parent: parentID, pullRequest: 385, merged: true)
+        _ = task("iPhone keyboard", parent: parentID, pullRequest: 390, merged: true)
+        _ = task("Older iPhone fix", parent: parentID, pullRequest: 360, merged: true, taskSpaceOpen: false)
+        _ = task("Docs gaps", pullRequest: 398, merged: true)
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.setWorkspaceMergeRequests(mergeRequests)
+        let reports: [(String, SessionStatusKind)] = [
+            ("iOS parity", .idle), ("iPhone fixes", .idle), ("iPhone fold", .working),
+            ("iPhone tab groups", .idle), ("iPhone keyboard", .working), ("Docs gaps", .idle),
+        ]
+        for (index, (title, kind)) in reports.enumerated() {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID, windowID: windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo",
+                at: now.addingTimeInterval(-60)
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .working ? "Working" : "Waiting"),
+                at: now.addingTimeInterval(Double(index) - 50)
+            )
+        }
+        let root = harness.hostingView
+
+        /// Group headers, rows and the fold line, top to bottom.
+        func layout() throws -> [String] {
+            pumpMainRunLoop(duration: 0.6)
+            root.layoutSubtreeIfNeeded()
+            pumpMainRunLoop(duration: 0.4)
+            root.layoutSubtreeIfNeeded()
+            func frame(_ prefix: String) -> CGRect? {
+                semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
+            }
+            var frames: [(String, CGRect)] = []
+            for header in ["Needs you", "Ready to review", "Running", "Idle"] {
+                if let found = frame("\(header), ") { frames.append((header.uppercased(), found)) }
+            }
+            for title in panelByTitle.keys {
+                if let found = frame("\(title), task space") { frames.append((title, found)) }
+            }
+            if let found = frame("4/5 merged, ") { frames.append(("[4/5 merged]", found)) }
+            let top = try semanticTextFrame(in: root, text: "Tasks", shape: "the Tasks row")
+            let below = frames.first.map { $0.1.minY > top.minY } ?? true
+            return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
+        }
+
+        // Collapsed: the parent, its open children, then one line for the
+        // two quiet merged children whose task spaces are still open. A
+        // merged child whose agent still works stays a row. The merged task
+        // without a parent stays in Idle.
+        let collapsed = try layout()
+        try writeSidebarEvidence(root, name: "merged-children-1-collapsed")
+        try attachSidebarRender(root, name: "merged-children-1-collapsed")
+        XCTAssertEqual(collapsed, [
+            "NEEDS YOU", "iOS parity", "iPhone fold", "iPhone keyboard", "[4/5 merged]", "IDLE", "Docs gaps",
+        ])
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("4/5 merged, 2 finished tasks, collapsed"), "\(textValues)")
+        // Folded children do not count as Idle; the lone merged task does.
+        XCTAssertTrue(textValues.contains("1 needs you, 2 running, 1 idle"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Idle, 1"), "\(textValues)")
+
+        // Expanded: the merged children list under the line, then a link
+        // to the one merged child whose task space already closed.
+        try clickSemanticText(prefix: "4/5 merged, 2 finished tasks, collapsed", in: root)
+        let expanded = try layout()
+        try writeSidebarEvidence(root, name: "merged-children-2-expanded")
+        try attachSidebarRender(root, name: "merged-children-2-expanded")
+        XCTAssertEqual(expanded, [
+            "NEEDS YOU", "iOS parity", "iPhone fold", "iPhone keyboard", "[4/5 merged]", "iPhone fixes", "iPhone tab groups",
+            "IDLE", "Docs gaps",
+        ])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("4/5 merged, 2 finished tasks, expanded"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Show 1 more merged task in the Tasks view"), "\(textValues)")
+
+        // The Needs you segment lists only the parent, as before.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        XCTAssertEqual(try layout(), ["NEEDS YOU", "iOS parity"])
+    }
+
     /// Plain sessions list in the same buckets as task spaces. A card
     /// collapses to its name line and keeps its counts, and the Needs you
     /// segment still lists what waits in it.

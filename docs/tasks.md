@@ -231,14 +231,16 @@ when you update:
   them off for one phone, open **Remote Access** in Toastty's settings and
   turn off **Task actions** for that device under **Paired Devices**. See
   [Acting on tasks](remote-access.md#acting-on-tasks).
-- **`Option+Shift+T` is taken in every app.** It opens quick entry, so other
-  apps, a terminal that uses Option as Meta among them, no longer get it.
-  Change it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`, or turn
-  it off with `shortcut = "none"`, then choose **Toastty > Reload
-  Configuration**. See [Quick entry](#quick-entry).
+- **Toastty asks before it takes `Option+Shift+T` in every app.** The key
+  opens quick entry, so other apps, a terminal that uses Option as Meta among
+  them, no longer get it. The What's new sheet at the first launch after the
+  update has **Use ⌥⇧T in every app**, on by default; clear it to leave the
+  key to other apps. Change the key later with `[quick_entry] shortcut` in
+  `~/.toastty/tasks.toml`, or turn it off with `shortcut = "none"`, then
+  choose **Toastty > Reload Configuration**. See [Quick entry](#quick-entry).
 - **Toastty offers the coordinator once.** At the first launch after the
-  update, it asks whether to start the coordinator. **Not Now** is saved; open
-  it later from **Agent > Open Coordinator**. See
+  update, the What's new sheet asks whether to start the coordinator.
+  **Not Now** is saved; open it later from **Agent > Open Coordinator**. See
   [Then start the coordinator](#then-start-the-coordinator).
 - **The sidebar groups by state.** Each project card lists its sessions and
   task spaces under **Needs you**, **Ready to review**, **Running** and
@@ -259,6 +261,12 @@ panel. Write the task, attach what helps, and press `Cmd+Return` or Create
 Task. Toastty saves the task at once and shows "Task created".
 Focus goes back to the app you were in.
 
+The key works in every app, so other apps and Toastty's own terminals no
+longer get it. Toastty asks first: the What's new sheet at the first launch
+has **Use ⌥⇧T in every app**, on by default. Until you answer, and after you
+clear it, **File ▸ New Task…** opens the panel. A `shortcut` in
+[`tasks.toml`](#toasttytaskstoml) wins over that answer.
+
 While [the coordinator](#the-coordinator) exists, the same panel sends your
 text to it, and the coordinator makes the task; see
 [Quick entry with the coordinator](#quick-entry-with-the-coordinator). The
@@ -278,9 +286,12 @@ rest of this section describes the panel with no coordinator, and what
   in the main window; a selected task space counts as its project. Toastty
   keeps the last one in `~/.toastty/task-last-workspace.json`. Agent starts
   on the agent, model and effort of your last successful quick entry task,
-  or the `[defaults]` preset before the first task. Cancelled and failed
+  or the `[defaults]` preset before the first task. With no agent in
+  `[defaults]`, it starts on the first agent in the list. Cancelled and failed
   tasks do not change this choice. When a pill has no value, Create Task
   stays off and the panel says `Pick a workspace with ⌘1` or `Pick an agent with ⌘2`.
+  With no agent to offer, it says `Install or configure an agent`, and the
+  Agent list says how.
 - **Pick from the keyboard:** `Cmd+1` opens the Workspace list and `Cmd+2`
   the Agent list. Type to filter, move with the arrow keys, and press
   `Return` to choose; the caret goes back to the task text. `Esc` closes
@@ -292,7 +303,7 @@ rest of this section describes the panel with no coordinator, and what
   your Frequent presets first. A preset is eligible after its first successful
   task; recent use counts more, with a 14-day half-life, and the
   top five are shown. Until then the list shows the `[defaults]` preset from
-  `tasks.toml`. Every task from quick entry counts its preset, including one
+  `tasks.toml`, or the first agent when it names none. Every task from quick entry counts its preset, including one
   the panel started on. Toastty keeps the counts in
   `~/.toastty/task-preset-usage.json`.
   The last-used preset can differ from the top Frequent preset. If it is
@@ -345,8 +356,9 @@ Other ways to open the same panel:
 Change the shortcut with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`,
 or turn it off with `shortcut = "none"`. Toastty reads it at launch and on
 Reload Configuration. The shortcut needs no Accessibility permission. If
-another app already uses it, Reload Configuration says so, and the shortcut
-still works inside Toastty from the File menu. Smoke runs and test hosts do
+Toastty cannot register it, a message says so at launch or on Reload
+Configuration, and the shortcut still works inside Toastty from the File
+menu. Smoke runs and test hosts do
 not register it.
 
 Toastty Mobile has the same form: **+** on its Home screen and content shared
@@ -374,7 +386,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
 | `--root <dir>` | The project's directory, instead of `--workspace`. Toastty uses the open workspace on it, or opens the project once every other check passed, so a request that fails opens nothing. |
 | `--external-ref <id>`, `--external-url <url>` | The issue or report the task came from, such as `github:owner/repo#123`, and its http or https page. The Tasks view shows it as **Source**. |
-| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. `[defaults]` in `tasks.toml` fills what you leave out. |
+| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. With no profile there, as on a fresh install, the installed built-in agents are offered: Claude Code, Codex, Cursor, Grok Build and Pi. `[defaults]` in `tasks.toml` fills what you leave out; with no agent there, the task takes the first offered agent that is installed. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
 | `--title`, `--slug` | The task's title and the task space's name. They start from the first line of the text. An explicit title stays fixed. Otherwise, the task uses its agent session's title when available. The slug stays fixed. |
 | `--request-id <id>` | The caller's key for this request. A repeat from the same agent session, or from the CLI outside one, with the same key returns the first task instead of making another. |
@@ -382,11 +394,11 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--base <ref>`, `--branch-prefix <prefix>` | With `--start-work`: what the worktree starts from, and the first part of its branch name. |
 | `--fork` | From a Claude Code or Codex session: start the agent as a fork of this session's conversation. See [Fork the conversation into new tasks](#fork-the-conversation-into-new-tasks). |
 
-A value you set is never changed. A request with an agent that is not in
-`agents.toml`, a model or effort that agent does not take, a file that cannot
+A value you set is never changed. A request with an agent that is not
+offered (see above), a model or effort that agent does not take, a file that cannot
 be read, or a first message longer than 64 KB fails at once and saves nothing.
-So does a request that leaves out the agent when `[defaults]` names none and
-triage is off. A file given as a symbolic link is copied as the file it points to.
+So does a request that leaves out the agent when no installed agent can take
+a task. A file given as a symbolic link is copied as the file it points to.
 
 An agent that splits its work names the agent, its settings and a first
 prompt:
@@ -455,7 +467,9 @@ When an agent creates a task, the new task space joins that agent's workspace
 scope if the agent is scoped, and the agent session is recorded as the one that
 spawned it. A task
 created from an agent in another task's task space records that task as its
-parent (`parentTaskID`).
+parent (`parentTaskID`). The new task's first message names the parent as a
+link, `[title](toastty://task/<parent-id>)`, and says how to report to it with
+`toastty task send <parent-id>`.
 
 ## Work in a git worktree
 
@@ -561,7 +575,8 @@ The calling session keeps running: Toastty does not close it or type into it.
 - The fork's first message starts with the start skill, if one is set. Then it
   names the task, its ID and task space, and the worktree and branch, if any.
   It tells the fork that it owns only this task, and how to report back: with
-  `toastty task send <parent-task-id>` when the caller is a task's agent, else
+  `toastty task send <parent-task-id>`, after the parent task as a link, when
+  the caller is a task's agent, else
   with `terminal.send-text` to the caller's terminal. The prompt, the task text
   and the attached files follow.
 - `task create` returns at once. You cannot use `--wait` with `--fork`, because
@@ -596,8 +611,16 @@ worktree.
   `reset: true`. `--include-reply` adds each task's `lastReply`.
 - Both commands report how long the task has been in its state; see
   [How long a task has been in its state](#how-long-a-task-has-been-in-its-state).
+- Each task in `task get` and `task list` has `markdownLink`, the task as
+  `[title](toastty://task/<task-id>)`. An agent names another task in text
+  with it, and uses the ID only in commands. The shipped task skills say so.
 - `toastty task send <task-id> "<message>"` types the message into the task's
-  agent and submits it, whatever the agent does. A busy agent queues it as typed
+  agent and submits it, whatever the agent does. Its first line names the
+  sender as `coordinator send` does, such as
+  `[Toastty] From task [title](toastty://task/<id>): not from the user.`, so
+  the agent that reads it can name the task that sent it. A message from the
+  coordinator's own session starts with
+  `[Toastty] From the coordinator: not from the user.` A busy agent queues it as typed
   input, and the Return key can answer a permission prompt that is on screen. It
   fails when the task has no running agent, and says so when the message was
   typed but may not have been submitted; check that terminal before you send it
@@ -697,6 +720,7 @@ with your policy.
 | `agentState.lastOutputAt` | When the agent's transcript last changed. |
 | `lastUserInputAt` | When you last worked in the task space. |
 | `pullRequest` | GitHub's last answer about the task's pull request: `state`, `isDraft`, `mergeStateStatus`, `checks` and `checksPendingSince`. |
+| `pullRequestLookupError` | Why GitHub has not answered about the pull request, while it has not: `problem` is `ghMissing`, `notSignedIn` or `other`, and `message` says what to do. `null` otherwise. |
 
 - **Stage.** A stage that lasts under 3 seconds does not move
   `stage.changedAt`: when an agent's status flickers between two tool calls
@@ -781,9 +805,10 @@ name in its first answer. It runs in its own workspace, named **Coordinator**, w
 [What the coordinator does](#what-the-coordinator-does), and your rules for
 it are in [the policy file](#the-policy-file).
 
-- **At a first launch**, when no coordinator was ever opened, Toastty asks
-  once whether to start it. **Start Coordinator** does what Open Coordinator
-  does. **Not Now** is saved, and Toastty does not ask again. The question
+- **At a first launch**, when no coordinator was ever opened, Toastty shows
+  the What's new sheet once. It names tasks, quick entry and the coordinator,
+  and asks whether to start the coordinator. **Start Coordinator** does what
+  Open Coordinator does. **Not Now** is saved, and Toastty does not ask again. The question
   shows over the window that has the keyboard, and the rest of the app stays
   in use. An automation run asks nothing.
 - **Open Coordinator**, in the **Agent** menu and the command palette, creates
@@ -887,6 +912,7 @@ text:
 | --- | --- |
 | `[Toastty] Wake: …` | Toastty: a [digest](#when-toastty-wakes-the-coordinator). |
 | `[Toastty] From task [title](toastty://task/<id>): not from the user.` | `coordinator send` from a session in that task's space. |
+| `[Toastty] From the coordinator: not from the user.` | `coordinator send` or `task send` from the coordinator's own agent session. |
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
@@ -1482,7 +1508,14 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   instruction files, all files together (`project_doc_max_bytes` in its
   configuration). So when `[coordinator] agent` names a Codex profile,
   Toastty starts the agent, and resumes it after a relaunch, with
-  `project_doc_max_bytes` set to 128 KiB for that command only. Your
+  `project_doc_max_bytes` set to 128 KiB for that command only. When the
+  profile's arguments cannot take it, as for a shell helper or an attached
+  `-c`, the coordinator's chat says that Codex may read only part of the
+  instructions and how to fix it: a `codex` profile that runs `codex`
+  itself, or `project_doc_max_bytes` in Codex's own configuration. When
+  the helper or that configuration already sets it, choose Don't Show
+  Again: Toastty then hides the notice until the profile's arguments
+  change. Your
   `~/.codex/config.toml` and the task agents do not change. The
   instruction file stays under 128 KiB, and the reference files hold the
   rules that the coordinator reads only when it needs them. An agent
@@ -1706,7 +1739,7 @@ changes no stage. Most have a fixed limit of 30 minutes:
 
 | Alert | When | Digest text |
 | --- | --- | --- |
-| `silent` | The task's agent is `busy` and its `lastOutputAt` is 30 minutes old or more. | `busy, no output for 30 minutes` |
+| `silent` | The task's agent is `busy`, and 30 minutes or more have passed since the later of its `lastOutputAt` and the time it became `busy`. Without a `lastOutputAt`, no alert. | `busy, no output for 30 minutes` |
 | `checksFailing` | The checks of the task's open pull request fail, in GitHub's last answer. | `pull request checks failing` |
 | `checksSlow` | The checks have been pending for 30 minutes on the same commit (`checksPendingSince`). | `pull request checks pending for 30 minutes` |
 | `interrupted` | A quit or a crash cut off the agent's turn (`interruptedAtQuit`), and the restored agent is `idle` at its prompt. It clears when the agent starts its next turn. | `interrupted by the quit` |
@@ -1780,9 +1813,18 @@ toastty coordinator wake --clear --quiet
   that Toastty's last digest started, while no other message has come into
   that turn. Otherwise the command fails and changes nothing, not even the
   time. So a turn that answers you is never quiet.
+- The last `coordinator wake` call of a turn decides. If the coordinator
+  marks the turn quiet and then runs `coordinator wake` again without
+  `--quiet` in the same turn, Toastty removes the mark: the chat does not fold
+  the turn, and its end alerts as usual. A call in a later turn does not
+  change the mark of a turn that has ended. After a relaunch in the middle of
+  a quiet turn, a later call without `--quiet` cannot remove the mark.
 - The chat folds a quiet turn under Toastty's line for its digest. A click
   on the line opens the digest, the coordinator's work and its answer. A
-  question or an approval prompt in the turn stays visible.
+  question or an approval prompt in the turn stays visible. The
+  coordinator's chat on a paired iPhone folds it the same way, and its New
+  line does not count it (see
+  [The Coordinator tab](remote-access.md#the-coordinator-tab)).
 - The end of a quiet turn does not mark the coordinator unread and sends no
   notification to the Mac and no push to a phone. If you send a message into
   the turn after the mark, or type in the coordinator's terminal, its end
@@ -1923,6 +1965,7 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, or an agent asked for input or stopped with an error |
 | Starting | setup, or triage when it is on, is still running, or it is moving into a worktree. Lists show it with Running |
 | Running | an agent that works or waits on its sub-agents; and a merge under way: "Merging…" while its agent checks or Toastty merges, "Waiting for checks" while GitHub's checks run |
+| Needs you | an agent started with the task's first prompt has not reported that it began it, 60 seconds after its launch: "Claude may be waiting in its terminal". It most likely waits for an answer there, such as a login or a folder-trust question. It clears when the agent reports, usually after your answer |
 | Needs you | its agent ended a turn with a question and marked it with `task needs-reply`: "Asks: <question>". Reading the turn does not clear it. It clears when the task's agent starts its next turn, usually your answer, or when the agent runs `task ready-for-review` |
 | Needs you | its pull request is open and not a draft while no agent works on it, or its agent marked work without a pull request ready with `task ready-for-review` |
 | Running | its agent ended its turn to wait on another task through `task watch`, shown as "waiting for <task>" |
@@ -1948,15 +1991,21 @@ you decide.
 The pull request comes from the task space's `github-pr` annotation. Toastty
 asks `gh` about open tasks at launch, when an agent's turn ends in the task
 space, and when the Tasks view opens. It checks for updates every 15 seconds:
-pending checks, unknown readiness and failed requests are retried after 15
-seconds; settled results are refreshed after two minutes. It copies the link
+pending checks and unknown readiness are retried after 15 seconds; settled
+results are refreshed after two minutes. Failed requests are retried after 15
+seconds, then 30, then 60, then every two minutes until GitHub answers. It copies the link
 and the merge onto the task record. The Merge button can keep the previous
 readiness for up to 30 seconds while GitHub returns unknown readiness or
 requests fail, only for the same head commit. A new commit never inherits the
 previous commit's readiness. Task status and alerts still keep the last
 reported checks for the same commit when a reply omits check fields; that
-reply does not prove that checks cleared. Without `gh`, a linked pull request
-with no agent working counts as waiting for review. A merge made on GitHub
+reply does not prove that checks cleared. Without an answer from GitHub, a
+linked pull request with no agent working counts as waiting for review. When
+the request failed, the task's status line and the Tasks view's Stage row say
+why and what to do: "⚠ install gh to check the PR" when `gh` is not installed
+or not on your login shell's `PATH`, "⚠ run gh auth login to check the PR"
+when `gh` is not signed in, else "⚠ PR check failed" with `gh`'s message.
+`task get` reports it as `pullRequestLookupError`. A merge made on GitHub
 also cleans up the task space when that is safe; see
 [Merge a task](#merge-a-task).
 
@@ -2015,7 +2064,15 @@ review. The choice is saved for each window.
   A parent without a pull request moves to To ship or Done when its
   children finish, so the whole family leaves Idle.
   A task space whose task is To ship or Done leaves its card unless an agent
-  in it is working or waiting for you. After the buckets, a To ship line with
+  in it is working or waiting for you, or Toastty still keeps it open after
+  its merge. Under its parent task, a kept task space with nothing working or
+  waiting folds into one line after the parent's open children, such as
+  **13/15 merged**, which takes the place of the parent's merged count. It
+  starts collapsed; click it to show the merged tasks as rows, then **Show N
+  more** when some merged children's task spaces already closed, which opens
+  the parent in the Tasks view. A folded task does not count in a bucket.
+  Without a listed parent, a kept task space lists in Idle until it closes.
+  After the buckets, a To ship line with
   the purple To ship mark lists the project's other To ship tasks, with
   **Release** when the project can release (see [Release](#release)) and the
   Done count on its right. It starts collapsed; click it to expand it in
@@ -2134,7 +2191,10 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 2. The skill checks what you cannot see at a glance: unresolved review threads,
    merge prerequisites in the description, tasks that must land first, and CI.
    If something blocks, it says why and ends its turn, and the task is back in
-   Needs you. Otherwise it runs `toastty task merge --head <commit>`.
+   Needs you. Otherwise it runs `toastty task merge --head <commit>`, which
+   waits for Toastty's first answer. If Toastty refuses the merge, for example
+   because the worktree has an untracked file, the command fails with the
+   reason and the agent reports it.
 3. Toastty merges at exactly that commit with GitHub's merge API. If checks
    still run, the task shows "Waiting for checks" and Toastty merges when they
    pass. It never turns on auto-merge, so commits pushed later are not merged.
@@ -2172,7 +2232,8 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 4. Toastty records the merge on the task first, and the task moves to Done
    (or To ship). The task space stays open for 24 hours, so you can still read
    the conversation, the Scratchpad and the pull request; the task's status
-   line says when it closes. Then, at a check every 30 seconds while the agent
+   line says when it closes, and `toastty task get` reports that time as
+   `cleanup.taskSpaceClosesAt`. Then, at a check every 30 seconds while the agent
    is not in a turn and no window shows the task space, Toastty closes the
    task space, removes the worktree and deletes the branch, the same way as the
    Merge button does for any other workspace. **Close Task Space** in the
@@ -2197,9 +2258,16 @@ once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
 checks: a `task merge` from the agent's turn that was checking is then refused.
 
 A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
-its task space, after the same 24-hour wait, when no agent there is working and
-the worktree is clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
+its task space after the same 24-hour wait, also when the agent was working
+when GitHub merged it: the cleanup waits for its turn to end, and a new turn
+or a link to another pull request keeps the task space open. The worktree
+must be clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
+When the task's worktree is on another branch than the pull request, as when
+a task updates an existing pull request, the cleanup cannot match a branch to
+delete and stops with both branch names. **Clean Up** then removes the
+worktree, and its local branch when the remote has every commit, with
+Archive's checks. Both branches stay on GitHub, and the task stays Done.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
 space must have one exact PR link, remain marked done, and have no unsaved
@@ -2228,6 +2296,11 @@ do, then:
 - deletes the local branch when every commit on it is on the remote, and keeps
   it otherwise unless you choose to delete the unpushed commits. The remote
   branch always stays, so the pull request can be reopened.
+
+A merged task can be archived too, for example while its cleanup waits, but
+it then shows as Archived, not Done. `toastty task archive <task-id> --dry-run`
+reports what an archive would close, remove and keep, and why it would refuse,
+and changes nothing.
 
 A task space with unsaved documents, or a merge under way, is not archived.
 Each step is saved as it finishes; if one stops, the task shows in Needs you
@@ -2392,9 +2465,17 @@ release_prompt = "Wait for my approval before any production change."  # optiona
 - With only `merge_prompt` set, Merge sends that prompt as written, with no
   skill line. Each key is looked up on its own, so a `merge_skill` in
   `[defaults]` also comes before a project's own `merge_prompt`.
-- Toastty does not check that the skill is installed. Name a skill the task's
-  agent can load: one in `~/.toastty/skills/`, the repository's
+- Toastty does not check that a skill you name is installed. Name a skill the
+  task's agent can load: one in `~/.toastty/skills/`, the repository's
   `.agents/skills/`, or one Toastty ships.
+- Some launches do not give the agent the skills that Toastty ships: Toastty
+  could not prepare Claude's skills plugin or Codex's profile, the profile
+  runs a wrapper script, or pi runs with `--no-skills`. When Toastty knows
+  this, the first message and Merge's message also give the path of the
+  shipped skill's `SKILL.md` in the app, and the first message keeps the
+  `coordinator send` and `task needs-reply` lines. For Claude and Codex, a
+  banner over the window also says that the agent launched without
+  Toastty's skills.
 
 ## `~/.toastty/tasks.toml`
 
@@ -2426,7 +2507,12 @@ effort = "high"
 runs your `claude` profile with that profile's own model and effort.
 `[defaults]` does not apply to it. Toastty reads the table each time it starts
 the coordinator's agent, and a resumed conversation keeps what it started
-with. With a Codex profile, Toastty also raises `project_doc_max_bytes` for
+with. Before a start, Toastty checks that the agent's command is installed.
+If it is not, the start stops with an error that names the agent and this
+setting, and makes no Coordinator workspace. When Claude Code or Codex is
+installed, the error offers to start with it, with its own model and
+effort. That choice applies to that start only: Toastty does not change
+`tasks.toml`. With a Codex profile, Toastty also raises `project_doc_max_bytes` for
 the coordinator, so that Codex reads all of its instructions (see
 [The coordinator's folder](#the-coordinators-folder)).
 
@@ -2434,6 +2520,9 @@ the coordinator, so that Codex reads all of its instructions (see
 [quick_entry]
 shortcut = "opt+shift+t"   # the default; "none" turns it off
 ```
+
+A `shortcut` written here wins over the answer to **Use ⌥⇧T in every app** in
+the What's new sheet.
 
 A shortcut joins modifiers and one key with `+`. Modifiers are `cmd`,
 `ctrl`, `opt` (or `alt`) and `shift`. The key is a letter, a digit,
@@ -2530,7 +2619,8 @@ code block, after other text, or from `claude -p --output-format json`:
 or the root of one of `closed_workspaces`. A project that is not open is only
 a suggestion: the task waits in Needs you with it chosen first. The workspace
 must be open and the agent an installed profile; a value that fails a check,
-or a triage that fails or times out, leaves that field to `[defaults]`, and
+or a triage that fails or times out, leaves that field to `[defaults]`, or to
+the first installed agent when `[defaults]` names none, and
 `task get` reports what happened in `triageNote`. The agent receives triage's
 first prompt, then your text exactly as written, then the attached files. For
 a task that waits for a workspace, the Tasks view also offers **Retry Triage**.

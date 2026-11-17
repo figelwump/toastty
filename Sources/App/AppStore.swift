@@ -2151,10 +2151,19 @@ final class AppStore: ObservableObject {
             return nil
         }
 
+        let listsOnlyNeedsYou = sidebarListsOnlyNeedsYou(
+            windowID: selection.windowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
         let livePanelIDs = sessionRuntimeStore?.activePanelIDs(
             matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
                 .union(Self.nextUnreadOrWorkingFallbackStatusKinds)
         ) ?? []
+        // Needs you lists a running row under Running, also when its last
+        // turn is unread.
+        let hiddenRunningPanelIDs = listsOnlyNeedsYou
+            ? sessionRuntimeStore.map(Self.runningPanelIDsHiddenFromNeedsYou) ?? []
+            : []
         let taskStages = (sessionRuntimeStore?.taskCoordinator?.board?.items() ?? [])
             .reduce(into: [UUID: TaskStage]()) { stages, item in
                 if let workspaceID = item.taskSpaceWorkspaceID {
@@ -2171,6 +2180,7 @@ final class AppStore: ObservableObject {
         )
         if let unreadTarget = navigationOrder.all.first(where: { target in
             guard allowing?(target) != false,
+                  !hiddenRunningPanelIDs.contains(target.panelID),
                   let workspace = state.workspacesByID[target.workspaceID],
                   workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
                 return false
@@ -2222,6 +2232,7 @@ final class AppStore: ObservableObject {
                     selectedTabID: selectedTabID,
                     focusedPanelID: selection.workspace.focusedPanelID
                 ),
+                listsOnlyNeedsYou: listsOnlyNeedsYou,
                 sessionRuntimeStore: sessionRuntimeStore
             )
             let match = entries.lazy.compactMap { entry in
@@ -2241,6 +2252,7 @@ final class AppStore: ObservableObject {
         let activeCycleResolution = nextUnreadOrActiveCycleTarget(
             selection: selection,
             selectedTabID: selectedTabID,
+            listsOnlyNeedsYou: listsOnlyNeedsYou,
             sessionRuntimeStore: sessionRuntimeStore,
             updatingCycleState: updatingCycleState
         )
@@ -2255,9 +2267,13 @@ final class AppStore: ObservableObject {
         return activeCycleResolution.target
     }
 
+    /// `listsOnlyNeedsYou` comes from the window the command runs in, also
+    /// when the saved cycle started in another window, so a cycle built for
+    /// the other segment no longer matches and restarts.
     private func nextUnreadOrActiveCycleTarget(
         selection: WindowCommandSelection,
         selectedTabID: UUID,
+        listsOnlyNeedsYou: Bool,
         sessionRuntimeStore: SessionRuntimeStore,
         updatingCycleState: Bool
     ) -> (target: PanelNavigationTarget?, resolution: String, cycleResetReason: String?) {
@@ -2277,6 +2293,7 @@ final class AppStore: ObservableObject {
                expectedCurrentTarget.panelID == selection.workspace.focusedPanelID {
                 let rebuiltEntries = buildNextActiveCycleEntries(
                     anchor: cycleState.anchor,
+                    listsOnlyNeedsYou: listsOnlyNeedsYou,
                     sessionRuntimeStore: sessionRuntimeStore
                 )
                 if rebuiltEntries == cycleState.entries {
@@ -2308,6 +2325,7 @@ final class AppStore: ObservableObject {
 
         let entries = buildNextActiveCycleEntries(
             anchor: currentAnchor,
+            listsOnlyNeedsYou: listsOnlyNeedsYou,
             sessionRuntimeStore: sessionRuntimeStore
         )
         guard let firstEntry = entries.first,
@@ -2327,15 +2345,18 @@ final class AppStore: ObservableObject {
 
     private func buildNextActiveCycleEntries(
         anchor: NextActiveCycleAnchor,
+        listsOnlyNeedsYou: Bool,
         sessionRuntimeStore: SessionRuntimeStore
     ) -> [NextActiveCycleEntry] {
         let actionRequiredPanelIDs = sessionRuntimeStore.activePanelIDs(
             matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
         )
-        let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
+        // The Needs you segment lists neither working sessions nor a flag
+        // for later, so the jump does not visit them either.
+        let workingPanelIDs = listsOnlyNeedsYou ? [] : sessionRuntimeStore.activePanelIDs(
             matching: Self.nextUnreadOrWorkingFallbackStatusKinds
         )
-        let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
+        let laterPanelIDs = listsOnlyNeedsYou ? [] : sessionRuntimeStore.activeLaterPanelIDs()
         let navigationOrder = SidebarPanelNavigationOrder(
             state: state,
             sessionRegistry: sessionRuntimeStore.sessionRegistry,
@@ -2427,6 +2448,23 @@ final class AppStore: ObservableObject {
         }
 
         return entries
+    }
+
+    /// Jump to Next Active follows the sidebar segment of the window it runs
+    /// in. The segments show only with the task system; without it the
+    /// sidebar lists everything.
+    private func sidebarListsOnlyNeedsYou(windowID: UUID, sessionRuntimeStore: SessionRuntimeStore?) -> Bool {
+        sessionRuntimeStore?.taskCoordinator != nil
+            && state.window(id: windowID)?.sidebarSegment == .needsYou
+    }
+
+    /// Panels whose sidebar row is Running, which the Needs you segment does
+    /// not list, also when the panel is unread: a working session or a
+    /// working program. A working session that lists there because a child
+    /// session needs the user is not a target: the child's own panel is.
+    private static func runningPanelIDsHiddenFromNeedsYou(_ sessionRuntimeStore: SessionRuntimeStore) -> Set<UUID> {
+        sessionRuntimeStore.activePanelIDs(matching: nextUnreadOrWorkingFallbackStatusKinds)
+            .union(sessionRuntimeStore.workingProgramPanelIDs())
     }
 
     private func panelNavigationTarget(for panelID: UUID) -> PanelNavigationTarget? {

@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import CoreState
 import Foundation
@@ -19,6 +20,15 @@ protocol CoordinatorAgentLaunching: AnyObject {
         model: String?,
         reasoningEffort: String?
     ) async throws -> AgentLaunchResult
+
+    /// What the profile would run, resolved as a launch resolves it,
+    /// without launching anything. Throws when no profile has the ID.
+    func profileExecutableState(profileID: String) throws -> AgentProfileExecutableState
+
+    /// The argv of a Codex profile whose arguments cannot take the raised
+    /// `project_doc_max_bytes` that the coordinator's start and resume
+    /// add. `nil` when they can, or when the profile is not Codex's.
+    func codexArgvLackingProjectDocMaxBytes(profileID: String) -> [String]?
 }
 
 extension AgentLaunchService: CoordinatorAgentLaunching {
@@ -47,12 +57,25 @@ extension AgentLaunchService: CoordinatorAgentLaunching {
 
 struct CoordinatorError: LocalizedError, Equatable {
     let message: String
+    /// An installed agent that can start the coordinator in place of a
+    /// configured one that is not installed.
+    let alternativeAgent: CoordinatorAgentChoice?
 
-    init(_ message: String) {
+    init(_ message: String, alternativeAgent: CoordinatorAgentChoice? = nil) {
         self.message = message
+        self.alternativeAgent = alternativeAgent
     }
 
     var errorDescription: String? { message }
+}
+
+/// An installed agent profile that a person can choose to start the
+/// coordinator with, in place of the configured one.
+struct CoordinatorAgentChoice: Equatable {
+    var profileID: String
+    var displayName: String
+    /// The configured profile that is not installed.
+    var configuredProfileID: String
 }
 
 /// Owns the coordinator: one long-lived agent session in its own pinned
@@ -132,6 +155,15 @@ final class CoordinatorController: ObservableObject {
     /// gets its own start.
     @Published private var startingWorkspaceID: UUID?
     @Published private var failedStart: FailedStart?
+    /// For one session of the coordinator, checked as it starts or
+    /// resumes: the argv of its Codex profile when that argv could not take
+    /// the raised `project_doc_max_bytes`.
+    @Published private var instructionsLimitCheck: (sessionID: String, argvLackingLimit: [String]?)?
+    /// The profile argv whose notice the user chose not to see again: the
+    /// limit may be set in the helper it runs or in Codex's config.
+    @Published private var instructionsNoticeHiddenArgv: [String]?
+    private let defaults: UserDefaults?
+    static let instructionsNoticeHiddenArgvKey = "toastty.coordinator.instructionsNoticeHiddenArgv"
     /// The agent session that Toastty last started for the coordinator in
     /// this run. Its conversation is new, unlike one that a relaunch
     /// resumes.
@@ -150,6 +182,11 @@ final class CoordinatorController: ObservableObject {
     let attachments: CoordinatorAttachments
     /// Where the user's waiting messages are saved, or `nil` to save none.
     private let queueFileURL: URL?
+    /// Where the coordinator's workspace and terminal are saved, or `nil`
+    /// to save nothing; see `CoordinatorWorkspaceRecord`.
+    private let workspaceFileURL: URL?
+    /// What the file at `workspaceFileURL` holds.
+    private var savedWorkspaceRecord: CoordinatorWorkspaceRecord?
     private let configLoader: () throws -> TasksConfig
     /// Tells the agent of the given profile that the coordinator's folder
     /// is trusted, before that agent starts there. See `ClaudeFolderTrust`.
@@ -260,6 +297,37 @@ final class CoordinatorController: ObservableObject {
         supportsChat && chat != nil && showsTerminal == false && location?.panelID == panelID
     }
 
+    /// The app's terminals, which give the coordinator's terminal the
+    /// keyboard. Set by `connectKeyboard(to:)`.
+    private weak var terminals: TerminalRuntimeRegistry?
+
+    /// Connects the keyboard of the chat and the terminal under it:
+    /// keyboard focus meant for the covered terminal goes to the chat's
+    /// field, and Show Terminal gives the terminal the keyboard.
+    func connectKeyboard(to terminals: TerminalRuntimeRegistry) {
+        self.terminals = terminals
+        terminals.coveringInputFocus = { [weak self] panelID in
+            guard let self, self.coversTerminal(panelID: panelID) else { return nil }
+            return { [weak self] in self?.chat?.focusComposer() ?? false }
+        }
+    }
+
+    /// Show Terminal, in the chat's notice or in the panel's header: the
+    /// panel shows the terminal in place of the chat, and the terminal
+    /// takes the keyboard, so that the user can answer a login or a
+    /// folder-trust question with the keys at once. The chat's field had
+    /// the keyboard and leaves the window with the chat. A terminal that
+    /// shows does not take the keyboard from that field by itself (see
+    /// `TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus`), so
+    /// without this the keys reach nothing until the user clicks.
+    func showTerminal() {
+        showsTerminal = true
+        guard let location, let panelID = location.panelID else { return }
+        // policy.md beside it can have the focus.
+        _ = store.send(.focusPanel(workspaceID: location.workspaceID, panelID: panelID))
+        terminals?.takeKeyboardFocus(panelID: panelID)
+    }
+
     /// Reads and sends to agent conversations inside the app. Set once the
     /// app has it. Without it every agent gets its text through
     /// `CoordinatorSendGate`.
@@ -311,27 +379,34 @@ final class CoordinatorController: ObservableObject {
         directoryURL: URL,
         folder: CoordinatorFolder? = nil,
         queueFileURL: URL? = nil,
+        workspaceFileURL: URL? = nil,
         configLoader: @escaping () throws -> TasksConfig,
         trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in },
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
         terminalReadinessTimeout: Duration = .seconds(10),
         now: @escaping () -> Date = Date.init,
-        chatReadDefaults: UserDefaults? = nil
+        defaults: UserDefaults? = nil
     ) {
-        chatReadThrough = CoordinatorChatReadThrough(defaults: chatReadDefaults)
+        chatReadThrough = CoordinatorChatReadThrough(defaults: defaults)
+        self.defaults = defaults
+        instructionsNoticeHiddenArgv = defaults?.stringArray(forKey: Self.instructionsNoticeHiddenArgvKey)
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
         self.launcher = launcher
         self.folder = folder ?? CoordinatorFolder(directoryURL: directoryURL)
         self.attachments = CoordinatorAttachments(coordinatorDirectoryURL: directoryURL)
         self.queueFileURL = queueFileURL
+        self.workspaceFileURL = workspaceFileURL
         self.configLoader = configLoader
         self.trustFolder = trustFolder
         self.deliverText = deliverText
         self.promptState = promptState
         self.terminalReadinessTimeout = terminalReadinessTimeout
         self.now = now
+        // First, so that a coordinator whose mark the layout lost comes
+        // back as one the layout restored.
+        restoreWorkspaceMark()
         // A session that starts, ends a turn or stops can open the prompt
         // for the next queued entry. `sink` runs before the new value is
         // stored, so the queue is looked at on the next main-actor turn.
@@ -340,7 +415,10 @@ final class CoordinatorController: ObservableObject {
         // that a new turn follows at once.
         sessionObserver = sessionRuntimeStore.$sessionRegistry
             .sink { [weak self] registry in
-                MainActor.assumeIsolated { self?.noteTurnEnd(in: registry) }
+                MainActor.assumeIsolated {
+                    self?.noteTurnEnd(in: registry)
+                    self?.checkInstructionsLimit(in: registry)
+                }
                 Task { @MainActor [weak self] in self?.drain() }
             }
         storeObserverToken = store.addActionAppliedObserver { [weak self] _, previousState, nextState in
@@ -354,6 +432,7 @@ final class CoordinatorController: ObservableObject {
             }
             if previousState.coordinator != nextState.coordinator {
                 self?.syncConversationSubscription()
+                self?.saveWorkspaceRecord()
             }
             let workspaceID = nextState.coordinatorWorkspaceID
             guard previousState.coordinatorWorkspaceID != workspaceID else { return }
@@ -375,6 +454,42 @@ final class CoordinatorController: ObservableObject {
             now: now()
         )
         refreshFolderOfARestoredCoordinator()
+        saveWorkspaceRecord()
+    }
+
+    /// Puts the coordinator's mark back on its workspace when the layout has
+    /// none: a Toastty that does not know the coordinator, such as v0.9.2,
+    /// saved the layout last. The reducer checks that the saved workspace
+    /// can still hold the mark.
+    private func restoreWorkspaceMark() {
+        guard let workspaceFileURL else { return }
+        savedWorkspaceRecord = CoordinatorWorkspaceRecord.load(from: workspaceFileURL)
+        guard store.state.coordinator == nil, let saved = savedWorkspaceRecord,
+              store.send(.restoreCoordinatorWorkspace(workspaceID: saved.workspaceID, panelID: saved.panelID)) else { return }
+        ToasttyLog.warning("Restored the coordinator's mark, which the saved layout had lost", category: .tasks, metadata: [
+            "workspace_id": saved.workspaceID.uuidString,
+            "panel_id": store.state.coordinator?.panelID?.uuidString ?? "",
+        ])
+    }
+
+    /// Saves where the coordinator lives now, or removes the file when
+    /// there is no coordinator.
+    private func saveWorkspaceRecord() {
+        guard let workspaceFileURL else { return }
+        let record = location.map { CoordinatorWorkspaceRecord(workspaceID: $0.workspaceID, panelID: $0.panelID) }
+        guard record != savedWorkspaceRecord else { return }
+        do {
+            if let record {
+                try record.save(to: workspaceFileURL)
+            } else {
+                try CoordinatorWorkspaceRecord.remove(at: workspaceFileURL)
+            }
+            savedWorkspaceRecord = record
+        } catch {
+            ToasttyLog.warning("Could not save where the coordinator lives", category: .tasks, metadata: [
+                "path": workspaceFileURL.path, "error": error.localizedDescription,
+            ])
+        }
     }
 
     /// After a relaunch, Toastty resumes the agent of a restored coordinator
@@ -429,6 +544,36 @@ final class CoordinatorController: ObservableObject {
     /// The agent session in the coordinator's terminal, while one runs.
     var session: SessionRecord? {
         location?.panelID.flatMap { sessionRuntimeStore.sessionRegistry.activeSession(for: $0) }
+    }
+
+    /// The running Codex coordinator may read only Codex's default share
+    /// of its instructions: its profile's arguments could not take the
+    /// raised `project_doc_max_bytes` (`CoordinatorFolder.codexProjectDocMaxBytes`).
+    /// False for that argv once the user chose not to see this again.
+    var mayReadPartOfItsInstructions: Bool {
+        guard let session, let check = instructionsLimitCheck, check.sessionID == session.sessionID,
+              let argv = check.argvLackingLimit else { return false }
+        return argv != instructionsNoticeHiddenArgv
+    }
+
+    /// Hides the notice for the current profile argv, also after a
+    /// relaunch. A profile with another argv is checked again.
+    func hideInstructionsNotice() {
+        guard let argv = instructionsLimitCheck?.argvLackingLimit else { return }
+        instructionsNoticeHiddenArgv = argv
+        defaults?.set(argv, forKey: Self.instructionsNoticeHiddenArgvKey)
+    }
+
+    /// Checks a session of the coordinator once, as it starts or resumes,
+    /// so the result is the profile that the launch used, not one that the
+    /// user edits later.
+    private func checkInstructionsLimit(in registry: SessionRegistry) {
+        guard let panelID = location?.panelID, let record = registry.activeSession(for: panelID),
+              instructionsLimitCheck?.sessionID != record.sessionID else { return }
+        let argv = record.agent == .codex
+            ? launcher?.codexArgvLackingProjectDocMaxBytes(profileID: record.agent.rawValue)
+            : nil
+        instructionsLimitCheck = (record.sessionID, argv)
     }
 
     /// `nil` when there is no coordinator.
@@ -608,8 +753,8 @@ final class CoordinatorController: ObservableObject {
     }
 
     /// Opens the coordinator's workspace, where the chat shows in full.
-    /// `showingTerminal` shows its terminal in place of the chat, for an
-    /// answer that only the terminal takes.
+    /// `showingTerminal` shows its terminal in place of the chat, with the
+    /// keyboard, for an answer that only the terminal takes.
     func openFullView(showingTerminal: Bool = false) {
         guard let location else { return }
         if showingTerminal {
@@ -620,6 +765,9 @@ final class CoordinatorController: ObservableObject {
             workspaceID: location.workspaceID,
             preferringUnreadSessionPanelIn: sessionRuntimeStore
         )
+        if showingTerminal {
+            showTerminal()
+        }
     }
 
     /// A click on a task's chip in the chat: the task's space opens, and
@@ -642,8 +790,12 @@ final class CoordinatorController: ObservableObject {
     /// `select` is set, and starts the agent when none runs. A terminal that
     /// is busy with something else is left alone: the call then fails, and
     /// Restart replaces that terminal.
+    ///
+    /// `agent` starts this coordinator's agent with that profile, with its
+    /// own model and effort, in place of `[coordinator]` in tasks.toml.
     @discardableResult
-    func open(windowID requestedWindowID: UUID? = nil, select: Bool = true) async throws -> StartResult {
+    func open(windowID requestedWindowID: UUID? = nil, select: Bool = true, agent: String? = nil) async throws -> StartResult {
+        try checkAgentBeforeCreatingWorkspace(agent)
         let createdWorkspace = try createWorkspaceIfNeeded(windowID: requestedWindowID)
         guard let location else {
             throw CoordinatorError("Toastty could not create the coordinator's workspace.")
@@ -662,7 +814,7 @@ final class CoordinatorController: ObservableObject {
         guard isStarting == false, awaitsRestore(location) == false else {
             return StartResult(location: location, createdWorkspace: createdWorkspace, startedAgent: false, sessionID: nil)
         }
-        let sessionID = try await startAgent(location, replacingBusyTerminal: false)
+        let sessionID = try await startAgent(location, replacingBusyTerminal: false, agent: agent)
         return StartResult(
             location: self.location ?? location,
             createdWorkspace: createdWorkspace,
@@ -676,15 +828,16 @@ final class CoordinatorController: ObservableObject {
     /// once it runs there the old terminal closes. A start that fails leaves
     /// the old agent alone. A terminal at its shell prompt is used again.
     @discardableResult
-    func restart(windowID requestedWindowID: UUID? = nil) async throws -> StartResult {
+    func restart(windowID requestedWindowID: UUID? = nil, agent: String? = nil) async throws -> StartResult {
         guard isStarting == false else {
             throw CoordinatorError("The coordinator is already starting.")
         }
+        try checkAgentBeforeCreatingWorkspace(agent)
         let createdWorkspace = try createWorkspaceIfNeeded(windowID: requestedWindowID)
         guard let location else {
             throw CoordinatorError("Toastty could not create the coordinator's workspace.")
         }
-        let sessionID = try await startAgent(location, replacingBusyTerminal: true)
+        let sessionID = try await startAgent(location, replacingBusyTerminal: true, agent: agent)
         return StartResult(
             location: self.location ?? location,
             createdWorkspace: createdWorkspace,
@@ -707,22 +860,97 @@ final class CoordinatorController: ObservableObject {
         }
     }
 
-    /// Runs a person's command, and shows why when it did not work.
+    /// Shows why the coordinator's agent did not start, and offers an
+    /// installed agent in its place, on the window of the command when it
+    /// has one. Returns true when the person chose to start with that agent.
+    typealias AgentChoicePresenter = @MainActor (
+        _ title: String,
+        _ message: String,
+        _ choice: CoordinatorAgentChoice,
+        _ windowID: UUID?
+    ) async -> Bool
+
+    /// Runs a person's command, and shows why when it did not work. When
+    /// the configured agent is not installed and another one is, the
+    /// failure offers to start with that one. The task's value is whether
+    /// the coordinator's agent runs, or was already running, at the end.
+    @discardableResult
     func perform(
         _ command: UserCommand,
         windowID: UUID? = nil,
-        presentFailure: @escaping @MainActor (String, String) -> Void = TaskActions.presentFailure
-    ) {
+        presentFailure: @escaping @MainActor (String, String) -> Void = TaskActions.presentFailure,
+        offerAgent: @escaping AgentChoicePresenter = CoordinatorController.presentAgentChoice
+    ) -> Task<Bool, Never> {
         Task { @MainActor in
             do {
-                switch command {
-                case .open: try await open(windowID: windowID)
-                case .restart: try await restart(windowID: windowID)
+                try await run(command, windowID: windowID, agent: nil)
+                return true
+            } catch let error as CoordinatorError {
+                guard let choice = error.alternativeAgent else {
+                    presentFailure(command.failureTitle, error.message)
+                    return false
+                }
+                guard await offerAgent(
+                    command.failureTitle,
+                    error.message + "\n\n" + Self.agentChoiceText(choice),
+                    choice,
+                    windowID
+                ) else { return false }
+                do {
+                    try await run(command, windowID: windowID, agent: choice.profileID)
+                    return true
+                } catch {
+                    presentFailure(command.failureTitle, error.localizedDescription)
+                    return false
                 }
             } catch {
                 presentFailure(command.failureTitle, error.localizedDescription)
+                return false
             }
         }
+    }
+
+    private func run(_ command: UserCommand, windowID: UUID?, agent: String?) async throws {
+        switch command {
+        case .open: try await open(windowID: windowID, agent: agent)
+        case .restart: try await restart(windowID: windowID, agent: agent)
+        }
+    }
+
+    /// What the alert adds below the failure when it offers `choice`.
+    static func agentChoiceText(_ choice: CoordinatorAgentChoice) -> String {
+        "\(startButtonTitle(choice)) starts the coordinator with \(choice.displayName) now, with its own model and effort. "
+            + "Toastty does not change tasks.toml, so a later start tries \(choice.configuredProfileID) again."
+    }
+
+    static func startButtonTitle(_ choice: CoordinatorAgentChoice) -> String {
+        "Start with \(choice.displayName)"
+    }
+
+    /// The failure as an alert with a button that starts with `choice`. It
+    /// is a sheet on the window, so that the main actor, and with it
+    /// Toastty's socket, keeps working while the alert waits for an answer;
+    /// an app-modal alert would hold the main actor in this task.
+    static func presentAgentChoice(
+        title: String,
+        message: String,
+        choice: CoordinatorAgentChoice,
+        windowID: UUID?
+    ) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addConfiguredButton(withTitle: startButtonTitle(choice), behavior: .defaultAction)
+        alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+        alert.window.setAccessibilityIdentifier("coordinator.agent-not-installed")
+        guard let window = windowID.flatMap(AgentLaunchUI.window(for:)) ?? NSApp.keyWindow ?? NSApp.mainWindow else {
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+        let response = await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+        return response == .alertFirstButtonReturn
     }
 
     // MARK: - Policy
@@ -760,6 +988,80 @@ final class CoordinatorController: ObservableObject {
         ) else {
             throw CoordinatorError("Toastty could not open \(path).")
         }
+    }
+
+    /// A start that would make the coordinator's workspace checks its agent
+    /// first, so that an agent that is not installed leaves no workspace
+    /// and no folder behind. A start in a workspace that exists checks it
+    /// in `launchAgent`, and the workspace shows why it failed.
+    private func checkAgentBeforeCreatingWorkspace(_ agent: String?) throws {
+        guard store.state.coordinator == nil else { return }
+        _ = try startConfiguration(agent: agent)
+    }
+
+    /// The agent, model and effort that a start uses, once Toastty found
+    /// the agent's command. `agent` replaces `[coordinator]`, with the
+    /// profile's own model and effort: a model set for one agent does not
+    /// fit another.
+    private func startConfiguration(agent: String?) throws -> TasksConfig.Coordinator {
+        guard let launcher else {
+            throw CoordinatorError("The agent launcher is not available.")
+        }
+        var config: TasksConfig.Coordinator
+        do {
+            config = try configLoader().coordinator
+        } catch {
+            throw CoordinatorError(error.localizedDescription)
+        }
+        if let agent, agent != config.agent {
+            config = TasksConfig.Coordinator(agent: agent)
+        }
+        try Self.checkInstalled(config.agent, launcher: launcher, choosingFrom: Self.agentChoices)
+        return config
+    }
+
+    /// The agents that a start offers in place of one that is not
+    /// installed, in this order: the two that Toastty sets up for the
+    /// coordinator, Claude's folder trust and Codex's instruction size.
+    static let agentChoices = [AgentKind.claude.rawValue, AgentKind.codex.rawValue]
+
+    /// Throws, with the first installed agent of `choices` as the
+    /// alternative, when the profile's command is not installed or no
+    /// profile has the ID. A command that Toastty cannot check, such as a
+    /// relative path, is left to the launch.
+    static func checkInstalled(
+        _ profileID: String,
+        launcher: any CoordinatorAgentLaunching,
+        choosingFrom choices: [String]
+    ) throws {
+        var message: String
+        do {
+            let state = try launcher.profileExecutableState(profileID: profileID)
+            switch state.failure {
+            case nil, .explicitPathNotAbsolute?:
+                return
+            case .commandNotFound?:
+                message = "The coordinator's agent \(profileID) is not installed: Toastty did not find the \(state.command.isEmpty ? profileID : state.command) command. Install it, or set"
+            case .explicitPathNotExecutable?:
+                message = "The coordinator's agent \(profileID) is not installed: \(state.command) is not a program that can run. Install it, or set"
+            }
+        } catch {
+            message = "The coordinator's agent \(profileID) is not an agent profile. Set"
+        }
+        let alternative = choices.lazy
+            .filter { $0 != profileID }
+            .compactMap { choice -> CoordinatorAgentChoice? in
+                guard let state = try? launcher.profileExecutableState(profileID: choice),
+                      state.executablePath != nil else { return nil }
+                return CoordinatorAgentChoice(profileID: choice, displayName: state.displayName, configuredProfileID: profileID)
+            }
+            .first
+        message += " agent under [coordinator] in ~/.toastty/tasks.toml to an agent profile that is installed"
+        if let alternative {
+            message += ", such as \(alternative.profileID)"
+        }
+        message += "."
+        throw CoordinatorError(message, alternativeAgent: alternative)
     }
 
     private func createWorkspaceIfNeeded(windowID requestedWindowID: UUID?) throws -> Bool {
@@ -804,7 +1106,7 @@ final class CoordinatorController: ObservableObject {
         repositoryPreparation = nil
     }
 
-    private func startAgent(_ location: CoordinatorLocation, replacingBusyTerminal: Bool) async throws -> String {
+    private func startAgent(_ location: CoordinatorLocation, replacingBusyTerminal: Bool, agent: String?) async throws -> String {
         let workspaceID = location.workspaceID
         startingWorkspaceID = workspaceID
         failedStart = nil
@@ -813,26 +1115,22 @@ final class CoordinatorController: ObservableObject {
             drain()
         }
         do {
-            return try await launchAgent(location, replacingBusyTerminal: replacingBusyTerminal)
+            return try await launchAgent(location, replacingBusyTerminal: replacingBusyTerminal, agent: agent)
         } catch {
             let reason = Self.startFailureReason(for: error)
             if self.location?.workspaceID == workspaceID {
                 failedStart = FailedStart(workspaceID: workspaceID, reason: reason)
             }
             ToasttyLog.warning("The coordinator's agent did not start", category: .tasks, metadata: ["reason": reason])
-            throw CoordinatorError(reason)
+            // Keeps the installed agent that a person can choose instead.
+            throw error as? CoordinatorError ?? CoordinatorError(reason)
         }
     }
 
-    private func launchAgent(_ location: CoordinatorLocation, replacingBusyTerminal: Bool) async throws -> String {
+    private func launchAgent(_ location: CoordinatorLocation, replacingBusyTerminal: Bool, agent: String?) async throws -> String {
+        let config = try startConfiguration(agent: agent)
         guard let launcher else {
             throw CoordinatorError("The agent launcher is not available.")
-        }
-        let config: TasksConfig.Coordinator
-        do {
-            config = try configLoader().coordinator
-        } catch {
-            throw CoordinatorError(error.localizedDescription)
         }
         let directory = try preparedDirectory()
         await prepareRepository()
@@ -861,6 +1159,7 @@ final class CoordinatorController: ObservableObject {
         }
         adoptReplacement(terminal, workspaceID: location.workspaceID)
         noteStartedSession(result.sessionID)
+        checkInstructionsLimit(in: sessionRuntimeStore.sessionRegistry)
         ToasttyLog.info("Started the coordinator's agent", category: .tasks, metadata: [
             "session_id": result.sessionID,
             "panel_id": terminal.panelID.uuidString,
@@ -1243,16 +1542,44 @@ final class CoordinatorController: ObservableObject {
 
     // MARK: - Quiet turns
 
+    /// The keys of the digests whose turn the coordinator marked quiet,
+    /// oldest first (`CoordinatorWakeState.quietDigestKeys`). The service
+    /// that keeps the wake state sets it, and sends `quietDigestChanges`
+    /// when the keys change.
+    var quietDigestKeys: () -> [String] = { [] }
+    /// Sends when `quietDigestKeys` changes: a turn is marked quiet, a mark
+    /// is removed or forgotten, or another coordinator starts. Paired
+    /// devices fold the turns with the Mac's chat (`RemoteAccessService`).
+    let quietDigestChanges = PassthroughSubject<Void, Never>()
+
     /// Whether the message is a digest whose turn the coordinator marked
-    /// quiet. The service that keeps the wake state sets it.
-    var isQuietDigest: (String) -> Bool = { _ in false }
+    /// quiet.
+    func isQuietDigest(_ text: String) -> Bool {
+        let keys = quietDigestKeys()
+        return keys.isEmpty == false && keys.contains(CoordinatorWakeState.digestKey(text))
+    }
 
     /// The newest text this controller typed into the agent, from any
     /// sender, as `CoordinatorWakeState.digestKey`, and when.
     private var lastTyped: (key: String, at: Date)?
-    /// The wake turn that the coordinator marked quiet: its session and the
-    /// key of the digest that started it.
-    private var quietTurn: (sessionID: String, digestKey: String)?
+    /// The wake turn that the coordinator marked quiet: its session, the
+    /// key of the digest that started it, and what names the turn. The
+    /// session's last turn end moves when its status ends the turn, and the
+    /// conversation's turn epoch when its transcript does. Either can come
+    /// first.
+    private var quietTurn: QuietTurn?
+
+    private struct QuietTurn {
+        let sessionID: String
+        let digestKey: String
+        let previousTurnEndedAt: Date?
+        let turnEpoch: RemoteInputEpoch?
+    }
+
+    /// The conversation's epoch of the turn that runs now.
+    private func runningTurnEpoch(_ subscription: any LocalConversationSubscription) -> RemoteInputEpoch? {
+        subscription.snapshot(at: now())?.summary.inputControl?.turnEpoch
+    }
 
     /// The events read to find the newest message to the agent.
     private static let quietTurnEventLimit = 200
@@ -1294,7 +1621,27 @@ final class CoordinatorController: ObservableObject {
               let subscription = syncConversationSubscription(),
               subscription.snapshot(at: now())?.summary.state == .working,
               onlyTheDigestReached(digestKey, subscription: subscription) else { return false }
-        quietTurn = (session.sessionID, digestKey)
+        quietTurn = QuietTurn(
+            sessionID: session.sessionID,
+            digestKey: digestKey,
+            previousTurnEndedAt: session.lastTurnEndedAt,
+            turnEpoch: runningTurnEpoch(subscription)
+        )
+        return true
+    }
+
+    /// Removes the quiet mark, when the coordinator runs `coordinator wake`
+    /// without `--quiet` after it marked the turn quiet: the last call of
+    /// the turn decides. Returns whether the mark belonged to the turn that
+    /// runs now, so that the caller also removes the saved mark. The mark
+    /// of a turn that has ended stays.
+    func unmarkQuietTurn(digestKey: String) -> Bool {
+        guard let quietTurn, quietTurn.digestKey == digestKey else { return false }
+        self.quietTurn = nil
+        guard let session, session.sessionID == quietTurn.sessionID,
+              session.lastTurnEndedAt == quietTurn.previousTurnEndedAt,
+              let subscription = syncConversationSubscription(),
+              runningTurnEpoch(subscription) == quietTurn.turnEpoch else { return false }
         return true
     }
 

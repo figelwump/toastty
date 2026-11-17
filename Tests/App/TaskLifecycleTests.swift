@@ -107,6 +107,26 @@ struct TaskLifecycleTests {
         #expect(launch.workspaceID == task.taskSpaceWorkspaceID)
         #expect(launch.panelID != task.operation.taskSpace?.panelID)
         #expect(launch.prompt.hasPrefix("Use the toastty-task-merge skill.\n\n"))
+        // A launch without its skills gets the skill's file.
+        let skillFile = try #require(ToasttyAgentPluginBundle.skillFiles()[TaskPrompt.defaultMergeSkill])
+        #expect(launch.promptWithoutSkills?.contains("The toastty-task-merge skill's instructions are in \(skillFile)") == true)
+    }
+
+    /// The task's agent runs but did not get its skills at launch.
+    @Test func mergeToAnAgentWithoutItsSkillsSaysWhereTheMergeSkillIs() async throws {
+        let fixture = try Fixture()
+        let task = try await taskInWorktree(fixture)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        fixture.launcher.sessionIDsWithoutSkills.insert(session)
+        let skillFile = try #require(ToasttyAgentPluginBundle.skillFiles()[TaskPrompt.defaultMergeSkill])
+        // The name the Skills sheet shows finds the same file.
+        #expect(ToasttyAgentPluginBundle.skillFiles()["toastty:\(TaskPrompt.defaultMergeSkill)"] == skillFile)
+
+        try fixture.coordinator.requestMerge(taskID: task.id)
+
+        #expect(fixture.sessions.delivered.last?.text == "Use the toastty-task-merge skill.\n\n"
+            + "Toastty could not give this session its skills. The toastty-task-merge skill's instructions are in \(skillFile): "
+            + "read that file and follow it.\n\nThe user accepted \(pullRequestURL) for merging.")
     }
 
     @Test func mergeWithoutAPullRequestOrAfterCancelIsRefused() async throws {
@@ -211,6 +231,20 @@ struct TaskLifecycleTests {
         let worktree = try #require(task.worktree)
         try fixture.repository.commit("local only", in: worktree.path)
         try Data("draft".utf8).write(to: URL(filePath: worktree.path).appending(path: "notes.txt"))
+
+        // The preview says what the archive would do, and why it would
+        // refuse, and changes nothing.
+        let preview = try await fixture.coordinator.archivePreview(taskID: task.id, options: TaskArchiveOptions())
+        #expect(preview.refusal?.contains("1 uncommitted file") == true)
+        #expect(preview.summary.contains("Removes the worktree and its 1 uncommitted file."))
+        #expect(preview.summary.contains("Keeps the branch \(worktree.branch): 1 of its commits are on no remote branch."))
+        let discarding = try await fixture.coordinator.archivePreview(
+            taskID: task.id, options: TaskArchiveOptions(deleteUnpushedCommits: true, discardChanges: true)
+        )
+        #expect(discarding.refusal == nil)
+        #expect(discarding.summary.contains("Deletes the local branch \(worktree.branch) and its 1 commit on no remote branch."))
+        #expect(fixture.record(task.id)?.archivedAt == nil)
+        #expect(fixture.record(task.id)?.cleanup == nil)
 
         let refused = await #expect(throws: TaskError.self) {
             try await fixture.coordinator.archive(taskID: task.id, options: TaskArchiveOptions())

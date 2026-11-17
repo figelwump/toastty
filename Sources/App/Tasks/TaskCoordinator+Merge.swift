@@ -34,6 +34,13 @@ extension TaskCoordinator {
     /// it; see `checkMergeCaller`.
     @discardableResult
     func merge(taskID: UUID, expectedHead: String?, caller: TaskCaller) throws -> TaskRecord {
+        try beginMerge(taskID: taskID, expectedHead: expectedHead, caller: caller).record
+    }
+
+    /// `merge`, with the pull request script's first answer for this merge.
+    private func beginMerge(
+        taskID: UUID, expectedHead: String?, caller: TaskCaller
+    ) throws -> (record: TaskRecord, answer: Task<WorkspaceMergeCoordinator.MergeAnswer, Never>) {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
@@ -46,6 +53,62 @@ extension TaskCoordinator {
         let target = try mergeTarget(record)
         try checkNotCancelled(record, caller: caller)
         return try startMerge(record, target: target, expectedHead: expectedHead)
+    }
+
+    /// How long `task.merge` from the socket waits for the merge's first
+    /// answer. The pull request script usually answers in a few seconds;
+    /// the CLI stops reading after 10.
+    static let mergeAnswerWait: Duration = .seconds(8)
+
+    /// `task.merge` from the socket: `merge`, then a wait for the pull
+    /// request script's first answer for this merge, so that the caller
+    /// learns of a refusal before it reports the merge. Throws the reason
+    /// when Toastty refused the merge, the merge failed, or the task space
+    /// or its pull request link changed meanwhile. Otherwise returns the
+    /// task: merged, waiting for checks, or, after `wait`, still merging.
+    func mergeAndAwaitAnswer(
+        taskID: UUID,
+        expectedHead: String?,
+        caller: TaskCaller,
+        wait: Duration = mergeAnswerWait
+    ) async throws -> TaskRecord {
+        let (started, answerTask) = try beginMerge(taskID: taskID, expectedHead: expectedHead, caller: caller)
+        let answer = await Self.value(of: answerTask, within: wait)
+        let record = records.record(id: taskID) ?? started
+        switch answer {
+        case nil, .merged?, .waitingForChecks?:
+            return record
+        case .stopped(let reason, .refused)?:
+            throw TaskError("Toastty refused to merge \(record.title), and nothing changed: \(reason)")
+        case .stopped(let reason, _)?:
+            throw TaskError(
+                "Toastty could not finish the merge of \(record.title): \(reason). "
+                    + "Check the pull request on GitHub before you report or merge again."
+            )
+        case .replaced?:
+            throw TaskError(
+                "The merge of \(record.title) ended without an answer: its task space or pull request link changed "
+                    + "while Toastty merged. Check the pull request on GitHub before you report or merge again."
+            )
+        }
+    }
+
+    /// The task's value, or `nil` when `limit` passes first. The task runs on.
+    private static func value<Value: Sendable>(of task: Task<Value, Never>, within limit: Duration) async -> Value? {
+        let answered = FirstAnswer()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Value?, Never>) in
+            let timer = Task { @MainActor in
+                try? await Task.sleep(for: limit)
+                guard answered.claim() else { return }
+                continuation.resume(returning: nil)
+            }
+            Task { @MainActor in
+                let value = await task.value
+                guard answered.claim() else { return }
+                timer.cancel()
+                continuation.resume(returning: value)
+            }
+        }
     }
 
     /// `task.request-merge`: the user's acceptance given outside the task,
@@ -82,13 +145,19 @@ extension TaskCoordinator {
         let mode = workspaceConfig?.merge ?? config?.defaults.merge ?? .agent
         let route = requestedRoute ?? (mode == .direct ? .direct : .agent)
         if route == .direct {
-            try startMerge(record, target: target, expectedHead: nil)
+            _ = try startMerge(record, target: target, expectedHead: nil)
             return
         }
-        let prompt = TaskPrompt.merge(
-            skill: workspaceConfig?.mergeSkill ?? config?.defaults.mergeSkill,
-            prompt: workspaceConfig?.mergePrompt ?? config?.defaults.mergePrompt,
-            pullRequestURL: target.pullRequest.url
+        let mergeSkill = workspaceConfig?.mergeSkill ?? config?.defaults.mergeSkill
+        let mergePrompt = workspaceConfig?.mergePrompt ?? config?.defaults.mergePrompt
+        let prompt = MergePrompt(
+            text: TaskPrompt.merge(skill: mergeSkill, prompt: mergePrompt, pullRequestURL: target.pullRequest.url),
+            withoutSkills: TaskPrompt.merge(
+                skill: mergeSkill,
+                prompt: mergePrompt,
+                pullRequestURL: target.pullRequest.url,
+                skills: Self.skillsMissing()
+            )
         )
         let requestedAt = now()
         try saveMergeState(taskID: taskID) {
@@ -331,14 +400,15 @@ extension TaskCoordinator {
     }
 
     /// Cleans up the task spaces whose pull request merged on GitHub, which
-    /// counts as the user's acceptance. Only when nothing is in the way:
-    /// no merge or cleanup ran for it, and no agent is in a turn. The task
-    /// has a worktree on its own branch, or was adopted from an older space.
-    /// Without a saved checkout, only an absent worktree permits cleanup.
-    /// The script checks an existing worktree is clean at the merged head. A task
-    /// whose agent was working gets "Merged · clean up?" instead. A task
-    /// in a project with `release_tags` is cleaned up the same way and
-    /// waits in To ship without its task space.
+    /// counts as the user's acceptance, when no merge or cleanup ran for it.
+    /// The task has a worktree on its own branch, or was adopted from an
+    /// older space. Without a saved checkout, only an absent worktree
+    /// permits cleanup. The script checks an existing worktree is clean at
+    /// the merged head. An agent in a turn does not stop it: the cleanup
+    /// waits for the hold and for the turn to end, as after a merge
+    /// Toastty ran, and new work in the task space ends it. A task in a
+    /// project with `release_tags` is cleaned up the same way and waits in
+    /// To ship without its task space.
     func cleanUpMergedTasks(_ taskIDs: [UUID]) {
         guard let merges else { return }
         for taskID in taskIDs {
@@ -352,15 +422,6 @@ extension TaskCoordinator {
                   store.state.workspacesByID[taskSpaceID] != nil,
                   merges.request(workspaceID: taskSpaceID) == nil,
                   let target = try? mergeTarget(record, afterMerge: true) else { continue }
-            if agentInTurn(workspaceID: taskSpaceID) {
-                records.update(id: taskID) {
-                    $0.cleanup = TaskCleanup(
-                        kind: .merge,
-                        problem: "The pull request merged while the agent was working, so Toastty left the task space open."
-                    )
-                }
-                continue
-            }
             records.update(id: taskID) { $0.cleanup = TaskCleanup(kind: .merge) }
             merges.cleanUpAfterMerge(
                 workspaceID: taskSpaceID, pullRequest: target.pullRequest, repoPath: target.repoPath,
@@ -376,8 +437,27 @@ extension TaskCoordinator {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
         if let taskSpaceID = record.taskSpaceWorkspaceID,
-           case .failed? = merges?.request(workspaceID: taskSpaceID)?.phase {
-            merges?.retryCleanup(workspaceID: taskSpaceID)
+           let request = merges?.request(workspaceID: taskSpaceID),
+           case .failed = request.phase {
+            guard request.stoppedOnBranchMismatch == true else {
+                merges?.retryCleanup(workspaceID: taskSpaceID)
+                return
+            }
+            // The script deletes only the pull request's branch, and the
+            // worktree is on another one, so a retry would stop again.
+            // Remove the worktree and its local branch the way closing a
+            // merged task's space does, with an archive's checks. Both
+            // branches stay on the remote, and the task stays merged.
+            guard agentInTurn(workspaceID: taskSpaceID) == false else {
+                throw TaskError("The agent is still working. Clean up once its turn ends.")
+            }
+            merges?.handOverStoppedCleanup(workspaceID: taskSpaceID)
+            try saveMergeState(taskID: taskID) {
+                var cleanup = TaskCleanup(kind: .merge)
+                cleanup.removesWorktreeDirectly = true
+                $0.cleanup = cleanup
+            }
+            startTeardown(taskID: taskID, kind: .merge, options: TaskArchiveOptions())
             return
         }
         guard let cleanup = record.cleanup, cleanup.problem != nil else {
@@ -393,6 +473,10 @@ extension TaskCoordinator {
             }
             guard agentInTurn(workspaceID: taskSpaceID) == false else {
                 throw TaskError("The agent is still working. Clean up once its turn ends.")
+            }
+            if cleanup.removesWorktreeDirectly == true {
+                startTeardown(taskID: taskID, kind: .merge, options: TaskArchiveOptions())
+                return
             }
             try saveMergeState(taskID: taskID) { $0.cleanup = nil }
             cleanUpMergedTasks([taskID])
@@ -504,7 +588,9 @@ extension TaskCoordinator {
     }
 
     @discardableResult
-    private func startMerge(_ record: TaskRecord, target: MergeTarget, expectedHead: String?) throws -> TaskRecord {
+    private func startMerge(
+        _ record: TaskRecord, target: MergeTarget, expectedHead: String?
+    ) throws -> (record: TaskRecord, answer: Task<WorkspaceMergeCoordinator.MergeAnswer, Never>) {
         guard let merges else {
             throw TaskError("Merging is not available in this Toastty instance.")
         }
@@ -524,13 +610,13 @@ extension TaskCoordinator {
             $0.mergeCancelledAt = nil
             $0.mergeFailure = nil
         }
-        guard merges.merge(
+        guard let answer = merges.merge(
             workspaceID: target.taskSpaceID,
             pullRequest: target.pullRequest,
             repoPath: target.repoPath,
             thenCleanUp: true,
             expectedHead: expectedHead
-        ) != nil else {
+        ) else {
             throw TaskError("A merge of \(record.title) is already under way.")
         }
         ToasttyLog.info("Merging a task", category: .tasks, metadata: [
@@ -538,7 +624,7 @@ extension TaskCoordinator {
             "pull_request": String(target.pullRequest.number),
             "expected_head": expectedHead ?? "",
         ])
-        return records.record(id: record.id) ?? record
+        return (records.record(id: record.id) ?? record, answer)
     }
 
     /// A cancelled merge stays cancelled for every agent turn that started
@@ -577,14 +663,27 @@ extension TaskCoordinator {
         throw TaskError("The user cancelled this merge. Do not merge unless the user asks again.")
     }
 
+    /// What Merge sends, and the same message for an agent that Toastty
+    /// knows did not get its skills.
+    struct MergePrompt {
+        var text: String
+        var withoutSkills: String
+
+        /// The message for `session`.
+        @MainActor
+        func text(for session: TaskSessionInfo, launcher: (any TaskAgentLaunching)?) -> String {
+            launcher?.lacksShippedSkills(sessionID: session.sessionID) == true ? withoutSkills : text
+        }
+    }
+
     /// Sends the merge prompt to the task's agent once it is at rest, or
     /// starts an agent for it when none runs. A busy agent finishes its
     /// turn first, so the prompt is the next thing it reads.
-    private func deliverMergePrompt(_ prompt: String, taskID: UUID, target: MergeTarget, requestedAt: Date) throws {
+    private func deliverMergePrompt(_ prompt: MergePrompt, taskID: UUID, target: MergeTarget, requestedAt: Date) throws {
         guard let record = records.record(id: taskID) else { return }
         if let session = liveAgentSession(of: record) {
             guard session.isInTurn else {
-                try send(taskID: taskID, text: prompt)
+                try send(taskID: taskID, text: prompt.text(for: session, launcher: launcher))
                 return
             }
             mergeDeliveryTasks[taskID] = Task { [weak self] in
@@ -600,7 +699,7 @@ extension TaskCoordinator {
                         // The request starts when the agent can read it, so
                         // its earlier statuses do not count as a reply.
                         try self.saveMergeState(taskID: taskID) { $0.mergeRequestedAt = self.now() }
-                        try self.send(taskID: taskID, text: prompt)
+                        try self.send(taskID: taskID, text: prompt.text(for: current, launcher: self.launcher))
                     } catch {
                         self.mergePromptFailed(taskID: taskID, reason: error.localizedDescription)
                     }
@@ -617,7 +716,7 @@ extension TaskCoordinator {
 
     /// Starts the task's agent in a new terminal tab in its checkout, with
     /// the merge prompt as its first message.
-    private func launchMergeAgent(prompt: String, record: TaskRecord, target: MergeTarget, requestedAt: Date) throws {
+    private func launchMergeAgent(prompt: MergePrompt, record: TaskRecord, target: MergeTarget, requestedAt: Date) throws {
         guard let launcher else {
             throw TaskError("The agent launcher is not available.")
         }
@@ -642,7 +741,8 @@ extension TaskCoordinator {
                         cwd: target.repoPath,
                         model: model,
                         reasoningEffort: effort,
-                        initialPrompt: prompt,
+                        initialPrompt: prompt.text,
+                        initialPromptWithoutSkills: Self.promptWithoutSkills(prompt.text, prompt.withoutSkills),
                         parentSessionID: nil,
                         forkFromSessionID: nil,
                         scopedWorkspaceIDs: record.creatorScope.map { $0.union([target.taskSpaceID]) },
@@ -680,5 +780,17 @@ extension TaskCoordinator {
         } catch {
             throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Lets the first of two racing tasks resume a continuation.
+@MainActor
+private final class FirstAnswer {
+    private var isClaimed = false
+
+    func claim() -> Bool {
+        guard isClaimed == false else { return false }
+        isClaimed = true
+        return true
     }
 }

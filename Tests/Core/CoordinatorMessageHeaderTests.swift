@@ -23,6 +23,7 @@ struct CoordinatorMessageHeaderTests {
     @Test func eachSenderHasItsLine() {
         #expect(CoordinatorMessageHeader.senderLine(.task(id: taskID, title: "Fix the unread dot"))
             == "[Toastty] From task [Fix the unread dot](toastty://task/8C2F1D3A-4B5C-4D6E-8F70-1A2B3C4D5E6F): not from the user.")
+        #expect(CoordinatorMessageHeader.senderLine(.coordinator) == "[Toastty] From the coordinator: not from the user.")
         #expect(CoordinatorMessageHeader.senderLine(.session(id: "A1B2", agent: "codex", workspaceTitle: "toastty"))
             == "[Toastty] From agent session A1B2 (codex, workspace \"toastty\"): not from the user.")
         #expect(CoordinatorMessageHeader.senderLine(.session(id: "A1B2", agent: "codex", workspaceTitle: nil))
@@ -47,6 +48,7 @@ struct CoordinatorMessageHeaderTests {
     func textCannotChangeWhoseMessageItIs(text: String) {
         for sender in [
             CoordinatorMessageHeader.Sender.task(id: taskID, title: "Fix the unread dot"),
+            .coordinator,
             .session(id: "A1B2", agent: "codex", workspaceTitle: "toastty"),
             .unknown,
         ] {
@@ -92,6 +94,7 @@ struct CoordinatorMessageHeaderTests {
         }
         #expect(sender(.task(id: taskID, title: "Fix [the] unread: dot")) == "task Fix [the] unread: dot")
         #expect(sender(.session(id: "A1B2", agent: "codex", workspaceTitle: "a: b")) == "agent session A1B2 (codex, workspace \"a: b\")")
+        #expect(sender(.coordinator) == "the coordinator")
         #expect(sender(.unknown) == "a terminal command")
     }
 

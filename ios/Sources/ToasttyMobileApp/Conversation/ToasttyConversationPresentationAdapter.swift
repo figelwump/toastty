@@ -47,12 +47,15 @@ enum ToasttyConversationPresentationAdapter {
     }
 
     /// How the coordinator's chat on this phone shows the messages that
-    /// Toastty typed: times as the phone writes them, and the attached
-    /// files by name, because the files stay on the Mac.
-    static var coordinatorMessages: CoordinatorChatTranscript.Messages {
+    /// Toastty typed: times as the phone writes them, the attached files by
+    /// name, because the files stay on the Mac, and the wake turns that the
+    /// coordinator marked quiet folded under their digest's line, as on the
+    /// Mac. `quietDigestKeys` is `nil` with a Mac that does not share them.
+    static func coordinatorMessages(quietDigestKeys: Set<String>? = nil) -> CoordinatorChatTranscript.Messages {
         CoordinatorChatTranscript.Messages(
             timeText: { $0.formatted(date: .omitted, time: .shortened) },
-            attachedFiles: .byName
+            attachedFiles: .byName,
+            isQuietDigest: { ToasttyCoordinatorQuietDigests.isQuiet($0, keys: quietDigestKeys) }
         )
     }
 }

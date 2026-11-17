@@ -63,6 +63,36 @@ struct AgentProfileStateAppControlTests {
         #expect(state.failure == nil)
     }
 
+    /// With no profile in agents.toml, as on a fresh install, tasks and Toastty
+    /// Mobile offer the built-in agents that a launch accepts by name, when their
+    /// command is installed. Toastty's own shim does not count as installed. A
+    /// configured profile replaces the built-in agents.
+    @Test
+    func profileSummariesOfferInstalledBuiltInAgentsOnlyWithoutProfiles() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent-profile-state-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let shimURL = rootURL.appendingPathComponent("shim", isDirectory: true)
+        let toolsURL = rootURL.appendingPathComponent("tools", isDirectory: true)
+        try makeExecutable(named: "codex", in: toolsURL)
+        try makeExecutable(named: "claude", in: toolsURL)
+        try makeExecutable(named: "cursor-agent", in: shimURL)
+        let environment = ["PATH": "\(shimURL.path):\(toolsURL.path)"]
+
+        let fresh = makeService(profiles: [], environment: environment, shimDirectoryPaths: [shimURL.path])
+        let summaries = fresh.launchProfileSummaries()
+        #expect(summaries.map(\.profileID) == ["claude", "codex"])
+        #expect(summaries.map(\.displayName) == ["Claude Code", "Codex"])
+        #expect(summaries.allSatisfy { $0.isInstalled && $0.acceptsInitialPrompt })
+
+        let configured = makeService(
+            profiles: [AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"])],
+            environment: environment,
+            shimDirectoryPaths: [shimURL.path]
+        )
+        #expect(configured.launchProfileSummaries().map(\.profileID) == ["codex"])
+    }
+
     /// A built-in profile with no agents.toml override still resolves, and reports
     /// that its command name was implied rather than configured.
     @Test

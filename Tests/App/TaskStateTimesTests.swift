@@ -624,14 +624,15 @@ extension TaskAppControlTests {
                 sessionID: session, agent: .claude, panelID: try #require(task.operation.taskSpace?.panelID),
                 workspaceID: try #require(task.taskSpaceWorkspaceID), cwd: nil, isActive: true,
                 isInTurn: kind == .working || kind == .needsApproval, nativeConversationID: nil, title: nil,
-                status: SessionStatus(kind: kind, summary: "\(kind)")
+                status: SessionStatus(kind: kind, summary: "\(kind)"), stateChangedAt: at(3)
             )
         }
 
-        // A busy agent, with the time its transcript last changed.
+        // A busy agent, with the time its transcript last changed and the
+        // time it became busy.
         try agent(.working)
         sessions.outputAt[session] = at(5)
-        #expect(try facts() == TaskAlertFacts(agentBusy: true, lastOutputAt: at(5), checks: .none))
+        #expect(try facts() == TaskAlertFacts(agentBusy: true, lastOutputAt: at(5), busySince: at(3), checks: .none))
         // Waiting for an approval, or at its prompt: not busy.
         try agent(.needsApproval)
         #expect(try facts().agentBusy == false)

@@ -305,7 +305,8 @@ final class WorkspaceMergeCoordinator {
     /// merge and cleans up after it. A refusal changes nothing; it is
     /// reported to the task through `cleanupObserver` and as a notification.
     /// With `expectedHead`, the merge is refused unless the checkout's
-    /// commit is that one: the version the merge skill checked.
+    /// commit is that one: the version the merge skill checked. The task
+    /// gives the script's first answer for this request.
     @discardableResult
     func merge(
         workspaceID: UUID,
@@ -313,7 +314,7 @@ final class WorkspaceMergeCoordinator {
         repoPath: String,
         thenCleanUp: Bool,
         expectedHead: String? = nil
-    ) -> Task<Void, Never>? {
+    ) -> Task<MergeAnswer, Never>? {
         guard requests[workspaceID]?.isRunning != true else { return nil }
         let request = WorkspaceMergeRequest(pullRequest: pullRequest, repoPath: repoPath, phase: .merging(thenCleanUp: thenCleanUp))
         update(workspaceID, request)
@@ -323,8 +324,23 @@ final class WorkspaceMergeCoordinator {
                 request: request,
                 thenCleanUp: thenCleanUp,
                 expectedHead: expectedHead
-            )
+            ) ?? .replaced
         }
+    }
+
+    /// What the first run of the pull request script decided for one merge
+    /// request, for the caller that started it.
+    enum MergeAnswer: Equatable, Sendable {
+        /// GitHub merged the pull request.
+        case merged
+        /// Toastty waits for checks, then merges.
+        case waitingForChecks
+        /// Nothing merges for this request. With `.refused`, the script
+        /// changed nothing; with `.error`, it may not have finished.
+        case stopped(reason: String, cause: TaskMergeFailure.Cause)
+        /// The request, its workspace or its pull request link changed
+        /// while the script ran, so the answer is not this request's.
+        case replaced
     }
 
     /// Cleans up after a merge that happened on GitHub, which is the user's
@@ -399,6 +415,13 @@ final class WorkspaceMergeCoordinator {
         Task { [weak self] in
             await self?.runCleanup(workspaceID: workspaceID, request: released)
         }
+    }
+
+    /// Ends a stopped cleanup without the `.dropped` event, because the
+    /// task removes what is left itself.
+    func handOverStoppedCleanup(workspaceID: UUID) {
+        guard let request = requests[workspaceID], case .failed = request.phase else { return }
+        update(workspaceID, nil)
     }
 
     /// Checks the pull request again after a failure.
@@ -561,14 +584,14 @@ final class WorkspaceMergeCoordinator {
         request: WorkspaceMergeRequest,
         thenCleanUp: Bool,
         expectedHead: String?
-    ) async {
+    ) async -> MergeAnswer {
         let outcome = await runScript(
             "merge",
             workspaceID: workspaceID,
             request: request,
             extraArguments: expectedHead.map { ["--expect-head", $0] } ?? []
         )
-        guard requests[workspaceID] == request else { return }
+        guard requests[workspaceID] == request else { return .replaced }
         let pullRequest = "PR #\(request.pullRequest.number)"
         // The workspace may have closed, or moved to another pull request,
         // while the script ran; the done mark and a failure belong to this
@@ -589,15 +612,15 @@ final class WorkspaceMergeCoordinator {
                 cause: outcome.status == "refused" ? .refused : .error,
                 head: outcome.head ?? expectedHead, base: outcome.base, recordOnTask: isCurrent
             )
-            return
+            return .stopped(reason: outcome.detail, cause: outcome.status == "refused" ? .refused : .error)
         }
         if isWaiting, outcome.base?.isEmpty != false {
+            let reason = "The merge did not report its target branch. Check the pull request, then merge again."
             mergeFailed(
-                workspaceID, pullRequest: pullRequest,
-                reason: "The merge did not report its target branch. Check the pull request, then merge again.",
+                workspaceID, pullRequest: pullRequest, reason: reason,
                 cause: .error, head: acceptedHead, base: nil, recordOnTask: isCurrent
             )
-            return
+            return .stopped(reason: reason, cause: .error)
         }
         guard let store, isCurrent else {
             update(workspaceID, nil)
@@ -607,8 +630,9 @@ final class WorkspaceMergeCoordinator {
                     workspaceID, pullRequest: request.pullRequest, head: acceptedHead, base: outcome.base,
                     reason: isClosed ? .workspaceClosed : .pullRequestChanged
                 )
+                return .replaced
             }
-            return
+            return .merged
         }
         // The done mark records that the user accepted this version. New work
         // in the workspace clears it, and with it a pending merge or cleanup.
@@ -631,12 +655,14 @@ final class WorkspaceMergeCoordinator {
                     ]
                 )
             }
+            return .waitingForChecks
         } else if thenCleanUp {
             next.phase = .awaitingMerge
             update(workspaceID, next)
         } else {
             update(workspaceID, nil)
         }
+        return .merged
     }
 
     /// Runs the merge again for a request waiting on checks. Returns whether
@@ -924,8 +950,14 @@ final class WorkspaceMergeCoordinator {
             report(workspaceID, .stopped(reason: outcome.detail))
             notify("Cleanup of \(pullRequest) did not finish", "\(workspaceTitle): \(outcome.detail)")
         } else {
-            fail(workspaceID, request, outcome.detail)
-            report(workspaceID, .stopped(reason: outcome.detail))
+            var stopped = request
+            var reason = outcome.detail
+            if outcome.refusal == "branch-mismatch" {
+                stopped.stoppedOnBranchMismatch = true
+                reason += ". Clean Up removes the worktree, and its local branch if the remote has every commit. Both branches stay on GitHub."
+            }
+            fail(workspaceID, stopped, reason)
+            report(workspaceID, .stopped(reason: reason))
             // New work or a changed pull request during the run drops the
             // request instead of offering a retry.
             if let state = store?.state {
@@ -1008,6 +1040,8 @@ final class WorkspaceMergeCoordinator {
         var head: String?
         /// For a merge, the target branch accepted with that commit.
         var base: String?
+        /// A refusal the caller acts on, such as `branch-mismatch`.
+        var refusal: String?
     }
 
     static func scriptOutcome(from result: WorkspaceMergeCommandResult) -> ScriptOutcome {
@@ -1020,7 +1054,8 @@ final class WorkspaceMergeCoordinator {
         }
         return ScriptOutcome(
             status: status, detail: object["detail"] as? String ?? status,
-            head: object["head"] as? String, base: object["base"] as? String
+            head: object["head"] as? String, base: object["base"] as? String,
+            refusal: object["refusal"] as? String
         )
     }
 

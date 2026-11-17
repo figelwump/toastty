@@ -5,21 +5,11 @@ import ToasttyMobileDomain
 import UIKit
 
 struct ToasttyConversationScreen: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
-    @State private var isLoadingAttachments = false
     @State private var selectedPreview: ToasttyPreviewSelection?
     @State private var isComposerFocused = false
     @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
-    /// Queue is a per-draft choice for one running turn: Steer is the
-    /// default while the agent works. The choice clears when the draft is
-    /// sent (the draft empties) and does not apply to a later turn. A failed
-    /// send or a brief connection check keeps it.
-    @State private var queueSelection: QueueSelection?
-    /// The draft epoch shown when Release was tapped; confirming releases
-    /// exactly that draft.
-    @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
     @State private var isShowingDetails = false
     /// The task detail that ⓘ opened, for a session in a task space, or that
     /// a task chip opened for a task with no task space to open.
@@ -29,18 +19,14 @@ struct ToasttyConversationScreen: View {
     let controller: HomeScreenController
     let presentation: ToasttyConversationPresentationState?
     let composer: ToasttyComposerPresentation?
-    let draft: String
-    let draftGeneration: UUID?
-    let draftEditRevision: UInt64
-    let draftReplacement: ToasttyComposerReplacement?
+    /// The drafts. This view reads only whether a send is under way; the
+    /// composer reads the rest, so typing does not update this view.
+    let drafts: ToasttyComposerDraftStore
     let draftDidChange: (String, UInt64) -> Void
     let draftReplacementCompleted: (ToasttyComposerReplacementResult) -> Void
-    let isSubmitting: Bool
-    let attachments: [RemoteMessageAttachment]
     let supportsAttachments: Bool
     let addAttachments: ([RemoteMessageAttachment]) -> String?
     let removeAttachment: (UUID) -> Void
-    let attachmentRecoveryMessage: String?
     let loadOlder: () -> Void
     /// The mode matters only while the agent works; nil at an open prompt.
     let submitDraft: (RemoteMessageDeliveryMode?) -> Bool
@@ -61,10 +47,6 @@ struct ToasttyConversationScreen: View {
     /// to go. Its messages have Copy, and the coordinator's have Reply, as
     /// in the Mac's coordinator chat.
     let isCoordinatorRoot: Bool
-    /// The coordinator's message that the draft answers.
-    let reply: CoordinatorReplyTarget?
-    /// Why the last Reply or Edit could not make a reply.
-    let replyNotice: String?
     /// Reply on a coordinator's message. False when the draft cannot
     /// become a reply; `replyNotice` then says why.
     let replyToMessage: (CoordinatorReplyTarget) -> Bool
@@ -77,18 +59,12 @@ struct ToasttyConversationScreen: View {
         controller: HomeScreenController,
         presentation: ToasttyConversationPresentationState? = nil,
         composer: ToasttyComposerPresentation? = nil,
-        draft: String = "",
-        draftGeneration: UUID? = nil,
-        draftEditRevision: UInt64 = 0,
-        draftReplacement: ToasttyComposerReplacement? = nil,
+        drafts: ToasttyComposerDraftStore,
         draftDidChange: @escaping (String, UInt64) -> Void = { _, _ in },
         draftReplacementCompleted: @escaping (ToasttyComposerReplacementResult) -> Void = { _ in },
-        isSubmitting: Bool = false,
-        attachments: [RemoteMessageAttachment] = [],
         supportsAttachments: Bool = false,
         addAttachments: @escaping ([RemoteMessageAttachment]) -> String? = { _ in nil },
         removeAttachment: @escaping (UUID) -> Void = { _ in },
-        attachmentRecoveryMessage: String? = nil,
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping (RemoteMessageDeliveryMode?) -> Bool = { _ in false },
         interrupt: @escaping () -> Void = {},
@@ -106,8 +82,6 @@ struct ToasttyConversationScreen: View {
         onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
         openTaskSpace: @escaping (UUID) -> Void = { _ in },
         isCoordinatorRoot: Bool = false,
-        reply: CoordinatorReplyTarget? = nil,
-        replyNotice: String? = nil,
         replyToMessage: @escaping (CoordinatorReplyTarget) -> Bool = { _ in false },
         cancelReply: @escaping () -> Void = {},
         newMessages: ToasttyNewMessagesMarker? = nil
@@ -116,18 +90,12 @@ struct ToasttyConversationScreen: View {
         self.controller = controller
         self.presentation = presentation
         self.composer = composer
-        self.draft = draft
-        self.draftGeneration = draftGeneration
-        self.draftEditRevision = draftEditRevision
-        self.draftReplacement = draftReplacement
+        self.drafts = drafts
         self.draftDidChange = draftDidChange
         self.draftReplacementCompleted = draftReplacementCompleted
-        self.isSubmitting = isSubmitting
-        self.attachments = attachments
         self.supportsAttachments = supportsAttachments
         self.addAttachments = addAttachments
         self.removeAttachment = removeAttachment
-        self.attachmentRecoveryMessage = attachmentRecoveryMessage
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.interrupt = interrupt
@@ -142,8 +110,6 @@ struct ToasttyConversationScreen: View {
         self.onVisibleLiveEdge = onVisibleLiveEdge
         self.openTaskSpace = openTaskSpace
         self.isCoordinatorRoot = isCoordinatorRoot
-        self.reply = reply
-        self.replyNotice = replyNotice
         self.replyToMessage = replyToMessage
         self.cancelReply = cancelReply
         self.newMessages = newMessages
@@ -159,7 +125,7 @@ struct ToasttyConversationScreen: View {
             if let conversation = controller.conversation(id: conversationID) {
                 ToasttyTranscriptView(
                     state: resolvedPresentation,
-                    isSubmitting: isSubmitting,
+                    isSubmitting: drafts.isSubmitting(conversationID),
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
                     queuedMessageAction: { action in
@@ -187,7 +153,24 @@ struct ToasttyConversationScreen: View {
                     newMessages: newMessages
                 )
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    composerBar(conversation)
+                    ToasttyConversationComposerBar(
+                        conversation: conversation,
+                        composer: composer ?? Self.lockedComposerFallback(conversation),
+                        isLastReported: controller.freshness != .live,
+                        drafts: drafts,
+                        draftDidChange: draftDidChange,
+                        draftReplacementCompleted: draftReplacementCompleted,
+                        supportsAttachments: supportsAttachments,
+                        addAttachments: addAttachments,
+                        removeAttachment: removeAttachment,
+                        submitDraft: submitDraft,
+                        interrupt: interrupt,
+                        releaseLocalDraft: releaseLocalDraft,
+                        isCoordinatorRoot: isCoordinatorRoot,
+                        cancelReply: cancelReply,
+                        isComposerFocused: $isComposerFocused,
+                        jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest
+                    )
                 }
                 // The task bar, like the Mac's top bar, for a session in a
                 // task space.
@@ -494,28 +477,107 @@ struct ToasttyConversationScreen: View {
             .joined(separator: " · ")
     }
 
-    /// The composer is a one-line field until it has focus or content; then it
-    /// grows into a card with a button bar underneath the text. While input
-    /// stays open, the agent's working state lives at the transcript's tail,
-    /// not under the field.
-    private func isExpandedComposer(_ presentation: ToasttyComposerPresentation) -> Bool {
-        presentation.gate.allowsInput
-            && (isComposerFocused || !draft.isEmpty || !attachments.isEmpty)
-    }
-
     /// Shown while the agent works, unless a locked composer already says so
     /// under the field (hosts without queue support).
     private func transcriptWorkingIndicator(
         _ conversation: MobileConversation
     ) -> ToasttyTranscriptWorkingIndicator? {
         guard conversation.state.bucket == .working, controller.freshness == .live else { return nil }
-        let gate = (composer ?? lockedComposerFallback(conversation)).gate
+        let gate = (composer ?? Self.lockedComposerFallback(conversation)).gate
         if gate == .disabled(.prompt(.working)) { return nil }
         return ToasttyTranscriptWorkingIndicator(turnElapsed: conversation.turnElapsed.map { .init($0) })
     }
 
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        var lifecycle = composerFocusLifecycle
+        isComposerFocused = lifecycle.focus(
+            afterTransitionTo: newPhase,
+            currentFocus: isComposerFocused
+        )
+        composerFocusLifecycle = lifecycle
+    }
+
+    static func lockedComposerFallback(
+        _ conversation: MobileConversation
+    ) -> ToasttyComposerPresentation {
+        ToasttyComposerPresentation.makeLockedFallback(
+            agentDisplayName: conversation.agent.displayName.capitalized,
+            inputAvailability: conversation.inputAvailability
+        )
+    }
+}
+
+/// The composer under the transcript: the field, its buttons and its status
+/// line. It is its own view and reads the draft from `drafts`, so that a
+/// keystroke updates this view only, and not the conversation screen with
+/// its transcript, the root view or the other tabs.
+private struct ToasttyConversationComposerBar: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var isLoadingAttachments = false
+    /// Queue is a per-draft choice for one running turn: Steer is the
+    /// default while the agent works. The choice clears when the draft is
+    /// sent (the draft empties) and does not apply to a later turn. A failed
+    /// send or a brief connection check keeps it.
+    @State private var queueSelection: QueueSelection?
+    /// The draft epoch shown when Release was tapped; confirming releases
+    /// exactly that draft.
+    @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
+
+    let conversation: MobileConversation
+    let composer: ToasttyComposerPresentation
+    /// The status is the last one the Mac reported.
+    let isLastReported: Bool
+    let drafts: ToasttyComposerDraftStore
+    let draftDidChange: (String, UInt64) -> Void
+    let draftReplacementCompleted: (ToasttyComposerReplacementResult) -> Void
+    let supportsAttachments: Bool
+    let addAttachments: ([RemoteMessageAttachment]) -> String?
+    let removeAttachment: (UUID) -> Void
+    /// The mode matters only while the agent works; nil at an open prompt.
+    let submitDraft: (RemoteMessageDeliveryMode?) -> Bool
+    let interrupt: () -> Void
+    let releaseLocalDraft: (RemoteInputEpoch) -> Void
+    /// The coordinator's chat shows the message that the draft answers.
+    let isCoordinatorRoot: Bool
+    let cancelReply: () -> Void
+    @Binding var isComposerFocused: Bool
+    @Binding var jumpToLiveEdgeRequest: UInt64
+
+    var body: some View {
+        composerBar(conversation)
+    }
+
+    private var conversationID: UUID { conversation.id }
+    private var draft: String { drafts.state.draft(for: conversationID) }
+    private var attachments: [RemoteMessageAttachment] { drafts.state.attachments(for: conversationID) }
+    private var isSubmitting: Bool { drafts.state.isSubmitting(conversationID) }
+    private var attachmentRecoveryMessage: String? { drafts.state.attachmentRecoveryMessages[conversationID] }
+    /// The coordinator's message that the draft answers.
+    private var reply: CoordinatorReplyTarget? { isCoordinatorRoot ? drafts.state.replies[conversationID] : nil }
+    /// Why the last Reply or Edit could not make a reply.
+    private var replyNotice: String? { isCoordinatorRoot ? drafts.state.replyNotices[conversationID] : nil }
+
+    /// The composer is a one-line field until it has focus or content; then it
+    /// grows into a card with a button bar underneath the text. While input
+    /// stays open, the agent's working state lives at the transcript's tail,
+    /// not under the field.
+    private func isExpandedComposer(_ presentation: ToasttyComposerPresentation) -> Bool {
+        fieldTakesText(presentation)
+            && (isComposerFocused || !draft.isEmpty || !attachments.isEmpty)
+    }
+
+    /// The field takes text while the Mac allows input, and keeps taking it
+    /// while the user is in it. The gate closes for reasons that have nothing
+    /// to do with typing; the Mac holds a Claude prompt closed for 500 ms
+    /// after each turn, for example. Only the user's own actions take the
+    /// keyboard away (Send, a dismissal, leaving the chat, the background);
+    /// Send waits for the gate.
+    private func fieldTakesText(_ presentation: ToasttyComposerPresentation) -> Bool {
+        presentation.gate.allowsInput || isComposerFocused
+    }
+
     private func composerBar(_ conversation: MobileConversation) -> some View {
-        let presentation = composer ?? lockedComposerFallback(conversation)
+        let presentation = composer
         let allowsAttachmentInput = presentation.gate.allowsInput && !isSubmitting
         let isExpanded = isExpandedComposer(presentation)
         let isWorking = presentation.gate.isWorking
@@ -523,7 +585,7 @@ struct ToasttyConversationScreen: View {
             ToasttyComposerMetadataView(
                 profile: conversation.executionProfile,
                 tabTitle: conversation.workspaceTabTitle,
-                isLastReported: controller.freshness != .live
+                isLastReported: isLastReported
             )
             if let reply {
                 ToasttyComposerReplyBar(reply: reply, canCancel: !isSubmitting, cancel: cancelReply)
@@ -706,19 +768,19 @@ struct ToasttyConversationScreen: View {
         ToasttyComposerTextView(
             text: draft,
             onTextChange: draftDidChange,
-            editRevision: draftEditRevision,
-            replacement: draftReplacement,
+            editRevision: drafts.state.editRevisions[conversationID, default: 0],
+            replacement: drafts.state.replacements[conversationID],
             onReplacementCompleted: draftReplacementCompleted,
             isFocused: $isComposerFocused,
             placeholder: presentation.placeholder,
-            isEnabled: presentation.gate.allowsInput,
+            isEnabled: fieldTakesText(presentation),
             accessibilityLabel: "Message \(presentation.agentDisplayName)",
             accessibilityHint: presentation.gate.allowsInput
                 ? "Enter a message, then use the Send button"
                 : disabledAccessibilityHint(presentation),
             maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5
         )
-            .id(draftGeneration)
+            .id(drafts.generation)
             .id(conversationID)
             // Keep the measured UIKit text height when attachments and the
             // keyboard compete for space; the preview list can shrink instead.
@@ -756,7 +818,7 @@ struct ToasttyConversationScreen: View {
                 }
             }
             .animation(.easeOut(duration: 0.18), value: isComposerFocused)
-            .disabled(presentation.gate.allowsInput == false)
+            .disabled(fieldTakesText(presentation) == false)
     }
 
     private func attachmentPicker(_ presentation: ToasttyComposerPresentation) -> some View {
@@ -939,28 +1001,10 @@ struct ToasttyConversationScreen: View {
         }
     }
 
-    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
-        var lifecycle = composerFocusLifecycle
-        isComposerFocused = lifecycle.focus(
-            afterTransitionTo: newPhase,
-            currentFocus: isComposerFocused
-        )
-        composerFocusLifecycle = lifecycle
-    }
-
     private func canSubmit(_ presentation: ToasttyComposerPresentation) -> Bool {
         isSubmitting == false && isLoadingAttachments == false
             && (attachments.isEmpty || supportsAttachments)
             && presentation.canSubmit(draft: draft, attachments: attachments)
-    }
-
-    private func lockedComposerFallback(
-        _ conversation: MobileConversation
-    ) -> ToasttyComposerPresentation {
-        ToasttyComposerPresentation.makeLockedFallback(
-            agentDisplayName: conversation.agent.displayName.capitalized,
-            inputAvailability: conversation.inputAvailability
-        )
     }
 
     private func composerStatusColor(

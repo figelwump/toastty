@@ -296,7 +296,7 @@ struct TasksView: View {
     }
 
     private func configErrorBanner(_ message: String) -> some View {
-        Text("tasks.toml: \(message)")
+        Text(message)
             .font(.system(size: 11.5))
             .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
             .fixedSize(horizontal: false, vertical: true)

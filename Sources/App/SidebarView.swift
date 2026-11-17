@@ -697,6 +697,9 @@ struct SidebarView: View {
     /// collapsed, and like a collapsed Subspaces group the choice is not
     /// saved: it resets when the sidebar hides or the app quits.
     @State private var expandedToShipProjectIDs: Set<UUID> = []
+    /// Parent task rows whose merged children show. Each starts collapsed;
+    /// like the To ship group, the choice is not saved.
+    @State private var expandedFinishedChildrenParents: Set<SidebarRowKey> = []
     /// Spawning session whose subspaces the group shows, per parent workspace.
     @State private var subspaceFilterSessionIDByParentID: [UUID: String] = [:]
     @State private var bucketMemory = SidebarBucketMemory()
@@ -1186,13 +1189,7 @@ struct SidebarView: View {
                     }
                 },
                 restart: {
-                    Task { @MainActor in
-                        do {
-                            try await controller.restart()
-                        } catch {
-                            TaskActions.presentFailure("Unable to Restart the Coordinator", error.localizedDescription)
-                        }
-                    }
+                    controller.perform(.restart)
                 },
                 close: { requestWorkspaceClose(workspaceID: location.workspaceID) }
             )
@@ -1237,6 +1234,10 @@ struct SidebarView: View {
         /// Task spaces the card's sessions started under other cards.
         let otherCardSpawns: [String: OtherCardSubspaceSpawn]
         let counts: [SidebarBucket: Int]
+        /// Merged child tasks that the All segment folds under their parent,
+        /// among the rows the ⑂ filter shows. Folded rows do not count in a
+        /// bucket.
+        var folded: Set<SidebarRowKey> = []
         var layout = SidebarBuckets.Layout<CardRow>()
         /// The card's rows in the Needs you segment.
         var needsYou = SidebarBuckets.Layout<CardRow>()
@@ -1344,9 +1345,20 @@ struct SidebarView: View {
             candidates: [SidebarBucketCandidate<CardRow>],
             shown: [SidebarBucketCandidate<CardRow>]
         ) -> BucketedCard {
+            func folded(_ rows: [SidebarBucketCandidate<CardRow>]) -> Set<SidebarRowKey> {
+                SidebarBuckets.foldedKeys(rows) { candidate in
+                    guard case .subspace(let row) = candidate.payload.kind else { return false }
+                    return SidebarSubspacePresentation.isHeldFinished(row)
+                }
+            }
+            // The counts ignore the ⑂ filter; the folds follow the families
+            // that the filtered layout draws.
+            let countedFolded = folded(candidates)
             var card = BucketedCard(
                 workspaceID: workspaceID, title: title, sessionStatuses: sessionStatuses,
-                subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns, counts: SidebarBuckets.counts(candidates)
+                subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns,
+                counts: SidebarBuckets.counts(candidates.filter { countedFolded.contains($0.key) == false }),
+                folded: folded(shown)
             )
             switch segment {
             case .all:
@@ -1435,6 +1447,7 @@ struct SidebarView: View {
         let filteredRows = SidebarSubspacePresentation.filteredRows(card.subspaceRows, spawningSessionID: filterSessionID)
         let attentionRowIDs = Set(card.subspaceRows.filter { $0.status.needsAttention }.map(\.id))
         let orderedKeys = SidebarBucket.allCases.flatMap { card.layout.entries($0).map(\.key) }
+        let expandedFolds = expandedFinishedChildrenParents
         return VStack(alignment: .leading, spacing: 0) {
             if let workspace, let filterSessionID {
                 subspacesFilterBar(
@@ -1447,9 +1460,28 @@ struct SidebarView: View {
                 let entries = card.layout.entries(bucket)
                 if entries.isEmpty == false {
                     bucketHeader(bucket, count: card.counts[bucket] ?? 0)
+                    let items = SidebarBuckets.items(entries, folded: card.folded)
+                    let foldedParents = Set(items.compactMap { item -> SidebarRowKey? in
+                        guard case .finishedChildren(let parent, _) = item else { return nil }
+                        return parent
+                    })
                     VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
-                        ForEach(entries) { entry in
-                            bucketRow(entry, card: card, workspace: workspace)
+                        ForEach(items) { item in
+                            switch item {
+                            case .row(let entry):
+                                bucketRow(
+                                    entry, card: card, workspace: workspace,
+                                    hidesChildProgress: foldedParents.contains(entry.key)
+                                )
+                            case .finishedChildren(let parent, let rows):
+                                let parentIndex = entries.firstIndex { $0.key == parent }
+                                let family = parentIndex.map { Array(entries[($0 + 1)...].prefix(while: \.isLinkedChild)) } ?? rows
+                                finishedChildrenFold(
+                                    parent: parentIndex.map { entries[$0] }, parentKey: parent, rows: rows,
+                                    listedMergedCount: family.filter(Self.isMerged).count,
+                                    card: card, workspace: workspace
+                                )
+                            }
                         }
                     }
                 }
@@ -1457,6 +1489,7 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.28), value: orderedKeys)
+        .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2), value: expandedFolds)
         .padding(.horizontal, 10)
         .padding(.bottom, 12)
         .id(SubspaceGroupScrollID(parentWorkspaceID: card.id))
@@ -1537,7 +1570,8 @@ struct SidebarView: View {
         _ entry: SidebarBucketEntry<CardRow>,
         card: BucketedCard,
         workspace: WorkspaceState?,
-        isCompact: Bool = false
+        isCompact: Bool = false,
+        hidesChildProgress: Bool = false
     ) -> some View {
         Group {
             switch entry.payload.kind {
@@ -1551,7 +1585,7 @@ struct SidebarView: View {
             case .subspace(let row):
                 let parentWorkspaceID = card.workspaceID ?? row.id
                 subspaceRow(
-                    Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact),
+                    Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact, hidesChildProgress: hidesChildProgress),
                     parentWorkspaceID: parentWorkspaceID,
                     showsSpawnerTag: SidebarSubspacePresentation.showsSpawnerTag(
                         row,
@@ -1566,7 +1600,7 @@ struct SidebarView: View {
                     // Its task space is open as a workspace of its own.
                     let row = subspaceRowModel(workspace: taskSpace, spawner: nil, projectTag: card.workspaceID == nil ? item.projectTitle : nil)
                     subspaceRow(
-                        Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact),
+                        Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact, hidesChildProgress: hidesChildProgress),
                         parentWorkspaceID: taskSpaceID, showsSpawnerTag: false
                     )
                 } else {
@@ -1593,13 +1627,105 @@ struct SidebarView: View {
     private static func bucketedSubspaceRow(
         _ row: SidebarSubspacePresentation.Row,
         entry: SidebarBucketEntry<CardRow>,
-        isCompact: Bool
+        isCompact: Bool,
+        hidesChildProgress: Bool = false
     ) -> SidebarSubspacePresentation.Row {
         var row = row
         row.isCompact = isCompact
         row.isLinkedChild = entry.isLinkedChild
         row.parentTaskTitle = entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil
+        if hidesChildProgress {
+            // The fold line under the row shows it.
+            row.childProgressLabel = nil
+        }
         return row
+    }
+
+    /// A parent task's merged children, folded into one "N/M merged" line
+    /// after its open children. Expanded, the children show as rows, then
+    /// "Show N more" for merged children whose task spaces closed. A fold
+    /// that holds the selected row shows it.
+    @ViewBuilder
+    private func finishedChildrenFold(
+        parent: SidebarBucketEntry<CardRow>?,
+        parentKey: SidebarRowKey,
+        rows: [SidebarBucketEntry<CardRow>],
+        listedMergedCount: Int,
+        card: BucketedCard,
+        workspace: WorkspaceState?
+    ) -> some View {
+        let isExpanded = Binding(
+            get: {
+                expandedFinishedChildrenParents.contains(parentKey)
+                    || rows.contains { $0.key == selectedRowKey }
+            },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedFinishedChildrenParents.insert(parentKey)
+                } else {
+                    expandedFinishedChildrenParents.remove(parentKey)
+                }
+            }
+        )
+        let parentTaskID = parent.flatMap(taskID(of:))
+        let progress = parentTaskID.flatMap { taskID in
+            taskCoordinator == nil ? nil : taskBoardSnapshot.childProgress(of: taskID)
+        }
+        let title = progress.map { SidebarSubspacePresentation.childProgressLabel(merged: $0.merged, total: $0.total) }
+            ?? "\(rows.count) merged"
+        // Merged children that no longer list: their task spaces closed.
+        let closedCount = max(0, (progress?.merged ?? 0) - listedMergedCount)
+        VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
+            SidebarFinishedChildrenToggle(title: title, rowCount: rows.count, isExpanded: isExpanded)
+                .padding(.leading, Self.linkedChildIndent)
+                .accessibilityIdentifier("sidebar.task.finishedChildren.\(Self.accessibilityKey(parentKey))")
+            if isExpanded.wrappedValue {
+                ForEach(rows) { entry in
+                    bucketRow(entry, card: card, workspace: workspace)
+                }
+                if closedCount > 0, let parentTaskID {
+                    SidebarShowMoreToShipButton(
+                        count: closedCount,
+                        help: "Show the other merged tasks in the Tasks view",
+                        accessibilityText: "Show \(closedCount) more merged \(closedCount == 1 ? "task" : "tasks") in the Tasks view"
+                    ) {
+                        openTasksView(selecting: .task(parentTaskID))
+                    }
+                    .padding(.leading, Self.linkedChildIndent + 22)
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
+    /// Whether a row's task counts as merged in its parent's "N/M merged":
+    /// To ship or Done, as `TaskBoard.childProgressByParentTaskID` counts.
+    private static func isMerged(_ entry: SidebarBucketEntry<CardRow>) -> Bool {
+        let stage: TaskStage? = switch entry.payload.kind {
+        case .subspace(let row): row.stage
+        case .task(let item): item.stage
+        case .terminal: nil
+        }
+        return stage == .toShip || stage == .done
+    }
+
+    /// The task a bucket row shows, if any.
+    private func taskID(of entry: SidebarBucketEntry<CardRow>) -> UUID? {
+        switch entry.payload.kind {
+        case .subspace(let row): store.state.workspacesByID[row.id]?.taskID
+        case .task(let item): item.taskID
+        case .terminal: nil
+        }
+    }
+
+    /// A row key as an accessibility identifier suffix.
+    private static func accessibilityKey(_ key: SidebarRowKey) -> String {
+        switch key {
+        case .panel(let id): "panel.\(id.uuidString)"
+        case .workspace(let id): "workspace.\(id.uuidString)"
+        case .task(.task(let id)): "task.\(id.uuidString)"
+        case .task(.taskSpace(let id)): "taskSpace.\(id.uuidString)"
+        }
     }
 
     /// The card's counts by bucket, in place of the running-agents chip:
@@ -4630,6 +4756,9 @@ struct SidebarView: View {
             summary: boardItem.flatMap { item in
                 // The agent's question replaces its last status line.
                 if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
+                // So does a start that may wait in the terminal: the session
+                // itself only shows that it waits.
+                if case .needsYou(.startWaitsInTerminal) = item.stage { return TaskBoardPresentation.statusLine(item) }
                 // A merged task's held task space says when it closes.
                 return item.stage.isBeforeStart || item.cleanupHeldUntil != nil ? TaskBoardPresentation.statusLine(item) : nil
             } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
@@ -5346,7 +5475,7 @@ struct SidebarView: View {
             Button(presentation.title) {}
                 .disabled(true)
             Button("Retry Clean Up") {
-                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: row.id)
+                TaskActions.retryCleanup(workspaceID: row.id, sessionRuntimeStore: sessionRuntimeStore)
             }
             Button("Don't Clean Up") {
                 sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)

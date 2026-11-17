@@ -342,7 +342,10 @@ targets its own workspace rather than the selected one; a caller whose session
 Toastty no longer runs must name the workspace. Only subspaces and a task's
 task space hold the mark: `workspace.set-done` rejects any other top-level
 workspace, and moving a subspace that is not a task's task space to top level
-drops it. The sidebar shows a done task space with a check in place of its
+drops it. It also rejects a task with an open pull request, or one GitHub has
+not answered for yet, and a task with a merge under way: such a task finishes
+when you merge or archive it, as the sidebar's box and Toastty Mobile already
+require. The sidebar shows a done task space with a check in place of its
 idle box and keeps its place; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn
@@ -881,7 +884,7 @@ toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
 toastty task needs-reply [<task-id>] [--question <text>]
 toastty task mark-done <task-id>
-toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
+toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
 toastty task release [--workspace <id>]
 ```
 
@@ -932,7 +935,9 @@ They also report how long the task has been in its state: `stage.changedAt`,
 when Toastty quit or crashed, and has not started one since),
 `agentState.lastOutputAt`, `lastUserInputAt`, and `pullRequest` with `checks`
 (`pending`, `failing` or `passing`), `checksPendingSince` and
-`mergeStateStatus`. `task list --changed-since` does not list a task when only
+`mergeStateStatus`. While GitHub has not answered about the pull request
+because the request failed, `pullRequestLookupError` gives the `problem`
+(`ghMissing`, `notSignedIn` or `other`) and a `message` that says what to do. `task list --changed-since` does not list a task when only
 `lastOutputAt` or `lastUserInputAt` changed. See
 [How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state).
 `task adopt` gives a task space without a record one; it defaults to the
@@ -956,18 +961,26 @@ its child tasks.
 `task merge` is what a merge skill runs once its checks pass; without a task
 ID it merges the calling agent's own task. It runs only from an agent session
 in the task's task space or its parent task's; elsewhere, including a shell,
-it refuses and names `task request-merge`.
+it refuses and names `task request-merge`. It waits up to 8 seconds for
+Toastty's first answer. When Toastty refuses the merge, for example because
+the worktree has uncommitted or untracked files, or the merge fails, the
+command fails with the reason. Otherwise `merge` in its answer is
+`waitingForChecks`, `cleaningUp` (merged), or `merging` when no answer came
+in time; `task get` reads it again.
 `task request-merge <task-id>` accepts the merge from outside the task, as
 the Merge button does: the task's agent checks the pull request and then
 merges it, also in a project with `merge = "direct"`. It refuses where the
 Merge button is not offered. Toastty merges at the checkout's
 commit, refuses with `--head` when the checkout moved past the checked commit,
 waits for checks that still run, and cleans up 24 hours after the merge,
-once the agent's turn has ended.
+once the agent's turn has ended; `task get` reports that time as
+`cleanup.taskSpaceClosesAt` while the task space waits.
 `task cancel-merge` stops a merge the user accepted. `task archive` closes a
 task without merging; it refuses with the reason, and `--close-pr`,
 `--delete-unpushed` and `--discard-changes` allow what it would otherwise
-refuse or leave. `task clean-up` retries a cleanup that stopped.
+refuse or leave. With `--dry-run` it changes nothing and prints `summary`,
+what the archive would close, remove and keep, and `refusal`, the reason it
+would refuse or `null`. `task clean-up` retries a cleanup that stopped.
 `task needs-reply` is what an agent runs just before it ends a turn with a
 question: the task stays in Needs you, showing `--question`, after the user
 reads the turn, until the task's agent starts its next turn. A later
@@ -1057,7 +1070,8 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   under Toastty's line, and its end marks nothing unread and sends no
   notification. Only the coordinator's own agent can pass `--quiet`, in a
   turn that Toastty's last digest started and that no other message came
-  into; otherwise the command fails and changes nothing. It returns the
+  into; otherwise the command fails and changes nothing. A later call
+  without `--quiet` in the same turn removes the mark. It returns the
   `status` fields and fails when there is no coordinator. See
   [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator)
   and [Quiet turns](tasks.md#quiet-turns).

@@ -23,10 +23,18 @@ struct TaskStartWorkTests {
             var prompt: String
             var forkFromSessionID: String?
             var scopedWorkspaceIDs: Set<UUID>? = nil
+            var promptWithoutSkills: String? = nil
         }
 
         private(set) var calls: [Call] = []
         weak var sessions: FakeSessions?
+        /// Sessions whose launch, as a test says, did not give the agent its
+        /// skills.
+        var sessionIDsWithoutSkills: Set<String> = []
+
+        func lacksShippedSkills(sessionID: String) -> Bool {
+            sessionIDsWithoutSkills.contains(sessionID)
+        }
 
         func launchProfileSummaries() -> [AgentLaunchProfileSummary] {
             ["claude", "codex", "cursor"].map { id in
@@ -51,6 +59,7 @@ struct TaskStartWorkTests {
             model: String?,
             reasoningEffort: String?,
             initialPrompt: String,
+            initialPromptWithoutSkills: String?,
             parentSessionID: String?,
             forkFromSessionID: String?,
             scopedWorkspaceIDs: Set<UUID>?,
@@ -65,7 +74,8 @@ struct TaskStartWorkTests {
                 model: model,
                 prompt: initialPrompt,
                 forkFromSessionID: forkFromSessionID,
-                scopedWorkspaceIDs: scopedWorkspaceIDs
+                scopedWorkspaceIDs: scopedWorkspaceIDs,
+                promptWithoutSkills: initialPromptWithoutSkills
             ))
             let sessionID = "launched-\(calls.count)"
             let agent = AgentKind(rawValue: profileID)!
@@ -738,8 +748,9 @@ struct TaskStartWorkTests {
             (\(remoteTip.prefix(12))).
 
             You own only this task. The conversation above can plan other tasks and other work: do not do them, and do \
-            not act for the session that created this task. Report progress, questions and results to the task that \
-            created this one with `toastty task send \(parent.id.uuidString) "<message>"`.
+            not act for the session that created this task. The task [\(parent.title)](toastty://task/\(parent.id.uuidString)) \
+            created this task. Report progress, questions and results to it with \
+            `toastty task send \(parent.id.uuidString) "<message>"`.
 
             Brief for the parser.
 
@@ -781,6 +792,30 @@ struct TaskStartWorkTests {
         #expect(fixture.sessions.closedPanels.isEmpty)
         #expect(fixture.sessions.delivered.isEmpty)
         #expect(fixture.launcher.calls.count == 3)
+    }
+
+    @Test func aChildTaskThatIsNotAForkNamesItsParentAsALink() async throws {
+        let fixture = try Fixture()
+        let parentTask = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Plan the release", title: "Plan the [beta] release", workspaceID: fixture.workspaceID, agent: "claude"
+        ))
+        await fixture.waitUntil("setup ends") { fixture.record(parentTask.id)?.setup == .started }
+        let parent = try #require(fixture.record(parentTask.id))
+
+        let child = try await fixture.coordinator.create(
+            TaskCreateRequest(text: "Write the release notes", workspaceID: fixture.workspaceID, agent: "claude"),
+            caller: try fixture.caller(of: parent)
+        )
+        #expect(child.parentTaskID == parent.id)
+        await fixture.waitUntil("the child launches") { fixture.launcher.calls.count == 2 }
+        let launched = try #require(fixture.launcher.calls.last)
+        // The title is escaped for the link, and the ID stays in the command.
+        let parentLine = #"The task [Plan the \[beta\] release](toastty://task/\#(parent.id.uuidString)) created this task. "#
+            + #"Report progress, questions and results to it with `toastty task send \#(parent.id.uuidString) "<message>"`."#
+        #expect(launched.prompt.contains(parentLine))
+        // A launch that cannot give the agent its skills sends another
+        // message, which names the parent too.
+        #expect(try #require(launched.promptWithoutSkills).contains(parentLine))
     }
 
     @Test func aForkFromATopLevelSessionReportsToThatSessionAndSkipsDefaults() async throws {

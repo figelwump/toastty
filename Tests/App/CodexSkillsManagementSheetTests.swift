@@ -296,6 +296,50 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         XCTAssertFalse(model.isWorking)
     }
 
+    /// Copies of the examples that came before the task skills are still
+    /// delivered and compete with them; the sheet names them, matching only
+    /// the exact names, and only those that are included.
+    @MainActor
+    func testUserSkillsModelFlagsIncludedOldExampleSkills() async {
+        let state = makeCatalogState(packages: [
+            makePackage(name: "release-notes", status: .accepted),
+            makePackage(name: "worktree-create", status: .accepted),
+            makePackage(name: "worktree-done", status: .accepted),
+            makePackage(name: "worktree-cleanup", status: .excluded(.missingSkillFile)),
+            makePackage(name: "worktree-create-v2", status: .accepted),
+        ])
+        var revealed: [URL] = []
+        let model = UserSkillsManagementModel(
+            userSkillsDirectoryURL: URL(fileURLWithPath: "/tmp/user-skills", isDirectory: true),
+            scanProvider: { state },
+            existingSnapshotProvider: { nil },
+            refreshProvider: { nil },
+            revealFolder: { _ in },
+            revealFiles: { revealed = $0 }
+        )
+        model.refresh()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(model.oldExampleSkills.map(\.name), ["worktree-create", "worktree-done"])
+        XCTAssertEqual(
+            UserSkillsManagementModel.statusDescription(for: state.packages[1]),
+            "Included · old example, replaced by toastty-task-start"
+        )
+        XCTAssertEqual(UserSkillsManagementModel.statusDescription(for: state.packages[0]), "Included")
+        XCTAssertEqual(
+            UserSkillsManagementModel.oldExampleSkillsWarning(count: 2),
+            "2 old example skills compete with the built-in task skills."
+        )
+        model.revealOldExampleSkills()
+        XCTAssertEqual(revealed, [state.packages[1].sourceURL, state.packages[2].sourceURL])
+
+        let cleanState = makeCatalogState(packages: [makePackage(name: "release-notes", status: .accepted)])
+        let clean = makeModel(scan: { cleanState })
+        clean.refresh()
+        await clean.waitForPendingWork()
+        XCTAssertTrue(clean.oldExampleSkills.isEmpty)
+    }
+
     @MainActor
     func testUserSkillsModelEmptyCatalogState() async {
         let emptyState = makeCatalogState(packages: [])

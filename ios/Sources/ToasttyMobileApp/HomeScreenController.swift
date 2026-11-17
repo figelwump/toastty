@@ -130,6 +130,10 @@ final class HomeScreenController {
     private(set) var hostSupportsCoordinatorSend: Bool
     /// Whether the connected Mac closes sessions for this device.
     private(set) var hostSupportsConversationClose: Bool
+    /// Whether the connected Mac has the task system, as its capabilities
+    /// say. A Mac from before tasks sends no board, and Home asks the user
+    /// to update it. True until the Mac's capabilities arrive.
+    private(set) var hostSupportsTasks: Bool
     /// Whether the connected Mac takes task actions from this device. The
     /// Mac's per-device Task actions switch is checked per request.
     var hostSupportsTaskActions: Bool
@@ -233,6 +237,7 @@ final class HomeScreenController {
         hostSupportsCoordinatorSend = runtimeMode == .fixture && Self.fixtureSupportsTaskCreate
             && Self.fixtureSupportsCoordinatorSend
         hostSupportsConversationClose = runtimeMode == .fixture
+        hostSupportsTasks = runtimeMode != .fixture || Self.fixtureSupportsTasks
         hostSupportsTaskActions = runtimeMode == .fixture
         hostSupportsProjectRelease = runtimeMode == .fixture
         self.connectionState = connectionState
@@ -289,6 +294,7 @@ final class HomeScreenController {
         hostSupportsTaskActions: Bool? = nil,
         hostSupportsProjectRelease: Bool? = nil,
         hostSupportsCoordinatorSend: Bool? = nil,
+        hostSupportsTasks: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
         let removedConversation = selectedConversationID.flatMap { conversation(id: $0) }
@@ -316,6 +322,9 @@ final class HomeScreenController {
         }
         if let hostSupportsProjectRelease {
             self.hostSupportsProjectRelease = hostSupportsProjectRelease
+        }
+        if let hostSupportsTasks {
+            self.hostSupportsTasks = hostSupportsTasks
         }
         // The same Mac snapshot is presented again whenever the connection
         // state changes, with fresh ages, so equality cannot tell a new one.
@@ -743,6 +752,21 @@ final class HomeScreenController {
     /// coordinator now.
     var supportsCoordinatorSend: Bool {
         hostSupportsCoordinatorSend && freshness == .live
+    }
+
+    /// Home asks the user to update the Mac while a live Mac from before
+    /// tasks sends no task board.
+    var asksToUpdateMacForTasks: Bool {
+        hostSupportsTasks == false && freshness == .live && snapshot.taskBoard == nil
+    }
+
+    /// `unsupported` plays a Mac from before tasks.
+    private static var fixtureSupportsTasks: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_HOST_TASKS"] != "unsupported"
+#else
+        true
+#endif
     }
 
     /// A fixture launch with this set to "unsupported" stands in for a Mac

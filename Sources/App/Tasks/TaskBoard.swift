@@ -29,6 +29,9 @@ struct TaskBoardItem: Identifiable, Equatable {
     var waitingOnTitle: String?
     var pullRequest: WorkspacePullRequestLink?
     var pullRequestState: TaskPullRequestState?
+    /// Why GitHub has not answered about the pull request, while it has
+    /// not: the task then waits for review only as far as Toastty can tell.
+    var pullRequestLookupProblem: PullRequestLookupProblem? = nil
     var branch: String?
     var parentTaskID: UUID?
     /// An accepted merge that is still under way.
@@ -73,6 +76,10 @@ enum TaskBoard {
         var records: [TaskRecord]
         var statuses: (UUID) -> [WorkspaceSessionStatus]
         var pullRequestState: (WorkspacePullRequestLink) -> TaskPullRequestState?
+        var pullRequestLookupProblem: (WorkspacePullRequestLink) -> PullRequestLookupProblem? = { _ in nil }
+        /// Whether a session's wait for the turn of its first prompt ran
+        /// out with no report from its agent.
+        var firstPromptNotStarted: (String) -> Bool = { _ in false }
         var config: TasksConfig?
         var homeDirectory: String = NSHomeDirectory()
         var sessionRegistry = SessionRegistry()
@@ -222,6 +229,13 @@ enum TaskBoard {
         return hasUnreadTurn(statuses, in: workspace) ? .finished : .idle
     }
 
+    /// Whether an agent in the task space was started with its first prompt
+    /// and never reported that it began it. An agent there that works or
+    /// asks for something comes first; see `TaskStage`.
+    static func startWaitsInTerminal(_ statuses: [WorkspaceSessionStatus], inputs: Inputs) -> Bool {
+        statuses.contains { inputs.firstPromptNotStarted($0.sessionID) }
+    }
+
     /// Whether a session in the task space ended a turn whose panel is still
     /// unread.
     static func hasUnreadTurn(_ statuses: [WorkspaceSessionStatus], in workspace: WorkspaceState?) -> Bool {
@@ -331,7 +345,8 @@ enum TaskBoard {
                 hasPullRequestLink: link != nil,
                 merge: merge,
                 cleanupProblem: cleanupProblem,
-                waitsOnTask: waitingOn != nil
+                waitsOnTask: waitingOn != nil,
+                startWaitsInTerminal: startWaitsInTerminal(statuses, inputs: inputs)
             ),
             releaseTagsConfigured: releaseTags.configured(root: root, repositoryRoot: record.operation.worktree?.checkoutRoot),
             children: children
@@ -354,6 +369,7 @@ enum TaskBoard {
             waitingOnTitle: waitingOn,
             pullRequest: link,
             pullRequestState: pullRequestState,
+            pullRequestLookupProblem: pullRequestState == nil ? link.flatMap(inputs.pullRequestLookupProblem) : nil,
             branch: record.worktree.flatMap { $0.isDetached ? nil : $0.branch },
             parentTaskID: record.parentTaskID,
             merge: merge,
@@ -418,7 +434,8 @@ enum TaskBoard {
                 taskSpaceOpen: true,
                 agent: agent,
                 pullRequest: pullRequestState,
-                hasPullRequestLink: link != nil
+                hasPullRequestLink: link != nil,
+                startWaitsInTerminal: startWaitsInTerminal(statuses, inputs: inputs)
             ),
             releaseTagsConfigured: releaseTags.configured(root: project?.rootDirectory)
         )
@@ -435,6 +452,7 @@ enum TaskBoard {
             hasUnreadTurn: hasUnreadTurn(statuses, in: workspace),
             pullRequest: link,
             pullRequestState: pullRequestState,
+            pullRequestLookupProblem: pullRequestState == nil ? link.flatMap(inputs.pullRequestLookupProblem) : nil,
             branch: nil,
             parentTaskID: nil,
             merge: nil,
@@ -698,6 +716,10 @@ final class TaskBoardStore: ObservableObject {
             records: records,
             statuses: statuses,
             pullRequestState: { [weak pullRequests] link in pullRequests?.state(for: link) },
+            pullRequestLookupProblem: { [weak pullRequests] link in pullRequests?.lookupProblem(for: link) },
+            firstPromptNotStarted: { [weak sessionRuntimeStore] sessionID in
+                sessionRuntimeStore?.sessionIDsWithUnstartedFirstPrompt.contains(sessionID) ?? false
+            },
             config: config,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry ?? SessionRegistry(),
             repositoryRoots: repositoryRoots,

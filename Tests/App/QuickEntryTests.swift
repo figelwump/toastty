@@ -21,7 +21,8 @@ struct QuickEntryTests {
             fixture existing: TaskCoordinatorTests.Fixture? = nil,
             create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil,
             recordsPresetUsage: Bool = false,
-            agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil
+            agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil,
+            registersGlobalHotKey: Bool = false
         ) throws {
             let fixture = try existing ?? TaskCoordinatorTests.Fixture()
             fixture.config = TasksConfig(defaults: .init(agent: "claude"))
@@ -42,7 +43,7 @@ struct QuickEntryTests {
                     return fixture.config
                 },
                 stagingRootURL: stagingRoot,
-                registersGlobalHotKey: false,
+                registersGlobalHotKey: registersGlobalHotKey,
                 toastDuration: .milliseconds(50),
                 // Opened over Toastty, whatever app the test host is behind.
                 frontmostApplication: { nil }
@@ -180,6 +181,42 @@ struct QuickEntryTests {
         #expect(fixture.record(record.id)?.setup == .started)
     }
 
+    /// A fresh install has no agents.toml and no tasks.toml: the panel
+    /// offers the installed built-in agents, starts on the first, and
+    /// creates the task. With none installed, it says what to install.
+    @Test func onAFreshInstallThePanelStartsOnAnInstalledAgentAndCreatesTheTask() async throws {
+        let harness = try Harness(fixture: try TaskCoordinatorTests.Fixture(freshInstallWith: ["claude", "codex"]))
+        let fixture = harness.fixture
+        fixture.config = TasksConfig()
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        #expect(model.agentProfiles.map(\.id) == ["claude", "codex"])
+        #expect(model.preset == QuickEntryPreset(agent: "claude"))
+        #expect(model.agentTitle == "Claude Code")
+        #expect(model.missingChoiceHint == nil)
+
+        try harness.type("Fix the unread dot")
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        let record = try #require(fixture.coordinator.records.records.last)
+        #expect(record.pinned.agent == "claude")
+        await fixture.waitForSetup(record.id)
+        #expect(fixture.record(record.id)?.setup == .started)
+
+        let bare = try Harness(fixture: try TaskCoordinatorTests.Fixture(freshInstallWith: []))
+        bare.fixture.config = TasksConfig()
+        bare.controller.present(prefill: .empty)
+        let bareModel = try #require(bare.controller.model)
+        #expect(bareModel.agentProfiles.isEmpty)
+        #expect(bareModel.preset == nil)
+        #expect(bareModel.missingChoiceHint == "Install or configure an agent")
+        bare.controller.openPicker(.agent)
+        let picker = try #require(bare.controller.picker)
+        #expect(picker.rows.isEmpty)
+        #expect(picker.emptyText == "No agent found. Install Claude Code or Codex, or add a profile to ~/.toastty/agents.toml, then open this panel again.")
+        bare.controller.dismiss()
+    }
+
     @Test func thePanelStartsOnTheSelectedProjectAndTheDefaultsPresetAndPinsBoth() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
@@ -274,10 +311,11 @@ struct QuickEntryTests {
         let harness = try Harness()
         let fixture = harness.fixture
         // Broken when the panel opens: the error shows at once, since the
-        // Agent pill has no preset and Create Task stays off.
-        fixture.configError = TaskError("tasks.toml line 3: [defaults] agent is empty")
+        // Agent pill has no preset and Create Task stays off. The error
+        // names the file once.
+        fixture.configError = TasksConfigParseError(line: 3, message: "[defaults] agent is empty")
         harness.controller.present(prefill: .empty)
-        #expect(harness.controller.model?.errorMessage?.contains("[defaults] agent is empty") == true)
+        #expect(harness.controller.model?.errorMessage == "tasks.toml line 3: [defaults] agent is empty")
         #expect(harness.controller.model?.preset == nil)
         harness.controller.dismiss()
 
@@ -577,6 +615,35 @@ struct QuickEntryTests {
         #expect(model.missingChoiceHint == "Pick a workspace with ⌘1")
         #expect(model.text == "Keep this draft")
         #expect(harness.controller.panel === panel)
+    }
+
+    @Test func theWorkspaceListShowsTheFolderATaskWouldUseAndMarksOneOutsideARepository() async throws {
+        let harness = try Harness()
+        defer { harness.controller.dismiss() }
+        let fixture = harness.fixture
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        // A workspace whose terminal is in a folder outside any repository,
+        // as the first workspace of a fresh install in the home folder.
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "Workspace 1", activate: false)))
+        let plain = try #require(fixture.store.state.workspacesByID.values.first { $0.title == "Workspace 1" })
+        _ = fixture.store.send(.updateTerminalPanelMetadata(
+            panelID: try #require(plain.focusedPanelID),
+            title: nil,
+            cwd: fixture.root.path
+        ))
+
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        await harness.controller.waitForWorkspaceFolderCheck()
+        let rows = try #require(harness.controller.picker?.rows)
+        let project = try #require(rows.first { $0.title == "toastty" })
+        // The terminal is in a subfolder; the task uses the repository root.
+        #expect(project.detail == QuickEntryWorkspaceFolders.displayPath(fixture.projectRoot))
+        #expect(project.warning == nil)
+        let other = try #require(rows.first { $0.title == "Workspace 1" })
+        #expect(other.detail == QuickEntryWorkspaceFolders.displayPath(fixture.root.path))
+        #expect(other.warning == QuickEntryWorkspaceFolders.notAGitRepository)
     }
 
     @Test func commandOneOpensTheWorkspacePickerAndReturnPicksAndRefocusesTheText() async throws {
@@ -1017,8 +1084,57 @@ struct QuickEntryTests {
         let harness = try Harness()
         harness.fixture.configError = TasksConfigParseError(line: 2, message: "[quick_entry] the shortcut \"t\" needs Command")
         let message = try #require(harness.controller.reloadShortcut())
-        #expect(message.contains("⌥⇧T until the file is fixed"))
+        #expect(message == "tasks.toml line 2: [quick_entry] the shortcut \"t\" needs Command. "
+            + "The quick entry shortcut is ⌥⇧T until the file is fixed.")
         #expect(harness.controller.shortcut == .default)
+    }
+
+    /// The shortcut cannot be registered when Toastty starts. The message
+    /// waits for a window that can show it, and shows once. A second
+    /// registration in the same process fails; another app's registration
+    /// does not make Toastty's fail, because Carbon refuses a hot key only
+    /// when both ask for it with `kEventHotKeyExclusive`.
+    @Test func aShortcutThatCannotBeRegisteredAtLaunchIsShownOnce() throws {
+        // An unlikely combination, so it does not collide with the
+        // machine's own shortcuts.
+        let shortcut = QuickEntryShortcut(modifiers: [.control, .option, .shift, .command], key: .function(17))
+        let earlier = QuickEntryHotKey {}
+        #expect(earlier.register(shortcut) == .registered(shortcut))
+        defer { earlier.unregister() }
+        let harness = try Harness(registersGlobalHotKey: true)
+        harness.fixture.config.quickEntry = .init(shortcut: shortcut)
+
+        harness.controller.loadShortcutAtLaunch()
+        #expect(harness.controller.isShortcutGlobal == false)
+        let expected = "Toastty could not register the quick entry shortcut \(shortcut.symbolLabel). "
+            + "Set another one with [quick_entry] shortcut in ~/.toastty/tasks.toml."
+        #expect(harness.controller.launchMessage == expected)
+
+        var shown: [String] = []
+        let windowID = UUID()
+        // The first window already shows a sheet.
+        harness.controller.presentLaunchMessageIfNeeded(windowID: windowID) { _, _ in false }
+        #expect(harness.controller.launchMessage == expected)
+        for _ in 0..<2 {
+            harness.controller.presentLaunchMessageIfNeeded(windowID: windowID) { _, message in
+                shown.append(message)
+                return true
+            }
+        }
+        #expect(shown == [expected])
+        #expect(harness.controller.launchMessage == nil)
+    }
+
+    @Test func aReloadReplacesALaunchMessageThatNoWindowShowed() throws {
+        let harness = try Harness()
+        harness.fixture.configError = TasksConfigParseError(line: 2, message: "[quick_entry] the shortcut \"t\" needs Command")
+        harness.controller.loadShortcutAtLaunch()
+        #expect(harness.controller.launchMessage?.contains("until the file is fixed") == true)
+
+        // The user fixes the file and reloads before any window showed it.
+        harness.fixture.configError = nil
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.launchMessage == nil)
     }
 
     @Test func aBrokenFileOnReloadKeepsTheShortcutInUse() throws {
@@ -1035,8 +1151,40 @@ struct QuickEntryTests {
         // A typo elsewhere in the file must not turn the shortcut back on.
         fixture.configError = TasksConfigParseError(line: 9, message: "[defaults] agent is empty")
         let message = try #require(harness.controller.reloadShortcut())
-        #expect(message.contains("stays off until the file is fixed"))
+        #expect(message == "tasks.toml line 9: [defaults] agent is empty. "
+            + "The quick entry shortcut stays off until the file is fixed.")
         #expect(harness.controller.shortcut == nil)
+    }
+
+    /// The What's new sheet asks before Toastty takes ⌥⇧T from every app.
+    @Test func theDefaultShortcutWaitsForTheUsersAnswerAndAWrittenShortcutWins() throws {
+        let harness = try Harness()
+        var permission = QuickEntryShortcutPermission.waiting
+        harness.controller.defaultShortcutPermission = { permission }
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut == nil, "No key until the sheet has its answer")
+
+        permission = .allowed
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut == .default)
+
+        permission = .declined
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut == nil)
+        // A broken file at launch falls back to no key, not to ⌥⇧T.
+        let launch = try Harness()
+        launch.controller.defaultShortcutPermission = { .declined }
+        launch.fixture.configError = TasksConfigParseError(line: 2, message: "[defaults] agent is empty")
+        #expect(try #require(launch.controller.reloadShortcut()).contains("is off until the file is fixed"))
+        #expect(launch.controller.shortcut == nil)
+
+        // A shortcut written in tasks.toml wins over the answer.
+        harness.fixture.config.quickEntry = .init(
+            shortcut: try QuickEntryShortcut.parse("ctrl+opt+space"),
+            isShortcutSet: true
+        )
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut?.symbolLabel == "⌃⌥Space")
     }
 }
 

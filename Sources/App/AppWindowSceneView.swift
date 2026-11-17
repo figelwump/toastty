@@ -23,6 +23,9 @@ struct AppWindowSceneView: View {
     let onWindowCloseInitiated: @MainActor () -> Void
     let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
+    /// Shows what Toastty found at launch, such as an error in
+    /// `tasks.toml`, over the first window that gets the keyboard.
+    var presentLaunchMessages: (@MainActor (UUID) -> Void)? = nil
 
     @State private var fontHUDValue: FontHUDValue?
     @State private var hideFontHUDTask: Task<Void, Never>?
@@ -231,7 +234,18 @@ struct AppWindowSceneView: View {
         _ = store.send(.selectWindow(windowID: windowID))
         scheduleWindowFocusRestore()
         openGettingStartedPanelIfNeeded()
+        presentLaunchMessagesIfNeeded()
         offerCoordinatorStartIfNeeded()
+    }
+
+    /// After this notification, as the coordinator's question, because the
+    /// message is a sheet, which takes the keyboard itself. While the
+    /// question still waits, the message waits too and shows when the
+    /// question ends; otherwise it shows here.
+    private func presentLaunchMessagesIfNeeded() {
+        guard let presentLaunchMessages else { return }
+        let windowID = windowID
+        Task { @MainActor in presentLaunchMessages(windowID) }
     }
 
     /// Asks once whether to start the coordinator. After this notification,

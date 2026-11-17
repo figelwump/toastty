@@ -262,8 +262,10 @@ final class LiveSessionsControllerTests: XCTestCase {
         let controller = try XCTUnwrap(subject.activeConversationController)
         controller.stop()
         controller.consume(composerState(for: conversation, failure: .coordinatorNotLive))
+        let drafts = ToasttyComposerDraftStore()
+        drafts.update { $0.updateDraft("saved draft", for: conversation.id) }
         let host = UIHostingController(rootView: ForegroundProbeComposerHarness(
-            sessions: subject, home: home, conversation: conversation
+            sessions: subject, home: home, conversation: conversation, drafts: drafts
         ))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -556,6 +558,44 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertFalse(home.canFlagConversations)
     }
 
+    /// Home asks the user to update the Mac only while a live Mac's
+    /// capabilities lack `tasks`. Empty capabilities, before a hello or
+    /// between connections, keep what Home knew.
+    func testHomeAsksToUpdateOnlyALiveMacWithoutTasks() {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+        ))
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: []
+        ))
+        XCTAssertTrue(home.hostSupportsTasks)
+        XCTAssertFalse(home.asksToUpdateMacForTasks)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.workspacePanels]
+        ))
+        XCTAssertTrue(home.asksToUpdateMacForTasks)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .reconnecting(failureCount: 1, showsBanner: false), capabilities: []
+        ))
+        XCTAssertFalse(home.hostSupportsTasks)
+        XCTAssertFalse(home.asksToUpdateMacForTasks)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.workspacePanels, .tasks]
+        ))
+        XCTAssertTrue(home.hostSupportsTasks)
+        XCTAssertFalse(home.asksToUpdateMacForTasks)
+    }
+
     func testSessionStartNeedsTheHostCapabilityAndThisDevicesSendAccess() async {
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
@@ -664,8 +704,9 @@ final class LiveSessionsControllerTests: XCTestCase {
 
     /// The coordinator chat's New line needs the Mac's capability and its
     /// read point. Each can change while the chat is open: the capability
-    /// comes with a connection state, the read point with a session list.
-    func testTheCoordinatorChatTakesTheMacsReadPointAndCapabilityFromBothPaths() async throws {
+    /// comes with a connection state or the device's scopes, the read point
+    /// with a session list.
+    func testTheCoordinatorChatTakesTheMacsReadPointAndCapabilityFromEveryPath() async throws {
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
             snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
@@ -709,6 +750,90 @@ final class LiveSessionsControllerTests: XCTestCase {
             connectionGeneration: 7, snapshot: coordinatorSnapshot(readPoint: readPoint), phase: .live
         ))
         XCTAssertEqual(controller.chatReading.macReadPoint, readPoint)
+
+        // The capability also needs this device's read access, so a change
+        // of the device's scopes reaches the open chat too.
+        await subject.updateDeviceScopes([])
+        XCTAssertFalse(controller.readsCoordinatorChat)
+        await subject.updateDeviceScopes([.read])
+        XCTAssertTrue(controller.readsCoordinatorChat)
+        XCTAssertEqual(controller.chatReading.macReadPoint, readPoint)
+        subject.stopObserving()
+    }
+
+    /// The coordinator's chat folds the wake turns that the Mac shares as
+    /// quiet. The phone reads their keys when a snapshot names a revision
+    /// it does not have, also after a failed read, and gives the open chat
+    /// the keys. A Mac without the capability gets no read, and no turn
+    /// folds.
+    func testTheCoordinatorChatReadsTheQuietTurnsWhenTheirRevisionChanges() async throws {
+        let runtime = LiveRuntimeSpy()
+        let first = RemoteCoordinatorQuietDigests(revision: "revision-1", keys: ["key-1"])
+        let second = RemoteCoordinatorQuietDigests(revision: "revision-2", keys: ["key-1", "key-2"])
+        await runtime.scriptQuietDigests([.success(first), .failure(.network(reason: .timedOut)), .success(second)])
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        await subject.updateDeviceScopes([.read])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks]
+        ))
+        func announce(_ revision: String?) {
+            var list = snapshot(titles: ["Alpha"])
+            let alpha = list.conversations[0]
+            list.workspaces = [RemoteWorkspaceSummary(
+                id: try! XCTUnwrap(alpha.placement.workspaceID), title: "Coordinator", panels: [],
+                isCoordinator: true, coordinatorConversationID: alpha.conversationID,
+                coordinatorQuietDigestsRevision: revision
+            )]
+            list.tasks = RemoteTaskBoard(doneCount: 0)
+            subject.consumeSessionsState(SessionsRuntime.State(connectionGeneration: 7, snapshot: list, phase: .live))
+        }
+        func waitForKeys(_ keys: Set<String>?, of controller: LiveConversationController) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while controller.quietDigestKeys != keys, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertEqual(controller.quietDigestKeys, keys)
+        }
+        announce(first.revision)
+        let coordinatorID = try XCTUnwrap(home.snapshot.coordinatorConversation?.id)
+        await subject.openConversation(coordinatorID)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+
+        // A Mac without the capability: no read, and nothing folds.
+        try await Task.sleep(for: .milliseconds(100))
+        let readsByAnOlderMac = await runtime.quietDigestReadCount()
+        XCTAssertEqual(readsByAnOlderMac, 0)
+        XCTAssertNil(controller.quietDigestKeys)
+
+        // The capability comes with a connection state: one read.
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks, .coordinatorQuietDigests]
+        ))
+        try await waitForKeys(Set(first.keys), of: controller)
+        // The same revision again reads nothing.
+        announce(first.revision)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsForTheFirstRevision = await runtime.quietDigestReadCount()
+        XCTAssertEqual(readsForTheFirstRevision, 1)
+
+        // A mark comes: a new revision. The read fails, and the chat keeps
+        // the keys it has. The next snapshot tries again.
+        announce(second.revision)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsAfterTheFailure = await runtime.quietDigestReadCount()
+        XCTAssertEqual(readsAfterTheFailure, 2)
+        XCTAssertEqual(controller.quietDigestKeys, Set(first.keys))
+        announce(second.revision)
+        try await waitForKeys(Set(second.keys), of: controller)
+
+        // The Mac stops sharing them: nothing folds.
+        announce(nil)
+        XCTAssertNil(controller.quietDigestKeys)
         subject.stopObserving()
     }
 
@@ -1069,13 +1194,14 @@ private struct ForegroundProbeComposerHarness: View {
     let sessions: LiveSessionsController
     let home: HomeScreenController
     let conversation: MobileConversation
+    let drafts: ToasttyComposerDraftStore
 
     var body: some View {
         ToasttyConversationScreen(
             conversationID: conversation.id,
             controller: home,
             composer: sessions.composerPresentation(for: conversation),
-            draft: "saved draft",
+            drafts: drafts,
             canAcknowledgeRead: false
         )
     }
@@ -1231,6 +1357,22 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     func scriptTaskActions(_ scripts: [Result<RemoteTaskActionResponse?, GatewayFailure>]) {
         taskActionScripts = scripts
     }
+
+    private var quietDigestAnswers: [Result<RemoteCoordinatorQuietDigests, GatewayFailure>] = []
+    private var quietDigestReads = 0
+
+    /// What each read of the quiet digests answers, in turn.
+    func scriptQuietDigests(_ answers: [Result<RemoteCoordinatorQuietDigests, GatewayFailure>]) {
+        quietDigestAnswers = answers
+    }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        quietDigestReads += 1
+        guard quietDigestAnswers.isEmpty == false else { throw GatewayFailure.invalidResponse }
+        return try quietDigestAnswers.removeFirst().get()
+    }
+
+    func quietDigestReadCount() -> Int { quietDigestReads }
 
     func taskAction(
         _ request: RemoteTaskActionRequest

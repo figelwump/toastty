@@ -297,6 +297,7 @@ private extension RemoteProtocolGoldenTests {
                 "session-list-with-tasks.json",
                 RemoteGatewaySessionListResponse(snapshot: makeTaskSessionSnapshot())
             ),
+            try fixture("coordinator-quiet-digests-response.json", quietDigests),
             try fixture(
                 "task-action-request.json",
                 RemoteTaskActionRequest(
@@ -325,6 +326,20 @@ private extension RemoteProtocolGoldenTests {
                     pullRequest: RemoteTaskPullRequest(number: 258, url: URL(string: "https://github.com/example/site/pull/258")!),
                     blockedReason: nil
                 )))
+            ),
+            // The v0.9.2 iPhone app sends the first request and decodes
+            // only the results it shipped with, `work_in_progress` among them.
+            try fixture(
+                "workspace-done-request.json",
+                RemoteWorkspaceDoneRequest(workspaceID: numberedUUID(310), done: true)
+            ),
+            try fixture(
+                "workspace-done-request-knows-open-pull-request.json",
+                RemoteWorkspaceDoneRequest(workspaceID: numberedUUID(310), done: true, knowsOpenPullRequestResult: true)
+            ),
+            try fixture(
+                "workspace-done-response-work_in_progress.json",
+                RemoteWorkspaceDoneResponse(result: .workInProgress)
             ),
             try fixture(
                 "events-request.json",
@@ -568,6 +583,7 @@ private extension RemoteProtocolGoldenTests {
         let reviewSpaceID = numberedUUID(202)
         let watchedSpaceID = numberedUUID(203)
         let question = numberedUUID(301), review = numberedUUID(302), failed = numberedUUID(304)
+        let unplaced = numberedUUID(307)
         let child = numberedUUID(305), shipped = numberedUUID(306)
         snapshot.tasks = RemoteTaskBoard(
             tasks: [
@@ -630,6 +646,15 @@ private extension RemoteProtocolGoldenTests {
                         RemoteTaskActionItem(action: .delete, title: "Delete Task"),
                     ]
                 ),
+                // No action picks a workspace: the Mac says where to do it.
+                RemoteTaskSummary(
+                    id: unplaced, title: "Fix the settings typo", group: .needsYou,
+                    statusLine: "⚠ pick a workspace", rowSummary: "⚠ pick a workspace",
+                    stageTitle: "Needs you", stageReason: "No workspace was named. Pick a workspace for this task.",
+                    activityAt: timestamp.addingTimeInterval(-200),
+                    actions: [RemoteTaskActionItem(action: .delete, title: "Delete Task")],
+                    macStep: "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace."
+                ),
                 RemoteTaskSummary(
                     id: shipped, title: "Parent task rollup", group: .toShip, mark: .toShip,
                     statusLine: "Merged · waiting for a release", stageTitle: "To ship",
@@ -648,6 +673,7 @@ private extension RemoteProtocolGoldenTests {
                 RemoteTaskBoardEntry(taskID: child, isLinkedChild: true, isContext: true),
                 RemoteTaskBoardEntry(taskID: review),
                 RemoteTaskBoardEntry(taskID: failed),
+                RemoteTaskBoardEntry(taskID: unplaced),
             ],
             idle: [RemoteTaskBoardEntry(taskID: watchedSpaceID)],
             toShip: [
@@ -656,16 +682,25 @@ private extension RemoteProtocolGoldenTests {
             doneCount: 12,
             finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)]
         )
-        // The coordinator's workspace: only it carries the mark, and the
-        // read point of the coordinator's chat.
+        // The coordinator's workspace: only it carries the mark, the read
+        // point of the coordinator's chat, and the revision of its quiet
+        // wake turns.
         snapshot.workspaces.append(
             RemoteWorkspaceSummary(
                 id: numberedUUID(210), title: "Coordinator", panels: [], isCoordinator: true,
-                coordinatorChatRead: RemoteCoordinatorChatReadPoint(eventID: "codex:msg_read", timestamp: timestamp)
+                coordinatorChatRead: RemoteCoordinatorChatReadPoint(eventID: "codex:msg_read", timestamp: timestamp),
+                coordinatorQuietDigestsRevision: quietDigests.revision
             )
         )
         return snapshot
     }
+
+    /// One quiet wake turn's digest, by its key.
+    static let quietDigests = RemoteCoordinatorQuietDigests(keys: [CoordinatorWakeState.digestKey("""
+        [Toastty] Wake: this message is from Toastty, not from the user.
+        - [Fix the login redirect](toastty://task/00000000-0000-0000-0000-000000000302): needsYou (agentFinished) at 2026-08-08T14:39:00Z
+        Read `toastty task list` for details.
+        """)])
 
     static func makeEventPage() -> ConversationEventPage {
         var events: [ConversationEvent] = []

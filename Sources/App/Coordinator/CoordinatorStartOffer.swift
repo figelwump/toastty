@@ -3,14 +3,17 @@ import CoreState
 import Foundation
 
 /// Asks once whether to start the coordinator, so that a new user learns
-/// that it exists.
+/// that it exists. The question is the What's new sheet
+/// (`WhatsNewSheet`), which also names tasks and quick entry.
 ///
 /// Toastty asks when a window first has the keyboard and no coordinator was
 /// ever opened: there is no coordinator's workspace, and the coordinator's
 /// folder, which the first open creates and nothing removes, does not exist.
-/// Start runs the same code as Open Coordinator. Not Now is saved, and
-/// Toastty does not ask again; Open Coordinator stays in the Agent menu and
-/// in the command palette.
+/// Start runs the same code as Open Coordinator, and is saved once the
+/// coordinator's agent runs: a start that fails, for example because the
+/// agent is not installed, asks again at the next launch. Not Now is saved,
+/// and Toastty does not ask again; Open Coordinator stays in the Agent menu
+/// and in the command palette.
 @MainActor
 final class CoordinatorStartOffer {
     enum Answer: Equatable {
@@ -30,16 +33,6 @@ final class CoordinatorStartOffer {
     /// Set once the user answered.
     static let answeredKey = "toastty.coordinator.startOfferAnswered"
 
-    static let messageText = "Start the coordinator?"
-    static let informativeText = """
-    The coordinator is an agent session in its own workspace that follows your tasks. \
-    It tells you what needs you, unblocks stuck tasks and turns your requests into tasks.
-
-    You can start it later with Open Coordinator in the Agent menu or the command palette.
-    """
-    static let startButtonTitle = "Start Coordinator"
-    static let notNowButtonTitle = "Not Now"
-
     private let controller: CoordinatorController
     private let store: AppStore
     /// Where the answer is saved, or `nil` for a run that never asks, such
@@ -48,18 +41,24 @@ final class CoordinatorStartOffer {
     private let coordinatorDirectoryURL: URL
     private let present: Presenter
     private let presentFailure: @MainActor (String, String) -> Void
+    private let offerAgent: CoordinatorController.AgentChoicePresenter
 
     /// Takes down the question that shows now.
     private var dismiss: (@MainActor () -> Void)?
     private var storeObserverToken: UUID?
+    /// Called each time the question stops showing, answered or not, after
+    /// the answer counts. The quick entry key waits for the question, so it
+    /// is set up again here.
+    var questionEnded: (@MainActor () -> Void)?
 
     init(
         controller: CoordinatorController,
         store: AppStore,
         defaults: UserDefaults?,
         coordinatorDirectoryURL: URL,
-        present: @escaping Presenter = CoordinatorStartOffer.presentSheet,
-        presentFailure: @escaping @MainActor (String, String) -> Void = TaskActions.presentFailure
+        present: @escaping Presenter,
+        presentFailure: @escaping @MainActor (String, String) -> Void = TaskActions.presentFailure,
+        offerAgent: @escaping CoordinatorController.AgentChoicePresenter = CoordinatorController.presentAgentChoice
     ) {
         self.controller = controller
         self.store = store
@@ -67,17 +66,23 @@ final class CoordinatorStartOffer {
         self.coordinatorDirectoryURL = coordinatorDirectoryURL
         self.present = present
         self.presentFailure = presentFailure
+        self.offerAgent = offerAgent
     }
 
     /// Whether Toastty still has the question to ask.
     var shouldOffer: Bool {
-        guard let defaults, defaults.bool(forKey: Self.answeredKey) == false else { return false }
+        guard answeredThisLaunch == false,
+              let defaults, defaults.bool(forKey: Self.answeredKey) == false else { return false }
         return controller.location == nil
             && FileManager.default.fileExists(atPath: coordinatorDirectoryURL.path) == false
     }
 
     /// Whether the question shows now.
     var isShowing: Bool { dismiss != nil }
+
+    /// The user answered in this launch. A Start whose start failed is not
+    /// saved, but the question waits for the next launch.
+    private var answeredThisLaunch = false
 
     /// Asks over `windowID` when the question is still open. Call it when a
     /// window gets the keyboard.
@@ -97,17 +102,29 @@ final class CoordinatorStartOffer {
     }
 
     private func answered(_ answer: Answer?, windowID: UUID) {
+        let wasShowing = isShowing
         // Before the open below, which would take the question down.
         stopShowing()
+        // Once the answer counts, so the quick entry key sees it.
+        defer { if wasShowing { questionEnded?() } }
         // Without an answer the question is still open: a window that gets
         // the keyboard later asks it again.
         guard let answer else { return }
-        defaults?.set(true, forKey: Self.answeredKey)
+        answeredThisLaunch = true
         ToasttyLog.info("The user answered whether to start the coordinator", category: .tasks, metadata: [
             "answer": answer == .start ? "start" : "not_now",
         ])
-        if answer == .start {
-            controller.perform(.open, windowID: windowID, presentFailure: presentFailure)
+        guard answer == .start else {
+            defaults?.set(true, forKey: Self.answeredKey)
+            return
+        }
+        let start = controller.perform(.open, windowID: windowID, presentFailure: presentFailure, offerAgent: offerAgent)
+        Task { @MainActor [weak self] in
+            guard await start.value else {
+                ToasttyLog.info("The coordinator did not start from the question; the next launch asks again", category: .tasks)
+                return
+            }
+            self?.defaults?.set(true, forKey: Self.answeredKey)
         }
     }
 
@@ -115,6 +132,7 @@ final class CoordinatorStartOffer {
         let dismiss = dismiss
         stopShowing()
         dismiss?()
+        questionEnded?()
     }
 
     private func stopShowing() {
@@ -122,38 +140,6 @@ final class CoordinatorStartOffer {
         if let storeObserverToken {
             store.removeActionAppliedObserver(storeObserverToken)
             self.storeObserverToken = nil
-        }
-    }
-
-    // MARK: - The sheet
-
-    /// The question as a sheet on the window. A sheet keeps the rest of the
-    /// app in use: at launch, restored terminals and agents carry on while
-    /// the question waits.
-    static func presentSheet(
-        windowID: UUID,
-        answer: @escaping @MainActor (Answer?) -> Void
-    ) -> (@MainActor () -> Void)? {
-        guard let window = AgentLaunchUI.window(for: windowID), window.attachedSheet == nil else { return nil }
-        let alert = NSAlert()
-        alert.messageText = messageText
-        alert.informativeText = informativeText
-        alert.alertStyle = .informational
-        alert.addConfiguredButton(withTitle: startButtonTitle, behavior: .defaultAction)
-        alert.addConfiguredButton(withTitle: notNowButtonTitle, behavior: .cancelAction)
-        alert.window.setAccessibilityIdentifier("coordinator.start-offer")
-        alert.beginSheetModal(for: window) { response in
-            Task { @MainActor in
-                switch response {
-                case .alertFirstButtonReturn: answer(.start)
-                case .alertSecondButtonReturn: answer(.notNow)
-                // Taken down, or its window closed.
-                default: answer(nil)
-                }
-            }
-        }
-        return { [weak window, alert] in
-            window?.endSheet(alert.window, returnCode: .abort)
         }
     }
 }

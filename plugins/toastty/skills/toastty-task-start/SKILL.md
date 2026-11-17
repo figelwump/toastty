@@ -14,17 +14,18 @@ this skill must run inside a Toastty-managed agent session, and stop.
 
 ## Sandbox permissions
 
-Every Toastty CLI command in this skill connects to the app's local socket.
-In a sandboxed runtime, request the runtime's per-command sandbox escalation
-on the first attempt. Do not try the command sandboxed first.
+Every Toastty CLI command in this skill connects to the app's local socket,
+and `git push` and `gh` need the network. In a sandboxed runtime, request the
+runtime's per-command sandbox escalation for these commands on the first
+attempt. Do not try the command sandboxed first.
 
 In Codex, use `sandbox_permissions="require_escalated"` with a short
-justification that the command needs Toastty's local socket. Escalation runs
-that invocation outside the sandbox; it does not restrict access to one socket.
-Limit the request to the exact command. Do not request a broad approval prefix,
-change sandbox settings, or widen Toastty's workspace scope. If escalation is
-unavailable or denied by runtime policy or approval review, report the
-restriction and stop.
+justification that the command needs Toastty's local socket or the network.
+Escalation runs that invocation outside the sandbox; it does not restrict
+access to one socket. Limit the request to the exact command. Do not request a
+broad approval prefix, change sandbox settings, or widen Toastty's workspace
+scope. If escalation is unavailable or denied by runtime policy or approval
+review, report the restriction and stop.
 
 ## Which instructions win
 
@@ -33,6 +34,15 @@ the skill line and the task. The repository has its own instructions, such as
 `AGENTS.md` or `CLAUDE.md`, for building, testing, review, commits and pull
 requests. Both take precedence over this skill where they differ. This skill
 gives the defaults and Toastty's own rules.
+
+## Name other tasks by title
+
+When you name another task, in a reply, a report, a pull request or a
+message, use its title, not its ID. `task get` and `task list` give each
+task's `markdownLink`, `[title](toastty://task/<id>)`: write that where
+Markdown shows, such as your replies and task messages. GitHub drops that
+link, so in a pull request write the title, and link the task's pull request
+when it has one. Use the ID only in commands.
 
 ## Show suggested UI changes as mockups
 
@@ -50,9 +60,10 @@ The text after the skill line, or after "The task, as written:", is the user's
 request. The user often writes it quickly and without context. The message
 lists any attached files with their paths; read them.
 
-The first message says where you are. A new task starts in the project's own
-checkout, not in a worktree: do not edit files there. If the directory or
-branch does not match the message, stop and say what you found.
+When the task already runs in a worktree, the first message names the
+worktree, its branch and its base. Without that line, you are in the
+project's own checkout, not in a worktree: do not edit files there. If the
+directory or branch does not match the message, stop and say what you found.
 
 If the request is for a different repository than this task's project, say so
 and ask the user how to continue. `task set-workspace` does not move a task
@@ -129,11 +140,27 @@ update its pull request on the base the worktree started from, unless the user
 limited publication. Keep it a draft while required checks run, and mark it
 ready when they pass. Readiness does not authorize a merge.
 
+Toastty reads pull requests only from GitHub, through `gh`. Before you publish
+the first time, check whether the remote you push to is on `github.com`.
+
+- **The pull request is not on GitHub:** open it as the repository's
+  instructions say; `gh` is not needed. Annotate the workspace with another
+  key, such as `merge-request`, never `github-pr`. Toastty cannot read it, so
+  when the pull request is ready, run `task ready-for-review` as step 7
+  describes. The user merges it on its host; Toastty's Merge does not apply.
+  Skip the GitHub steps below.
+- **On GitHub, check `gh auth status` once.** If `gh` is missing or not signed
+  in, push the branch, then ask the user to install `gh` or run
+  `gh auth login`, with `task needs-reply` (step 7). Do not open the pull
+  request another way.
+
+On GitHub:
+
 - Set the workspace's `github-pr` annotation to the pull request, as
   `toastty-capabilities` describes. Toastty reads the pull request from it: the
   task shows as ready for review while the pull request is open, not a draft,
   and no agent works on it. Do not run `task ready-for-review` for work with a
-  pull request.
+  GitHub pull request.
 - Open the pull request in a browser panel in this task workspace's right
   panel, as `toastty-capabilities` describes. Reuse a panel that already shows
   it.
@@ -154,9 +181,17 @@ ready when they pass. Readiness does not authorize a merge.
   that you found, add a section `## Remaining after merge` to the
   description: what remains, its plan, and the open questions with the
   answers you suggest. Toastty removes the worktree after the merge, and its
-  ignored files with it: never keep such a plan only in a folder such as
-  `artifacts/`. The coordinator, when one runs, then continues the work in a
-  new task.
+  ignored files with it: never keep such a plan only in an ignored folder,
+  such as an `artifacts/` folder if the repository has one. The coordinator,
+  when one runs, then continues the work in a new task.
+- **When Toastty cleans up.** After the pull request merges, by Toastty or on
+  GitHub, Toastty closes this task space, removes the worktree and deletes
+  the branch 24 hours after the merge, at the first check when no agent turn
+  runs. `toastty task get` reports that time as `cleanup.taskSpaceClosesAt`.
+  A new turn in the task space after the merge, or a `github-pr` link to
+  another pull request, keeps the task space open. A worktree on another
+  branch than the pull request's, as when the task updates an existing pull
+  request, stops the cleanup until the user chooses Clean Up.
 
 In a repository without pull requests, report the verified commit instead.
 
@@ -202,9 +237,9 @@ task's Scratchpad.
   investigation is complete. State the decision needed in your final answer.
   Check the conversation first: if the user already authorized the work,
   continue within that scope instead of asking for the same approval again.
-- **A completed answer, investigation, plan, or other work without a pull
-  request:** use this only when the requested work is complete and the task
-  does not wait for a decision to continue that work. A request only for an
+- **A completed answer, investigation, plan, or other work without a GitHub
+  pull request:** use this only when the requested work is complete and the
+  task does not wait for a decision to continue that work. A request only for an
   answer, investigation, or plan can be complete when delivered, even if it
   suggests possible future work. An explanation or proposed fix alone does
   not complete requested or authorized implementation. Mark the task ready
@@ -216,9 +251,9 @@ task's Scratchpad.
   `ok=true`, and read the task again to confirm `readyForReviewAt` is set and
   `doneAt` is null. If you cannot verify the task's identity, do not change
   it, and say so.
-- **Work with a pull request:** the user accepts it with the Merge button or by
-  saying "merge it", which runs `toastty-task-merge`. Do not merge it yourself,
-  and do not mark the task Done.
+- **Work with a GitHub pull request:** the user accepts it with the Merge
+  button or by saying "merge it", which runs `toastty-task-merge`. Do not merge
+  it yourself, and do not mark the task Done.
 - **Work in child tasks:** do not mark this task ready for review or Done.
   Toastty finishes it when its children finish and at least one of them
   merged. A ready-for-review mark from before the newest child task does not
@@ -251,11 +286,19 @@ each part its own task:
 - Each call returns a task ID while setup continues. Check one with
   `toastty task get <task-id>`, or add `--wait` to wait until its agent starts.
 - The new tasks record this one as their parent. Coordinate them from here.
-- Tell each new task how to report back: `toastty task send <this task's ID>
-  "<message>"`. `toastty task get`, with no ID, shows this task and its
-  `taskID`. Task IDs keep working after a relaunch; panel and session IDs do
-  not. The message must include the paths of the new task's verification
-  report and evidence files, such as screenshots and test output.
+- Toastty tells each new task which task created it, as a link, and how to
+  report to it with `toastty task send`. In the brief, say what to report:
+  the paths of the new task's verification report and evidence files, such as
+  screenshots and test output.
+
+This needs this session to be a task, so that the new tasks record it as
+their parent and can report to it. `toastty task get` with no ID fails in a
+session that is not a task. Then, in a task space, run `toastty task adopt`
+first; in a top-level workspace, move the work into a task first with
+`task start-work --title` (see
+[Move this task into a worktree](#move-this-task-into-a-worktree)). If the
+user does not want that, the new tasks have no parent and no report step:
+check them with `toastty task get <task-id>`.
 
 ## Wait for other tasks
 
@@ -265,6 +308,10 @@ turn. Toastty sends you one line, starting `[Toastty watch`, when the condition
 holds or can never hold. Conditions: `idle` (its agent finished a turn after
 you started watching), `waiting` (it waits for an approval or an answer),
 `ready-for-review`, `merged`, `to-ship`, `done`, or `archived`.
+
+Toastty can send that line only to a task's agent. In a session that is not
+a task, add `--wait --timeout <seconds>` instead: the command then waits for
+the condition and returns its result.
 
 To ask another task's agent something, run `toastty task send <task-id>
 "<question>"`, then watch it `--until idle` and read the answer with

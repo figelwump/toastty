@@ -12,7 +12,7 @@ struct TaskCoordinatorTests {
         let store = AppStore(persistTerminalFontPreference: false)
         /// Status changes send no desktop notification: without notification
         /// access, as on CI, the access alert would block the test host.
-        let sessionRuntimeStore = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        let sessionRuntimeStore: SessionRuntimeStore
         let router = TestTerminalCommandRouter()
         let root: URL
         /// A git repository root; the workspace terminal starts in a
@@ -21,6 +21,11 @@ struct TaskCoordinatorTests {
         let attachmentsDirectory: URL
         let recordsFile: URL
         let launcher: AgentLaunchService
+        /// agents.toml as the launcher reads it; a test can change it.
+        let agentCatalog: TestAgentCatalogProvider
+        /// Whether a launch gives the agent Toastty's skills. On by default,
+        /// as in the app; a test turns it off.
+        let skills = TestSkillsDelivery()
         let workspaceID: UUID
         var config = TasksConfig()
         var configError: (any Error)?
@@ -32,7 +37,19 @@ struct TaskCoordinatorTests {
         private(set) var scopeGrants: [(sessionID: String, workspaceID: UUID)] = []
         private(set) var coordinator: TaskCoordinator!
 
-        init(readinessTimeout: Duration = .seconds(3)) throws {
+        /// `initialPromptTurnTimeoutNanoseconds` is how long the session
+        /// store waits for an agent to report the turn of its first prompt.
+        /// `freshInstallWith` starts as a fresh install: agents.toml has no
+        /// profile, and only the named commands are on the launch PATH.
+        init(
+            readinessTimeout: Duration = .seconds(3),
+            initialPromptTurnTimeoutNanoseconds: UInt64 = 60_000_000_000,
+            freshInstallWith installed: [String]? = nil
+        ) throws {
+            sessionRuntimeStore = SessionRuntimeStore(
+                sendSessionStatusNotification: { _, _, _, _, _ in },
+                initialPromptTurnTimeoutNanoseconds: initialPromptTurnTimeoutNanoseconds
+            )
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("toastty-tasks-\(UUID().uuidString)", isDirectory: true)
                 .resolvingSymlinksInPath()
@@ -46,7 +63,7 @@ struct TaskCoordinatorTests {
             attachmentsDirectory = root.appendingPathComponent("task-attachments", isDirectory: true)
             recordsFile = root.appendingPathComponent("task-records.json")
             var executables: [String: String] = [:]
-            for name in ["claude", "codex"] {
+            for name in installed ?? ["claude", "codex"] {
                 let path = bin.appendingPathComponent(name).path
                 FileManager.default.createFile(atPath: path, contents: Data("#!/bin/sh\n".utf8))
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
@@ -63,16 +80,33 @@ struct TaskCoordinatorTests {
                 title: nil,
                 cwd: subdirectory.path
             ))
+            // A fresh install has no profile in agents.toml, and only the
+            // installed commands are on the launch PATH.
+            var profiles: [AgentProfile] = []
+            if installed == nil {
+                profiles = [
+                    AgentProfile(id: "claude", displayName: "Claude Code", argv: [try #require(executables["claude"])]),
+                    AgentProfile(id: "codex", displayName: "Codex", argv: [try #require(executables["codex"])]),
+                ]
+            }
+            let agentCatalog = TestAgentCatalogProvider(profiles: profiles)
+            self.agentCatalog = agentCatalog
+            let launchPath = installed == nil ? nil : bin.path
             launcher = AgentLaunchService(
                 store: store,
                 terminalCommandRouter: router,
                 sessionRuntimeStore: sessionRuntimeStore,
-                agentCatalogProvider: TestAgentCatalogProvider(profiles: [
-                    AgentProfile(id: "claude", displayName: "Claude Code", argv: [try #require(executables["claude"])]),
-                    AgentProfile(id: "codex", displayName: "Codex", argv: [try #require(executables["codex"])]),
-                ]),
+                agentCatalogProvider: agentCatalog,
+                claudeSkillsBundleManager: skills,
                 cliExecutablePathProvider: { "/bin/sh" },
-                socketPathProvider: { "/tmp/toastty-tests.sock" }
+                socketPathProvider: { "/tmp/toastty-tests.sock" },
+                codexSkillsResolver: skills,
+                managedAgentResolutionContextProvider: {
+                    ManagedAgentResolutionContext(
+                        environment: launchPath.map { ["PATH": $0] } ?? ProcessInfo.processInfo.environment,
+                        shimDirectoryPaths: []
+                    )
+                }
             )
             coordinator = makeCoordinator(records: TaskRecordStore(fileURL: recordsFile), readinessTimeout: readinessTimeout)
         }
@@ -133,6 +167,58 @@ struct TaskCoordinatorTests {
         func savedRecord(_ id: UUID) -> TaskRecord? {
             TaskRecordStore(fileURL: recordsFile).record(id: id)
         }
+    }
+
+    /// A fresh install has no profile in agents.toml and no tasks.toml. The
+    /// installed built-in agents take tasks, as a launch accepts them by
+    /// name, and a task that names no agent gets the first of them. With
+    /// none installed, the error says what to install.
+    @Test func aFreshInstallCreatesTasksWithTheInstalledBuiltInAgents() async throws {
+        let fixture = try Fixture(freshInstallWith: ["codex", "claude"])
+        fixture.config = TasksConfig()
+
+        let unnamed = try await fixture.coordinator.create(TaskCreateRequest(text: "Fix the unread dot", workspaceID: fixture.workspaceID))
+        await fixture.waitForSetup(unnamed.id)
+        let started = try #require(fixture.record(unnamed.id))
+        #expect(started.setup == .started)
+        #expect(started.resolved?.agent == "claude")
+        let panelID = try #require(started.operation.taskSpace?.panelID)
+        #expect(fixture.router.sentTextByPanelID[panelID]?.contains("Fix the unread dot") == true)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .claude)
+
+        let named = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Rename the flag", workspaceID: fixture.workspaceID, agent: "codex", model: "gpt-6.1-sol"
+        ))
+        await fixture.waitForSetup(named.id)
+        #expect(fixture.record(named.id)?.setup == .started)
+        #expect(fixture.record(named.id)?.resolved?.agent == "codex")
+
+        do {
+            _ = try await fixture.coordinator.create(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "cursor"))
+            Issue.record("an agent that is not installed was accepted")
+        } catch {
+            #expect(error.localizedDescription == "Agent cursor is not a profile in agents.toml (available: claude, codex).")
+        }
+
+        // With Codex alone, Codex takes the task.
+        let codexOnly = try Fixture(freshInstallWith: ["codex"])
+        codexOnly.config = TasksConfig()
+        let codexTask = try await codexOnly.coordinator.create(TaskCreateRequest(text: "Fix the unread dot", workspaceID: codexOnly.workspaceID))
+        await codexOnly.waitForSetup(codexTask.id)
+        #expect(codexOnly.record(codexTask.id)?.setup == .started)
+        #expect(codexOnly.record(codexTask.id)?.resolved?.agent == "codex")
+
+        let bare = try Fixture(freshInstallWith: [])
+        bare.config = TasksConfig()
+        for agent in [nil, "claude"] {
+            do {
+                _ = try await bare.coordinator.create(TaskCreateRequest(text: "x", workspaceID: bare.workspaceID, agent: agent))
+                Issue.record("a task was accepted with no installed agent")
+            } catch {
+                #expect(error.localizedDescription.hasSuffix(TaskCoordinator.installAgentAdvice))
+            }
+        }
+        #expect(bare.coordinator.records.records.isEmpty)
     }
 
     @Test func createStartsTheAgentInANewTaskSpace() async throws {
@@ -242,6 +328,58 @@ struct TaskCoordinatorTests {
         #expect(plainSent.contains(TaskPrompt.replyLine))
     }
 
+    /// A launch that does not give the agent its skills, such as a Claude
+    /// whose skills plugin could not be staged or a Codex whose profile
+    /// could not be prepared.
+    @Test func anAgentWithoutItsSkillsGetsTheSkillsFileAndTheFallbackLines() async throws {
+        let fixture = try Fixture()
+        let skillFile = try #require(ToasttyAgentPluginBundle.skillFiles()[TaskPrompt.defaultStartSkill])
+        #expect(FileManager.default.fileExists(atPath: skillFile))
+        // The terminal command quotes the prompt for the shell, so the
+        // check skips the apostrophe in "skill's".
+        let pathLine = "instructions are in \(skillFile): read that file and follow it."
+        for agent in ["claude", "codex"] {
+            fixture.skills.delivers = false
+            let task = try await fixture.coordinator.create(TaskCreateRequest(
+                text: "Fix the composer with \(agent)",
+                workspaceID: fixture.workspaceID,
+                agent: agent
+            ))
+            await fixture.waitForSetup(task.id)
+            let record = try #require(fixture.record(task.id))
+            #expect(record.setup == .started)
+            let sentPanelID = try #require(record.operation.taskSpace?.panelID)
+            let sent = try #require(fixture.router.sentTextByPanelID[sentPanelID])
+            let skillLine = try #require(sent.range(of: "Use the toastty-task-start skill."), "\(agent)")
+            #expect(sent.contains("Toastty could not give this session its skills. The toastty-task-start skill"), "\(agent)")
+            let path = try #require(sent.range(of: pathLine), "\(agent)")
+            let text = try #require(sent.range(of: "Fix the composer with \(agent)"))
+            #expect(skillLine.upperBound < path.lowerBound)
+            #expect(path.upperBound < text.lowerBound)
+            #expect(sent.contains(TaskPrompt.replyLine), "\(agent)")
+            #expect(sent.contains(TaskPrompt.coordinatorLine), "\(agent)")
+            let session = try #require(record.operation.agentLaunch?.sessionID)
+            #expect(fixture.launcher.lacksShippedSkills(sessionID: session))
+
+            // With its skills, the same task says none of this.
+            fixture.skills.delivers = true
+            let delivered = try await fixture.coordinator.create(TaskCreateRequest(
+                text: "Fix the sidebar with \(agent)",
+                workspaceID: fixture.workspaceID,
+                agent: agent
+            ))
+            await fixture.waitForSetup(delivered.id)
+            let deliveredRecord = try #require(fixture.record(delivered.id))
+            let deliveredSentPanelID = try #require(deliveredRecord.operation.taskSpace?.panelID)
+            let deliveredSent = try #require(fixture.router.sentTextByPanelID[deliveredSentPanelID])
+            #expect(deliveredSent.contains("Use the toastty-task-start skill."))
+            #expect(deliveredSent.contains("Toastty could not give this session its skills") == false, "\(agent)")
+            #expect(deliveredSent.contains("needs-reply") == false, "\(agent)")
+            let deliveredSession = try #require(deliveredRecord.operation.agentLaunch?.sessionID)
+            #expect(fixture.launcher.lacksShippedSkills(sessionID: deliveredSession) == false)
+        }
+    }
+
     @Test func defaultsFillOnlyTheFieldsTheCallerLeftOut() async throws {
         let fixture = try Fixture()
         fixture.config = TasksConfig(defaults: .init(agent: "claude", model: "claude-opus-5-5", effort: "high"))
@@ -286,7 +424,6 @@ struct TaskCoordinatorTests {
             }
         }
 
-        await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID), mentioning: "[defaults]")
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "gemini"), mentioning: "available: claude, codex")
         await expectFailure(TaskCreateRequest(text: "  ", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "needs text or a prompt")
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: UUID(), agent: "codex"), mentioning: "No open workspace")
@@ -467,6 +604,62 @@ struct TaskCoordinatorTests {
         let relaunched = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
         relaunched.reconcileAfterLaunch()
         #expect(relaunched.records.record(id: taskID)?.setup == .started)
+    }
+
+    /// The layout as Toastty v0.9.2 saves it again after reading it: without
+    /// the workspace fields that version does not know.
+    static func layoutSavedByV092(_ state: AppState) throws -> AppState {
+        let encoded = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: state))
+        func strip(_ value: Any) -> Any {
+            if let array = value as? [Any] { return array.map(strip) }
+            guard var object = value as? [String: Any] else { return value }
+            if object["tabsByID"] != nil {
+                for key in ["taskID", "isCoordinator", "coordinatorPanelID", "rootDirectory"] {
+                    object[key] = nil
+                }
+            }
+            return object.mapValues(strip)
+        }
+        let stripped = try JSONSerialization.data(withJSONObject: strip(try JSONSerialization.jsonObject(with: encoded)))
+        return try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: stripped).makeAppState()
+    }
+
+    /// The bug this guards: after a return to v0.9.2 and forward again,
+    /// the task space had no link to its task, so the board listed the
+    /// task twice: once as the task, once as a task space without a record.
+    @Test func aLayoutSavedByV092LinksItsTaskSpacesAgainAtLaunch() async throws {
+        let fixture = try Fixture()
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the unread dot", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(created.id)
+        let taskSpace = try #require(fixture.record(created.id)?.taskSpaceWorkspaceID)
+        // Another record names a workspace that is gone; nothing changes for it.
+        let gone = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the empty search", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(gone.id)
+        let goneSpace = try #require(fixture.record(gone.id)?.taskSpaceWorkspaceID)
+        #expect(fixture.store.send(.closeWorkspace(workspaceID: goneSpace)))
+
+        fixture.store.replaceState(try Self.layoutSavedByV092(fixture.store.state))
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.taskID == nil)
+        func listings() -> Int {
+            TaskBoard.items(TaskBoard.Inputs(
+                state: fixture.store.state, records: fixture.coordinator.records.records,
+                statuses: { _ in [] }, pullRequestState: { _ in nil }, config: nil
+            )).filter { $0.taskSpaceWorkspaceID == taskSpace }.count
+        }
+        #expect(listings() == 2)
+
+        // The next launch.
+        let relaunched = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(relaunched)
+        relaunched.reconcileAfterLaunch()
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.taskID == created.id)
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.canHoldDoneMark == true)
+        #expect(listings() == 1)
+        #expect(fixture.record(created.id)?.source != .recovered)
+        #expect(fixture.store.state.workspacesByID[goneSpace] == nil)
+        #expect(relaunched.records.records.count == 2)
     }
 
     @Test func aTaskSpaceWithoutARecordGetsOneRebuilt() throws {
@@ -747,5 +940,50 @@ struct TaskCoordinatorTests {
         let repeated = try await fixture.coordinator.create(request)
         #expect(repeated.id == created.id)
         #expect(workspacesOnWebsite().count == 1)
+    }
+}
+
+/// Stands in for the app's skills managers, so that a launch gives the
+/// agent Toastty's skills, or not, as a test says. The paths are not read.
+final class TestSkillsDelivery: ClaudeSkillsBundleManaging, CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    private let lock = NSLock()
+    private var deliversStorage = true
+
+    var delivers: Bool {
+        get { lock.withLock { deliversStorage } }
+        set { lock.withLock { deliversStorage = newValue } }
+    }
+
+    private var claudeConfiguration: ClaudeSkillsLaunchConfiguration? {
+        guard delivers else { return nil }
+        return ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-test-plugin/toastty",
+            skillsRootPath: "/tmp/toastty-test-plugin/toastty/skills",
+            version: "1.0.0",
+            contentDigest: "test"
+        )
+    }
+
+    func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration? { claudeConfiguration }
+
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus {
+        claudeConfiguration.map { .providedAtLaunch($0) } ?? .unavailable(detail: "test")
+    }
+
+    func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? { claudeConfiguration }
+
+    func resolve(request: ManagedAgentLaunchRequest, workingDirectory: String?) -> CodexManagedLaunchSkillsDecision {
+        CodexManagedLaunchSkillsDecision(
+            configuration: delivers
+                ? CodexSkillsLaunchConfiguration(
+                    profileName: CodexSkillsContract.profileName,
+                    codexHomePath: "/tmp/toastty-test-codex-home",
+                    skillsRootPath: "/tmp/toastty-test-codex-skills",
+                    version: "1.0.0",
+                    contentDigest: "test"
+                )
+                : nil,
+            status: nil
+        )
     }
 }

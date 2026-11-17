@@ -402,9 +402,10 @@ nothing on their own and ends the watch, nothing for a stage
 that returns in under 3 seconds, and the timer set, cleared and fired with
 `coordinator wake`. It holds a task's turn open and moves the modification
 time of that agent's transcript 31 minutes back: the real 30-minute limit
-applies, and one digest with the silent alert arrives within seconds. The
-agent writing clears the alert, which wakes nothing, and a second silence
-wakes the coordinator again. It then kills the app with a digest waiting, a
+applies, but the agent became busy only a short time ago, so no silent alert
+starts and nothing wakes; the end of the turn then gives one digest with no
+alert. The alert's start, its clearing and its return are covered by the
+`CoordinatorWakeTests` unit tests, which use a fake clock. It then kills the app with a digest waiting, a
 timer set and a task's agent held in a turn, keeps it down until the timer's
 time passed, and checks that the relaunched app types the waiting change
 once and the scheduled check once, and that one digest line for the task
@@ -617,6 +618,29 @@ Claude CLI than the one on the `PATH`.
 permission question or a crash report, and exits with code 4: that prompt is
 the user's to answer.
 
+### Launch failures
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-launch-failure-check.py --gui-session'
+```
+
+This check mutates disposable Toastty instances on the dedicated validation
+Mac, each with a throwaway runtime home and user home. No agent takes a turn.
+It needs the remote Mac's screen unlocked. `--scenario no-claude|bad-shortcut`
+runs one scenario; the default is both.
+
+- `no-claude`: the app's `PATH` has Codex but not `claude`, as for a user who
+  has only Codex. Start in the first-launch question shows the alert that
+  names `claude` and `[coordinator] agent` and offers **Start with Codex**.
+  Cancel leaves no Coordinator workspace or folder, the next launch asks
+  again, and **Start with Codex** then starts the coordinator with Codex.
+- `bad-shortcut`: `tasks.toml` sets a quick entry shortcut that is not
+  valid. The first window shows the message as a sheet, and the coordinator
+  question comes after it. Another app that holds the shortcut cannot stand
+  in: Toastty registers it without `kEventHotKeyExclusive`, and Carbon then
+  accepts it whatever another app holds.
+
 ### Coordinator skill
 
 ```bash
@@ -780,6 +804,37 @@ transcripts, the task agents' event log and the coordinator's files under
 the run's artifacts directory. A build that can capture its windows outside
 automation mode also writes PNG frames; a normal build cannot, and the check
 records that and continues.
+
+### Fresh install
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-fresh-install-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and a user home that has no
+`~/.toastty/agents.toml` and no `tasks.toml`; the installed production app is
+not touched. It covers a new user's first tasks; see [Tasks](../tasks.md). It
+needs the remote Mac's screen unlocked, uses subscription usage, and takes
+about ten minutes.
+
+It reuses the setup of the quick entry check: `claude` on the instance's
+PATH runs the real, authenticated Claude CLI in the coordinator's folder and
+a fake task agent anywhere else. The other agents installed on the remote Mac
+stay on the PATH. The first-launch question is not answered in advance: the
+check answers Not Now in the real sheet. It then creates tasks with
+`toastty task create` (no agent, and `--agent claude`), from quick entry
+opened with File > New Task…, and through the coordinator opened from the
+Agent menu, with a request from quick entry. Each surface is its own check,
+and the check goes on after one fails, so a build from before a fix shows
+where each surface stops.
+
+It writes `remote-fresh-install-check/result.json`, the app log, Claude's
+transcript and the task agents' events under the run's artifacts directory.
+A build that can capture its windows outside automation mode also writes PNG
+frames of every visible window, the quick entry panel and its Agent list
+among them.
 
 ## Remote Computer Use
 

@@ -21,7 +21,7 @@ struct QuickEntryPickerView: View {
 
     private var width: CGFloat {
         if picker.columns != nil { return 520 }
-        return picker.kind == .workspace ? 360 : 420
+        return 420
     }
 
     private var placeholder: String {
@@ -75,6 +75,19 @@ struct QuickEntryPickerView: View {
                 rowList
             }
 
+            if let hint = picker.highlightedWarningHint {
+                Rectangle().fill(Self.divider).frame(height: 1)
+                Text(hint)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(ToastyTheme.sessionNeedsApprovalText.opacity(0.07))
+                    .accessibilityIdentifier("quick-entry.picker.warning-hint")
+            }
+
             Rectangle().fill(Self.divider).frame(height: 1)
             footer
         }
@@ -106,7 +119,7 @@ struct QuickEntryPickerView: View {
                         .id(row.id)
                     }
                     if picker.rows.isEmpty {
-                        Text("No matches")
+                        Text(picker.emptyText)
                             .font(.system(size: 13))
                             .foregroundStyle(QuickEntryView.mutedText)
                             .padding(.horizontal, 11)
@@ -230,10 +243,24 @@ private struct PickerRow: View {
                 EffortStepper(effort: effort, adjust: adjustEffort)
             } else if row.detailIsShortcut, let detail = row.detail {
                 KeyHint(keys: [detail], label: "")
+            } else if row.detailIsPath, let detail = row.detail {
+                Text(detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(QuickEntryView.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(-1)
             } else if let detail = row.detail {
                 Text(detail)
                     .font(.system(size: 11.5))
                     .foregroundStyle(QuickEntryView.mutedText)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if let warning = row.warning {
+                Text("⚠ " + warning)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
                     .lineLimit(1)
                     .fixedSize()
             }

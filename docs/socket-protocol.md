@@ -423,6 +423,11 @@ Notable action-specific behavior:
     pane after a relaunch, else the most recently active agent in the task
     space. It types the text and submits it, as `terminal.send-text` with
     `submit=true` does; a busy agent queues it as typed input.
+  - Toastty types a first line that names the sender, from the caller and
+    never from the text, as for `coordinator.send`: `[Toastty] From task
+    [title](toastty://task/<id>): not from the user.` for a caller in a task's
+    space, and `[Toastty] From the coordinator: not from the user.` for the
+    coordinator's own agent session. The text starts on the second line.
   - optional `args.steer=true` checks the agent before it types, and types
     nothing into a permission prompt or a question. The result adds
     `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
@@ -455,8 +460,8 @@ Notable action-specific behavior:
     `to-ship`. A task marked done by hand meets only `ready-for-review` and
     `done`. `archived` holds only for an archived task.
   - a notifying watch is saved on the notified task's record and fires once:
-    Toastty sends one line, `[Toastty watch <watchID>] Task "<title>"
-    (<taskID>) <reason>...`, to that task's agent through `task.send`, and
+    Toastty sends one line, `[Toastty watch <watchID>] Task
+    [<title>](toastty://task/<taskID>) <reason>...`, to that task's agent through `task.send`, and
     retries while its agent is not running. A deleted target, or one archived
     while the watch waits for another condition, fires it with that reason. A
     `wait=true` watch lives in memory, notifies nobody, and is dropped when no
@@ -475,16 +480,22 @@ Notable action-specific behavior:
     agent session, gets `INVALID_PAYLOAD` naming `task.request-merge`. The
     caller's session comes from the CLI's environment, so this rule prevents
     mistakes; it is not a security boundary.
-  - records the user's acceptance and hands the merge to the merge owner, then
-    returns the task object. The merge owner runs the bundled pull request
-    script: it merges at the checkout's commit with GitHub's merge API, never
-    turns on auto-merge, waits for checks that still run, and once GitHub
-    reports the merge and no agent in the task space is in a turn, closes the
-    task space, removes the worktree and deletes the branch.
+  - records the user's acceptance and hands the merge to the merge owner. The
+    merge owner runs the bundled pull request script: it merges at the
+    checkout's commit with GitHub's merge API, never turns on auto-merge, waits
+    for checks that still run, and once GitHub reports the merge and no agent
+    in the task space is in a turn, closes the task space, removes the
+    worktree and deletes the branch.
+  - waits up to 8 seconds for the script's first answer, then returns the task
+    object with `merge` as `task.get` reports it: `waitingForChecks`,
+    `cleaningUp` (merged), or `merging` when the script has not answered yet.
   - with `head`, the script refuses unless the checkout is at that commit.
   - `INVALID_PAYLOAD` when the task is archived or merged, its task space is
     closed, it has no pull request link, a merge is already under way, or the
-    user cancelled the merge during the caller's current turn.
+    user cancelled the merge during the caller's current turn; also, with the
+    reason, when the script refuses the merge (nothing changed: for example,
+    the worktree has uncommitted or untracked files) or the merge fails. The
+    task's `mergeFailure` records the same reason.
 - `task.request-merge`
   - requires `args.taskID`. The user's acceptance given outside the task, as
     the Merge button gives it: the task's agent gets the merge prompt, checks
@@ -500,7 +511,10 @@ Notable action-specific behavior:
     merges, after the pull request merged, or when no merge is under way.
 - `task.clean-up`
   - requires `args.taskID`. Retries a cleanup that stopped after a merge, an
-    archive or a release.
+    archive or a release. When the merge's cleanup stopped because the task's
+    worktree is on another branch than the pull request, it removes the
+    worktree and the local branch with an archive's checks instead, and
+    keeps both branches on the remote.
 - `task.ready-for-review`, `task.needs-reply`, `task.mark-done`
   - `task.ready-for-review` takes optional `taskID`, sets
     `readyForReviewAt`, and clears a reply request. `task.needs-reply` takes
@@ -520,7 +534,7 @@ Notable action-specific behavior:
     release task. Returns the task object.
 - `task.archive`
   - requires `args.taskID`; takes booleans `closePullRequest`,
-    `deleteUnpushedCommits` and `discardChanges`. Runs its checks before it
+    `deleteUnpushedCommits`, `discardChanges` and `dryRun`. Runs its checks before it
     returns and refuses with `INVALID_PAYLOAD` and the reason: unsaved documents
     in the task space, a merge under way, uncommitted changes without
     `discardChanges`, or a detached worktree whose commit is on no remote branch
@@ -531,6 +545,11 @@ Notable action-specific behavior:
     the remote has its commits or with `deleteUnpushedCommits`. The remote
     branch stays. Each step is saved in `cleanup.stepsDone`; a stop sets
     `cleanup.problem`, and `task.archive` or `task.clean-up` continues.
+  - with `dryRun=true`, changes nothing and returns `taskID`, `dryRun`,
+    `summary` (the lines the archive alert shows: what closes, what is
+    removed, and what stays, also what happens to the pull request) and
+    `refusal` (the reason the archive would refuse with these options, or
+    `null`).
 - `task.release`
   - takes the `workspaceID` selector, or the calling managed session's
     workspace; a task space resolves to its project. tasks.toml must give the
@@ -804,7 +823,9 @@ watched project, then wakes the coordinator. It returns the
 and its last delivery. It never returns a secret or the full URL path. With
 `args.name`, it returns only that webhook.
 
-`task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
+`task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `markdownLink`
+(the task as `[title](toastty://task/<taskID>)`, for an agent to name it in
+text), `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
 `agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, `filesRemovedAt`
 (when Toastty removed its copies of the files, a week after the task finished),
@@ -831,7 +852,8 @@ it), and for Needs you `attention` and, for failures and a stopped
 cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
 (`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.
 `cleanup` (`kind`: `merge`, `archive` or `release`; `stepsDone`, `problem`,
-`finishedAt`) appears once a cleanup started, and `release` (`childTaskIDs`)
+`finishedAt`; and `taskSpaceClosesAt`, the earliest time Toastty closes a
+merged task's space, while it waits) appears once a cleanup started, and `release` (`childTaskIDs`)
 on a release task. A task with a
 worktree request also has `worktree`: `state` (`running`, `failed` with
 `reason`, or `finished`), `branchPrefix`, `requestedBase`, `path`, `branch`
@@ -1589,6 +1611,11 @@ Request payload:
 
 - `step: String`
 - `fixture?: String`
+- `window?: String`: the identifier or accessibility identifier of the visible
+  window to capture, such as `quick-entry.panel`. If it is omitted, the first
+  visible window is captured.
+- `frame?: Bool`: when `true`, the capture includes the title bar and its
+  window buttons, not only the window's content. The default is `false`.
 
 Result:
 
@@ -1596,6 +1623,8 @@ Result:
 
 Behavior:
 
+- The PNG has the window's backing scale: 2x on a Retina display.
+- If no visible window has the `window` identifier, return `INVALID_PAYLOAD`.
 - If `fixture` is omitted, the current fixture name is used.
 - If `fixture` is provided and does not match the current fixture, return
   `INVALID_PAYLOAD`.

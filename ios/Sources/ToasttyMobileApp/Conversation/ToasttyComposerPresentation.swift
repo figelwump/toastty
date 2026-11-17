@@ -1,5 +1,6 @@
 import ConversationUI
 import Foundation
+import Observation
 import RemoteProtocol
 import ToasttyMobileDomain
 
@@ -697,6 +698,40 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         restoredRecoveries.removeAll(keepingCapacity: false)
         replies.removeAll(keepingCapacity: false)
         replyNotices.removeAll(keepingCapacity: false)
+    }
+}
+
+/// Holds the composer drafts for the whole app, so that a keystroke updates
+/// the composer and not the screens around it.
+///
+/// SwiftUI updates a view when a value that its body read changes. Only the
+/// composer reads `state`, which changes on each keystroke. The root view
+/// reads `generation` and the conversation screen reads `isSubmitting(_:)`;
+/// these change only on a reset and on a send.
+@MainActor @Observable
+final class ToasttyComposerDraftStore {
+    private(set) var state: ToasttyComposerDraftState
+    private(set) var generation: UUID
+    private var submittingConversations: Set<UUID>
+
+    init(_ state: ToasttyComposerDraftState = ToasttyComposerDraftState()) {
+        self.state = state
+        generation = state.generation
+        submittingConversations = Set(state.submissions.keys)
+    }
+
+    func isSubmitting(_ conversationID: UUID) -> Bool {
+        submittingConversations.contains(conversationID)
+    }
+
+    @discardableResult
+    func update<Result>(_ change: (inout ToasttyComposerDraftState) -> Result) -> Result {
+        let result = change(&state)
+        // Set these only when they change: each set updates their readers.
+        if generation != state.generation { generation = state.generation }
+        let submitting = Set(state.submissions.keys)
+        if submittingConversations != submitting { submittingConversations = submitting }
+        return result
     }
 }
 

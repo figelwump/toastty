@@ -110,9 +110,13 @@ public struct TasksConfig: Equatable, Sendable {
         /// The global shortcut for the quick entry panel; nil when the file
         /// turns it off with `shortcut = "none"`.
         public var shortcut: QuickEntryShortcut?
+        /// The file names the shortcut itself, as a key or as "none". Only
+        /// then does it win over the user's answer in the What's new sheet.
+        public var isShortcutSet: Bool
 
-        public init(shortcut: QuickEntryShortcut? = .default) {
+        public init(shortcut: QuickEntryShortcut? = .default, isShortcutSet: Bool = false) {
             self.shortcut = shortcut
+            self.isShortcutSet = isShortcutSet
         }
     }
 
@@ -255,6 +259,33 @@ public enum TasksConfigFile {
             .appending(path: configDirectoryName, directoryHint: .isDirectory)
             .appending(path: fileName, directoryHint: .notDirectory)
     }
+
+    /// Writes a short file that names the quick entry shortcut, when there
+    /// is no file yet, so "Change the key…" opens something to edit. It
+    /// sets nothing: the shortcut line is a comment.
+    public static func ensureTemplateExists(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory()
+    ) throws {
+        let url = fileURL(homeDirectoryPath: homeDirectoryPath)
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do {
+            try Data(templateContents.utf8).write(to: url, options: .withoutOverwriting)
+        } catch let error as CocoaError where error.code == .fileWriteFileExists {
+            return
+        }
+    }
+
+    public static let templateContents = """
+    # Toastty task settings. Toastty reads this file at launch and when you
+    # choose Reload Configuration. docs/tasks.md lists every setting.
+
+    [quick_entry]
+    # The key that opens quick entry from any app. "none" turns it off.
+    # A key written here wins over the answer in the What's new sheet.
+    # shortcut = "opt+shift+t"
+
+    """
 
     /// The parsed file, or `.empty` when there is no file.
     public static func load(
@@ -505,10 +536,10 @@ private struct TasksConfigParser {
             return TasksConfig.QuickEntry()
         }
         if value.lowercased() == "none" {
-            return TasksConfig.QuickEntry(shortcut: nil)
+            return TasksConfig.QuickEntry(shortcut: nil, isShortcutSet: true)
         }
         do {
-            return TasksConfig.QuickEntry(shortcut: try QuickEntryShortcut.parse(value))
+            return TasksConfig.QuickEntry(shortcut: try QuickEntryShortcut.parse(value), isShortcutSet: true)
         } catch {
             throw TasksConfigParseError(line: entry.line, message: "\(table.name) \(error.localizedDescription)")
         }

@@ -13,7 +13,9 @@ protocol TaskAgentLaunching: AnyObject {
     /// unscoped. With `forkFromSessionID`, the new session continues a copy
     /// of that session's conversation.
     /// `beforeDispatch` runs directly before the command is sent; a throw
-    /// there cancels the launch.
+    /// there cancels the launch. `initialPromptWithoutSkills` replaces
+    /// `initialPrompt` when Toastty knows that the launch does not give the
+    /// agent its skills.
     func launchTask(
         profileID: String,
         workspaceID: UUID,
@@ -22,11 +24,15 @@ protocol TaskAgentLaunching: AnyObject {
         model: String?,
         reasoningEffort: String?,
         initialPrompt: String,
+        initialPromptWithoutSkills: String?,
         parentSessionID: String?,
         forkFromSessionID: String?,
         scopedWorkspaceIDs: Set<UUID>?,
         beforeDispatch: @escaping @MainActor () throws -> Void
     ) async throws -> AgentLaunchResult
+    /// Toastty knows that the session's launch did not give the agent its
+    /// skills.
+    func lacksShippedSkills(sessionID: String) -> Bool
 }
 
 extension AgentLaunchService: TaskAgentLaunching {
@@ -38,6 +44,7 @@ extension AgentLaunchService: TaskAgentLaunching {
         model: String?,
         reasoningEffort: String?,
         initialPrompt: String,
+        initialPromptWithoutSkills: String?,
         parentSessionID: String?,
         forkFromSessionID: String?,
         scopedWorkspaceIDs: Set<UUID>?,
@@ -51,6 +58,7 @@ extension AgentLaunchService: TaskAgentLaunching {
             model: model,
             reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
+            initialPromptWithoutSkills: initialPromptWithoutSkills,
             forkFromSessionID: forkFromSessionID,
             inheritedScopedWorkspaceIDs: scopedWorkspaceIDs,
             parentSessionID: parentSessionID,
@@ -570,14 +578,16 @@ final class TaskCoordinator {
                 startPrompt: resolved?.startPrompt ?? startPrompt,
                 firstPrompt: prompt,
                 text: text,
-                attachmentPaths: attachments.map(\.path)
+                attachmentPaths: attachments.map(\.path),
+                parent: parentTask(id: parentTaskID)
             )
             : TaskPrompt.forkedTask(
                 record: record,
                 taskSpaceWorkspaceID: UUID(),
                 sourceWorkspaceID: forkSource?.workspaceID,
                 worktree: nil,
-                base: nil
+                base: nil,
+                parent: parentTask(id: parentTaskID)
             )
         guard firstMessage.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else {
             throw TaskError("The task, prompt and file paths are too long for an agent's first message (at most \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB).")
@@ -1009,17 +1019,19 @@ final class TaskCoordinator {
 
     /// Brings records and workspaces back in line after a launch: a setup
     /// that the last run did not finish is marked failed, unless its agent
-    /// had already started, and a task space whose record is missing gets
-    /// one rebuilt from what the workspace shows.
+    /// had already started, a task space that lost its link to its record
+    /// gets it back, and a task space whose record is missing gets one
+    /// rebuilt from what the workspace shows.
     func reconcileAfterLaunch() {
         // An archive or a release cleanup that a quit interrupted shows as
         // stopped, so Clean Up continues it from what is still there. So
         // does a merge's cleanup whose task space is gone while its worktree
-        // is still there: no merge request is left to finish it.
+        // is still there, or one Toastty ran itself: no merge request is
+        // left to finish it.
         for record in records.records {
             guard let cleanup = record.cleanup,
                   cleanup.finishedAt == nil, cleanup.problem == nil else { continue }
-            if cleanup.kind == .merge {
+            if cleanup.kind == .merge, cleanup.removesWorktreeDirectly != true {
                 let taskSpaceClosed = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] == nil } ?? true
                 guard taskSpaceClosed, let worktree = record.worktree, worktree.isDetached == false,
                       isDirectory(worktree.path) else { continue }
@@ -1065,6 +1077,7 @@ final class TaskCoordinator {
                 }
             }
         }
+        relinkTaskSpaces()
         for workspace in store.state.workspacesByID.values {
             guard let taskID = workspace.taskID, records.record(id: taskID) == nil else { continue }
             let parent = workspace.parentWorkspaceID.flatMap { store.state.workspacesByID[$0] }
@@ -1100,6 +1113,33 @@ final class TaskCoordinator {
         // Saved watches keep waiting across a relaunch; old fired ones go.
         evaluateWatches()
         startWatchMonitorIfNeeded()
+    }
+
+    /// Links each open task space to its task again when the layout lost
+    /// the link: a Toastty that does not know tasks, such as v0.9.2, saved
+    /// the layout last. The record keeps its side of the link. Without this
+    /// the board lists the task twice, once as a task space without one. A
+    /// workspace that more than one record names, or a task that another
+    /// workspace already holds, is left as it is.
+    private func relinkTaskSpaces() {
+        let linkedTaskIDs = Set(store.state.workspacesByID.values.compactMap(\.taskID))
+        let recordsByTaskSpace = Dictionary(grouping: records.records.filter { $0.taskSpaceWorkspaceID != nil }) {
+            $0.taskSpaceWorkspaceID!
+        }
+        var relinked = false
+        for (workspaceID, named) in recordsByTaskSpace {
+            guard named.count == 1, let record = named.first,
+                  linkedTaskIDs.contains(record.id) == false,
+                  let workspace = store.state.workspacesByID[workspaceID],
+                  workspace.taskID == nil, workspace.isCoordinator == false,
+                  store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: record.id)) else { continue }
+            relinked = true
+            ToasttyLog.warning("Linked a task space to its task again", category: .tasks, metadata: [
+                "task_id": record.id.uuidString,
+                "workspace_id": workspaceID.uuidString,
+            ])
+        }
+        if relinked { flushLayout() }
     }
 
     // MARK: - Setup
@@ -1241,7 +1281,8 @@ final class TaskCoordinator {
             text: record.text,
             attachmentPaths: record.attachments.map(\.path),
             worktree: worktree,
-            base: base
+            base: base,
+            parent: parentTask(of: record)
         )
         // Routing checked the message without the worktree line, which is
         // known only now. Triage's own prompt is the part that can go; the
@@ -1256,7 +1297,8 @@ final class TaskCoordinator {
                 text: record.text,
                 attachmentPaths: record.attachments.map(\.path),
                 worktree: worktree,
-                base: base
+                base: base,
+                parent: parentTask(of: record)
             )
             let dropped = "Toastty left out triage's first prompt, which made the agent's first message longer than \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB."
             saveOrDefer(taskID: taskID) {
@@ -1264,6 +1306,17 @@ final class TaskCoordinator {
                 $0.triageNote = [$0.triageNote, dropped].compactMap { $0 }.joined(separator: " ")
             }
         }
+        let promptWithoutSkills = Self.promptWithoutSkills(prompt, TaskPrompt.compose(
+            skill: resolved.skill,
+            startPrompt: resolved.startPrompt,
+            firstPrompt: firstPrompt,
+            text: record.text,
+            attachmentPaths: record.attachments.map(\.path),
+            worktree: worktree,
+            base: base,
+            parent: parentTask(of: record),
+            skills: Self.skillsMissing()
+        ))
         let parentSessionID = creatorSessionID(of: record)
         let result: AgentLaunchResult
         do {
@@ -1276,6 +1329,7 @@ final class TaskCoordinator {
                     model: resolved.model,
                     reasoningEffort: resolved.effort,
                     initialPrompt: prompt,
+                    initialPromptWithoutSkills: promptWithoutSkills,
                     parentSessionID: parentSessionID,
                     forkFromSessionID: nil,
                     // A task session is unscoped unless the session that
@@ -1306,6 +1360,18 @@ final class TaskCoordinator {
             $0.operation.agentLaunch = TaskOperation.AgentLaunch(sessionID: result.sessionID, at: now())
         }
         finishStarted(taskID: taskID, attempt: attempt)
+    }
+
+    /// The task that created `record`, for the first message's parent line.
+    /// `nil` when it has no parent, or the parent no longer exists.
+    func parentTask(of record: TaskRecord) -> TaskPrompt.ParentTask? {
+        guard record.parentTaskID != record.id else { return nil }
+        return parentTask(id: record.parentTaskID)
+    }
+
+    func parentTask(id: UUID?) -> TaskPrompt.ParentTask? {
+        guard let id, let parent = records.record(id: id) else { return nil }
+        return TaskPrompt.ParentTask(id: parent.id, title: parent.title)
     }
 
     private func creatorSessionID(of record: TaskRecord) -> String? {
@@ -1514,9 +1580,6 @@ final class TaskCoordinator {
                     config: config
                 )
             }
-            guard resolution.agent ?? config.defaults.agent != nil else {
-                throw TaskError("Triage did not choose an agent, and [defaults] in ~/.toastty/tasks.toml names none. Set agent there, then retry.")
-            }
             resolved = try resolvedFields(
                 pinned: TaskFields(
                     workspaceID: current.pinned.workspaceID,
@@ -1541,7 +1604,8 @@ final class TaskCoordinator {
                 startPrompt: resolved.startPrompt,
                 firstPrompt: resolved.prompt,
                 text: current.text,
-                attachmentPaths: current.attachments.map(\.path)
+                attachmentPaths: current.attachments.map(\.path),
+                parent: parentTask(of: current)
             )
             // The caller's own message was checked when the task was made, so
             // only triage's prompt can push it over; the task starts without it.
@@ -1798,7 +1862,9 @@ final class TaskCoordinator {
 
     /// The pinned fields, completed from `[defaults]`. A pinned value that
     /// cannot work fails the request; a default that does not fit the
-    /// chosen agent is left out.
+    /// chosen agent is left out. With no agent in either, the task takes
+    /// the first installed agent that can take a task, without the default
+    /// model and effort.
     /// `skill` is the project's start skill, used when `pinned` names none,
     /// and `startPrompt` its `start_prompt`.
     func resolvedFields(
@@ -1808,8 +1874,8 @@ final class TaskCoordinator {
         skill: String? = nil,
         startPrompt: String? = nil
     ) throws -> TaskFields {
-        guard let agent = pinned.agent ?? defaults.agent else {
-            throw TaskError("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.")
+        guard let agent = pinned.agent ?? defaults.agent ?? triageAgents().first?.id else {
+            throw TaskError("Toastty found no installed agent that can take a task. \(Self.installAgentAdvice)")
         }
         let profile = try checkedProfile(agent)
         var fields = TaskFields(
@@ -1822,17 +1888,19 @@ final class TaskCoordinator {
         if let model = pinned.model {
             try checkModel(model, profile: profile)
             fields.model = model
-        } else if profile.supportsModel, pinned.agent == nil || pinned.agent == defaults.agent {
+        } else if profile.supportsModel, agent == defaults.agent {
             fields.model = defaults.model
         }
         if let effort = pinned.effort {
             try checkEffort(effort, profile: profile)
             fields.effort = effort
-        } else if profile.supportsReasoningEffort, pinned.agent == nil || pinned.agent == defaults.agent {
+        } else if profile.supportsReasoningEffort, agent == defaults.agent {
             fields.effort = defaults.effort
         }
         return fields
     }
+
+    static let installAgentAdvice = "Install Claude Code or Codex, or add a profile to ~/.toastty/agents.toml."
 
     /// Checks the agent, model and effort a caller set, before triage or
     /// `[defaults]` add anything, and returns the agent's profile.
@@ -1846,6 +1914,10 @@ final class TaskCoordinator {
     func checkedProfile(_ agent: String) throws -> AgentLaunchProfileSummary {
         let profiles = launcher?.launchProfileSummaries() ?? []
         guard let profile = profiles.first(where: { $0.profileID == agent }) else {
+            // With no profile, the list holds the installed built-in agents.
+            guard profiles.isEmpty == false else {
+                throw TaskError("Agent \(agent) is not installed, and agents.toml has no profile. \(Self.installAgentAdvice)")
+            }
             let available = profiles.map(\.profileID).joined(separator: ", ")
             throw TaskError("Agent \(agent) is not a profile in agents.toml\(available.isEmpty ? "" : " (available: \(available))").")
         }
@@ -1985,17 +2057,25 @@ final class TaskCoordinator {
     /// The first terminal, in tab order, whose directory is known and still
     /// exists. This does not follow focus, so the answer stays the same.
     static func firstTerminalDirectory(in workspace: WorkspaceState, fileManager: FileManager = .default) -> String? {
-        for tab in workspace.orderedTabs {
-            for slot in tab.layoutTree.allSlotInfos {
-                guard case .terminal(let terminal) = tab.panels[slot.panelID],
-                      let directory = terminal.agentLaunchWorkingDirectory else { continue }
-                var isDirectory: ObjCBool = false
-                if fileManager.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue {
-                    return directory
-                }
+        firstExistingDirectory(terminalDirectories(in: workspace), fileManager: fileManager)
+    }
+
+    /// The workspace's terminal folders in layout order, read from the
+    /// state alone, without the file system.
+    static func terminalDirectories(in workspace: WorkspaceState) -> [String] {
+        workspace.orderedTabs.flatMap { tab in
+            tab.layoutTree.allSlotInfos.compactMap { slot -> String? in
+                guard case .terminal(let terminal) = tab.panels[slot.panelID] else { return nil }
+                return terminal.agentLaunchWorkingDirectory
             }
         }
-        return nil
+    }
+
+    nonisolated static func firstExistingDirectory(_ directories: [String], fileManager: FileManager = .default) -> String? {
+        directories.first { directory in
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: directory, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
     }
 
     /// A new terminal is not ready at once: it reports itself busy until its
@@ -2003,6 +2083,20 @@ final class TaskCoordinator {
     /// moment after that. Both refusals happen before any text is sent, so
     /// they are retried until `timeout` passes. A delivery the terminal did
     /// not confirm is never retried.
+    /// What a message says for an agent that Toastty knows did not get its
+    /// skills: the path of a skill that Toastty ships.
+    static func skillsMissing() -> TaskPrompt.SkillDelivery {
+        .missing(shippedSkillFiles: ToasttyAgentPluginBundle.skillFiles())
+    }
+
+    /// `withoutSkills`, the same message for an agent without its skills,
+    /// when it says more than `prompt` and still fits a first message.
+    static func promptWithoutSkills(_ prompt: String, _ withoutSkills: String) -> String? {
+        guard withoutSkills != prompt,
+              withoutSkills.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else { return nil }
+        return withoutSkills
+    }
+
     static func launchWhenTerminalIsReady(
         timeout: Duration,
         attempt: @MainActor () async throws -> AgentLaunchResult

@@ -79,19 +79,8 @@ extension TaskCoordinator {
         if record.archivedAt != nil, record.cleanup?.kind == .archive, record.cleanup?.finishedAt != nil {
             return record
         }
-        if let taskSpaceID = record.taskSpaceWorkspaceID, let request = merges?.request(workspaceID: taskSpaceID) {
-            switch request.phase {
-            case .failed, .holdingCleanup:
-                // Archive's own teardown closes the held task space.
-                break
-            case .awaitingChecks:
-                throw TaskError("Toastty is waiting to merge \(record.title). Cancel the merge first.")
-            case .merging, .awaitingMerge, .cleaningUp, .closing:
-                throw TaskError("\(record.title) is merging or cleaning up now.")
-            }
-        }
-        if record.operation.worktree?.added == false, setupTasks[taskID] != nil || startWorkTasks[taskID] != nil {
-            throw TaskError("Toastty is making the worktree of \(record.title). Try again when it is done.")
+        if let problem = archiveBlocker(record) {
+            throw TaskError(problem)
         }
         let check = try await archiveCheck(taskID: taskID)
         if let problem = Self.archiveRefusal(check, options: options) {
@@ -125,6 +114,49 @@ extension TaskCoordinator {
             "close_pull_request": String(options.closePullRequest),
         ])
         return records.record(id: taskID) ?? record
+    }
+
+    /// What `archive` would do with `options`, without changing anything:
+    /// the lines the archive alert shows, plus what happens to the pull
+    /// request, and the reason it would refuse, if it would.
+    func archivePreview(taskID: UUID, options: TaskArchiveOptions) async throws -> (summary: [String], refusal: String?) {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        if record.archivedAt != nil, record.cleanup?.kind == .archive, record.cleanup?.finishedAt != nil {
+            return (["\(record.title) is already archived."], nil)
+        }
+        if let problem = archiveBlocker(record) {
+            return ([], problem)
+        }
+        let check = try await archiveCheck(taskID: taskID)
+        var summary = TaskActions.archiveSummary(record: record, check: check, options: options)
+        if let pullRequest = check.pullRequest, record.mergedAt == nil {
+            summary.append(options.closePullRequest
+                ? "Closes \(pullRequest.displayName) on GitHub."
+                : "Leaves \(pullRequest.displayName) open on GitHub.")
+        }
+        return (summary, Self.archiveRefusal(check, options: options))
+    }
+
+    /// Why the archive cannot start now: a merge under way, or a worktree
+    /// Toastty is still making.
+    private func archiveBlocker(_ record: TaskRecord) -> String? {
+        if let taskSpaceID = record.taskSpaceWorkspaceID, let request = merges?.request(workspaceID: taskSpaceID) {
+            switch request.phase {
+            case .failed, .holdingCleanup:
+                // Archive's own teardown closes the held task space.
+                break
+            case .awaitingChecks:
+                return "Toastty is waiting to merge \(record.title). Cancel the merge first."
+            case .merging, .awaitingMerge, .cleaningUp, .closing:
+                return "\(record.title) is merging or cleaning up now."
+            }
+        }
+        if record.operation.worktree?.added == false, setupTasks[record.id] != nil || startWorkTasks[record.id] != nil {
+            return "Toastty is making the worktree of \(record.title). Try again when it is done."
+        }
+        return nil
     }
 
     /// Why the archive must not start without another choice from the user.

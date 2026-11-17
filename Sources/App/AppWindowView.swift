@@ -24,8 +24,10 @@ struct AppWindowView: View {
     @State private var showsSkillsManagementSheet = false
     @State private var skillsProvisionedNotice: ManagedAgentSkillsProvisionedNotice?
     @State private var queuedSkillsProvisionedNotices: [ManagedAgentSkillsProvisionedNotice] = []
-    @State private var codexSkillsUnavailableNotice: ManagedCodexSkillsUnavailableNotice?
-    @State private var lastCodexSkillsUnavailableReasonCode: String?
+    @State private var skillsUnavailableNotice: ManagedAgentSkillsUnavailableNotice?
+    /// The agent and reason of the last banner, so that each launch with
+    /// the same cause does not show it again.
+    @State private var lastSkillsUnavailableReason: String?
     @State private var appIsActive = true
     /// The width of the window's content, which limits the dock's width.
     @State private var windowContentWidth: CGFloat = 0
@@ -307,16 +309,16 @@ struct AppWindowView: View {
                 .zIndex(20)
             }
 
-            if let codexSkillsUnavailableNotice {
-                ManagedCodexSkillsUnavailableBanner(
-                    notice: codexSkillsUnavailableNotice,
+            if let skillsUnavailableNotice {
+                ManagedAgentSkillsUnavailableBanner(
+                    notice: skillsUnavailableNotice,
                     manage: {
-                        self.codexSkillsUnavailableNotice = nil
+                        self.skillsUnavailableNotice = nil
                         showsSkillsManagementSheet = true
                     },
                     dismiss: {
                         withAnimation(.easeOut(duration: 0.15)) {
-                            self.codexSkillsUnavailableNotice = nil
+                            self.skillsUnavailableNotice = nil
                         }
                     }
                 )
@@ -450,9 +452,10 @@ struct AppWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
             if let notice = notification.object as? ManagedAgentSkillsProvisionedNotice,
                notice.windowID == windowID,
-               notice.agent == .codex {
-                codexSkillsUnavailableNotice = nil
-                lastCodexSkillsUnavailableReasonCode = nil
+               // A later launch of the same agent got its skills.
+               lastSkillsUnavailableReason?.hasPrefix("\(notice.agent.rawValue)/") == true {
+                skillsUnavailableNotice = nil
+                lastSkillsUnavailableReason = nil
             }
             guard let notice = ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: windowID,
@@ -466,13 +469,13 @@ struct AppWindowView: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedCodexSkillsUnavailable)) { notification in
-            guard let notice = notification.object as? ManagedCodexSkillsUnavailableNotice,
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsUnavailable)) { notification in
+            guard let notice = notification.object as? ManagedAgentSkillsUnavailableNotice,
                   notice.windowID == windowID,
-                  notice.reasonCode != lastCodexSkillsUnavailableReasonCode else { return }
-            lastCodexSkillsUnavailableReasonCode = notice.reasonCode
+                  "\(notice.agent.rawValue)/\(notice.reasonCode)" != lastSkillsUnavailableReason else { return }
+            lastSkillsUnavailableReason = "\(notice.agent.rawValue)/\(notice.reasonCode)"
             withAnimation(.easeOut(duration: 0.15)) {
-                codexSkillsUnavailableNotice = notice
+                skillsUnavailableNotice = notice
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -647,6 +650,14 @@ struct AppWindowView: View {
             result = .success(())
         case .openShortcutReference:
             result = openKeyboardShortcutsReferenceResult()
+        case .openCoordinator:
+            // The same open as Agent ▸ Open Coordinator, failures included.
+            if let coordinatorController {
+                coordinatorController.perform(.open, windowID: windowID)
+                result = .success(())
+            } else {
+                result = .failure(ToasttyMenuActionError(message: "This Toastty has no coordinator."))
+            }
         }
 
         if case .failure(let error) = result {

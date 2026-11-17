@@ -155,7 +155,7 @@ tell the user that the task waits at a prompt. Otherwise:
    `references/improving.md` says:
 
    ```text
-   - 2026-11-09T19:12Z merging 9d03e7c [Fix the typo in the guide](toastty://task/<id>): by rule "toastty: documentation up to 40 lines".
+   - 2026-11-09T19:12Z merging 9d03e7c [Fix the typo in the guide](toastty://task/<id>): by rule "webapp: documentation up to 40 lines".
    ```
 
 4. Tell the user in one or two sentences. For a rule: the task as a link,

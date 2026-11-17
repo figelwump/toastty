@@ -90,11 +90,64 @@ struct TaskAppControlTests {
         #expect(try taskID(repeated.result) == id)
     }
 
+    /// The bug this guards: an agent's `workspace.set-done` finished its own
+    /// task while the task's pull request was open, so the task skipped the
+    /// merge and To ship. The done checkbox, on the Mac and on a phone,
+    /// already refused that.
+    @Test func setDoneRefusesATaskWithAnOpenPullRequest() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = TaskBoardTests.FakeGitHub()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: gitHub),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the unread dot", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(created.id)
+        let taskSpace = try #require(fixture.record(created.id)?.taskSpaceWorkspaceID)
+        let session = try #require(fixture.record(created.id)?.operation.agentLaunch?.sessionID)
+        let url = "https://github.com/example/toastty/pull/124"
+        #expect(fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace, key: "github-pr", annotation: WorkspaceAnnotation(text: "PR #124", url: url))))
+        let link = try #require(WorkspacePullRequestLink(annotationURL: url))
+        gitHub.answer(url, state: "OPEN")
+        await board.pullRequests?.refresh(link).value
+        func group() throws -> AutomationJSONValue? {
+            let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(created.id.uuidString)])
+            guard case .object(let stage)? = got["stage"] else { return nil }
+            return stage["group"]
+        }
+
+        // The task's agent marks its own task space, naming no workspace.
+        await expectInvalidPayload(
+            "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+        ) {
+            _ = try executor.runAction(id: "workspace.set-done", args: [:], context: context(session))
+        }
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
+        #expect(try group() != .string("done"))
+
+        // Once the pull request is closed without a merge, the mark
+        // finishes the task.
+        gitHub.answer(url, state: "CLOSED")
+        await board.pullRequests?.refresh(link).value
+        let marked = try executor.runAction(id: "workspace.set-done", args: [:], context: context(session))
+        #expect(marked.didMutateState)
+        #expect(try group() == .string("done"))
+    }
+
     @Test func errorsComeBackAsInvalidPayload() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
-        await expectInvalidPayload("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.") {
-            _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x")], context: context())
+        await expectInvalidPayload("Agent gemini is not a profile in agents.toml (available: claude, codex).") {
+            _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x"), "agent": .string("gemini")], context: context())
         }
         await expectInvalidPayload("workspace must be a workspace ID") {
             _ = try await executor.runActionAsync(id: "task.create", args: ["text": .string("x"), "workspace": .string("toastty")], context: context())
@@ -490,15 +543,35 @@ struct TaskAppControlTests {
         #expect(changedTasks.count == 1)
         #expect(busy["taskID"] == .string(producer.id.uuidString))
         #expect(agentState(busy) == "busy")
+        // The task as an agent names it in text.
+        let producerTitle = try #require(fixture.record(producer.id)?.title)
+        #expect(busy["markdownLink"] == .string("[\(producerTitle)](toastty://task/\(producer.id.uuidString))"))
 
-        // A follow-up by task ID reaches the producer's terminal.
+        // A follow-up by task ID reaches the producer's terminal, after a
+        // first line that names the sending task as a link.
         let sent = try executor.runAction(
             id: "task.send",
             args: ["taskID": .string(producer.id.uuidString), "text": .string("Also document the errors")],
-            context: context()
+            context: context(consumerSession)
         )
         #expect(sent.result?["sessionID"] == .string(producerSession))
         #expect(typed.entries.map(\.panelID) == [producerPanel])
+        let consumerTitle = try #require(fixture.record(consumer.id)?.title)
+        #expect(typed.entries.last?.text == """
+            [Toastty] From task [\(consumerTitle)](toastty://task/\(consumer.id.uuidString)): not from the user.
+            Also document the errors
+            """)
+        // A message with no text is refused, sender line or not.
+        for steer in [false, true] {
+            await expectInvalidPayload("The message is empty.") {
+                _ = try await executor.runActionAsync(
+                    id: "task.send",
+                    args: ["taskID": .string(producer.id.uuidString), "text": .string(" \n "), "steer": .bool(steer)],
+                    context: context(consumerSession)
+                )
+            }
+        }
+        #expect(typed.entries.count == 1)
 
         // The consumer's agent waits for the producer instead of polling;
         // the watch notifies the caller's own task by default.
@@ -514,7 +587,9 @@ struct TaskAppControlTests {
         )
         fixture.coordinator.evaluateWatches()
         #expect(typed.entries.last?.panelID == consumerPanel)
-        #expect(typed.entries.last?.text.contains("is idle. Read it with: toastty task get \(producer.id.uuidString)") == true)
+        #expect(typed.entries.last?.text.contains(
+            "Task [\(producerTitle)](toastty://task/\(producer.id.uuidString)) is idle. Read it with: toastty task get \(producer.id.uuidString)"
+        ) == true)
 
         let watches = try executor.runQuery(id: "task.watches", args: ["notifyTaskID": .string(consumer.id.uuidString)])
         guard case .array(let listed)? = watches["watches"], case .object(let fired)? = listed.first else {
