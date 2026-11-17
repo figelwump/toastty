@@ -1,5 +1,4 @@
 import Foundation
-import RemoteProtocol
 
 /// The text of a message that Toastty types into an agent's terminal as one
 /// paste, followed by a Return.
@@ -93,8 +92,12 @@ public enum AgentPasteText {
         return piece.replacingCharacters(in: coreRange, with: replaced)
     }
 
+    /// What JavaScript's `trim()` removes, as Claude Code trims a piece.
+    private static let javaScriptWhitespace = CharacterSet.whitespacesAndNewlines
+        .union(CharacterSet(charactersIn: "\u{FEFF}"))
+
     private static func trimmed(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
+        text.trimmingCharacters(in: javaScriptWhitespace)
     }
 
     private static func unquoted(_ text: String) -> String {

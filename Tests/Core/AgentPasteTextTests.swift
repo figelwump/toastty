@@ -1,5 +1,5 @@
+import RemoteProtocol
 import Testing
-@testable import CoreState
 
 /// Claude Code 2.1.326 drops the Return that Toastty types after a paste
 /// when a line of the paste names an image file. Each "converted" case below
@@ -28,6 +28,8 @@ struct AgentPasteTextTests {
         ("line\r\n/Users/me/a.jpg\r\nmore", "line\r\n`/Users/me/a.jpg`\r\nmore"),
         // A backtick in the path gets a longer fence.
         ("/Users/me/a`b.png", "``/Users/me/a`b.png``"),
+        // Claude Code trims as JavaScript does, also a byte order mark.
+        ("/Users/me/a.png\u{FEFF}", "`/Users/me/a.png`\u{FEFF}"),
     ])
     func linesThatClaudeCodeReadsAsImagesBecomeCodeSpans(text: String, expected: String) {
         let result = AgentPasteText.keepingImagePathsAsText(text)
