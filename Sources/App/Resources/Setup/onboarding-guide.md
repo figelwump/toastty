@@ -22,6 +22,7 @@ Tell the user what will happen:
 - You will dry-run, show the plan, then ask before writing files.
 - Codex may need global status hooks; other supported managed agents get status integration at launch. Cursor receives a launch-scoped plugin, so Toastty does not change `~/.cursor/hooks.json`.
 - Toastty makes eight shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
+- Toastty has tasks. Quick entry (`Option+Shift+T` by default, or File > New Task…) adds a task from any app; an agent works on it in its own git worktree and opens a pull request for the user to review and merge. The task's workspace must be in a git repository. The coordinator, in Agent > Open Coordinator, is one agent that follows all tasks; it asks a few questions the first time.
 - After setup, you can help them pick a workflow: a skill that has agents use Toastty's workspaces, panels, and agent launches the way they work.
 
 ## Available Setup Commands In This Build
@@ -58,6 +59,8 @@ After approval, apply with `--apply`. For Claude Code, Cursor, Grok Build, OpenC
 Offer Terminal profiles as optional manual setup. Ask whether the user wants quick launchers for common terminal actions such as tmux, zellij, ssh, or REPLs with environment loaded. Do not block the setup flow if the user skips profiles.
 
 Confirm that setup is live by launching an agent in a fresh Toastty pane. Supported agents can usually use their own resume option, such as `--resume`, to continue the conversation after the fresh launch. A tracked agent should appear in Toastty with live status.
+
+Then offer a first task, and skip it if the user declines. In a workspace whose folder is in a git repository, the user presses Option+Shift+T (or chooses File > New Task…), writes a small change, and presses Command+Return. The task's agent works in its own worktree; for a pull request, the repository needs a GitHub remote and `gh` must be signed in. If the user cleared "Use ⌥⇧T in every app" in the What's new sheet, the key is off: use File > New Task….
 
 ## Phase 2: Review Automatic Skills
 

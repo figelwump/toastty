@@ -231,14 +231,16 @@ when you update:
   them off for one phone, open **Remote Access** in Toastty's settings and
   turn off **Task actions** for that device under **Paired Devices**. See
   [Acting on tasks](remote-access.md#acting-on-tasks).
-- **`Option+Shift+T` is taken in every app.** It opens quick entry, so other
-  apps, a terminal that uses Option as Meta among them, no longer get it.
-  Change it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`, or turn
-  it off with `shortcut = "none"`, then choose **Toastty > Reload
-  Configuration**. See [Quick entry](#quick-entry).
+- **Toastty asks before it takes `Option+Shift+T` in every app.** The key
+  opens quick entry, so other apps, a terminal that uses Option as Meta among
+  them, no longer get it. The What's new sheet at the first launch after the
+  update has **Use ⌥⇧T in every app**, on by default; clear it to leave the
+  key to other apps. Change the key later with `[quick_entry] shortcut` in
+  `~/.toastty/tasks.toml`, or turn it off with `shortcut = "none"`, then
+  choose **Toastty > Reload Configuration**. See [Quick entry](#quick-entry).
 - **Toastty offers the coordinator once.** At the first launch after the
-  update, it asks whether to start the coordinator. **Not Now** is saved; open
-  it later from **Agent > Open Coordinator**. See
+  update, the What's new sheet asks whether to start the coordinator.
+  **Not Now** is saved; open it later from **Agent > Open Coordinator**. See
   [Then start the coordinator](#then-start-the-coordinator).
 - **The sidebar groups by state.** Each project card lists its sessions and
   task spaces under **Needs you**, **Ready to review**, **Running** and
@@ -258,6 +260,12 @@ Press `Option+Shift+T` from any app, Toastty included, to open the quick entry
 panel. Write the task, attach what helps, and press `Cmd+Return` or Create
 Task. Toastty saves the task at once and shows "Task created".
 Focus goes back to the app you were in.
+
+The key works in every app, so other apps and Toastty's own terminals no
+longer get it. Toastty asks first: the What's new sheet at the first launch
+has **Use ⌥⇧T in every app**, on by default. Until you answer, and after you
+clear it, **File ▸ New Task…** opens the panel. A `shortcut` in
+[`tasks.toml`](#toasttytaskstoml) wins over that answer.
 
 While [the coordinator](#the-coordinator) exists, the same panel sends your
 text to it, and the coordinator makes the task; see
@@ -796,9 +804,10 @@ name in its first answer. It runs in its own workspace, named **Coordinator**, w
 [What the coordinator does](#what-the-coordinator-does), and your rules for
 it are in [the policy file](#the-policy-file).
 
-- **At a first launch**, when no coordinator was ever opened, Toastty asks
-  once whether to start it. **Start Coordinator** does what Open Coordinator
-  does. **Not Now** is saved, and Toastty does not ask again. The question
+- **At a first launch**, when no coordinator was ever opened, Toastty shows
+  the What's new sheet once. It names tasks, quick entry and the coordinator,
+  and asks whether to start the coordinator. **Start Coordinator** does what
+  Open Coordinator does. **Not Now** is saved, and Toastty does not ask again. The question
   shows over the window that has the keyboard, and the rest of the app stays
   in use. An automation run asks nothing.
 - **Open Coordinator**, in the **Agent** menu and the command palette, creates
@@ -2477,6 +2486,9 @@ the coordinator, so that Codex reads all of its instructions (see
 [quick_entry]
 shortcut = "opt+shift+t"   # the default; "none" turns it off
 ```
+
+A `shortcut` written here wins over the answer to **Use ⌥⇧T in every app** in
+the What's new sheet.
 
 A shortcut joins modifiers and one key with `+`. Modifiers are `cmd`,
 `ctrl`, `opt` (or `alt`) and `shift`. The key is a letter, a digit,

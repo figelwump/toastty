@@ -615,6 +615,35 @@ struct QuickEntryTests {
         #expect(harness.controller.panel === panel)
     }
 
+    @Test func theWorkspaceListShowsTheFolderATaskWouldUseAndMarksOneOutsideARepository() async throws {
+        let harness = try Harness()
+        defer { harness.controller.dismiss() }
+        let fixture = harness.fixture
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        // A workspace whose terminal is in a folder outside any repository,
+        // as the first workspace of a fresh install in the home folder.
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "Workspace 1", activate: false)))
+        let plain = try #require(fixture.store.state.workspacesByID.values.first { $0.title == "Workspace 1" })
+        _ = fixture.store.send(.updateTerminalPanelMetadata(
+            panelID: try #require(plain.focusedPanelID),
+            title: nil,
+            cwd: fixture.root.path
+        ))
+
+        harness.controller.present(prefill: .empty)
+        let panel = try #require(harness.controller.panel)
+        try harness.pressCommand("1", keyCode: kVK_ANSI_1, in: panel)
+        await harness.controller.waitForWorkspaceFolderCheck()
+        let rows = try #require(harness.controller.picker?.rows)
+        let project = try #require(rows.first { $0.title == "toastty" })
+        // The terminal is in a subfolder; the task uses the repository root.
+        #expect(project.detail == QuickEntryWorkspaceFolders.displayPath(fixture.projectRoot))
+        #expect(project.warning == nil)
+        let other = try #require(rows.first { $0.title == "Workspace 1" })
+        #expect(other.detail == QuickEntryWorkspaceFolders.displayPath(fixture.root.path))
+        #expect(other.warning == QuickEntryWorkspaceFolders.notAGitRepository)
+    }
+
     @Test func commandOneOpensTheWorkspacePickerAndReturnPicksAndRefocusesTheText() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
@@ -1073,6 +1102,37 @@ struct QuickEntryTests {
         let message = try #require(harness.controller.reloadShortcut())
         #expect(message.contains("stays off until the file is fixed"))
         #expect(harness.controller.shortcut == nil)
+    }
+
+    /// The What's new sheet asks before Toastty takes ⌥⇧T from every app.
+    @Test func theDefaultShortcutWaitsForTheUsersAnswerAndAWrittenShortcutWins() throws {
+        let harness = try Harness()
+        var permission = QuickEntryShortcutPermission.waiting
+        harness.controller.defaultShortcutPermission = { permission }
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut == nil, "No key until the sheet has its answer")
+
+        permission = .allowed
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut == .default)
+
+        permission = .declined
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut == nil)
+        // A broken file at launch falls back to no key, not to ⌥⇧T.
+        let launch = try Harness()
+        launch.controller.defaultShortcutPermission = { .declined }
+        launch.fixture.configError = TasksConfigParseError(line: 2, message: "[defaults] agent is empty")
+        #expect(try #require(launch.controller.reloadShortcut()).contains("is off until the file is fixed"))
+        #expect(launch.controller.shortcut == nil)
+
+        // A shortcut written in tasks.toml wins over the answer.
+        harness.fixture.config.quickEntry = .init(
+            shortcut: try QuickEntryShortcut.parse("ctrl+opt+space"),
+            isShortcutSet: true
+        )
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.shortcut?.symbolLabel == "⌃⌥Space")
     }
 }
 

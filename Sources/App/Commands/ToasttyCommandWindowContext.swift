@@ -16,6 +16,7 @@ enum GettingStartedPanelNativeAction: String, Equatable {
     case openAgentProfiles = "open-agent-profiles"
     case openSkillsManagement = "open-skills-management"
     case openShortcutReference = "open-shortcut-reference"
+    case openCoordinator = "open-coordinator"
 }
 
 enum GettingStartedPanelRequest: Equatable {
