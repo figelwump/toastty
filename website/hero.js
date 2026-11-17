@@ -218,11 +218,10 @@
       var onSub = { x: subBox.x + 70, y: subBox.y + 14 };
       var onDocs = { x: docsBox.x + 80, y: docsBox.y + 14 };
       var onField = { x: fieldBox.x + 120, y: fieldBox.y + fieldBox.h / 2 };
-      var restDock = { x: 700, y: 560 };
       var onBtn = { x: btnBox.x + 10, y: btnBox.y + 8 };
       var dragA = { x: siteBox.x + box.x + 2, y: siteBox.y + box.y + 2 }, dragB = { x: siteBox.x + box.x + box.w, y: siteBox.y + box.y + box.h };
       var onAdd = { x: addBox.x + 16, y: addBox.y + 8 }, onSendBtn = { x: sendBox.x + 40, y: sendBox.y + 12 }, onItem = { x: itemBox.x + 50, y: itemBox.y + 10 };
-      var path = [[0, rest1], [8.0, rest1], [8.7, onDocs], [9.0, onDocs], [9.6, onBtn], [9.8, onBtn], [10.3, dragA], [10.4, dragA], [11.0, dragB], [12.0, dragB], [12.3, onAdd], [12.5, onAdd], [12.8, onSendBtn], [12.95, onSendBtn], [13.15, onItem], [13.35, onItem], [14.0, rest3], [16.6, rest3], [17.3, onSub], [17.8, onSub], [18.7, onField], [19.1, onField], [19.9, restDock], [D, restDock]];
+      var path = [[0, rest1], [8.0, rest1], [8.7, onDocs], [9.0, onDocs], [9.6, onBtn], [9.8, onBtn], [10.3, dragA], [10.4, dragA], [11.0, dragB], [12.0, dragB], [12.3, onAdd], [12.5, onAdd], [12.8, onSendBtn], [12.95, onSendBtn], [13.15, onItem], [13.35, onItem], [14.0, rest3], [16.6, rest3], [17.3, onSub], [17.8, onSub], [18.7, onField], [D, onField]];
       var p = rest1;
       for (var i = 0; i < path.length - 1; i++) {
         if (t >= path[i][0] && t < path[i + 1][0]) {
@@ -234,7 +233,10 @@
       cursor.style.transform = 'translate(' + p.x + 'px,' + p.y + 'px)';
       var clicks = [8.75, 9.7, 12.35, 12.85, 13.2, 17.4, 18.85];
       cursor.classList.toggle('click', clicks.some(function (c) { return t >= c && t < c + 0.4; }));
-      cursor.style.opacity = t < 7.9 ? 0 : 1;
+      // The pointer shows only while it moves to something or clicks it: from the docs step to its
+      // last click, then from the move to the task row until the user types "merge it" (macOS hides
+      // the pointer while you type). So it never sits idle in a still such as the poster.
+      cursor.style.opacity = t < 7.9 ? 0 : t < 13.6 ? 1 : t < 14.0 ? 1 - seg(13.6, 14.0) : t < 16.5 ? 0 : t < 19.1 ? seg(16.5, 16.7) : 1 - seg(19.1, 19.3);
 
       // loop fade
       fade.style.opacity = t > 23.2 ? (t - 23.2) / 0.8 : (t < 0.4 ? 1 - t / 0.4 : 0);

@@ -380,14 +380,14 @@ h1 em { display: block; color: var(--amber); font-style: normal; }
 .qe-file { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #3c3c40; border-radius: 8px; padding: 4px 10px 4px 4px; font: 12px var(--sans); color: #d9d5cd; background: #1f1f21; }
 .qe-file i { width: 30px; height: 22px; border-radius: 4px; background: linear-gradient(180deg, #f4f5f7 0 60%, #f2c4c5 60%); }
 .qe-add { border: 1px dashed #4a4a50; border-radius: 8px; padding: 3px 10px; font: 12px var(--sans); color: #9b978f; }
-.qe-f { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid #343438; }
-.qe-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #3c3c40; border-radius: 7px; padding: 3px 8px; font: 12px var(--sans); color: #9b978f; white-space: nowrap; }
+.qe-f { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-top: 1px solid #343438; }
+.qe-pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #3c3c40; border-radius: 7px; padding: 3px 7px; font: 12px var(--sans); color: #9b978f; white-space: nowrap; }
 .qe-pill svg { width: 11px; height: 11px; fill: none; stroke: #9b978f; stroke-width: 2; stroke-linejoin: round; }
 .qe-pill b { color: #9b978f; font-weight: 500; }
 .qe-esc { margin-left: auto; }
-.qe-btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #3c3c40; color: #d9d5cd; font: 500 12.5px var(--sans); border-radius: 7px; padding: 4px 9px; white-space: nowrap; }
+.qe-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #3c3c40; color: #d9d5cd; font: 500 12.5px var(--sans); border-radius: 7px; padding: 4px 8px; white-space: nowrap; }
 .qe-k { font: 600 9.5px/1.5 var(--mono); color: #9b978f; border: 1px solid #4a4a50; border-radius: 4px; padding: 0 4px; }
-.qe-go { display: inline-flex; align-items: center; gap: 8px; background: #F5A623; color: #1a1206; font: 600 12.5px var(--sans); border-radius: 7px; padding: 5px 10px; }
+.qe-go { display: inline-flex; align-items: center; gap: 6px; background: #F5A623; color: #1a1206; font: 600 12.5px var(--sans); border-radius: 7px; padding: 5px 9px; }
 .qe-go .qe-k { color: #1a1206; border-color: rgba(26, 18, 6, 0.4); }
 .tv { position: absolute; inset: 0; display: grid; grid-template-columns: 1.1fr 1fr; background: #101011; color: #ece9e3; font: 12px/1.4 var(--sans); }
 .tv-l { padding: 14px 0; min-width: 0; }
