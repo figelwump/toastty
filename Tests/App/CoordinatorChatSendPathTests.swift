@@ -93,6 +93,47 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.chat.presentation.hasOlder)
     }
 
+    @MainActor
+    @Test func reopeningChatAfterReplayDoesNotWaitForAnExpiredSend() async throws {
+        let fixture = try CoordinatorChatFixture(
+            initialUserMessages: ["Old prompt"], sendConfirmationTimeout: .milliseconds(100)
+        )
+        defer { fixture.tearDown() }
+        let subscription = fixture.conversations.service.subscribeToConversation(inPanel: fixture.panelID)
+        defer { subscription.cancel() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt and the end of replay") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+                && fixture.chat.presentation.rows.isEmpty == false
+        }
+        let firstReadID = subscription.transcriptReadID
+        try #require(fixture.controller.send(Self.digest, id: "wake").wasTyped)
+        #expect(fixture.chat.presentation.sendItems.map(\.clientRequestID) == ["wake"])
+        fixture.chat.hide()
+        try await fixture.waitUntil("the host's unconfirmed receipt") {
+            guard case .page(let page) = subscription.events(before: nil, limit: 20) else { return false }
+            return page.events.contains { $0.payload == .sendDeliveryUnconfirmed(.init(clientRequestID: "wake")) }
+        }
+
+        // A replay can replace the loaded page after the host has stopped
+        // waiting, so that page no longer carries the delivery receipt.
+        let path = URL(filePath: fixture.conversations.resumeRecord.sessionFilePath)
+        let replacement = try CoordinatorChatFixture.userMessagesTranscript(["Old prompt", Self.digest, "New question"])
+        try replacement.write(to: path, options: .atomic)
+        try await fixture.waitUntil("the replaced transcript") {
+            guard subscription.transcriptReadID != firstReadID, !subscription.isReadingInitialTranscript,
+                  case .page(let page) = subscription.events(before: nil, limit: 20) else { return false }
+            return page.events.contains {
+                guard case .userMessage(let message) = $0.payload else { return false }
+                return message.text == "New question"
+            }
+        }
+        fixture.chat.show(panelID: fixture.panelID)
+        #expect(fixture.chat.presentation.rows.last?.content
+            == .userMessage(text: "New question", origin: .unknown, deliveryMode: nil))
+        #expect(fixture.chat.presentation.sendItems.isEmpty)
+    }
+
     // MARK: - At an open prompt
 
     @MainActor
@@ -1676,12 +1717,14 @@ final class CoordinatorChatFixture {
         savesQueue: Bool = false,
         agentReportsStart: Bool = true,
         initialUserMessages: [String] = [],
-        chatDefaults: UserDefaults? = nil
+        chatDefaults: UserDefaults? = nil,
+        sendConfirmationTimeout: Duration = .seconds(10)
     ) throws {
         let conversations = try LocalConversationFixture(
             pairsNativeDevice: pairsNativeDevice,
             inCoordinatorWorkspace: true,
-            initialTranscript: try Self.userMessagesTranscript(initialUserMessages)
+            initialTranscript: try Self.userMessagesTranscript(initialUserMessages),
+            sendConfirmationTimeout: sendConfirmationTimeout
         )
         self.conversations = conversations
         delivered = conversations.captureDeliveredText()
