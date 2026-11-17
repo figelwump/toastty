@@ -321,6 +321,14 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         return true
     }
 
+    /// Removes the quiet mark of the turn the last digest started, such as
+    /// when the coordinator ran `coordinator wake` again without `--quiet`
+    /// in that turn. The caller checks that this turn runs now.
+    public mutating func unmarkLastDigestQuiet() {
+        guard let lastDigestKey else { return }
+        quietDigestKeys.removeAll { $0 == lastDigestKey }
+    }
+
     /// Whether the message is a digest whose turn the coordinator marked
     /// quiet.
     public func isQuietDigest(_ text: String) -> Bool {

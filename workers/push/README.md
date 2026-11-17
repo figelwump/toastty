@@ -167,6 +167,33 @@ iOS Release build and provisioning profile. This repository does not provide an
 operator command that deploys production. Deploy compatible relay changes before
 clients that add request fields, because v1 rejects unknown JSON fields.
 
+## Production relay release step
+
+When a release changes `workers/push/src/`, deploying the production relay is
+step 3 of the [release order](../../docs/building-and-releasing.md#release-order):
+after the release commit is on `main`, and before the iPhone build and the Mac
+release. The release of the task system needs it, because that release adds task
+alerts to the relay.
+
+The repository owner does this step by hand. Only the owner has the production
+Cloudflare account, the production APNs key, and the production Worker's
+configuration, and none of them is in this repository. An agent does not deploy
+production; it asks the owner and waits.
+
+1. Check out the release commit and run the local checks above.
+2. Deploy `src/relay.ts` from that commit to the production Worker with its
+   production configuration: `APNS_ENVIRONMENT=production`,
+   `APNS_TOPIC=com.giantthings.toastty.mobile`, and the production relay ID.
+3. Request `GET /health` on the production relay URL. It must report
+   `"enabled": true`, `"apnsEnvironment": "production"`, and the production
+   relay ID. The response does not show the relay version, so record the
+   deployed commit in the release checklist.
+
+If you skip this step, the Mac still works with the older relay. The older relay
+refuses each task alert with HTTP 400, and the Mac sends only the session alerts
+that the task alert replaced. A task alert that replaced no session alert, such
+as a stopped merge, then sends nothing.
+
 ## Deployed development probe
 
 The command below mutates only the development Worker

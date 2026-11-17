@@ -129,7 +129,7 @@ struct ToasttyTasksTabView: View {
                     .toasttyListRow(vertical: 0)
                 ForEach(entries) { entry in
                     ToasttyTaskListRow(
-                        task: entry.task, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext,
+                        task: entry.task, isLinkedChild: entry.isLinkedChild,
                         controller: controller, openWorkspace: openWorkspace, openTask: openTask
                     )
                 }

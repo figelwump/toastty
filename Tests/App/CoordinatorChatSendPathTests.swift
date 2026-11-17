@@ -1204,6 +1204,66 @@ struct CoordinatorChatSendPathTests {
         fixture.report(.ready)
         #expect(statusKind(fixture) == .ready)
         try fixture.endTurn(4)
+
+        // The coordinator marks a wake turn quiet too early, finds a report
+        // after all, and runs the command again without --quiet before it
+        // answers. The last call decides: the turn is not quiet, its end
+        // alerts, and the chat shows its answer.
+        let answered = try await quietWakeTurn(5, "readyForReview")
+        #expect(fixture.controller.isQuietDigest(answered))
+        try wakes.service.setCoordinatorWake(.clear)
+        #expect(fixture.controller.isQuietDigest(answered) == false)
+        #expect(fixture.controller.turnEndsQuietly(sessionID: fixture.conversations.sessionID) == false)
+        try fixture.recordAgentMessage("The branch is not ready to release.")
+        fixture.report(.ready)
+        #expect(statusKind(fixture) == .ready)
+        try fixture.endTurn(5)
+        try await fixture.waitUntil("the answer outside a fold") {
+            let state = fixture.chat.presentation
+            guard let digestRow = state.rows.first(where: { row in
+                if case .hostMessage(let line) = row.content { line.text == answered } else { false }
+            }), case .hostMessage(let line) = digestRow.content,
+                state.rows.contains(where: { row in
+                    if case .assistantMessage(let text, _) = row.content { text == "The branch is not ready to release." } else { false }
+                }) else { return false }
+            return line.foldsTurn == false
+                && state.turns.first(where: { $0.id == digestRow.id })?.foldsWholeTurn == false
+        }
+
+        // A turn's mark stays once the turn has ended: a later turn's call
+        // without --quiet does not open an earlier quiet turn.
+        let ended = try await quietWakeTurn(6, "agentFinished")
+        try fixture.recordAgentMessage("Nothing needs you.")
+        fixture.report(.ready)
+        #expect(statusKind(fixture) == .idle)
+        try fixture.endTurn(6)
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        try fixture.startTurn(7, userText: "Anything new?")
+        try await fixture.waitUntil("the user's turn") { fixture.chat.summary?.state == .working }
+        try wakes.service.setCoordinatorWake(.clear)
+        #expect(fixture.controller.isQuietDigest(ended))
+        try fixture.endTurn(7)
+
+        // The same when the transcript ends the quiet turn and starts the
+        // next one before the agent's status ends the quiet turn, as Codex
+        // can report it.
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        let endedFirstInTranscript = try await quietWakeTurn(8, "awaitingReply")
+        let quietEpoch = try #require(fixture.chat.summary?.inputControl?.turnEpoch)
+        try fixture.recordAgentMessage("Nothing needs you.")
+        try fixture.endTurnInTranscript(8)
+        try fixture.startTurn(9, userText: "Anything else?")
+        try await fixture.waitUntil("the next turn in the transcript") {
+            guard let epoch = fixture.chat.summary?.inputControl?.turnEpoch else { return false }
+            return epoch != quietEpoch && fixture.chat.summary?.state == .working
+        }
+        try wakes.service.setCoordinatorWake(.clear)
+        #expect(fixture.controller.isQuietDigest(endedFirstInTranscript))
+        try fixture.endTurn(9)
     }
 
     /// A paired device folds the quiet wake turns as this chat does. The
