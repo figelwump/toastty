@@ -63,9 +63,9 @@ public struct TaskBucketEntry<Key: Hashable, Payload>: Identifiable {
     public let ownBucket: TaskBucket
     /// Drawn under the task that started it.
     public var isLinkedChild = false
-    /// Drawn dimmed: the row's own state is in a calmer bucket. It lists
-    /// here to keep its family together, or because it is selected and
-    /// holds its place.
+    /// The row's own state is in a calmer bucket. It lists here to keep
+    /// its family together, or because it is selected and holds its place.
+    /// The Mac sidebar and the iPhone draw it like any other row.
     public var isContext = false
     /// Its parent task has a row, but the Needs you segment shows the row
     /// without it, so the row names the parent.
@@ -128,8 +128,8 @@ public enum TaskBuckets<Key: Hashable> {
         }
     }
 
-    /// How many rows each bucket holds by the rows' own state. A dimmed
-    /// relative and a held row count where their own state is.
+    /// How many rows each bucket holds by the rows' own state. A relative
+    /// listed with its family and a held row count where their own state is.
     public static func counts<Payload>(_ candidates: [Candidate<Payload>]) -> [TaskBucket: Int] {
         Dictionary(grouping: candidates, by: \.bucket).mapValues(\.count)
     }

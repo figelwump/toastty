@@ -1,5 +1,9 @@
 # iPhone session notifications
 
+> **Historical plan.** It records the design as planned when it was written and is
+> not kept up to date. For current behavior, see the reference documents listed in
+> [the README](../../README.md#documentation).
+
 Status: implemented for explicitly configured development builds. The development relay is deployed. Automated enrollment, host, and native UI checks pass; full physical-device enrollment and session delivery remain to be verified. The earlier operator probe proved background delivery through Cloudflare and APNs. Production deployment and activation are separate actions.
 
 ## User flow

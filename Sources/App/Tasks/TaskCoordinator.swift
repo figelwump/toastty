@@ -1017,8 +1017,9 @@ final class TaskCoordinator {
 
     /// Brings records and workspaces back in line after a launch: a setup
     /// that the last run did not finish is marked failed, unless its agent
-    /// had already started, and a task space whose record is missing gets
-    /// one rebuilt from what the workspace shows.
+    /// had already started, a task space that lost its link to its record
+    /// gets it back, and a task space whose record is missing gets one
+    /// rebuilt from what the workspace shows.
     func reconcileAfterLaunch() {
         // An archive or a release cleanup that a quit interrupted shows as
         // stopped, so Clean Up continues it from what is still there. So
@@ -1073,6 +1074,7 @@ final class TaskCoordinator {
                 }
             }
         }
+        relinkTaskSpaces()
         for workspace in store.state.workspacesByID.values {
             guard let taskID = workspace.taskID, records.record(id: taskID) == nil else { continue }
             let parent = workspace.parentWorkspaceID.flatMap { store.state.workspacesByID[$0] }
@@ -1108,6 +1110,33 @@ final class TaskCoordinator {
         // Saved watches keep waiting across a relaunch; old fired ones go.
         evaluateWatches()
         startWatchMonitorIfNeeded()
+    }
+
+    /// Links each open task space to its task again when the layout lost
+    /// the link: a Toastty that does not know tasks, such as v0.9.2, saved
+    /// the layout last. The record keeps its side of the link. Without this
+    /// the board lists the task twice, once as a task space without one. A
+    /// workspace that more than one record names, or a task that another
+    /// workspace already holds, is left as it is.
+    private func relinkTaskSpaces() {
+        let linkedTaskIDs = Set(store.state.workspacesByID.values.compactMap(\.taskID))
+        let recordsByTaskSpace = Dictionary(grouping: records.records.filter { $0.taskSpaceWorkspaceID != nil }) {
+            $0.taskSpaceWorkspaceID!
+        }
+        var relinked = false
+        for (workspaceID, named) in recordsByTaskSpace {
+            guard named.count == 1, let record = named.first,
+                  linkedTaskIDs.contains(record.id) == false,
+                  let workspace = store.state.workspacesByID[workspaceID],
+                  workspace.taskID == nil, workspace.isCoordinator == false,
+                  store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: record.id)) else { continue }
+            relinked = true
+            ToasttyLog.warning("Linked a task space to its task again", category: .tasks, metadata: [
+                "task_id": record.id.uuidString,
+                "workspace_id": workspaceID.uuidString,
+            ])
+        }
+        if relinked { flushLayout() }
     }
 
     // MARK: - Setup

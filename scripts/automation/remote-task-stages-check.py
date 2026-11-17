@@ -13,7 +13,8 @@ directory is the project root), a fake agent, and a tasks.toml with
 - a started task reports stage `running`, and `idle` once its agent ended its
   first turn; a linked pull request with no answer from GitHub makes it
   `needsYou`/`review`, and the link is copied to the record; the task space's
-  done mark makes it `done`;
+  done mark is refused while that pull request may be open, and `task
+  mark-done` makes it `done`;
 - `task adopt` gives a task space made by `workspace.create` a record;
 - `window.sidebar.set-segment` and `window.tasks.show` work without changing
   the selected workspace;
@@ -170,7 +171,7 @@ def main():
         # 1. A started task is running until its agent ends its first turn,
         # which is the task's text. With its agent then at its prompt it is
         # idle; a linked pull request with no answer from GitHub waits for
-        # review; the done mark finishes it.
+        # review; the done mark cannot finish it, Mark Done can.
         task = cli_json('task', 'create', 'Fix the unread dot', '--workspace', workspace_id, '--wait', '--timeout', '90')
         task_id, task_space = task['taskID'], task['setup']['taskSpaceWorkspaceID']
         require(stage(task_id)['group'] == 'running', f'A started task should run its first turn: {stage(task_id)}')
@@ -203,8 +204,13 @@ def main():
         open_and_close_quick_entry('sidebar.tasks.new')
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=needsYou')
         capture('sidebar-needs-you')
-        cli_json('action', 'run', 'workspace.set-done', '--workspace', task_space)
-        require(stage(task_id)['group'] == 'done', f'The done mark should finish the task: {stage(task_id)}')
+        refused = subprocess.run([str(cli), '--json', 'action', 'run', 'workspace.set-done', '--workspace', task_space],
+                                 env=environment, capture_output=True, text=True, timeout=120)
+        require(refused.returncode != 0 and 'open pull request' in refused.stdout + refused.stderr,
+                f'The done mark should not finish a task whose pull request may be open: {refused.stdout} {refused.stderr}')
+        require(stage(task_id).get('attention') == 'review', f'A refused done mark changed the stage: {stage(task_id)}')
+        cli_json('task', 'mark-done', task_id)
+        require(stage(task_id)['group'] == 'done', f'Mark Done should finish the task: {stage(task_id)}')
         cli_json('action', 'run', 'window.sidebar.set-segment', '--window', window_id, 'segment=all')
         capture('sidebar-projects-done')
         cli_json('action', 'run', 'window.tasks.show', '--window', window_id)

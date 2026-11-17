@@ -145,7 +145,18 @@ push. The former `TOASTTY_IOS_TESTFLIGHT_ON_PUSH` variable has no effect.
    device with the compatible Mac configuration. Then assign the build to the
    remaining internal group or enable automatic distribution for that group.
 6. Record the git SHA, GitHub Actions run URL, marketing version, build number,
-   and compatible Toastty macOS release.
+   and compatible Toastty macOS release, such as `0.10.0 (40)` for the release
+   of the task system.
+
+When a release changes both the phone and the Mac, this build is step 4 of the
+[release order](building-and-releasing.md#release-order). Deploy the
+production relay first. Making this build available before the Mac release goes
+live is required; the protocol has no other protection for an older phone. A
+phone build that predates a new alert kind, such as `kind: "task"`,
+cannot decode it: the alert's text shows, but a tap only opens the app, and in
+the foreground no banner shows. For the real-device check in step 5, use the
+Mac release candidate that `scripts/release/release.sh` built, before it is
+published.
 
 The workflow defaults the marketing version to `0.1.0`. Its build number is
 `GITHUB_RUN_NUMBER.GITHUB_RUN_ATTEMPT`, so a rerun does not reuse a rejected

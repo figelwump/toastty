@@ -1418,6 +1418,7 @@ struct ToasttyApp: App {
             launcher: agentLaunchService,
             directoryURL: runtimePaths.coordinatorDirectoryURL,
             queueFileURL: runtimePaths.coordinatorQueueFileURL,
+            workspaceFileURL: runtimePaths.coordinatorWorkspaceFileURL,
             configLoader: { try TasksConfigFile.load() },
             // The agent's terminal inherits this process's environment.
             trustFolder: { [weak agentCatalogStore] profileID, directory in

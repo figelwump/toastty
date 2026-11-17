@@ -318,6 +318,61 @@ struct CoordinatorControllerTests {
         #expect(fixture.tasks.router.sendAttemptCount == 1)
     }
 
+    /// The bug this guards: after a return to v0.9.2 and forward again, the
+    /// coordinator's workspace was an ordinary one, and its folder kept
+    /// Toastty from offering a new coordinator.
+    @Test func aLayoutSavedByV092KeepsTheCoordinatorThroughTheSavedRecord() throws {
+        let fixture = try Fixture()
+        let recordURL = fixture.tasks.root.appendingPathComponent("runtime-home/coordinator-workspace.json")
+        func launch() -> CoordinatorController {
+            CoordinatorController(
+                store: fixture.store,
+                sessionRuntimeStore: fixture.sessions,
+                launcher: nil,
+                directoryURL: fixture.directory,
+                queueFileURL: fixture.queueFileURL,
+                workspaceFileURL: recordURL,
+                configLoader: { TasksConfig() },
+                deliverText: { _, _ in .unavailable },
+                promptState: { _ in .unavailable }
+            )
+        }
+        let first = launch()
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        let workspaceID = UUID()
+        let firstPanelID = UUID()
+        #expect(fixture.store.send(.createCoordinatorWorkspace(
+            windowID: windowID, workspaceID: workspaceID, panelID: firstPanelID, terminalCWD: fixture.directory.path)))
+        #expect(CoordinatorWorkspaceRecord.load(from: recordURL) == CoordinatorWorkspaceRecord(workspaceID: workspaceID, panelID: firstPanelID))
+        // A restart moved the agent to a new terminal; the record follows.
+        #expect(fixture.store.send(.createBackgroundTerminalTab(
+            workspaceID: workspaceID, tabID: UUID(), panelID: UUID(), terminalCWD: fixture.directory.path)))
+        let panelID = try #require(fixture.store.state.workspacesByID[workspaceID]?.allPanelsByID.keys.first { $0 != firstPanelID })
+        #expect(fixture.store.send(.setCoordinatorPanel(panelID: panelID)))
+        #expect(CoordinatorWorkspaceRecord.load(from: recordURL)?.panelID == panelID)
+        #expect(first.location?.panelID == panelID)
+        // A message of the user's waits for the coordinator's prompt.
+        try CoordinatorQueueSnapshot(
+            workspaceID: workspaceID, queued: [.init(id: "waiting", text: "Create the export task")], paused: []
+        ).save(to: fixture.queueFileURL)
+
+        fixture.store.replaceState(try TaskCoordinatorTests.layoutSavedByV092(fixture.store.state))
+        #expect(fixture.store.state.coordinator == nil)
+
+        // The next launch: the coordinator and its waiting message are back.
+        let relaunched = launch()
+        #expect(relaunched.location == CoordinatorLocation(windowID: windowID, workspaceID: workspaceID, panelID: panelID))
+        #expect(fixture.store.state.topLevelWorkspaceIDs(in: windowID) == [fixture.tasks.workspaceID])
+        #expect(relaunched.queuedEntries.map(\.id) == ["waiting"])
+
+        // A coordinator closed in v0.9.2 stays closed, and its record goes.
+        fixture.store.replaceState(try TaskCoordinatorTests.layoutSavedByV092(fixture.store.state))
+        #expect(fixture.store.send(.closeWorkspace(workspaceID: workspaceID)))
+        _ = launch()
+        #expect(fixture.store.state.coordinator == nil)
+        #expect(FileManager.default.fileExists(atPath: recordURL.path) == false)
+    }
+
     @Test func openWithoutSelectLeavesTheSelectionAlone() async throws {
         let fixture = try Fixture()
         let result = try await fixture.controller.open(select: false)

@@ -45,8 +45,9 @@ public struct RemoteTaskBoardEntry: Codable, Equatable, Sendable {
     public var taskID: UUID
     /// Drawn under the task that started it.
     public var isLinkedChild: Bool
-    /// Drawn dimmed: the task's own stage is in a calmer group, and it lists
-    /// here to keep its family together.
+    /// The task's own stage is in a calmer group, and it lists here to keep
+    /// its family together. Kept on the wire for older apps; the phone draws
+    /// the row like any other.
     public var isContext: Bool
 
     public init(taskID: UUID, isLinkedChild: Bool = false, isContext: Bool = false) {
@@ -219,6 +220,11 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
     /// Present on a parent task with child tasks that are not archived.
     /// Absent from older hosts.
     public var childProgress: RemoteTaskChildProgress?
+    /// What the user must do on the Mac before the task can go on, when no
+    /// task action can do it from a client: picking the task's workspace.
+    /// A client shows it with the task's detail. Absent otherwise, and from
+    /// older hosts.
+    public var macStep: String?
 
     public init(
         id: UUID,
@@ -240,7 +246,8 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         releaseAfterMergeRequestedAt: Date? = nil,
         parentTaskID: UUID? = nil,
         parentTaskTitle: String? = nil,
-        childProgress: RemoteTaskChildProgress? = nil
+        childProgress: RemoteTaskChildProgress? = nil,
+        macStep: String? = nil
     ) {
         self.id = id
         self.hasRecord = hasRecord
@@ -262,12 +269,13 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         self.parentTaskID = parentTaskID
         self.parentTaskTitle = parentTaskTitle.map(Self.bounded)
         self.childProgress = childProgress
+        self.macStep = macStep.map(Self.bounded)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, hasRecord, title, group, mark, statusLine, rowSummary, stageTitle, stageReason
         case projectWorkspaceID, projectTitle, taskSpaceWorkspaceID, pullRequest, activityAt, mergeControl, actions
-        case releaseAfterMergeRequestedAt, parentTaskID, parentTaskTitle, childProgress
+        case releaseAfterMergeRequestedAt, parentTaskID, parentTaskTitle, childProgress, macStep
     }
 
     public init(from decoder: any Decoder) throws {
@@ -292,6 +300,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         parentTaskID = try container.decodeIfPresent(UUID.self, forKey: .parentTaskID)
         parentTaskTitle = try container.decodeIfPresent(String.self, forKey: .parentTaskTitle)
         childProgress = try container.decodeIfPresent(RemoteTaskChildProgress.self, forKey: .childProgress)
+        macStep = try container.decodeIfPresent(String.self, forKey: .macStep)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -316,6 +325,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         try container.encodeIfPresent(parentTaskID, forKey: .parentTaskID)
         try container.encodeIfPresent(parentTaskTitle, forKey: .parentTaskTitle)
         try container.encodeIfPresent(childProgress, forKey: .childProgress)
+        try container.encodeIfPresent(macStep, forKey: .macStep)
     }
 
     /// Whether the Mac offers `action` for this task now: in its action

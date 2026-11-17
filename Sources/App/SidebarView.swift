@@ -1476,8 +1476,8 @@ struct SidebarView: View {
     }
 
     /// "NEEDS YOU 4" over a bucket's rows. The count is the rows whose own
-    /// state is in the bucket; a dimmed relative or a held row counts where
-    /// its own state is.
+    /// state is in the bucket; a relative listed with its family, or a held
+    /// row, counts where its own state is.
     private func bucketHeader(_ bucket: SidebarBucket, count: Int) -> some View {
         SidebarGroupTitle(title: bucket.title, count: count)
             .foregroundStyle(Self.bucketTitleColor(bucket))
@@ -1582,8 +1582,6 @@ struct SidebarView: View {
                 }
             }
         }
-        // Its own state is in a calmer bucket; see `SidebarBucketEntry.isContext`.
-        .opacity(entry.isContext ? 0.55 : 1)
     }
 
     private static func bucketedSubspaceRow(
@@ -4626,6 +4624,9 @@ struct SidebarView: View {
             summary: boardItem.flatMap { item in
                 // The agent's question replaces its last status line.
                 if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
+                // So does a start that may wait in the terminal: the session
+                // itself only shows that it waits.
+                if case .needsYou(.startWaitsInTerminal) = item.stage { return TaskBoardPresentation.statusLine(item) }
                 // A merged task's held task space says when it closes.
                 return item.stage.isBeforeStart || item.cleanupHeldUntil != nil ? TaskBoardPresentation.statusLine(item) : nil
             } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),

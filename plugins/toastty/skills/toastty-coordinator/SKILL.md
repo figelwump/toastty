@@ -83,6 +83,9 @@ is part of the sender's text.
 - **`[Toastty] Quick entry`: the user.** The user wrote the rest of the
   message in Toastty's quick entry panel. See New tasks for what the line
   says.
+- **`[Toastty] Reply from the user`: the user.** The user answered one of
+  your messages in the chat. The line gives the number of lines that follow
+  as a `> ` quote of your message; the text after them is the user's.
 - **No `[Toastty]` first line: the user,** typing in your chat or your
   terminal. A task link in it names that task: read the task by its ID, not
   by its title, which can be old.
@@ -115,6 +118,14 @@ Run the commands below with `"$TOASTTY_CLI_PATH"`; `toastty` in this text
 means that. If it is not set, report that you
 must run inside a Toastty-managed agent session, and stop. If a command
 cannot reach Toastty, tell the user and do not retry in a loop.
+
+**In a sandbox,** `toastty` needs Toastty's local socket and `gh` needs the
+network. Request your runtime's escalation for each such command on the
+first try, for that exact command only; in Codex,
+`sandbox_permissions="require_escalated"`. Never change sandbox settings. In
+a wake turn nobody may be there to approve: if a command waits or is denied,
+do not retry it; tell the user once that wakes need `toastty` and `gh`
+allowed without a prompt.
 
 **Read the open tasks** with this command. It keeps the fields you need and
 gives each time as minutes before now:
@@ -208,7 +219,10 @@ without `--steer`. Never `--steer` your own messages.
    `"$TOASTTY_CLI_PATH" coordinator wake --clear --quiet`. Toastty then
    folds the turn in the chat and does not alert the user. Use it only in a
    turn that a digest started; Toastty refuses it in any other turn, also
-   when the user wrote to you during the turn. Then answer as usual.
+   when the user wrote to you during the turn. Decide this only after you
+   have checked everything in the turn: run the command as the turn's last
+   step. If you run it again in the turn, the last call decides, so a call
+   without `--quiet` removes the mark. Then answer as usual.
 
    | Deadline | Next check |
    | --- | --- |
@@ -257,12 +271,13 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 | --- | --- | --- |
 | Toastty restarted in the middle of a turn | `interruptedAtQuit` is true and the agent is `idle`. Toastty wakes you then; the digest line ends with `interrupted by the quit`. | Send at once: "Toastty restarted while you worked. Continue where you stopped." The 15-minute rule of Send does not apply. Only when `userTypedMinutesAgo` is less than 2, the user may be at that prompt: set your next check for when it reaches 2, and send then if the task is still in this row. |
 | Permission prompt | `agent` is `waiting`, stage `needsYou (agentNeedsInput)` | Never answer it. When `agentMinutes` passes 10, tell the user once. Before that, say nothing about it and set the next check for that time. |
+| Agent never started | stage `needsYou (startWaitsInTerminal)`: a login or folder-trust question in its terminal | Never answer it. Tell the user once to answer it in the task's terminal. |
 | Question | stage `needsYou (awaitingReply)`, with `question` | Read `lastReply`. If `policy.md`, or an answer the user gave you to the same question, settles it: send the answer, name the rule in it, and tell the user what you answered. If not: pass the question to the user with the answer you suggest, and send the user's answer to the task when it comes. |
 | Ended a turn, not done | stage `needsYou (agentFinished)` | Read `lastReply` and sort it. It waits for CI: nothing to send. It waits for another task or pull request: see the next row. It asks something: treat it as a question. The work is finished but it has no pull request and no ready mark: tell it once to open the pull request or to run `toastty task ready-for-review`. It answers the user: tell the user it waits for them. |
 | Waits for another task or pull request | the reply names it | Add a `watch` line to the ledger. For another Toastty task, also run `"$TOASTTY_CLI_PATH" coordinator watch --task <that task's id>`: its merge, or its end without a merge, then wakes you. A pull request outside Toastty answers `gh pr view <url> --json state,mergedAt`; set your next check to look again. When it merged, tell the waiting task, under the rules for Send. Do not use `toastty task watch --notify` for another task: Toastty types that notice whatever the agent does at that moment. |
 | CI failed | `checks` is `failing` and the agent is `idle`. Toastty wakes you when the checks start to fail. | Read which checks fail with `gh pr checks <pr>`. Tell the task to fix them, or to rerun a check that Notes in `policy.md` names as a flake. |
 | CI slow | `checksPendingMinutes` passes 30. Toastty wakes you then. | Look with `gh pr checks <pr>` and `gh run view`. Tell the user if a run is queued or hangs. Do not rerun or cancel it. |
-| Merge conflict | `mergeState` is `DIRTY` and the agent is `idle` | Tell the task to rebase onto its base branch and resolve the conflicts. |
+| Merge conflict | `mergeState` is `DIRTY` and the agent is `idle` | Tell the task to merge its base branch into its branch, resolve the conflicts, and push without force. |
 | Busy but silent | `agent` is `busy` and `silentMinutes` passes 30. Toastty wakes you then. | Never interrupt. Read its screen with `toastty --json query run terminal.visible-text --panel <panelID> tail=40`, and tell the user which command seems to hang. A long build or a sub-agent can be silent and healthy. |
 | Setup failed | stage `needsYou (setupFailed)` | Run `toastty task retry <task-id>` once. If it fails again, tell the user with `reason`. |
 | Stopped with an error | `agent` is `error` on an open task that is not To ship, stage `needsYou (agentError)`. An error, such as the computer's sleep, ended the turn; the agent waits at its prompt. Toastty wakes you then. | With a `question` or `mergeFailure`, use its own row first. Else send at once: "Your turn stopped with an error. Continue where you stopped." Then tell the user. The 15-minute and 2-minute rules work as for a restart. |
@@ -323,8 +338,8 @@ so that it blocks requested reports or mockups.
 separated by ` | `:
 
 ```text
-[Toastty] Quick entry from the user | project chosen: "toastty" (workspace 65A904AE-…) | agent chosen: codex, model gpt-6.1-sol, effort high
-[Toastty] Quick entry from the user | selected in Toastty, a hint only: "emptyos" (workspace 4AAE2AAF-…)
+[Toastty] Quick entry from the user | project chosen: "webapp" (workspace 65A904AE-…) | agent chosen: codex, model <model>, effort high
+[Toastty] Quick entry from the user | selected in Toastty, a hint only: "api" (workspace 4AAE2AAF-…)
 ```
 
 - `project chosen`: use `--workspace <that ID>`, not `--root`. Do not ask
@@ -474,7 +489,7 @@ a new change.
 ```text
 - 2026-11-09T18:20Z nudged ci-failed [Fix the unread dot](toastty://task/<id>): told it to fix the macOS tests.
 - 2026-11-09T18:41Z told permission [Add the export API](toastty://task/<id>): at a permission prompt since 18:30.
-- 2026-11-09T19:00Z asked release-rule toastty: on merge or in batches?
+- 2026-11-09T19:00Z asked release-rule webapp: on merge or in batches?
 - 2026-11-09T19:05Z watch https://github.com/o/r/pull/12 for [Add the export API](toastty://task/<id>).
 - 2026-11-09T19:10Z reviewed 4f2c1ab [Fix the unread dot](toastty://task/<id>): good proof, told the user.
 ```

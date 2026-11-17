@@ -342,7 +342,10 @@ targets its own workspace rather than the selected one; a caller whose session
 Toastty no longer runs must name the workspace. Only subspaces and a task's
 task space hold the mark: `workspace.set-done` rejects any other top-level
 workspace, and moving a subspace that is not a task's task space to top level
-drops it. The sidebar shows a done task space with a check in place of its
+drops it. It also rejects a task with an open pull request, or one GitHub has
+not answered for yet, and a task with a merge under way: such a task finishes
+when you merge or archive it, as the sidebar's box and Toastty Mobile already
+require. The sidebar shows a done task space with a check in place of its
 idle box and keeps its place; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn
@@ -869,7 +872,7 @@ toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root 
 toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>]
-toastty task send <task-id> (<text> | --text-file <path>) [--steer]
+toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer]
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
@@ -932,7 +935,9 @@ They also report how long the task has been in its state: `stage.changedAt`,
 when Toastty quit or crashed, and has not started one since),
 `agentState.lastOutputAt`, `lastUserInputAt`, and `pullRequest` with `checks`
 (`pending`, `failing` or `passing`), `checksPendingSince` and
-`mergeStateStatus`. `task list --changed-since` does not list a task when only
+`mergeStateStatus`. While GitHub has not answered about the pull request
+because the request failed, `pullRequestLookupError` gives the `problem`
+(`ghMissing`, `notSignedIn` or `other`) and a `message` that says what to do. `task list --changed-since` does not list a task when only
 `lastOutputAt` or `lastUserInputAt` changed. See
 [How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state).
 `task adopt` gives a task space without a record one; it defaults to the
@@ -940,7 +945,9 @@ calling agent's task space.
 
 `task send`, `task watch` and `task list --changed-since` let an agent follow
 and talk to other tasks by task ID; see
-[Coordinate tasks](tasks.md#coordinate-tasks). `task send` types its message
+[Coordinate tasks](tasks.md#coordinate-tasks). `task send` and
+`coordinator send` take the message in exactly one way: as one argument, with
+`--text`, or from a UTF-8 file with `--text-file`. `task send` types its message
 whatever the agent does. With `--steer`, it checks the agent first: the message
 goes to the agent's open prompt or into its running turn, or Toastty holds it
 for the next open prompt, and nothing is typed into a permission prompt.
@@ -1000,7 +1007,7 @@ Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 toastty coordinator open [--window <id>] [--no-select]
 toastty coordinator restart [--window <id>]
 toastty coordinator status
-toastty coordinator send (<text> | --text-file <path>)
+toastty coordinator send (<text> | --text <text> | --text-file <path>)
 toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
 toastty coordinator watch (--task <task-id> | --workspace <id>) [--remove]
 ```
@@ -1055,7 +1062,8 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   under Toastty's line, and its end marks nothing unread and sends no
   notification. Only the coordinator's own agent can pass `--quiet`, in a
   turn that Toastty's last digest started and that no other message came
-  into; otherwise the command fails and changes nothing. It returns the
+  into; otherwise the command fails and changes nothing. A later call
+  without `--quiet` in the same turn removes the mark. It returns the
   `status` fields and fails when there is no coordinator. See
   [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator)
   and [Quiet turns](tasks.md#quiet-turns).
