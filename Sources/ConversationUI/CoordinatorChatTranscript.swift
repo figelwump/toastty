@@ -66,12 +66,17 @@ public enum ToasttyTranscriptRows {
                 }
             case .assistantMessage(let payload):
                 if let coordinatorMessages {
-                    let quoted = CoordinatorMessageHeader.quoteText(payload.text)
-                    assistantRowIDs[CoordinatorChatTranscript.QuotedMessage(
-                        text: quoted,
-                        time: CoordinatorMessageHeader.replyTime(coordinatorMessages.timeText(event.timestamp))
-                    )] = rowID
-                    assistantRowIDsByText[quoted, default: []].append(rowID)
+                    let time = CoordinatorMessageHeader.replyTime(coordinatorMessages.timeText(event.timestamp))
+                    // A reply quotes the message as Toastty typed it, which
+                    // can put image names in code spans.
+                    let quotes = Set([
+                        CoordinatorMessageHeader.quoteText(payload.text),
+                        CoordinatorMessageHeader.typedQuoteText(payload.text),
+                    ])
+                    for quoted in quotes {
+                        assistantRowIDs[CoordinatorChatTranscript.QuotedMessage(text: quoted, time: time)] = rowID
+                        assistantRowIDsByText[quoted, default: []].append(rowID)
+                    }
                 }
                 content = .assistantMessage(text: payload.text, phase: payload.phase)
             case .toolStarted(let payload):

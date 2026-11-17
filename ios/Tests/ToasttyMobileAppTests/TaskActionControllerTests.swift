@@ -285,7 +285,7 @@ final class TaskActionControllerTests: XCTestCase {
 
         let failure = await controller.releaseProject(release)
         XCTAssertNil(failure)
-        let lane = try XCTUnwrap(controller.snapshot.taskBoard.map(MobileTaskSections.make)?.toShip.first)
+        let lane = try XCTUnwrap(MobileTaskSections.make(controller.snapshot).toShip.first)
         XCTAssertEqual(lane.release?.isReleasing, true)
         // The release task lists like any other task.
         let task = try XCTUnwrap(lane.release?.releaseTaskID.flatMap { controller.snapshot.taskBoard?.task(id: $0) })
@@ -300,7 +300,7 @@ final class TaskActionControllerTests: XCTestCase {
     // MARK: - Helpers
 
     private func toasttyRelease(_ controller: HomeScreenController) throws -> MobileProjectRelease {
-        try XCTUnwrap(controller.snapshot.taskBoard.map(MobileTaskSections.make)?.toShip.first?.release)
+        try XCTUnwrap(MobileTaskSections.make(controller.snapshot).toShip.first?.release)
     }
 
     private func liveController(supportsTaskActions: Bool = true, supportsRelease: Bool = false) -> HomeScreenController {

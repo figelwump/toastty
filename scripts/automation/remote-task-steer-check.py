@@ -13,6 +13,11 @@ This script plays a coordinator outside Toastty.
 
 It checks that `task send --steer`:
 - types the message at an idle agent's open prompt (`sent`);
+- submits a message with image paths, each on a line of its own: one with
+  a plain `task send` and two with `--steer` at the open prompt, and one in
+  the running turn's message below. Claude Code reads such a pasted line as
+  an image file and drops the Return typed meanwhile, so Toastty types the
+  paths as code spans, and the screen must never show `[Image #`;
 - types it into a running turn (`steered`), and the agent reads it in that
   turn: it answers as the message says, and not as the turn's first message
   said. When Toastty reports a Codex agent in a turn as idle, as it does
@@ -35,10 +40,12 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
 import uuid
+import zlib
 
 
 def _load(name, filename):
@@ -68,6 +75,17 @@ HOLD_TEXT = (
     f'./{HOLD_SCRIPT} 40 . Then reply with exactly HOLD-DONE.'
 )
 STEER_TEXT = 'Change of plan: when the current command ends, reply with exactly STEERED-OK and not with HOLD-DONE.'
+# An 8x8 red PNG. Its paths go into messages on lines of their own, as a
+# coordinator passes on the user's screenshots.
+def png():
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    rows = b''.join(b'\x00' + b'\xff\x00\x00' * 8 for _ in range(8))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 8, 8, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+
+
+IMAGE_NOTE = 'Do not open or read the files named below; they are only part of the check.'
 TOUCH_TEXT = (
     f'Run exactly this one shell command, and no other command: touch {MARKER_FILE} . '
     'Then reply with exactly TOUCH-DONE.'
@@ -105,6 +123,9 @@ def main():
     hold.chmod(0o755)
     toastty_dir = repository / '.toastty'
     toastty_dir.mkdir()
+    shots = [root / 'shot-1.png', root / 'shot-2.jpg']
+    for shot in shots:
+        shot.write_bytes(png())
     for name in ('.codex', '.claude'):
         if (Path.home() / name).exists():
             (repository / name).symlink_to(Path.home() / name)
@@ -209,6 +230,12 @@ def main():
         def steer(text):
             return cli_result('task', 'send', task_id, text, '--steer')
 
+        def with_images(text, count):
+            return '\n'.join([text, IMAGE_NOTE, *(str(shot) for shot in shots[:count])])
+
+        def no_image_attachment(marker):
+            require('[Image #' not in screen(), f'An image path became an image attachment by {marker}')
+
         reply('READY-T')
         wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
         step('task started', taskID=task_id, agentState=get()['agentState'])
@@ -220,6 +247,18 @@ def main():
         wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
         step('idle agent: sent', result=sent)
 
+        # 1b. Image paths on lines of their own: without --steer, then with it.
+        cli_result('task', 'send', task_id, with_images('Run no command. Reply with exactly IMAGE-ONE-OK.', 1))
+        reply('IMAGE-ONE-OK', timeout=120)
+        no_image_attachment('IMAGE-ONE-OK')
+        wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
+        two = steer(with_images('Run no command. Reply with exactly IMAGE-TWO-OK.', 2))
+        require(two.get('delivery') == 'sent' and two.get('delivered') is True, f'Not sent at the open prompt: {two}')
+        reply('IMAGE-TWO-OK', timeout=120)
+        no_image_attachment('IMAGE-TWO-OK')
+        wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
+        step('idle agent: image paths submitted, without and with --steer', result=two)
+
         # 2. A running turn: typed into the turn, and the agent follows it.
         cli_result('task', 'send', task_id, HOLD_TEXT)
         wait_for('the agent in a turn', lambda: agent_state() == 'busy', interval=0.5)
@@ -230,15 +269,16 @@ def main():
             time.sleep(1)
             states.append(agent_state())
         if states[-1] == 'busy':
-            steered = steer(STEER_TEXT)
+            steered = steer(with_images(STEER_TEXT, 1))
             require(steered.get('delivery') == 'steered', f'Not steered into the running turn: {steered}')
             reply('STEERED-OK')
+            no_image_attachment('STEERED-OK')
             # An agent that read the message only after its turn would have
             # ended that turn with the first message's answer.
             require(visible_text_with(instance, snapshot(), 'HOLD-DONE') is None,
                     'The agent answered the first message before it read the steered one')
             wait_for('the agent at its prompt', lambda: agent_state() == 'idle', interval=1)
-            step('busy agent: steered and read in the turn', result=steered)
+            step('busy agent: steered, with an image path, and read in the turn', result=steered)
         else:
             # Without Codex's hooks, Toastty follows a Codex agent's state
             # from its session log, and reports it as idle during a long

@@ -371,7 +371,7 @@ last workspace here. See
 
 ```bash
 toastty task create "Composer keeps a blank line after send" \
-  --workspace "$WORKSPACE_ID" --agent codex --model gpt-6.1-sol --effort high
+  --workspace "$WORKSPACE_ID" --agent codex --model gpt-6.2-sol --effort high
 ```
 
 `task create` returns as soon as Toastty has saved the task. Setup continues in
@@ -405,7 +405,7 @@ prompt:
 
 ```bash
 toastty task create --title "Split out the parser" --slug parser-split \
-  --agent codex --model gpt-6.1-sol --effort high --prompt-file brief.md
+  --agent codex --model gpt-6.2-sol --effort high --prompt-file brief.md
 ```
 
 Other verbs:
@@ -530,7 +530,7 @@ with every choice set:
 
 ```bash
 toastty task create "Split the parser" --start-work --base feat/parser \
-  --agent codex --model gpt-6.1-sol --effort high --prompt-file brief.md
+  --agent codex --model gpt-6.2-sol --effort high --prompt-file brief.md
 ```
 
 Setup makes the worktree before the task space, so the task space's terminal
@@ -1013,7 +1013,7 @@ you when it is not sure, and creates the task.
 A message looks like this in the coordinator's terminal:
 
 ```text
-[Toastty] Quick entry from the user | project chosen: "toastty" (workspace 65A904AE-…) | agent chosen: codex, model gpt-6.1-sol, effort high
+[Toastty] Quick entry from the user | project chosen: "toastty" (workspace 65A904AE-…) | agent chosen: codex, model gpt-6.2-sol, effort high
 The unread dot stays on after I read the session on the phone.
 
 Read the following files attached to this message on this Mac:
@@ -1591,7 +1591,7 @@ by asking you:
 - Website copy or layout → toastty, docs/.
 
 ## Agents
-- Toastty bug with a repro: codex, gpt-6.1-sol, high, start work at once.
+- Toastty bug with a repro: codex, gpt-6.2-sol, high, start work at once.
 - Design or product question: claude, claude-opus-5-5, xhigh; shape first.
 
 ## Talking
@@ -2677,7 +2677,7 @@ title and a slug, and any model or effort the preset leaves out.
 [triage]
 command = "claude -p --model claude-sonnet-5-5 --effort medium --tools ''"
 guidelines = """
-A clear bug with a repro: codex, gpt-6.1-sol, high. Tell it to start work.
+A clear bug with a repro: codex, gpt-6.2-sol, high. Tell it to start work.
 A design question: claude, claude-opus-5-5, xhigh. Tell it to shape first.
 """
 timeout_seconds = 120
@@ -2698,7 +2698,7 @@ The command answers with one JSON object on stdout, also read from a fenced
 code block, after other text, or from `claude -p --output-format json`:
 
 ```json
-{"workspace": "<workspace ID>", "agent": "codex", "model": "gpt-6.1-sol",
+{"workspace": "<workspace ID>", "agent": "codex", "model": "gpt-6.2-sol",
  "effort": "high", "first_prompt": "Start with the composer views.",
  "title": "Composer keeps a blank line", "slug": "composer-blank-line",
  "reason": "A composer bug in toastty."}

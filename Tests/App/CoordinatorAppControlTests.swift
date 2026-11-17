@@ -115,6 +115,10 @@ struct CoordinatorAppControlTests {
         // by its session and workspace title, which any session could share.
         let fromCoordinator = try await send("A note to myself.", as: coordinatorSessionID)
         #expect(fromCoordinator == "[Toastty] From the coordinator: not from the user.\nA note to myself.")
+        // An image path is typed as text: Claude Code drops a Return typed
+        // while it reads a pasted image path.
+        let withImage = try await send("Screenshot:\n/Users/me/shot.jpg", as: coordinatorSessionID)
+        #expect(withImage == "[Toastty] From the coordinator: not from the user.\nScreenshot:\n`/Users/me/shot.jpg`")
         #expect(CoordinatorMessageHeader.kind(of: fromCoordinator) == .fromSender(sender: "the coordinator"))
         // No session, or a session that does not run: Toastty cannot tell.
         for caller in [nil, "not-a-session"] as [String?] {

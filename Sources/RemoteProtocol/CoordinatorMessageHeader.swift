@@ -230,6 +230,17 @@ public enum CoordinatorMessageHeader {
         quoteLines(message).joined(separator: "\n")
     }
 
+    /// `quoteText` as a typed reply gives it back. Toastty types image
+    /// paths as code spans (`AgentPasteText`), and that can change a line
+    /// of the quote, such as one that ends in an image name.
+    public static func typedQuoteText(_ message: String) -> String {
+        quoteLines(message).map { line in
+            guard line.isEmpty == false else { return line }
+            // The `> ` stays: a piece that starts with `>` is no path.
+            return String(AgentPasteText.keepingImagePathsAsText("> " + line).dropFirst(2))
+        }.joined(separator: "\n")
+    }
+
     /// The parts of a reply as `replyMessage` wrote it: the quoted message,
     /// its time, and the rest, which is the user's text with the list of
     /// attached files. `nil` for a message that is not such a reply, also
