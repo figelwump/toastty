@@ -263,14 +263,18 @@ toastty_find_reattachable_run() {
   return 1
 }
 
-# Runs the probe or follow action of admission.py for one remote run.
+# Runs the probe or follow action of admission.py for one remote run. The
+# local copy is sent over stdin, so a probe also works after the run folder,
+# and the controller staged in it, were removed.
 toastty_remote_detached() {
   local action="$1" run_root="$2"
-  ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
-    "$action" "$run_root" <<'EOF'
-set -euo pipefail
-exec /usr/bin/python3 "$2/controller/scripts/remote/admission.py" "$1" --root "$(dirname "$(dirname "$2")")" --dir "$2"
-EOF
+  {
+    printf '%s\n' 'set -euo pipefail' \
+      'exec /usr/bin/python3 - "$1" --root "$(dirname "$(dirname "$2")")" --dir "$2" <<'"'"'TOASTTY_ADMISSION_PY'"'"
+    cat "$ROOT_DIR/scripts/remote/admission.py"
+    printf '%s\n' TOASTTY_ADMISSION_PY
+  } | ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
+    "$action" "$run_root"
 }
 
 toastty_remote_run_reattachable() {
