@@ -1417,6 +1417,18 @@ struct TaskBoardTests {
         let readView = TasksViewSections.make(board.items())
         #expect(readView.needsYou.isEmpty)
         #expect(readView.running.map(\.id).contains(.task(task.id)))
+
+        // Once its project closes, the task space is a top-level workspace
+        // with no row under a project, and the sidebar lists the task by its
+        // stage alone. So does the Tasks view, even with a new unread turn.
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: "restored-\(session)"))
+        #expect(TasksViewSections.make(board.items()).needsYou.map(\.id) == [.task(task.id)])
+        #expect(fixture.store.send(.closeWorkspace(workspaceID: fixture.workspaceID)))
+        let topLevel = try item()
+        #expect(topLevel.stage == .running)
+        #expect(topLevel.hasUnreadTurn)
+        #expect(topLevel.taskSpaceStatus == nil)
+        #expect(TasksViewSections.make(board.items()).running.map(\.id).contains(.task(task.id)))
     }
 
     @Test func aQuestionWaitsInNeedsYouUntilTheTasksAgentStartsNewWork() async throws {
@@ -1814,6 +1826,15 @@ struct TaskBoardTests {
         #expect(read.running.map(\.item.title) == ["waiting-parent", "working-child", "other-running"])
         #expect(read.running.map(\.isLinkedChild) == [false, true, false])
         #expect(TaskBoardPresentation.tasksViewStatusLine(read.running[0].item) == "The agent · waiting for working-child")
+
+        // A merge under way keeps its line while its unread turn lists it
+        // in Needs you.
+        var merging = statusItem("merging", stage: .running)
+        merging.merge = .waitingForChecks
+        merging.hasUnreadTurn = true
+        merging.taskSpaceStatus = .ready
+        #expect(TasksViewSections.make([merging]).needsYou.map(\.item.title) == ["merging"])
+        #expect(TaskBoardPresentation.tasksViewStatusLine(merging) == "Waiting for checks")
     }
 
     /// Status lists tasks in the order of the project cards: by project,

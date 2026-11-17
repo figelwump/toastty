@@ -43,9 +43,10 @@ enum TaskBoardPresentation {
     }
 
     /// The Tasks view row's line: the stage's, unless the row lists for an
-    /// unread finished turn; see `showsUnreadTurnOverStage`.
+    /// unread finished turn; see `showsUnreadTurnOverStage`. A merge under
+    /// way keeps its own line, since the merge goes on without the user.
     static func tasksViewStatusLine(_ item: TaskBoardItem, now: Date = Date()) -> String {
-        showsUnreadTurnOverStage(item) ? finishedTurnLine(item) : statusLine(item, now: now)
+        showsUnreadTurnOverStage(item) && item.merge == nil ? finishedTurnLine(item) : statusLine(item, now: now)
     }
 
     private static func finishedTurnLine(_ item: TaskBoardItem) -> String {
