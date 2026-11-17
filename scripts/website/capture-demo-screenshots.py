@@ -38,6 +38,7 @@ import datetime
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import socket
@@ -211,6 +212,8 @@ hook('UserPromptSubmit', prompt=last_prompt)
 hook('Stop')
 subprocess.run([cli, 'session', 'status', '--session', session, '--kind', 'idle', '--summary', 'Waiting'],
                capture_output=True)
+# The script waits for this file: Toastty has the transcript and the turn's end.
+open(os.path.join(here, 'coordinator-ready'), 'w').close()
 sys.stdout.write('\x1b]2;Claude Code\x07\x1b[2J\x1b[HToasty is following your tasks.\n')
 sys.stdout.flush()
 for _ in sys.stdin:
@@ -244,9 +247,13 @@ else:
 '''
 
 
-def git(*arguments, cwd):
+def git(*arguments, cwd, home):
+    # No GIT_* variable from the caller, such as GIT_DIR or GIT_INDEX_FILE,
+    # may point these commands at another repository or index.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    environment['HOME'] = str(home)
     subprocess.run(['git', '-c', 'user.name=Lumen Demo', '-c', 'user.email=demo@example.com',
-                    '-c', 'init.defaultBranch=main', *arguments], cwd=cwd, check=True,
+                    '-c', 'init.defaultBranch=main', *arguments], cwd=cwd, env=environment, check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -259,19 +266,19 @@ def write_demo_home(home, demo):
     # The login shell keeps HOME at the real home but honors ZDOTDIR. The fake
     # gh goes first on PATH in .zprofile, which runs after /etc/zprofile's
     # path_helper; the app takes PATH from a login shell.
-    (home / '.zprofile').write_text(f'export PATH="{demo / "bin"}:$PATH"\n')
+    (home / '.zprofile').write_text(f'export PATH={shlex.quote(str(demo / "bin"))}:"$PATH"\n')
     (home / '.zshrc').write_text("PROMPT='%F{244}%1~%f %F{214}❯%f '\n")
     for repo in ('lumen', 'docs-site', 'infra'):
         path = home / 'code' / repo
         path.mkdir(parents=True)
-        git('init', '-q', cwd=path)
+        git('init', '-q', cwd=path, home=home)
         (path / 'README.md').write_text(f'# {repo}\n')
-        git('add', '.', cwd=path)
-        git('commit', '-q', '-m', 'Initial commit', cwd=path)
+        git('add', '.', cwd=path, home=home)
+        git('commit', '-q', '-m', 'Initial commit', cwd=path, home=home)
     # Tasks start work from origin's main, so lumen gets a local origin.
-    git('clone', '-q', '--bare', str(home / 'code/lumen'), str(home / 'origin/lumen.git'), cwd=home)
-    git('remote', 'add', 'origin', str(home / 'origin/lumen.git'), cwd=home / 'code/lumen')
-    git('fetch', '-q', 'origin', cwd=home / 'code/lumen')
+    git('clone', '-q', '--bare', str(home / 'code/lumen'), str(home / 'origin/lumen.git'), cwd=home, home=home)
+    git('remote', 'add', 'origin', str(home / 'origin/lumen.git'), cwd=home / 'code/lumen', home=home)
+    git('fetch', '-q', 'origin', cwd=home / 'code/lumen', home=home)
 
     for name, text in TRANSCRIPTS.items():
         # An OSC 2 sequence first, so the pane's title names the agent.
@@ -502,8 +509,8 @@ def build_demo(demo):
         """Shows a transcript in a pane and keeps its shell busy, so the
         fake session is not ended for sitting at a prompt. A new pane takes
         a moment to accept input."""
-        command = (f"cd '{code(directory)}' && clear && cat '{files / 'transcripts' / (transcript + '.txt')}'"
-                   f" && sleep 86400")
+        command = (f"cd {shlex.quote(str(code(directory)))} && clear"
+                   f" && cat {shlex.quote(str(files / 'transcripts' / (transcript + '.txt')))} && sleep 86400")
         wait_for(f'pane {panel} to accept input', lambda: demo.cli_json(
             'action', 'run', 'terminal.send-text', '--panel', panel, f'text={command}', 'submit=true',
             check=False) is not None, timeout=30, interval=0.5)
@@ -641,8 +648,12 @@ def build_demo(demo):
     ]
     (files / 'bin/coordinator-seed.json').write_text(json.dumps(seed))
     demo.cli_json('coordinator', 'open', '--no-select')
+    # The launch starts out idle, so the status alone proves nothing: the fake
+    # coordinator marks when it has reported its transcript and its hooks.
+    wait_for('the coordinator to report its conversation', (files / 'bin/coordinator-ready').exists, timeout=120,
+             interval=1)
     wait_for('the coordinator at its prompt', lambda: (demo.cli_json('coordinator', 'status', check=False) or {})
-             .get('status') in ('idle', 'ready'), timeout=120, interval=1)
+             .get('status') in ('idle', 'ready'), timeout=60, interval=1)
 
     # Visiting the other projects clears their "New" badges.
     for workspace in (docs, infra, lumen):
@@ -719,6 +730,9 @@ def main():
     parser.add_argument('--crop-only', action='store_true',
                         help='only crop the captures in --out/raw again')
     options = parser.parse_args()
+    # SIGTERM, as from a wrapper that stops the run, exits through the cleanup
+    # below like Control-C does.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     out = Path(options.out).resolve()
     tools = out / 'tools'
     if options.crop_only:
