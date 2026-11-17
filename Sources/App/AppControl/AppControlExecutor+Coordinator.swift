@@ -100,7 +100,7 @@ extension AppControlExecutor {
             // The first line says who sent it. Toastty writes that line
             // from the caller, so the text cannot pass as the user's or as
             // one of Toastty's own messages.
-            result = try controller.send(CoordinatorMessageHeader.message(from: coordinatorSender(), text: text))
+            result = try controller.send(CoordinatorMessageHeader.message(from: messageSender(), text: text))
         } catch let error as CoordinatorError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
@@ -126,11 +126,15 @@ extension AppControlExecutor {
         return .init(didMutateState: false, result: response)
     }
 
-    /// Who runs this request, for the first line of a message: the task
-    /// whose space the caller's session is in, else that session, else a
-    /// caller that named no running session.
-    private func coordinatorSender() -> CoordinatorMessageHeader.Sender {
+    /// Who runs this request, for the first line of a message that
+    /// `coordinator send` or `task send` types: the coordinator's own agent
+    /// session, else the task whose space the caller's session is in, else
+    /// that session, else a caller that named no running session.
+    func messageSender() -> CoordinatorMessageHeader.Sender {
         guard let session = callerManagedSession() else { return .unknown }
+        if session.sessionID == coordinatorController?.session?.sessionID {
+            return .coordinator
+        }
         if let task = taskCoordinator?.task(inWorkspace: session.workspaceID) {
             return .task(id: task.id, title: task.title)
         }

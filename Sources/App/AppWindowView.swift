@@ -647,6 +647,14 @@ struct AppWindowView: View {
             result = .success(())
         case .openShortcutReference:
             result = openKeyboardShortcutsReferenceResult()
+        case .openCoordinator:
+            // The same open as Agent ▸ Open Coordinator, failures included.
+            if let coordinatorController {
+                coordinatorController.perform(.open, windowID: windowID)
+                result = .success(())
+            } else {
+                result = .failure(ToasttyMenuActionError(message: "This Toastty has no coordinator."))
+            }
         }
 
         if case .failure(let error) = result {

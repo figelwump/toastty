@@ -118,7 +118,8 @@ extension TaskCoordinator {
                 taskSpaceWorkspaceID: taskSpace.workspaceID,
                 sourceWorkspaceID: store.state.workspaceSelection(containingPanelID: source.panelID)?.workspace.id,
                 worktree: worktree,
-                base: record.operation.base
+                base: record.operation.base,
+                parent: parentTask(of: record)
             )
             let result: AgentLaunchResult
             do {

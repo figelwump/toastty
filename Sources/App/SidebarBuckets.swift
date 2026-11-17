@@ -67,3 +67,73 @@ typealias SidebarBucketEntry<Payload> = TaskBucketEntry<SidebarRowKey, Payload>
 typealias SidebarBucketPin = TaskBucketPin<SidebarRowKey>
 /// The shared rules, keyed by the sidebar's rows.
 typealias SidebarBuckets = TaskBuckets<SidebarRowKey>
+
+/// One line a bucket draws in the All segment: a row, or the merged child
+/// tasks of a parent, folded into one "N/M merged" line after its open
+/// children.
+enum SidebarBucketItem<Payload>: Identifiable {
+    case row(SidebarBucketEntry<Payload>)
+    /// The parent's finished children, in the order the bucket lists them.
+    case finishedChildren(parent: SidebarRowKey, rows: [SidebarBucketEntry<Payload>])
+
+    enum ID: Hashable {
+        case row(SidebarRowKey)
+        case finishedChildren(parent: SidebarRowKey)
+    }
+
+    var id: ID {
+        switch self {
+        case .row(let entry): .row(entry.key)
+        case .finishedChildren(let parent, _): .finishedChildren(parent: parent)
+        }
+    }
+}
+
+extension TaskBuckets where Key == SidebarRowKey {
+    /// The finished rows that fold under their parent: each row that
+    /// `isFinished` accepts and that lists under its parent. The rule for
+    /// "lists under its parent" is the one `TaskBuckets` uses for families:
+    /// the parent is among the rows and has no parent among them itself.
+    /// A finished row without a listed parent stays a row of its own.
+    static func foldedKeys<Payload>(
+        _ candidates: [Candidate<Payload>],
+        isFinished: (Candidate<Payload>) -> Bool
+    ) -> Set<Key> {
+        let keys = Set(candidates.map(\.key))
+        func parent(_ candidate: Candidate<Payload>) -> Key? {
+            guard let parent = candidate.parent, parent != candidate.key, keys.contains(parent) else { return nil }
+            return parent
+        }
+        let rootKeys = Set(candidates.filter { parent($0) == nil }.map(\.key))
+        return Set(candidates.filter { candidate in
+            parent(candidate).map(rootKeys.contains) == true && isFinished(candidate)
+        }.map(\.key))
+    }
+
+    /// A bucket's entries with each family's folded children moved into
+    /// one line after the family's other children.
+    static func items<Payload>(_ entries: [Entry<Payload>], folded: Set<Key>) -> [SidebarBucketItem<Payload>] {
+        var items: [SidebarBucketItem<Payload>] = []
+        var root: Key?
+        var finished: [Entry<Payload>] = []
+        func closeFamily() {
+            if let root, finished.isEmpty == false {
+                items.append(.finishedChildren(parent: root, rows: finished))
+            }
+            finished = []
+        }
+        for entry in entries {
+            if entry.isLinkedChild == false {
+                closeFamily()
+                root = entry.key
+                items.append(.row(entry))
+            } else if folded.contains(entry.key), root != nil {
+                finished.append(entry)
+            } else {
+                items.append(.row(entry))
+            }
+        }
+        closeFamily()
+        return items
+    }
+}

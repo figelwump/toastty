@@ -57,6 +57,16 @@ final class QuickEntryController: ObservableObject {
     }
     /// Whether `tasks.toml` has been read without error since launch.
     private var hasLoadedShortcut = false
+    /// The Workspace list's folder checks, by what the state said about
+    /// each folder. A new panel checks again, so a repository made since
+    /// then shows.
+    private var workspaceFolderResolutions: [QuickEntryWorkspaceFolders.Source: QuickEntryWorkspaceFolders.Resolution] = [:]
+    private var workspaceFolderSources: [String: QuickEntryWorkspaceFolders.Source] = [:]
+    private var workspaceFolderCheck: Task<Void, Never>?
+    /// Whether Toastty may take the default shortcut when `tasks.toml`
+    /// does not set one: the What's new sheet asks the user first. Set by
+    /// the app; without it, the default applies.
+    var defaultShortcutPermission: @MainActor () -> QuickEntryShortcutPermission = { .allowed }
     // Removed in deinit, which is not main-actor isolated.
     nonisolated(unsafe) private var terminationObserver: (any NSObjectProtocol)?
     /// The app in front when the panel opened, if not Toastty.
@@ -126,14 +136,18 @@ final class QuickEntryController: ObservableObject {
         let configured: QuickEntryShortcut?
         var message: String?
         do {
-            configured = try configLoader().quickEntry.shortcut
+            let quickEntry = try configLoader().quickEntry
+            // A shortcut written in the file wins; otherwise the default
+            // applies only once the user allowed it.
+            configured = quickEntry.isShortcutSet || defaultShortcutPermission() == .allowed ? quickEntry.shortcut : nil
             hasLoadedShortcut = true
         } catch {
             guard hasLoadedShortcut else {
-                // At launch there is no earlier setting: use the default
-                // rather than leave the user with no way in.
-                configured = .default
-                message = "tasks.toml: \(error.localizedDescription). The quick entry shortcut is \(QuickEntryShortcut.default.symbolLabel) until the file is fixed."
+                // At launch there is no earlier setting: use the default,
+                // if the user allowed it, rather than leave the user with
+                // no way in.
+                configured = defaultShortcutPermission() == .allowed ? .default : nil
+                message = "tasks.toml: \(error.localizedDescription). The quick entry shortcut is \(configured?.symbolLabel ?? "off") until the file is fixed."
                 return applyShortcut(configured, message: message)
             }
             // A typo must not change the shortcut: keep the one in use,
@@ -212,6 +226,7 @@ final class QuickEntryController: ObservableObject {
         let config = Result { try configLoader() }
         let defaults = (try? config.get())?.defaults
         let profiles = quickEntryAgentProfiles(defaults: defaults)
+        workspaceFolderResolutions = [:]
         let options = workspaceOptions()
         let frequent = frequentPresets(defaults: defaults, profiles: profiles)
         // Read before the workspace is filled in: an opener that names a
@@ -826,8 +841,61 @@ final class QuickEntryController: ObservableObject {
         }
     }
 
+    /// Each workspace with its folder, and the git mark once the folder
+    /// check below has run. Starts the check for folders not checked yet.
     private func workspaceOptions() -> [QuickEntryModel.Option] {
-        Self.taskWorkspaces(in: store.state).map { QuickEntryModel.Option(id: $0.id.uuidString, title: $0.title) }
+        let workspaces = Self.taskWorkspaces(in: store.state)
+        let sources = QuickEntryWorkspaceFolders.sources(for: workspaces.map(\.id), in: store.state)
+        workspaceFolderSources = Dictionary(sources.map { ($0.workspaceID.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+        checkWorkspaceFolders(sources)
+        return workspaces.map { workspace in
+            let source = workspaceFolderSources[workspace.id.uuidString]
+            return QuickEntryWorkspaceFolders.option(
+                id: workspace.id,
+                title: workspace.title,
+                source: source,
+                resolution: source.flatMap { workspaceFolderResolutions[$0] }
+            )
+        }
+    }
+
+    /// Checks off the main thread whether each folder is in a git
+    /// repository, then marks the open list.
+    private func checkWorkspaceFolders(_ sources: [QuickEntryWorkspaceFolders.Source]) {
+        let unchecked = sources.filter { $0.folder != nil && workspaceFolderResolutions[$0] == nil }
+        guard unchecked.isEmpty == false else { return }
+        workspaceFolderCheck?.cancel()
+        workspaceFolderCheck = Task { [weak self] in
+            let resolved = await Task.detached(priority: .userInitiated) {
+                unchecked.compactMap { source in QuickEntryWorkspaceFolders.resolve(source).map { (source, $0) } }
+            }.value
+            guard let self, Task.isCancelled == false else { return }
+            for (source, resolution) in resolved {
+                workspaceFolderResolutions[source] = resolution
+            }
+            markWorkspaceFolders()
+        }
+    }
+
+    private func markWorkspaceFolders() {
+        guard let model else { return }
+        model.workspaceOptions = model.workspaceOptions.map { option in
+            guard let source = workspaceFolderSources[option.id] else { return option }
+            return QuickEntryWorkspaceFolders.option(
+                id: source.workspaceID,
+                title: option.title,
+                source: source,
+                resolution: workspaceFolderResolutions[source]
+            )
+        }
+        if let picker, picker.kind == .workspace {
+            picker.updateWorkspaces(model.workspaceOptions)
+        }
+    }
+
+    /// Waits for the folder check that runs now. Test seam.
+    func waitForWorkspaceFolderCheck() async {
+        await workspaceFolderCheck?.value
     }
 
     /// Top-level workspaces in sidebar order, window by window. A task

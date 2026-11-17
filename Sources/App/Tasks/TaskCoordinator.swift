@@ -570,14 +570,16 @@ final class TaskCoordinator {
                 startPrompt: resolved?.startPrompt ?? startPrompt,
                 firstPrompt: prompt,
                 text: text,
-                attachmentPaths: attachments.map(\.path)
+                attachmentPaths: attachments.map(\.path),
+                parent: parentTask(id: parentTaskID)
             )
             : TaskPrompt.forkedTask(
                 record: record,
                 taskSpaceWorkspaceID: UUID(),
                 sourceWorkspaceID: forkSource?.workspaceID,
                 worktree: nil,
-                base: nil
+                base: nil,
+                parent: parentTask(id: parentTaskID)
             )
         guard firstMessage.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else {
             throw TaskError("The task, prompt and file paths are too long for an agent's first message (at most \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB).")
@@ -1270,7 +1272,8 @@ final class TaskCoordinator {
             text: record.text,
             attachmentPaths: record.attachments.map(\.path),
             worktree: worktree,
-            base: base
+            base: base,
+            parent: parentTask(of: record)
         )
         // Routing checked the message without the worktree line, which is
         // known only now. Triage's own prompt is the part that can go; the
@@ -1285,7 +1288,8 @@ final class TaskCoordinator {
                 text: record.text,
                 attachmentPaths: record.attachments.map(\.path),
                 worktree: worktree,
-                base: base
+                base: base,
+                parent: parentTask(of: record)
             )
             let dropped = "Toastty left out triage's first prompt, which made the agent's first message longer than \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB."
             saveOrDefer(taskID: taskID) {
@@ -1335,6 +1339,18 @@ final class TaskCoordinator {
             $0.operation.agentLaunch = TaskOperation.AgentLaunch(sessionID: result.sessionID, at: now())
         }
         finishStarted(taskID: taskID, attempt: attempt)
+    }
+
+    /// The task that created `record`, for the first message's parent line.
+    /// `nil` when it has no parent, or the parent no longer exists.
+    func parentTask(of record: TaskRecord) -> TaskPrompt.ParentTask? {
+        guard record.parentTaskID != record.id else { return nil }
+        return parentTask(id: record.parentTaskID)
+    }
+
+    func parentTask(id: UUID?) -> TaskPrompt.ParentTask? {
+        guard let id, let parent = records.record(id: id) else { return nil }
+        return TaskPrompt.ParentTask(id: parent.id, title: parent.title)
     }
 
     private func creatorSessionID(of record: TaskRecord) -> String? {
@@ -1567,7 +1583,8 @@ final class TaskCoordinator {
                 startPrompt: resolved.startPrompt,
                 firstPrompt: resolved.prompt,
                 text: current.text,
-                attachmentPaths: current.attachments.map(\.path)
+                attachmentPaths: current.attachments.map(\.path),
+                parent: parentTask(of: current)
             )
             // The caller's own message was checked when the task was made, so
             // only triage's prompt can push it over; the task starts without it.
@@ -2019,17 +2036,25 @@ final class TaskCoordinator {
     /// The first terminal, in tab order, whose directory is known and still
     /// exists. This does not follow focus, so the answer stays the same.
     static func firstTerminalDirectory(in workspace: WorkspaceState, fileManager: FileManager = .default) -> String? {
-        for tab in workspace.orderedTabs {
-            for slot in tab.layoutTree.allSlotInfos {
-                guard case .terminal(let terminal) = tab.panels[slot.panelID],
-                      let directory = terminal.agentLaunchWorkingDirectory else { continue }
-                var isDirectory: ObjCBool = false
-                if fileManager.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue {
-                    return directory
-                }
+        firstExistingDirectory(terminalDirectories(in: workspace), fileManager: fileManager)
+    }
+
+    /// The workspace's terminal folders in layout order, read from the
+    /// state alone, without the file system.
+    static func terminalDirectories(in workspace: WorkspaceState) -> [String] {
+        workspace.orderedTabs.flatMap { tab in
+            tab.layoutTree.allSlotInfos.compactMap { slot -> String? in
+                guard case .terminal(let terminal) = tab.panels[slot.panelID] else { return nil }
+                return terminal.agentLaunchWorkingDirectory
             }
         }
-        return nil
+    }
+
+    nonisolated static func firstExistingDirectory(_ directories: [String], fileManager: FileManager = .default) -> String? {
+        directories.first { directory in
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: directory, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
     }
 
     /// A new terminal is not ready at once: it reports itself busy until its

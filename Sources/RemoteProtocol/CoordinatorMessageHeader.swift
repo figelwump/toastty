@@ -20,6 +20,10 @@ public enum CoordinatorMessageHeader {
     public enum Sender: Equatable, Sendable {
         /// A session in a task's space.
         case task(id: UUID, title: String)
+        /// The coordinator's own agent session. Tasks get the coordinator's
+        /// messages, including the user's words that it passes on, so the
+        /// line names it apart from any other session.
+        case coordinator
         /// A managed session that belongs to no task.
         case session(id: String, agent: String, workspaceTitle: String?)
         /// A caller that named no running session: a shell, a script, or
@@ -43,6 +47,8 @@ public enum CoordinatorMessageHeader {
         switch sender {
         case .task(let id, let title):
             return "\(senderPrefix)task [\(CoordinatorTaskLink.linkText(title))](toastty://task/\(id.uuidString)): not from the user."
+        case .coordinator:
+            return "\(senderPrefix)the coordinator: not from the user."
         case .session(let id, let agent, let workspaceTitle):
             let place = workspaceTitle.map { ", workspace \(quoted($0))" } ?? ""
             return "\(senderPrefix)agent session \(word(id)) (\(word(agent))\(place)): not from the user."

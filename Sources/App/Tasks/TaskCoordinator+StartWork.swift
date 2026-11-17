@@ -297,7 +297,13 @@ extension TaskCoordinator {
 
             // 7. The session.
             let resolved = record.resolved?.agent == source.agent ? record.resolved : nil
-            let prompt = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: record.operation.base, forked: forked)
+            let prompt = TaskPrompt.movedToWorktree(
+                record: record,
+                worktree: worktree,
+                base: record.operation.base,
+                forked: forked,
+                parent: parentTask(of: record)
+            )
             let forkSourceID = current?.sessionID
             let launchTarget = terminal
             let result: AgentLaunchResult

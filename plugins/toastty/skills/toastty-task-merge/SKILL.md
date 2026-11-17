@@ -161,3 +161,5 @@ check it as above from its own pull request and worktree, then run
 `"$TOASTTY_CLI_PATH" task merge <child-task-id> --head <sha>`. Wait for one
 child's merge before you merge a child that builds on it, for example with
 `"$TOASTTY_CLI_PATH" task watch <child-task-id> --until merged`.
+In your report, name each child by its title, as its `markdownLink` from
+`task list` gives it, not by its ID.
