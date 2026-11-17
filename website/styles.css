@@ -152,7 +152,7 @@ h1 em { display: block; color: var(--amber); font-style: normal; }
 .item i { width: 18px; height: 18px; border-radius: 4px; background: #eadfcb; display: block; flex: none; }
 .item span { height: 5px; border-radius: 3px; background: #ddd2bf; flex: 1; }
 .summary { border: 1px solid #e3d7c3; border-radius: 6px; padding: 6px; margin-bottom: 7px; background: #fdfaf4; }
-.summary .r { display: flex; justify-content: space-between; font: 600 8px var(--sans); color: #5d5346; margin-bottom: 3px; }
+.summary .r { display: flex; justify-content: space-between; gap: 6px; font: 600 8px var(--sans); color: #5d5346; margin-bottom: 3px; }
 .summary .r.tot { font-size: 9.5px; color: #231d15; border-top: 1px solid #eadfcb; padding-top: 3px; }
 .pay { background: #d98a1c; color: #fff; font: 700 8.5px var(--sans); text-align: center; border-radius: 5px; padding: 5px 0; }
 .wire .item i, .wire .item span { background: #e6ded0; }
