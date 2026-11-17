@@ -228,7 +228,7 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         intent = .toggleFocusedPanelMode
 
     case GHOSTTY_ACTION_START_SEARCH:
-        let needle = action.action.start_search.needle.map { String(cString: $0) } ?? ""
+        let needle = String(cString: action.action.start_search.needle)
         intent = .startSearch(needle: needle)
 
     case GHOSTTY_ACTION_END_SEARCH:
@@ -243,11 +243,11 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         intent = .searchSelected(rawSelected >= 0 ? rawSelected : nil)
 
     case GHOSTTY_ACTION_SET_TITLE:
-        let title = action.action.set_title.title.map { String(cString: $0) } ?? ""
+        let title = String(cString: action.action.set_title.title)
         intent = .setTerminalTitle(title)
 
     case GHOSTTY_ACTION_PWD:
-        let pwd = action.action.pwd.pwd.map { String(cString: $0) } ?? ""
+        let pwd = String(cString: action.action.pwd.pwd)
         intent = .setTerminalCWD(pwd)
 
     case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
@@ -259,7 +259,7 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         intent = .commandFinished(exitCode: exitCode)
 
     case GHOSTTY_ACTION_PROGRAM_STATUS:
-        guard let pointer = action.action.program_status else { return nil }
+        let pointer = action.action.program_status
         let report = pointer.pointee
         let state: TerminalProgramStatusReport.State
         switch report.state {
@@ -299,8 +299,8 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
 
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
         let notification = action.action.desktop_notification
-        let title = notification.title.map { String(cString: $0) } ?? ""
-        let body = notification.body.map { String(cString: $0) } ?? ""
+        let title = String(cString: notification.title)
+        let body = String(cString: notification.body)
         intent = .desktopNotification(title: title, body: body)
 
     default:
@@ -605,7 +605,7 @@ private func ghosttyReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
     location: ghostty_clipboard_e,
     state: UnsafeMutableRawPointer?,
-    mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+    mimes: UnsafePointer<UnsafePointer<CChar>>?,
     mimesCount: Int,
     list: Bool
 ) -> ghostty_clipboard_read_result_e {
@@ -1356,11 +1356,17 @@ final class GhosttyRuntimeManager {
             return lhs.key < rhs.key
         }
 
-        let keyPointers = pairs.map { strdup($0.key) }
-        let valuePointers = pairs.map { strdup($0.value) }
+        func copyCString(_ string: String) -> UnsafeMutablePointer<CChar> {
+            let bytes = Array(string.utf8CString)
+            let pointer = UnsafeMutablePointer<CChar>.allocate(capacity: bytes.count)
+            pointer.initialize(from: bytes, count: bytes.count)
+            return pointer
+        }
+        let keyPointers = pairs.map { copyCString($0.key) }
+        let valuePointers = pairs.map { copyCString($0.value) }
         defer {
-            keyPointers.forEach { free($0) }
-            valuePointers.forEach { free($0) }
+            keyPointers.forEach { $0.deallocate() }
+            valuePointers.forEach { $0.deallocate() }
         }
 
         var ghosttyEnvVars = zip(keyPointers, valuePointers).map { pair in
@@ -1888,12 +1894,7 @@ final class GhosttyRuntimeManager {
 
         for index in 0..<diagnosticsCount {
             let diagnostic = ghostty_config_get_diagnostic(config, index)
-            let message: String
-            if let diagnosticMessage = diagnostic.message {
-                message = String(cString: diagnosticMessage)
-            } else {
-                message = "unknown diagnostic"
-            }
+            let message = String(cString: diagnostic.message)
             ToasttyLog.warning(
                 "Ghostty config diagnostic",
                 category: .ghostty,
