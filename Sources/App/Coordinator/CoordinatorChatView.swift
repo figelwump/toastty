@@ -202,7 +202,7 @@ struct CoordinatorChatView: View {
     private var showTerminalButton: some View {
         noticeButton("Show Terminal", identifier: "coordinator.chat.notice.show-terminal") {
             switch host {
-            case .panel: controller.showsTerminal = true
+            case .panel: controller.showTerminal()
             case .dock: controller.openFullView(showingTerminal: true)
             }
         }

@@ -1562,15 +1562,8 @@ struct ToasttyApp: App {
                 defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
             )
             // Keyboard focus meant for the terminal under the chat goes to
-            // the chat's composer.
-            terminalRuntimeRegistry.coveringInputFocus = { [weak coordinatorController] panelID in
-                guard let coordinatorController, coordinatorController.coversTerminal(panelID: panelID) else {
-                    return nil
-                }
-                return { [weak coordinatorController] in
-                    coordinatorController?.chat?.focusComposer() ?? false
-                }
-            }
+            // the chat's composer, and Show Terminal gives it back.
+            coordinatorController.connectKeyboard(to: terminalRuntimeRegistry)
         }
         // The quick entry Agent picker offers the models the iPhone's
         // start-session screen offers.
