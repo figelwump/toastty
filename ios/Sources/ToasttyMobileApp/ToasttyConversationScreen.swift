@@ -499,8 +499,18 @@ struct ToasttyConversationScreen: View {
     /// stays open, the agent's working state lives at the transcript's tail,
     /// not under the field.
     private func isExpandedComposer(_ presentation: ToasttyComposerPresentation) -> Bool {
-        presentation.gate.allowsInput
+        fieldTakesText(presentation)
             && (isComposerFocused || !draft.isEmpty || !attachments.isEmpty)
+    }
+
+    /// The field takes text while the Mac allows input, and keeps taking it
+    /// while the user is in it. The gate closes for reasons that have nothing
+    /// to do with typing; the Mac holds a Claude prompt closed for 500 ms
+    /// after each turn, for example. Only the user's own actions take the
+    /// keyboard away (Send, a dismissal, leaving the chat, the background);
+    /// Send waits for the gate.
+    private func fieldTakesText(_ presentation: ToasttyComposerPresentation) -> Bool {
+        presentation.gate.allowsInput || isComposerFocused
     }
 
     /// Shown while the agent works, unless a locked composer already says so
@@ -711,7 +721,7 @@ struct ToasttyConversationScreen: View {
             onReplacementCompleted: draftReplacementCompleted,
             isFocused: $isComposerFocused,
             placeholder: presentation.placeholder,
-            isEnabled: presentation.gate.allowsInput,
+            isEnabled: fieldTakesText(presentation),
             accessibilityLabel: "Message \(presentation.agentDisplayName)",
             accessibilityHint: presentation.gate.allowsInput
                 ? "Enter a message, then use the Send button"
@@ -756,7 +766,7 @@ struct ToasttyConversationScreen: View {
                 }
             }
             .animation(.easeOut(duration: 0.18), value: isComposerFocused)
-            .disabled(presentation.gate.allowsInput == false)
+            .disabled(fieldTakesText(presentation) == false)
     }
 
     private func attachmentPicker(_ presentation: ToasttyComposerPresentation) -> some View {

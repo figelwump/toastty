@@ -337,12 +337,21 @@ enum ToasttyConversationFixture {
         )
     }
 
+    /// `responses` adds that many answers that arrived after the fixture's
+    /// transcript, as the incoming fixture delivers them.
     static func gatedSendPresentation(
         for conversationID: UUID,
         sendItems: [ToasttySendPresentationItem],
-        hasShortResponse: Bool = false
+        hasShortResponse: Bool = false,
+        responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         let fixture = presentation(for: conversationID)
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        let incoming = (0..<max(0, responses)).map { index in
+            row(conversationID, UInt64(101 + index), timestamp, .assistantMessage(
+                text: incomingResponseText(index + 1), phase: .final
+            ))
+        }
         return ToasttyConversationPresentationState(
             rows: fixture.rows.filter { $0.id.sequence != 14 }.map { row in
                 guard hasShortResponse, row.id.sequence == 13 else { return row }
@@ -350,12 +359,16 @@ enum ToasttyConversationFixture {
                     id: row.id, timestamp: row.timestamp, provider: row.provider,
                     content: .assistantMessage(text: "The latest response is ready.", phase: .final)
                 )
-            },
+            } + incoming,
             sendItems: sendItems,
             phase: .live,
-            revision: sendItems.isEmpty ? .initial : .appended,
+            revision: sendItems.isEmpty && responses == 0 ? .initial : .appended,
             historyTruncated: false
         )
+    }
+
+    static func incomingResponseText(_ number: Int) -> String {
+        "Incoming response \(number): the checks passed on the remote test Mac."
     }
 
     static func reconciledSendPresentation(
@@ -572,15 +585,16 @@ enum ToasttyConversationFixture {
     static func coordinatorPresentation(
         for conversationID: UUID,
         sendItems: [ToasttySendPresentationItem] = [],
-        hasLongMessage: Bool = false
+        hasLongMessage: Bool = false,
+        responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationAdapter.makeState(
-            events: coordinatorEvents(for: conversationID, hasLongMessage: hasLongMessage)
+            events: coordinatorEvents(for: conversationID, hasLongMessage: hasLongMessage, responses: responses)
                 .map(CompatibleConversationEvent.known),
             projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
             projectionGeneration: projectionGeneration,
             phase: .live,
-            revision: .initial,
+            revision: responses == 0 ? .initial : .appended,
             historyTruncated: false,
             sendItems: sendItems,
             coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages
@@ -592,7 +606,9 @@ enum ToasttyConversationFixture {
     static let coordinatorLongMessageOpening = "Here is the week, task by task."
     static let coordinatorLongMessageEnding = "That is everything that moved this week."
 
-    static func coordinatorEvents(for conversationID: UUID, hasLongMessage: Bool = false) -> [ConversationEvent] {
+    static func coordinatorEvents(
+        for conversationID: UUID, hasLongMessage: Bool = false, responses: Int = 0
+    ) -> [ConversationEvent] {
         // Event `n` is `n - 1` times two minutes after the first.
         func time(_ sequence: Int) -> Date {
             Date(timeIntervalSince1970: 1_786_406_400).addingTimeInterval(TimeInterval((sequence - 1) * 2 * 60))
@@ -652,6 +668,9 @@ enum ToasttyConversationFixture {
         if hasLongMessage {
             payloads.append(.userMessage(.init(text: "What moved this week?", origin: .remote)))
             payloads.append(.assistantMessage(.init(text: longMessage, phase: .final)))
+        }
+        payloads += (0..<max(0, responses)).map { index -> ConversationEventPayload in
+            .assistantMessage(.init(text: incomingResponseText(index + 1), phase: .final))
         }
         return payloads.enumerated().map { index, payload in
             ConversationEvent(
