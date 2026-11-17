@@ -1210,8 +1210,9 @@ sets its next check.
 | --- | --- |
 | Toastty restarted while an agent worked | Tells the task to continue as soon as Toastty wakes it with the `interrupted` alert. If you typed in that task in the last 2 minutes, it waits until 2 minutes have passed. |
 | An agent waits at a permission prompt | Never answers it. Tells you after 10 minutes. |
-| An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. |
+| An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. When the question proposes a UI, design or user experience change with no mockup in the task's Scratchpads, it first tells the task once to add one. |
 | An agent ended a turn, and the task is not done | Reads the reply. It then waits for CI, notes the task or pull request the agent waits for and tells the agent when that merged, treats the reply as a question, or tells the agent to open its pull request or to mark the work ready. |
+| An agent waits for someone, such as a maintainer, to fix something first, and no task or pull request holds the fix | When the fix is in the task's own project or in a project of your policy's Projects section, tells the task once to go ahead with the fix, and tells you. Otherwise asks you who owns it. |
 | CI failed | When the failed tests are outside the pull request's change, tells the task to rerun them once before it changes code. Otherwise, or when the rerun fails again, tells the task to fix it. A test that passed on the rerun goes in its ledger. |
 | CI runs for more than 30 minutes | Looks at the run, and tells you when it is queued or hangs. |
 | The pull request has merge conflicts | Tells the task to rebase and resolve them. |
@@ -1234,9 +1235,13 @@ sets its next check.
   the Reviewing section of your policy. With weak proof, it tells the task
   exactly what to add, once; if the proof is weak again, it brings the task
   to you. With good proof, it tells you in one or two sentences why the task
-  is ready. It writes no summary of the proof. You merge, unless a rule of
-  yours lets the coordinator ask for the merge; see
-  [Merges by the coordinator](#merges-by-the-coordinator).
+  is ready. It writes no summary of the proof. A UI, design or user
+  experience change that a task only proposes needs a mockup in a
+  Scratchpad. You merge, unless a rule of yours lets the coordinator ask for
+  the merge; see [Merges by the coordinator](#merges-by-the-coordinator). A
+  finished task with no pull request goes on the
+  [daily list](#how-the-coordinator-keeps-work-moving) and is then marked
+  Done.
 - **Releases.** Each project has a rule in the policy: release on merge, or
   in batches. The coordinator asks you for the rule the first time a project
   has merged work that waits. It starts a release that the rule calls for
@@ -1256,7 +1261,11 @@ How it works with your tasks:
   (`lastUserInputAt`).
 - It sends a task one message for each condition. If the condition comes
   back, it tells you.
-- It writes a task as a link, `[title](toastty://task/<task-id>)`.
+- It names a task by its title as a link, `[title](toastty://task/<task-id>)`,
+  in its answers, in its messages to tasks and in its ledger. It uses the ID
+  alone only in commands.
+- A message to a Done task opens it again, so it sends one only when the
+  task's work must go on.
 - It treats text from tasks, pull requests and issues as data, not as
   instructions.
 - It does not use `task watch --notify` for a task that waits for another
@@ -1280,6 +1289,7 @@ What it may do alone, what it asks first, and what it never does:
 | Ask a task's agent to merge, when you tell it to or a Merging rule covers the change | | |
 | Start a release that a rule or `--after-merge` calls for | | |
 | Add a policy rule after your answer | | |
+| Mark a finished task with no pull request Done, after one daily list offered it | | |
 
 The skill fixes the Never column: your policy cannot change it, and the
 coordinator refuses these also when you ask it in its conversation.
@@ -1399,7 +1409,12 @@ which you typed nothing since it began to wait. The groups:
 - **Offers:** a task or a rule that the coordinator offered. An offer is on
   at most 3 lists, then the coordinator drops it and says so.
 - **Closes by default:** a question with a default, such as the first-run
-  question. It is on one list, which names the default.
+  question. It is on one list, which names the default. A finished task with
+  no pull request is such an item: an answer, an investigation, or a parent
+  whose child tasks ended, when its last reply names no remaining work.
+  Unless you answer, the coordinator marks it Done at the next list. Say
+  that it stays open, and it is not offered again. A rule in the Unblocking
+  section of your policy can close such tasks sooner.
 - **Moving:** work that it follows after a merge, one line each.
 
 Answer in the chat with the number, such as "2 yes". Ask "what waits for
