@@ -2272,7 +2272,9 @@ struct SidebarView: View {
         SidebarToShipGroupToggle(
             count: count,
             isExpanded: isExpanded,
-            summary: Text("\(openCount) open").foregroundStyle(ToastyTheme.sidebarSessionPathText),
+            summary: Text("\(openCount) open")
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText),
             showsMark: true,
             group: .done,
             accessibilityText: Self.cardDoneToggleLabel(count: count, openCount: openCount, isExpanded: isExpanded.wrappedValue)
