@@ -754,9 +754,15 @@ final class QuickEntryController: ObservableObject {
 
     /// `[defaults]` as a preset, when its agent is offered. A model or
     /// effort the agent cannot take is left out, as the coordinator does.
+    /// With no agent there, the first agent offered, as a task created with
+    /// no agent gets. `nil` defaults, from a tasks.toml that cannot be read,
+    /// give no preset.
     static func defaultPreset(_ defaults: TasksConfig.Defaults?, profiles: [QuickEntryAgentProfile]) -> QuickEntryPreset? {
-        guard let defaults, let agent = defaults.agent,
-              let profile = profiles.first(where: { $0.id == agent }) else { return nil }
+        guard let defaults else { return nil }
+        guard let agent = defaults.agent else {
+            return profiles.first.map { QuickEntryPreset(agent: $0.id) }
+        }
+        guard let profile = profiles.first(where: { $0.id == agent }) else { return nil }
         return QuickEntryPreset(
             agent: agent,
             model: profile.supportsModel ? defaults.model : nil,

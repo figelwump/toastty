@@ -2263,7 +2263,8 @@ final class RemoteAccessService: ObservableObject {
                     case .ready?, .idle?, nil: return false
                     }
                 },
-                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: request.workspaceID)
+                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: request.workspaceID),
+                clientKnowsOpenPullRequestResult: request.knowsOpenPullRequestResult
             )
             if result == .updated {
                 let didChange = store.send(.setWorkspaceDone(
@@ -2378,19 +2379,25 @@ final class RemoteAccessService: ObservableObject {
     /// is late: an agent started after the tap. Refusing it keeps a delayed
     /// request from restoring a mark that new work just cleared. A task with
     /// an open pull request finishes through Merge, so the Mac refuses its
-    /// mark even when a client offers the checkbox. Opening a task again is
-    /// always allowed.
+    /// mark even when a client offers the checkbox. A client that cannot
+    /// decode that refusal, such as the v0.9.2 iPhone app, gets
+    /// `workInProgress`, so it says the task can't be marked done instead
+    /// of reporting a failed connection. Opening a task again is always
+    /// allowed.
     nonisolated static func workspaceDoneResult(
         requestedDone: Bool,
         isSubspace: Bool,
         isDone: Bool,
         hasWorkInProgress: Bool,
-        acceptsDoneMark: Bool = true
+        acceptsDoneMark: Bool,
+        clientKnowsOpenPullRequestResult: Bool
     ) -> RemoteWorkspaceDoneResult {
         guard isSubspace else { return .notSubspace }
         guard isDone != requestedDone else { return .unchanged }
         if requestedDone, hasWorkInProgress { return .workInProgress }
-        if requestedDone, acceptsDoneMark == false { return .hasOpenPullRequest }
+        if requestedDone, acceptsDoneMark == false {
+            return clientKnowsOpenPullRequestResult ? .hasOpenPullRequest : .workInProgress
+        }
         return .updated
     }
 

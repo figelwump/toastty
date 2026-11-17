@@ -1562,9 +1562,6 @@ final class TaskCoordinator {
                     config: config
                 )
             }
-            guard resolution.agent ?? config.defaults.agent != nil else {
-                throw TaskError("Triage did not choose an agent, and [defaults] in ~/.toastty/tasks.toml names none. Set agent there, then retry.")
-            }
             resolved = try resolvedFields(
                 pinned: TaskFields(
                     workspaceID: current.pinned.workspaceID,
@@ -1846,7 +1843,9 @@ final class TaskCoordinator {
 
     /// The pinned fields, completed from `[defaults]`. A pinned value that
     /// cannot work fails the request; a default that does not fit the
-    /// chosen agent is left out.
+    /// chosen agent is left out. With no agent in either, the task takes
+    /// the first installed agent that can take a task, without the default
+    /// model and effort.
     /// `skill` is the project's start skill, used when `pinned` names none,
     /// and `startPrompt` its `start_prompt`.
     func resolvedFields(
@@ -1856,8 +1855,8 @@ final class TaskCoordinator {
         skill: String? = nil,
         startPrompt: String? = nil
     ) throws -> TaskFields {
-        guard let agent = pinned.agent ?? defaults.agent else {
-            throw TaskError("Name an agent with --agent <profile>, or set agent in the [defaults] table of ~/.toastty/tasks.toml.")
+        guard let agent = pinned.agent ?? defaults.agent ?? triageAgents().first?.id else {
+            throw TaskError("Toastty found no installed agent that can take a task. \(Self.installAgentAdvice)")
         }
         let profile = try checkedProfile(agent)
         var fields = TaskFields(
@@ -1870,17 +1869,19 @@ final class TaskCoordinator {
         if let model = pinned.model {
             try checkModel(model, profile: profile)
             fields.model = model
-        } else if profile.supportsModel, pinned.agent == nil || pinned.agent == defaults.agent {
+        } else if profile.supportsModel, agent == defaults.agent {
             fields.model = defaults.model
         }
         if let effort = pinned.effort {
             try checkEffort(effort, profile: profile)
             fields.effort = effort
-        } else if profile.supportsReasoningEffort, pinned.agent == nil || pinned.agent == defaults.agent {
+        } else if profile.supportsReasoningEffort, agent == defaults.agent {
             fields.effort = defaults.effort
         }
         return fields
     }
+
+    static let installAgentAdvice = "Install Claude Code or Codex, or add a profile to ~/.toastty/agents.toml."
 
     /// Checks the agent, model and effort a caller set, before triage or
     /// `[defaults]` add anything, and returns the agent's profile.
@@ -1894,6 +1895,10 @@ final class TaskCoordinator {
     func checkedProfile(_ agent: String) throws -> AgentLaunchProfileSummary {
         let profiles = launcher?.launchProfileSummaries() ?? []
         guard let profile = profiles.first(where: { $0.profileID == agent }) else {
+            // With no profile, the list holds the installed built-in agents.
+            guard profiles.isEmpty == false else {
+                throw TaskError("Agent \(agent) is not installed, and agents.toml has no profile. \(Self.installAgentAdvice)")
+            }
             let available = profiles.map(\.profileID).joined(separator: ", ")
             throw TaskError("Agent \(agent) is not a profile in agents.toml\(available.isEmpty ? "" : " (available: \(available))").")
         }

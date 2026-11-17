@@ -34,6 +34,13 @@ extension TaskCoordinator {
     /// it; see `checkMergeCaller`.
     @discardableResult
     func merge(taskID: UUID, expectedHead: String?, caller: TaskCaller) throws -> TaskRecord {
+        try beginMerge(taskID: taskID, expectedHead: expectedHead, caller: caller).record
+    }
+
+    /// `merge`, with the pull request script's first answer for this merge.
+    private func beginMerge(
+        taskID: UUID, expectedHead: String?, caller: TaskCaller
+    ) throws -> (record: TaskRecord, answer: Task<WorkspaceMergeCoordinator.MergeAnswer, Never>) {
         guard let record = records.record(id: taskID) else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
@@ -46,6 +53,62 @@ extension TaskCoordinator {
         let target = try mergeTarget(record)
         try checkNotCancelled(record, caller: caller)
         return try startMerge(record, target: target, expectedHead: expectedHead)
+    }
+
+    /// How long `task.merge` from the socket waits for the merge's first
+    /// answer. The pull request script usually answers in a few seconds;
+    /// the CLI stops reading after 10.
+    static let mergeAnswerWait: Duration = .seconds(8)
+
+    /// `task.merge` from the socket: `merge`, then a wait for the pull
+    /// request script's first answer for this merge, so that the caller
+    /// learns of a refusal before it reports the merge. Throws the reason
+    /// when Toastty refused the merge, the merge failed, or the task space
+    /// or its pull request link changed meanwhile. Otherwise returns the
+    /// task: merged, waiting for checks, or, after `wait`, still merging.
+    func mergeAndAwaitAnswer(
+        taskID: UUID,
+        expectedHead: String?,
+        caller: TaskCaller,
+        wait: Duration = mergeAnswerWait
+    ) async throws -> TaskRecord {
+        let (started, answerTask) = try beginMerge(taskID: taskID, expectedHead: expectedHead, caller: caller)
+        let answer = await Self.value(of: answerTask, within: wait)
+        let record = records.record(id: taskID) ?? started
+        switch answer {
+        case nil, .merged?, .waitingForChecks?:
+            return record
+        case .stopped(let reason, .refused)?:
+            throw TaskError("Toastty refused to merge \(record.title), and nothing changed: \(reason)")
+        case .stopped(let reason, _)?:
+            throw TaskError(
+                "Toastty could not finish the merge of \(record.title): \(reason). "
+                    + "Check the pull request on GitHub before you report or merge again."
+            )
+        case .replaced?:
+            throw TaskError(
+                "The merge of \(record.title) ended without an answer: its task space or pull request link changed "
+                    + "while Toastty merged. Check the pull request on GitHub before you report or merge again."
+            )
+        }
+    }
+
+    /// The task's value, or `nil` when `limit` passes first. The task runs on.
+    private static func value<Value: Sendable>(of task: Task<Value, Never>, within limit: Duration) async -> Value? {
+        let answered = FirstAnswer()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Value?, Never>) in
+            let timer = Task { @MainActor in
+                try? await Task.sleep(for: limit)
+                guard answered.claim() else { return }
+                continuation.resume(returning: nil)
+            }
+            Task { @MainActor in
+                let value = await task.value
+                guard answered.claim() else { return }
+                timer.cancel()
+                continuation.resume(returning: value)
+            }
+        }
     }
 
     /// `task.request-merge`: the user's acceptance given outside the task,
@@ -82,7 +145,7 @@ extension TaskCoordinator {
         let mode = workspaceConfig?.merge ?? config?.defaults.merge ?? .agent
         let route = requestedRoute ?? (mode == .direct ? .direct : .agent)
         if route == .direct {
-            try startMerge(record, target: target, expectedHead: nil)
+            _ = try startMerge(record, target: target, expectedHead: nil)
             return
         }
         let mergeSkill = workspaceConfig?.mergeSkill ?? config?.defaults.mergeSkill
@@ -510,7 +573,9 @@ extension TaskCoordinator {
     }
 
     @discardableResult
-    private func startMerge(_ record: TaskRecord, target: MergeTarget, expectedHead: String?) throws -> TaskRecord {
+    private func startMerge(
+        _ record: TaskRecord, target: MergeTarget, expectedHead: String?
+    ) throws -> (record: TaskRecord, answer: Task<WorkspaceMergeCoordinator.MergeAnswer, Never>) {
         guard let merges else {
             throw TaskError("Merging is not available in this Toastty instance.")
         }
@@ -530,13 +595,13 @@ extension TaskCoordinator {
             $0.mergeCancelledAt = nil
             $0.mergeFailure = nil
         }
-        guard merges.merge(
+        guard let answer = merges.merge(
             workspaceID: target.taskSpaceID,
             pullRequest: target.pullRequest,
             repoPath: target.repoPath,
             thenCleanUp: true,
             expectedHead: expectedHead
-        ) != nil else {
+        ) else {
             throw TaskError("A merge of \(record.title) is already under way.")
         }
         ToasttyLog.info("Merging a task", category: .tasks, metadata: [
@@ -544,7 +609,7 @@ extension TaskCoordinator {
             "pull_request": String(target.pullRequest.number),
             "expected_head": expectedHead ?? "",
         ])
-        return records.record(id: record.id) ?? record
+        return (records.record(id: record.id) ?? record, answer)
     }
 
     /// A cancelled merge stays cancelled for every agent turn that started
@@ -700,5 +765,17 @@ extension TaskCoordinator {
         } catch {
             throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Lets the first of two racing tasks resume a continuation.
+@MainActor
+private final class FirstAnswer {
+    private var isClaimed = false
+
+    func claim() -> Bool {
+        guard isClaimed == false else { return false }
+        isClaimed = true
+        return true
     }
 }

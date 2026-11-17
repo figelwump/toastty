@@ -181,6 +181,42 @@ struct QuickEntryTests {
         #expect(fixture.record(record.id)?.setup == .started)
     }
 
+    /// A fresh install has no agents.toml and no tasks.toml: the panel
+    /// offers the installed built-in agents, starts on the first, and
+    /// creates the task. With none installed, it says what to install.
+    @Test func onAFreshInstallThePanelStartsOnAnInstalledAgentAndCreatesTheTask() async throws {
+        let harness = try Harness(fixture: try TaskCoordinatorTests.Fixture(freshInstallWith: ["claude", "codex"]))
+        let fixture = harness.fixture
+        fixture.config = TasksConfig()
+        harness.controller.present(prefill: .empty)
+        let model = try #require(harness.controller.model)
+        #expect(model.agentProfiles.map(\.id) == ["claude", "codex"])
+        #expect(model.preset == QuickEntryPreset(agent: "claude"))
+        #expect(model.agentTitle == "Claude Code")
+        #expect(model.missingChoiceHint == nil)
+
+        try harness.type("Fix the unread dot")
+        try harness.pressCommandReturn()
+        await fixture.waitUntil("the panel closes") { harness.controller.isPresented == false }
+        let record = try #require(fixture.coordinator.records.records.last)
+        #expect(record.pinned.agent == "claude")
+        await fixture.waitForSetup(record.id)
+        #expect(fixture.record(record.id)?.setup == .started)
+
+        let bare = try Harness(fixture: try TaskCoordinatorTests.Fixture(freshInstallWith: []))
+        bare.fixture.config = TasksConfig()
+        bare.controller.present(prefill: .empty)
+        let bareModel = try #require(bare.controller.model)
+        #expect(bareModel.agentProfiles.isEmpty)
+        #expect(bareModel.preset == nil)
+        #expect(bareModel.missingChoiceHint == "Install or configure an agent")
+        bare.controller.openPicker(.agent)
+        let picker = try #require(bare.controller.picker)
+        #expect(picker.rows.isEmpty)
+        #expect(picker.emptyText == "No agent found. Install Claude Code or Codex, or add a profile to ~/.toastty/agents.toml, then open this panel again.")
+        bare.controller.dismiss()
+    }
+
     @Test func thePanelStartsOnTheSelectedProjectAndTheDefaultsPresetAndPinsBoth() async throws {
         let harness = try Harness()
         let fixture = harness.fixture
