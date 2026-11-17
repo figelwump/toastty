@@ -292,10 +292,8 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         let readChild = app.buttons["toastty-subspace-row-\(familiesReadChildSubspaceID)"]
         // The mark says why: the unread turn.
         XCTAssertTrue(unread.label.hasPrefix("EmptyOS.app step 4 and step 5 owner, task space, ready"), unread.label)
-        XCTAssertEqual(
-            [needsYou, unread, unreadParent, running, unreadChild, readParent, readChild].map(\.frame.minY),
-            [needsYou, unread, unreadParent, running, unreadChild, readParent, readChild].map(\.frame.minY).sorted()
-        )
+        let tops = [needsYou, unread, unreadParent, running, unreadChild, readParent, readChild].map { $0.frame.minY }
+        XCTAssertEqual(tops, tops.sorted())
 
         // At a large text size the nested row still lists under its parent;
         // the screenshot shows the ↳ level with its wrapped title.
