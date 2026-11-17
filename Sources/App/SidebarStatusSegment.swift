@@ -512,9 +512,59 @@ struct SidebarToShipGroupToggle: View {
     }
 }
 
-/// "Show N more →" under a project's latest To ship tasks.
+/// "› ☑ 13/15 merged" under a parent task's open child tasks: its merged
+/// children whose task spaces Toastty still holds open, folded into one
+/// line. It starts collapsed.
+struct SidebarFinishedChildrenToggle: View {
+    /// The parent's "N/M merged".
+    let title: String
+    let rowCount: Int
+    @Binding var isExpanded: Bool
+
+    nonisolated static func label(title: String, rowCount: Int, isExpanded: Bool) -> String {
+        "\(title), \(rowCount) finished \(rowCount == 1 ? "task" : "tasks"), \(isExpanded ? "expanded" : "collapsed")"
+    }
+
+    var body: some View {
+        let accessibilityText = Self.label(title: title, rowCount: rowCount, isExpanded: isExpanded)
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 9)
+                Image(systemName: "checkmark.square")
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
+                Text(title)
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+            .frame(minHeight: 18)
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded ? "Hide the merged tasks" : "Show the merged tasks")
+        .accessibilityLabel(accessibilityText)
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityText)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// "Show N more →" under a project's latest To ship tasks, or under a
+/// parent task's merged children.
 struct SidebarShowMoreToShipButton: View {
     let count: Int
+    var help = "Show the other tasks to ship in the Tasks view"
+    /// What VoiceOver reads; a To ship list's text by default.
+    var accessibilityText: String?
     let action: () -> Void
     @State private var isHovered = false
 
@@ -531,10 +581,10 @@ struct SidebarShowMoreToShipButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help("Show the other tasks to ship in the Tasks view")
-        .accessibilityLabel(SidebarRecentToShip.showMoreLabel(count))
+        .help(help)
+        .accessibilityLabel(accessibilityText ?? SidebarRecentToShip.showMoreLabel(count))
         .background {
-            SidebarSemanticTextBridge(text: SidebarRecentToShip.showMoreLabel(count))
+            SidebarSemanticTextBridge(text: accessibilityText ?? SidebarRecentToShip.showMoreLabel(count))
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
         }
