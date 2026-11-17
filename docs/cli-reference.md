@@ -961,7 +961,12 @@ its child tasks.
 `task merge` is what a merge skill runs once its checks pass; without a task
 ID it merges the calling agent's own task. It runs only from an agent session
 in the task's task space or its parent task's; elsewhere, including a shell,
-it refuses and names `task request-merge`.
+it refuses and names `task request-merge`. It waits up to 8 seconds for
+Toastty's first answer. When Toastty refuses the merge, for example because
+the worktree has uncommitted or untracked files, or the merge fails, the
+command fails with the reason. Otherwise `merge` in its answer is
+`waitingForChecks`, `cleaningUp` (merged), or `merging` when no answer came
+in time; `task get` reads it again.
 `task request-merge <task-id>` accepts the merge from outside the task, as
 the Merge button does: the task's agent checks the pull request and then
 merges it, also in a project with `merge = "direct"`. It refuses where the

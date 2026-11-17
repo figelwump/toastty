@@ -913,6 +913,13 @@ final class AppControlExecutor {
             }
             return try await finishTaskArchive(coordinator, taskID: taskID, options: options)
         }
+        if AppControlActionID.resolve(rawID) == .taskMerge {
+            let preparation = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskMerge.descriptor)
+                return try prepareTaskMerge(args: args)
+            }
+            return try await finishTaskMerge(preparation)
+        }
         if let action = AppControlActionID.resolve(rawID), action == .coordinatorOpen || action == .coordinatorRestart {
             let preparation = try withRequestContext(context) {
                 try validateTabParameter(args, descriptor: action.descriptor)
