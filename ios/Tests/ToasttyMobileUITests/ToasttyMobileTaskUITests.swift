@@ -35,6 +35,7 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private let familiesUnreadSubspaceID = "A4000000-0000-0000-0000-000000000011"
     private let familiesUnreadParentSubspaceID = "A4000000-0000-0000-0000-000000000012"
     private let familiesUnreadChildSubspaceID = "A4000000-0000-0000-0000-000000000013"
+    private let familiesFinishedChildSubspaceID = "A4000000-0000-0000-0000-000000000016"
     private let familiesReadParentSubspaceID = "A4000000-0000-0000-0000-000000000014"
     private let familiesReadChildSubspaceID = "A4000000-0000-0000-0000-000000000015"
 
@@ -265,9 +266,10 @@ final class ToasttyMobileTaskUITests: XCTestCase {
 
     /// A parent whose agent ended its turn to wait on another task is
     /// Running on the Mac, but its unread turn waits for the user: the
-    /// Tasks tab lists it in Needs you, as Home and the Mac sidebar do, and
-    /// its child lists in Running. Once the turn is read, the parent lists
-    /// in Running with its child under it.
+    /// Tasks tab lists it in Needs you, as Home and the Mac sidebar do, with
+    /// a child that also needs the user under it, and its running child in
+    /// Running. Once the turn is read, the parent lists in Running with its
+    /// child under it. The screenshots show the ↳ on each nested row.
     func testATaskThatWaitsOnAnotherTaskWithAnUnreadTurnListsInNeedsYou() {
         let app = launchTaskFixture(tasks: "families")
         select(.all, in: app)
@@ -276,24 +278,30 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         attachScreenshot(named: "home-families", of: app)
         // Home already lists both unread parents in Needs you.
         let cardLabel = card.label
+        // One-line rows, with a nested one.
+        select(.needsYou, in: app)
+        XCTAssertTrue(app.buttons["toastty-subspace-row-\(familiesFinishedChildSubspaceID)"].waitForExistence(timeout: 5))
+        attachScreenshot(named: "home-needs-you-families", of: app)
         app.tabBars.buttons["Tasks"].tap()
         let running = app.descendants(matching: .any)["toastty-tasks-group-running"]
         XCTAssertTrue(running.waitForExistence(timeout: 5))
         attachScreenshot(named: "tasks-tab-families", of: app)
 
-        XCTAssertTrue(cardLabel.hasSuffix("2 need you, 3 running"), cardLabel)
+        XCTAssertTrue(cardLabel.hasSuffix("3 need you, 3 running"), cardLabel)
         let needsYou = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
         XCTAssertTrue(needsYou.exists, "An unread parent that waits on a task should list in Needs you")
-        XCTAssertEqual(needsYou.label, "Needs you, 2")
+        XCTAssertEqual(needsYou.label, "Needs you, 3")
         XCTAssertEqual(running.label, "Running, 3")
         let unread = app.buttons["toastty-subspace-row-\(familiesUnreadSubspaceID)"]
         let unreadParent = app.buttons["toastty-subspace-row-\(familiesUnreadParentSubspaceID)"]
         let unreadChild = app.buttons["toastty-subspace-row-\(familiesUnreadChildSubspaceID)"]
+        let finishedChild = app.buttons["toastty-subspace-row-\(familiesFinishedChildSubspaceID)"]
         let readParent = app.buttons["toastty-subspace-row-\(familiesReadParentSubspaceID)"]
         let readChild = app.buttons["toastty-subspace-row-\(familiesReadChildSubspaceID)"]
         // The mark says why: the unread turn.
         XCTAssertTrue(unread.label.hasPrefix("EmptyOS.app step 4 and step 5 owner, task space, ready"), unread.label)
-        let tops = [needsYou, unread, unreadParent, running, unreadChild, readParent, readChild].map { $0.frame.minY }
+        let tops = [needsYou, unread, unreadParent, finishedChild, running, unreadChild, readParent, readChild]
+            .map { $0.frame.minY }
         XCTAssertEqual(tops, tops.sorted())
 
         // At a large text size the nested row still lists under its parent;

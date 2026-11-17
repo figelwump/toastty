@@ -16,6 +16,8 @@ public extension ToasttyMobileFixture {
     /// Waits on its running child, with an unread turn.
     static let familiesUnreadParentSubspaceID = UUID(uuidString: "A4000000-0000-0000-0000-000000000012")!
     static let familiesUnreadChildSubspaceID = UUID(uuidString: "A4000000-0000-0000-0000-000000000013")!
+    /// A second child of that parent, whose finished turn is unread.
+    static let familiesFinishedChildSubspaceID = UUID(uuidString: "A4000000-0000-0000-0000-000000000016")!
     /// Waits on its running child, with its turn read.
     static let familiesReadParentSubspaceID = UUID(uuidString: "A4000000-0000-0000-0000-000000000014")!
     static let familiesReadChildSubspaceID = UUID(uuidString: "A4000000-0000-0000-0000-000000000015")!
@@ -23,12 +25,13 @@ public extension ToasttyMobileFixture {
     static let familiesUnreadTaskID = UUID(uuidString: "D4000000-0000-0000-0000-000000000001")!
     static let familiesUnreadParentTaskID = UUID(uuidString: "D4000000-0000-0000-0000-000000000002")!
     static let familiesUnreadChildTaskID = UUID(uuidString: "D4000000-0000-0000-0000-000000000003")!
+    static let familiesFinishedChildTaskID = UUID(uuidString: "D4000000-0000-0000-0000-000000000006")!
     static let familiesReadParentTaskID = UUID(uuidString: "D4000000-0000-0000-0000-000000000004")!
     static let familiesReadChildTaskID = UUID(uuidString: "D4000000-0000-0000-0000-000000000005")!
 
     /// One project with three parents that wait on other tasks: two with
-    /// an unread turn (one of them with a running child) and one whose turn
-    /// was read, with a running child.
+    /// an unread turn (one of them with a running child and a child whose own
+    /// turn is unread) and one whose turn was read, with a running child.
     static let familiesTaskHome: MobileHomeSnapshot = {
         let projectID = familiesWorkspaceID
         let now = Date()
@@ -53,11 +56,12 @@ public extension ToasttyMobileFixture {
         }
         func task(
             _ id: UUID, _ title: String, status: String, taskSpace: UUID,
-            parent: (id: UUID, title: String)? = nil, childProgress: RemoteTaskChildProgress? = nil
+            parent: (id: UUID, title: String)? = nil, childProgress: RemoteTaskChildProgress? = nil,
+            finished: Bool = false
         ) -> RemoteTaskSummary {
             RemoteTaskSummary(
-                id: id, title: title, group: .running, statusLine: status,
-                stageTitle: "Running", stageReason: status,
+                id: id, title: title, group: finished ? .needsYou : .running, statusLine: status,
+                stageTitle: finished ? "Needs you" : "Running", stageReason: finished ? "the agent finished a turn" : status,
                 projectWorkspaceID: projectID, projectTitle: "emptyos", taskSpaceWorkspaceID: taskSpace,
                 activityAt: now, parentTaskID: parent?.id, parentTaskTitle: parent?.title,
                 childProgress: childProgress
@@ -74,11 +78,15 @@ public extension ToasttyMobileFixture {
                 ),
                 task(
                     unreadParent.id, unreadParent.title, status: "Claude · waiting for Website copy pass",
-                    taskSpace: familiesUnreadParentSubspaceID, childProgress: RemoteTaskChildProgress(merged: 0, total: 1)
+                    taskSpace: familiesUnreadParentSubspaceID, childProgress: RemoteTaskChildProgress(merged: 0, total: 2)
                 ),
                 task(
                     familiesUnreadChildTaskID, "Website copy pass", status: "Claude · working",
                     taskSpace: familiesUnreadChildSubspaceID, parent: unreadParent
+                ),
+                task(
+                    familiesFinishedChildTaskID, "Website hero pass", status: "Claude · finished, unread",
+                    taskSpace: familiesFinishedChildSubspaceID, parent: unreadParent, finished: true
                 ),
                 task(
                     readParent.id, readParent.title, status: "Claude · waiting for Step 4 plan: record move list 1",
@@ -89,6 +97,7 @@ public extension ToasttyMobileFixture {
                     taskSpace: familiesReadChildSubspaceID, parent: readParent
                 ),
             ],
+            needsYou: [RemoteTaskBoardEntry(taskID: familiesFinishedChildTaskID)],
             running: [
                 RemoteTaskBoardEntry(taskID: familiesUnreadTaskID),
                 RemoteTaskBoardEntry(taskID: familiesUnreadParentTaskID),
@@ -112,6 +121,10 @@ public extension ToasttyMobileFixture {
             space(
                 familiesUnreadChildSubspaceID, "website-copy", number: 62, status: .working,
                 last: "Running grep -rn \"hero\" site/"
+            ),
+            space(
+                familiesFinishedChildSubspaceID, "website-hero", number: 65, status: .ready,
+                last: "Replaced the hero images; ready for a look"
             ),
             space(
                 familiesReadParentSubspaceID, "merge-main", number: 63, status: .idle,

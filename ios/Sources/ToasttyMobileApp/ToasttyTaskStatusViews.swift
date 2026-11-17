@@ -90,7 +90,9 @@ extension View {
     /// mark. The Tasks tab and Home's cards both draw it.
     func toasttyLinkedChild(_ isLinkedChild: Bool) -> some View {
         padding(.leading, isLinkedChild ? ToasttyChildArrowMark.indent : 0)
-            .overlay(alignment: .topLeading) {
+            // On the title's baseline, which a one-line row centres in its
+            // minimum height.
+            .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
                 if isLinkedChild {
                     ToasttyChildArrowMark()
                 }
@@ -103,8 +105,6 @@ extension View {
 struct ToasttyChildArrowMark: View {
     /// How far a nested row moves right.
     static let indent: CGFloat = 18
-    /// The rows' own top padding, so the arrow's line is the title's line.
-    private static let rowTopPadding: CGFloat = 9
 
     var body: some View {
         // A line in the rows' title font, so the arrow stays level with the
@@ -118,7 +118,6 @@ struct ToasttyChildArrowMark: View {
                     .foregroundStyle(ToasttyDesignTokens.mutedText.opacity(0.8))
             }
             .padding(.leading, 4)
-            .padding(.top, Self.rowTopPadding)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
