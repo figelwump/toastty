@@ -154,6 +154,22 @@ struct TaskCoordinationTests {
         }
     }
 
+    /// Claude Code drops a Return typed while it reads a pasted image path,
+    /// so both sends type such a path as text.
+    @Test func bothSendsTypeAnImagePathAsTextSoTheReturnSubmitsIt() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let text = "See the screenshot:\n/Users/me/attachments/shot.jpg"
+        let typed = "See the screenshot:\n`/Users/me/attachments/shot.jpg`"
+
+        try fixture.coordinator.send(taskID: task.id, text: text)
+        #expect(try messages(fixture, to: task) == [typed])
+
+        fixture.sessions.steerResult = .success(.steered)
+        _ = try await fixture.coordinator.sendSteering(taskID: task.id, text: text)
+        #expect(fixture.sessions.steered.map(\.text) == [typed])
+    }
+
     @Test func taskSessionsAreUnscopedUnlessTheirCreatorWasScoped() async throws {
         let fixture = try Fixture()
         _ = try await fixture.startedTask()

@@ -110,6 +110,7 @@ extension TaskCoordinator {
     /// not the user's typing, so the task's last user input does not move.
     func sendSteering(taskID: UUID, text: String) async throws -> (session: TaskSessionInfo, delivery: TaskSteerDelivery) {
         let (record, session) = try sendTarget(taskID: taskID, text: text)
+        let text = AgentPasteText.keepingImagePathsAsText(text)
         let result = await sessions?.deliverSteering(text, panelID: session.panelID) ?? .failure(.stateUnknown)
         var metadata = [
             "task_id": taskID.uuidString,
@@ -170,7 +171,10 @@ extension TaskCoordinator {
         TaskError("Toastty could not type into task \(record.title)'s terminal.")
     }
 
+    /// Types `text` and presses Return, with image paths kept as text so
+    /// that the Return submits it (`AgentPasteText`).
     private func deliver(_ text: String, to session: TaskSessionInfo, taskID: UUID) -> TerminalInputDeliveryResult {
+        let text = AgentPasteText.keepingImagePathsAsText(text)
         let result = sessions?.deliver(text, panelID: session.panelID) ?? .unavailable
         let metadata = [
             "task_id": taskID.uuidString,

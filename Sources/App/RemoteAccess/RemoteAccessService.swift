@@ -3810,8 +3810,9 @@ final class RemoteAccessService: ObservableObject {
             return .rejected(reason: reason)
         case .accept(let turnEpoch):
             recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
+            let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
             let delivery = terminalRuntimeRegistry.sendRemoteText(
-                deliveredText ?? request.text,
+                typedText,
                 submit: true,
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -3821,12 +3822,12 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
                 coordinator.markSteerUncertain(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(request, for: conversationID, deliveredText: typedText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
                 coordinator.markSteerDelivered(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(request, for: conversationID, deliveredText: typedText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
                 ToasttyLog.info(
                     "Remote steer delivered",
                     category: .automation,
@@ -4257,8 +4258,11 @@ final class RemoteAccessService: ObservableObject {
             // Ghostty bracketed-paste semantics for multi-line input and does
             // not steal the local first responder.
             recordRemoteInput(panelID: panelID, byUserNow: recordedDeliveryMode != .queue && origin.isUserAction)
+            // Image paths stay text, or Claude Code drops the Return. The
+            // conversation then echoes the text as typed.
+            let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
             let delivery = terminalRuntimeRegistry.sendRemoteText(
-                deliveredText ?? request.text,
+                typedText,
                 submit: true,
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -4274,7 +4278,7 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery_uncertain",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, deliveryMode: recordedDeliveryMode)
+                recordPendingSend(request, for: conversationID, deliveredText: typedText, deliveryMode: recordedDeliveryMode)
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
@@ -4288,7 +4292,7 @@ final class RemoteAccessService: ObservableObject {
                 recordPendingSend(
                     request,
                     for: conversationID,
-                    deliveredText: deliveredText,
+                    deliveredText: typedText,
                     deliveryMode: recordedDeliveryMode,
                     consumedPromptEpoch: epoch
                 )
