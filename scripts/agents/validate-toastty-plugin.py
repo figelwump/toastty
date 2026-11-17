@@ -270,6 +270,23 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
             if reference not in skill_text:
                 errors.append(f"{skill_name} is missing helper reference {reference}")
 
+    # Users allow Toastty commands with rules on their first words, such as
+    # `Bash(toastty task get *)`. A rule matches `toastty task get --json`,
+    # not `toastty --json task get` or `"$TOASTTY_CLI_PATH" task get`. The
+    # diagnostics skill runs one exact CLI path on purpose.
+    rule_breaking_command = re.compile(
+        r'\btoastty --json\b|"\$TOASTTY_CLI_PATH" (?:--json )?[a-z]'
+    )
+    for text_path in sorted(skills_root.glob("*/**/*.md")):
+        if text_path.relative_to(skills_root).parts[0] == "toastty-send-diagnostics":
+            continue
+        for line_number, line in enumerate(text_path.read_text(encoding="utf-8").splitlines(), 1):
+            if rule_breaking_command.search(line):
+                errors.append(
+                    f"{text_path.relative_to(skills_root)}:{line_number} writes a Toastty command "
+                    "that allow rules cannot match; write `toastty <command words> --json ...`"
+                )
+
     for script_path in sorted(skills_root.glob("*/scripts/*.sh")):
         try:
             executable = script_path.stat().st_mode & 0o111

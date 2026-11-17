@@ -19,7 +19,7 @@ public enum TaskPrompt {
     /// Custom start skills also need the direct route to the coordinator.
     /// The shipped skill carries the same guidance.
     public static let coordinatorLine = "To ask the coordinator, run "
-        + #"`"$TOASTTY_CLI_PATH" coordinator send "<question>"` (or `--text-file <path>` for a long message). "#
+        + #"`toastty coordinator send "<question>"` (or `--text-file <path>` for a long message). "#
         + "Toastty identifies this task as the sender. `sent` means submitted, not read; `queued` waits for an open prompt. "
         + "The answer appears in Coordinator chat. It reaches this task only if the coordinator sends it here with `toastty task send`."
 

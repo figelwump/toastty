@@ -91,118 +91,135 @@ workspace to stop it. See
 
 ## Approval prompts
 
-A task's agent runs commands such as `"$TOASTTY_CLI_PATH" task start-work`,
-`git push` and `gh pr create`. In their default permission modes, Claude Code
-and Codex ask you before such commands. A coordinator asks again on each wake,
-often while you are away. Toastty adds no allow rules of its own. The setups
-below let the commands run without a question. Each one gives the agent more
-power, so add only what you accept.
+A task's agent runs commands such as `toastty task start-work`, `git push`
+and `gh pr create`. In their default permission modes, Claude Code and Codex
+ask you before such commands. A coordinator asks again on each wake, often
+while you are away. Toastty adds no allow rules of its own. The rules below
+let the commands run without a question. Each one gives the agent more power,
+so add only what you accept.
 
-The shipped skills write the Toastty CLI as `"$TOASTTY_CLI_PATH"`, a variable
-that holds a different path in each Toastty process. Neither agent's allow
-rules can match a command that starts with a variable, so the Toastty commands
-need the hook below for Claude Code and still ask in Codex.
+The shipped skills write each Toastty command as `toastty`, then the command
+words, then `--json` and the other arguments, such as
+`toastty task get --json`. Toastty puts `toastty` on `PATH` in each terminal
+and agent session it manages, so a rule on the first words of the command
+matches it. Without the rules, the agent asks before each of these commands
+and runs it when you approve.
+
+The rules below allow the Toastty commands that read, create, start, message
+and watch tasks (`task get`, `list`, `workspace-choices`, `watches`, `create`,
+`start-work`, `send`, `watch`, `unwatch`, `needs-reply` and
+`ready-for-review`), the coordinator's `status`, `send`, `wake` and `watch`,
+and `query run`, which only reads. Every other Toastty command still asks,
+among them `task merge`, `task request-merge`, `task archive`, `task delete`
+and `task mark-done`.
+
+A rule does not match these forms, so they still ask:
+
+- `--json` before the command words, as in `toastty --json task get`.
+- `"$TOASTTY_CLI_PATH"` in place of `toastty`. The skills use it only when
+  `toastty` is not on `PATH`, as when `enable-agent-command-shims = false`
+  (see [Configuration](configuration.md)).
+- A variable in the command's words, such as
+  `--socket-path "$TOASTTY_SOCKET_PATH"`.
 
 ### Claude Code
 
-Tested with Claude Code 2.1.325 in its default permission mode, with stand-in
-`toastty`, `git` and `gh` programs:
-
-- A rule such as `Bash("$TOASTTY_CLI_PATH" task *)` in `permissions.allow`
-  does not help. Claude Code says "A variable in this command can't be
-  checked before it runs" and asks.
-- A `PreToolUse` hook that approves the command does work.
-- `Bash(git push *)` and `Bash(gh pr create *)` rules work.
-
-Save this hook as `~/.claude/hooks/toastty-task-commands.py` and make it
-executable (`chmod +x`). It approves one plain Toastty command from a fixed
-list: the `task` commands that read, create, start, message and watch tasks,
-the coordinator's `status`, `send`, `wake` and `watch`, and `query run`,
-which only reads. Every other command asks as before, among them `task merge`,
-`task request-merge`, `task archive`, `task delete` and `task mark-done`, and
-any command with a variable after the first word, a command substitution, a
-chain, a pipe or a redirect.
-
-```python
-#!/usr/bin/env python3
-# Claude Code PreToolUse hook: approve plain Toastty task and coordinator
-# commands. Everything else goes through Claude Code's normal checks.
-import json, re, sys
-
-ALLOWED = re.compile(
-    r'"\$TOASTTY_CLI_PATH" (--json )?'
-    r'(task (get|list|workspace-choices|watches|create|start-work|send'
-    r'|watch|unwatch|needs-reply|ready-for-review)'
-    r'|coordinator (status|send|wake|watch)'
-    r'|query run)'
-    r'( [^$`;&|<>()\\\n]*)?'
-)
-
-command = json.load(sys.stdin).get("tool_input", {}).get("command", "")
-if ALLOWED.fullmatch(command):
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "allow",
-        "permissionDecisionReason": "Toastty task command",
-    }}))
-```
-
-Then add the hook and the rules to `~/.claude/settings.json`:
+Add the rules to `permissions.allow` in `~/.claude/settings.json`, beside the
+rules that you already have:
 
 ```json
 {
   "permissions": {
     "allow": [
+      "Bash(toastty task get *)",
+      "Bash(toastty task list *)",
+      "Bash(toastty task workspace-choices *)",
+      "Bash(toastty task watches *)",
+      "Bash(toastty task create *)",
+      "Bash(toastty task start-work *)",
+      "Bash(toastty task send *)",
+      "Bash(toastty task watch *)",
+      "Bash(toastty task unwatch *)",
+      "Bash(toastty task needs-reply *)",
+      "Bash(toastty task ready-for-review *)",
+      "Bash(toastty coordinator status *)",
+      "Bash(toastty coordinator send *)",
+      "Bash(toastty coordinator wake *)",
+      "Bash(toastty coordinator watch *)",
+      "Bash(toastty query run *)",
       "Bash(git push *)",
       "Bash(gh pr create *)",
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)"
     ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/toastty-task-commands.py" }]
-      }
-    ]
   }
 }
 ```
 
-Merge it into the file's existing `permissions` and `hooks`. The rules in a
-project's own `.claude/settings.json` apply only after you trusted that folder
-in Claude Code.
+`Bash(toastty task get *)` also matches `toastty task get` with no arguments.
+The rules in a project's own `.claude/settings.json` apply only after you
+trusted that folder in Claude Code.
 
-On a wake, a coordinator reads tasks (`task list`, `task get`), sends to them
-(`task send`), sets its next check (`coordinator wake`, `coordinator watch`),
-reads pull requests (`gh pr view`, `gh pr checks`) and reads its Scratchpads
-(`query run`). The setup above covers these. It still asks before it writes
-its daily list (`action run panel.scratchpad.set-content`), before it commits
-a change to its policy (`git commit` in its folder), and before
-`task request-merge`.
+On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
+sends to them (`task send` with the text in a here-document), sets its next
+check (`coordinator wake`, `coordinator watch`), reads pull requests
+(`gh pr view`, `gh pr checks`) and reads its Scratchpads (`query run`). The
+rules above cover these. It still asks before it writes its daily list
+(`action run panel.scratchpad.set-content`), before it commits a change to
+its policy (`git commit` in its folder), and before `task request-merge`.
+
+Tested with Claude Code 2.1.326 in its default permission mode:
+
+- LIVE_CLAUDE_RESULT
+- With a stand-in `toastty` (`claude -p`, only these rules): these ran with
+  no question: `toastty task get` with and without `--json`, a `task create`
+  over several lines, `task send` with the text in a here-document, the
+  coordinator's `task list --json | jq …` read, `coordinator wake` and
+  `coordinator watch`, and `query run … --json`. These asked:
+  `toastty --json task get`, `task delete`, `task request-merge`, and
+  `task get --json --socket-path "$TOASTTY_SOCKET_PATH"`.
+- The `git push` and `gh pr create` rules were tested with Claude Code
+  2.1.325 and stand-in `git` and `gh` programs. The `gh pr view` and
+  `gh pr checks` rules were not tested.
 
 ### Codex
 
 Codex [rules](https://developers.openai.com/codex/rules) go in a file under
 `~/.codex/rules/`, such as `~/.codex/rules/toastty.rules`. A rule with
-`decision="allow"` runs a matching command outside the sandbox with no
-question:
+`decision = "allow"` runs a matching command outside the sandbox with no
+question. The Toastty commands need that: they connect to Toastty's local
+socket, which Codex's `workspace-write` sandbox blocks.
 
 ```python
-prefix_rule(pattern=["git", "push"], decision="allow")
-prefix_rule(pattern=["gh", "pr", ["create", "view", "checks"]], decision="allow")
+prefix_rule(
+    pattern = ["toastty", "task", ["get", "list", "workspace-choices", "watches",
+        "create", "start-work", "send", "watch", "unwatch", "needs-reply",
+        "ready-for-review"]],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["toastty", "coordinator", ["status", "send", "wake", "watch"]],
+    decision = "allow",
+)
+prefix_rule(pattern = ["toastty", "query", "run"], decision = "allow")
+prefix_rule(pattern = ["git", "push"], decision = "allow")
+prefix_rule(pattern = ["gh", "pr", ["create", "view", "checks"]], decision = "allow")
 ```
 
-`codex execpolicy check --rules toastty.rules -- git push -u origin HEAD`
-(Codex 0.169.0) reports both rules as matching. Not tested: a full Codex
-session with these rules.
+Codex matches a rule only against a command that it can split into plain
+words. CODEX_COMPOUND_RESULT
 
-The Toastty commands still ask. They connect to Toastty's local socket, which
-Codex's `workspace-write` sandbox blocks, so the shipped skills tell Codex to
-ask for escalation. A rule cannot allow them: Codex splits a shell command
-into words for its rules only when it has no variable, and the skills write
-`"$TOASTTY_CLI_PATH"`.
+Without the rules, the shipped skills tell Codex to ask for escalation for
+each Toastty command, and Codex asks you before it runs one.
+
+Tested with Codex 0.169.0:
+
+- `codex execpolicy check --rules toastty.rules -- toastty task get --json`
+  reports `allow`, and so do the other allowed commands in the forms the
+  skills write. `toastty --json task get`, `task delete`, `task merge`,
+  `task request-merge`, `task archive`, `task mark-done` and `action run`
+  match no rule.
+- LIVE_CODEX_RESULT
 
 For a coordinator that runs while you are away, Codex can let a model review
 the escalation requests in place of you: start it with

@@ -62,6 +62,57 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         }
     }
 
+    // An installed build puts ~/.toastty/bin first on a terminal's PATH, and
+    // the shipped skills run `toastty` from there.
+    func testSyncInstallationLinksToasttyToTheCLIUntilDisabled() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: homeDirectoryURL) }
+        let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
+        let cliURL = try makeExecutableHelper(in: homeDirectoryURL, named: "bundled-toastty")
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        let installer = AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            helperExecutablePathProvider: { helperURL.path },
+            cliExecutablePathProvider: { cliURL.path }
+        )
+
+        let installation = try XCTUnwrap(installer.syncInstallation(enabled: true))
+        let toasttyURL = installation.directoryURL.appendingPathComponent("toastty", isDirectory: false)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: toasttyURL.path), cliURL.path)
+
+        _ = try installer.syncInstallation(enabled: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: toasttyURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runtimePaths.agentShimDirectoryURL.path))
+    }
+
+    // A runtime-isolated instance directory holds its own copy of the CLI.
+    func testSyncInstallationKeepsAStagedToasttyCopy() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: homeDirectoryURL) }
+        let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
+        let cliURL = try makeExecutableHelper(in: homeDirectoryURL, named: "bundled-toastty")
+        let instanceDirectoryURL = homeDirectoryURL.appendingPathComponent("instance", isDirectory: true)
+        try FileManager.default.createDirectory(at: instanceDirectoryURL, withIntermediateDirectories: true)
+        let stagedURL = try makeExecutableHelper(in: instanceDirectoryURL, named: "toastty")
+        let installer = AgentCommandShimInstaller(
+            runtimePaths: ToasttyRuntimePaths.resolve(homeDirectoryPath: homeDirectoryURL.path, environment: [:]),
+            installationDirectoryURL: instanceDirectoryURL,
+            managedCommandNames: ["claude"],
+            helperExecutablePathProvider: { helperURL.path },
+            cliExecutablePathProvider: { cliURL.path }
+        )
+
+        _ = try installer.syncInstallation(enabled: true)
+        XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: stagedURL.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: stagedURL.path))
+
+        _ = try installer.syncInstallation(enabled: false)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: stagedURL.path))
+    }
+
     func testSyncInstallationCreatesConfiguredWrapperLinksWhenEnabled() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
@@ -280,8 +331,8 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: piURL, encoding: .utf8), "custom pi")
     }
 
-    private func makeExecutableHelper(in directoryURL: URL) throws -> URL {
-        let helperURL = directoryURL.appendingPathComponent("toastty-agent-shim-helper", isDirectory: false)
+    private func makeExecutableHelper(in directoryURL: URL, named name: String = "toastty-agent-shim-helper") throws -> URL {
+        let helperURL = directoryURL.appendingPathComponent(name, isDirectory: false)
         FileManager.default.createFile(atPath: helperURL.path, contents: Data("#!/bin/sh\nexit 0\n".utf8))
         try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o755))], ofItemAtPath: helperURL.path)
         return helperURL

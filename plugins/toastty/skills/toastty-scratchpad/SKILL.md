@@ -30,7 +30,7 @@ plugin cache when `TOASTTY_SKILLS_ROOT` is missing.
 A managed session can have several open Scratchpads in its workspace tab. List them before reading or updating an existing artifact:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.list \
+toastty query run panel.scratchpad.list --json \
   "sessionID=$TOASTTY_SESSION_ID"
 ```
 
@@ -51,7 +51,7 @@ Check `stateSessionID` before changing the binding:
 Rebind without another permission question only when the document is unbound, its previous owner is confirmed inactive, or the user explicitly handed it off from the identified active owner. Recheck panel state immediately before rebinding. If the document or owner changed, reassess instead of using the earlier decision:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.rebind \
+toastty action run panel.scratchpad.rebind --json \
   --panel "<panel-id>" "sessionID=$TOASTTY_SESSION_ID"
 ```
 
@@ -69,7 +69,7 @@ Select the intended open document from `panel.scratchpad.list`; do not scan work
 2. Export the selected Scratchpad directly:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+toastty action run panel.scratchpad.export --json \
   "sessionID=${TOASTTY_SESSION_ID}" \
   "documentID=<document-id>"
 ```
@@ -78,7 +78,7 @@ Select the intended open document from `panel.scratchpad.list`; do not scan work
 4. If diagnostics or runtime metadata are needed, query the returned `panelID`:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.state \
+toastty query run panel.scratchpad.state --json \
   "panelID=<panel-id>"
 ```
 
@@ -214,7 +214,7 @@ Patch rules:
 Example:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+toastty action run panel.scratchpad.export --json \
   "sessionID=$TOASTTY_SESSION_ID" \
   "documentID=<document-id>"
 ```
@@ -233,7 +233,7 @@ cat > /tmp/scratchpad-patch.json <<'JSON'
 }
 JSON
 
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.patch-content \
+toastty action run panel.scratchpad.patch-content --json \
   --stdin patch \
   "sessionID=$TOASTTY_SESSION_ID" \
   "documentID=<document-id>" \
@@ -260,7 +260,7 @@ Scratchpad supports inline JavaScript, but the generated document runs in a sand
 If a published Scratchpad looks blank or incomplete, do not assume JavaScript is disabled. First inspect the panel state for generated-content diagnostics. Use the `panelID` returned by the publish helper:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.state "panelID=<panel-id>"
+toastty query run panel.scratchpad.state --json "panelID=<panel-id>"
 ```
 
 The state response includes `recentDiagnostics` when the generated iframe reports console messages, JavaScript errors, unhandled promise rejections, or CSP violations. Pay attention to:
@@ -280,7 +280,7 @@ When the user asks you to look at, read, inspect, use, or implement what is in a
 In a Toastty-managed agent terminal, run:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+toastty action run panel.scratchpad.export --json \
   "sessionID=$TOASTTY_SESSION_ID" "documentID=<document-id>"
 ```
 

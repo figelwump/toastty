@@ -4,6 +4,8 @@ Toastty bundles a `toastty` CLI that communicates with the running app over its 
 
 When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, pointing at that app instance's executable copy. Runtime-isolated builds stage an immutable per-instance copy; ordinary installed builds use the bundled executable directly. All examples below assume you invoke the CLI through that path.
 
+In a terminal or agent session that Toastty manages, the same CLI is also on `PATH` as `toastty`: Toastty puts its helper directory first on `PATH` (unless `enable-agent-command-shims = false`), and the shipped skills run `toastty …` so that one allow rule covers them (see [Approval prompts](tasks.md#approval-prompts)). `--json` and `--socket-path` work anywhere after `toastty`; the skills write `--json` after the command words, such as `toastty task get --json`.
+
 ## Global options
 
 | Option | Description |

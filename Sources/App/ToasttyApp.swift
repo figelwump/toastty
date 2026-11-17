@@ -850,7 +850,8 @@ struct ToasttyApp: App {
                 enabled: initialToasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
                 agentProfiles: agentCatalogStore.catalog,
-                helperExecutablePath: agentShimExecutablePath
+                helperExecutablePath: agentShimExecutablePath,
+                cliExecutablePath: cliExecutablePath
             )
         } catch {
             shimDirectoryPath = nil
@@ -1755,17 +1756,22 @@ struct ToasttyApp: App {
         enabled: Bool,
         runtimePaths: ToasttyRuntimePaths,
         agentProfiles: AgentCatalog,
-        helperExecutablePath: String?
+        helperExecutablePath: String?,
+        cliExecutablePath: String?
     ) throws -> String? {
         let managedDirectoryURL = managedAgentCommandShimDirectoryURL(
             runtimePaths: runtimePaths,
             helperExecutablePath: helperExecutablePath
         )
+        // Terminals get this directory first on PATH, so `toastty` there is
+        // the CLI that the shipped skills run. A runtime-isolated instance
+        // directory already holds its own copy of the CLI.
         let installation = try AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
             installationDirectoryURL: managedDirectoryURL,
             managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles),
-            helperExecutablePathProvider: { helperExecutablePath }
+            helperExecutablePathProvider: { helperExecutablePath },
+            cliExecutablePathProvider: { cliExecutablePath }
         )
             .syncInstallation(enabled: enabled)
         let compatibilityDirectoryURL = runtimePaths.agentShimDirectoryURL.standardizedFileURL
@@ -2117,7 +2123,8 @@ struct ToasttyApp: App {
                 enabled: toasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
                 agentProfiles: agentCatalogStore.catalog,
-                helperExecutablePath: agentLaunchShimExecutablePath
+                helperExecutablePath: agentLaunchShimExecutablePath,
+                cliExecutablePath: agentLaunchCLIExecutablePath
             )
             managedAgentResolutionContextStore.update(
                 Self.makeManagedAgentResolutionContext(

@@ -49,11 +49,11 @@ If you need to run the flow inline instead of using the helper:
 
 ```bash
 workspace_id="$(
-  "$TOASTTY_CLI_PATH" --json query run terminal.state --panel "$TOASTTY_PANEL_ID" \
+  toastty query run terminal.state --json --panel "$TOASTTY_PANEL_ID" \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["workspaceID"])'
 )"
 
-"$TOASTTY_CLI_PATH" action run panel.create.local-document \
+toastty action run panel.create.local-document \
   --workspace "$workspace_id" \
   "filePath=/absolute/path/to/file.md"
 ```

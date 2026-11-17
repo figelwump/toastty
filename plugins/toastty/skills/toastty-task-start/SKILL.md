@@ -9,8 +9,12 @@ Toastty runs each task in its own task space. The task's agent owns the task
 from the user's request to the user's review: it reports progress, questions
 and results to the user in that task space.
 
-Run the commands below with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
-this skill must run inside a Toastty-managed agent session, and stop.
+Run the Toastty commands below as written: `toastty`, the command words, then
+`--json` and the other arguments, such as `toastty task get --json`. Toastty
+puts `toastty` on `PATH` in each agent session it manages, and the user's allow
+rules match this form. If `toastty` is not found, run `"$TOASTTY_CLI_PATH"` in
+its place. If that is not set either, report that this skill
+must run inside a Toastty-managed agent session, and stop.
 
 ## Sandbox permissions
 
@@ -101,7 +105,7 @@ user's explicit approval.
    `--base <branch>` only when the work must start from something other than
    the remote's default branch, such as a feature branch the work lands on or
    the branch of a stacked pull request.
-2. Run `"$TOASTTY_CLI_PATH" task start-work --branch-prefix <prefix>`. In a
+2. Run `toastty task start-work --branch-prefix <prefix>`. In a
    session that is not a task yet, also pass `--title "<short title>"`.
 3. If the command fails, report its error and stop. Otherwise end your turn
    at once with one short line saying that the work continues in the worktree.
@@ -229,7 +233,7 @@ task's status. Put work that goes on after a merge under the heading
 task's Scratchpad.
 
 - **A question for the user:** run
-  `"$TOASTTY_CLI_PATH" task needs-reply --question "<the question in a few words>"`
+  `toastty task needs-reply --question "<the question in a few words>"`
   just before you end the turn. The task then waits in Needs you until the
   user answers. Also use it for blocked work, and report the blocker and the
   next action. Use it when continuing this task depends on the user's
@@ -245,9 +249,9 @@ task's Scratchpad.
   not complete requested or authorized implementation. Mark the task ready
   for review, so that the user can read the result and follow up before
   deciding the task is Done. Run
-  `"$TOASTTY_CLI_PATH" --json task get` and confirm that its request matches
+  `toastty task get --json` and confirm that its request matches
   this conversation. Then run
-  `"$TOASTTY_CLI_PATH" --json task ready-for-review <task-id>`, require
+  `toastty task ready-for-review --json <task-id>`, require
   `ok=true`, and read the task again to confirm `readyForReviewAt` is set and
   `doneAt` is null. If you cannot verify the task's identity, do not change
   it, and say so.
@@ -270,7 +274,7 @@ When the agreed plan has parts that should land as separate pull requests, give
 each part its own task:
 
 ```bash
-"$TOASTTY_CLI_PATH" task create "<one-line summary>" --start-work \
+toastty task create "<one-line summary>" --start-work \
   --agent <profile> --model <model> --effort <effort> \
   --prompt-file <brief.md> [--title <title>] [--slug <slug>] \
   [--branch-prefix <prefix>] [--base <branch>] [--workspace <id>]
@@ -303,7 +307,7 @@ check them with `toastty task get <task-id>`.
 ## Wait for other tasks
 
 Do not poll in a shell loop. To continue when another task reaches a point,
-run `"$TOASTTY_CLI_PATH" task watch <task-id> --until <condition>` and end your
+run `toastty task watch <task-id> --until <condition>` and end your
 turn. Toastty sends you one line, starting `[Toastty watch`, when the condition
 holds or can never hold. Conditions: `idle` (its agent finished a turn after
 you started watching), `waiting` (it waits for an approval or an answer),
@@ -322,7 +326,7 @@ reaches it.
 ## Ask the coordinator
 
 When the user asks you to ask the coordinator something, send the question
-directly with `"$TOASTTY_CLI_PATH" coordinator send "<question>"`. For a long
+directly with `toastty coordinator send "<question>"`. For a long
 message, write it to a file and use `coordinator send --text-file <path>`.
 Include the relevant context and the decision needed. Toastty identifies
 this task as the sender; no coordinator panel or session ID is needed.

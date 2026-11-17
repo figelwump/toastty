@@ -7,7 +7,7 @@ You never merge a pull request yourself. In three cases you ask the task's
 agent to merge it:
 
 ```bash
-"$TOASTTY_CLI_PATH" task request-merge <task-id>
+toastty task request-merge <task-id>
 ```
 
 Toastty then sends its merge prompt to that agent. The agent's merge skill
@@ -77,7 +77,7 @@ is obvious.
   branch that the rule names.
 - **The task.** Its stage is `needsYou (review)`, `agent` is `idle`, and
   `userTypedMinutesAgo` is null or more than 15. In
-  `"$TOASTTY_CLI_PATH" --json task get <task-id>`, `parentTaskID` and `merge`
+  `toastty task get --json <task-id>`, `parentTaskID` and `merge`
   are null: it is not a child of another task, and no merge is under way.
   The ledger has no `merging` line for it. Its `text` has no line
   `[coordinator review]`: the user reads each change that comes from your
@@ -101,7 +101,7 @@ again for about a minute. If it still fails, the task shows `mergeFailure`.
 The user accepted that merge, so you ask for it again, one time, without a
 new message from the user.
 
-`"$TOASTTY_CLI_PATH" --json task get <task-id>` gives `mergeFailure` with
+`toastty task get --json <task-id>` gives `mergeFailure` with
 `at`, `reason`, `cause`, `head` and `base`. Ask again only when every point
 below holds in a read that is less than a minute old.
 
@@ -140,7 +140,7 @@ user's: tell the user, and do not ask a third time.
 In every case, do not run the command while the task's agent is `waiting`:
 tell the user that the task waits at a prompt. Otherwise:
 
-1. Run `"$TOASTTY_CLI_PATH" coordinator watch --task <task-id>` first, so
+1. Run `toastty coordinator watch --task <task-id>` first, so
    that the merge, or the task's end without one, wakes you. A watch that
    starts after the merge wakes nothing.
 2. Run `task request-merge`. If Toastty refuses it, or your agent program's
@@ -167,7 +167,7 @@ tell the user that the task waits at a prompt. Otherwise:
 While the task has a `merging` line and has not merged or stopped, do nothing
 more for it. When it wakes you:
 
-- **It merged** (`toastty --json task get <task-id>` shows `mergedAt`; a
+- **It merged** (`toastty task get --json <task-id>` shows `mergedAt`; a
   merged task can be Done and then is not in the open tasks). Read the merged
   commit with `gh pr view <pr> --json state,mergedAt,headRefOid`. Change the
   `merging` line to a `merged` line and tell the user in one line that it

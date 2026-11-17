@@ -55,11 +55,11 @@ Resolve the current workspace, then take the selected-tab snapshot:
 
 ```bash
 workspace_id="$(
-  "$TOASTTY_CLI_PATH" --json query run terminal.state --panel "$TOASTTY_PANEL_ID" \
+  toastty query run terminal.state --json --panel "$TOASTTY_PANEL_ID" \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["workspaceID"])'
 )"
 
-"$TOASTTY_CLI_PATH" --json query run workspace.snapshot --workspace "$workspace_id"
+toastty query run workspace.snapshot --json --workspace "$workspace_id"
 ```
 
 Each `result.slotMappings` entry carries `slotID`, `panelID`, and
@@ -71,7 +71,7 @@ the pane, and `readable`.
 ## Reading
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run terminal.visible-text --panel "<panel-id>" tail=80
+toastty query run terminal.visible-text --json --panel "<panel-id>" tail=80
 ```
 
 - `tail=<n>` returns the last `n` lines. Start small; widen only if needed.
