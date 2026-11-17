@@ -48,6 +48,43 @@ extension TaskCoordinator {
         return try startMerge(record, target: target, expectedHead: expectedHead)
     }
 
+    /// How long `task.merge` from the socket waits for the merge's first
+    /// answer. The pull request script usually answers in a few seconds;
+    /// the CLI stops reading after 10.
+    static let mergeAnswerWait: Duration = .seconds(8)
+
+    /// `task.merge` from the socket: `merge`, then a wait for the pull
+    /// request script's first answer, so that the caller learns of a
+    /// refusal before it reports the merge. Throws the reason when Toastty
+    /// refused the merge or the merge failed. Otherwise returns the task:
+    /// merged, waiting for checks, or, after `wait`, still merging.
+    func mergeAndAwaitAnswer(
+        taskID: UUID,
+        expectedHead: String?,
+        caller: TaskCaller,
+        wait: Duration = mergeAnswerWait
+    ) async throws -> TaskRecord {
+        let started = try merge(taskID: taskID, expectedHead: expectedHead, caller: caller)
+        if let taskSpaceID = started.taskSpaceWorkspaceID {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: wait)
+            while case .merging? = merges?.request(workspaceID: taskSpaceID)?.phase, clock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        let record = records.record(id: taskID) ?? started
+        // `startMerge` cleared the earlier failure, so this one is new.
+        if let failure = record.mergeFailure {
+            switch failure.cause {
+            case .refused:
+                throw TaskError("Toastty refused to merge \(record.title), and nothing changed: \(failure.reason)")
+            case .error, .acceptanceEnded:
+                throw TaskError("Toastty did not merge \(record.title): \(failure.reason)")
+            }
+        }
+        return record
+    }
+
     /// `task.request-merge`: the user's acceptance given outside the task,
     /// for example through an outside coordinator. It is allowed where the
     /// Merge button is offered, and it always goes through the task's agent,
