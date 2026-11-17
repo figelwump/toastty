@@ -475,16 +475,22 @@ Notable action-specific behavior:
     agent session, gets `INVALID_PAYLOAD` naming `task.request-merge`. The
     caller's session comes from the CLI's environment, so this rule prevents
     mistakes; it is not a security boundary.
-  - records the user's acceptance and hands the merge to the merge owner, then
-    returns the task object. The merge owner runs the bundled pull request
-    script: it merges at the checkout's commit with GitHub's merge API, never
-    turns on auto-merge, waits for checks that still run, and once GitHub
-    reports the merge and no agent in the task space is in a turn, closes the
-    task space, removes the worktree and deletes the branch.
+  - records the user's acceptance and hands the merge to the merge owner. The
+    merge owner runs the bundled pull request script: it merges at the
+    checkout's commit with GitHub's merge API, never turns on auto-merge, waits
+    for checks that still run, and once GitHub reports the merge and no agent
+    in the task space is in a turn, closes the task space, removes the
+    worktree and deletes the branch.
+  - waits up to 8 seconds for the script's first answer, then returns the task
+    object with `merge` as `task.get` reports it: `waitingForChecks`,
+    `cleaningUp` (merged), or `merging` when the script has not answered yet.
   - with `head`, the script refuses unless the checkout is at that commit.
   - `INVALID_PAYLOAD` when the task is archived or merged, its task space is
     closed, it has no pull request link, a merge is already under way, or the
-    user cancelled the merge during the caller's current turn.
+    user cancelled the merge during the caller's current turn; also, with the
+    reason, when the script refuses the merge (nothing changed: for example,
+    the worktree has uncommitted or untracked files) or the merge fails. The
+    task's `mergeFailure` records the same reason.
 - `task.request-merge`
   - requires `args.taskID`. The user's acceptance given outside the task, as
     the Merge button gives it: the task's agent gets the merge prompt, checks

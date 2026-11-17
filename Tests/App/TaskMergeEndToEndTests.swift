@@ -458,6 +458,51 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// The merge skill's `task merge`, from the task's agent through the CLI,
+    /// answers with the script's refusal instead of an acceptance, so the
+    /// agent cannot report a merge that will not happen. An untracked cache
+    /// file is enough: the script refuses any untracked file.
+    @Test
+    func taskMergeAnswersWithTheRefusalOfADirtyWorktree() async throws {
+        try await withScenario { scenario in
+            let taskSocketPath = temporarySocketPath()
+            let taskServer = try makeTaskServer(scenario, socketPath: taskSocketPath)
+            defer { withExtendedLifetime(taskServer) {} }
+            try waitForSocket(at: taskSocketPath)
+            scenario.socketPath = taskSocketPath
+            // The merge skill runs in the agent's turn.
+            scenario.reportAgent(.working)
+            let cache = "\(scenario.worktree)/__pycache__"
+            try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: "\(cache)/helper.cpython-314.pyc", contents: Data([0]))
+
+            let refused = try await scenario.cli(["--json", "task", "merge", "--head", scenario.head], sessionID: "agent")
+            #expect(refused.status != 0, "\(refused.output)")
+            #expect(refused.output.contains("refused to merge"), "\(refused.output)")
+            #expect(refused.output.contains("uncommitted changes"), "\(refused.output)")
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
+            #expect(scenario.record?.mergeFailure?.cause == .refused)
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+
+            // An answer that does not come in time is no answer: the call
+            // returns while the merge runs, and the refusal lands on the task.
+            let unanswered = try await scenario.tasks.mergeAndAwaitAnswer(
+                taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller, wait: .zero
+            )
+            #expect(unanswered.mergeFailure == nil)
+            #expect(scenario.boardItem?.merge == .merging)
+            await scenario.waitUntil("the merge is refused again") { scenario.record?.mergeFailure != nil }
+
+            // With the cache gone, the same call merges and says so.
+            try FileManager.default.removeItem(atPath: cache)
+            let accepted = try await scenario.cli(["--json", "task", "merge", "--head", scenario.head], sessionID: "agent")
+            #expect(accepted.status == 0, "\(accepted.output)")
+            #expect(accepted.output.contains("\"merge\" : \"cleaningUp\""), "\(accepted.output)")
+            #expect(scenario.record?.mergeFailure == nil)
+            await scenario.waitUntil("GitHub merges it") { FileManager.default.fileExists(atPath: scenario.mergedMarker) }
+        }
+    }
+
     @Test(arguments: [false, true])
     func anUnreadChildRemainsReachableWhileItsParentWaitsForTheMerge(agentExited: Bool) async throws {
         try await withScenario(checksPending: true) { scenario in
@@ -530,10 +575,11 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     @Test
     func cancelMergeStopsAMergeWaitingForChecks() async throws {
         try await withScenario(checksPending: true) { scenario in
-            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: nil, caller: scenario.agentCaller)
-            await scenario.waitUntil("the merge waits") {
-                if case .awaitingChecks? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
-                return false
+            // `task merge` answers once the merge waits for the checks.
+            _ = try await scenario.tasks.mergeAndAwaitAnswer(taskID: scenario.taskID, expectedHead: nil, caller: scenario.agentCaller)
+            guard case .awaitingChecks? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase else {
+                Issue.record("The merge should wait for checks: \(String(describing: scenario.merges.request(workspaceID: scenario.taskSpaceID)))")
+                return
             }
             #expect(scenario.boardItem?.merge == .waitingForChecks)
             #expect(scenario.boardItem?.stage == .running)
@@ -1062,16 +1108,19 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         var cliPath = ""
 
         /// Runs the bundled `toastty` CLI as a shell outside Toastty does:
-        /// no managed session in its environment. Off the main actor, so the
-        /// socket server can answer.
-        func cli(_ arguments: [String]) async throws -> (status: Int32, output: String) {
+        /// no managed session in its environment, unless `sessionID` names
+        /// the managed session it runs in. Off the main actor, so the socket
+        /// server can answer.
+        func cli(_ arguments: [String], sessionID: String? = nil) async throws -> (status: Int32, output: String) {
             let executable = cliPath
             let fullArguments = ["--socket-path", socketPath] + arguments
-            return try await Task.detached {
+            var environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()]
+            environment[ToasttyLaunchContextEnvironment.sessionIDKey] = sessionID
+            return try await Task.detached { [environment] in
                 let process = Process()
                 process.executableURL = URL(filePath: executable)
                 process.arguments = fullArguments
-                process.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()]
+                process.environment = environment
                 let output = Pipe()
                 process.standardOutput = output
                 process.standardError = output

@@ -463,7 +463,7 @@ final class LiveSessionsController {
         homeController.installSubspaceDone { [runtime] workspaceID, isDone in
             do {
                 let response = try await runtime.setWorkspaceDone(
-                    RemoteWorkspaceDoneRequest(workspaceID: workspaceID, done: isDone)
+                    RemoteWorkspaceDoneRequest(workspaceID: workspaceID, done: isDone, knowsOpenPullRequestResult: true)
                 )
                 switch response?.result {
                 case .updated?, .unchanged?: return .applied
@@ -812,6 +812,10 @@ final class LiveSessionsController {
         homeController.setHostSupportsProjectRelease(acceptsProjectRelease)
         homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
         homeController.setHostSupportsCoordinatorSend(acceptsCoordinatorSend)
+        activeConversationController?.consumeCoordinatorChatRead(
+            isSupported: acceptsCoordinatorChatRead,
+            readPoint: homeController.snapshot.coordinatorChatRead
+        )
         await runtime.updateDeviceScopes(scopes)
     }
 

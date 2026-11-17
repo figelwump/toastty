@@ -2151,7 +2151,10 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 2. The skill checks what you cannot see at a glance: unresolved review threads,
    merge prerequisites in the description, tasks that must land first, and CI.
    If something blocks, it says why and ends its turn, and the task is back in
-   Needs you. Otherwise it runs `toastty task merge --head <commit>`.
+   Needs you. Otherwise it runs `toastty task merge --head <commit>`, which
+   waits for Toastty's first answer. If Toastty refuses the merge, for example
+   because the worktree has an untracked file, the command fails with the
+   reason and the agent reports it.
 3. Toastty merges at exactly that commit with GitHub's merge API. If checks
    still run, the task shows "Waiting for checks" and Toastty merges when they
    pass. It never turns on auto-merge, so commits pushed later are not merged.

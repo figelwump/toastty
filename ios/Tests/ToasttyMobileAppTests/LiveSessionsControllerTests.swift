@@ -702,8 +702,9 @@ final class LiveSessionsControllerTests: XCTestCase {
 
     /// The coordinator chat's New line needs the Mac's capability and its
     /// read point. Each can change while the chat is open: the capability
-    /// comes with a connection state, the read point with a session list.
-    func testTheCoordinatorChatTakesTheMacsReadPointAndCapabilityFromBothPaths() async throws {
+    /// comes with a connection state or the device's scopes, the read point
+    /// with a session list.
+    func testTheCoordinatorChatTakesTheMacsReadPointAndCapabilityFromEveryPath() async throws {
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
             snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
@@ -746,6 +747,14 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.consumeSessionsState(SessionsRuntime.State(
             connectionGeneration: 7, snapshot: coordinatorSnapshot(readPoint: readPoint), phase: .live
         ))
+        XCTAssertEqual(controller.chatReading.macReadPoint, readPoint)
+
+        // The capability also needs this device's read access, so a change
+        // of the device's scopes reaches the open chat too.
+        await subject.updateDeviceScopes([])
+        XCTAssertFalse(controller.readsCoordinatorChat)
+        await subject.updateDeviceScopes([.read])
+        XCTAssertTrue(controller.readsCoordinatorChat)
         XCTAssertEqual(controller.chatReading.macReadPoint, readPoint)
         subject.stopObserving()
     }

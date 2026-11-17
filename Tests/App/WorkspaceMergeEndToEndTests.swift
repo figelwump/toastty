@@ -15,12 +15,13 @@ struct WorkspaceMergeEndToEndTests: AutomationSocketServerTestSupport {
         try await withScenario(pullRequestState: "OPEN") { scenario in
             // The script calls back into this test's socket server; the main
             // actor stays free while it runs.
-            await scenario.coordinator.merge(
+            let answer = await scenario.coordinator.merge(
                 workspaceID: scenario.taskWorkspaceID,
                 pullRequest: scenario.pullRequest,
                 repoPath: scenario.worktree,
                 thenCleanUp: true
             )?.value
+            #expect(answer == .merged)
             #expect(FileManager.default.fileExists(atPath: scenario.mergedPullRequestMarker))
 
             // The first check after the merge finds it merged and cleans up.

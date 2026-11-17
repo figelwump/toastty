@@ -60,11 +60,7 @@ extension AppControlExecutor {
             let updated = try perform { try coordinator.setReleaseAfterMerge(taskID: record.id, requested: afterMerge) }
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskMerge:
-            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
-            let merged = try perform {
-                try coordinator.merge(taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller())
-            }
-            return .init(didMutateState: true, result: Self.taskSnapshot(merged))
+            throw AutomationSocketError.invalidPayload("task.merge waits for the merge's first answer; send it through app_control.run_action")
         case .taskRequestMerge:
             let record = try visibleTask(args: args, coordinator: coordinator)
             try perform { try coordinator.requestMergeFromOutside(taskID: record.id) }
@@ -214,6 +210,38 @@ extension AppControlExecutor {
         do {
             let record = try await coordinator.archive(taskID: taskID, options: options)
             return .init(didMutateState: true, result: Self.taskSnapshot(record))
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
+    struct TaskMergePreparation {
+        var coordinator: TaskCoordinator
+        var taskID: UUID
+        var expectedHead: String?
+        var caller: TaskCaller
+    }
+
+    /// The checks that need the request's context: which task, and who asks.
+    func prepareTaskMerge(args: [String: AutomationJSONValue]) throws -> TaskMergePreparation {
+        let coordinator = try requiredTaskCoordinator()
+        let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+        return TaskMergePreparation(
+            coordinator: coordinator, taskID: record.id, expectedHead: args.taskString("head"), caller: taskCaller()
+        )
+    }
+
+    /// Starts the merge and answers once the pull request script has, with
+    /// `merge` as `task.get` reports it. A refusal is an error with its reason.
+    func finishTaskMerge(_ preparation: TaskMergePreparation) async throws -> AppControlActionOutcome {
+        let coordinator = preparation.coordinator
+        do {
+            let record = try await coordinator.mergeAndAwaitAnswer(
+                taskID: preparation.taskID, expectedHead: preparation.expectedHead, caller: preparation.caller
+            )
+            var result = Self.taskSnapshot(record)
+            result["merge"] = coordinator.board?.mergeActivity(taskID: record.id).map { .string("\($0)") } ?? .null
+            return .init(didMutateState: true, result: result)
         } catch let error as TaskError {
             throw AutomationSocketError.invalidPayload(error.message)
         }

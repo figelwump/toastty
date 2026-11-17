@@ -127,15 +127,31 @@ If nothing blocks, run:
 "$TOASTTY_CLI_PATH" task merge --head <headRefOid>
 ```
 
-It returns at once. Report the pull request, the commit, and whether Toastty
-merges it now or after the checks that are still running. Then end your turn
-and run nothing else: Toastty cleans up later, after this turn ends.
+It waits a few seconds for Toastty's first answer, then reports it:
+
+- **The command fails:** the error gives the reason. When Toastty refused the
+  merge, for example over an untracked file in the worktree, nothing changed.
+  Otherwise read the pull request with `gh pr view` to learn whether it
+  merged. Report the reason and end your turn; do not say that Toastty
+  accepted the merge.
+- **`merge` is `waitingForChecks`:** Toastty merges when the checks that
+  still run pass.
+- **`merge` is `cleaningUp`, or `mergedAt` is set:** the pull request merged.
+- **`merge` is `merging`:** Toastty has not answered yet. Read the task again
+  with `"$TOASTTY_CLI_PATH" --json task get` before you report.
+
+Report the pull request, the commit, and that answer. Then end your turn and
+run nothing else: Toastty cleans up later, after this turn ends. If the user
+asks about the merge later, read `mergedAt`, `merge` and `mergeFailure` with
+`task get` before you answer: a merge that waited for checks can still stop.
 
 If something blocks, report each blocker with its link and end your turn. Do
 not run `task merge`. The task then waits for the user in the Tasks view, who can
 fix the blocker and press Merge again, or choose Merge Without Checks.
 
 If `task merge` refuses because the user cancelled the merge, do not retry it.
+Do not run `task merge` again for any other refusal in the same turn either:
+report it, so that the user can fix the cause.
 
 ## Coordinating tasks
 
