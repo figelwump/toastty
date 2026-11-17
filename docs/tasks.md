@@ -278,9 +278,12 @@ rest of this section describes the panel with no coordinator, and what
   in the main window; a selected task space counts as its project. Toastty
   keeps the last one in `~/.toastty/task-last-workspace.json`. Agent starts
   on the agent, model and effort of your last successful quick entry task,
-  or the `[defaults]` preset before the first task. Cancelled and failed
+  or the `[defaults]` preset before the first task. With no agent in
+  `[defaults]`, it starts on the first agent in the list. Cancelled and failed
   tasks do not change this choice. When a pill has no value, Create Task
   stays off and the panel says `Pick a workspace with ⌘1` or `Pick an agent with ⌘2`.
+  With no agent to offer, it says `Install or configure an agent`, and the
+  Agent list says how.
 - **Pick from the keyboard:** `Cmd+1` opens the Workspace list and `Cmd+2`
   the Agent list. Type to filter, move with the arrow keys, and press
   `Return` to choose; the caret goes back to the task text. `Esc` closes
@@ -292,7 +295,7 @@ rest of this section describes the panel with no coordinator, and what
   your Frequent presets first. A preset is eligible after its first successful
   task; recent use counts more, with a 14-day half-life, and the
   top five are shown. Until then the list shows the `[defaults]` preset from
-  `tasks.toml`. Every task from quick entry counts its preset, including one
+  `tasks.toml`, or the first agent when it names none. Every task from quick entry counts its preset, including one
   the panel started on. Toastty keeps the counts in
   `~/.toastty/task-preset-usage.json`.
   The last-used preset can differ from the top Frequent preset. If it is
@@ -374,7 +377,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
 | `--root <dir>` | The project's directory, instead of `--workspace`. Toastty uses the open workspace on it, or opens the project once every other check passed, so a request that fails opens nothing. |
 | `--external-ref <id>`, `--external-url <url>` | The issue or report the task came from, such as `github:owner/repo#123`, and its http or https page. The Tasks view shows it as **Source**. |
-| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. `[defaults]` in `tasks.toml` fills what you leave out. |
+| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. With no profile there, as on a fresh install, the installed built-in agents are offered: Claude Code, Codex, Cursor, Grok Build and Pi. `[defaults]` in `tasks.toml` fills what you leave out; with no agent there, the task takes the first offered agent that is installed. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
 | `--title`, `--slug` | The task's title and the task space's name. They start from the first line of the text. An explicit title stays fixed. Otherwise, the task uses its agent session's title when available. The slug stays fixed. |
 | `--request-id <id>` | The caller's key for this request. A repeat from the same agent session, or from the CLI outside one, with the same key returns the first task instead of making another. |
@@ -382,11 +385,11 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--base <ref>`, `--branch-prefix <prefix>` | With `--start-work`: what the worktree starts from, and the first part of its branch name. |
 | `--fork` | From a Claude Code or Codex session: start the agent as a fork of this session's conversation. See [Fork the conversation into new tasks](#fork-the-conversation-into-new-tasks). |
 
-A value you set is never changed. A request with an agent that is not in
-`agents.toml`, a model or effort that agent does not take, a file that cannot
+A value you set is never changed. A request with an agent that is not
+offered (see above), a model or effort that agent does not take, a file that cannot
 be read, or a first message longer than 64 KB fails at once and saves nothing.
-So does a request that leaves out the agent when `[defaults]` names none and
-triage is off. A file given as a symbolic link is copied as the file it points to.
+So does a request that leaves out the agent when no installed agent can take
+a task. A file given as a symbolic link is copied as the file it points to.
 
 An agent that splits its work names the agent, its settings and a first
 prompt:
@@ -2547,7 +2550,8 @@ code block, after other text, or from `claude -p --output-format json`:
 or the root of one of `closed_workspaces`. A project that is not open is only
 a suggestion: the task waits in Needs you with it chosen first. The workspace
 must be open and the agent an installed profile; a value that fails a check,
-or a triage that fails or times out, leaves that field to `[defaults]`, and
+or a triage that fails or times out, leaves that field to `[defaults]`, or to
+the first installed agent when `[defaults]` names none, and
 `task get` reports what happened in `triageNote`. The agent receives triage's
 first prompt, then your text exactly as written, then the attached files. For
 a task that waits for a workspace, the Tasks view also offers **Retry Triage**.

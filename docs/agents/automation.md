@@ -781,6 +781,37 @@ the run's artifacts directory. A build that can capture its windows outside
 automation mode also writes PNG frames; a normal build cannot, and the check
 records that and continues.
 
+### Fresh install
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-fresh-install-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and a user home that has no
+`~/.toastty/agents.toml` and no `tasks.toml`; the installed production app is
+not touched. It covers a new user's first tasks; see [Tasks](../tasks.md). It
+needs the remote Mac's screen unlocked, uses subscription usage, and takes
+about ten minutes.
+
+It reuses the setup of the quick entry check: `claude` on the instance's
+PATH runs the real, authenticated Claude CLI in the coordinator's folder and
+a fake task agent anywhere else. The other agents installed on the remote Mac
+stay on the PATH. The first-launch question is not answered in advance: the
+check answers Not Now in the real sheet. It then creates tasks with
+`toastty task create` (no agent, and `--agent claude`), from quick entry
+opened with File > New Task…, and through the coordinator opened from the
+Agent menu, with a request from quick entry. Each surface is its own check,
+and the check goes on after one fails, so a build from before a fix shows
+where each surface stops.
+
+It writes `remote-fresh-install-check/result.json`, the app log, Claude's
+transcript and the task agents' events under the run's artifacts directory.
+A build that can capture its windows outside automation mode also writes PNG
+frames of every visible window, the quick entry panel and its Agent list
+among them.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
