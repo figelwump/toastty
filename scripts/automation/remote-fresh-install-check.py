@@ -24,8 +24,8 @@ Coordinator. Each surface is a check of its own and the check goes on after
 one fails, so a build from before the fix shows where each surface stops.
 From the task records, the task agents' events and Claude's transcript it
 proves that:
-- the first launch asks whether to start the coordinator, and Not Now
-  starts nothing;
+- the first launch shows the What's new sheet, which asks whether to start
+  the coordinator, and Not Now starts nothing;
 - `toastty task create` with no agent creates a task, and it starts with
   Claude Code; so does `toastty task create --agent claude`;
 - an agent that is not installed fails at once and names the installed
@@ -53,7 +53,9 @@ import traceback
 
 HERE = Path(__file__).resolve().parent
 NAME = 'remote-fresh-install-check'
-QUESTION = 'Start the coordinator?'
+# The What's new sheet asks the question (WhatsNewSheet.Words.title).
+QUESTION = 'New in Toastty: tasks'
+NOT_NOW = 'whats-new.not-now'
 
 
 def load(name, file):
@@ -157,7 +159,8 @@ def run_check(run):
     def known():
         return {task['taskID'] for task in run.tasks_now()}
 
-    # 0. The first launch asks about the coordinator; Not Now starts nothing.
+    # 0. The first launch asks about the coordinator in the What's new
+    # sheet; Not Now starts nothing.
     def question():
         code, output = ui.ax('sheet-texts', check=False)
         return output if code == 0 and QUESTION in output else ''
@@ -169,7 +172,7 @@ def run_check(run):
     # prompt can wait for the user.
     ui.ax('window-set-frame', '-100', '40', '980', '1000', check=False)
     run.capture('first-launch-question')
-    ui.ax('click-label', 'Not Now')
+    ui.ax('click', NOT_NOW)
     wait_for('the question to go', lambda: not question(), timeout=30)
     check('a fresh install: no agents.toml and no tasks.toml',
           not (toastty / 'agents.toml').exists() and not (toastty / 'tasks.toml').exists(),
