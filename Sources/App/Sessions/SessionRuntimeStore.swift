@@ -2572,6 +2572,17 @@ final class SessionRuntimeStore: ObservableObject {
         case .toolUse, .toolCompleted:
             guard claudeTeammateTemplatesBySessionID[sessionID]?[event.agentID] != nil else {
                 guard event.phase == .toolUse else { return false }
+                // A tool call from an agent that Toastty does not track counts
+                // as work only inside the main agent's turn. Claude Code's side
+                // queries, such as the away summary (recap) and prompt
+                // suggestions, run tools under a new agent ID outside any turn,
+                // and no later hook ends them. Marking the session Working for
+                // one of them would leave it busy while the agent sits at its
+                // prompt. A tracked background sub-agent keeps its behavior.
+                guard record.turnStartedAt != nil
+                    || record.backgroundActivitiesByID[event.agentID] != nil else {
+                    return false
+                }
                 claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
                 updateStatus(
                     sessionID: sessionID,

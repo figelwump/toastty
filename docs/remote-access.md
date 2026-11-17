@@ -865,6 +865,14 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   time and opening of the coordinator's message it answers; a tap shows that
   message. The files stay on the Mac, so the phone shows their names, not
   thumbnails. Other sessions' chats show every message as it was typed.
+- **Quiet wake turns fold.** A wake turn that the coordinator marked quiet
+  on the Mac (see [Quiet turns](tasks.md#quiet-turns)) folds whole under
+  Toastty's line for its digest, as in the Mac's chat: no work strip and no
+  answer. A tap on the line opens the digest, the coordinator's work and its
+  answer, and a second tap closes them. When a mark comes or goes while the
+  chat is open, for example at the end of the turn, the turn folds or opens
+  where it is, without a reload. With an older Mac, which does not share the
+  marks, quiet turns show open, as before.
 - **Copy and Reply.** As in the Mac's coordinator chat, Copy is under your
   messages and the coordinator's, and Reply is under the coordinator's. A
   phone has no pointer, so both always show. Copy shows a check mark for a
@@ -889,8 +897,7 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   active is read. The phone sends its reads to the Mac about a second after
   they happen, and when you leave the chat or the app, so a message you read on
   the phone shows no line when you come back to the Mac's chat, and the other
-  way round. The phone does not fold quiet turns, so the replies of a quiet
-  turn after your last read count as new on the phone, not on the Mac.
+  way round.
 - **Steer and Stop.** While the coordinator works, Send steers into its turn
   by default, as the Mac chat's Send does, and **Queue** is the other choice
   (see [Queue, steer, and stop](#queue-steer-and-stop-while-the-agent-works)).
@@ -898,9 +905,9 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   types before the coordinator's waiting messages. **Stop** holds the
   coordinator's waiting messages too.
 - **Not on the phone yet.** The coordinator's own queue (the Mac chat's
-  Queued and Paused rows with Edit, Remove, Steer now and Send next), quiet
-  turns folded under their digest, thumbnails of attached images, and `@`
-  mentions in the composer stay on the Mac.
+  Queued and Paused rows with Edit, Remove, Steer now and Send next),
+  thumbnails of attached images, and `@` mentions in the composer stay on the
+  Mac.
 - **The tab's icon is Toasty's outline.** While another tab shows, its badge
   says what the coordinator waits for, from its session's status, as the
   Mac's coordinator row marks it: **New** for output you have not read, **!**
@@ -965,6 +972,32 @@ carries no row and needs the transcript's live edge on screen, so it does not
 move the chat's read point. With an older Mac, the phone shows no New line and
 sends no reads. An older phone ignores the field.
 
+Only the Mac knows which wake turns are quiet, so it shares them. It names
+each quiet turn by its digest's key (`CoordinatorWakeState.digestKey`): the
+SHA-256, in hex, of the digest's text without leading and trailing white
+space. The Mac keeps these keys with the wake state, at most 200, and its own
+chat folds by them. The phone computes the same key
+(`CoordinatorChatTranscript.digestKey`, in the shared conversation code) from
+the text of the digest's user message, which it reads from the same
+conversation as the Mac's chat: JSON carries the text exactly, so the keys
+match without a lookup of transcript events, and a mark that comes before the
+Mac has read the digest from the transcript still matches when the digest
+arrives. The wire models stay Foundation-only, so each side hashes for itself.
+
+200 keys are too large to send with every session snapshot, so a Mac with the
+coordinator advertises the `coordinator_quiet_digests` capability and sends
+only `coordinatorQuietDigestsRevision` on the coordinator's workspace: the
+first 16 hex digits of the SHA-256 of the keys, one per line. The same keys
+give the same revision, also after a Mac relaunch. When a mark comes or goes,
+the revision changes and the Mac sends a new session list at once. A device
+reads the keys with `GET /api/coordinator.quiet_digests`, which answers
+`protocolVersion`, `revision` and `keys` (oldest first, empty without a
+coordinator) and needs a paired device's read access only. The phone reads
+them when a snapshot names a revision it does not have, one read at a time; a
+read that fails is tried again with the next snapshot. With an older Mac, which
+sends neither, quiet turns show open, and the New line counts their replies.
+An older phone ignores the field.
+
 ### Starting a session
 
 Tap **+** on a workspace screen to start a new agent session. On the Home
@@ -1006,6 +1039,8 @@ notice, and you open the session from the list when it arrives.
   session from the phone.
 - **Agents.** The sheet lists the profiles from `~/.toastty/agents.toml` whose
   sessions the phone can show: Codex, Claude Code, OpenCode, MiMo Code, Pi, and Cursor.
+  With no profile in that file, it lists those built-in agents that are
+  installed on the Mac.
   A profile whose command is not installed, or that cannot take a first message
   on its command line, is listed struck through and cannot be chosen. Tap it
   to see the reason.

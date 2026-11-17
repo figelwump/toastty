@@ -136,6 +136,7 @@ extension TaskCoordinator {
             facts[record.id] = TaskAlertFacts(
                 agentBusy: busy,
                 lastOutputAt: busy ? agent.session.flatMap { sessions?.lastOutputAt(sessionID: $0.sessionID) } : nil,
+                busySince: busy ? agent.session?.stateChangedAt : nil,
                 checks: checks(of: record),
                 interruptedAtQuit: agent.activity == .idle && wasInterruptedAtQuit(record)
             )

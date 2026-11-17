@@ -12,6 +12,9 @@ final class MobileTaskBoardTests: XCTestCase {
         // The Mac marks its coordinator's workspace, which leaves the projects.
         XCTAssertEqual(snapshot.presentation().coordinator?.id, uuid(210))
         XCTAssertFalse(snapshot.presentation().topLevelWorkspaces.contains { $0.id == uuid(210) })
+        // The revision of the coordinator's quiet wake turns, whose keys
+        // the Mac serves apart (`coordinator-quiet-digests-response.json`).
+        XCTAssertEqual(snapshot.presentation().coordinatorQuietDigestsRevision, "6ca155390421e7e6")
 
         XCTAssertEqual(board.tasks.count, 7)
         let question = try XCTUnwrap(board.task(taskSpaceID: uuid(201)))

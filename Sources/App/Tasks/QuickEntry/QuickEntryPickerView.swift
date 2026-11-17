@@ -106,7 +106,7 @@ struct QuickEntryPickerView: View {
                         .id(row.id)
                     }
                     if picker.rows.isEmpty {
-                        Text("No matches")
+                        Text(picker.emptyText)
                             .font(.system(size: 13))
                             .foregroundStyle(QuickEntryView.mutedText)
                             .padding(.horizontal, 11)

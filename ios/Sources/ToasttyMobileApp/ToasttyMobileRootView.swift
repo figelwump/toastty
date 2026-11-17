@@ -927,7 +927,8 @@ struct ToasttyMobileRootView: View {
                     : [],
                 hasLongMessage: ProcessInfo.processInfo.environment[
                     "TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"
-                ] == "1"
+                ] == "1",
+                quietTurns: fixtureCoordinatorQuietTurns
             )
         }
         switch fixtureScenario {
@@ -1019,9 +1020,21 @@ struct ToasttyMobileRootView: View {
         else { return nil }
         let rows = ToasttyConversationFixture.coordinatorPresentation(
             for: ToasttyMobileFixture.coordinatorConversationID,
-            hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1"
+            hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
+            quietTurns: fixtureCoordinatorQuietTurns
         ).rows
         return CoordinatorChatReadPoint.marker(in: rows, after: sessionController.homeController.snapshot.coordinatorChatRead)
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS=1` ends the fixture
+    /// coordinator chat with two quiet wake turns, from a Mac that shares
+    /// the marks; `unsupported` is an older Mac that does not.
+    private var fixtureCoordinatorQuietTurns: ToasttyConversationFixture.CoordinatorQuietTurns {
+        switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS"] {
+        case "1": .shared
+        case "unsupported": .unshared
+        default: .none
+        }
     }
 #endif
 

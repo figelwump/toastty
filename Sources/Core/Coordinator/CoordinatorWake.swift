@@ -339,7 +339,9 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// and trailing white space, in hex. The agent's transcript keeps the
     /// text Toastty typed, so the key survives a relaunch, which forgets
     /// which message Toastty sent. Every digest names the time of each
-    /// change it lists, so two digests do not share a text.
+    /// change it lists, so two digests do not share a text. A paired iPhone
+    /// computes the same key from the text it receives
+    /// (`CoordinatorChatTranscript.digestKey`).
     public static func digestKey(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return SHA256.hash(data: Data(trimmed.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -444,8 +446,8 @@ extension CoordinatorWakeState.TaskChange {
 /// not have to poll for it. Each alert wakes the coordinator once when it
 /// starts, and again only after it cleared and came back.
 public enum TaskAlert: String, Codable, CaseIterable, Sendable {
-    /// The task's agent is busy, and its transcript has not changed for
-    /// `limit`.
+    /// The task's agent is busy, and neither its transcript nor its busy
+    /// state has changed for `limit`.
     case silent
     /// The checks of the task's open pull request fail.
     case checksFailing
@@ -490,14 +492,23 @@ public struct TaskAlertFacts: Equatable, Sendable {
     /// When the agent's transcript last changed; `nil` when Toastty does
     /// not know.
     public var lastOutputAt: Date?
+    /// When the agent became busy; `nil` when Toastty does not know.
+    public var busySince: Date?
     public var checks: Checks
     /// A quit or a crash cut off the agent's turn, and the agent is idle
     /// at its prompt.
     public var interruptedAtQuit: Bool
 
-    public init(agentBusy: Bool, lastOutputAt: Date?, checks: Checks, interruptedAtQuit: Bool = false) {
+    public init(
+        agentBusy: Bool,
+        lastOutputAt: Date?,
+        busySince: Date? = nil,
+        checks: Checks,
+        interruptedAtQuit: Bool = false
+    ) {
         self.agentBusy = agentBusy
         self.lastOutputAt = lastOutputAt
+        self.busySince = busySince
         self.checks = checks
         self.interruptedAtQuit = interruptedAtQuit
     }
@@ -510,8 +521,13 @@ public struct TaskAlertFacts: Equatable, Sendable {
         TaskAlert.allCases.filter { alert in
             switch (alert, checks) {
             case (.silent, _):
+                // Silence counts from the later of the last transcript
+                // change and the start of the busy state: an agent that
+                // became busy a minute ago has not been silent for longer,
+                // even when its transcript is old.
                 guard agentBusy, let lastOutputAt else { return false }
-                return now.timeIntervalSince(lastOutputAt) >= TaskAlert.limit
+                let silentSince = max(lastOutputAt, busySince ?? lastOutputAt)
+                return now.timeIntervalSince(silentSince) >= TaskAlert.limit
             case (.checksFailing, .failing):
                 return true
             case (.checksSlow, .pending(let since?)):
@@ -524,5 +540,20 @@ public struct TaskAlertFacts: Equatable, Sendable {
                 return false
             }
         }
+    }
+}
+
+extension RemoteCoordinatorQuietDigests {
+    /// The quiet digests with these keys, oldest first, and their revision.
+    public init(keys: [String]) {
+        self.init(revision: Self.revision(of: keys), keys: keys)
+    }
+
+    /// The first 16 hex digits of the SHA-256 of the keys, one per line.
+    /// The same keys give the same revision, also after a relaunch, so a
+    /// device reads them again only when they change.
+    public static func revision(of keys: [String]) -> String {
+        let digest = SHA256.hash(data: Data(keys.joined(separator: "\n").utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }

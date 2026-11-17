@@ -97,6 +97,14 @@ final class QuickEntryPicker: ObservableObject {
     var onClose: () -> Void = {}
     var onRetryCodexModels: () -> Void = {}
 
+    /// What the list says with no rows. An Agent list with no agent at
+    /// all says what to install; the panel reads the agents when it opens.
+    var emptyText: String {
+        kind == .agent && profiles.isEmpty
+            ? "No agent found. Install Claude Code or Codex, or add a profile to ~/.toastty/agents.toml, then open this panel again."
+            : "No matches"
+    }
+
     var showsCodexCatalogStatus: Bool {
         kind == .agent && codexCatalogStatus != nil
             && profiles.contains { $0.id == AgentKind.codex.rawValue && $0.supportsModel }
@@ -416,7 +424,9 @@ final class QuickEntryPicker: ObservableObject {
                 searchText: "\(title) \(shown.model ?? "") \(shown.effort ?? "") \(shown.agent)"
             )
         }
-        let other = [
+        // With no agent, the columns would be empty too; the list then
+        // says how to add an agent.
+        let other = profiles.isEmpty ? [] : [
             Row(
                 id: "columns",
                 section: "Other",

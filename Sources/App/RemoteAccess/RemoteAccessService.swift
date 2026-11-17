@@ -102,6 +102,18 @@ final class RemoteAccessCoordinatorChatReadBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's read of the coordinator's quiet digests into the
+/// main-actor-owned coordinator.
+final class RemoteAccessCoordinatorQuietDigestsBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func digests() -> RemoteCoordinatorQuietDigests {
+        MainActor.assumeIsolated {
+            service?.coordinatorQuietDigests() ?? RemoteCoordinatorQuietDigests(keys: [])
+        }
+    }
+}
+
 /// Bridges the gateway's authenticated done request into the main-actor-owned
 /// workspace state.
 final class RemoteAccessWorkspaceDoneBridge: @unchecked Sendable {
@@ -567,6 +579,11 @@ final class RemoteAccessService: ObservableObject {
     /// does not advertise it.
     private var coordinatorChatReadThrough: CoordinatorChatReadThrough?
     private var coordinatorChatReadObserver: AnyCancellable?
+    private let coordinatorQuietDigestsBridge = RemoteAccessCoordinatorQuietDigestsBridge()
+    /// The keys of the coordinator's quiet digests. `nil` on a Mac without
+    /// the coordinator, which does not advertise them.
+    private var coordinatorQuietDigestKeys: (() -> [String])?
+    private var coordinatorQuietDigestsObserver: AnyCancellable?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -829,6 +846,7 @@ final class RemoteAccessService: ObservableObject {
         questionAnswerBridge.service = self
         readAcknowledgementBridge.service = self
         coordinatorChatReadBridge.service = self
+        coordinatorQuietDigestsBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
         conversationCloseBridge.service = self
@@ -943,6 +961,7 @@ final class RemoteAccessService: ObservableObject {
         // controller, so only a Mac with one advertises it.
         if let coordinatorController = taskBoard?.coordinator?.coordinatorController {
             installCoordinatorChatRead(coordinatorController.chatReadThrough)
+            installCoordinatorQuietDigests(from: coordinatorController)
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -1747,7 +1766,10 @@ final class RemoteAccessService: ObservableObject {
                     uniquingKeysWith: { first, _ in first }
                 ),
                 acceptsDoneMark: { refusals.contains($0) == false },
-                coordinatorChatRead: coordinatorChatReadThrough?.point),
+                coordinatorChatRead: coordinatorChatReadThrough?.point,
+                coordinatorQuietDigestsRevision: coordinatorQuietDigestKeys.map {
+                    RemoteCoordinatorQuietDigests.revision(of: $0())
+                }),
             tasks: makeTaskBoard()
         )
     }
@@ -1815,7 +1837,8 @@ final class RemoteAccessService: ObservableObject {
         conversationIDsBySessionID: [String: RemoteConversationID] = [:],
         liveConversationIDsByPanelID: [UUID: RemoteConversationID] = [:],
         acceptsDoneMark: (UUID) -> Bool = { _ in true },
-        coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil
+        coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil,
+        coordinatorQuietDigestsRevision: String? = nil
     ) -> [RemoteWorkspaceSummary] {
         let parentIDs = state.subspaceParentIDsByWorkspaceID()
         // The coordinator's own session, by its panel, while its agent runs:
@@ -1887,7 +1910,9 @@ final class RemoteAccessService: ObservableObject {
                 coordinatorConversationID: workspace.isCoordinator && coordinator?.workspaceID == id
                     ? coordinatorConversationID : nil,
                 coordinatorChatRead: workspace.isCoordinator && coordinator?.workspaceID == id
-                    ? coordinatorChatRead : nil)
+                    ? coordinatorChatRead : nil,
+                coordinatorQuietDigestsRevision: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorQuietDigestsRevision : nil)
         }
     }
 
@@ -2197,6 +2222,31 @@ final class RemoteAccessService: ObservableObject {
                 guard let self, self.isEnabled else { return }
                 self.scheduleSessionListBroadcast()
             }
+    }
+
+    /// Shares which of the coordinator's wake turns are quiet with paired
+    /// devices, so their chats fold them as the Mac's does. The
+    /// coordinator's workspace carries the revision of the quiet digests,
+    /// and a device reads their keys when it changes. Installing it
+    /// advertises `coordinatorQuietDigests`. The app installs the
+    /// coordinator's controller once, at launch.
+    func installCoordinatorQuietDigests(from controller: CoordinatorController) {
+        coordinatorQuietDigestKeys = { [weak controller] in controller?.quietDigestKeys() ?? [] }
+        handler.coordinatorQuietDigestsHandler = { [coordinatorQuietDigestsBridge] in
+            coordinatorQuietDigestsBridge.digests()
+        }
+        // A mark comes once in a wake turn, so a new revision goes out at
+        // once, while the turn may still be on a device's screen.
+        coordinatorQuietDigestsObserver = controller.quietDigestChanges
+            .sink { [weak self] in
+                guard let self, self.isEnabled else { return }
+                self.scheduleSessionListBroadcast()
+            }
+    }
+
+    /// The coordinator's quiet digests now, for a device's read.
+    func coordinatorQuietDigests() -> RemoteCoordinatorQuietDigests {
+        RemoteCoordinatorQuietDigests(keys: coordinatorQuietDigestKeys?() ?? [])
     }
 
     /// A paired device showed the coordinator's chat through the row of

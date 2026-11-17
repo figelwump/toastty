@@ -166,7 +166,9 @@ final class QuickEntryModel: ObservableObject {
     /// Why Create Task waits for the user, when a pill has no value.
     var missingChoiceHint: String? {
         if workspaceID == nil { return "Pick a workspace with ⌘1" }
-        if preset == nil { return "Pick an agent with ⌘2" }
+        // An empty Agent list: no agent can take a task. The list says how
+        // to add one.
+        if preset == nil { return agentProfiles.isEmpty ? "Install or configure an agent" : "Pick an agent with ⌘2" }
         return nil
     }
 

@@ -313,6 +313,16 @@ struct CoordinatorWakeStateTests {
         // Not busy, or no known output: never silent.
         #expect(alerts(TaskAlertFacts(agentBusy: false, lastOutputAt: t0, checks: .none), at: 2 * limit).isEmpty)
         #expect(alerts(TaskAlertFacts(agentBusy: true, lastOutputAt: nil, checks: .none), at: 2 * limit).isEmpty)
+        #expect(alerts(TaskAlertFacts(agentBusy: true, lastOutputAt: nil, busySince: t0, checks: .none), at: 2 * limit).isEmpty)
+        // Silence counts from the later of the last output and the start of
+        // the busy state: busy for a minute after 40 quiet minutes is not
+        // silent; busy for 31 minutes with no newer output is.
+        let lateBusy = TaskAlertFacts(agentBusy: true, lastOutputAt: t0, busySince: at(40 * 60), checks: .none)
+        #expect(alerts(lateBusy, at: 41 * 60).isEmpty)
+        #expect(alerts(lateBusy, at: 40 * 60 + limit - 1).isEmpty)
+        #expect(alerts(lateBusy, at: 40 * 60 + limit) == [.silent])
+        #expect(alerts(TaskAlertFacts(agentBusy: true, lastOutputAt: at(10 * 60), busySince: t0, checks: .none), at: 31 * 60).isEmpty)
+        #expect(alerts(TaskAlertFacts(agentBusy: true, lastOutputAt: t0, busySince: t0, checks: .none), at: 31 * 60) == [.silent])
 
         // Checks pending since t0 on the head commit.
         let pending = TaskAlertFacts(agentBusy: false, lastOutputAt: nil, checks: .pending(since: t0))

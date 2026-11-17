@@ -297,6 +297,7 @@ private extension RemoteProtocolGoldenTests {
                 "session-list-with-tasks.json",
                 RemoteGatewaySessionListResponse(snapshot: makeTaskSessionSnapshot())
             ),
+            try fixture("coordinator-quiet-digests-response.json", quietDigests),
             try fixture(
                 "task-action-request.json",
                 RemoteTaskActionRequest(
@@ -681,16 +682,25 @@ private extension RemoteProtocolGoldenTests {
             doneCount: 12,
             finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)]
         )
-        // The coordinator's workspace: only it carries the mark, and the
-        // read point of the coordinator's chat.
+        // The coordinator's workspace: only it carries the mark, the read
+        // point of the coordinator's chat, and the revision of its quiet
+        // wake turns.
         snapshot.workspaces.append(
             RemoteWorkspaceSummary(
                 id: numberedUUID(210), title: "Coordinator", panels: [], isCoordinator: true,
-                coordinatorChatRead: RemoteCoordinatorChatReadPoint(eventID: "codex:msg_read", timestamp: timestamp)
+                coordinatorChatRead: RemoteCoordinatorChatReadPoint(eventID: "codex:msg_read", timestamp: timestamp),
+                coordinatorQuietDigestsRevision: quietDigests.revision
             )
         )
         return snapshot
     }
+
+    /// One quiet wake turn's digest, by its key.
+    static let quietDigests = RemoteCoordinatorQuietDigests(keys: [CoordinatorWakeState.digestKey("""
+        [Toastty] Wake: this message is from Toastty, not from the user.
+        - [Fix the login redirect](toastty://task/00000000-0000-0000-0000-000000000302): needsYou (agentFinished) at 2026-08-08T14:39:00Z
+        Read `toastty task list` for details.
+        """)])
 
     static func makeEventPage() -> ConversationEventPage {
         var events: [ConversationEvent] = []
