@@ -27,7 +27,7 @@ struct ToasttyTasksTabView: View {
     }
 
     var body: some View {
-        let sections = controller.snapshot.taskBoard.map(MobileTaskSections.make) ?? MobileTaskSections()
+        let sections = MobileTaskSections.make(controller.snapshot)
         ScrollViewReader { proxy in
             List {
                 content(sections)
