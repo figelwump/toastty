@@ -38,6 +38,7 @@
     var viewEls = { lumen: $('view-lumen'), child: $('view-child'), docs: $('view-docs') };
     var cardLumen = $('card-lumen'), cardDocs = $('card-docs'), rowDocs = $('row-docs');
     var docsS = $('docs-s'), docsIc = $('docs-ic'), docsBkt = $('docs-bkt'), docsHc = $('docs-hc'), lumenHc = $('lumen-hc'), segRev = $('seg-rev');
+    var crChips = Array.prototype.slice.call(stage.querySelectorAll('.tl-cr'));
     var rowSub = $('row-sub'), subS = $('sub-s'), subIc = $('sub-ic'), subPr = $('sub-pr'), subEl = $('sub-el'), subBkt = $('sub-bkt');
     var wtitle = $('wtitle'), phead = $('phead');
     var dockSt = $('dock-st'), dockWk = $('dock-wk'), dockWkT = $('dock-wk-t'), dockF = $('dock-f'), dockPh = $('dock-ph'), dockTyped = $('dock-typed'), dockSend = $('dock-send');
@@ -114,6 +115,13 @@
       setText(subS, pick(SUB_S));
       setHTML(subIc, done ? '<span class="tmark done">✓</span>' : ready ? '<span class="tmark rev"></span>' : starting ? '<span class="tmark start"></span>' : '<span class="spin"></span>');
       subPr.classList.toggle('show', ready || merging || done);
+      // Toasty's chips for the task follow it, as the app's do: its stage mark and, once it has one, its PR.
+      crChips.forEach(function (c) {
+        c.classList.toggle('run', working && !starting && t >= 4.0);
+        c.classList.toggle('rev', ready || merging);
+        c.classList.toggle('done', done);
+        c.classList.toggle('has-pr', ready || merging || done);
+      });
       var secs = Math.round(Math.max(0, Math.min(t, READY) - 4.0) * 25 + 4);
       setText(subEl, Math.floor(secs / 60) + 'm ' + ('0' + (secs % 60)).slice(-2) + 's');
       subEl.style.display = t < READY ? '' : 'none';
