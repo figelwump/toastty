@@ -177,7 +177,7 @@ extension AppControlExecutor {
         guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw AutomationSocketError.invalidPayload("The message is empty.")
         }
-        return CoordinatorMessageHeader.message(from: messageSender(), text: text)
+        return CoordinatorMessageHeader.message(from: messageSender(statedName: try statedSenderName(args: args)), text: text)
     }
 
     func finishTaskSteerSend(_ coordinator: TaskCoordinator, taskID: UUID, text: String) async throws -> AppControlActionOutcome {
