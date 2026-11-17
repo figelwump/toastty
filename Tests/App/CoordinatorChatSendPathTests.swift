@@ -706,6 +706,41 @@ struct CoordinatorChatSendPathTests {
         #expect(quote.sourceRowID == earlier.id)
     }
 
+    /// A quoted line that ends in an image name is typed with that name in
+    /// a code span (`AgentPasteText`). The quote still opens its message.
+    @MainActor
+    @Test func aReplysQuoteWithAnImageNameOpensItsMessage() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        let answer = "I replaced logo.png"
+        try fixture.startTurn(1, userText: "Check the icon")
+        try fixture.recordAgentMessage(answer)
+        try fixture.endTurn(1)
+        let agentRow = try await fixture.waitFor("the agent's message") {
+            fixture.chat.presentation.rows.first { row in
+                if case .assistantMessage(answer, _) = row.content { return true }
+                return false
+            }
+        }
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        fixture.chat.reply(to: ToasttyMessageReplyRequest(rowID: agentRow.id, text: answer, timestamp: agentRow.timestamp))
+        fixture.chat.draft = "Thanks."
+        fixture.chat.send()
+        let typed = try #require(fixture.delivered.texts.first)
+        #expect(typed.contains("\n> I replaced `logo.png`\n"))
+        try fixture.startTurn(2, userText: typed)
+        let quote = try await fixture.waitFor("the reply's row") { () -> ToasttyMessageQuote? in
+            for row in fixture.chat.presentation.rows {
+                if case .userMessage(_, _, _, let quote?, _) = row.content { return quote }
+            }
+            return nil
+        }
+        #expect(quote.sourceRowID == agentRow.id)
+    }
+
     /// A path in the quote is the coordinator's text, not a file of the
     /// reply: Remove keeps the folder it names.
     @MainActor

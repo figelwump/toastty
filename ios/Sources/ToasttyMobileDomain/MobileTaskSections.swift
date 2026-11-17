@@ -1,13 +1,17 @@
 import Foundation
 import RemoteProtocol
 
-/// The Tasks tab's groups, as the Mac's Tasks view lists them: Needs you,
-/// Ready to review, Running and Idle, then To ship with one lane per
-/// project, then the Done count. Each group lists the tasks whose own stage is
-/// in it, a child under its parent when both are there. A family in Needs
-/// you lists under Ready to review when every member that needs the user
-/// waits only for a review. A member whose own state is calmer draws like
-/// any other row; its status mark shows its own state.
+/// The Tasks tab's groups, in the Mac's Tasks view order: Needs you, Ready
+/// to review, Running and Idle, then To ship with one lane per project, then
+/// the Done count. Each group lists the tasks whose own state is in it, a
+/// child under its parent when both are there. A task's own state is its
+/// stage, or, while its task space has a row, that row's bucket: the more
+/// urgent of the stage and the sessions, as Home and the Mac sidebar place
+/// the row. So a task whose agent waits on another task (stage Running) and
+/// whose finished turn is unread lists in Needs you, as its row's mark shows.
+/// A family in Needs you lists under Ready to review when every member that
+/// needs the user waits only for a review. A member whose own state is
+/// calmer draws like any other row; its status mark shows its own state.
 public struct MobileTaskSections: Equatable, Sendable {
     public struct Entry: Equatable, Identifiable, Sendable {
         public let task: RemoteTaskSummary
@@ -47,7 +51,20 @@ public struct MobileTaskSections: Equatable, Sendable {
 
     public init() {}
 
-    public static func make(_ board: MobileTaskBoard) -> Self {
+    /// The groups for `snapshot`'s task board, each task with an open task
+    /// space placed by the row the Tasks tab draws for it. Empty without a
+    /// board.
+    public static func make(_ snapshot: MobileHomeSnapshot) -> Self {
+        guard let board = snapshot.taskBoard else { return Self() }
+        return make(board, taskSpaceRow: snapshot.subspaceRow(id:))
+    }
+
+    /// `taskSpaceRow` gives the row a task's task space draws as, if the
+    /// phone lists it; without one, a task lists by its stage alone.
+    public static func make(
+        _ board: MobileTaskBoard,
+        taskSpaceRow: (UUID) -> MobileSubspaceRow? = { _ in nil }
+    ) -> Self {
         var sections = Self()
         sections.toShip = board.toShip.map { lane in
             let tasks = MobileTaskBoard.taskIDs(lane).compactMap(board.task(id:))
@@ -59,28 +76,39 @@ public struct MobileTaskSections: Equatable, Sendable {
                 release: MobileTaskBoard.release(lane, tasks: tasks)
             )
         }
-        func entries(_ group: RemoteTaskGroup) -> [Entry] {
-            grouped(board.tasks.filter { $0.group == group })
+        // To ship, Done and Archived tasks keep their lanes and the Done
+        // count, whatever their task space's sessions do.
+        func bucket(_ task: RemoteTaskSummary) -> TaskBucket? {
+            guard let stage = MobileHomeBuckets.bucket(task) else { return nil }
+            guard let taskSpaceID = task.taskSpaceWorkspaceID, let row = taskSpaceRow(taskSpaceID) else { return stage }
+            return min(stage, MobileHomeBuckets.bucket(row))
+        }
+        var buckets: [UUID: TaskBucket] = [:]
+        for task in board.tasks where buckets[task.id] == nil {
+            buckets[task.id] = bucket(task)
+        }
+        func entries(_ isListed: (TaskBucket) -> Bool) -> [Entry] {
+            grouped(board.tasks.filter { buckets[$0.id].map(isListed) == true })
         }
         var family: [Entry] = []
         func placeFamily() {
             guard family.isEmpty == false else { return }
-            let bucket = family.compactMap { MobileHomeBuckets.bucket($0.task) }.min() ?? .needsYou
+            let bucket = family.compactMap { buckets[$0.task.id] }.min() ?? .needsYou
             let placed = family.map { entry in
                 var entry = entry
-                entry.isContext = MobileHomeBuckets.bucket(entry.task) != bucket
+                entry.isContext = buckets[entry.task.id] != bucket
                 return entry
             }
             if bucket == .readyToReview { sections.readyToReview += placed } else { sections.needsYou += placed }
             family = []
         }
-        for entry in entries(.needsYou) {
+        for entry in entries(\.isListedInNeedsYouSegment) {
             if entry.isLinkedChild == false { placeFamily() }
             family.append(entry)
         }
         placeFamily()
-        sections.running = entries(.running)
-        sections.idle = entries(.idle)
+        sections.running = entries { $0 == .running }
+        sections.idle = entries { $0 == .idle }
         sections.doneCount = board.doneCount
         return sections
     }

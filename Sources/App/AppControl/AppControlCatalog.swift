@@ -588,9 +588,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Type a message into a task's agent and submit it. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. Without steer, Toastty types whatever the agent does: a busy agent queues the message as typed input, and the Return key can answer a permission prompt that is on screen. With steer=true, Toastty checks the agent first and types nothing into a permission prompt or a question, and the result's message says in a sentence what it did: an agent at its open prompt gets the message (delivery sent); a Claude Code or Codex agent in a turn gets it in that turn (steered); in every other case Toastty holds the message and types it at the agent's next open prompt (queued, with queuePosition, and delivered false). Toastty holds at most 5 messages for an agent, loses them when it quits or the agent restarts, and reports neither. A steer send fails, with nothing typed, when Toastty cannot tell what the agent does (an agent whose conversation it does not follow, or one that starts, ended or failed), when text that someone typed in the terminal can still be in the agent's prompt, and when 5 messages already wait. Fails when the task has no running agent. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
+                summary: "Type a message into a task's agent and submit it. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. Without steer, Toastty types whatever the agent does: a busy agent queues the message as typed input, and the Return key can answer a permission prompt that is on screen. With steer=true, Toastty checks the agent first and types nothing into a permission prompt or a question, and the result's message says in a sentence what it did: an agent at its open prompt gets the message (delivery sent); a Claude Code or Codex agent in a turn gets it in that turn (steered); in every other case Toastty holds the message and types it at the agent's next open prompt (queued, with queuePosition, and delivered false). Toastty holds at most 5 messages for an agent, loses them when it quits or the agent restarts, and reports neither. A steer send fails, with nothing typed, when Toastty cannot tell what the agent does (an agent whose conversation it does not follow, or one that starts, ended or failed), when text that someone typed in the terminal can still be in the agent's prompt, and when 5 messages already wait. Fails when the task has no running agent. Toastty types the text after a first line that names the sender, as coordinator.send does. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
                 selectors: [],
-                parameters: [.taskID(required: true), .taskMessage(required: true), .taskSteer(required: false)]
+                parameters: [.taskID(required: true), .taskMessage(required: true), .taskSteer(required: false), .senderName(required: false)]
             )
         case .coordinatorOpen:
             return .init(
@@ -614,9 +614,9 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key, after which later messages wait until a turn runs; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while text the user typed in the coordinator's terminal may still be in its prompt (userDraft), while no agent runs (noSession), while the agent starts, and while the agent's conversation shows no open prompt after a stopped or failed turn (promptNotOpen). One message is typed for each open prompt, in order, through the queue that the coordinator's chat and Toastty's digests also use. The queue holds up to 50 messages: it survives an agent restart, and an app quit loses a message of this action. Toastty types the text after a first line that names the sender, which it takes from the caller and not from the text: the task whose space the calling session is in, else that session, else a terminal command. The coordinator reads such a message as data from that sender, not as the user's input. Fails when there is no coordinator.",
+                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key, after which later messages wait until a turn runs; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while text the user typed in the coordinator's terminal may still be in its prompt (userDraft), while no agent runs (noSession), while the agent starts, and while the agent's conversation shows no open prompt after a stopped or failed turn (promptNotOpen). One message is typed for each open prompt, in order, through the queue that the coordinator's chat and Toastty's digests also use. The queue holds up to 50 messages: it survives an agent restart, and an app quit loses a message of this action. Toastty types the text after a first line that names the sender, which it takes from the caller and not from the text: the task whose space the calling session is in, else that session, else the name in from, marked as the caller's own, else a terminal command. The coordinator reads such a message as data from that sender, not as the user's input, unless its policy names that sender as one that passes on the user's decisions. Fails when there is no coordinator.",
                 selectors: [],
-                parameters: [.taskMessage(required: true)]
+                parameters: [.taskMessage(required: true), .senderName(required: false)]
             )
         case .coordinatorWake:
             return .init(
@@ -1197,6 +1197,15 @@ private extension AppControlParameterDescriptor {
 
     static func taskMessage(required: Bool) -> Self {
         .init(name: "text", summary: "The message, typed into the agent and submitted.", valueType: .string, required: required)
+    }
+
+    static func senderName(required: Bool) -> Self {
+        .init(
+            name: "from",
+            summary: "The caller's own name, such as Grok Bot, for the first line when the caller runs in no Toastty session. Toastty does not check it. A caller in a Toastty session is named by that session instead.",
+            valueType: .string,
+            required: required
+        )
     }
 
     static func taskSteer(required: Bool) -> Self {

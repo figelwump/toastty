@@ -9,7 +9,7 @@ description: Read before the first Toastty validation command after code, projec
 
 Use this as the Toastty verification decision layer. Keep detailed command semantics in `docs/agents/automation.md`; use this skill to choose the right validation path, run it with the project guardrails, and report what was actually verified.
 
-Read this skill before the first validation command. Agent-driven native builds, macOS test suites, iOS Simulator runs, and GUI checks must run on toastty-mini. Cheap source checks and read-only inspection may run locally. If the mini is unavailable, wait or report the blocked checks; do not fall back to the user's Mac. An explicit user request for a local run permits that run only.
+Read this skill before the first validation command. Agent-driven native builds, macOS test suites, focused iOS Simulator runs, and GUI checks must run on toastty-mini; the full iOS suite runs on hosted CI (see CI Coverage). Cheap source checks and read-only inspection may run locally. If the mini is unavailable, wait or report the blocked checks; do not fall back to the user's Mac. An explicit user request for a local run permits that run only.
 
 ## Core Workflow
 
@@ -34,6 +34,39 @@ Full hosted native validation is available by manually dispatching `Toastty CI`.
 Before TestFlight, that full run must pass on the exact `main` release commit;
 follow `docs/ios-release-ci.md`. It retains macOS checks and both iOS
 configurations, including full Debug UI and performance budgets.
+
+**The full iOS suite runs on hosted CI, not on toastty-mini.** A full iOS suite
+is `scripts/remote/test.sh --platform ios` with no `-only-testing` selection.
+When a change needs it, push the commit you intend to hand off, then dispatch
+`Toastty CI` for the branch and follow that one run:
+
+```bash
+gh workflow run mobile-ios.yml --ref <branch>   # prints the new run's URL
+gh run view <run-id> --json headSha,status,conclusion,url
+gh run watch <run-id> --exit-status
+```
+
+- Take the run ID from the URL that `gh workflow run` prints. The run's
+  `headSha` must be the PR head. `gh pr checks` does not show a dispatched run
+  (it shows the PR run's iOS jobs as skipped), so link the run in the PR and
+  the verification report.
+- The run must pass on the PR head before you report the task ready, and again
+  before you merge a head that needs a new full run. After a base merge that
+  needs no full rerun (see After A Base Merge), the run on the last commit
+  before that merge still counts: say so in the report. Expect about 95
+  minutes plus queue time; do not hand off before it ends. When you
+  push a new commit that needs the suite, cancel your earlier run for the
+  branch with `gh run cancel <run-id>` and dispatch again.
+- A failed test outside the PR's change: rerun the failed jobs once with
+  `gh run rerun <run-id> --failed` before you change code. A second failure is
+  a real failure. Name the rerun in the report. Hosted runs use Xcode 26.6 and
+  already retry each failed test once.
+- Focused iOS tests (`-only-testing`) stay on toastty-mini. Run the full iOS
+  suite there only when hosted CI cannot run the check, such as live-broker or
+  paired-device tests, or a check that needs the mini's simulator runtime, and
+  state which of these applies.
+- The full macOS suite stays on toastty-mini, because hosted CI builds without
+  Ghostty.
 
 ## Decision Tree
 
@@ -65,6 +98,21 @@ For a build without tests, use `sv exec -- scripts/remote/test.sh --build-only -
 The wrapper gives that build a compute slot. Inspect `sv exec -- scripts/remote/status.sh`
 for active work and waits; do not create another polling script.
 
+### After A Base Merge
+
+When a task merges its base branch into its branch, rebuild on toastty-mini
+and rerun the focused tests for the PR's own changed areas. Rerun a full suite only when the merge had conflicts in, or changed,
+files that the PR also changes, or when it changed build, project, or
+dependency settings. A base that moved ahead is not by itself a reason to merge
+it or to rerun checks.
+
+The task that changes a shared base branch, such as a task that merges `main`
+into a feature branch, runs the full suites once on the new base tip: on its
+PR head when the base did not move before its merge, or else on the base after
+its merge. That run catches a clash between branches that each passed
+alone; the task fixes or reports a failure there. A feature branch's own PR
+runs the full suites before it merges into `main`.
+
 ### Unit Or Integration Test Changes
 
 Run agent-driven `xcodebuild test` through the remote wrapper:
@@ -82,7 +130,7 @@ Use local `xcodebuild test` only when the user explicitly requests that local ru
 Treat `ios/` as a separate Tuist graph from the root macOS project. Choose the tier that matches the change:
 
 - Baseline/dispatcher: cheap dispatcher source checks may run locally if they do not build a native app or start a simulator.
-- Agent-driven simulator: use `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree`. The remote wrapper generates the iOS graph before `xcodebuild`, resolves a compatible simulator when no destination was supplied, and copies the log, result JSON, and xcresult back under `artifacts/remote-tests/`.
+- Agent-driven simulator: for focused tests, use `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree -- -only-testing:<target>/<class>`. Run the full iOS suite on hosted CI (see CI Coverage). The remote wrapper generates the iOS graph before `xcodebuild`, resolves a compatible simulator when no destination was supplied, and copies the log, result JSON, and xcresult back under `artifacts/remote-tests/`.
 - User surface: use remote simulator screenshots or a live paired phone check. State explicitly whether evidence came from fixtures, an iOS Simulator, or a physical device.
 
 Changes to `Sources/RemoteProtocol/` or its fixtures must validate both graphs: root macOS generation/build/tests and the native iOS test tier. Do not treat a green iOS run as proof that the macOS host still compiles the shared contract.

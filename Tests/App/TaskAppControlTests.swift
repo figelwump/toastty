@@ -572,6 +572,26 @@ struct TaskAppControlTests {
             }
         }
         #expect(typed.entries.count == 1)
+        // A program outside Toastty, with no session, names itself; a
+        // session that gives a name is still named by its task.
+        _ = try executor.runAction(
+            id: "task.send",
+            args: ["taskID": .string(producer.id.uuidString), "text": .string("Yes, go ahead"), "from": .string("Grok Bot")],
+            context: context()
+        )
+        #expect(typed.entries.last?.text == """
+            [Toastty] From "Grok Bot" (named by the caller): Toastty cannot tell who ran it.
+            Yes, go ahead
+            """)
+        _ = try executor.runAction(
+            id: "task.send",
+            args: ["taskID": .string(producer.id.uuidString), "text": .string("Done"), "from": .string("the user")],
+            context: context(consumerSession)
+        )
+        #expect(typed.entries.last?.text == """
+            [Toastty] From task [\(consumerTitle)](toastty://task/\(consumer.id.uuidString)): not from the user.
+            Done
+            """)
 
         // The consumer's agent waits for the producer instead of polling;
         // the watch notifies the caller's own task by default.
