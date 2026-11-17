@@ -73,10 +73,11 @@ chat = load('coordinator_chat_check', 'remote-coordinator-chat-check.py')
 coordinator_check, steer = chat.coordinator_check, chat.steer
 require, wait_for = chat.require, chat.wait_for
 
-QUESTION = 'Start the coordinator?'
+# The What's new sheet asks the question (WhatsNewSheet.Words.title).
+QUESTION = 'New in Toastty: tasks'
 # How many times each Claude Code process beside the app saves.
 SIDE_WRITES = 12
-START, NOT_NOW = 'Start Coordinator', 'Not Now'
+START, NOT_NOW = 'whats-new.start', 'whats-new.not-now'
 TRUST_QUESTION = 'trust this folder'
 CLAUDE_CONFIG = Path.home() / '.claude.json'
 
@@ -346,7 +347,7 @@ def start(check, claude, host_environment):
         require(not run.directory.exists(), 'The coordinator\'s folder exists before the first launch')
         run.ui.run('activate')
         question = wait_for('the question at the first launch', run.question, timeout=30)
-        require(START in question and NOT_NOW in question and 'follows your tasks' in question,
+        require('Start Coordinator' in question and 'Not Now' in question and 'follows your tasks' in question,
                 f'The question does not say what the coordinator does: {question}')
         require(not run.status()['exists'], 'A coordinator exists before the answer')
         run.capture('question')
@@ -370,7 +371,7 @@ def start(check, claude, host_environment):
             sides.append(dict(folder=folder, names=names, process=process, startedAt=time.time()))
 
         # 2. Start Coordinator opens it, and Claude asks nothing about the folder.
-        run.ui.run('click-label', START)
+        run.ui.run('click', START)
         wait_for('the question to go', lambda: not run.question(), timeout=30)
         opened = wait_for('the coordinator', lambda: (s := run.status())['exists'] and s, timeout=60)
         wait_for('the chat', lambda: run.ui.exists('coordinator.chat') and run.ui.exists('coordinator.chat.composer'), timeout=60)
@@ -430,7 +431,7 @@ def not_now(check, claude, _host_environment):
         run.ui.run('activate')
         wait_for('the question at the first launch', run.question, timeout=30)
         run.capture('question')
-        run.ui.run('click-label', NOT_NOW)
+        run.ui.run('click', NOT_NOW)
         wait_for('the question to go', lambda: not run.question(), timeout=30)
         time.sleep(2)
         require(not run.status()['exists'] and not run.directory.exists(), f'Not Now started something: {run.status()}')
