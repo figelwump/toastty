@@ -299,7 +299,7 @@ final class ToasttyCoordinatorChatReadingTests: XCTestCase {
         ToasttyConversationPresentationAdapter.makeState(
             events: events.map(CompatibleConversationEvent.known),
             projectionRunID: runID, projectionGeneration: 1, phase: .live, revision: .initial,
-            historyTruncated: false, coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages
+            historyTruncated: false, coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages()
         ).rows
     }
 

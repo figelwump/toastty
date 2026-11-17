@@ -34,7 +34,13 @@ struct TaskCoordinatorTests {
 
         /// `initialPromptTurnTimeoutNanoseconds` is how long the session
         /// store waits for an agent to report the turn of its first prompt.
-        init(readinessTimeout: Duration = .seconds(3), initialPromptTurnTimeoutNanoseconds: UInt64 = 60_000_000_000) throws {
+        /// `freshInstallWith` starts as a fresh install: agents.toml has no
+        /// profile, and only the named commands are on the launch PATH.
+        init(
+            readinessTimeout: Duration = .seconds(3),
+            initialPromptTurnTimeoutNanoseconds: UInt64 = 60_000_000_000,
+            freshInstallWith installed: [String]? = nil
+        ) throws {
             sessionRuntimeStore = SessionRuntimeStore(
                 sendSessionStatusNotification: { _, _, _, _, _ in },
                 initialPromptTurnTimeoutNanoseconds: initialPromptTurnTimeoutNanoseconds
@@ -52,7 +58,7 @@ struct TaskCoordinatorTests {
             attachmentsDirectory = root.appendingPathComponent("task-attachments", isDirectory: true)
             recordsFile = root.appendingPathComponent("task-records.json")
             var executables: [String: String] = [:]
-            for name in ["claude", "codex"] {
+            for name in installed ?? ["claude", "codex"] {
                 let path = bin.appendingPathComponent(name).path
                 FileManager.default.createFile(atPath: path, contents: Data("#!/bin/sh\n".utf8))
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
@@ -69,17 +75,32 @@ struct TaskCoordinatorTests {
                 title: nil,
                 cwd: subdirectory.path
             ))
-            launcher = AgentLaunchService(
-                store: store,
-                terminalCommandRouter: router,
-                sessionRuntimeStore: sessionRuntimeStore,
-                agentCatalogProvider: TestAgentCatalogProvider(profiles: [
-                    AgentProfile(id: "claude", displayName: "Claude Code", argv: [try #require(executables["claude"])]),
-                    AgentProfile(id: "codex", displayName: "Codex", argv: [try #require(executables["codex"])]),
-                ]),
-                cliExecutablePathProvider: { "/bin/sh" },
-                socketPathProvider: { "/tmp/toastty-tests.sock" }
-            )
+            if installed != nil {
+                let launchPath = bin.path
+                launcher = AgentLaunchService(
+                    store: store,
+                    terminalCommandRouter: router,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
+                    cliExecutablePathProvider: { "/bin/sh" },
+                    socketPathProvider: { "/tmp/toastty-tests.sock" },
+                    managedAgentResolutionContextProvider: {
+                        ManagedAgentResolutionContext(environment: ["PATH": launchPath], shimDirectoryPaths: [])
+                    }
+                )
+            } else {
+                launcher = AgentLaunchService(
+                    store: store,
+                    terminalCommandRouter: router,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    agentCatalogProvider: TestAgentCatalogProvider(profiles: [
+                        AgentProfile(id: "claude", displayName: "Claude Code", argv: [try #require(executables["claude"])]),
+                        AgentProfile(id: "codex", displayName: "Codex", argv: [try #require(executables["codex"])]),
+                    ]),
+                    cliExecutablePathProvider: { "/bin/sh" },
+                    socketPathProvider: { "/tmp/toastty-tests.sock" }
+                )
+            }
             coordinator = makeCoordinator(records: TaskRecordStore(fileURL: recordsFile), readinessTimeout: readinessTimeout)
         }
 
@@ -139,6 +160,58 @@ struct TaskCoordinatorTests {
         func savedRecord(_ id: UUID) -> TaskRecord? {
             TaskRecordStore(fileURL: recordsFile).record(id: id)
         }
+    }
+
+    /// A fresh install has no profile in agents.toml and no tasks.toml. The
+    /// installed built-in agents take tasks, as a launch accepts them by
+    /// name, and a task that names no agent gets the first of them. With
+    /// none installed, the error says what to install.
+    @Test func aFreshInstallCreatesTasksWithTheInstalledBuiltInAgents() async throws {
+        let fixture = try Fixture(freshInstallWith: ["codex", "claude"])
+        fixture.config = TasksConfig()
+
+        let unnamed = try await fixture.coordinator.create(TaskCreateRequest(text: "Fix the unread dot", workspaceID: fixture.workspaceID))
+        await fixture.waitForSetup(unnamed.id)
+        let started = try #require(fixture.record(unnamed.id))
+        #expect(started.setup == .started)
+        #expect(started.resolved?.agent == "claude")
+        let panelID = try #require(started.operation.taskSpace?.panelID)
+        #expect(fixture.router.sentTextByPanelID[panelID]?.contains("Fix the unread dot") == true)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .claude)
+
+        let named = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Rename the flag", workspaceID: fixture.workspaceID, agent: "codex", model: "gpt-6.1-sol"
+        ))
+        await fixture.waitForSetup(named.id)
+        #expect(fixture.record(named.id)?.setup == .started)
+        #expect(fixture.record(named.id)?.resolved?.agent == "codex")
+
+        do {
+            _ = try await fixture.coordinator.create(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "cursor"))
+            Issue.record("an agent that is not installed was accepted")
+        } catch {
+            #expect(error.localizedDescription == "Agent cursor is not a profile in agents.toml (available: claude, codex).")
+        }
+
+        // With Codex alone, Codex takes the task.
+        let codexOnly = try Fixture(freshInstallWith: ["codex"])
+        codexOnly.config = TasksConfig()
+        let codexTask = try await codexOnly.coordinator.create(TaskCreateRequest(text: "Fix the unread dot", workspaceID: codexOnly.workspaceID))
+        await codexOnly.waitForSetup(codexTask.id)
+        #expect(codexOnly.record(codexTask.id)?.setup == .started)
+        #expect(codexOnly.record(codexTask.id)?.resolved?.agent == "codex")
+
+        let bare = try Fixture(freshInstallWith: [])
+        bare.config = TasksConfig()
+        for agent in [nil, "claude"] {
+            do {
+                _ = try await bare.coordinator.create(TaskCreateRequest(text: "x", workspaceID: bare.workspaceID, agent: agent))
+                Issue.record("a task was accepted with no installed agent")
+            } catch {
+                #expect(error.localizedDescription.hasSuffix(TaskCoordinator.installAgentAdvice))
+            }
+        }
+        #expect(bare.coordinator.records.records.isEmpty)
     }
 
     @Test func createStartsTheAgentInANewTaskSpace() async throws {
@@ -292,7 +365,6 @@ struct TaskCoordinatorTests {
             }
         }
 
-        await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID), mentioning: "[defaults]")
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "gemini"), mentioning: "available: claude, codex")
         await expectFailure(TaskCreateRequest(text: "  ", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "needs text or a prompt")
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: UUID(), agent: "codex"), mentioning: "No open workspace")

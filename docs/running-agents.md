@@ -17,9 +17,13 @@ Toastty sends the configured command into the focused terminal panel and starts 
 To hand an agent a piece of work instead, press `Option+Shift+T` from any app and create a task: Toastty starts the agent in a task space of its own, and the shipped skills take the work to a pull request and Merge. See [Your first task](tasks.md#your-first-task).
 
 Automation can also launch managed `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, or `pi` sessions through
-`agent.launch` without an `agents.toml` profile. Configure `agents.toml` when
+`agent.launch` without an `agents.toml` profile. While `agents.toml` has no
+profile, [tasks](tasks.md) also offer the installed built-in agents that take a
+first message (Claude Code, Codex, Cursor, Grok Build and Pi), and Toastty
+Mobile the installed ones whose sessions it can show. Configure `agents.toml` when
 you want manual UI launch entries, shortcuts, custom argv, wrapper shim names,
-or custom initial-prompt support.
+or custom initial-prompt support. Once it has a profile, tasks and Toastty
+Mobile offer only its profiles.
 
 ## agents.toml
 

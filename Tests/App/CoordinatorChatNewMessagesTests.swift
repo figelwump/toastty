@@ -621,6 +621,50 @@ extension LocalConversationFixture {
         return (response.status, decoded?.result)
     }
 
+    /// Reads the coordinator's quiet digests through the gateway's own
+    /// request handler, as a device would.
+    func gatewayCoordinatorQuietDigests(
+        credential: String?
+    ) throws -> (status: Int, digests: RemoteCoordinatorQuietDigests?) {
+        var headers = ["tailscale-user-login": "owner@example.com"]
+        if let credential { headers["authorization"] = "Bearer \(credential)" }
+        let http = RemoteGatewayHTTPRequest(
+            method: "GET", path: RemoteCoordinatorQuietDigestsPolicy.path, headers: headers, body: Data()
+        )
+        guard case .respond(let response) = gatewayHandler.handle(http, at: .now) else {
+            throw LocalConversationFixtureError.unexpectedGatewayOutcome
+        }
+        let decoded = try? ConversationEventCoding.makeDecoder().decode(
+            RemoteCoordinatorQuietDigests.self, from: response.body
+        )
+        return (response.status, decoded)
+    }
+
+    /// The newest events of a conversation as the gateway sends them to a
+    /// device: the response's bytes, decoded.
+    func gatewayLatestEvents(
+        of conversationID: RemoteConversationID,
+        credential: String?
+    ) throws -> [ConversationEvent] {
+        var headers = ["tailscale-user-login": "owner@example.com"]
+        if let credential { headers["authorization"] = "Bearer \(credential)" }
+        let http = RemoteGatewayHTTPRequest(
+            method: "POST",
+            path: "/api/conversation.events.get",
+            headers: headers,
+            body: try ConversationEventCoding.makeEncoder().encode(
+                RemoteGatewayEventsRequest(conversationID: conversationID, limit: 100, backward: .latest)
+            )
+        )
+        guard case .respond(let response) = gatewayHandler.handle(http, at: .now),
+              case .page(let page) = try ConversationEventCoding.makeDecoder().decode(
+                RemoteGatewayEventsResponse.self, from: response.body
+              ) else {
+            throw LocalConversationFixtureError.unexpectedGatewayOutcome
+        }
+        return page.events
+    }
+
     /// The capabilities the gateway's hello advertises.
     func gatewayCapabilities() -> [RemoteGatewayCapability] {
         let http = RemoteGatewayHTTPRequest(method: "GET", path: "/api/hello", headers: [:], body: Data())

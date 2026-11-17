@@ -1022,6 +1022,17 @@ public actor ConnectionCoordinator {
         return try await gateway.readCoordinatorChat(request)
     }
 
+    /// Reads which of the coordinator's wake turns are quiet, only while
+    /// live against a host that advertises them. `nil` means nothing was
+    /// asked.
+    public func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorQuietDigests) else {
+            return nil
+        }
+        return try await gateway.coordinatorQuietDigests()
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

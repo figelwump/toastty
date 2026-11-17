@@ -408,6 +408,11 @@ public final class RemoteGatewayRequestHandler {
     /// thread, as the read acknowledgement handler is.
     public var coordinatorChatReadHandler: CoordinatorChatReadHandler?
 
+    /// The coordinator's quiet digests now. Installing it is what
+    /// advertises `RemoteGatewayCapability.coordinatorQuietDigests`.
+    /// Invoked on the main thread, as the chat read handler is.
+    public var coordinatorQuietDigestsHandler: (() -> RemoteCoordinatorQuietDigests)?
+
     /// Sends a quick entry message to the coordinator. Installing it is
     /// what advertises `RemoteGatewayCapability.coordinatorSend`. Invoked
     /// only by the main-actor transport, after `resolveCoordinatorSend`
@@ -898,6 +903,10 @@ public final class RemoteGatewayRequestHandler {
             return handleConversationReadAcknowledgement(request, device: authenticated)
         case .coordinatorChatRead:
             return handleCoordinatorChatRead(request, device: authenticated)
+        case .coordinatorQuietDigests:
+            // Without a coordinator, no digest is quiet.
+            let digests = coordinatorQuietDigestsHandler?() ?? RemoteCoordinatorQuietDigests(keys: [])
+            return .respond(.json(body: (try? encoder.encode(digests)) ?? Data()))
         case .workspaceDone:
             return handleWorkspaceDone(request, device: authenticated, at: date)
         case .conversationFlag:
@@ -994,6 +1003,7 @@ public final class RemoteGatewayRequestHandler {
         if projectReleaseHandler != nil { response.capabilities.append(.projectRelease) }
         if coordinatorSendHandler != nil { response.capabilities.append(.coordinatorSend) }
         if coordinatorChatReadHandler != nil { response.capabilities.append(.coordinatorChatRead) }
+        if coordinatorQuietDigestsHandler != nil { response.capabilities.append(.coordinatorQuietDigests) }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))
     }

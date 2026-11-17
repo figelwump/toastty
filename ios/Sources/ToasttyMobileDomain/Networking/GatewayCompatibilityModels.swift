@@ -279,7 +279,8 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 acceptsDoneMark: metadata[id]?.acceptsDoneMark ?? true,
                 isCoordinator: metadata[id]?.isCoordinator ?? false,
                 coordinatorConversationID: metadata[id]?.coordinatorConversationID?.rawValue,
-                coordinatorChatRead: metadata[id]?.coordinatorChatRead
+                coordinatorChatRead: metadata[id]?.coordinatorChatRead,
+                coordinatorQuietDigestsRevision: metadata[id]?.coordinatorQuietDigestsRevision
             )
         }.sorted {
             // A workspace known only from its sessions follows, by title.

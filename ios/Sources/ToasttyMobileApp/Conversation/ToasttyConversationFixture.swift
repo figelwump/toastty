@@ -582,14 +582,20 @@ enum ToasttyConversationFixture {
     /// coordinator chat shows them.
     /// `hasLongMessage` ends the chat with a coordinator message long
     /// enough that the transcript draws it as several rows.
+    /// `quietTurns` ends it with two wake turns that the coordinator marked
+    /// quiet, as in the user's report, and says whether the fixture Mac
+    /// shares the marks.
     static func coordinatorPresentation(
         for conversationID: UUID,
         sendItems: [ToasttySendPresentationItem] = [],
         hasLongMessage: Bool = false,
+        quietTurns: CoordinatorQuietTurns = .none,
         responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationAdapter.makeState(
-            events: coordinatorEvents(for: conversationID, hasLongMessage: hasLongMessage, responses: responses)
+            events: coordinatorEvents(
+                for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns, responses: responses
+            )
                 .map(CompatibleConversationEvent.known),
             projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
             projectionGeneration: projectionGeneration,
@@ -597,9 +603,42 @@ enum ToasttyConversationFixture {
             revision: responses == 0 ? .initial : .appended,
             historyTruncated: false,
             sendItems: sendItems,
-            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages
+            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages(
+                quietDigestKeys: quietTurns == .shared ? coordinatorQuietDigestKeys : nil
+            )
         )
     }
+
+    /// The fixture coordinator chat's quiet wake turns.
+    enum CoordinatorQuietTurns: Equatable {
+        case none
+        /// The turns, and a Mac that shares which are quiet.
+        case shared
+        /// The turns, and an older Mac that does not share the marks.
+        case unshared
+    }
+
+    /// The digests of the fixture's quiet wake turns, which a fixture Mac
+    /// that shares the marks names by their keys.
+    static let coordinatorQuietDigests = [
+        """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - [compact-session-rows](toastty://task/\(ToasttyMobileFixture.reviewTaskID.uuidString)): idle at 2026-08-11T15:21:40Z
+        Read `toastty task list` for details.
+        """,
+        """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - [early-session-titles](toastty://task/\(ToasttyMobileFixture.questionTaskID.uuidString)): running at 2026-08-11T15:27:05Z
+        Read `toastty task list` for details.
+        """,
+    ]
+
+    static var coordinatorQuietDigestKeys: Set<String> {
+        Set(coordinatorQuietDigests.map(CoordinatorChatTranscript.digestKey))
+    }
+
+    /// Each quiet turn's answer, as in the user's report.
+    static let coordinatorQuietAnswers = ["Nothing new needs you.", "Nothing needs you."]
 
     /// The opening and the last line of the long message that
     /// `hasLongMessage` adds.
@@ -607,7 +646,10 @@ enum ToasttyConversationFixture {
     static let coordinatorLongMessageEnding = "That is everything that moved this week."
 
     static func coordinatorEvents(
-        for conversationID: UUID, hasLongMessage: Bool = false, responses: Int = 0
+        for conversationID: UUID,
+        hasLongMessage: Bool = false,
+        quietTurns: CoordinatorQuietTurns = .none,
+        responses: Int = 0
     ) -> [ConversationEvent] {
         // Event `n` is `n - 1` times two minutes after the first.
         func time(_ sequence: Int) -> Date {
@@ -630,7 +672,7 @@ enum ToasttyConversationFixture {
         // The reply quotes the answer, event 4, by its time.
         let reply = CoordinatorMessageHeader.replyMessage(
             quote: answer,
-            time: ToasttyConversationPresentationAdapter.coordinatorMessages.timeText(time(4)),
+            time: ToasttyConversationPresentationAdapter.coordinatorMessages().timeText(time(4)),
             text: "Good. Release toastty once the export API merges."
         )
         let quickEntry = CoordinatorMessageHeader.quickEntryMessage(
@@ -668,6 +710,19 @@ enum ToasttyConversationFixture {
         if hasLongMessage {
             payloads.append(.userMessage(.init(text: "What moved this week?", origin: .remote)))
             payloads.append(.assistantMessage(.init(text: longMessage, phase: .final)))
+        }
+        if quietTurns != .none {
+            // Each wake turn reads the tasks, finds nothing for the user and
+            // says so with `coordinator wake --quiet`.
+            for (index, digest) in coordinatorQuietDigests.enumerated() {
+                payloads.append(.userMessage(.init(text: digest, origin: .remote)))
+                for (call, command) in ["toastty task list", "toastty coordinator wake --clear --quiet"].enumerated() {
+                    let callID = "quiet-\(index + 1)-\(call + 1)"
+                    payloads.append(.toolStarted(.init(callID: callID, toolName: "Bash", detail: command)))
+                    payloads.append(.toolFinished(.init(callID: callID, toolName: "Bash", outcome: .succeeded)))
+                }
+                payloads.append(.assistantMessage(.init(text: coordinatorQuietAnswers[index], phase: .final)))
+            }
         }
         payloads += (0..<max(0, responses)).map { index -> ConversationEventPayload in
             .assistantMessage(.init(text: incomingResponseText(index + 1), phase: .final))

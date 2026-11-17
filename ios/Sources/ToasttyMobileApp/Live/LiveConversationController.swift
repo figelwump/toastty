@@ -84,6 +84,10 @@ final class LiveConversationController {
     private(set) var chatReading = ToasttyCoordinatorChatReading()
     /// The Mac shares the coordinator chat's read point with this phone.
     private var supportsCoordinatorChatRead = false
+    /// The keys of the digests whose wake turn the coordinator marked
+    /// quiet, from the Mac. `nil` with a Mac that does not share them: then
+    /// no turn folds.
+    private(set) var quietDigestKeys: Set<String>?
     /// The app is active. The chat is on screen while this controller
     /// exists: it closes when another screen covers it.
     private var isSceneActive = true
@@ -352,6 +356,17 @@ final class LiveConversationController {
         supportsCoordinatorChatRead = isSupported
         chatReading.consumeMacReadPoint(readPoint)
         updateChatReading()
+    }
+
+    /// The quiet wake turns that the Mac shares. A mark that comes or goes
+    /// folds or opens its turn in place, as a new row would change it,
+    /// without moving the reader.
+    func consumeCoordinatorQuietDigests(_ keys: Set<String>?) {
+        guard quietDigestKeys != keys else { return }
+        quietDigestKeys = keys
+        guard isCoordinatorChat else { return }
+        change = .append
+        refreshTranscriptPresentation(contentChanged: true)
     }
 
     /// The app became active, or stopped being active. Coming back places
@@ -699,7 +714,9 @@ final class LiveConversationController {
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,
             prependAnchorID: prependAnchorID,
-            coordinatorMessages: isCoordinatorChat ? ToasttyConversationPresentationAdapter.coordinatorMessages : nil
+            coordinatorMessages: isCoordinatorChat
+                ? ToasttyConversationPresentationAdapter.coordinatorMessages(quietDigestKeys: quietDigestKeys)
+                : nil
         )
         updateChatReading()
     }

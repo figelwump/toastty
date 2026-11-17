@@ -73,7 +73,15 @@ final class TaskWebhookService: ObservableObject {
     weak var coordinator: CoordinatorController?
     /// What waits for the coordinator, and its timer. `nil` while there is
     /// no coordinator.
-    var coordinatorWake: CoordinatorWakeState?
+    var coordinatorWake: CoordinatorWakeState? {
+        didSet {
+            // Paired devices fold the quiet turns too, so they learn of
+            // each mark that comes or goes.
+            if (coordinatorWake?.quietDigestKeys ?? []) != (oldValue?.quietDigestKeys ?? []) {
+                coordinator?.quietDigestChanges.send()
+            }
+        }
+    }
     /// The turns that Toastty's digests started in this run, and how many
     /// failed in a row. See `coordinatorTurnEnded`.
     var coordinatorWakeTurns = CoordinatorWakeTurns()
