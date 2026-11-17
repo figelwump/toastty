@@ -2494,6 +2494,9 @@ def ui_mockup(run):
     told = [m['text'] for m in run.messages(task)]
     run.check('the task is told once to add a mockup', len(told) == 1 and 'mock' in told[0].lower(), told)
     run.check('the question waits for the mockup', task.link not in run.said(turns), run.said(turns), required=False)
+    # The agent works on the mockup long enough for Toastty to count the stage, then asks again.
+    run.status(task, 'working')
+    time.sleep(SETTLE + 2)
     mockup = run.root / 'mockup.html'
     mockup.write_text(MOCKUP)
     done = run.run_cli('action', 'run', 'panel.scratchpad.set-content', f'sessionID={run.session_of(task)}',
