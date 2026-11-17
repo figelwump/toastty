@@ -182,10 +182,15 @@ def find(reference):
     return pr
 
 
+def run_id(pr):
+    """A new commit starts a new run, as on GitHub; a rerun keeps the run's ID."""
+    return 9000 + int(pr['head'][-5:], 16) % 90000
+
+
 def checks_of(pr):
     return [dict(__typename='CheckRun', name=c['name'], workflowName='CI', status=c.get('status', 'COMPLETED'),
                  conclusion=c.get('conclusion'),
-                 detailsUrl=f"https://github.com/{state['slug']}/actions/runs/{9000 + i}/job/{i}")
+                 detailsUrl=f"https://github.com/{state['slug']}/actions/runs/{run_id(pr)}/job/{i}")
             for i, c in enumerate(pr.get('checks', []))]
 
 
@@ -240,7 +245,7 @@ elif args[:2] == ['pr', 'view'] and len(args) > 2:
 elif args[:2] == ['pr', 'checks'] and len(args) > 2:
     found = find(args[2]).get('checks', [])
     rows = [dict(name=c['name'], state=c.get('conclusion') or c.get('status'), bucket=bucket(c), workflow='CI',
-                 link=f"https://github.com/{state['slug']}/actions/runs/{9000 + i}/job/{i}",
+                 link=f"https://github.com/{state['slug']}/actions/runs/{run_id(find(args[2]))}/job/{i}",
                  description=c.get('summary', '')) for i, c in enumerate(found)]
     if '--json' in args:
         emit(rows)
