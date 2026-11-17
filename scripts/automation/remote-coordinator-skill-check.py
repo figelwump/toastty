@@ -423,6 +423,15 @@ REPORT = '''<!doctype html><html><head><title>Verification: unread dot</title></
 '''
 
 
+# Toastty's first line on a `task send` from the coordinator's own session.
+COORDINATOR_SENDER_LINE = '[Toastty] From the coordinator: not from the user.\n'
+
+
+def typed_text(text):
+    """What the coordinator typed: a message to a task without Toastty's sender line."""
+    return text[len(COORDINATOR_SENDER_LINE):] if text.startswith(COORDINATOR_SENDER_LINE) else text
+
+
 def say(*parts):
     with PRINT_LOCK:
         print('[skill-check]', *parts, flush=True)
@@ -880,7 +889,7 @@ class Run:
                    not requested, requested)
         received = [(task, message) for task in self.tasks for message in self.messages(task)]
         # Toastty writes the merge prompt of a merge that the coordinator asked for.
-        unsigned = [m['text'][:120] for task, m in received if not m['text'].lstrip().startswith('[coordinator]')
+        unsigned = [m['text'][:120] for task, m in received if not typed_text(m['text']).lstrip().startswith('[coordinator]')
                     and not (task.id in self.merges_expected and 'toastty-task-merge' in m['text'])]
         self.check('every message to a task starts with [coordinator]', not unsigned, unsigned)
         # `task send --steer` may reach an agent that works: Toastty checks
@@ -890,7 +899,7 @@ class Run:
         for task, message in received:
             before = [kind for at, kind in task.statuses if at <= message['at']]
             checked = before and before[-1] == 'working' and any(
-                task.id in c and message['text'].strip()[:60] in c for c in steered)
+                task.id in c and typed_text(message['text']).strip()[:60] in c for c in steered)
             if before and before[-1] in ('working', 'needs_approval') and not checked:
                 interrupted.append(f'{task.title} was {before[-1]}: {message["text"][:120]}')
         self.check('no message to an agent that works or waits at a prompt, but a --steer send to one that works',
