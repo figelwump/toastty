@@ -570,14 +570,16 @@ final class TaskCoordinator {
                 startPrompt: resolved?.startPrompt ?? startPrompt,
                 firstPrompt: prompt,
                 text: text,
-                attachmentPaths: attachments.map(\.path)
+                attachmentPaths: attachments.map(\.path),
+                parent: parentTask(id: parentTaskID)
             )
             : TaskPrompt.forkedTask(
                 record: record,
                 taskSpaceWorkspaceID: UUID(),
                 sourceWorkspaceID: forkSource?.workspaceID,
                 worktree: nil,
-                base: nil
+                base: nil,
+                parent: parentTask(id: parentTaskID)
             )
         guard firstMessage.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else {
             throw TaskError("The task, prompt and file paths are too long for an agent's first message (at most \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB).")
@@ -1270,7 +1272,8 @@ final class TaskCoordinator {
             text: record.text,
             attachmentPaths: record.attachments.map(\.path),
             worktree: worktree,
-            base: base
+            base: base,
+            parent: parentTask(of: record)
         )
         // Routing checked the message without the worktree line, which is
         // known only now. Triage's own prompt is the part that can go; the
@@ -1285,7 +1288,8 @@ final class TaskCoordinator {
                 text: record.text,
                 attachmentPaths: record.attachments.map(\.path),
                 worktree: worktree,
-                base: base
+                base: base,
+                parent: parentTask(of: record)
             )
             let dropped = "Toastty left out triage's first prompt, which made the agent's first message longer than \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB."
             saveOrDefer(taskID: taskID) {
@@ -1335,6 +1339,18 @@ final class TaskCoordinator {
             $0.operation.agentLaunch = TaskOperation.AgentLaunch(sessionID: result.sessionID, at: now())
         }
         finishStarted(taskID: taskID, attempt: attempt)
+    }
+
+    /// The task that created `record`, for the first message's parent line.
+    /// `nil` when it has no parent, or the parent no longer exists.
+    func parentTask(of record: TaskRecord) -> TaskPrompt.ParentTask? {
+        guard record.parentTaskID != record.id else { return nil }
+        return parentTask(id: record.parentTaskID)
+    }
+
+    func parentTask(id: UUID?) -> TaskPrompt.ParentTask? {
+        guard let id, let parent = records.record(id: id) else { return nil }
+        return TaskPrompt.ParentTask(id: parent.id, title: parent.title)
     }
 
     private func creatorSessionID(of record: TaskRecord) -> String? {
@@ -1567,7 +1583,8 @@ final class TaskCoordinator {
                 startPrompt: resolved.startPrompt,
                 firstPrompt: resolved.prompt,
                 text: current.text,
-                attachmentPaths: current.attachments.map(\.path)
+                attachmentPaths: current.attachments.map(\.path),
+                parent: parentTask(of: current)
             )
             // The caller's own message was checked when the task was made, so
             // only triage's prompt can push it over; the task starts without it.
