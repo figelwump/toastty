@@ -274,13 +274,14 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         let card = app.buttons["toastty-mobile-workspace-\(familiesWorkspaceID)"]
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         attachScreenshot(named: "home-families", of: app)
+        // Home already lists both unread parents in Needs you.
+        let cardLabel = card.label
         app.tabBars.buttons["Tasks"].tap()
         let running = app.descendants(matching: .any)["toastty-tasks-group-running"]
         XCTAssertTrue(running.waitForExistence(timeout: 5))
         attachScreenshot(named: "tasks-tab-families", of: app)
 
-        // Home already lists both unread parents in Needs you.
-        XCTAssertTrue(card.label.hasSuffix("2 need you, 3 running"), card.label)
+        XCTAssertTrue(cardLabel.hasSuffix("2 need you, 3 running"), cardLabel)
         let needsYou = app.descendants(matching: .any)["toastty-tasks-group-needsYou"]
         XCTAssertTrue(needsYou.exists, "An unread parent that waits on a task should list in Needs you")
         XCTAssertEqual(needsYou.label, "Needs you, 2")
