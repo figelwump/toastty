@@ -183,3 +183,122 @@ toastty_finish_run_metadata() {
   fi
   [[ "$invalid_result" == 0 ]]
 }
+
+# A remote run is detached from its SSH session, so it keeps going when the
+# local wrapper stops (for example when Toastty quits). The same command run
+# again from the same worktree reattaches to it instead of queueing a new run.
+# The identity covers the worktree, the selected source content and every
+# option that changes what the run checks. Ignored files are not part of it.
+toastty_source_identity() {
+  case "$VALIDATION_SCOPE" in
+    head|ref)
+      local ref=HEAD
+      [[ "$VALIDATION_SCOPE" != ref ]] || ref="${REF_SPEC:?--ref is required for ref scope}"
+      git -C "$ROOT_DIR" rev-parse --verify "$ref^{commit}"
+      ;;
+    working-tree)
+      local index scratch tree status=0
+      index="$(git -C "$ROOT_DIR" rev-parse --path-format=absolute --git-path index)" || return 1
+      scratch="$(mktemp -d)" || return 1
+      [[ ! -f "$index" ]] || cp "$index" "$scratch/index" || status=1
+      if [[ "$status" == 0 ]] \
+        && GIT_INDEX_FILE="$scratch/index" git -C "$ROOT_DIR" add -A -- . >/dev/null 2>&1 \
+        && tree="$(GIT_INDEX_FILE="$scratch/index" git -C "$ROOT_DIR" write-tree)"; then
+        printf '%s\n' "$tree"
+      else
+        status=1
+      fi
+      rm -rf "$scratch"
+      return "$status"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+toastty_request_key() {
+  printf '%s\0' "$@" | shasum -a 256 | cut -c 1-64
+}
+
+toastty_process_start() {
+  ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'
+}
+
+# Records that this wrapper owns the detached run, for a later reattach.
+toastty_write_attach_record() {
+  local dir="$1" key="$2" temporary="$1/attach.env.tmp"
+  {
+    printf 'requestKey=%s\n' "$key"
+    printf 'ownerPid=%s\n' "$$"
+    printf 'ownerStart=%s\n' "$(toastty_process_start "$$")"
+  } >"$temporary" && mv "$temporary" "$dir/attach.env"
+}
+
+toastty_attach_value() {
+  sed -n "s/^$2=//p" "$1/attach.env" | head -n 1
+}
+
+# Prints the label of the newest local run with this identity that has no
+# result yet and whose wrapper has stopped. With an explicit label, only that
+# run is a candidate.
+toastty_find_reattachable_run() {
+  local parent="$1" key="$2" explicit_label="$3" dir pid
+  local candidates=()
+  if [[ -n "$explicit_label" ]]; then
+    candidates=("$parent/$explicit_label")
+  elif [[ -d "$parent" ]]; then
+    while IFS= read -r dir; do
+      candidates+=("$parent/$dir")
+    done < <(ls -t "$parent" 2>/dev/null)
+  fi
+  for dir in ${candidates[@]+"${candidates[@]}"}; do
+    [[ -f "$dir/attach.env" && ! -L "$dir/attach.env" && ! -e "$dir/result.json" ]] || continue
+    [[ "$(toastty_attach_value "$dir" requestKey)" == "$key" ]] || continue
+    pid="$(toastty_attach_value "$dir" ownerPid)"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$(toastty_process_start "$pid")" == "$(toastty_attach_value "$dir" ownerStart)" ]]; then
+      continue
+    fi
+    basename "$dir"
+    return 0
+  done
+  return 1
+}
+
+# Runs the probe or follow action of admission.py for one remote run.
+toastty_remote_detached() {
+  local action="$1" run_root="$2"
+  ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
+    "$action" "$run_root" <<'EOF'
+set -euo pipefail
+exec /usr/bin/python3 "$2/controller/scripts/remote/admission.py" "$1" --root "$(dirname "$(dirname "$2")")" --dir "$2"
+EOF
+}
+
+toastty_remote_run_reattachable() {
+  local state
+  state="$(toastty_remote_detached probe "$1" 2>/dev/null)" || return 1
+  jq -e '.detached == true and .followed == false' <<<"$state" >/dev/null 2>&1
+}
+
+# Wraps a remote session script (printed by the function named in $1) so that
+# it runs detached from SSH, then follows its output. The session gets the
+# same arguments; $2 is always the remote run root.
+toastty_emit_detached_launcher() {
+  cat <<'EOF'
+set -euo pipefail
+remote_run_root="$2"
+session_script="$remote_run_root/remote-session.sh"
+(umask 077 && cat >"$session_script") <<'TOASTTY_REMOTE_SESSION'
+EOF
+  "$1"
+  cat <<'EOF'
+TOASTTY_REMOTE_SESSION
+admission="$remote_run_root/controller/scripts/remote/admission.py"
+gui_root="$(dirname "$(dirname "$remote_run_root")")"
+/usr/bin/python3 "$admission" detach --root "$gui_root" --dir "$remote_run_root" -- /bin/bash "$session_script" "$@"
+exec /usr/bin/python3 "$admission" follow --root "$gui_root" --dir "$remote_run_root"
+EOF
+}
+
+toastty_detached_run_notice() {
+  printf '[remote] %s runs detached on the remote host. If this command stops early, run it again from this worktree to reattach, or stop the run with: scripts/remote/cancel.sh %s\n' "$1" "$1" >&2
+}

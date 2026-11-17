@@ -193,3 +193,127 @@ test("invalid state and out-of-root marker paths fail before a command runs", as
   assert.notEqual((await c.finished).code, 0);
   assert.equal(existsSync(sentinel), false);
 });
+
+test("compute work leaves the last free slot to desktop work while the desktop is free", async (t) => {
+  const root = fixture(t);
+  const a = run(root, "compute-a", "compute"), b = run(root, "compute-b", "compute");
+  await until(() => status(root).running.length === 2);
+  const c = run(root, "compute-c", "compute");
+  await until(() => status(root).waiting.length === 1);
+  const d = run(root, "desktop-d", "desktop");
+  t.after(async () => { for (const x of [a, b, c, d]) await stop(x); });
+  await until(() => status(root).waiting.length === 2);
+  await stop(a);
+  await until(() => status(root).running.some((x) => x.label === "desktop-d"));
+  assert.deepEqual(status(root).running.map((x) => x.label).sort(), ["compute-b", "desktop-d"]);
+  assert.deepEqual(status(root).waiting.map((x) => x.label), ["compute-c"]);
+});
+
+test("a build admitted as compute frees its slot while it waits for the desktop", async (t) => {
+  const root = fixture(t), report = join(root, "report.json"), tested = join(root, "tested");
+  const owner = run(root, "desktop-owner", "desktop");
+  await until(() => status(root).running.length === 1);
+  const build = run(root, "build-then-test", "compute", ["--report", report],
+    ["bash", "-c", 'python3 "$1" acquire-desktop --root "$2" && touch "$3"', "-", helper, root, tested]);
+  await until(() => status(root).waiting.some((x) => x.label === "build-then-test" && x.resource === "desktop"));
+  // The waiting build holds no slot: other compute work can run.
+  const other = run(root, "other-compute", "compute");
+  t.after(async () => { await stop(owner); await stop(other); await stop(build); });
+  await until(() => status(root).running.some((x) => x.label === "other-compute"));
+  assert.equal(existsSync(tested), false);
+  await stop(owner);
+  assert.equal((await build.finished).code, 0);
+  assert.equal(existsSync(tested), true);
+  const evidence = JSON.parse(readFileSync(report, "utf8"));
+  assert.equal(evidence.resource, "desktop");
+  assert.equal(evidence.state, "finished");
+  assert.ok(evidence.desktopQueueSeconds > 0);
+  assert.equal(typeof evidence.buildSeconds, "number");
+});
+
+function admission(...args) {
+  const p = spawnSync("python3", [helper, ...args], { encoding: "utf8" });
+  return { code: p.status, stdout: p.stdout, stderr: p.stderr };
+}
+function follower(root, dir) {
+  const child = spawn("python3", [helper, "follow", "--root", root, "--dir", dir]);
+  let stdout = "";
+  child.stdout.on("data", (d) => { stdout += d; });
+  child.finished = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal, get stdout() { return stdout; } })));
+  child.output = () => stdout;
+  return child;
+}
+function probe(root, dir) { return JSON.parse(admission("probe", "--root", root, "--dir", dir).stdout); }
+
+test("a detached run survives its follower, accepts a new follower and stops on cancel", async (t) => {
+  const root = fixture(t), dir = join(root, "runs", "detached-run");
+  mkdirSync(dir, { recursive: true });
+  const script = "trap 'echo stopping; exit 143' TERM; echo hello; while :; do sleep 0.1; done";
+  assert.equal(admission("detach", "--root", root, "--dir", dir, "--", "bash", "-c", script).code, 0);
+  t.after(() => admission("cancel", "--root", root, "--label", "detached-run"));
+  const first = follower(root, dir);
+  await until(() => first.output().includes("hello"));
+  first.kill("SIGKILL"); await first.finished;
+  await until(() => probe(root, dir).followed === false);
+  assert.equal(probe(root, dir).running, true);
+  const second = follower(root, dir);
+  await until(() => second.output().includes("hello"));
+  assert.equal(probe(root, dir).followed, true);
+  assert.equal(admission("cancel", "--root", root, "--label", "detached-run").code, 0);
+  const result = await second.finished;
+  assert.equal(result.code, 143);
+  assert.match(result.stdout, /stopping/);
+  assert.deepEqual({ ...probe(root, dir), running: undefined }, { detached: true, finished: true, running: undefined, followed: false, exitCode: 143 });
+  assert.equal(admission("follow", "--root", root, "--dir", join(root, "runs")).code, 69);
+});
+
+test("a detached run that nobody follows gives up waiting and never starts", async (t) => {
+  const root = fixture(t), dir = join(root, "runs", "orphan"), sentinel = join(root, "must-not-run");
+  mkdirSync(dir, { recursive: true });
+  const owner = run(root, "desktop-owner", "desktop");
+  t.after(() => stop(owner));
+  await until(() => status(root).running.length === 1);
+  assert.equal(admission("detach", "--root", root, "--dir", dir, "--", "python3", helper, "run", "--root", root,
+    "--label", "orphan", "--resource", "desktop", "--timeout", "30", "--orphan-timeout", "0.5", "--", "touch", sentinel).code, 0);
+  await until(() => probe(root, dir).finished === true);
+  assert.equal(probe(root, dir).exitCode, 76);
+  assert.equal(existsSync(sentinel), false);
+  assert.equal(status(root).waiting.length, 0);
+});
+
+test("a leftover desktop marker is released once no process refers to its run", async (t) => {
+  const root = fixture(t), runDir = join(root, "test-runs", "ended"), marker = join(runDir, "desktop-active");
+  mkdirSync(runDir, { recursive: true });
+  const a = run(root, "ended", "desktop", ["--release-marker", marker], ["python3", "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", marker]);
+  assert.notEqual((await a.finished).code, 0);
+  const [blocked] = status(root).blocked;
+  const requestPath = join(root, ".admission", "requests", `${blocked.id}.json`);
+  // A process that still refers to the run folder keeps the reservation.
+  const holder = spawn("python3", ["-c", "import time; time.sleep(30)", join(runDir, "Derived")]);
+  t.after(() => holder.kill("SIGKILL"));
+  const old = { ...JSON.parse(readFileSync(requestPath, "utf8")), blockedAt: Date.now() / 1000 - 600 };
+  writeFileSync(requestPath, JSON.stringify(old));
+  const waiting = run(root, "still-blocked", "desktop", ["--timeout", "1"], ["true"]);
+  assert.equal((await waiting.finished).code, 75);
+  assert.equal(existsSync(marker), true);
+  holder.kill("SIGKILL");
+  await new Promise((r) => holder.on("exit", r));
+  const next = run(root, "after-release", "desktop", [], ["true"]);
+  assert.equal((await next.finished).code, 0);
+  assert.equal(existsSync(marker), false);
+  assert.equal(JSON.parse(readFileSync(join(runDir, "DESKTOP_RELEASED"), "utf8")).label, "ended");
+  // Status itself never releases anything.
+  assert.equal(status(root).blocked.length, 0);
+});
+
+test("status does not release a leftover marker", async (t) => {
+  const root = fixture(t), runDir = join(root, "test-runs", "ended"), marker = join(runDir, "desktop-active");
+  mkdirSync(runDir, { recursive: true });
+  const a = run(root, "ended", "desktop", ["--release-marker", marker], ["python3", "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", marker]);
+  await a.finished;
+  const [blocked] = status(root).blocked;
+  const requestPath = join(root, ".admission", "requests", `${blocked.id}.json`);
+  writeFileSync(requestPath, JSON.stringify({ ...JSON.parse(readFileSync(requestPath, "utf8")), blockedAt: 0 }));
+  assert.equal(status(root).blocked.length, 1);
+  assert.equal(existsSync(marker), true);
+});
