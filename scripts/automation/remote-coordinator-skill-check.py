@@ -271,6 +271,9 @@ else:
     sys.exit(f'gh: this check does not answer: {" ".join(args)}')
 '''
 
+# The first line that Toastty puts before a message from the coordinator.
+SENDER_LINE = re.compile(r'^\[Toastty\] From the coordinator: not from the user\.\n')
+
 # A long message as Claude Code records it: the whole text inside one wrapper.
 PASTED = re.compile(r'^\s*<pasted_content id="([^"\n]+)">\n(.*?)\n</pasted_content id="\1">\s*$', re.S)
 # The files in its folder that the coordinator may change.
@@ -872,8 +875,10 @@ class Run:
         self.check('asks for no merge that the scenario does not expect: no such task has a merge request',
                    not requested, requested)
         received = [(task, message) for task in self.tasks for message in self.messages(task)]
-        # Toastty writes the merge prompt of a merge that the coordinator asked for.
-        unsigned = [m['text'][:120] for task, m in received if not m['text'].lstrip().startswith('[coordinator]')
+        # Toastty writes the merge prompt of a merge that the coordinator asked
+        # for, and puts its own sender line before the coordinator's text.
+        unsigned = [m['text'][:120] for task, m in received
+                    if not SENDER_LINE.sub('', m['text'].lstrip(), count=1).startswith('[coordinator]')
                     and not (task.id in self.merges_expected and 'toastty-task-merge' in m['text'])]
         self.check('every message to a task starts with [coordinator]', not unsigned, unsigned)
         # `task send --steer` may reach an agent that works: Toastty checks
