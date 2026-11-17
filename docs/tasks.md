@@ -2224,7 +2224,8 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 4. Toastty records the merge on the task first, and the task moves to Done
    (or To ship). The task space stays open for 24 hours, so you can still read
    the conversation, the Scratchpad and the pull request; the task's status
-   line says when it closes. Then, at a check every 30 seconds while the agent
+   line says when it closes, and `toastty task get` reports that time as
+   `cleanup.taskSpaceClosesAt`. Then, at a check every 30 seconds while the agent
    is not in a turn and no window shows the task space, Toastty closes the
    task space, removes the worktree and deletes the branch, the same way as the
    Merge button does for any other workspace. **Close Task Space** in the
@@ -2249,9 +2250,16 @@ once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
 checks: a `task merge` from the agent's turn that was checking is then refused.
 
 A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
-its task space, after the same 24-hour wait, when no agent there is working and
-the worktree is clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
+its task space after the same 24-hour wait, also when the agent was working
+when GitHub merged it: the cleanup waits for its turn to end, and a new turn
+or a link to another pull request keeps the task space open. The worktree
+must be clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
+When the task's worktree is on another branch than the pull request, as when
+a task updates an existing pull request, the cleanup cannot match a branch to
+delete and stops with both branch names. **Clean Up** then removes the
+worktree, and its local branch when the remote has every commit, with
+Archive's checks. Both branches stay on GitHub, and the task stays Done.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
 space must have one exact PR link, remain marked done, and have no unsaved
@@ -2280,6 +2288,11 @@ do, then:
 - deletes the local branch when every commit on it is on the remote, and keeps
   it otherwise unless you choose to delete the unpushed commits. The remote
   branch always stays, so the pull request can be reopened.
+
+A merged task can be archived too, for example while its cleanup waits, but
+it then shows as Archived, not Done. `toastty task archive <task-id> --dry-run`
+reports what an archive would close, remove and keep, and why it would refuse,
+and changes nothing.
 
 A task space with unsaved documents, or a merge under way, is not archived.
 Each step is saved as it finishes; if one stops, the task shows in Needs you

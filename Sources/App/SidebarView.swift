@@ -5481,7 +5481,7 @@ struct SidebarView: View {
             Button(presentation.title) {}
                 .disabled(true)
             Button("Retry Clean Up") {
-                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: row.id)
+                TaskActions.retryCleanup(workspaceID: row.id, sessionRuntimeStore: sessionRuntimeStore)
             }
             Button("Don't Clean Up") {
                 sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)

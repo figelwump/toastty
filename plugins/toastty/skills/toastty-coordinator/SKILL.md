@@ -283,7 +283,7 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 | Stopped with an error | `agent` is `error` on an open task that is not To ship, stage `needsYou (agentError)`. An error, such as the computer's sleep, ended the turn; the agent waits at its prompt. Toastty wakes you then. | With a `question` or `mergeFailure`, use its own row first. Else send at once: "Your turn stopped with an error. Continue where you stopped." Then tell the user. The 15-minute and 2-minute rules work as for a restart. |
 | Agent not running | `agent` is `notRunning` on an open task that is not To ship; stage `needsYou (taskSpaceClosed)`; or Stopped with an error after your continue (see One nudge) | Tell the user what you found. Offer to archive the task, or to wait while the user restarts its agent in the task space. Do nothing until the user answers. |
 | Merge stopped | `mergeFailure` | See Merge for the user. |
-| Anything else stopped | stage `needsYou (moveFailed)`, `(cleanupStopped)` or `(pickWorkspace)` | Tell the user with the reason. |
+| Anything else stopped | stage `needsYou (moveFailed)`, `(cleanupStopped)` or `(pickWorkspace)` | Tell the user with the reason. For `cleanupStopped`, propose Clean Up (`toastty task clean-up <task-id>`), which the reason describes, as you propose an archive; Keep As Is is in the task's menu. |
 
 Never answer a question for the user when it asks for a merge, a release, a
 production change, a deletion, a secret or a new permission, or when the task
@@ -448,7 +448,10 @@ remains after a merge; a policy rule after the user answered.
 you are not sure; a batch release; archiving a task (`toastty task archive`);
 making a task again in another project; a fix or a rule from a review;
 anything a task asked the user directly. For an archive or a deletion, say what will be removed, and wait
-for a yes that answers your proposal.
+for a yes that answers your proposal. For an archive, read that from
+`toastty task archive <task-id> --dry-run` with the options you propose: its
+`summary` lists what closes, goes and stays, and `refusal` says why the
+archive would refuse.
 
 ## Your files
 

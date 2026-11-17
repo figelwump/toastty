@@ -511,7 +511,10 @@ Notable action-specific behavior:
     merges, after the pull request merged, or when no merge is under way.
 - `task.clean-up`
   - requires `args.taskID`. Retries a cleanup that stopped after a merge, an
-    archive or a release.
+    archive or a release. When the merge's cleanup stopped because the task's
+    worktree is on another branch than the pull request, it removes the
+    worktree and the local branch with an archive's checks instead, and
+    keeps both branches on the remote.
 - `task.ready-for-review`, `task.needs-reply`, `task.mark-done`
   - `task.ready-for-review` takes optional `taskID`, sets
     `readyForReviewAt`, and clears a reply request. `task.needs-reply` takes
@@ -531,7 +534,7 @@ Notable action-specific behavior:
     release task. Returns the task object.
 - `task.archive`
   - requires `args.taskID`; takes booleans `closePullRequest`,
-    `deleteUnpushedCommits` and `discardChanges`. Runs its checks before it
+    `deleteUnpushedCommits`, `discardChanges` and `dryRun`. Runs its checks before it
     returns and refuses with `INVALID_PAYLOAD` and the reason: unsaved documents
     in the task space, a merge under way, uncommitted changes without
     `discardChanges`, or a detached worktree whose commit is on no remote branch
@@ -542,6 +545,11 @@ Notable action-specific behavior:
     the remote has its commits or with `deleteUnpushedCommits`. The remote
     branch stays. Each step is saved in `cleanup.stepsDone`; a stop sets
     `cleanup.problem`, and `task.archive` or `task.clean-up` continues.
+  - with `dryRun=true`, changes nothing and returns `taskID`, `dryRun`,
+    `summary` (the lines the archive alert shows: what closes, what is
+    removed, and what stays, also what happens to the pull request) and
+    `refusal` (the reason the archive would refuse with these options, or
+    `null`).
 - `task.release`
   - takes the `workspaceID` selector, or the calling managed session's
     workspace; a task space resolves to its project. tasks.toml must give the
@@ -844,7 +852,8 @@ it), and for Needs you `attention` and, for failures and a stopped
 cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
 (`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.
 `cleanup` (`kind`: `merge`, `archive` or `release`; `stepsDone`, `problem`,
-`finishedAt`) appears once a cleanup started, and `release` (`childTaskIDs`)
+`finishedAt`; and `taskSpaceClosesAt`, the earliest time Toastty closes a
+merged task's space, while it waits) appears once a cleanup started, and `release` (`childTaskIDs`)
 on a release task. A task with a
 worktree request also has `worktree`: `state` (`running`, `failed` with
 `reason`, or `finished`), `branchPrefix`, `requestedBase`, `path`, `branch`

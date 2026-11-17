@@ -417,6 +417,13 @@ final class WorkspaceMergeCoordinator {
         }
     }
 
+    /// Ends a stopped cleanup without the `.dropped` event, because the
+    /// task removes what is left itself.
+    func handOverStoppedCleanup(workspaceID: UUID) {
+        guard let request = requests[workspaceID], case .failed = request.phase else { return }
+        update(workspaceID, nil)
+    }
+
     /// Checks the pull request again after a failure.
     func retryCleanup(workspaceID: UUID) {
         guard var request = requests[workspaceID], case .failed = request.phase else { return }
@@ -943,8 +950,14 @@ final class WorkspaceMergeCoordinator {
             report(workspaceID, .stopped(reason: outcome.detail))
             notify("Cleanup of \(pullRequest) did not finish", "\(workspaceTitle): \(outcome.detail)")
         } else {
-            fail(workspaceID, request, outcome.detail)
-            report(workspaceID, .stopped(reason: outcome.detail))
+            var stopped = request
+            var reason = outcome.detail
+            if outcome.refusal == "branch-mismatch" {
+                stopped.stoppedOnBranchMismatch = true
+                reason += ". Clean Up removes the worktree, and its local branch if the remote has every commit. Both branches stay on GitHub."
+            }
+            fail(workspaceID, stopped, reason)
+            report(workspaceID, .stopped(reason: reason))
             // New work or a changed pull request during the run drops the
             // request instead of offering a retry.
             if let state = store?.state {
@@ -1027,6 +1040,8 @@ final class WorkspaceMergeCoordinator {
         var head: String?
         /// For a merge, the target branch accepted with that commit.
         var base: String?
+        /// A refusal the caller acts on, such as `branch-mismatch`.
+        var refusal: String?
     }
 
     static func scriptOutcome(from result: WorkspaceMergeCommandResult) -> ScriptOutcome {
@@ -1039,7 +1054,8 @@ final class WorkspaceMergeCoordinator {
         }
         return ScriptOutcome(
             status: status, detail: object["detail"] as? String ?? status,
-            head: object["head"] as? String, base: object["base"] as? String
+            head: object["head"] as? String, base: object["base"] as? String,
+            refusal: object["refusal"] as? String
         )
     }
 

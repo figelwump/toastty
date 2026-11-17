@@ -67,6 +67,8 @@ Prints one JSON object, {"status": ..., "detail": ...}. merge reports "merged",
 changed), or "failed", and adds "head", the accepted commit. clean-up
 and close report "cleaned", "partial" (some changes made and something kept),
 "stopped" (a step failed before any change), or "skipped" (nothing changed).
+A refusal the caller acts on adds "refusal": "branch-mismatch" when the task's
+recorded worktree branch is not the PR's branch.
 """
 
 from __future__ import annotations
@@ -102,6 +104,18 @@ REMOTE_SLUG = re.compile(r"[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
 
 class Refusal(Exception):
     """A check failed before any change; the message says which."""
+
+    #: A stable name for a refusal that the caller acts on, reported as
+    #: "refusal" next to the status.
+    code: str | None = None
+
+
+class BranchMismatch(Refusal):
+    """The task's worktree is on another branch than the PR. Toastty then
+    removes the worktree with an archive's checks instead, and keeps both
+    branches on the remote."""
+
+    code = "branch-mismatch"
 
 
 def run(args: list[str], cwd: str | None = None, check: bool = True) -> str:
@@ -680,7 +694,9 @@ def load(options: argparse.Namespace) -> Context:
         if expected_path == repo:
             raise Refusal("the primary checkout cannot be cleaned up")
         if options.worktree_branch != pr["headRefName"]:
-            raise Refusal("the recorded worktree branch does not match the PR's branch")
+            raise BranchMismatch(
+                f"PR #{options.pr}'s branch is {pr['headRefName']}, but the task's worktree is on "
+                f"{options.worktree_branch}, so Toastty deleted no branch")
         worktree = next((w for w in worktrees if w.path == expected_path), None)
         if worktree is not None:
             if worktree.locked:
@@ -747,6 +763,8 @@ def main() -> None:
     except Refusal as refusal:
         status = "refused" if options.action == "merge" else "skipped"
         detail = str(refusal)
+        if refusal.code:
+            report["refusal"] = refusal.code
     print(json.dumps({"status": status, "detail": detail, **report}))
 
 

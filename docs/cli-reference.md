@@ -884,7 +884,7 @@ toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
 toastty task needs-reply [<task-id>] [--question <text>]
 toastty task mark-done <task-id>
-toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes]
+toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
 toastty task release [--workspace <id>]
 ```
 
@@ -973,11 +973,14 @@ merges it, also in a project with `merge = "direct"`. It refuses where the
 Merge button is not offered. Toastty merges at the checkout's
 commit, refuses with `--head` when the checkout moved past the checked commit,
 waits for checks that still run, and cleans up 24 hours after the merge,
-once the agent's turn has ended.
+once the agent's turn has ended; `task get` reports that time as
+`cleanup.taskSpaceClosesAt` while the task space waits.
 `task cancel-merge` stops a merge the user accepted. `task archive` closes a
 task without merging; it refuses with the reason, and `--close-pr`,
 `--delete-unpushed` and `--discard-changes` allow what it would otherwise
-refuse or leave. `task clean-up` retries a cleanup that stopped.
+refuse or leave. With `--dry-run` it changes nothing and prints `summary`,
+what the archive would close, remove and keep, and `refusal`, the reason it
+would refuse or `null`. `task clean-up` retries a cleanup that stopped.
 `task needs-reply` is what an agent runs just before it ends a turn with a
 question: the task stays in Needs you, showing `--question`, after the user
 reads the turn, until the task's agent starts its next turn. A later

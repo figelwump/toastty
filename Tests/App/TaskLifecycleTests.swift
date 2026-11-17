@@ -212,6 +212,20 @@ struct TaskLifecycleTests {
         try fixture.repository.commit("local only", in: worktree.path)
         try Data("draft".utf8).write(to: URL(filePath: worktree.path).appending(path: "notes.txt"))
 
+        // The preview says what the archive would do, and why it would
+        // refuse, and changes nothing.
+        let preview = try await fixture.coordinator.archivePreview(taskID: task.id, options: TaskArchiveOptions())
+        #expect(preview.refusal?.contains("1 uncommitted file") == true)
+        #expect(preview.summary.contains("Removes the worktree and its 1 uncommitted file."))
+        #expect(preview.summary.contains("Keeps the branch \(worktree.branch): 1 of its commits are on no remote branch."))
+        let discarding = try await fixture.coordinator.archivePreview(
+            taskID: task.id, options: TaskArchiveOptions(deleteUnpushedCommits: true, discardChanges: true)
+        )
+        #expect(discarding.refusal == nil)
+        #expect(discarding.summary.contains("Deletes the local branch \(worktree.branch) and its 1 commit on no remote branch."))
+        #expect(fixture.record(task.id)?.archivedAt == nil)
+        #expect(fixture.record(task.id)?.cleanup == nil)
+
         let refused = await #expect(throws: TaskError.self) {
             try await fixture.coordinator.archive(taskID: task.id, options: TaskArchiveOptions())
         }
