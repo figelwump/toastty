@@ -52,6 +52,9 @@ public struct ToasttyTranscriptView: View {
     @State private var scrollInteractionCount = 0
     /// The scroll view's phase; a programmatic move ends at rest in `.idle`.
     @State private var scrollPhase: ScrollPhase = .idle
+    /// Until when the transcript's own move to a row's top may still be
+    /// landing; see `repairRowTopOvershoot`.
+    @State private var rowTopMoveDeadline: ContinuousClock.Instant?
     #if DEBUG && os(iOS)
     @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
     #endif
@@ -223,19 +226,8 @@ public struct ToasttyTranscriptView: View {
                             using: proxy
                         )
                     }
-                    if scrollPhase == .idle, new.isPastContentEnd, lastScrollTarget != nil {
-                        // In a lazy transcript, a move to a row's top near
-                        // the end, such as the new messages' line, left
-                        // iOS's scroll view resting past the content's end
-                        // by the bottom inset, with the screen blank under
-                        // the last row until a gesture bounced it back. Show
-                        // the transcript's end instead, which still shows
-                        // the row.
-                        scrollWithoutAnimation(
-                            to: ToasttyConversationScrollTarget.liveEdge,
-                            anchor: .bottom,
-                            using: proxy
-                        )
+                    if scrollPhase == .idle {
+                        repairRowTopOvershoot(new, using: proxy)
                     }
                     if reachedPhysicalLiveEdge {
                         if case .send(let request)? = scrollCoordinator.liveEdgeOwner,
@@ -251,18 +243,12 @@ public struct ToasttyTranscriptView: View {
                 }
                 .onScrollPhaseChange { oldPhase, newPhase, context in
                     scrollPhase = newPhase
-                    if newPhase == .idle,
-                       TranscriptScrollMetrics(geometry: context.geometry).isPastContentEnd,
-                       lastScrollTarget != nil {
-                        // An animated move to a row's top, such as a quote's
-                        // row, ends here; see the geometry check above.
-                        scrollWithoutAnimation(
-                            to: ToasttyConversationScrollTarget.liveEdge,
-                            anchor: .bottom,
-                            using: proxy
-                        )
+                    if newPhase == .idle {
+                        // An animated move to a quote's row ends here.
+                        repairRowTopOvershoot(TranscriptScrollMetrics(geometry: context.geometry), using: proxy)
                     }
                     if newPhase == .tracking || newPhase == .interacting {
+                        rowTopMoveDeadline = nil
                         // Finger-down or a direct drag owns the reader's
                         // position until it settles, including any momentum
                         // after finger lift.
@@ -363,6 +349,7 @@ public struct ToasttyTranscriptView: View {
                                 continue
                             }
                             if let target = scrollTaskKey.materializationTarget {
+                                markRowTopMove()
                                 scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                 // The first move can stop at the lazy stack's
                                 // estimated bottom without realizing this target.
@@ -394,6 +381,7 @@ public struct ToasttyTranscriptView: View {
                                     case .wait:
                                         continue
                                     case .retry:
+                                        markRowTopMove()
                                         scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                     case .expire:
                                         scrollCoordinator.abandonHistoryMove(command)
@@ -948,6 +936,7 @@ public struct ToasttyTranscriptView: View {
             target = responseContext?.target ?? .transcript(blockID)
             anchor = .top
         }
+        if anchor == .top { markRowTopMove() }
 
         if command.motion == .animated, !reducesMotion {
             withAnimation(.easeOut(duration: 0.2)) {
@@ -988,6 +977,7 @@ public struct ToasttyTranscriptView: View {
                   scrollInteractionCount == interactions,
                   let target = newMessages?.itemID(in: displayItems)
             else { return }
+            markRowTopMove()
             scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
         }
         try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
@@ -1012,15 +1002,41 @@ public struct ToasttyTranscriptView: View {
             turnFold.toggle(turn.id)
             // The row is laid out on the next pass.
             DispatchQueue.main.async {
+                markRowTopMove()
                 withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
                     proxy.scrollTo(target, anchor: .top)
                 }
             }
             return
         }
+        markRowTopMove()
         withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
             proxy.scrollTo(target, anchor: .top)
         }
+    }
+
+    /// How long the transcript's own move to a row's top may take to land,
+    /// with the lazy stack's corrections and an animation.
+    private static let rowTopMoveLandingTime: Duration = .milliseconds(500)
+
+    /// Marks the start of the transcript's own move to a row's top.
+    private func markRowTopMove() {
+        rowTopMoveDeadline = .now + Self.rowTopMoveLandingTime
+    }
+
+    /// In a lazy transcript, a move to a row's top near the end, such as the
+    /// new messages' line, can leave iOS's scroll view resting past the
+    /// content's end by the bottom inset: the screen stays blank under the
+    /// last row until a gesture bounces it back. While such a move lands,
+    /// the transcript shows its end instead, which still shows the row.
+    /// Only the move's own landing counts: while content changes, such as a
+    /// card that opens, iOS 26 can report the end passed for a moment.
+    private func repairRowTopOvershoot(_ metrics: TranscriptScrollMetrics, using proxy: ScrollViewProxy) {
+        guard let rowTopMoveDeadline, ContinuousClock.now < rowTopMoveDeadline,
+              metrics.isPastContentEnd, lastScrollTarget != nil
+        else { return }
+        self.rowTopMoveDeadline = nil
+        scrollWithoutAnimation(to: ToasttyConversationScrollTarget.liveEdge, anchor: .bottom, using: proxy)
     }
 
     private func scrollWithoutAnimation(
