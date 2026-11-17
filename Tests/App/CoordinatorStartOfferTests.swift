@@ -324,9 +324,11 @@ struct CoordinatorStartOfferTests {
         #expect(offer.message.contains("Start with Codex starts the coordinator with Codex now"))
         #expect(offer.message.contains("a later start tries claude again"))
         #expect(launch.failures == [CoordinatorController.UserCommand.open.failureTitle])
-        // A start that worked is saved.
-        await fixture.waitUntil("the answer is saved") { launch.offer.shouldOffer == false }
-        #expect(UserDefaults(suiteName: suite)?.bool(forKey: CoordinatorStartOffer.answeredKey) == true)
+        // A start that worked is saved, once the start returns. The offer
+        // stops asking in this launch at once, so wait for the saved key.
+        let saved = try #require(UserDefaults(suiteName: suite))
+        await fixture.waitUntil("the answer is saved") { saved.bool(forKey: CoordinatorStartOffer.answeredKey) }
+        #expect(saved.bool(forKey: CoordinatorStartOffer.answeredKey))
     }
 
     @Test func cancellingTheOfferedAgentAsksAgainAtTheNextLaunch() async throws {
