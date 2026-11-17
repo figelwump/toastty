@@ -943,6 +943,13 @@ body {
   white-space: pre;
 }
 
+/* Front matter values are long prose lines, such as a skill's description,
+   so they wrap. Code blocks keep their lines and scroll. */
+.markdown-prose pre.markdown-frontmatter code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .markdown-prose pre.markdown-frontmatter::before {
   content: "Front matter";
   display: block;

@@ -109,7 +109,7 @@ struct CoordinatorFolderTests {
         let policy = try read("policy.md", in: directory)
         #expect(policy.split(separator: "\n").filter { $0.isEmpty == false } == [
             "# Coordinator policy", "## Projects", "## Agents", "## Talking", "## Reviewing", "## Merging",
-            "## Improving", "## Unblocking", "## Releases", "## Notes (kept by the coordinator)",
+            "## Improving", "## Unblocking", "## Releases",
         ])
         #expect(try read("ledger.md", in: directory).hasPrefix("# Coordinator ledger"))
         // The coordinator's two records: the sections it sorts friction
