@@ -113,7 +113,9 @@ public enum AutomationFixtureLoader {
             frame: CGRectCodable(x: 80, y: 80, width: 2300, height: 760),
             workspaceIDs: [workspace.id],
             selectedWorkspaceID: workspace.id,
-            sidebarVisible: true
+            sidebarVisible: true,
+            // Keep screenshot geometry independent of the first-run sidebar width.
+            sidebarWidthPointsOverride: 280
         )
 
         return AppState(
@@ -144,7 +146,8 @@ public enum AutomationFixtureLoader {
             frame: CGRectCodable(x: 80, y: 80, width: 2300, height: 760),
             workspaceIDs: [workspace.id],
             selectedWorkspaceID: workspace.id,
-            sidebarVisible: sidebarVisible
+            sidebarVisible: sidebarVisible,
+            sidebarWidthPointsOverride: 280
         )
 
         return AppState(

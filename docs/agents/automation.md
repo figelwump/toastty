@@ -678,12 +678,18 @@ session, where the Claude login is readable.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
-`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `conflict`, `weak-proof`, `good-proof`,
+`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
 `user-words-busy`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
-passes the words on with `task send --steer` and not without it. `dependency` also checks that the coordinator
+passes the words on with `task send --steer` and not without it. In
+`ci-failed` the failed test is in the pull request's change: the task is
+told to fix it once, and a second failure goes to the user. In the two
+`ci-rerun` scenarios the failed test is outside the change: the task is
+told to rerun it once, and the policy does not change. When the rerun
+passes, the ledger names the test; when it fails again, the task is told to
+fix it. `dependency` also checks that the coordinator
 asks Toastty to watch the task it waits for. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and
