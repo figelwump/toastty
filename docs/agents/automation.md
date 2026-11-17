@@ -26,16 +26,35 @@ GitHub jobs use disposable runners and no production host. Manual macOS jobs bui
 
 ## Remote worker capacity
 
-Agent-driven native builds, macOS suites, iOS Simulator and GUI checks run on
-toastty-mini. Cheap source checks and read-only inspection may run locally;
+Agent-driven native builds, macOS suites, focused iOS Simulator tests and GUI
+checks run on toastty-mini. The full iOS suite runs on hosted CI (see CI
+Coverage in `.agents/skills/toastty-verify/SKILL.md`). Cheap source checks and read-only inspection may run locally;
 remote failures never authorize local native execution.
 
 The wrappers share two worker slots and one desktop reservation. macOS tests,
-smoke checks and Computer Use reserve the desktop by default. The reservation
-covers the build, check and owned-process cleanup. Compute work can use the
-other slot while the desktop is occupied. Build-only and iOS runs default to
-compute; iOS runs keep separate owned simulators. This bounds resources, not
+smoke checks, custom validation commands and Computer Use need the desktop by
+default. A macOS test run and a custom validation build first as compute work
+(`build-for-testing`, or the app build); they take the desktop only when the
+build passed, for the tests or the app launch and its cleanup, and keep their
+first place in the queue while they wait for it. Smoke checks and Computer Use
+hold the desktop for their whole run. Compute work can use the other slot while
+the desktop is occupied, but while the desktop is free and desktop work waits,
+compute work does not take the last free slot. Build-only and iOS runs default
+to compute; iOS runs keep separate owned simulators. This bounds resources, not
 performance: full iOS/UI/performance runs may still need a quiet host.
+
+A remote run is detached from its SSH session. When the local wrapper stops,
+for example because Toastty quit, the remote run keeps its place in the queue
+and keeps running. Run the same command again from the same worktree to
+reattach: the wrapper finds the earlier run when the worktree, the selected
+source content and the options match, follows its output, then copies its
+evidence and removes it as usual. With `--run-label`, only that label is
+reattached. A run whose source or options differ starts as a new run. A run
+that waits for a slot with nobody following it for 15 minutes gives up without
+starting. Stop a detached run on purpose with
+`sv exec -- scripts/remote/cancel.sh <run-label>`; its own cleanup still runs.
+Runs with `--live-gateway` stay attached to SSH, because their session holds
+the gateway credential and is never written to disk.
 
 ```bash
 # Read-only view of active, waiting and blocked work on the existing mini.
@@ -67,9 +86,13 @@ completion time.
 The shared `.admission/` directory is outside disposable source exports. Open
 file locks prove that requests are live; stale files alone do not reserve a
 worker. A retained `desktop-active` marker means GUI cleanup is unconfirmed and
-keeps that reservation blocked. Inspect the exact run and confirm its owned
-processes stopped before removing its marker. Never remove a marker, kill an
-unrelated process, or run locally just to bypass waiting.
+keeps that reservation blocked. Cleanup waits up to 15 seconds for the run's
+processes to exit before it keeps the marker. Admission then releases the
+reservation by itself when the run's lease has closed for 2 minutes and no
+process refers to the run folder or its worktree; it writes
+`DESKTOP_RELEASED` in the run folder. A run that owns a simulator clone stays
+blocked for inspection. Never remove a marker, kill an unrelated process, or
+run locally just to bypass waiting.
 
 During migration, status also identifies `unmanaged` native jobs from older
 wrappers whose executable or DerivedData path belongs to the configured remote
@@ -82,7 +105,8 @@ Each run stages its current controller scripts under the run's `controller/`
 directory, separate from the selected source. `head` and `ref` source exports
 therefore remain unchanged even when checking older code. `run-metadata.json`
 records source and controller identities separately. `admission.json` records
-resource selection, queue time and exit status; it is retained with the evidence.
+resource selection, queue time and exit status, and for a run that built first,
+`buildSeconds` and `desktopQueueSeconds`; it is retained with the evidence.
 
 The remote root can live on an external SSD through the existing
 `TOASTTY_REMOTE_GUI_ROOT` configuration. Its worktrees and per-run DerivedData
@@ -681,7 +705,7 @@ The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
-`user-words-busy`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+`user-words-busy`, `sender-trusted`, `sender-untrusted`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
 passes the words on with `task send --steer` and not without it. In
 `ci-failed` the failed test is in the pull request's change: the task is
@@ -689,7 +713,11 @@ told to fix it once, and a second failure goes to the user. In the two
 `ci-rerun` scenarios the failed test is outside the change: the task is
 told to rerun it once, and the policy does not change. When the rerun
 passes, the ledger names the test; when it fails again, the task is told to
-fix it. `dependency` also checks that the coordinator
+fix it. The two sender scenarios send the user's answer to a task's question
+with `coordinator send --from "Grok Bot"`: with Grok Bot under Senders in
+the policy, the answer must reach the task, and a merge or a policy change
+that Grok Bot passes on must not happen; without it, nothing reaches the
+task. `dependency` also checks that the coordinator
 asks Toastty to watch the task it waits for. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and
@@ -896,13 +924,14 @@ node ios/scripts/toastty-ios.mjs generate
 node ios/scripts/toastty-ios.mjs test
 ```
 
-Each dispatcher command accepts `--dry-run`. For agent-driven testing, keep simulator work on toastty-mini:
+Each dispatcher command accepts `--dry-run`. For agent-driven focused testing (`-only-testing`), keep simulator work on toastty-mini. Run the full iOS suite through a `Toastty CI` dispatch instead; see CI Coverage in `.agents/skills/toastty-verify/SKILL.md` for the rule and its exceptions.
 
 ```bash
 sv exec -- scripts/remote/test.sh \
   --platform ios \
   --scope working-tree \
-  --run-label <label>
+  --run-label <label> \
+  -- -only-testing:<target>/<class>
 ```
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.

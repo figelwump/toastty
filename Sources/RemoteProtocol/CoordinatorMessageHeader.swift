@@ -26,6 +26,10 @@ public enum CoordinatorMessageHeader {
         case coordinator
         /// A managed session that belongs to no task.
         case session(id: String, agent: String, workspaceTitle: String?)
+        /// A caller that named no running session, with the name it gave
+        /// itself (`--from`), such as a program outside Toastty that passes
+        /// on the user's messages. Toastty does not check the name.
+        case named(String)
         /// A caller that named no running session: a shell, a script, or
         /// an agent without its session's environment.
         case unknown
@@ -52,9 +56,18 @@ public enum CoordinatorMessageHeader {
         case .session(let id, let agent, let workspaceTitle):
             let place = workspaceTitle.map { ", workspace \(quoted($0))" } ?? ""
             return "\(senderPrefix)agent session \(word(id)) (\(word(agent))\(place)): not from the user."
+        case .named(let name):
+            return "\(senderPrefix)\(quoted(name)) (named by the caller): Toastty cannot tell who ran it."
         case .unknown:
             return "\(senderPrefix)a terminal command: Toastty cannot tell who ran it."
         }
+    }
+
+    /// A caller's own name that the first line shows exactly as given: one
+    /// line of at most 60 characters, without `"`, `|` or repeated spaces.
+    /// The coordinator's policy names a sender by this exact text.
+    public static func isSenderName(_ name: String) -> Bool {
+        quoted(name) == "\"\(name)\""
     }
 
     /// The text to type for a message that `coordinator send` brought.
@@ -342,8 +355,9 @@ public enum CoordinatorMessageHeader {
         return (message[..<end], String(message[message.index(after: end)...]))
     }
 
-    /// "task Fix the unread dot", "agent session 1B2C (claude)" or
-    /// "a terminal command", from a line `senderLine` wrote.
+    /// "task Fix the unread dot", "agent session 1B2C (claude)",
+    /// "\"Grok Bot\" (named by the caller)" or "a terminal command", from a
+    /// line `senderLine` wrote.
     private static func senderName(inLine line: Substring) -> String {
         var name = line.dropFirst(senderPrefix.count)
         // The clause after the last ": " is Toastty's note, not the name.
