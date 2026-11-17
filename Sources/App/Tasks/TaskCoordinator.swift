@@ -13,7 +13,9 @@ protocol TaskAgentLaunching: AnyObject {
     /// unscoped. With `forkFromSessionID`, the new session continues a copy
     /// of that session's conversation.
     /// `beforeDispatch` runs directly before the command is sent; a throw
-    /// there cancels the launch.
+    /// there cancels the launch. `initialPromptWithoutSkills` replaces
+    /// `initialPrompt` when Toastty knows that the launch does not give the
+    /// agent its skills.
     func launchTask(
         profileID: String,
         workspaceID: UUID,
@@ -22,11 +24,15 @@ protocol TaskAgentLaunching: AnyObject {
         model: String?,
         reasoningEffort: String?,
         initialPrompt: String,
+        initialPromptWithoutSkills: String?,
         parentSessionID: String?,
         forkFromSessionID: String?,
         scopedWorkspaceIDs: Set<UUID>?,
         beforeDispatch: @escaping @MainActor () throws -> Void
     ) async throws -> AgentLaunchResult
+    /// Toastty knows that the session's launch did not give the agent its
+    /// skills.
+    func lacksShippedSkills(sessionID: String) -> Bool
 }
 
 extension AgentLaunchService: TaskAgentLaunching {
@@ -38,6 +44,7 @@ extension AgentLaunchService: TaskAgentLaunching {
         model: String?,
         reasoningEffort: String?,
         initialPrompt: String,
+        initialPromptWithoutSkills: String?,
         parentSessionID: String?,
         forkFromSessionID: String?,
         scopedWorkspaceIDs: Set<UUID>?,
@@ -51,6 +58,7 @@ extension AgentLaunchService: TaskAgentLaunching {
             model: model,
             reasoningEffort: reasoningEffort,
             initialPrompt: initialPrompt,
+            initialPromptWithoutSkills: initialPromptWithoutSkills,
             forkFromSessionID: forkFromSessionID,
             inheritedScopedWorkspaceIDs: scopedWorkspaceIDs,
             parentSessionID: parentSessionID,
@@ -1298,6 +1306,17 @@ final class TaskCoordinator {
                 $0.triageNote = [$0.triageNote, dropped].compactMap { $0 }.joined(separator: " ")
             }
         }
+        let promptWithoutSkills = Self.promptWithoutSkills(prompt, TaskPrompt.compose(
+            skill: resolved.skill,
+            startPrompt: resolved.startPrompt,
+            firstPrompt: firstPrompt,
+            text: record.text,
+            attachmentPaths: record.attachments.map(\.path),
+            worktree: worktree,
+            base: base,
+            parent: parentTask(of: record),
+            skills: Self.skillsMissing()
+        ))
         let parentSessionID = creatorSessionID(of: record)
         let result: AgentLaunchResult
         do {
@@ -1310,6 +1329,7 @@ final class TaskCoordinator {
                     model: resolved.model,
                     reasoningEffort: resolved.effort,
                     initialPrompt: prompt,
+                    initialPromptWithoutSkills: promptWithoutSkills,
                     parentSessionID: parentSessionID,
                     forkFromSessionID: nil,
                     // A task session is unscoped unless the session that
@@ -2063,6 +2083,20 @@ final class TaskCoordinator {
     /// moment after that. Both refusals happen before any text is sent, so
     /// they are retried until `timeout` passes. A delivery the terminal did
     /// not confirm is never retried.
+    /// What a message says for an agent that Toastty knows did not get its
+    /// skills: the path of a skill that Toastty ships.
+    static func skillsMissing() -> TaskPrompt.SkillDelivery {
+        .missing(shippedSkillFiles: ToasttyAgentPluginBundle.skillFiles())
+    }
+
+    /// `withoutSkills`, the same message for an agent without its skills,
+    /// when it says more than `prompt` and still fits a first message.
+    static func promptWithoutSkills(_ prompt: String, _ withoutSkills: String) -> String? {
+        guard withoutSkills != prompt,
+              withoutSkills.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else { return nil }
+        return withoutSkills
+    }
+
     static func launchWhenTerminalIsReady(
         timeout: Duration,
         attempt: @MainActor () async throws -> AgentLaunchResult

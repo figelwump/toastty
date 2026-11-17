@@ -9,9 +9,11 @@ import Foundation
 /// Toastty asks when a window first has the keyboard and no coordinator was
 /// ever opened: there is no coordinator's workspace, and the coordinator's
 /// folder, which the first open creates and nothing removes, does not exist.
-/// Start runs the same code as Open Coordinator. Not Now is saved, and
-/// Toastty does not ask again; Open Coordinator stays in the Agent menu and
-/// in the command palette.
+/// Start runs the same code as Open Coordinator, and is saved once the
+/// coordinator's agent runs: a start that fails, for example because the
+/// agent is not installed, asks again at the next launch. Not Now is saved,
+/// and Toastty does not ask again; Open Coordinator stays in the Agent menu
+/// and in the command palette.
 @MainActor
 final class CoordinatorStartOffer {
     enum Answer: Equatable {
@@ -39,6 +41,7 @@ final class CoordinatorStartOffer {
     private let coordinatorDirectoryURL: URL
     private let present: Presenter
     private let presentFailure: @MainActor (String, String) -> Void
+    private let offerAgent: CoordinatorController.AgentChoicePresenter
 
     /// Takes down the question that shows now.
     private var dismiss: (@MainActor () -> Void)?
@@ -54,7 +57,8 @@ final class CoordinatorStartOffer {
         defaults: UserDefaults?,
         coordinatorDirectoryURL: URL,
         present: @escaping Presenter,
-        presentFailure: @escaping @MainActor (String, String) -> Void = TaskActions.presentFailure
+        presentFailure: @escaping @MainActor (String, String) -> Void = TaskActions.presentFailure,
+        offerAgent: @escaping CoordinatorController.AgentChoicePresenter = CoordinatorController.presentAgentChoice
     ) {
         self.controller = controller
         self.store = store
@@ -62,17 +66,23 @@ final class CoordinatorStartOffer {
         self.coordinatorDirectoryURL = coordinatorDirectoryURL
         self.present = present
         self.presentFailure = presentFailure
+        self.offerAgent = offerAgent
     }
 
     /// Whether Toastty still has the question to ask.
     var shouldOffer: Bool {
-        guard let defaults, defaults.bool(forKey: Self.answeredKey) == false else { return false }
+        guard answeredThisLaunch == false,
+              let defaults, defaults.bool(forKey: Self.answeredKey) == false else { return false }
         return controller.location == nil
             && FileManager.default.fileExists(atPath: coordinatorDirectoryURL.path) == false
     }
 
     /// Whether the question shows now.
     var isShowing: Bool { dismiss != nil }
+
+    /// The user answered in this launch. A Start whose start failed is not
+    /// saved, but the question waits for the next launch.
+    private var answeredThisLaunch = false
 
     /// Asks over `windowID` when the question is still open. Call it when a
     /// window gets the keyboard.
@@ -100,12 +110,21 @@ final class CoordinatorStartOffer {
         // Without an answer the question is still open: a window that gets
         // the keyboard later asks it again.
         guard let answer else { return }
-        defaults?.set(true, forKey: Self.answeredKey)
+        answeredThisLaunch = true
         ToasttyLog.info("The user answered whether to start the coordinator", category: .tasks, metadata: [
             "answer": answer == .start ? "start" : "not_now",
         ])
-        if answer == .start {
-            controller.perform(.open, windowID: windowID, presentFailure: presentFailure)
+        guard answer == .start else {
+            defaults?.set(true, forKey: Self.answeredKey)
+            return
+        }
+        let start = controller.perform(.open, windowID: windowID, presentFailure: presentFailure, offerAgent: offerAgent)
+        Task { @MainActor [weak self] in
+            guard await start.value else {
+                ToasttyLog.info("The coordinator did not start from the question; the next launch asks again", category: .tasks)
+                return
+            }
+            self?.defaults?.set(true, forKey: Self.answeredKey)
         }
     }
 

@@ -67,6 +67,9 @@ final class CoordinatorChatModel: ObservableObject {
         /// Toastty quit while it typed a message. The message waits,
         /// paused, until the user sends it again or removes it.
         case typingInterrupted
+        /// The Codex coordinator may read only part of its instructions:
+        /// its profile's arguments cannot take the raised limit.
+        case instructionsMayBeCut
         case failure(String)
     }
 
@@ -648,7 +651,8 @@ final class CoordinatorChatModel: ObservableObject {
         case .localDraft:
             return .terminalDraft
         default:
-            return controller.hasInterruptedEntry ? .typingInterrupted : nil
+            if controller.hasInterruptedEntry { return .typingInterrupted }
+            return controller.mayReadPartOfItsInstructions ? .instructionsMayBeCut : nil
         }
     }
 

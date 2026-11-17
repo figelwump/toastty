@@ -243,12 +243,7 @@ enum AgentLaunchArgumentOverrideAdapter {
     ) -> [String] {
         guard let codexProjectDocMaxBytes, agent == .codex else { return argv }
         do {
-            var editor = try ProviderArgvEditor(argv: argv, agent: agent, profileID: profileID)
-            try editor.removeCodexConfigAssignments(
-                key: "project_doc_max_bytes",
-                parameter: "projectDocMaxBytes"
-            )
-            return editor.inserting(["--config", "project_doc_max_bytes=\(codexProjectDocMaxBytes)"])
+            return try codexArgv(argv, settingProjectDocMaxBytes: codexProjectDocMaxBytes, profileID: profileID)
         } catch {
             ToasttyLog.warning(
                 "Launching Codex without project_doc_max_bytes because its argv cannot take it",
@@ -260,6 +255,25 @@ enum AgentLaunchArgumentOverrideAdapter {
             )
             return argv
         }
+    }
+
+    /// Whether `applying(codexProjectDocMaxBytes:)` sets the limit in this
+    /// Codex argv, rather than leaving the argv unchanged.
+    static func canApplyCodexProjectDocMaxBytes(to argv: [String], profileID: String) -> Bool {
+        (try? codexArgv(argv, settingProjectDocMaxBytes: 1, profileID: profileID)) != nil
+    }
+
+    private static func codexArgv(
+        _ argv: [String],
+        settingProjectDocMaxBytes bytes: Int,
+        profileID: String
+    ) throws -> [String] {
+        var editor = try ProviderArgvEditor(argv: argv, agent: .codex, profileID: profileID)
+        try editor.removeCodexConfigAssignments(
+            key: "project_doc_max_bytes",
+            parameter: "projectDocMaxBytes"
+        )
+        return editor.inserting(["--config", "project_doc_max_bytes=\(bytes)"])
     }
 
     private static func validatedValue(

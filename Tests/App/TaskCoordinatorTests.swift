@@ -21,6 +21,11 @@ struct TaskCoordinatorTests {
         let attachmentsDirectory: URL
         let recordsFile: URL
         let launcher: AgentLaunchService
+        /// agents.toml as the launcher reads it; a test can change it.
+        let agentCatalog: TestAgentCatalogProvider
+        /// Whether a launch gives the agent Toastty's skills. On by default,
+        /// as in the app; a test turns it off.
+        let skills = TestSkillsDelivery()
         let workspaceID: UUID
         var config = TasksConfig()
         var configError: (any Error)?
@@ -75,32 +80,34 @@ struct TaskCoordinatorTests {
                 title: nil,
                 cwd: subdirectory.path
             ))
-            if installed != nil {
-                let launchPath = bin.path
-                launcher = AgentLaunchService(
-                    store: store,
-                    terminalCommandRouter: router,
-                    sessionRuntimeStore: sessionRuntimeStore,
-                    agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
-                    cliExecutablePathProvider: { "/bin/sh" },
-                    socketPathProvider: { "/tmp/toastty-tests.sock" },
-                    managedAgentResolutionContextProvider: {
-                        ManagedAgentResolutionContext(environment: ["PATH": launchPath], shimDirectoryPaths: [])
-                    }
-                )
-            } else {
-                launcher = AgentLaunchService(
-                    store: store,
-                    terminalCommandRouter: router,
-                    sessionRuntimeStore: sessionRuntimeStore,
-                    agentCatalogProvider: TestAgentCatalogProvider(profiles: [
-                        AgentProfile(id: "claude", displayName: "Claude Code", argv: [try #require(executables["claude"])]),
-                        AgentProfile(id: "codex", displayName: "Codex", argv: [try #require(executables["codex"])]),
-                    ]),
-                    cliExecutablePathProvider: { "/bin/sh" },
-                    socketPathProvider: { "/tmp/toastty-tests.sock" }
-                )
+            // A fresh install has no profile in agents.toml, and only the
+            // installed commands are on the launch PATH.
+            var profiles: [AgentProfile] = []
+            if installed == nil {
+                profiles = [
+                    AgentProfile(id: "claude", displayName: "Claude Code", argv: [try #require(executables["claude"])]),
+                    AgentProfile(id: "codex", displayName: "Codex", argv: [try #require(executables["codex"])]),
+                ]
             }
+            let agentCatalog = TestAgentCatalogProvider(profiles: profiles)
+            self.agentCatalog = agentCatalog
+            let launchPath = installed == nil ? nil : bin.path
+            launcher = AgentLaunchService(
+                store: store,
+                terminalCommandRouter: router,
+                sessionRuntimeStore: sessionRuntimeStore,
+                agentCatalogProvider: agentCatalog,
+                claudeSkillsBundleManager: skills,
+                cliExecutablePathProvider: { "/bin/sh" },
+                socketPathProvider: { "/tmp/toastty-tests.sock" },
+                codexSkillsResolver: skills,
+                managedAgentResolutionContextProvider: {
+                    ManagedAgentResolutionContext(
+                        environment: launchPath.map { ["PATH": $0] } ?? ProcessInfo.processInfo.environment,
+                        shimDirectoryPaths: []
+                    )
+                }
+            )
             coordinator = makeCoordinator(records: TaskRecordStore(fileURL: recordsFile), readinessTimeout: readinessTimeout)
         }
 
@@ -319,6 +326,58 @@ struct TaskCoordinatorTests {
         let plainSent = try #require(fixture.router.sentTextByPanelID[plainPanel])
         #expect(plainSent.contains("Use the ") == false)
         #expect(plainSent.contains(TaskPrompt.replyLine))
+    }
+
+    /// A launch that does not give the agent its skills, such as a Claude
+    /// whose skills plugin could not be staged or a Codex whose profile
+    /// could not be prepared.
+    @Test func anAgentWithoutItsSkillsGetsTheSkillsFileAndTheFallbackLines() async throws {
+        let fixture = try Fixture()
+        let skillFile = try #require(ToasttyAgentPluginBundle.skillFiles()[TaskPrompt.defaultStartSkill])
+        #expect(FileManager.default.fileExists(atPath: skillFile))
+        // The terminal command quotes the prompt for the shell, so the
+        // check skips the apostrophe in "skill's".
+        let pathLine = "instructions are in \(skillFile): read that file and follow it."
+        for agent in ["claude", "codex"] {
+            fixture.skills.delivers = false
+            let task = try await fixture.coordinator.create(TaskCreateRequest(
+                text: "Fix the composer with \(agent)",
+                workspaceID: fixture.workspaceID,
+                agent: agent
+            ))
+            await fixture.waitForSetup(task.id)
+            let record = try #require(fixture.record(task.id))
+            #expect(record.setup == .started)
+            let sentPanelID = try #require(record.operation.taskSpace?.panelID)
+            let sent = try #require(fixture.router.sentTextByPanelID[sentPanelID])
+            let skillLine = try #require(sent.range(of: "Use the toastty-task-start skill."), "\(agent)")
+            #expect(sent.contains("Toastty could not give this session its skills. The toastty-task-start skill"), "\(agent)")
+            let path = try #require(sent.range(of: pathLine), "\(agent)")
+            let text = try #require(sent.range(of: "Fix the composer with \(agent)"))
+            #expect(skillLine.upperBound < path.lowerBound)
+            #expect(path.upperBound < text.lowerBound)
+            #expect(sent.contains(TaskPrompt.replyLine), "\(agent)")
+            #expect(sent.contains(TaskPrompt.coordinatorLine), "\(agent)")
+            let session = try #require(record.operation.agentLaunch?.sessionID)
+            #expect(fixture.launcher.lacksShippedSkills(sessionID: session))
+
+            // With its skills, the same task says none of this.
+            fixture.skills.delivers = true
+            let delivered = try await fixture.coordinator.create(TaskCreateRequest(
+                text: "Fix the sidebar with \(agent)",
+                workspaceID: fixture.workspaceID,
+                agent: agent
+            ))
+            await fixture.waitForSetup(delivered.id)
+            let deliveredRecord = try #require(fixture.record(delivered.id))
+            let deliveredSentPanelID = try #require(deliveredRecord.operation.taskSpace?.panelID)
+            let deliveredSent = try #require(fixture.router.sentTextByPanelID[deliveredSentPanelID])
+            #expect(deliveredSent.contains("Use the toastty-task-start skill."))
+            #expect(deliveredSent.contains("Toastty could not give this session its skills") == false, "\(agent)")
+            #expect(deliveredSent.contains("needs-reply") == false, "\(agent)")
+            let deliveredSession = try #require(deliveredRecord.operation.agentLaunch?.sessionID)
+            #expect(fixture.launcher.lacksShippedSkills(sessionID: deliveredSession) == false)
+        }
     }
 
     @Test func defaultsFillOnlyTheFieldsTheCallerLeftOut() async throws {
@@ -881,5 +940,50 @@ struct TaskCoordinatorTests {
         let repeated = try await fixture.coordinator.create(request)
         #expect(repeated.id == created.id)
         #expect(workspacesOnWebsite().count == 1)
+    }
+}
+
+/// Stands in for the app's skills managers, so that a launch gives the
+/// agent Toastty's skills, or not, as a test says. The paths are not read.
+final class TestSkillsDelivery: ClaudeSkillsBundleManaging, CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    private let lock = NSLock()
+    private var deliversStorage = true
+
+    var delivers: Bool {
+        get { lock.withLock { deliversStorage } }
+        set { lock.withLock { deliversStorage = newValue } }
+    }
+
+    private var claudeConfiguration: ClaudeSkillsLaunchConfiguration? {
+        guard delivers else { return nil }
+        return ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-test-plugin/toastty",
+            skillsRootPath: "/tmp/toastty-test-plugin/toastty/skills",
+            version: "1.0.0",
+            contentDigest: "test"
+        )
+    }
+
+    func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration? { claudeConfiguration }
+
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus {
+        claudeConfiguration.map { .providedAtLaunch($0) } ?? .unavailable(detail: "test")
+    }
+
+    func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? { claudeConfiguration }
+
+    func resolve(request: ManagedAgentLaunchRequest, workingDirectory: String?) -> CodexManagedLaunchSkillsDecision {
+        CodexManagedLaunchSkillsDecision(
+            configuration: delivers
+                ? CodexSkillsLaunchConfiguration(
+                    profileName: CodexSkillsContract.profileName,
+                    codexHomePath: "/tmp/toastty-test-codex-home",
+                    skillsRootPath: "/tmp/toastty-test-codex-skills",
+                    version: "1.0.0",
+                    contentDigest: "test"
+                )
+                : nil,
+            status: nil
+        )
     }
 }

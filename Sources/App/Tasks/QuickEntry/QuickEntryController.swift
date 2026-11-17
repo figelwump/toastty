@@ -57,6 +57,9 @@ final class QuickEntryController: ObservableObject {
     }
     /// Whether `tasks.toml` has been read without error since launch.
     private var hasLoadedShortcut = false
+    /// Why the shortcut did not work as configured at launch, such as an
+    /// error in `tasks.toml`, until a window shows it.
+    private(set) var launchMessage: String?
     /// The Workspace list's folder checks, by what the state said about
     /// each folder. A new panel checks again, so a repository made since
     /// then shows.
@@ -67,6 +70,11 @@ final class QuickEntryController: ObservableObject {
     /// does not set one: the What's new sheet asks the user first. Set by
     /// the app; without it, the default applies.
     var defaultShortcutPermission: @MainActor () -> QuickEntryShortcutPermission = { .allowed }
+    /// Whether `launchMessage` waits for the What's new sheet: the key is
+    /// read again when the sheet ends, and that message replaces this one,
+    /// so the user sees it once. Set by the app; without it, the message
+    /// shows at once.
+    var launchMessageWaits: @MainActor () -> Bool = { false }
     // Removed in deinit, which is not main-actor isolated.
     nonisolated(unsafe) private var terminationObserver: (any NSObjectProtocol)?
     /// The app in front when the panel opened, if not Toastty.
@@ -129,10 +137,32 @@ final class QuickEntryController: ObservableObject {
 
     // MARK: - Shortcut
 
+    /// Reads the shortcut at launch, before any window is up, and again
+    /// when the What's new sheet ends. A message waits in `launchMessage`
+    /// until `presentLaunchMessageIfNeeded` shows it.
+    func loadShortcutAtLaunch() {
+        launchMessage = reloadShortcut()
+    }
+
+    /// Shows the launch message once, over the window that got the
+    /// keyboard. `present` returns false when that window cannot show it
+    /// now, and the message then waits for the next window.
+    func presentLaunchMessageIfNeeded(
+        windowID: UUID,
+        present: @MainActor (_ windowID: UUID, _ message: String) -> Bool
+    ) {
+        guard let launchMessage, launchMessageWaits() == false,
+              present(windowID, launchMessage) else { return }
+        self.launchMessage = nil
+    }
+
     /// Reads `[quick_entry] shortcut` and registers it. Returns a message
     /// when the shortcut could not be set up.
     @discardableResult
     func reloadShortcut() -> String? {
+        // A reload shows its own message, so a launch message that no
+        // window showed yet is out of date.
+        launchMessage = nil
         let configured: QuickEntryShortcut?
         var message: String?
         do {
@@ -147,12 +177,12 @@ final class QuickEntryController: ObservableObject {
                 // if the user allowed it, rather than leave the user with
                 // no way in.
                 configured = defaultShortcutPermission() == .allowed ? .default : nil
-                message = "tasks.toml: \(error.localizedDescription). The quick entry shortcut is \(configured?.symbolLabel ?? "off") until the file is fixed."
+                message = "\(error.localizedDescription). The quick entry shortcut is \(configured?.symbolLabel ?? "off") until the file is fixed."
                 return applyShortcut(configured, message: message)
             }
             // A typo must not change the shortcut: keep the one in use,
             // including no shortcut at all.
-            return "tasks.toml: \(error.localizedDescription). The quick entry shortcut stays \(shortcut?.symbolLabel ?? "off") until the file is fixed."
+            return "\(error.localizedDescription). The quick entry shortcut stays \(shortcut?.symbolLabel ?? "off") until the file is fixed."
         }
         return applyShortcut(configured, message: message)
     }
@@ -187,7 +217,10 @@ final class QuickEntryController: ObservableObject {
                 "shortcut": shortcut.symbolLabel,
                 "status": String(status),
             ])
-            message = message ?? "The quick entry shortcut \(shortcut.symbolLabel) is in use by another app. Set another one with [quick_entry] shortcut in ~/.toastty/tasks.toml."
+            // Another app that holds the keys does not make this fail:
+            // Carbon refuses a hot key only when both apps register it
+            // exclusively. So the message names no cause.
+            message = message ?? "Toastty could not register the quick entry shortcut \(shortcut.symbolLabel). Set another one with [quick_entry] shortcut in ~/.toastty/tasks.toml."
         }
         return message
     }
@@ -260,7 +293,7 @@ final class QuickEntryController: ObservableObject {
             }
         )
         if case .failure(let error) = config {
-            model.showError("tasks.toml: \(error.localizedDescription)")
+            model.showError(error.localizedDescription)
         }
         self.model = model
 

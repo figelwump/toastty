@@ -74,6 +74,9 @@ struct AppWindowSceneHostView: View {
     let automationStartupError: String?
     let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
+    /// Shows what Toastty found at launch over a window that got the
+    /// keyboard.
+    var presentLaunchMessages: (@MainActor (UUID) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
@@ -115,7 +118,8 @@ struct AppWindowSceneHostView: View {
                     presentCommandPalette: presentCommandPalette,
                     onWindowCloseInitiated: handleWindowCloseInitiated,
                     allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
-                    disableAnimations: disableAnimations
+                    disableAnimations: disableAnimations,
+                    presentLaunchMessages: presentLaunchMessages
                 )
             } else {
                 EmptyStateView(onCreateWorkspace: createWorkspaceAction)

@@ -358,13 +358,7 @@ struct WorkspaceHeaderCoordinatorControl<Running: View>: View {
             HStack(spacing: 8) {
                 WorkspaceHeaderSubtitleText(text: "Agent not running")
                 Button("Restart Coordinator") {
-                    Task { @MainActor in
-                        do {
-                            try await controller.restart()
-                        } catch {
-                            TaskActions.presentFailure("Unable to Restart the Coordinator", error.localizedDescription)
-                        }
-                    }
+                    controller.perform(.restart)
                 }
                 .buttonStyle(WorkspaceHeaderMergeButtonStyle(corners: .all, tone: .neutral))
                 .help(status?.startFailure ?? "Start a fresh agent session for the coordinator")
