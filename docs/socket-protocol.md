@@ -423,6 +423,10 @@ Notable action-specific behavior:
     pane after a relaunch, else the most recently active agent in the task
     space. It types the text and submits it, as `terminal.send-text` with
     `submit=true` does; a busy agent queues it as typed input.
+  - Toastty types a first line that names the sender, from the caller and
+    never from the text, as for `coordinator.send`: `[Toastty] From task
+    [title](toastty://task/<id>): not from the user.` for a caller in a task's
+    space. The text starts on the second line.
   - optional `args.steer=true` checks the agent before it types, and types
     nothing into a permission prompt or a question. The result adds
     `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
@@ -455,8 +459,8 @@ Notable action-specific behavior:
     `to-ship`. A task marked done by hand meets only `ready-for-review` and
     `done`. `archived` holds only for an archived task.
   - a notifying watch is saved on the notified task's record and fires once:
-    Toastty sends one line, `[Toastty watch <watchID>] Task "<title>"
-    (<taskID>) <reason>...`, to that task's agent through `task.send`, and
+    Toastty sends one line, `[Toastty watch <watchID>] Task
+    [<title>](toastty://task/<taskID>) <reason>...`, to that task's agent through `task.send`, and
     retries while its agent is not running. A deleted target, or one archived
     while the watch waits for another condition, fires it with that reason. A
     `wait=true` watch lives in memory, notifies nobody, and is dropped when no
@@ -810,7 +814,9 @@ watched project, then wakes the coordinator. It returns the
 and its last delivery. It never returns a secret or the full URL path. With
 `args.name`, it returns only that webhook.
 
-`task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `slug`,
+`task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `markdownLink`
+(the task as `[title](toastty://task/<taskID>)`, for an agent to name it in
+text), `slug`,
 `text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
 `agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, `filesRemovedAt`
 (when Toastty removed its copies of the files, a week after the task finished),

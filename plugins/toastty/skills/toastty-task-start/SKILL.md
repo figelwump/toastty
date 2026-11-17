@@ -35,6 +35,15 @@ the skill line and the task. The repository has its own instructions, such as
 requests. Both take precedence over this skill where they differ. This skill
 gives the defaults and Toastty's own rules.
 
+## Name other tasks by title
+
+When you name another task, in a reply, a report, a pull request or a
+message, use its title, not its ID. `task get` and `task list` give each
+task's `markdownLink`, `[title](toastty://task/<id>)`: write that where
+Markdown shows, such as your replies and task messages. GitHub drops that
+link, so in a pull request write the title, and link the task's pull request
+when it has one. Use the ID only in commands.
+
 ## Show suggested UI changes as mockups
 
 When you suggest a change to a UI, a design, or a user experience, at any step
@@ -269,11 +278,10 @@ each part its own task:
 - Each call returns a task ID while setup continues. Check one with
   `toastty task get <task-id>`, or add `--wait` to wait until its agent starts.
 - The new tasks record this one as their parent. Coordinate them from here.
-- Tell each new task how to report back: `toastty task send <this task's ID>
-  "<message>"`. `toastty task get`, with no ID, shows this task and its
-  `taskID`. Task IDs keep working after a relaunch; panel and session IDs do
-  not. The message must include the paths of the new task's verification
-  report and evidence files, such as screenshots and test output.
+- Toastty tells each new task which task created it, as a link, and how to
+  report to it with `toastty task send`. In the brief, say what to report:
+  the paths of the new task's verification report and evidence files, such as
+  screenshots and test output.
 
 This needs this session to be a task, so that the new tasks record it as
 their parent and can report to it. `toastty task get` with no ID fails in a
@@ -281,8 +289,8 @@ session that is not a task. Then, in a task space, run `toastty task adopt`
 first; in a top-level workspace, move the work into a task first with
 `task start-work --title` (see
 [Move this task into a worktree](#move-this-task-into-a-worktree)). If the
-user does not want that, the new tasks have no parent: give them no report
-step, and check them with `toastty task get <task-id>`.
+user does not want that, the new tasks have no parent and no report step:
+check them with `toastty task get <task-id>`.
 
 ## Wait for other tasks
 

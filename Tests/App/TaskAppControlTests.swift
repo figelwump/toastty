@@ -543,15 +543,35 @@ struct TaskAppControlTests {
         #expect(changedTasks.count == 1)
         #expect(busy["taskID"] == .string(producer.id.uuidString))
         #expect(agentState(busy) == "busy")
+        // The task as an agent names it in text.
+        let producerTitle = try #require(fixture.record(producer.id)?.title)
+        #expect(busy["markdownLink"] == .string("[\(producerTitle)](toastty://task/\(producer.id.uuidString))"))
 
-        // A follow-up by task ID reaches the producer's terminal.
+        // A follow-up by task ID reaches the producer's terminal, after a
+        // first line that names the sending task as a link.
         let sent = try executor.runAction(
             id: "task.send",
             args: ["taskID": .string(producer.id.uuidString), "text": .string("Also document the errors")],
-            context: context()
+            context: context(consumerSession)
         )
         #expect(sent.result?["sessionID"] == .string(producerSession))
         #expect(typed.entries.map(\.panelID) == [producerPanel])
+        let consumerTitle = try #require(fixture.record(consumer.id)?.title)
+        #expect(typed.entries.last?.text == """
+            [Toastty] From task [\(consumerTitle)](toastty://task/\(consumer.id.uuidString)): not from the user.
+            Also document the errors
+            """)
+        // A message with no text is refused, sender line or not.
+        for steer in [false, true] {
+            await expectInvalidPayload("The message is empty.") {
+                _ = try await executor.runActionAsync(
+                    id: "task.send",
+                    args: ["taskID": .string(producer.id.uuidString), "text": .string(" \n "), "steer": .bool(steer)],
+                    context: context(consumerSession)
+                )
+            }
+        }
+        #expect(typed.entries.count == 1)
 
         // The consumer's agent waits for the producer instead of polling;
         // the watch notifies the caller's own task by default.
@@ -567,7 +587,9 @@ struct TaskAppControlTests {
         )
         fixture.coordinator.evaluateWatches()
         #expect(typed.entries.last?.panelID == consumerPanel)
-        #expect(typed.entries.last?.text.contains("is idle. Read it with: toastty task get \(producer.id.uuidString)") == true)
+        #expect(typed.entries.last?.text.contains(
+            "Task [\(producerTitle)](toastty://task/\(producer.id.uuidString)) is idle. Read it with: toastty task get \(producer.id.uuidString)"
+        ) == true)
 
         let watches = try executor.runQuery(id: "task.watches", args: ["notifyTaskID": .string(consumer.id.uuidString)])
         guard case .array(let listed)? = watches["watches"], case .object(let fired)? = listed.first else {

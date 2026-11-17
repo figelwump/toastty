@@ -455,7 +455,9 @@ When an agent creates a task, the new task space joins that agent's workspace
 scope if the agent is scoped, and the agent session is recorded as the one that
 spawned it. A task
 created from an agent in another task's task space records that task as its
-parent (`parentTaskID`).
+parent (`parentTaskID`). The new task's first message names the parent as a
+link, `[title](toastty://task/<parent-id>)`, and says how to report to it with
+`toastty task send <parent-id>`.
 
 ## Work in a git worktree
 
@@ -561,7 +563,8 @@ The calling session keeps running: Toastty does not close it or type into it.
 - The fork's first message starts with the start skill, if one is set. Then it
   names the task, its ID and task space, and the worktree and branch, if any.
   It tells the fork that it owns only this task, and how to report back: with
-  `toastty task send <parent-task-id>` when the caller is a task's agent, else
+  `toastty task send <parent-task-id>`, after the parent task as a link, when
+  the caller is a task's agent, else
   with `terminal.send-text` to the caller's terminal. The prompt, the task text
   and the attached files follow.
 - `task create` returns at once. You cannot use `--wait` with `--fork`, because
@@ -596,8 +599,14 @@ worktree.
   `reset: true`. `--include-reply` adds each task's `lastReply`.
 - Both commands report how long the task has been in its state; see
   [How long a task has been in its state](#how-long-a-task-has-been-in-its-state).
+- Each task in `task get` and `task list` has `markdownLink`, the task as
+  `[title](toastty://task/<task-id>)`. An agent names another task in text
+  with it, and uses the ID only in commands. The shipped task skills say so.
 - `toastty task send <task-id> "<message>"` types the message into the task's
-  agent and submits it, whatever the agent does. A busy agent queues it as typed
+  agent and submits it, whatever the agent does. Its first line names the
+  sender as `coordinator send` does, such as
+  `[Toastty] From task [title](toastty://task/<id>): not from the user.`, so
+  the agent that reads it can name the task that sent it. A busy agent queues it as typed
   input, and the Return key can answer a permission prompt that is on screen. It
   fails when the task has no running agent, and says so when the message was
   typed but may not have been submitted; check that terminal before you send it

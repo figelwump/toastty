@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 /// What `task.get` and `task.list` report about a task's agent.
 struct TaskAgentStatus: Equatable {
@@ -381,7 +382,9 @@ extension TaskCoordinator {
     static func watchMessage(_ watch: TaskWatch, targetTitle: String?) -> String {
         guard case .fired(_, let reason, let impossible, _) = watch.state else { return "" }
         let target = watch.targetTaskID.uuidString
-        let name = targetTitle.map { "\"\($0.replacingOccurrences(of: "\n", with: " "))\" (\(target))" } ?? target
+        // The title as a link, for the agent to name the task by; the ID
+        // stays in the command.
+        let name = targetTitle.map { CoordinatorTaskLink.markdown(taskID: watch.targetTaskID, title: $0) } ?? target
         let prefix = "[Toastty watch \(watch.id.uuidString)] Task \(name) \(reason)"
         if impossible {
             return "\(prefix), so your watch until \(watch.condition.rawValue) can never fire."
