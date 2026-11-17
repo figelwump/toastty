@@ -637,13 +637,13 @@ def follow(args, root: Path) -> int:
 
 def probe(args, root: Path) -> int:
     """Read-only state of a detached run, for a wrapper deciding to reattach."""
-    value = {"detached": False}
     run_dir = contained(root, args.dir)
+    value = {"detached": False, "exists": run_dir.is_dir()}
     record_path = run_dir / "detached.json"
     if run_dir.is_dir() and record_path.exists():
         record = read_request(record_path)
         exit_path = run_dir / "detached-exit.json"
-        value = {"detached": True, "finished": exit_path.exists(), "running": keeper_alive(record),
+        value = {"detached": True, "exists": True, "finished": exit_path.exists(), "running": keeper_alive(record),
                  "followed": followed(run_dir), "cancelled": (run_dir / "CANCELLED").exists()}
         if value["finished"]:
             value["exitCode"] = read_request(exit_path).get("exitCode")

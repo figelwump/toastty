@@ -313,6 +313,13 @@ toastty_remote_run_continues() {
   jq -e '.detached == true and .finished != true' <<<"$state" >/dev/null 2>&1
 }
 
+# Succeeds when the run folder is gone, as after a cancel before it started.
+toastty_remote_run_removed() {
+  local state
+  state="$(toastty_remote_detached probe "$1" 2>/dev/null)" || return 1
+  jq -e '.exists == false' <<<"$state" >/dev/null 2>&1
+}
+
 # Files that the wrapper stages as the remote controller. A rerun with other
 # controller files is a different run.
 toastty_controller_identity() {

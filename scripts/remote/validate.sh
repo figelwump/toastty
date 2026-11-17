@@ -758,6 +758,11 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     warn "Lost the connection to remote run $RUN_LABEL; it keeps running. Run the same command again to reattach."
     return "$remote_validation_exit_code"
   fi
+  if [[ "$remote_validation_exit_code" != 0 && -n "$request_key" ]] && toastty_remote_run_removed "$remote_run_root"; then
+    write_result_json "$LOCAL_ARTIFACTS_DIR/result.json" remote remote fail "$SMOKE_TEST" "$started_at" "$(timestamp_utc)" "$remote_run_root" "" \
+      "The remote run was cancelled before it started; its remote folders were removed"
+    return "$remote_validation_exit_code"
+  fi
 
   toastty_run_phase artifactCopy
   local copy_succeeded=1
