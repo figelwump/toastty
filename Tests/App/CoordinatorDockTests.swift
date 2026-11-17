@@ -338,12 +338,16 @@ struct CoordinatorDockTests {
         try await fixture.waitUntil("the chat's field to take the keyboard again", chatFieldHasTheKeyboard)
 
         // Another panel beside the chat, as policy.md's can be, has the
-        // focus: Show Terminal focuses the coordinator's panel too.
+        // focus: Show Terminal focuses the coordinator's panel too. Each
+        // change shows before the next click, as it does for a user.
         #expect(store.send(.splitFocusedSlot(workspaceID: location.workspaceID, orientation: .horizontal)))
         #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID != fixture.panelID)
+        try await Task.sleep(for: .milliseconds(300))
         controller.showTerminal()
         try await fixture.waitUntil("the terminal to take the keyboard from the panel beside it") { terminal.hasKeyboardFocus }
         #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID == fixture.panelID)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(terminal.hasKeyboardFocus)
         controller.showsTerminal = false
         try await fixture.waitUntil("the chat's field to take the keyboard once more", chatFieldHasTheKeyboard)
 
