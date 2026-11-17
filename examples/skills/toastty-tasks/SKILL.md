@@ -80,6 +80,9 @@ a turn that ends with a question. When it ends, read the task with
   - `agentFinished`: the agent finished a turn; summarize `lastReply`.
   - `agentNeedsInput`: the agent waits for a permission answer in its
     terminal. You cannot answer it; tell the user to answer in Toastty.
+  - `startWaitsInTerminal`: the agent never started the task; it most likely
+    waits at a login or folder-trust question in its terminal. Tell the user
+    to answer it in Toastty.
   - Anything else (`pickWorkspace`, `setupFailed`, `moveFailed`,
     `cleanupStopped`, `agentError`, `taskSpaceClosed`): tell the user, with
     `stage.reason` when there is one, that the task needs them in Toastty.

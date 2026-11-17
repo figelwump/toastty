@@ -568,6 +568,7 @@ private extension RemoteProtocolGoldenTests {
         let reviewSpaceID = numberedUUID(202)
         let watchedSpaceID = numberedUUID(203)
         let question = numberedUUID(301), review = numberedUUID(302), failed = numberedUUID(304)
+        let unplaced = numberedUUID(307)
         let child = numberedUUID(305), shipped = numberedUUID(306)
         snapshot.tasks = RemoteTaskBoard(
             tasks: [
@@ -630,6 +631,15 @@ private extension RemoteProtocolGoldenTests {
                         RemoteTaskActionItem(action: .delete, title: "Delete Task"),
                     ]
                 ),
+                // No action picks a workspace: the Mac says where to do it.
+                RemoteTaskSummary(
+                    id: unplaced, title: "Fix the settings typo", group: .needsYou,
+                    statusLine: "⚠ pick a workspace", rowSummary: "⚠ pick a workspace",
+                    stageTitle: "Needs you", stageReason: "No workspace was named. Pick a workspace for this task.",
+                    activityAt: timestamp.addingTimeInterval(-200),
+                    actions: [RemoteTaskActionItem(action: .delete, title: "Delete Task")],
+                    macStep: "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace."
+                ),
                 RemoteTaskSummary(
                     id: shipped, title: "Parent task rollup", group: .toShip, mark: .toShip,
                     statusLine: "Merged · waiting for a release", stageTitle: "To ship",
@@ -648,6 +658,7 @@ private extension RemoteProtocolGoldenTests {
                 RemoteTaskBoardEntry(taskID: child, isLinkedChild: true, isContext: true),
                 RemoteTaskBoardEntry(taskID: review),
                 RemoteTaskBoardEntry(taskID: failed),
+                RemoteTaskBoardEntry(taskID: unplaced),
             ],
             idle: [RemoteTaskBoardEntry(taskID: watchedSpaceID)],
             toShip: [

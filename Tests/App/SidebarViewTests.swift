@@ -2330,8 +2330,8 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(root, name: "buckets-1-before-click")
         try attachSidebarRender(root, name: "buckets-1-before-click")
 
-        // Selecting the unread task reads it; it holds its place, dimmed and
-        // no longer counted.
+        // Selecting the unread task reads it; it holds its place and no
+        // longer counts.
         let clicked = try XCTUnwrap(panelByTitle["Thumbnail filenames"])
         XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: clicked.workspaceID)))
         XCTAssertTrue(harness.store.send(.focusPanel(workspaceID: clicked.workspaceID, panelID: clicked.panelID)))
@@ -2344,7 +2344,7 @@ final class SidebarViewTests: XCTestCase {
         try writeSidebarEvidence(root, name: "buckets-2-clicked-row-holds")
         try attachSidebarRender(root, name: "buckets-2-clicked-row-holds")
 
-        // Resuming work moves the selected row to Running at normal opacity.
+        // Resuming work moves the selected row to Running.
         harness.sessionRuntimeStore.updateStatus(
             sessionID: "Thumbnail filenames", status: SessionStatus(kind: .working, summary: "Working"),
             at: now.addingTimeInterval(5)

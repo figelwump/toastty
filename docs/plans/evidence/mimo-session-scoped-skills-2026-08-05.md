@@ -223,7 +223,7 @@ own conventional dirs will.
 Run the probe again with:
 
 ```bash
-scripts/agents/probe-mimo-session-scoped-skills.py --mimo /Users/vishal/.mimocode/bin/mimo
+scripts/agents/probe-mimo-session-scoped-skills.py --mimo ~/.mimocode/bin/mimo
 ```
 
 Add `--live-model` (with credentials, e.g.

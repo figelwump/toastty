@@ -159,6 +159,15 @@ struct ToasttyTasksTabView: View {
                 .id(Self.doneGroupID)
                 .accessibilityIdentifier("toastty-tasks-group-done")
                 .toasttyListRow(vertical: 0)
+            // The Mac sends a count for Done, not the tasks.
+            Text("Done tasks are listed on your Mac, in Tasks (⌘⇧T).")
+                .font(.footnote)
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("toastty-tasks-done-on-mac")
+                .toasttyListRow(vertical: 0)
         }
     }
 
