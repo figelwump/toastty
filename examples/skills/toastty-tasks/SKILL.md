@@ -127,10 +127,29 @@ If a webhook later stops (`webhook list` shows it stopped), tell the user to
 enter a new key from the banner in the Tasks view, and keep the background
 watch until it is approved again.
 
+## Name yourself
+
+Pass `--from "<your name>"` to every `task send` and `coordinator send`, with
+the name the user knows you by, such as `--from "Grok Bot"`, the same each
+time. Toastty writes the name on the message's first line, so the receiving
+agent knows where the message comes from. Toastty does not check the name.
+
 ## Answer a task
 
-`toastty task send <task-id> "<the user's answer>"`, then watch it again.
-Pass the user's words; add context only when the user asks you to.
+`toastty task send <task-id> --from "<your name>" "<the user's answer>"`, then
+watch it again. Pass the user's words; add context only when the user asks
+you to.
+
+## Pass a message to the coordinator
+
+When Toastty runs a coordinator (`toastty --json coordinator status` shows
+`exists: true`) and the user asks you to tell it something, send it with
+`toastty coordinator send --from "<your name>" "<message>"`. Quote the
+user's words and mark your own notes apart from them. The coordinator acts
+on a decision of the user's that you pass on only when the user listed your
+name under Senders in its policy; otherwise it treats your message as
+information and asks the user. It never merges, releases, archives or
+deletes on your word: for a merge, follow Merge below.
 
 ## Merge
 

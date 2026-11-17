@@ -26,8 +26,9 @@ GitHub jobs use disposable runners and no production host. Manual macOS jobs bui
 
 ## Remote worker capacity
 
-Agent-driven native builds, macOS suites, iOS Simulator and GUI checks run on
-toastty-mini. Cheap source checks and read-only inspection may run locally;
+Agent-driven native builds, macOS suites, focused iOS Simulator tests and GUI
+checks run on toastty-mini. The full iOS suite runs on hosted CI (see CI
+Coverage in `.agents/skills/toastty-verify/SKILL.md`). Cheap source checks and read-only inspection may run locally;
 remote failures never authorize local native execution.
 
 The wrappers share two worker slots and one desktop reservation. macOS tests,
@@ -318,7 +319,10 @@ before the first send.
 The check makes one task with a real agent and sends to it with
 `task send --steer`: at its open prompt (`sent`), and in a turn that a script
 of the run holds for 40 seconds (`steered`, and the agent must answer as that
-message says, not as the turn's first message said). A host without Codex's
+message says, not as the turn's first message said). Messages with image paths
+on lines of their own must be answered too: one with a plain `task send` and
+two with `--steer` at the open prompt, and one in the steered message. The
+screen must never show `[Image #`. A host without Codex's
 hooks reports a Codex agent in a long command as idle; the check then requires
 `queued`, nothing typed during the turn, and the message after the turn. With
 Claude it also sends while a permission prompt is on screen: the result must be
@@ -678,7 +682,7 @@ The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
-`user-words-busy`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+`user-words-busy`, `sender-trusted`, `sender-untrusted`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
 passes the words on with `task send --steer` and not without it. In
 `ci-failed` the failed test is in the pull request's change: the task is
@@ -686,7 +690,11 @@ told to fix it once, and a second failure goes to the user. In the two
 `ci-rerun` scenarios the failed test is outside the change: the task is
 told to rerun it once, and the policy does not change. When the rerun
 passes, the ledger names the test; when it fails again, the task is told to
-fix it. `dependency` also checks that the coordinator
+fix it. The two sender scenarios send the user's answer to a task's question
+with `coordinator send --from "Grok Bot"`: with Grok Bot under Senders in
+the policy, the answer must reach the task, and a merge or a policy change
+that Grok Bot passes on must not happen; without it, nothing reaches the
+task. `dependency` also checks that the coordinator
 asks Toastty to watch the task it waits for. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and
@@ -893,13 +901,14 @@ node ios/scripts/toastty-ios.mjs generate
 node ios/scripts/toastty-ios.mjs test
 ```
 
-Each dispatcher command accepts `--dry-run`. For agent-driven testing, keep simulator work on toastty-mini:
+Each dispatcher command accepts `--dry-run`. For agent-driven focused testing (`-only-testing`), keep simulator work on toastty-mini. Run the full iOS suite through a `Toastty CI` dispatch instead; see CI Coverage in `.agents/skills/toastty-verify/SKILL.md` for the rule and its exceptions.
 
 ```bash
 sv exec -- scripts/remote/test.sh \
   --platform ios \
   --scope working-tree \
-  --run-label <label>
+  --run-label <label> \
+  -- -only-testing:<target>/<class>
 ```
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
