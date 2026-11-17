@@ -2035,7 +2035,15 @@ review. The choice is saved for each window.
   A parent without a pull request moves to To ship or Done when its
   children finish, so the whole family leaves Idle.
   A task space whose task is To ship or Done leaves its card unless an agent
-  in it is working or waiting for you. After the buckets, a To ship line with
+  in it is working or waiting for you, or Toastty still keeps it open after
+  its merge. Under its parent task, a kept task space with nothing working or
+  waiting folds into one line after the parent's open children, such as
+  **13/15 merged**, which takes the place of the parent's merged count. It
+  starts collapsed; click it to show the merged tasks as rows, then **Show N
+  more** when some merged children's task spaces already closed, which opens
+  the parent in the Tasks view. A folded task does not count in a bucket.
+  Without a listed parent, a kept task space lists in Idle until it closes.
+  After the buckets, a To ship line with
   the purple To ship mark lists the project's other To ship tasks, with
   **Release** when the project can release (see [Release](#release)) and the
   Done count on its right. It starts collapsed; click it to expand it in

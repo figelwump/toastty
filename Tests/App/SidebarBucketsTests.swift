@@ -98,6 +98,38 @@ struct SidebarBucketsTests {
         #expect(SidebarBuckets.counts(candidates) == [.needsYou: 3, .running: 2, .idle: 2])
     }
 
+    @Test func mergedChildrenFoldIntoOneLineAfterTheirParentsOpenChildren() {
+        let candidates = [
+            row("Parent", .needsYou),
+            row("Merged A", .idle, parent: "Parent"),
+            row("Open child", .running, parent: "Parent"),
+            row("Merged B", .idle, parent: "Parent"),
+            row("Grandchild merged", .idle, parent: "Open child"),
+            row("Lone merged", .idle),
+            row("Orphan merged", .idle, parent: "Closed parent"),
+        ]
+        let finished: Set = ["Merged A", "Merged B", "Grandchild merged", "Lone merged", "Orphan merged"]
+        let folded = SidebarBuckets.foldedKeys(candidates) { finished.contains($0.payload) }
+        // Only a finished row that lists under its parent folds. One level
+        // only, as families list, and a row whose parent has no row stays.
+        #expect(folded == [key("Merged A"), key("Merged B")])
+
+        let layout = SidebarBuckets.layout(candidates, pin: nil)
+        let items = SidebarBuckets.items(layout.entries(.needsYou), folded: folded).map { item in
+            switch item {
+            case .row(let entry): names([entry])[0]
+            case .finishedChildren(let parent, let rows):
+                "fold under \(parent == key("Parent") ? "Parent" : "?"): " + rows.map(\.payload).joined(separator: ", ")
+            }
+        }
+        #expect(items == ["Parent", "  Open child (dimmed)", "fold under Parent: Merged A, Merged B"])
+        let idle = SidebarBuckets.items(layout.entries(.idle), folded: folded).map { item -> String in
+            guard case .row(let entry) = item else { return "fold" }
+            return entry.payload
+        }
+        #expect(idle == ["Grandchild merged", "Lone merged", "Orphan merged"])
+    }
+
     @Test func theSelectedRowHoldsWhileItsTurnIsReadAndMovesWhenWorkResumes() {
         var candidates = [row("Thumbnail", .needsYou), row("Hostname", .needsYou), row("Deploy", .running)]
         var layout = SidebarBuckets.layout(candidates, pin: nil)
