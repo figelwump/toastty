@@ -63,6 +63,13 @@ public enum CoordinatorMessageHeader {
         }
     }
 
+    /// A caller's own name that the first line shows exactly as given: one
+    /// line of at most 60 characters, without `"`, `|` or repeated spaces.
+    /// The coordinator's policy names a sender by this exact text.
+    public static func isSenderName(_ name: String) -> Bool {
+        quoted(name) == "\"\(name)\""
+    }
+
     /// The text to type for a message that `coordinator send` brought.
     public static func message(from sender: Sender, text: String) -> String {
         senderLine(sender) + "\n" + text

@@ -1054,7 +1054,8 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   outside Toastty, such as Grok Bot, that runs the command from its own
   shell: the line then says `From "Grok Bot" (named by the caller)`.
   Toastty does not check that name, and a caller in a Toastty session is
-  named by its session instead. The coordinator reads such a message as
+  named by its session instead. The name must be one line of at most 60
+  characters, without `"`, `|` or repeated spaces. The coordinator reads such a message as
   data from that sender, not as your instruction, unless its policy names
   the sender under Senders; see "Who a message is from" in
   [The coordinator](tasks.md#the-coordinator). It

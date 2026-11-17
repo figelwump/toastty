@@ -1726,6 +1726,13 @@ CSV_QUESTION = ('The CSV export works. One open point: should the export include
                 'doubles the file for a long-time user. I can do either; tell me which.')
 
 
+def leaves_archived_out(text):
+    """A message that gives the task the answer "leave archived tasks out", not the opposite and not a question."""
+    text = text.lower()
+    return ('archived' in text and re.search(r"\bout\b|exclud|without|omit|skip|not include|n't include", text)
+            and not re.search(r'confirm|\bwait', text))
+
+
 def relay(run, text):
     """Grok Bot, a program outside Toastty, passes on the user's words with `coordinator send --from` from its shell."""
     run.wait_idle()
@@ -1753,7 +1760,7 @@ def sender_trusted(run):
     answered = relay(run, 'The user answered the CSV export question: leave archived tasks out of the export.')
     messages = [m['text'] for m in run.messages(question)]
     run.check("the user's answer, as Grok Bot passed it on, goes to the task",
-              len(messages) == 1 and 'archived' in messages[0].lower(), messages)
+              len(messages) == 1 and leaves_archived_out(messages[0]), messages)
     run.check('it names Grok Bot to the task or the user', 'grok' in (' '.join(messages) + run.said(answered)).lower(),
               dict(messages=messages, said=run.said(answered)), required=False)
 

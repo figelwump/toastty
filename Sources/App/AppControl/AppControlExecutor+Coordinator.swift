@@ -154,11 +154,14 @@ extension AppControlExecutor {
     }
 
     /// The name a caller gives itself with `from`, such as "Grok Bot".
-    /// `nil` without one.
+    /// `nil` without one. A name that the first line would change is
+    /// refused: the coordinator's policy names a sender by its exact text.
     func statedSenderName(args: [String: AutomationJSONValue]) throws -> String? {
         guard let value = args["from"] else { return nil }
-        guard case .string(let name) = value, name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-            throw AutomationSocketError.invalidPayload("from must be the sender's name")
+        guard case .string(let name) = value, CoordinatorMessageHeader.isSenderName(name) else {
+            throw AutomationSocketError.invalidPayload(
+                "from must be the sender's name: one line of at most 60 characters, without \", | or repeated spaces"
+            )
         }
         return name
     }

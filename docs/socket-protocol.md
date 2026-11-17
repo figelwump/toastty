@@ -808,8 +808,9 @@ fields with `createdWorkspace` and `startedAgent`, after the start attempt.
 the sender, from the request's `callerSessionID`: the task whose space that
 session is in, else the session, else the name in optional `args.from` as
 `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran
-it.`, else "a terminal command". Toastty does not check `args.from`, and a
-non-empty string is required when it is present. `coordinator.wake` takes exactly one of
+it.`, else "a terminal command". Toastty does not check who `args.from`
+names. It refuses a name that the line would change: it must be one line of
+at most 60 characters, without `"`, `|` or repeated spaces. `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
 fields. With `args.quiet` it also marks the wake turn that runs now as one

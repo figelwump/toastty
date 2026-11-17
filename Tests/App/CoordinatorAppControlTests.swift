@@ -132,11 +132,12 @@ struct CoordinatorAppControlTests {
         #expect(try await send("CI is green.", as: taskSessionID, from: "Grok Bot") == taskLine + "\nCI is green.")
         #expect(try await send("A note.", as: coordinatorSessionID, from: "the user")
             == "[Toastty] From the coordinator: not from the user.\nA note.")
-        // An empty name is refused, and nothing is typed.
+        // A name that the line would change is refused, and nothing is
+        // typed.
         try fixture.setStatus(.idle)
         await fixture.settle()
         let typedBefore = fixture.typedTexts.count
-        for empty in [AutomationJSONValue.string("  "), .null, .bool(true)] {
+        for empty in [AutomationJSONValue.string("  "), .string("Acme | Bot"), .string("Grok Bot\n"), .null, .bool(true)] {
             #expect(throws: AutomationSocketError.self) {
                 _ = try executor.runAction(id: "coordinator.send", args: ["text": .string("Hi"), "from": empty], context: context())
             }

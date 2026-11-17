@@ -118,6 +118,18 @@ struct CoordinatorMessageHeaderTests {
         #expect(sender.hasSuffix("\" (named by the caller)"))
     }
 
+    /// Only a name that the line shows unchanged is a sender's name: the
+    /// coordinator's policy matches it by its exact text.
+    @Test func aSendersNameIsOneUnchangedLine() {
+        for name in ["Grok Bot", "grok-bot_2", "Ops: night shift", String(repeating: "g", count: 60)] {
+            #expect(CoordinatorMessageHeader.isSenderName(name), "\(name)")
+        }
+        for name in ["", "  ", " Grok Bot", "Grok Bot ", "Grok  Bot", "Grok\nBot", "Grok \"Bot\"", "Acme | Bot",
+                     "Grok\u{7}Bot", "Grok\u{200B}Bot", String(repeating: "g", count: 61)] {
+            #expect(CoordinatorMessageHeader.isSenderName(name) == false, "\(name.debugDescription)")
+        }
+    }
+
     @Test func theChatNamesTheSenderInOneLine() {
         func sender(_ sender: CoordinatorMessageHeader.Sender) -> String? {
             guard case .fromSender(let name) = CoordinatorMessageHeader.kind(
