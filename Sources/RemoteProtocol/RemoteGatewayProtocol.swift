@@ -398,15 +398,45 @@ public struct RemoteWorkspaceDoneRequest: Codable, Equatable, Sendable {
     public var protocolVersion: String
     public var workspaceID: UUID
     public var done: Bool
+    /// The client can decode `RemoteWorkspaceDoneResult.hasOpenPullRequest`.
+    /// A request without the key comes from a client that cannot, so the
+    /// Mac answers it with `workInProgress`, which every client decodes.
+    public var knowsOpenPullRequestResult: Bool
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
         workspaceID: UUID,
-        done: Bool
+        done: Bool,
+        knowsOpenPullRequestResult: Bool = false
     ) {
         self.protocolVersion = protocolVersion
         self.workspaceID = workspaceID
         self.done = done
+        self.knowsOpenPullRequestResult = knowsOpenPullRequestResult
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try container.decode(String.self, forKey: .protocolVersion)
+        workspaceID = try container.decode(UUID.self, forKey: .workspaceID)
+        done = try container.decode(Bool.self, forKey: .done)
+        knowsOpenPullRequestResult = try container.decodeIfPresent(
+            Bool.self, forKey: .knowsOpenPullRequestResult
+        ) ?? false
+    }
+
+    /// Leaves the key out when false, so the request is the same JSON an
+    /// older client sends.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(protocolVersion, forKey: .protocolVersion)
+        try container.encode(workspaceID, forKey: .workspaceID)
+        try container.encode(done, forKey: .done)
+        if knowsOpenPullRequestResult { try container.encode(true, forKey: .knowsOpenPullRequestResult) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, workspaceID, done, knowsOpenPullRequestResult
     }
 }
 
@@ -421,7 +451,8 @@ public enum RemoteWorkspaceDoneResult: String, Codable, Equatable, Sendable {
     case workInProgress = "work_in_progress"
     /// The subspace's task has an open pull request or a merge under way,
     /// so it finishes through Merge, not a done mark. Older clients cannot
-    /// decode this result and report the request as failed.
+    /// decode this result, so the Mac sends it only to a client whose
+    /// request sets `knowsOpenPullRequestResult`.
     case hasOpenPullRequest = "has_open_pull_request"
     case workspaceNotFound = "workspace_not_found"
 }
