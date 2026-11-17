@@ -195,8 +195,9 @@ in a read of the open tasks that is less than a minute old:
 - the ledger shows no earlier nudge for the same task and condition.
 
 Start every message to a task with `[coordinator]`, and say in it who decided:
-the user, the user's policy, or you. Name other tasks in it as Talk to the
-user says. A Done task opens again when its agent starts new work, such as
+the user, the user's policy, or you. Write another task in it as a Markdown
+link with its title, `[title](toastty://task/<task-id>)`, not as its ID or a
+bare URL. A Done task opens again when its agent starts new work, such as
 after your message: send to a Done task only when its work must go on.
 
 ```bash
