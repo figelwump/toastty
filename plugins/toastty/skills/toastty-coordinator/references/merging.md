@@ -68,8 +68,10 @@ is obvious.
 - **The report.** The task's report and its last reply show no review finding
   that the agent rejected or left open, no follow-up that the change still
   needs, and no question for the user.
-- **The pull request.** It is not a draft. Every check passed: none still
-  runs, none failed, and a flake that Notes names does not count as passed.
+- **The pull request.** It is not a draft. Every check passed on the head
+  commit: none still runs and none failed. A failed check counts as passed
+  only after a rerun of it passed; a `flake` line in the ledger does not
+  change that.
   `mergeState` is `CLEAN`. `reviewDecision` is not `CHANGES_REQUESTED` or
   `REVIEW_REQUIRED`.
 - **The base branch.** `baseRefName` is the repository's default branch, which

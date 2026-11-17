@@ -181,8 +181,7 @@ Steps:
    stay Open. Add `· proposed` and the date to each line you take. Leave out
    a line that you proposed in the last 7 days, unless its count rose since.
 3. **A fix for each.** Suggest the smallest one that fits:
-   - a line in `policy.md`: a rule, or a fact in Notes that you give to each
-     new task;
+   - a rule in `policy.md`, such as a line that you give to each new task;
    - a line in Talking that changes your daily list or its Scratchpad, when
      the friction is an item that waited there for days, or a kind of item
      that the user overlooked;

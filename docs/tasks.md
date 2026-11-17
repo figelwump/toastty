@@ -1275,7 +1275,7 @@ sets its next check.
 | An agent waits at a permission prompt | Never answers it. Tells you after 10 minutes. |
 | An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. |
 | An agent ended a turn, and the task is not done | Reads the reply. It then waits for CI, notes the task or pull request the agent waits for and tells the agent when that merged, treats the reply as a question, or tells the agent to open its pull request or to mark the work ready. |
-| CI failed | Tells the task to fix it, or to rerun a check your policy names as a flake. |
+| CI failed | When the failed tests are outside the pull request's change, tells the task to rerun them once before it changes code. Otherwise, or when the rerun fails again, tells the task to fix it. A test that passed on the rerun goes in its ledger. |
 | CI runs for more than 30 minutes | Looks at the run, and tells you when it is queued or hangs. |
 | The pull request has merge conflicts | Tells the task to rebase and resolve them. |
 | An agent is busy, with no output for 30 minutes | Never interrupts. Tells you which command seems to hang. |
@@ -1389,7 +1389,7 @@ holds. Otherwise it brings the task to you, as for any review.
 | The diff | It read all of it. Every changed file and line fits the rule's kind and size, and the change does only what the task asked. It judges the kind from the files, not from the description. With no size in the rule, the limit is 40 changed lines in 3 files. |
 | The proof | Good proof under your Reviewing rules, for the current commit. |
 | The report | No review finding that the agent rejected or left open, no follow-up that the change still needs, and no question for you. |
-| The pull request | Not a draft. Every check passed, with none still running; a known flake does not count as passed. No conflict, and no requested or missing review. |
+| The pull request | Not a draft. Every check passed, with none still running; a failed check counts only after a rerun of it passed. No conflict, and no requested or missing review. |
 | The base branch | The repository's default branch, or a branch that the rule names. |
 | The task | It waits for review, its agent is idle, you did not type in it in the last 15 minutes, and it is not a child of another task. |
 
@@ -1556,7 +1556,7 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 | `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
 | `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator), `references/improving.md` the rules for [its two records and its review](#how-the-coordinator-improves-the-work), `references/first-run.md` the questions of [the first run](#the-policy-file), and `references/releases.md` the rules for [releases](#release). Your own rules go in `policy.md`. |
 | `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
-| `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
+| `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, the outside pull requests it watches, and the tests that failed and then passed on a rerun. |
 | `friction.md` | the coordinator | What slows the work: one line for each pattern, with a count. See [How the coordinator improves the work](#how-the-coordinator-improves-the-work). You can edit it. |
 | `decisions.md` | the coordinator | What waited for you: one line for each review and each question, with what you then decided. |
 | `attachments/` | Toastty | Copies of the files you attached to a quick entry message, in one folder for each message, kept out of the repository. See [Quick entry with the coordinator](#quick-entry-with-the-coordinator). |
@@ -1612,7 +1612,9 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 
 ### The policy file
 
-`policy.md` holds your choices. A rule there wins over the skill's defaults,
+`policy.md` holds your choices, and only rules: facts that the coordinator
+keeps, such as a test that passed on a rerun, go in its ledger. A rule there
+wins over the skill's defaults,
 except for the Never column. You can edit it at any time; the coordinator
 reads it on each wake. **Policy**, in the header of the coordinator's panel,
 and **Open Policy**, in the Coordinator row's context menu, show the file in
@@ -1659,9 +1661,6 @@ by asking you:
 ## Releases
 - www: on merge.
 - Toastty Mac app: batch; remind me at 8 waiting or every Monday.
-
-## Notes (kept by the coordinator)
-- toastty: testLongSidebarScroll fails on the mini; CI decides.
 ```
 
 **The first run.** The first time you write to the coordinator while one
@@ -1692,7 +1691,10 @@ Say "set yourself up again" to answer all five parts again. A policy from an
 older version has no Talking or Improving section; the coordinator asks
 about it once and adds the heading. It does not ask about
 Merging: that section stays empty until you ask for a rule, and the
-coordinator adds the heading to an older policy when it first writes one.
+coordinator adds the heading to an older policy when it first writes one. An
+older policy can also end with a Notes section. Its lines still apply; the
+coordinator adds nothing to it, and asks you once whether to move each fact
+there to its ledger and each rule to its section.
 
 **Undo.** The coordinator commits each change it makes to the policy as one
 commit, named `Policy: change <section>`, and shows you the line it added.
