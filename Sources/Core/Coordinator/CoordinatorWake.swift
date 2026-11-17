@@ -339,7 +339,9 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// and trailing white space, in hex. The agent's transcript keeps the
     /// text Toastty typed, so the key survives a relaunch, which forgets
     /// which message Toastty sent. Every digest names the time of each
-    /// change it lists, so two digests do not share a text.
+    /// change it lists, so two digests do not share a text. A paired iPhone
+    /// computes the same key from the text it receives
+    /// (`CoordinatorChatTranscript.digestKey`).
     public static func digestKey(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return SHA256.hash(data: Data(trimmed.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -524,5 +526,20 @@ public struct TaskAlertFacts: Equatable, Sendable {
                 return false
             }
         }
+    }
+}
+
+extension RemoteCoordinatorQuietDigests {
+    /// The quiet digests with these keys, oldest first, and their revision.
+    public init(keys: [String]) {
+        self.init(revision: Self.revision(of: keys), keys: keys)
+    }
+
+    /// The first 16 hex digits of the SHA-256 of the keys, one per line.
+    /// The same keys give the same revision, also after a relaunch, so a
+    /// device reads them again only when they change.
+    public static func revision(of keys: [String]) -> String {
+        let digest = SHA256.hash(data: Data(keys.joined(separator: "\n").utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }

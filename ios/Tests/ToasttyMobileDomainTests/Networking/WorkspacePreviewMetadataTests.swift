@@ -289,6 +289,64 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         }
     }
 
+    /// The coordinator's workspace carries the revision of its quiet wake
+    /// turns. An older Mac sends none, and one this phone cannot read
+    /// counts as none, so no turn folds.
+    func testTheQuietDigestsRevisionDecodesAndAnOlderOrMalformedOneIsNone() throws {
+        let coordinatorID = UUID()
+        func decoded(_ revision: Any?) throws -> MobileHomeSnapshot {
+            var coordinator: [String: Any] = [
+                "id": coordinatorID.uuidString, "title": "Coordinator", "panels": [], "isCoordinator": true,
+            ]
+            coordinator["coordinatorQuietDigestsRevision"] = revision
+            return try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(
+                workspaces: [coordinator], tasks: [:]
+            )).presentation()
+        }
+        XCTAssertEqual(try decoded("6ca155390421e7e6").coordinatorQuietDigestsRevision, "6ca155390421e7e6")
+        for value: Any? in [nil, 7, ["revision": "6ca155390421e7e6"]] {
+            let snapshot = try decoded(value)
+            XCTAssertNotNil(snapshot.coordinator)
+            XCTAssertNil(snapshot.coordinatorQuietDigestsRevision, "value: \(String(describing: value))")
+        }
+    }
+
+    /// The phone finds a digest's key from the text that the Mac's
+    /// conversation reader sends, so that text must cross the wire byte for
+    /// byte: white space, line endings, non-ASCII text, text in either
+    /// Unicode normal form and characters that JSON escapes. Swift's `==`
+    /// treats canonically equal strings as equal, so the bytes are compared.
+    func testADigestCrossesTheWireByteForByte() throws {
+        let header = "\(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user."
+        let texts = [
+            header + "\n- [Fix the login](toastty://task/1): needsYou (review) at 2026-11-16T15:25:00Z\nRead `toastty task list` for details.",
+            "\n  " + header + "\r\n- [Café \u{1F35E} \"quoted\" \\ back/slash](toastty://task/2): idle\r\n\t\n",
+            header + "\n- [e\u{0301} and \u{00E9}, \u{2028} \u{2029} \u{0007}](toastty://task/3): running",
+        ]
+        let conversationID = RemoteConversationID(rawValue: UUID())
+        let events = texts.enumerated().map { index, text in
+            ConversationEvent(
+                conversationID: conversationID, sequence: UInt64(index + 1), eventID: "claude:msg_\(index)",
+                timestamp: Date(timeIntervalSince1970: 1_800_000_000), provider: .claude,
+                payload: .userMessage(.init(text: text, origin: .remote))
+            )
+        }
+        let page = ConversationEventPage(
+            conversationID: conversationID, projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
+            projectionGeneration: 1, events: events, latestSequence: 3, firstAvailableSequence: 1
+        )
+        // The bytes the Mac's gateway writes, read by this phone's decoder.
+        let bytes = try ConversationEventCoding.makeEncoder().encode(RemoteGatewayEventsResponse.page(page))
+        guard case .page(let decoded) = try GatewayCompatibilityDecoder().decodeEventsResponse(bytes) else {
+            return XCTFail("The page did not decode")
+        }
+        let received = decoded.events.compactMap { event -> String? in
+            guard case .known(let known) = event, case .userMessage(let message) = known.payload else { return nil }
+            return message.text
+        }
+        XCTAssertEqual(received.map { Array($0.utf8) }, texts.map { Array($0.utf8) })
+    }
+
     private func snapshotData(workspaces: [[String: Any]]?, tasks: [String: Any]? = nil) throws -> Data {
         var snapshot: [String: Any] = ["projectionRunID": UUID().uuidString, "conversations": [],
                                         "generatedAt": "2026-09-06T12:00:00.000Z"]

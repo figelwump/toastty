@@ -1792,7 +1792,10 @@ toastty coordinator wake --clear --quiet
   a quiet turn, a later call without `--quiet` cannot remove the mark.
 - The chat folds a quiet turn under Toastty's line for its digest. A click
   on the line opens the digest, the coordinator's work and its answer. A
-  question or an approval prompt in the turn stays visible.
+  question or an approval prompt in the turn stays visible. The
+  coordinator's chat on a paired iPhone folds it the same way, and its New
+  line does not count it (see
+  [The Coordinator tab](remote-access.md#the-coordinator-tab)).
 - The end of a quiet turn does not mark the coordinator unread and sends no
   notification to the Mac and no push to a phone. If you send a message into
   the turn after the mark, or type in the coordinator's terminal, its end

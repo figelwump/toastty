@@ -92,8 +92,8 @@ extension TaskWebhookService {
         coordinator.onWorkspaceChange = { [weak self] workspaceID in
             self?.coordinatorWorkspaceChanged(to: workspaceID)
         }
-        coordinator.isQuietDigest = { [weak self] text in
-            self?.coordinatorWake?.isQuietDigest(text) ?? false
+        coordinator.quietDigestKeys = { [weak self] in
+            self?.coordinatorWake?.quietDigestKeys ?? []
         }
         coordinator.onTurnEnd = { [weak self] end in
             self?.coordinatorTurnEnded(end)

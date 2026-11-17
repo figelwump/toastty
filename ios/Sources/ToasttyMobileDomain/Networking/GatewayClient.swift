@@ -129,6 +129,7 @@ public protocol GatewayClientProtocol: Sendable {
     func readCoordinatorChat(
         _ request: RemoteCoordinatorChatReadRequest
     ) async throws -> RemoteCoordinatorChatReadResponse
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests
 }
 
 public extension GatewayClientProtocol {
@@ -241,6 +242,10 @@ public extension GatewayClientProtocol {
     func readCoordinatorChat(
         _ request: RemoteCoordinatorChatReadRequest
     ) async throws -> RemoteCoordinatorChatReadResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -691,6 +696,13 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
             body: try encode(request)
         )
         return try decodeVersioned(RemoteCoordinatorChatReadResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests {
+        let response = try await perform(method: "GET", path: RemoteCoordinatorQuietDigestsPolicy.path)
+        return try decodeVersioned(RemoteCoordinatorQuietDigests.self, from: response.body) {
             $0.protocolVersion
         }
     }
