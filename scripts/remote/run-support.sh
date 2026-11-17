@@ -276,7 +276,9 @@ EOF
 toastty_remote_run_reattachable() {
   local state
   state="$(toastty_remote_detached probe "$1" 2>/dev/null)" || return 1
-  jq -e '.detached == true and .followed == false and .cancelled != true' <<<"$state" >/dev/null 2>&1
+  # A follower can still hold the lock for a few seconds after its wrapper was
+  # killed; follow waits for it. A live local owner was already excluded.
+  jq -e '.detached == true and .cancelled != true' <<<"$state" >/dev/null 2>&1
 }
 
 # Wraps a remote session script (printed by the function named in $1) so that
@@ -297,6 +299,21 @@ gui_root="$(dirname "$(dirname "$remote_run_root")")"
 /usr/bin/python3 "$admission" detach --root "$gui_root" --dir "$remote_run_root" -- /bin/bash "$session_script" "$@"
 exec /usr/bin/python3 "$admission" follow --root "$gui_root" --dir "$remote_run_root"
 EOF
+}
+
+# Succeeds when the wrapper must stop without a result: the detached run is
+# still going (only the connection was lost) or its state cannot be read.
+toastty_remote_run_continues() {
+  local state
+  state="$(toastty_remote_detached probe "$1" 2>/dev/null)" || return 0
+  jq -e '.detached == true and .finished != true' <<<"$state" >/dev/null 2>&1
+}
+
+# Files that the wrapper stages as the remote controller. A rerun with other
+# controller files is a different run.
+toastty_controller_identity() {
+  (cd "$ROOT_DIR" && find scripts/remote scripts/automation/runtime-ownership.sh -type f -print \
+    | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done) | shasum -a 256 | cut -c 1-64
 }
 
 toastty_detached_run_notice() {

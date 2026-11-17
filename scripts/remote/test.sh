@@ -852,6 +852,8 @@ run_local_mode() {
   if [[ "$LIVE_GATEWAY" != 1 && -n "$REMOTE_HOST" ]]; then
     if source_identity="$(toastty_source_identity)"; then
       request_key="$(toastty_request_key test "$ROOT_DIR" "$VALIDATION_SCOPE" "$source_identity" \
+        "$(toastty_controller_identity)" "$REMOTE_REPO_ROOT" "$REMOTE_GUI_ROOT" "$QUEUE_TIMEOUT" \
+        "${TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS:-}" "${TOASTTY_ALLOW_REMOTE_X86_64_TESTS:-}" \
         "$TEST_PLATFORM" "$RESOURCE" "$BUILD_ONLY" "$BUILD_JOBS" ${XCODEBUILD_ARGS[@]+"${XCODEBUILD_ARGS[@]}"})"
       if reattach_label="$(toastty_find_reattachable_run "$ROOT_DIR/artifacts/remote-tests" "$request_key" "$EXPLICIT_RUN_LABEL")" \
         && toastty_remote_run_reattachable "$REMOTE_GUI_ROOT/test-runs/$reattach_label"; then
@@ -997,6 +999,10 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     remote_test_exit_code=$?
     warn "Remote xcodebuild test failed"
   fi
+  fi
+  if [[ "$remote_test_exit_code" != 0 && -n "$request_key" ]] && toastty_remote_run_continues "$remote_run_root"; then
+    warn "Lost the connection to remote run $RUN_LABEL; it keeps running. Run the same command again to reattach."
+    return "$remote_test_exit_code"
   fi
 
   toastty_run_phase artifactCopy

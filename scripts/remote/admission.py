@@ -123,7 +123,11 @@ def release_dead_reservation(root: Path, path: Path, value: dict, marker: Path) 
     """
     blocked_at = value.get("blockedAt")
     if not isinstance(blocked_at, (int, float)):
-        blocked_at = path.stat().st_mtime
+        # A supervisor that was killed never recorded the time. Start the
+        # settle time now, when admission first sees the closed lease.
+        value["blockedAt"] = time.time()
+        write_request(path, value)
+        return False
     if time.time() - blocked_at < REAP_GRACE_SECONDS:
         return False
     run_dir = marker.parent
@@ -386,7 +390,7 @@ def execute(args, root: Path, state: Path) -> int:
         print(f"[admission] {args.label} admitted as {args.resource} after {row['queueSeconds']:.2f}s", file=sys.stderr, flush=True)
         environment = dict(os.environ, TOASTTY_ADMISSION_SUPERVISOR_PID=str(os.getpid()),
                            TOASTTY_ADMISSION_REQUEST_ID=request_id,
-                           TOASTTY_ADMISSION_ROOT=str(root),
+                           TOASTTY_ADMISSION_ROOT=args.root,
                            TOASTTY_ADMISSION_QUEUE_TIMEOUT=str(args.timeout),
                            TOASTTY_ADMISSION_ORPHAN_TIMEOUT=str(args.orphan_timeout))
         child = subprocess.Popen(command, pass_fds=(fd,), start_new_session=True, env=environment)
@@ -693,7 +697,7 @@ def main() -> int:
     following = sub.add_parser("follow")
     following.add_argument("--root", required=True)
     following.add_argument("--dir", required=True)
-    following.add_argument("--lock-timeout", type=float, default=30)
+    following.add_argument("--lock-timeout", type=float, default=60)
     probing = sub.add_parser("probe")
     probing.add_argument("--root", required=True)
     probing.add_argument("--dir", required=True)

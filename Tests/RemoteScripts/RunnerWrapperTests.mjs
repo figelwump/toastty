@@ -101,6 +101,7 @@ const script = readFileSync(0, "utf8");
 const execution = script.includes('script_path="$4"');
 const phase = execution ? "execute" : script.includes("toastty_allocate_remote_run") ? "allocate" : script.includes("worktree remove") ? "cleanup" : "preflight";
 appendFileSync(process.env.FIXTURE_TRANSPORT_LOG, phase + "\\n");
+if (execution && process.env.FIXTURE_SSH_PID) require("node:fs").writeFileSync(process.env.FIXTURE_SSH_PID, String(process.pid));
 const fixtureExecution = ${JSON.stringify(fixtureExecution)};
 // Keep command joining faithful while excluding machine-specific login files.
 const command = args.slice(hostIndex + 1);
@@ -367,5 +368,24 @@ for (const kind of ["test", "validate"]) {
     // Let the earlier detached run end so that no process outlives the test.
     writeFileSync(gate, "");
     await until(() => existsSync(join(context.remoteRun, "detached-exit.json")));
+  });
+}
+
+for (const kind of ["test", "validate"]) {
+  test(`${kind}.sh stops without a result when only its connection drops, and a rerun reattaches`, { timeout: 90000 }, async (t) => {
+    const context = fixture(t, kind);
+    const gate = join(context.root, "gate"), sshPid = join(context.root, "ssh.pid");
+    const first = context.start({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate, FIXTURE_SSH_PID: sshPid });
+    await until(() => existsSync(join(context.remoteRun, "detached.json")) && existsSync(sshPid));
+    process.kill(Number(readFileSync(sshPid, "utf8")), "SIGKILL");
+    assert.notEqual(await first.finished, 0);
+    assert.equal(existsSync(join(context.localArtifacts, "result.json")), false);
+    assert.equal(existsSync(join(context.remoteRun, "detached-exit.json")), false);
+    writeFileSync(gate, "");
+    const second = context.run({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate });
+    succeeds(second);
+    assert.match(second.stdout + second.stderr, /Reattaching to remote run explicit-run-label/);
+    assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "pass");
+    assert.equal(existsSync(context.remoteRun), false);
   });
 }

@@ -535,6 +535,9 @@ if [[ -z "$smoke_test" ]]; then
 fi
 cd "$remote_worktree_dir"
 remote_exit_code=0
+# On cancel, wait for admission and its cleanup, then still write the
+# completion markers below. A no-op trap is reset for child processes.
+trap ':' HUP INT TERM
 /usr/bin/python3 "$remote_run_root/controller/scripts/remote/admission.py" run \
   --root "$(dirname "$(dirname "$remote_run_root")")" --resource "$admission_resource" \
   --label "$run_label" --timeout "$queue_timeout" --report "$remote_run_root/admission.json" \
@@ -594,6 +597,7 @@ run_local_mode() {
   if [[ -n "$REMOTE_HOST" ]] && source_identity="$(toastty_source_identity)"; then
     [[ -z "$SMOKE_TEST" ]] || smoke_env_identity="$(build_smoke_env_script "$SMOKE_TEST")"
     request_key="$(toastty_request_key validate "$ROOT_DIR" "$VALIDATION_SCOPE" "$source_identity" \
+      "$(toastty_controller_identity)" "$REMOTE_REPO_ROOT" "$REMOTE_GUI_ROOT" "${TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS:-3600}" \
       "$SMOKE_TEST" "$VALIDATION_COMMAND" "$SYNC_GHOSTTY_ARTIFACTS" "$smoke_env_identity")"
     if reattach_label="$(toastty_find_reattachable_run "$ROOT_DIR/artifacts/remote-gui" "$request_key" "$EXPLICIT_RUN_LABEL")" \
       && toastty_remote_run_reattachable "$REMOTE_GUI_ROOT/runs/$reattach_label"; then
@@ -749,6 +753,10 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     remote_validation_exit_code=$?
     warn "Remote validation failed"
   fi
+  fi
+  if [[ "$remote_validation_exit_code" != 0 && -n "$request_key" ]] && toastty_remote_run_continues "$remote_run_root"; then
+    warn "Lost the connection to remote run $RUN_LABEL; it keeps running. Run the same command again to reattach."
+    return "$remote_validation_exit_code"
   fi
 
   toastty_run_phase artifactCopy
