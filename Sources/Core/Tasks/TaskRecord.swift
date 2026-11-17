@@ -226,6 +226,10 @@ public struct TaskCleanup: Codable, Equatable, Sendable {
     public var finishedAt: Date?
     /// What the user chose for an archive, so a retry does the same.
     public var archiveOptions: TaskArchiveOptions?
+    /// A merge's cleanup that Toastty runs itself, with an archive's
+    /// checks, because the pull request script could not match the
+    /// worktree's branch to the pull request. A retry continues it.
+    public var removesWorktreeDirectly: Bool?
 
     public init(
         kind: Kind,

@@ -80,6 +80,50 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// While the task space waits for its cleanup, the task's agent reads
+    /// when it closes, and a caller reads what an archive would do instead,
+    /// both through the CLI and without changing anything.
+    @Test
+    func aHeldTaskSpaceReportsItsCloseTimeAndAnArchivePreview() async throws {
+        try await withScenario(cleanupHold: 3_600) { scenario in
+            scenario.reportAgent(.ready)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the cleanup is held") { scenario.isHeld }
+            let taskSocketPath = temporarySocketPath()
+            let taskServer = try makeTaskServer(scenario, socketPath: taskSocketPath)
+            defer { withExtendedLifetime(taskServer) {} }
+            try waitForSocket(at: taskSocketPath)
+            scenario.socketPath = taskSocketPath
+            let taskID = scenario.taskID.uuidString
+
+            let get = try await scenario.cli(["--json", "task", "get", taskID])
+            #expect(get.status == 0, "\(get.output)")
+            let task = try #require(
+                (try JSONSerialization.jsonObject(with: Data(get.output.utf8)) as? [String: Any])?["result"] as? [String: Any]
+            )
+            let closesAt = try #require((task["cleanup"] as? [String: Any])?["taskSpaceClosesAt"] as? String, "\(get.output)")
+            let closes = try #require(ISO8601DateFormatter().date(from: closesAt))
+            #expect(abs(closes.timeIntervalSinceNow - 3_600) < 120, "\(closesAt)")
+
+            let preview = try await scenario.cli(["--json", "task", "archive", taskID, "--dry-run"])
+            #expect(preview.status == 0, "\(preview.output)")
+            let result = try #require(
+                (try JSONSerialization.jsonObject(with: Data(preview.output.utf8)) as? [String: Any])?["result"] as? [String: Any]
+            )
+            #expect(result["dryRun"] as? Bool == true)
+            #expect(result["refusal"] is NSNull, "\(preview.output)")
+            let summary = try #require(result["summary"] as? [String])
+            #expect(summary.contains("Removes the worktree."), "\(summary)")
+            #expect(summary.contains("Deletes the local branch fix/task-7. It stays on the remote."), "\(summary)")
+            #expect(summary.contains("test/repo#7 merged, but the task shows as Archived, not Done."), "\(summary)")
+            // Nothing changed.
+            #expect(scenario.record?.archivedAt == nil)
+            #expect(scenario.isHeld)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+        }
+    }
+
     @Test
     func aHeldCleanupWaitsWhileAWindowShowsTheTaskSpace() async throws {
         try await withScenario(cleanupHold: 0.5) { scenario in
@@ -866,32 +910,107 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// The task's work went to a pull request on another branch, as when a
+    /// task rebases an existing pull request. The cleanup cannot match the
+    /// worktree's branch to the pull request, so it stops and says why;
+    /// Clean Up then removes the worktree and its local branch with an
+    /// archive's checks, and the task stays merged.
     @Test
-    func aMergeOnGitHubWhileTheAgentWorksWaitsForTheUser() async throws {
+    func cleanUpRemovesAWorktreeOnAnotherBranchThanThePullRequest() async throws {
+        try await withScenario(pullRequestBranch: "feat/shared") { scenario in
+            scenario.reportAgent(.ready)
+            FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+            await scenario.waitUntil("the cleanup stops") {
+                if case .failed? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                return false
+            }
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID)?.stoppedOnBranchMismatch == true)
+            guard case .needsYou(.cleanupStopped(let reason))? = scenario.boardItem?.stage else {
+                Issue.record("expected Merged · clean up?, got \(String(describing: scenario.boardItem?.stage))")
+                return
+            }
+            #expect(reason.contains("PR #7's branch is feat/shared, but the task's worktree is on fix/task-7"), "\(reason)")
+            #expect(reason.contains("Clean Up removes the worktree"), "\(reason)")
+            #expect(scenario.boardItem.map { TaskBoardPresentation.statusLine($0) } == "Merged · clean up?")
+            #expect(scenario.boardItem.map { TaskBoardPresentation.detailActions($0) } == [.cleanUp, .keepAsIs])
+
+            // An unsaved document stops the first try before anything
+            // closes; the next Clean Up continues the same way, rather than
+            // through the script, which would stop on the branches again.
+            scenario.tasks.unsavedDocumentCount = { _ in 1 }
+            try scenario.tasks.retryCleanup(taskID: scenario.taskID)
+            await scenario.waitUntil("the cleanup stops on the document") { scenario.record?.cleanup?.problem != nil }
+            #expect(scenario.record?.cleanup?.problem?.contains("unsaved documents") == true)
+            #expect(scenario.record?.cleanup?.removesWorktreeDirectly == true)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            scenario.tasks.unsavedDocumentCount = { _ in 0 }
+
+            try scenario.tasks.retryCleanup(taskID: scenario.taskID)
+            await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(try scenario.git(["branch", "--list", "fix/task-7"], in: scenario.repo).isEmpty)
+            // Both branches stay on GitHub: the pull request's, and none
+            // was pushed under the task's own name.
+            #expect(try scenario.git(["ls-remote", "--heads", "origin", "feat/shared"], in: scenario.repo).isEmpty == false)
+            #expect(scenario.record?.mergedAt != nil)
+            #expect(scenario.record?.archivedAt == nil)
+            #expect(scenario.boardItem?.stage == .done)
+        }
+    }
+
+    /// A merge on GitHub while the agent works is the user's acceptance too.
+    /// Its cleanup waits for the agent's turn, as after a merge Toastty
+    /// ran, and does not ask the user. Work the agent starts afterwards, or
+    /// a new pull request in the task space, ends the cleanup quietly.
+    @Test(arguments: ["turnEnds", "newTurn", "newPullRequest"])
+    func aMergeOnGitHubWhileTheAgentWorksWaitsForItsTurn(after: String) async throws {
         try await withScenario { scenario in
             scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
                 sessionID: "agent", agent: .claude, panelID: scenario.taskPanelID, workspaceID: scenario.taskSpaceID,
                 cwd: scenario.worktree, isActive: true, isInTurn: true
             )
-            #expect(scenario.headerPresentation?.title == "Merge PR #7")
+            scenario.reportAgent(.working)
             FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
             await scenario.pullRequests.refresh(scenario.pullRequest).value
 
-            #expect(scenario.record?.cleanup?.problem?.contains("while the agent was working") == true)
-            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
-            guard case .needsYou(.cleanupStopped)? = scenario.boardItem?.stage else {
-                Issue.record("expected Merged · clean up?, got \(String(describing: scenario.boardItem?.stage))")
-                return
-            }
-            // The task space stays open, and its header shows the merge as
-            // done instead of offering Merge for the merged pull request.
-            #expect(scenario.headerPresentation?.title == "Done · PR #7")
+            await scenario.waitUntil("the merge is recorded") { scenario.record?.mergedAt != nil }
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(scenario.boardItem?.stage == .done)
+            // The agent is still in its turn, so nothing closes.
+            try await Task.sleep(for: .milliseconds(600))
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(scenario.record?.cleanup?.finishedAt == nil)
 
-            // Clean Up once the agent is done.
-            scenario.fakeSessions.sessions["agent"]?.isInTurn = false
-            try scenario.tasks.retryCleanup(taskID: scenario.taskID)
-            await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
-            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            switch after {
+            case "turnEnds":
+                scenario.fakeSessions.sessions["agent"]?.isInTurn = false
+                scenario.reportAgent(.ready)
+                await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+                #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+                #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            case "newTurn":
+                scenario.reportAgent(.ready)
+                scenario.reportAgent(.working)
+                await scenario.waitUntil("the cleanup ends") { scenario.record?.cleanup?.finishedAt != nil }
+                #expect(scenario.record?.cleanup?.stepsDone == ["left the task space open"])
+                #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+                #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+            default:
+                scenario.store.send(.setWorkspaceAnnotation(
+                    workspaceID: scenario.taskSpaceID,
+                    key: "github-pr",
+                    annotation: try #require(WorkspaceAnnotation.validated(text: "PR #8", url: "https://github.com/test/repo/pull/8"))
+                ))
+                await scenario.waitUntil("the cleanup ends") { scenario.record?.cleanup?.finishedAt != nil }
+                #expect(scenario.record?.cleanup?.stepsDone == ["left the task space open"])
+                #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            }
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(scenario.boardItem.map { if case .needsYou = $0.stage { true } else { false } } == false)
         }
     }
 
@@ -1222,7 +1341,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     /// way the app wires it.
     private func withScenario(
         checksPending: Bool = false, baseBranch: String = "main", adopted: Bool = false,
-        cleanupHold: TimeInterval = 0,
+        cleanupHold: TimeInterval = 0, pullRequestBranch: String = "fix/task-7",
         _ body: (Scenario) async throws -> Void
     ) async throws {
         let root = URL(filePath: NSTemporaryDirectory())
@@ -1248,7 +1367,12 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         try git(["worktree", "add", "-q", "-b", "fix/task-7", worktree], in: repo)
         _ = try commit("first", in: worktree)
         let head = try commit("second", in: worktree)
-        try git(["push", "-q", "-u", "origin", "fix/task-7"], in: worktree)
+        if pullRequestBranch == "fix/task-7" {
+            try git(["push", "-q", "-u", "origin", "fix/task-7"], in: worktree)
+        } else {
+            // The task's work went to another branch's pull request.
+            try git(["push", "-q", "origin", "HEAD:refs/heads/\(pullRequestBranch)"], in: worktree)
+        }
 
         let fakeBin = root.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
@@ -1256,7 +1380,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             ? [["name": "CI gate", "status": "IN_PROGRESS", "conclusion": NSNull()]]
             : [["name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS"]]
         let pullRequest: [String: Any] = [
-            "number": 7, "title": "task", "state": "OPEN", "isDraft": false, "headRefName": "fix/task-7",
+            "number": 7, "title": "task", "state": "OPEN", "isDraft": false, "headRefName": pullRequestBranch,
             "headRefOid": head, "baseRefName": baseBranch, "isCrossRepository": false,
             "mergeable": "MERGEABLE", "mergeStateStatus": checksPending ? "BLOCKED" : "CLEAN",
             "url": "https://github.com/test/repo/pull/7", "statusCheckRollup": checks, "body": "",

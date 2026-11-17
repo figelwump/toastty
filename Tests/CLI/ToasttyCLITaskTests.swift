@@ -296,6 +296,15 @@ struct ToasttyCLITaskTests {
                 "closePullRequest": .bool(true),
                 "deleteUnpushedCommits": .bool(false),
                 "discardChanges": .bool(true),
+                "dryRun": .bool(false),
+            ]))
+        #expect(try command(["archive", taskID, "--dry-run"])
+            == .appControlRun(kind: .action, id: "task.archive", args: [
+                "taskID": .string(taskID),
+                "closePullRequest": .bool(false),
+                "deleteUnpushedCommits": .bool(false),
+                "discardChanges": .bool(false),
+                "dryRun": .bool(true),
             ]))
         #expect(try command(["release"]) == .appControlRun(kind: .action, id: "task.release", args: [:]))
         #expect(try command(["release", "--workspace", workspaceID])

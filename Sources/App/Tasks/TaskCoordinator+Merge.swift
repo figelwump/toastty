@@ -394,14 +394,15 @@ extension TaskCoordinator {
     }
 
     /// Cleans up the task spaces whose pull request merged on GitHub, which
-    /// counts as the user's acceptance. Only when nothing is in the way:
-    /// no merge or cleanup ran for it, and no agent is in a turn. The task
-    /// has a worktree on its own branch, or was adopted from an older space.
-    /// Without a saved checkout, only an absent worktree permits cleanup.
-    /// The script checks an existing worktree is clean at the merged head. A task
-    /// whose agent was working gets "Merged · clean up?" instead. A task
-    /// in a project with `release_tags` is cleaned up the same way and
-    /// waits in To ship without its task space.
+    /// counts as the user's acceptance, when no merge or cleanup ran for it.
+    /// The task has a worktree on its own branch, or was adopted from an
+    /// older space. Without a saved checkout, only an absent worktree
+    /// permits cleanup. The script checks an existing worktree is clean at
+    /// the merged head. An agent in a turn does not stop it: the cleanup
+    /// waits for the hold and for the turn to end, as after a merge
+    /// Toastty ran, and new work in the task space ends it. A task in a
+    /// project with `release_tags` is cleaned up the same way and waits in
+    /// To ship without its task space.
     func cleanUpMergedTasks(_ taskIDs: [UUID]) {
         guard let merges else { return }
         for taskID in taskIDs {
@@ -415,15 +416,6 @@ extension TaskCoordinator {
                   store.state.workspacesByID[taskSpaceID] != nil,
                   merges.request(workspaceID: taskSpaceID) == nil,
                   let target = try? mergeTarget(record, afterMerge: true) else { continue }
-            if agentInTurn(workspaceID: taskSpaceID) {
-                records.update(id: taskID) {
-                    $0.cleanup = TaskCleanup(
-                        kind: .merge,
-                        problem: "The pull request merged while the agent was working, so Toastty left the task space open."
-                    )
-                }
-                continue
-            }
             records.update(id: taskID) { $0.cleanup = TaskCleanup(kind: .merge) }
             merges.cleanUpAfterMerge(
                 workspaceID: taskSpaceID, pullRequest: target.pullRequest, repoPath: target.repoPath,
@@ -439,8 +431,27 @@ extension TaskCoordinator {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
         if let taskSpaceID = record.taskSpaceWorkspaceID,
-           case .failed? = merges?.request(workspaceID: taskSpaceID)?.phase {
-            merges?.retryCleanup(workspaceID: taskSpaceID)
+           let request = merges?.request(workspaceID: taskSpaceID),
+           case .failed = request.phase {
+            guard request.stoppedOnBranchMismatch == true else {
+                merges?.retryCleanup(workspaceID: taskSpaceID)
+                return
+            }
+            // The script deletes only the pull request's branch, and the
+            // worktree is on another one, so a retry would stop again.
+            // Remove the worktree and its local branch the way closing a
+            // merged task's space does, with an archive's checks. Both
+            // branches stay on the remote, and the task stays merged.
+            guard agentInTurn(workspaceID: taskSpaceID) == false else {
+                throw TaskError("The agent is still working. Clean up once its turn ends.")
+            }
+            merges?.handOverStoppedCleanup(workspaceID: taskSpaceID)
+            try saveMergeState(taskID: taskID) {
+                var cleanup = TaskCleanup(kind: .merge)
+                cleanup.removesWorktreeDirectly = true
+                $0.cleanup = cleanup
+            }
+            startTeardown(taskID: taskID, kind: .merge, options: TaskArchiveOptions())
             return
         }
         guard let cleanup = record.cleanup, cleanup.problem != nil else {
@@ -456,6 +467,10 @@ extension TaskCoordinator {
             }
             guard agentInTurn(workspaceID: taskSpaceID) == false else {
                 throw TaskError("The agent is still working. Clean up once its turn ends.")
+            }
+            if cleanup.removesWorktreeDirectly == true {
+                startTeardown(taskID: taskID, kind: .merge, options: TaskArchiveOptions())
+                return
             }
             try saveMergeState(taskID: taskID) { $0.cleanup = nil }
             cleanUpMergedTasks([taskID])

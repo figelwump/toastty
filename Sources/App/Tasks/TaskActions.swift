@@ -12,6 +12,21 @@ enum TaskActions {
             .requestMerge(workspaceID: workspaceID, mode: .mergeAndCleanUp, route: .direct)
     }
 
+    /// Retry Clean Up from a task space's header or sidebar menu. A task
+    /// space goes through its task, which knows when a retry would stop
+    /// again and removes the worktree another way; other workspaces retry
+    /// the pull request script.
+    static func retryCleanup(workspaceID: UUID, sessionRuntimeStore: SessionRuntimeStore) {
+        guard let coordinator = sessionRuntimeStore.taskCoordinator,
+              let record = coordinator.records.record(taskSpaceWorkspaceID: workspaceID) else {
+            sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: workspaceID)
+            return
+        }
+        perform("Unable to Clean Up \(record.title)") {
+            try coordinator.retryCleanup(taskID: record.id)
+        }
+    }
+
     /// Reads what archiving would end and lose, asks the user, then
     /// archives with what they chose.
     static func archive(taskID: UUID, coordinator: TaskCoordinator) {
@@ -170,7 +185,9 @@ enum TaskActions {
 
     /// The lines the archive alert shows: what closes, what goes, and what
     /// stays. Kept apart from the alert so it can be tested.
-    static func archiveSummary(record: TaskRecord, check: TaskArchiveCheck) -> [String] {
+    static func archiveSummary(
+        record: TaskRecord, check: TaskArchiveCheck, options: TaskArchiveOptions = TaskArchiveOptions()
+    ) -> [String] {
         var lines: [String] = []
         if record.taskSpaceWorkspaceID != nil {
             let sessions = check.agentSessions == 0 ? "" :
@@ -188,11 +205,17 @@ enum TaskActions {
             }
         }
         if let branch = check.branch {
-            if check.unpushedCommits > 0 {
+            if check.unpushedCommits > 0, options.deleteUnpushedCommits {
+                lines.append("Deletes the local branch \(branch) and its \(check.unpushedCommits) \(check.unpushedCommits == 1 ? "commit" : "commits") on no remote branch.")
+            } else if check.unpushedCommits > 0 {
                 lines.append("Keeps the branch \(branch): \(check.unpushedCommits) of its commits are on no remote branch.")
             } else {
                 lines.append("Deletes the local branch \(branch). It stays on the remote.")
             }
+        }
+        if record.mergedAt != nil {
+            let pullRequest = check.pullRequest.map { "\($0.displayName) merged" } ?? "The pull request merged"
+            lines.append("\(pullRequest), but the task shows as Archived, not Done.")
         }
         return lines
     }

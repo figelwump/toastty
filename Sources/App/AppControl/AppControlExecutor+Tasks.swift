@@ -204,7 +204,7 @@ extension AppControlExecutor {
 
     /// The checks that need only the request's context; the git checks run
     /// after an await.
-    func prepareTaskArchive(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, TaskArchiveOptions) {
+    func prepareTaskArchive(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, TaskArchiveOptions, dryRun: Bool) {
         let coordinator = try requiredTaskCoordinator()
         let record = try visibleTask(args: args, coordinator: coordinator)
         let options = TaskArchiveOptions(
@@ -212,11 +212,22 @@ extension AppControlExecutor {
             deleteUnpushedCommits: try args.taskBool("deleteUnpushedCommits") ?? false,
             discardChanges: try args.taskBool("discardChanges") ?? false
         )
-        return (coordinator, record.id, options)
+        return (coordinator, record.id, options, try args.taskBool("dryRun") ?? false)
     }
 
-    func finishTaskArchive(_ coordinator: TaskCoordinator, taskID: UUID, options: TaskArchiveOptions) async throws -> AppControlActionOutcome {
+    func finishTaskArchive(
+        _ coordinator: TaskCoordinator, taskID: UUID, options: TaskArchiveOptions, dryRun: Bool
+    ) async throws -> AppControlActionOutcome {
         do {
+            if dryRun {
+                let preview = try await coordinator.archivePreview(taskID: taskID, options: options)
+                return .init(didMutateState: false, result: [
+                    "taskID": .string(taskID.uuidString),
+                    "dryRun": .bool(true),
+                    "summary": .array(preview.summary.map(AutomationJSONValue.string)),
+                    "refusal": preview.refusal.map(AutomationJSONValue.string) ?? .null,
+                ])
+            }
             let record = try await coordinator.archive(taskID: taskID, options: options)
             return .init(didMutateState: true, result: Self.taskSnapshot(record))
         } catch let error as TaskError {
@@ -392,6 +403,14 @@ extension AppControlExecutor {
     ) -> [String: AutomationJSONValue] {
         var snapshot = Self.taskSnapshot(record, stage: stage)
         snapshot["merge"] = coordinator.board?.mergeActivity(taskID: record.id).map { .string("\($0)") } ?? .null
+        // After a merge, the earliest time Toastty closes the task space and
+        // removes the worktree, so the task's agent can hand its work over.
+        if let taskSpaceID = record.taskSpaceWorkspaceID,
+           case .holdingCleanup(let until)? = coordinator.merges?.request(workspaceID: taskSpaceID)?.phase,
+           case .object(var cleanup)? = snapshot["cleanup"] {
+            cleanup["taskSpaceClosesAt"] = .string(ISO8601DateFormatter().string(from: until))
+            snapshot["cleanup"] = .object(cleanup)
+        }
         let status = coordinator.agentStatus(of: record)
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         snapshot["agentState"] = .object([

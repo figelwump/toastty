@@ -822,7 +822,7 @@ struct WorkspaceView: View {
             openPullRequest: { openWorkspacePullRequest(workspace) },
             setMode: { store.setWorkspaceMergeMode($0) },
             retryCleanup: {
-                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: workspace.id)
+                TaskActions.retryCleanup(workspaceID: workspace.id, sessionRuntimeStore: sessionRuntimeStore)
             },
             cancelCleanup: {
                 sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)

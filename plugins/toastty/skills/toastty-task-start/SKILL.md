@@ -184,6 +184,14 @@ On GitHub:
   ignored files with it: never keep such a plan only in an ignored folder,
   such as an `artifacts/` folder if the repository has one. The coordinator,
   when one runs, then continues the work in a new task.
+- **When Toastty cleans up.** After the pull request merges, by Toastty or on
+  GitHub, Toastty closes this task space, removes the worktree and deletes
+  the branch 24 hours after the merge, at the first check when no agent turn
+  runs. `toastty task get` reports that time as `cleanup.taskSpaceClosesAt`.
+  A new turn in the task space after the merge, or a `github-pr` link to
+  another pull request, keeps the task space open. A worktree on another
+  branch than the pull request's, as when the task updates an existing pull
+  request, stops the cleanup until the user chooses Clean Up.
 
 In a repository without pull requests, report the verified commit instead.
 

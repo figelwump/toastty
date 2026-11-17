@@ -908,10 +908,10 @@ final class AppControlExecutor {
             }
         }
         if AppControlActionID.resolve(rawID) == .taskArchive {
-            let (coordinator, taskID, options) = try withRequestContext(context) {
+            let (coordinator, taskID, options, dryRun) = try withRequestContext(context) {
                 try prepareTaskArchive(args: args)
             }
-            return try await finishTaskArchive(coordinator, taskID: taskID, options: options)
+            return try await finishTaskArchive(coordinator, taskID: taskID, options: options, dryRun: dryRun)
         }
         if AppControlActionID.resolve(rawID) == .taskMerge {
             let preparation = try withRequestContext(context) {
