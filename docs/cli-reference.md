@@ -1062,7 +1062,8 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   under Toastty's line, and its end marks nothing unread and sends no
   notification. Only the coordinator's own agent can pass `--quiet`, in a
   turn that Toastty's last digest started and that no other message came
-  into; otherwise the command fails and changes nothing. It returns the
+  into; otherwise the command fails and changes nothing. A later call
+  without `--quiet` in the same turn removes the mark. It returns the
   `status` fields and fails when there is no coordinator. See
   [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator)
   and [Quiet turns](tasks.md#quiet-turns).

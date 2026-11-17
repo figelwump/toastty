@@ -213,7 +213,10 @@ extension TaskWebhookService {
     /// Sets, moves or removes the coordinator's next check. With `quiet`,
     /// it also marks the turn that runs now as one that needs nothing from
     /// the user. That is refused, and nothing changes, unless the last
-    /// digest started this turn and no other message came into it.
+    /// digest started this turn and no other message came into it. Without
+    /// `quiet`, it removes such a mark from the turn that runs now: the
+    /// last call of a turn decides, so a turn that the coordinator marked
+    /// quiet too early and then answered is not folded.
     @discardableResult
     func setCoordinatorWake(_ request: CoordinatorWakeRequest, quiet: Bool = false) throws -> CoordinatorWakeStatus {
         let at = now()
@@ -238,6 +241,9 @@ extension TaskWebhookService {
                 )
             }
             wake.markLastDigestQuiet()
+        } else if let digestKey = wake.lastDigestKey, coordinator?.unmarkQuietTurn(digestKey: digestKey) == true {
+            wake.unmarkLastDigestQuiet()
+            ToasttyLog.info("Removed the quiet mark of a coordinator wake turn", category: .tasks)
         }
         // Whole seconds, as the digest and the status print the time.
         wake.setRequestedWake(date.map { Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.up)) })

@@ -208,7 +208,10 @@ without `--steer`. Never `--steer` your own messages.
    `"$TOASTTY_CLI_PATH" coordinator wake --clear --quiet`. Toastty then
    folds the turn in the chat and does not alert the user. Use it only in a
    turn that a digest started; Toastty refuses it in any other turn, also
-   when the user wrote to you during the turn. Then answer as usual.
+   when the user wrote to you during the turn. Decide this only after you
+   have checked everything in the turn: run the command as the turn's last
+   step. If you run it again in the turn, the last call decides, so a call
+   without `--quiet` removes the mark. Then answer as usual.
 
    | Deadline | Next check |
    | --- | --- |

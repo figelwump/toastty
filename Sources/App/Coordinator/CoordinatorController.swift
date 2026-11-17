@@ -1297,9 +1297,24 @@ final class CoordinatorController: ObservableObject {
     /// The newest text this controller typed into the agent, from any
     /// sender, as `CoordinatorWakeState.digestKey`, and when.
     private var lastTyped: (key: String, at: Date)?
-    /// The wake turn that the coordinator marked quiet: its session and the
-    /// key of the digest that started it.
-    private var quietTurn: (sessionID: String, digestKey: String)?
+    /// The wake turn that the coordinator marked quiet: its session, the
+    /// key of the digest that started it, and what names the turn. The
+    /// session's last turn end moves when its status ends the turn, and the
+    /// conversation's turn epoch when its transcript does. Either can come
+    /// first.
+    private var quietTurn: QuietTurn?
+
+    private struct QuietTurn {
+        let sessionID: String
+        let digestKey: String
+        let previousTurnEndedAt: Date?
+        let turnEpoch: RemoteInputEpoch?
+    }
+
+    /// The conversation's epoch of the turn that runs now.
+    private func runningTurnEpoch(_ subscription: any LocalConversationSubscription) -> RemoteInputEpoch? {
+        subscription.snapshot(at: now())?.summary.inputControl?.turnEpoch
+    }
 
     /// The events read to find the newest message to the agent.
     private static let quietTurnEventLimit = 200
@@ -1341,7 +1356,27 @@ final class CoordinatorController: ObservableObject {
               let subscription = syncConversationSubscription(),
               subscription.snapshot(at: now())?.summary.state == .working,
               onlyTheDigestReached(digestKey, subscription: subscription) else { return false }
-        quietTurn = (session.sessionID, digestKey)
+        quietTurn = QuietTurn(
+            sessionID: session.sessionID,
+            digestKey: digestKey,
+            previousTurnEndedAt: session.lastTurnEndedAt,
+            turnEpoch: runningTurnEpoch(subscription)
+        )
+        return true
+    }
+
+    /// Removes the quiet mark, when the coordinator runs `coordinator wake`
+    /// without `--quiet` after it marked the turn quiet: the last call of
+    /// the turn decides. Returns whether the mark belonged to the turn that
+    /// runs now, so that the caller also removes the saved mark. The mark
+    /// of a turn that has ended stays.
+    func unmarkQuietTurn(digestKey: String) -> Bool {
+        guard let quietTurn, quietTurn.digestKey == digestKey else { return false }
+        self.quietTurn = nil
+        guard let session, session.sessionID == quietTurn.sessionID,
+              session.lastTurnEndedAt == quietTurn.previousTurnEndedAt,
+              let subscription = syncConversationSubscription(),
+              runningTurnEpoch(subscription) == quietTurn.turnEpoch else { return false }
         return true
     }
 
