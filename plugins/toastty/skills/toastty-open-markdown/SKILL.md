@@ -45,7 +45,9 @@ fi
 
 ## Manual equivalent
 
-If you need to run the flow inline instead of using the helper:
+If you need to run the flow inline instead of using the helper, run the
+commands as written. If `toastty` is not found, run `"$TOASTTY_CLI_PATH"` in
+its place:
 
 ```bash
 workspace_id="$(

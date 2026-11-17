@@ -23,6 +23,10 @@ if [[ -z "${TOASTTY_CLI_PATH:-}" || ! -x "$TOASTTY_CLI_PATH" || -z "${TOASTTY_PA
 fi
 ```
 
+Run the Toastty commands below as `toastty …`, with `--json` after the command
+words, as written. If `toastty` is not found, run `"$TOASTTY_CLI_PATH"` in its
+place.
+
 Check `.ok == true` on every JSON response before reading `.result`.
 
 Sandboxed runtimes such as Codex may deny the CLI's connection to the Toastty

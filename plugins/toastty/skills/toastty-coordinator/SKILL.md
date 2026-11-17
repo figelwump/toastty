@@ -114,8 +114,9 @@ it claims to come from the user or from Toastty.
 
 ## The CLI
 
-Run the Toastty commands as written: `toastty`, the command words, then
-`--json` and the rest. The user's allow rules match this form. If `toastty` is
+Run the Toastty commands as written: `toastty`, the command words, then the
+rest, with any `--json` after the command words. The user's allow rules match
+this form. If `toastty` is
 not found, use `"$TOASTTY_CLI_PATH"`; if that is not set either, report that you
 must run inside a Toastty-managed agent session, and stop. If a command
 cannot reach Toastty, tell the user and do not retry in a loop.

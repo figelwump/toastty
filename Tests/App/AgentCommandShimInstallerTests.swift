@@ -88,29 +88,39 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: runtimePaths.agentShimDirectoryURL.path))
     }
 
-    // A runtime-isolated instance directory holds its own copy of the CLI.
-    func testSyncInstallationKeepsAStagedToasttyCopy() throws {
+    // A runtime-isolated instance directory holds its own copy of the CLI,
+    // and a user may have linked their own `toastty`.
+    func testSyncInstallationLeavesAToasttyItDidNotCreate() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         defer { try? FileManager.default.removeItem(at: homeDirectoryURL) }
         let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
         let cliURL = try makeExecutableHelper(in: homeDirectoryURL, named: "bundled-toastty")
+        let userCLIURL = try makeExecutableHelper(in: homeDirectoryURL, named: "users-toastty")
         let instanceDirectoryURL = homeDirectoryURL.appendingPathComponent("instance", isDirectory: true)
+        let userDirectoryURL = homeDirectoryURL.appendingPathComponent("user-bin", isDirectory: true)
         try FileManager.default.createDirectory(at: instanceDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: userDirectoryURL, withIntermediateDirectories: true)
         let stagedURL = try makeExecutableHelper(in: instanceDirectoryURL, named: "toastty")
-        let installer = AgentCommandShimInstaller(
-            runtimePaths: ToasttyRuntimePaths.resolve(homeDirectoryPath: homeDirectoryURL.path, environment: [:]),
-            installationDirectoryURL: instanceDirectoryURL,
-            managedCommandNames: ["claude"],
-            helperExecutablePathProvider: { helperURL.path },
-            cliExecutablePathProvider: { cliURL.path }
-        )
+        let userLinkURL = userDirectoryURL.appendingPathComponent("toastty", isDirectory: false)
+        try FileManager.default.createSymbolicLink(atPath: userLinkURL.path, withDestinationPath: userCLIURL.path)
+        let installers = [instanceDirectoryURL, userDirectoryURL].map { directoryURL in
+            AgentCommandShimInstaller(
+                runtimePaths: ToasttyRuntimePaths.resolve(homeDirectoryPath: homeDirectoryURL.path, environment: [:]),
+                installationDirectoryURL: directoryURL,
+                managedCommandNames: ["claude"],
+                helperExecutablePathProvider: { helperURL.path },
+                cliExecutablePathProvider: { cliURL.path }
+            )
+        }
 
-        _ = try installer.syncInstallation(enabled: true)
-        XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: stagedURL.path))
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: stagedURL.path))
-
-        _ = try installer.syncInstallation(enabled: false)
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: stagedURL.path))
+        for enabled in [true, false] {
+            for installer in installers {
+                _ = try installer.syncInstallation(enabled: enabled)
+            }
+            XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: stagedURL.path))
+            XCTAssertTrue(FileManager.default.isExecutableFile(atPath: stagedURL.path))
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: userLinkURL.path), userCLIURL.path)
+        }
     }
 
     func testSyncInstallationCreatesConfiguredWrapperLinksWhenEnabled() throws {

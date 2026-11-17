@@ -60,12 +60,15 @@ final class AgentCommandShimInstaller {
 
         let directoryURL = installationDirectoryURL
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        let cliPath = cliLinkDestination(in: directoryURL)
+        let previouslyInstalledNames = previouslyInstalledManagedCommandNames(in: directoryURL)
+        let cliPath = cliLinkDestination(
+            in: directoryURL,
+            ownsExistingLink: previouslyInstalledNames.contains(Self.cliCommandName)
+        )
         let installedNames = managedCommandNames
             .union(cliPath == nil ? [] : [Self.cliCommandName])
         try removeManagedLinks(
-            named: previouslyInstalledManagedCommandNames(in: directoryURL)
-                .subtracting(installedNames),
+            named: previouslyInstalledNames.subtracting(installedNames),
             from: directoryURL
         )
 
@@ -135,16 +138,17 @@ final class AgentCommandShimInstaller {
 
     /// The CLI that `toastty` in this directory links to, so that an agent
     /// session finds Toastty's CLI on `PATH` by name. Nil leaves `toastty`
-    /// alone: no CLI was given, or the directory already holds a file of
-    /// that name, such as the copy a runtime-isolated instance stages there.
-    private func cliLinkDestination(in directoryURL: URL) -> String? {
+    /// alone: no CLI was given, or the directory already holds a `toastty`
+    /// that the manifest does not record, such as the copy a
+    /// runtime-isolated instance stages there or a user's own link.
+    private func cliLinkDestination(in directoryURL: URL, ownsExistingLink: Bool) -> String? {
         guard let cliPath = normalizedNonEmpty(cliExecutablePathProvider()),
               fileManager.isExecutableFile(atPath: cliPath) else {
             return nil
         }
         let linkURL = directoryURL.appendingPathComponent(Self.cliCommandName, isDirectory: false)
         let pathStatus = Self.pathStatus(at: linkURL.path)
-        guard pathStatus.exists == false || pathStatus.isSymlink,
+        guard pathStatus.exists == false || (pathStatus.isSymlink && ownsExistingLink),
               URL(fileURLWithPath: cliPath).standardizedFileURL != linkURL.standardizedFileURL else {
             return nil
         }

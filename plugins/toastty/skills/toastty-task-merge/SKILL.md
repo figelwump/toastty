@@ -16,11 +16,12 @@ the merge, at the first check when no agent turn runs. `toastty task get`
 reports that time as `cleanup.taskSpaceClosesAt`. Do not merge with `gh`,
 close this workspace, or remove the worktree.
 
-Run the Toastty commands below as written: `toastty`, the command words, then
-`--json` and the other arguments, such as `toastty task get --json`. Toastty
-puts `toastty` on `PATH` in each agent session it manages, and the user's allow
-rules match this form. If `toastty` is not found, run `"$TOASTTY_CLI_PATH"` in
-its place. If that is not set either, report that this skill
+Run the Toastty commands below as written: `toastty`, then the command words,
+then the arguments. Where a command has `--json`, it comes after the command
+words, as in `toastty task get --json`. Toastty puts `toastty` on `PATH` in each
+agent session it manages, and the user's allow rules match this form. If
+`toastty` is not found, run `"$TOASTTY_CLI_PATH"` in its place. If that is not
+set either, report that this skill
 must run inside a Toastty-managed agent session, and stop.
 
 ## Sandbox permissions

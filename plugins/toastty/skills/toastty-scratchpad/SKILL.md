@@ -25,6 +25,10 @@ fi
 Do not guess a repository checkout, global skill directory, or versioned Codex
 plugin cache when `TOASTTY_SKILLS_ROOT` is missing.
 
+Run the Toastty commands below as `toastty …`, with `--json` after the command
+words, as written. If `toastty` is not found, run `"$TOASTTY_CLI_PATH"` in its
+place.
+
 ## Select An Open Scratchpad
 
 A managed session can have several open Scratchpads in its workspace tab. List them before reading or updating an existing artifact:
