@@ -335,15 +335,16 @@ struct ToasttyConversationScreen: View {
     /// The coordinator tab's … menu: the coordinator's policy, ledger and
     /// friction notes, read-only, then the panels the Panels button would
     /// list. A panel that already shows one of the three files is left out
-    /// while the menu lists the file. Without the Mac's file previews the
-    /// menu lists only the panels.
+    /// while the menu lists the file. The Mac finds the files in the
+    /// session's working folder, so without that folder, or without the
+    /// Mac's file previews, the menu lists only the panels.
     @ViewBuilder
     private var coordinatorMenuButton: some View {
-        let showsFiles = controller.hostSupportsLocalFilePreview
         let conversation = controller.conversation(id: conversationID)
-        let folder = conversation?.cwd
+        let folder = controller.hostSupportsLocalFilePreview ? conversation?.cwd : nil
+        let showsFiles = folder != nil
         let all = ToasttyConversationPanels.sections(in: controller.snapshot, for: conversationID)
-        let sections = showsFiles ? ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: folder) : all
+        let sections = folder.map { ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: $0) } ?? all
         if showsFiles || !sections.isEmpty {
             Menu {
                 if showsFiles {

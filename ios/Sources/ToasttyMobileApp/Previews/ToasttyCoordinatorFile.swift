@@ -68,13 +68,11 @@ enum ToasttyCoordinatorFile: String, CaseIterable, Identifiable {
     /// Whether `panel` shows one of these files from `folder`, the
     /// coordinator session's working folder. The Mac can send the folder
     /// with `~` for the home folder; the phone cannot expand it, so such a
-    /// folder matches by the path after `~`. Without a folder, the file name
-    /// alone decides.
-    static func isShown(by panel: RemoteWorkspacePanel, folder: String?) -> Bool {
+    /// folder matches by the path after `~`.
+    static func isShown(by panel: RemoteWorkspacePanel, folder: String) -> Bool {
         guard let filePath = panel.filePath else { return false }
         let name = (filePath as NSString).lastPathComponent
         guard allCases.contains(where: { $0.fileName == name }) else { return false }
-        guard let folder, !folder.isEmpty else { return true }
         let trimmed = String(folder.reversed().drop(while: { $0 == "/" }).reversed())
         if trimmed.hasPrefix("~/") {
             return filePath.hasSuffix("\(trimmed.dropFirst())/\(name)")
@@ -84,9 +82,12 @@ enum ToasttyCoordinatorFile: String, CaseIterable, Identifiable {
     }
 
     /// The last line with text, so a reveal does not land on the blank end
-    /// of a file that ends with a newline.
+    /// of a file that ends with a newline. Line breaks count as the web
+    /// view counts them: `\r\n`, `\r` and `\n`.
     static func lastContentLine(of content: String) -> Int {
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = content.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
         let lastWithText = lines.lastIndex { !$0.allSatisfy(\.isWhitespace) }
         return (lastWithText ?? 0) + 1
     }

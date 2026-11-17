@@ -114,9 +114,9 @@ final class ToasttyConversationPanelTests: XCTestCase {
         let all = ToasttyConversationPanels.sections(in: snapshot, for: ToasttyMobileFixture.coordinatorConversationID)
         XCTAssertEqual(Set(all.flatMap(\.panels).map(\.id)),
                        [ToasttyMobileFixture.coordinatorWaitingPanelID, ToasttyMobileFixture.coordinatorPolicyPanelID])
-        for folder in ["~/.toastty/coordinator", "~/.toastty/coordinator/", nil] {
+        for folder in ["~/.toastty/coordinator", "~/.toastty/coordinator/"] {
             XCTAssertEqual(ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: folder)
-                .flatMap(\.panels).map(\.id), [ToasttyMobileFixture.coordinatorWaitingPanelID], "\(folder ?? "nil")")
+                .flatMap(\.panels).map(\.id), [ToasttyMobileFixture.coordinatorWaitingPanelID], folder)
         }
         XCTAssertEqual(ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: "~/elsewhere")
             .flatMap(\.panels).count, 2)
@@ -139,6 +139,8 @@ final class ToasttyConversationPanelTests: XCTestCase {
     func testLedgerRevealLineIsTheLastLineWithText() {
         XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\n\n- one\n- two\n"), 4)
         XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\n- one\n- two\n\n  \n"), 3)
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\r\n- one\r\n- two\r\n"), 3)
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\r- one\r"), 2)
         XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "- only"), 1)
         XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: ""), 1)
     }

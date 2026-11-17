@@ -50,7 +50,7 @@ enum ToasttyConversationPanels {
     /// ledger or friction notes from `folder`, for the Coordinator tab's
     /// menu, which lists those files itself.
     static func withoutCoordinatorFiles(
-        _ sections: [ToasttyConversationPanelSection], folder: String?
+        _ sections: [ToasttyConversationPanelSection], folder: String
     ) -> [ToasttyConversationPanelSection] {
         sections.compactMap { section in
             let panels = section.panels.filter { !ToasttyCoordinatorFile.isShown(by: $0.panel, folder: folder) }
