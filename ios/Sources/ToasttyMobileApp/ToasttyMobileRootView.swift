@@ -946,6 +946,7 @@ struct ToasttyMobileRootView: View {
                     "TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"
                 ] == "1",
                 quietTurns: fixtureCoordinatorQuietTurns,
+                attachedImages: fixtureCoordinatorAttachedImages,
                 responses: fixtureIncoming?.responses ?? 0
             )
         }
@@ -1039,7 +1040,8 @@ struct ToasttyMobileRootView: View {
         let rows = ToasttyConversationFixture.coordinatorPresentation(
             for: ToasttyMobileFixture.coordinatorConversationID,
             hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
-            quietTurns: fixtureCoordinatorQuietTurns
+            quietTurns: fixtureCoordinatorQuietTurns,
+            attachedImages: fixtureCoordinatorAttachedImages
         ).rows
         return CoordinatorChatReadPoint.marker(in: rows, after: sessionController.homeController.snapshot.coordinatorChatRead)
     }
@@ -1051,6 +1053,17 @@ struct ToasttyMobileRootView: View {
         switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS"] {
         case "1": .shared
         case "unsupported": .unshared
+        default: .none
+        }
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES=1` adds a message with
+    /// images to the fixture coordinator chat, from a Mac that serves them;
+    /// `unsupported` is an older Mac that does not.
+    private var fixtureCoordinatorAttachedImages: ToasttyConversationFixture.CoordinatorAttachedImages {
+        switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES"] {
+        case "1": .served
+        case "unsupported": .notServed
         default: .none
         }
     }

@@ -102,6 +102,18 @@ final class RemoteAccessCoordinatorChatReadBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's check of an attached image's message into the
+/// main-actor-owned conversation projection.
+final class RemoteAccessCoordinatorConversationEventsBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func events(_ conversationID: RemoteConversationID) -> [ConversationEvent]? {
+        MainActor.assumeIsolated {
+            service?.coordinatorConversationEvents(conversationID)
+        }
+    }
+}
+
 /// Bridges the gateway's read of the coordinator's quiet digests into the
 /// main-actor-owned coordinator.
 final class RemoteAccessCoordinatorQuietDigestsBridge: @unchecked Sendable {
@@ -580,6 +592,7 @@ final class RemoteAccessService: ObservableObject {
     private var coordinatorChatReadThrough: CoordinatorChatReadThrough?
     private var coordinatorChatReadObserver: AnyCancellable?
     private let coordinatorQuietDigestsBridge = RemoteAccessCoordinatorQuietDigestsBridge()
+    private let coordinatorConversationEventsBridge = RemoteAccessCoordinatorConversationEventsBridge()
     /// The keys of the coordinator's quiet digests. `nil` on a Mac without
     /// the coordinator, which does not advertise them.
     private var coordinatorQuietDigestKeys: (() -> [String])?
@@ -847,6 +860,7 @@ final class RemoteAccessService: ObservableObject {
         readAcknowledgementBridge.service = self
         coordinatorChatReadBridge.service = self
         coordinatorQuietDigestsBridge.service = self
+        coordinatorConversationEventsBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
         conversationCloseBridge.service = self
@@ -962,6 +976,7 @@ final class RemoteAccessService: ObservableObject {
         if let coordinatorController = taskBoard?.coordinator?.coordinatorController {
             installCoordinatorChatRead(coordinatorController.chatReadThrough)
             installCoordinatorQuietDigests(from: coordinatorController)
+            installCoordinatorAttachmentImages()
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -2242,6 +2257,28 @@ final class RemoteAccessService: ObservableObject {
                 guard let self, self.isEnabled else { return }
                 self.scheduleSessionListBroadcast()
             }
+    }
+
+    /// Serves paired devices the images attached to the messages of the
+    /// coordinator's chat, so their chats show them as the Mac's does.
+    /// Installing it advertises `coordinatorAttachmentImages`. The app
+    /// installs it once, at launch, with the coordinator.
+    func installCoordinatorAttachmentImages() {
+        handler.coordinatorConversationEventsHandler = { [coordinatorConversationEventsBridge] conversationID in
+            coordinatorConversationEventsBridge.events(conversationID)
+        }
+    }
+
+    /// The events of the coordinator's conversation, by the coordinator's
+    /// panel as the chat read does, or `nil` when `conversationID` is any
+    /// other conversation.
+    func coordinatorConversationEvents(_ conversationID: RemoteConversationID) -> [ConversationEvent]? {
+        guard isReady, isEnabled,
+              let coordinatorPanelID = store.state.coordinator?.panelID,
+              panelIDByConversationID[conversationID] == coordinatorPanelID,
+              let projector = projectionStore.projectorState(for: conversationID)
+        else { return nil }
+        return projector.events
     }
 
     /// The coordinator's quiet digests now, for a device's read.

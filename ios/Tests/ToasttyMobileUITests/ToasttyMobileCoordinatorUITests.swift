@@ -779,7 +779,105 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-reply-edit", of: app)
     }
 
+    // MARK: - Attached images
+
+    /// With a Mac that serves them, a message's images show as thumbnails
+    /// in its bubble, as in the Mac's chat: one attached on the Mac and one
+    /// sent from the phone. Every image has the same 200 × 120 box, loaded,
+    /// still loading, or gone from the Mac (its name in the box), so a
+    /// loading image does not move the chat. A file that is not an image
+    /// keeps its name chip, and the text no longer names the files.
+    func testAttachedImagesShowAsThumbnailsInTheBubble() {
+        let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES": "1"])
+        app.tabBars.buttons["Coordinator"].tap()
+        let text = textView(containing: "Here is the crash screen", in: app)
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertFalse(((text.value as? String) ?? "").contains("crash-screen.png"), "The text no longer names the files")
+
+        let slow = attachedImage("slow-capture.png", in: app)
+        XCTAssertTrue(slow.waitForExistence(timeout: 5))
+        XCTAssertTrue(scrollIntoView(slow, in: app))
+        // Loaded thumbnails open the full-size view, so they are buttons.
+        XCTAssertTrue(app.buttons["Image crash-screen.png"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Image Photo-3213AEE3.jpg"].waitForExistence(timeout: 10))
+        let gone = attachedImage("Photo-91C2.jpg", in: app)
+        XCTAssertTrue(waitForValue("Not available", of: gone))
+        XCTAssertEqual(slow.value as? String, "Loading")
+        XCTAssertFalse(app.buttons["Image Photo-91C2.jpg"].exists)
+        XCTAssertFalse(app.buttons["Image slow-capture.png"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["File notes.txt"].exists)
+        // The Mac's chat shows the quick entry message's image too.
+        XCTAssertTrue(attachedImage("csv-mockup.png", in: app).exists)
+
+        for name in ["crash-screen.png", "Photo-3213AEE3.jpg", "Photo-91C2.jpg", "slow-capture.png"] {
+            let frame = attachedImage(name, in: app).frame
+            XCTAssertEqual(frame.width, 200, accuracy: 1, name)
+            XCTAssertEqual(frame.height, 120, accuracy: 1, name)
+        }
+        attachScreenshot(named: "coordinator-images-thumbnails", of: app)
+    }
+
+    /// An older Mac does not serve the images: the bubble names the files
+    /// in its text, as before.
+    func testAnOlderMacsAttachedFilesShowByName() {
+        let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES": "unsupported"])
+        app.tabBars.buttons["Coordinator"].tap()
+        let text = textView(containing: "Here is the crash screen", in: app)
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(scrollIntoView(text, in: app))
+        let shown = (text.value as? String) ?? ""
+        XCTAssertTrue(
+            shown.contains("crash-screen.png, Photo-3213AEE3.jpg, Photo-91C2.jpg, slow-capture.png, notes.txt"), shown
+        )
+        XCTAssertFalse(shown.contains("/Users/me"), shown)
+        XCTAssertFalse(attachedImage("crash-screen.png", in: app).exists)
+        XCTAssertFalse(attachedImage("csv-mockup.png", in: app).exists)
+        attachScreenshot(named: "coordinator-images-older-mac", of: app)
+    }
+
+    /// A tap on a thumbnail shows the image full size, from the Mac. A pinch
+    /// zooms it; Done closes the view, and so does a swipe down while the
+    /// image fits the screen.
+    func testATapOnAThumbnailShowsTheImageFullSize() {
+        let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES": "1"])
+        app.tabBars.buttons["Coordinator"].tap()
+        let crash = app.buttons["Image crash-screen.png"]
+        XCTAssertTrue(crash.waitForExistence(timeout: 10))
+        XCTAssertTrue(scrollIntoView(crash, in: app))
+        crash.tap()
+
+        let viewer = app.descendants(matching: .any)["toastty-mobile-attachment-viewer-image"]
+        XCTAssertTrue(viewer.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue("Full size, Fits the screen", of: viewer), "\(viewer.value ?? "")")
+        XCTAssertEqual(viewer.label, "Image crash-screen.png")
+        XCTAssertTrue(app.staticTexts["crash-screen.png"].exists)
+        attachScreenshot(named: "coordinator-image-full-size", of: app)
+
+        viewer.pinch(withScale: 3, velocity: 3)
+        XCTAssertTrue(waitForValue("Full size, Zoomed", of: viewer), "\(viewer.value ?? "")")
+        attachScreenshot(named: "coordinator-image-zoomed", of: app)
+        app.buttons["toastty-mobile-attachment-viewer-done"].tap()
+        XCTAssertTrue(viewer.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(crash))
+
+        // The phone's own photo, and a swipe down to close.
+        let photo = app.buttons["Image Photo-3213AEE3.jpg"]
+        XCTAssertTrue(waitUntilHittable(photo))
+        photo.tap()
+        XCTAssertTrue(viewer.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue("Full size, Fits the screen", of: viewer), "\(viewer.value ?? "")")
+        attachScreenshot(named: "coordinator-image-phone-photo", of: app)
+        viewer.swipeDown(velocity: .fast)
+        XCTAssertTrue(viewer.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(textView(containing: "Here is the crash screen", in: app).exists)
+    }
+
     // MARK: - Helpers
+
+    /// An attached image's box, loaded or not.
+    private func attachedImage(_ name: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Image \(name)")).firstMatch
+    }
 
     /// Drags the chat in its upper part, clear of the composer and the
     /// keyboard, until `element` shows between the navigation bar and the

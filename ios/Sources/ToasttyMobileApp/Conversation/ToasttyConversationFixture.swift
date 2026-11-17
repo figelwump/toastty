@@ -585,16 +585,20 @@ enum ToasttyConversationFixture {
     /// `quietTurns` ends it with two wake turns that the coordinator marked
     /// quiet, as in the user's report, and says whether the fixture Mac
     /// shares the marks.
+    /// `attachedImages` adds a message with images, as in the images
+    /// mock-up, and says whether the fixture Mac serves the images.
     static func coordinatorPresentation(
         for conversationID: UUID,
         sendItems: [ToasttySendPresentationItem] = [],
         hasLongMessage: Bool = false,
         quietTurns: CoordinatorQuietTurns = .none,
+        attachedImages: CoordinatorAttachedImages = .none,
         responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationAdapter.makeState(
             events: coordinatorEvents(
-                for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns, responses: responses
+                for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns,
+                attachedImages: attachedImages != .none, responses: responses
             )
                 .map(CompatibleConversationEvent.known),
             projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
@@ -604,10 +608,35 @@ enum ToasttyConversationFixture {
             historyTruncated: false,
             sendItems: sendItems,
             coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages(
-                quietDigestKeys: quietTurns == .shared ? coordinatorQuietDigestKeys : nil
+                quietDigestKeys: quietTurns == .shared ? coordinatorQuietDigestKeys : nil,
+                showsAttachedImages: attachedImages == .served
             )
         )
     }
+
+    /// The fixture coordinator chat's message with images.
+    enum CoordinatorAttachedImages: Equatable {
+        case none
+        /// The message, and a Mac that serves its images.
+        case served
+        /// The message, and an older Mac that does not serve them.
+        case notServed
+    }
+
+    /// The message with images: one attached on the Mac, one sent from the
+    /// phone, one the Mac no longer has, one that loads slowly, and a file
+    /// that is not an image.
+    static let coordinatorImagesMessage = RemoteAttachmentDeliveryText.text(
+        "Here is the crash screen, and the photo I took of the phone.",
+        paths: [
+            "/Users/me/Desktop/crash-screen.png",
+            "/Users/me/Library/Application Support/Toastty/remote-access/attachments/"
+                + "5F0C2D8E-61B4-4F2A-9E57-3C1A0B7D9E21/Photo-3213AEE3.jpg",
+            "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.goneFileName)",
+            "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.slowFileName)",
+            "/Users/me/Desktop/notes.txt",
+        ]
+    )
 
     /// The fixture coordinator chat's quiet wake turns.
     enum CoordinatorQuietTurns: Equatable {
@@ -649,6 +678,7 @@ enum ToasttyConversationFixture {
         for conversationID: UUID,
         hasLongMessage: Bool = false,
         quietTurns: CoordinatorQuietTurns = .none,
+        attachedImages: Bool = false,
         responses: Int = 0
     ) -> [ConversationEvent] {
         // Event `n` is `n - 1` times two minutes after the first.
@@ -707,6 +737,12 @@ enum ToasttyConversationFixture {
             .userMessage(.init(text: quickEntry, origin: .remote)),
             .assistantMessage(.init(text: "I made a task for it in toastty, with Codex.", phase: .final)),
         ]
+        if attachedImages {
+            payloads.append(.userMessage(.init(text: coordinatorImagesMessage, origin: .remote)))
+            payloads.append(.assistantMessage(.init(
+                text: "Thanks. The crash is in the export sheet; I added both images to the task.", phase: .final
+            )))
+        }
         if hasLongMessage {
             payloads.append(.userMessage(.init(text: "What moved this week?", origin: .remote)))
             payloads.append(.assistantMessage(.init(text: longMessage, phase: .final)))

@@ -837,6 +837,50 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    /// The coordinator's chat shows attached images as thumbnails only with
+    /// a Mac that serves them and read access, whichever comes last: the
+    /// capability with a connection state, or the scopes, as with a stored
+    /// credential. Without either, the files show by name.
+    func testTheCoordinatorChatShowsAttachedImagesOnlyWhenTheMacServesThem() async throws {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks, .coordinatorAttachmentImages]
+        ))
+        var list = snapshot(titles: ["Alpha"])
+        let alpha = list.conversations[0]
+        list.workspaces = [RemoteWorkspaceSummary(
+            id: try XCTUnwrap(alpha.placement.workspaceID), title: "Coordinator", panels: [],
+            isCoordinator: true, coordinatorConversationID: alpha.conversationID
+        )]
+        list.tasks = RemoteTaskBoard(doneCount: 0)
+        subject.consumeSessionsState(SessionsRuntime.State(connectionGeneration: 7, snapshot: list, phase: .live))
+        let coordinatorID = try XCTUnwrap(home.snapshot.coordinatorConversation?.id)
+        await subject.openConversation(coordinatorID)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+
+        // The capability came before the scopes: no read access yet.
+        XCTAssertFalse(controller.showsCoordinatorAttachedImages)
+        await subject.updateDeviceScopes([.read])
+        XCTAssertTrue(controller.showsCoordinatorAttachedImages)
+
+        // A Mac without the capability, after a reconnect.
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 8, phase: .live, capabilities: [.tasks]
+        ))
+        XCTAssertFalse(controller.showsCoordinatorAttachedImages)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 9, phase: .live, capabilities: [.tasks, .coordinatorAttachmentImages]
+        ))
+        XCTAssertTrue(controller.showsCoordinatorAttachedImages)
+        subject.stopObserving()
+    }
+
     func testSessionStartTreatsEveryUnansweredRequestAsUnconfirmed() async {
         let runtime = LiveRuntimeSpy()
         let conversationID = RemoteConversationID()

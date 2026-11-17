@@ -998,6 +998,44 @@ read that fails is tried again with the next snapshot. With an older Mac, which
 sends neither, quiet turns show open, and the New line counts their replies.
 An older phone ignores the field.
 
+The phone's coordinator chat shows the images attached to a user message as
+thumbnails in the bubble, in the Mac chat's order and 200 × 120 point box, and
+any other file as its name chip. The files stay on the Mac: a Mac with the
+coordinator advertises `coordinator_attachment_images` and serves each image
+with `POST /api/coordinator.attachment_image.get`. The request names the
+coordinator's `conversationID`, the user message's `eventID`, the file's
+`attachmentIndex` in the message's list of files, and `size`: `thumbnail`
+(at most 600 pixels on the long side) or `full` (at most 4096). It never names
+a path. The Mac finds the path in its own copy of that user message, with the
+parser its own chat uses (`CoordinatorMessageHeader.displayParts(of:)`), and
+serves it only when the file has an image's extension, is a regular file at
+that path with no symbolic link in it (the macOS `/tmp`, `/var` and `/etc`
+aliases excepted), is at most 64 MB and 100 million pixels, and decodes as an
+image. The answer is a new JPEG, or a PNG for an image with transparency, made
+from the decoded pixels, with `mimeType`, base64 `data`, `pixelWidth` and
+`pixelHeight`; the file's own bytes and metadata never leave the Mac. A refusal
+answers `error` with the preview error kinds: `denied` (another conversation, a
+message that is not a user message, an index past the message's files, a
+symbolic link, or a device without read access), `missing` (the message or
+the file is gone), `unsupported` (not an image), `tooLarge`, or `busy` (the
+Mac's preview reads are all in use). The route needs read access only, as
+showing the chat does. A device that can send messages can put any path in a
+message, and then read that path through this route if it is an image; send
+access already lets it ask the agent to read any file, so this adds nothing to
+what send access allows, and a read-only device reads only what others
+attached.
+
+The phone fetches a thumbnail only while its box is on screen, a few at a
+time, keeps the thumbnails in memory, and asks once for an image that two
+views need at once. A box keeps its size while it loads ("Loading…") and when
+the image cannot be had (its name, as on the Mac): the Mac keeps files sent
+from the phone for 7 days, and a file attached on the Mac can move. A failed
+fetch is tried again when the box shows again. A tap on a thumbnail opens the
+image full screen, with pinch and double-tap to zoom; Done, or a swipe down
+while the image fits the screen, closes it. With an older Mac the phone names
+the files in the bubble's text, as before. Task-session chats name the files
+too.
+
 ### Starting a session
 
 Tap **+** on a workspace screen to start a new agent session. On the Home

@@ -1792,8 +1792,11 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
     let caption: String?
     /// The agent's message that this message answers.
     var quote: ToasttyMessageQuote?
-    /// The local files sent with the message.
+    /// The files sent with the message, by their paths on the host.
     var attachments: [URL] = []
+    /// The message, by which a device asks the host for its images. `nil`
+    /// while it sends.
+    var attachmentMessage: ToasttyAttachedMessage?
     var isSending = false
     /// Under the bubble, outside it: the message's copy button, or the
     /// same space while the message sends.
@@ -1826,7 +1829,7 @@ private struct ToasttyUserMessageBubble<Footer: View>: View {
                                       textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
             }
             if attachments.isEmpty == false {
-                ToasttyMessageAttachments(urls: attachments)
+                ToasttyMessageAttachments(urls: attachments, message: attachmentMessage)
             }
             if let caption {
                 Text(caption)
@@ -2143,7 +2146,10 @@ private struct ToasttyTranscriptRowView: View {
                 isUser: true,
                 metadata: ToasttyUserMessageCaption.text(origin: origin, deliveryMode: deliveryMode),
                 quote: quote,
-                attachments: attachments
+                attachments: attachments,
+                attachmentMessage: row.eventID.map {
+                    ToasttyAttachedMessage(conversationID: row.id.conversationID, eventID: $0)
+                }
             )
         case .assistantMessage(let text, let phase):
             // A chunked message renders this row's slice; the metadata caption
@@ -2198,7 +2204,8 @@ private struct ToasttyTranscriptRowView: View {
         isUser: Bool,
         metadata: String?,
         quote: ToasttyMessageQuote? = nil,
-        attachments: [URL] = []
+        attachments: [URL] = [],
+        attachmentMessage: ToasttyAttachedMessage? = nil
     ) -> some View {
         // A long message draws as several rows. Only its last row has the
         // buttons, and they act on the whole message.
@@ -2211,7 +2218,9 @@ private struct ToasttyTranscriptRowView: View {
             // message of files alone has no text.
             let names = attachments.map(\.lastPathComponent).joined(separator: ", ")
             let copiedText = [text, names].filter { $0.isEmpty == false }.joined(separator: "\n\n")
-            ToasttyUserMessageBubble(text: text, caption: metadata, quote: quote, attachments: attachments) {
+            ToasttyUserMessageBubble(
+                text: text, caption: metadata, quote: quote, attachments: attachments, attachmentMessage: attachmentMessage
+            ) {
                 if copiesMessage {
                     messageCopyButton(copiedText, alignment: .trailing)
                 }

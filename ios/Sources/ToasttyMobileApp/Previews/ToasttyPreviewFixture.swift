@@ -19,6 +19,13 @@ extension ToasttyPreviewService {
                     return RemoteHTMLResourceResponse(error: .missing)
                 }
                 return RemoteHTMLResourceResponse(mimeType: resource.mimeType, data: Data(resource.text.utf8))
+            },
+            attachmentImage: { request in
+#if DEBUG
+                try await ToasttyAttachmentImageFixture.image(for: request)
+#else
+                throw RemotePreviewError.unsupported
+#endif
             }
         )
     }

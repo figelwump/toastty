@@ -131,6 +131,13 @@ final class AppSessionController {
             let resource = try await client.previewResource(request)
             guard await vault.currentGeneration() == generation else { throw RemotePreviewError.stale }
             return resource
+        }, attachmentImage: { request in
+            let generation = await vault.currentGeneration()
+            let image = try await client.coordinatorAttachmentImage(request)
+            guard await vault.currentGeneration() == generation, let data = image.data else {
+                throw RemotePreviewError.stale
+            }
+            return data
         })
     }
 

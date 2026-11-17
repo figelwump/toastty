@@ -72,6 +72,22 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
         XCTAssertFalse(shown.contains("/Users/me"))
         XCTAssertNil(quote)
         XCTAssertEqual(origin, .remote)
+
+        // A Mac that serves the images: each file shows by itself, in the
+        // message's order, as on the Mac, and the text does not name them.
+        // The bubble asks the Mac for an image by the message's event and
+        // the file's place in this list.
+        let apart = coordinatorRows([.userMessage(.init(text: text, origin: .remote))], showsAttachedImages: true)
+        guard case .userMessage(let apartText, _, _, _, let files) = try XCTUnwrap(apart.first).content else {
+            return XCTFail("Expected the user's message: \(apart)")
+        }
+        XCTAssertEqual(apartText, """
+        Add a CSV export to the Tasks tab.
+
+        project "toastty" · codex, model gpt-6.1-sol, effort high
+        """)
+        XCTAssertEqual(files.map(\.path), ["/Users/me/.toastty/coordinator/attachments/A1/csv-mockup.png", "/tmp/notes.md"])
+        XCTAssertEqual(apart.first?.eventID, "coordinator-1")
     }
 
     func testAReplyShowsTheLineThatNamesTheMessageItAnswers() throws {
@@ -182,7 +198,10 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func coordinatorRows(_ payloads: [ConversationEventPayload]) -> [ToasttyTranscriptRow] {
+    private func coordinatorRows(
+        _ payloads: [ConversationEventPayload],
+        showsAttachedImages: Bool = false
+    ) -> [ToasttyTranscriptRow] {
         ToasttyConversationPresentationAdapter.makeState(
             events: payloads.enumerated().map { event(UInt64($0.offset + 1), $0.element) },
             projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
@@ -190,7 +209,9 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
             phase: .live,
             revision: .initial,
             historyTruncated: false,
-            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages()
+            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages(
+                showsAttachedImages: showsAttachedImages
+            )
         ).rows
     }
 

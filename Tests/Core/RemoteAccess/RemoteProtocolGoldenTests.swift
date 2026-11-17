@@ -299,6 +299,21 @@ private extension RemoteProtocolGoldenTests {
             ),
             try fixture("coordinator-quiet-digests-response.json", quietDigests),
             try fixture(
+                "coordinator-attachment-image-request.json",
+                RemoteCoordinatorAttachmentImageRequest(
+                    conversationID: RemoteConversationID(rawValue: numberedUUID(220)),
+                    eventID: "claude:msg_attach",
+                    attachmentIndex: 1,
+                    size: .thumbnail
+                )
+            ),
+            try fixture(
+                "coordinator-attachment-image-response.json",
+                RemoteCoordinatorAttachmentImageResponse(
+                    mimeType: "image/png", data: Data([0x89, 0x50, 0x4E, 0x47]), pixelWidth: 600, pixelHeight: 338)
+            ),
+            try fixture("coordinator-attachment-image-refusal.json", RemoteCoordinatorAttachmentImageResponse(error: .denied)),
+            try fixture(
                 "task-action-request.json",
                 RemoteTaskActionRequest(
                     taskID: numberedUUID(302),
