@@ -205,6 +205,26 @@ public struct AppReducer {
             state.windows[windowIndex].workspaceIDs.append(workspaceID)
             return true
 
+        case .restoreCoordinatorWorkspace(let workspaceID, let panelID):
+            // The coordinator's rules: one coordinator, in a top-level
+            // workspace that is not a task space. A workspace that a
+            // subspace nests under is a project, so it is left alone.
+            guard state.coordinator == nil,
+                  var workspace = state.workspacesByID[workspaceID],
+                  workspace.parentWorkspaceID == nil,
+                  workspace.taskID == nil,
+                  state.windows.contains(where: { $0.workspaceIDs.contains(workspaceID) }),
+                  state.workspacesByID.values.contains(where: { $0.parentWorkspaceID == workspaceID }) == false
+            else { return false }
+            workspace.isCoordinator = true
+            workspace.spawningSessionID = nil
+            workspace.doneAt = nil
+            if let panelID, case .terminal? = workspace.panelState(for: panelID) {
+                workspace.coordinatorPanelID = panelID
+            }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
         case .setCoordinatorPanel(let panelID):
             guard let coordinator = state.coordinator,
                   coordinator.panelID != panelID,

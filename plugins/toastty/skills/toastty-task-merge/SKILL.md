@@ -18,6 +18,18 @@ or remove the worktree.
 Run the commands below with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
 this skill must run inside a Toastty-managed agent session, and stop.
 
+## Sandbox permissions
+
+Each Toastty CLI command connects to the app's local socket, and `git fetch`,
+`git push` and `gh` need the network. In a sandboxed runtime, request the
+runtime's per-command escalation for these commands on the first attempt; do
+not try them sandboxed first. In Codex, use
+`sandbox_permissions="require_escalated"` with a short justification that the
+command needs Toastty's local socket or the network. Limit each request to the
+exact command. Do not request a broad approval prefix, change sandbox
+settings, or widen Toastty's workspace scope. If escalation is unavailable or
+denied, report the restriction and stop without merging.
+
 ## Check the pull request
 
 Work in this task's checkout (`git rev-parse --show-toplevel`). Read the pull
@@ -25,6 +37,10 @@ request with
 `gh pr view --json number,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeStateStatus,statusCheckRollup,reviewDecision,body`.
 Stop and report, without merging, when:
 
+- `gh` is missing or not signed in (`gh auth status` fails). Ask the user to
+  install it or run `gh auth login`;
+- the pull request is not on GitHub. Toastty merges only GitHub pull
+  requests: the user merges it on its host;
 - there is no pull request, or it is closed or already merged;
 - `git status --porcelain` shows uncommitted or untracked changes;
 - after `git fetch`, local `HEAD` differs from `headRefOid` before you start
@@ -99,11 +115,11 @@ do not bypass them to complete a merge.
 Before you merge, check for work in this task's scope that goes on after the
 merge, such as a rollout or a later step that your answers or the description
 name. It does not block the merge. But Toastty removes the worktree after the
-merge, with its ignored files, such as a plan under `artifacts/`. When such
-work exists, make sure that the description has a `## Remaining after merge`
-section with what remains, its plan and its open questions. If the section is
-missing, add it with `gh pr edit --body-file` and keep the rest of the
-description.
+merge, with its ignored files, such as a plan in an ignored `artifacts/`
+folder. When such work exists, make sure that the description has a
+`## Remaining after merge` section with what remains, its plan and its open
+questions. If the section is missing, add it with `gh pr edit --body-file` and
+keep the rest of the description.
 
 If nothing blocks, run:
 
@@ -128,5 +144,4 @@ with `"$TOASTTY_CLI_PATH" task list --parent <this-task-id>`. For each child,
 check it as above from its own pull request and worktree, then run
 `"$TOASTTY_CLI_PATH" task merge <child-task-id> --head <sha>`. Wait for one
 child's merge before you merge a child that builds on it, for example with
-`"$TOASTTY_CLI_PATH" task watch <child-task-id> --until merged` where that
-command exists.
+`"$TOASTTY_CLI_PATH" task watch <child-task-id> --until merged`.

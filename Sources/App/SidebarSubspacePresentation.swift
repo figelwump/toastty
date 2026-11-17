@@ -194,6 +194,9 @@ enum SidebarSubspacePresentation {
         switch stage {
         case .needsYou(.awaitingReply)?:
             return .question
+        case .needsYou(.startWaitsInTerminal)?:
+            // The agent's session shows idle, but it never began.
+            return .needsApproval
         case .needsYou(.review)?, .needsYou(.readyForReview)?:
             return .review
         case .toShip?:

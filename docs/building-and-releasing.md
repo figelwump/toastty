@@ -265,6 +265,81 @@ secrets to the Release runtime allowlist. The override applies only to Xcode's
 `ToasttyApp-Release` Run action; Debug, Finder, `open`, and direct executable
 launches do not receive it.
 
+## Release order
+
+A Toastty release has four parts that reach users separately: the iPhone
+notification relay (a Cloudflare Worker), the iPhone app (TestFlight), the Mac
+app (GitHub Releases and the Sparkle update feed), and the website. Each part
+must find the parts it talks to already updated. Do the steps in this order:
+
+1. **Record the version.** Choose the marketing version and a build number
+   greater than the highest `sparkle:version` in
+   `https://updates.toastty.dev/appcast.xml`. Write both in the release
+   checklist or pull request. The release of the task system is `0.10.0` with
+   build `40` or higher, because `0.9.2` is build `39`.
+2. **Prepare the release commit on `main`.** Build the Ghostty release artifact
+   at the commit that [Ghostty Integration](ghostty-integration.md) pins, and
+   check it with `scripts/release/check-ghostty-pin.sh`. Run the full build and
+   tests on the release commit, and a manual `Toastty CI` run from `main`. Keep
+   the website change out of `main` until step 6, because a website change goes
+   live when it reaches `main`; see [When the website goes live](#when-the-website-goes-live).
+3. **Deploy the production push relay** from the release commit. The
+   repository owner does this by hand, because the repository has no
+   production deploy command; see
+   [Production relay release step](../workers/push/README.md#production-relay-release-step).
+   Reason: a relay without task alerts answers a task alert with HTTP 400. The
+   Mac then sends only the session alerts that the task alert replaced, so a
+   task alert that replaced none, such as a stopped merge, sends nothing.
+4. **Make the iPhone build available** through TestFlight, as
+   [iOS Release CI](ios-release-ci.md#first-internal-build) describes. This
+   step is required before the Mac release goes live; the protocol has no other
+   protection for an older phone. For the real-device check, use a Mac build
+   from step 5's `scripts/release/release.sh` before you publish it. Reason: a
+   phone build without task alerts cannot decode alerts with `kind: "task"`.
+   The alert's text shows, but a tap only opens the app, and while the app is
+   open no banner shows.
+5. **Release the Mac app.** Build the DMG with `scripts/release/release.sh`,
+   write the release notes with a `## Highlights` section, and publish with
+   `scripts/release/publish-github-release.sh`. Only `--publish` changes the
+   update feed, so existing users get the update at that point.
+6. **Publish the website change.** Merge its pull request into `main` after the
+   Mac release is live, then confirm on toastty.dev that the change shows. For
+   `0.10.0` the website change is two stacked pull requests that land together:
+   the website text change (#392), and the new "Tasks and the Coordinator"
+   section stacked on it. #392 targets `feat/task-system-coordinator` today;
+   retarget it to `main` after step 2, so that it does not merge with the
+   release branch. The coordinator tracks this step until the site shows the
+   new page.
+
+Do not change the order when only some parts change. A step for a part that did
+not change is a no-op.
+
+### When the website goes live
+
+toastty.dev is a Render static site behind Cloudflare (`www.toastty.dev` is a
+CNAME for `toastty-dev.onrender.com`). Its deploy settings are in the Render
+dashboard, not in this repository. The site most likely publishes `website/` on
+each push to `main`: after pull request #125 merged at 23:23:10 UTC on
+2026-10-10, the live page's `Last-Modified` was 23:23:24 UTC. Steps 2 to 5 need
+the release commit on `main`, so a website change that is on the release branch
+goes live at step 2. The site then describes features that the download does not
+have yet, for as long as steps 3 to 5 take. Choose one way to prevent that:
+
+- **Keep the website change in its own pull request into `main`, and merge it at
+  step 6.** Nothing to change in Render. The website pull request must not be
+  part of the release branch. Chosen for `0.10.0` on 2026-11-16. Cost: from step 2 to step 6 the old
+  page stays live, and its links to the worktree handoff examples in
+  `tree/main/examples/skills` find a folder that holds only the `toastty-tasks`
+  skill.
+- **Merge to `main` and publish the Mac release close together.** No extra pull
+  request, but the site is ahead of the download for hours or more: the relay
+  deploy, the TestFlight build, and the real-device check all come between.
+- **Turn off automatic deploys in Render before step 2, and deploy by hand at
+  step 6.** The website change can stay on the release branch, but the repository
+  owner must change the Render settings and turn them back on afterwards. The
+  old page and its stale links to `tree/main/examples/skills` stay live from
+  step 2 to step 6, as in the first option.
+
 ## Build a signed release DMG
 
 The release script expects:
@@ -272,6 +347,7 @@ The release script expects:
 - a release Ghostty artifact at `Dependencies/GhosttyKit.Release.xcframework`
 - Ghostty provenance metadata at `Dependencies/GhosttyKit.Release.metadata.env`
 - access to the clean Ghostty source checkout containing the recorded release commit
+- a Ghostty artifact built from the commit pinned in [Ghostty Integration](ghostty-integration.md): the `git -C ../ghostty checkout <commit>` line. `scripts/release/check-ghostty-pin.sh` compares the two, and the release script stops when they differ, because a stale artifact still builds
 - a local `Developer ID Application` certificate
 - notarization credentials injected at runtime
 - a Sparkle private key injected at runtime as `TOASTTY_SPARKLE_PRIVATE_KEY`
@@ -299,6 +375,14 @@ Before the archive is built, the release workflow verifies the generated
 third-party notices against the pinned production web-panel dependencies,
 Ghostty, Sparkle, and the checked-in Toastty license. The verified notices are
 bundled at `Contents/Resources/ThirdPartyNotices.txt` in the app.
+Each production web-panel package must ship a license or notice file. A package
+that ships none needs an entry for its exact `name@version` in
+`scripts/release/third-party-license-overrides.json`: the license, the license
+text under `scripts/release/third-party-licenses/`, its source, and the reason.
+The check stops when an entry is missing, when the package ships a license file
+after all, or when no installed package uses the entry, for example after a
+version change. `format@0.2.2` has such an entry: the npm package ships no
+license file, and the text is the MIT `License.md` its author added upstream.
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags
@@ -314,7 +398,7 @@ Prerequisites:
 - `gh` is installed and authenticated for the target repo
 - the recorded release commit is available in the current checkout
 
-Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release.
+Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release. Every release needs a `## Highlights` section with content. With `--publish`, the publisher writes that section, as HTML, into the update feed item's `description`, followed by a "Full release notes on GitHub" link. The Sparkle update prompt shows it in its release notes box, so it is the first thing an updating user reads. The item has no `sparkle:releaseNotesLink`, because Sparkle then shows the linked page instead of the `description`; its `sparkle:fullReleaseNotesLink` points to the GitHub releases list for the Version History button. The section can use `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publisher stops when the section is missing, repeated, or empty, uses other Markdown, or when a `{{placeholder}}` from the template remains. A `--publish --dry-run` writes the updated feed to `artifacts/release/<version>-<build>/appcast-dry-run.xml` without changing anything.
 
 ```bash
 sv exec -- env \

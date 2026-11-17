@@ -1,5 +1,9 @@
 # toastty codex computer use e2e
 
+> **Historical plan.** It records the design as planned when it was written and is
+> not kept up to date. For current behavior, see the reference documents listed in
+> [the README](../../README.md#documentation).
+
 Date: 2026-04-20
 Updated: 2026-05-05
 
@@ -64,7 +68,7 @@ The following work is already landed on `main` and available in this worktree:
 - Remote validation defaults to the `toastty-mini` SSH alias and the Mini repo
   root configured through env:
   - `TOASTTY_REMOTE_GUI_HOST=toastty-mini`
-  - `TOASTTY_REMOTE_GUI_REPO_ROOT=/Users/agents/GiantThings/repos/toastty`
+  - `TOASTTY_REMOTE_GUI_REPO_ROOT=<the repository on the Mac mini>`
 - The current merged baseline commit for this worktree is `ff96884`.
 
 Known Mini-specific issue at handoff time:

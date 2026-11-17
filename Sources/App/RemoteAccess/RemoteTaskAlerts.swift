@@ -166,7 +166,7 @@ struct TaskAlertDetector {
             case (.none, .review), (.none, .readyForReview): return .review
             case (.none, _): return nil
             }
-        case .pickWorkspace, .taskSpaceClosed, .agentNeedsInput:
+        case .pickWorkspace, .taskSpaceClosed, .agentNeedsInput, .startWaitsInTerminal:
             return nil
         }
     }

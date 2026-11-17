@@ -12,7 +12,7 @@ struct TaskCoordinatorTests {
         let store = AppStore(persistTerminalFontPreference: false)
         /// Status changes send no desktop notification: without notification
         /// access, as on CI, the access alert would block the test host.
-        let sessionRuntimeStore = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        let sessionRuntimeStore: SessionRuntimeStore
         let router = TestTerminalCommandRouter()
         let root: URL
         /// A git repository root; the workspace terminal starts in a
@@ -32,7 +32,13 @@ struct TaskCoordinatorTests {
         private(set) var scopeGrants: [(sessionID: String, workspaceID: UUID)] = []
         private(set) var coordinator: TaskCoordinator!
 
-        init(readinessTimeout: Duration = .seconds(3)) throws {
+        /// `initialPromptTurnTimeoutNanoseconds` is how long the session
+        /// store waits for an agent to report the turn of its first prompt.
+        init(readinessTimeout: Duration = .seconds(3), initialPromptTurnTimeoutNanoseconds: UInt64 = 60_000_000_000) throws {
+            sessionRuntimeStore = SessionRuntimeStore(
+                sendSessionStatusNotification: { _, _, _, _, _ in },
+                initialPromptTurnTimeoutNanoseconds: initialPromptTurnTimeoutNanoseconds
+            )
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("toastty-tasks-\(UUID().uuidString)", isDirectory: true)
                 .resolvingSymlinksInPath()
@@ -467,6 +473,62 @@ struct TaskCoordinatorTests {
         let relaunched = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
         relaunched.reconcileAfterLaunch()
         #expect(relaunched.records.record(id: taskID)?.setup == .started)
+    }
+
+    /// The layout as Toastty v0.9.2 saves it again after reading it: without
+    /// the workspace fields that version does not know.
+    static func layoutSavedByV092(_ state: AppState) throws -> AppState {
+        let encoded = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: state))
+        func strip(_ value: Any) -> Any {
+            if let array = value as? [Any] { return array.map(strip) }
+            guard var object = value as? [String: Any] else { return value }
+            if object["tabsByID"] != nil {
+                for key in ["taskID", "isCoordinator", "coordinatorPanelID", "rootDirectory"] {
+                    object[key] = nil
+                }
+            }
+            return object.mapValues(strip)
+        }
+        let stripped = try JSONSerialization.data(withJSONObject: strip(try JSONSerialization.jsonObject(with: encoded)))
+        return try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: stripped).makeAppState()
+    }
+
+    /// The bug this guards: after a return to v0.9.2 and forward again,
+    /// the task space had no link to its task, so the board listed the
+    /// task twice: once as the task, once as a task space without a record.
+    @Test func aLayoutSavedByV092LinksItsTaskSpacesAgainAtLaunch() async throws {
+        let fixture = try Fixture()
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the unread dot", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(created.id)
+        let taskSpace = try #require(fixture.record(created.id)?.taskSpaceWorkspaceID)
+        // Another record names a workspace that is gone; nothing changes for it.
+        let gone = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the empty search", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(gone.id)
+        let goneSpace = try #require(fixture.record(gone.id)?.taskSpaceWorkspaceID)
+        #expect(fixture.store.send(.closeWorkspace(workspaceID: goneSpace)))
+
+        fixture.store.replaceState(try Self.layoutSavedByV092(fixture.store.state))
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.taskID == nil)
+        func listings() -> Int {
+            TaskBoard.items(TaskBoard.Inputs(
+                state: fixture.store.state, records: fixture.coordinator.records.records,
+                statuses: { _ in [] }, pullRequestState: { _ in nil }, config: nil
+            )).filter { $0.taskSpaceWorkspaceID == taskSpace }.count
+        }
+        #expect(listings() == 2)
+
+        // The next launch.
+        let relaunched = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(relaunched)
+        relaunched.reconcileAfterLaunch()
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.taskID == created.id)
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.canHoldDoneMark == true)
+        #expect(listings() == 1)
+        #expect(fixture.record(created.id)?.source != .recovered)
+        #expect(fixture.store.state.workspacesByID[goneSpace] == nil)
+        #expect(relaunched.records.records.count == 2)
     }
 
     @Test func aTaskSpaceWithoutARecordGetsOneRebuilt() throws {

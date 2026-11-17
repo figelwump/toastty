@@ -520,6 +520,23 @@ struct RemoteTaskActionTests {
             setup: .setupFailed(reason: "create_hook exited 1")
         )
         try fixture.coordinator.records.insert(failed)
+        // No action picks a workspace, so a task that waits for one tells
+        // the phone to pick it on the Mac. Other tasks send no Mac step.
+        let unplaced = TaskRecord(
+            createdAt: Date(),
+            text: "Fix the settings typo",
+            title: "Fix the settings typo",
+            slug: "fix-the-settings-typo",
+            source: .cli,
+            resolved: TaskFields(agent: "codex"),
+            setup: .needsWorkspace(reason: TaskCoordinator.noWorkspaceReason)
+        )
+        try fixture.coordinator.records.insert(unplaced)
+        let unplacedSummary = try #require(harness.current(unplaced.id)?.summary)
+        #expect(unplacedSummary.macStep == RemoteTaskBoardProjection.pickWorkspaceMacStep)
+        #expect(unplacedSummary.offers(.delete))
+        #expect(try #require(harness.current(failed.id)?.summary).macStep == nil)
+        #expect(try #require(harness.current(task.id)?.summary).macStep == nil)
         #expect(await harness.perform(.delete, failed.id, id: "delete-1") == .performed)
         #expect(fixture.record(failed.id) == nil)
         // A retry after a lost answer finds the first result.

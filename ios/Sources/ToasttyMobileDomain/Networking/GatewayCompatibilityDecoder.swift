@@ -199,7 +199,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
             // value reads as none and keeps the task.
             parentTaskID: parentTaskID,
             parentTaskTitle: parentTaskID == nil ? nil : object.lossyString("parentTaskTitle"),
-            childProgress: object.lossyObject("childProgress").flatMap(decodeTaskChildProgress)
+            childProgress: object.lossyObject("childProgress").flatMap(decodeTaskChildProgress),
+            // Absent from older Macs.
+            macStep: object.lossyString("macStep")
         )
     }
 

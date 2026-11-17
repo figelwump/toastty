@@ -246,6 +246,11 @@ exists, omit color or repeat the claim; attempting to replace it fails. Examples
 - GitHub pull request: `key=github-pr`, `text="PR #1931"`, and
   `url=<verified GitHub pull URL>` when available. Use `PR #<number>` for all
   pull request chips, including primary annotations in task space rows.
+  Toastty reads a task's pull request only from a `github-pr` URL of the form
+  `https://github.com/<owner>/<repo>/pull/<number>`. For a pull or merge
+  request on another host, use another key, such as `merge-request`; Toastty
+  does not track it, so a task with one follows `toastty-task-start` for a
+  pull request that is not on GitHub.
 - GitHub issue: `key=github-issue`, `text="Issue #482"`, and
   `url=<verified GitHub issue URL>` when available.
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; omit `url` unless a
@@ -280,9 +285,14 @@ short, around 12 characters or fewer (`PR #1234`, `ENG-512`), because the row
 truncates longer text. Leave `primary` out for secondary annotations such as a
 branch name or agent label.
 
-Mark a finished task space task with `workspace.set-done`, not an annotation.
-With no workspace given it marks the calling agent's own workspace, and the
-task space row shows a check. The mark clears when an agent in that workspace
+In a Toastty task, never run `workspace.set-done`: the task board reads its
+mark as the task's Done time, and only the user's acceptance finishes a task.
+`"$TOASTTY_CLI_PATH" task get` with no task ID succeeds only in a task's
+session; there, follow `toastty-task-start` to set the task's status.
+
+Outside a task, mark a finished task space with `workspace.set-done`, not an
+annotation. With no workspace given it marks the calling agent's own
+workspace, and the task space row shows a check. The mark clears when an agent in that workspace
 starts new work, so do not clear it yourself before continuing. A top-level
 workspace has no check and `workspace.set-done` rejects it; mark it with a
 `task-status` annotation with text `DONE` instead, and clear that annotation
@@ -579,4 +589,4 @@ proactively.
 
 If the user asks for a recurring Toastty workflow, write a narrow, workflow-specific skill that extends these general capabilities instead of creating another general Toastty orchestration or capability skill. Describe the workflow intent, required Toastty context, scope policy, live discovery steps, actions and queries to use, validation, and failure handling.
 
-Before designing one, read `"$TOASTTY_CLI_PATH" setup guide --topic workflows`. It lists example workflows to suggest, the rules workflow skills follow, and where Toastty's bundled example skills are, such as the worktree handoff, to copy and adapt.
+Before designing one, read `"$TOASTTY_CLI_PATH" setup guide --topic workflows`. It lists example workflows to suggest, the rules workflow skills follow, and a worked example: the task lifecycle that the shipped `toastty-task-start` and `toastty-task-merge` skills run.

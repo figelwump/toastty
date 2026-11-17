@@ -90,6 +90,59 @@ struct TaskAppControlTests {
         #expect(try taskID(repeated.result) == id)
     }
 
+    /// The bug this guards: an agent's `workspace.set-done` finished its own
+    /// task while the task's pull request was open, so the task skipped the
+    /// merge and To ship. The done checkbox, on the Mac and on a phone,
+    /// already refused that.
+    @Test func setDoneRefusesATaskWithAnOpenPullRequest() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = TaskBoardTests.FakeGitHub()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: gitHub),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the unread dot", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(created.id)
+        let taskSpace = try #require(fixture.record(created.id)?.taskSpaceWorkspaceID)
+        let session = try #require(fixture.record(created.id)?.operation.agentLaunch?.sessionID)
+        let url = "https://github.com/example/toastty/pull/124"
+        #expect(fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace, key: "github-pr", annotation: WorkspaceAnnotation(text: "PR #124", url: url))))
+        let link = try #require(WorkspacePullRequestLink(annotationURL: url))
+        gitHub.answer(url, state: "OPEN")
+        await board.pullRequests?.refresh(link).value
+        func group() throws -> AutomationJSONValue? {
+            let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(created.id.uuidString)])
+            guard case .object(let stage)? = got["stage"] else { return nil }
+            return stage["group"]
+        }
+
+        // The task's agent marks its own task space, naming no workspace.
+        await expectInvalidPayload(
+            "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+        ) {
+            _ = try executor.runAction(id: "workspace.set-done", args: [:], context: context(session))
+        }
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
+        #expect(try group() != .string("done"))
+
+        // Once the pull request is closed without a merge, the mark
+        // finishes the task.
+        gitHub.answer(url, state: "CLOSED")
+        await board.pullRequests?.refresh(link).value
+        let marked = try executor.runAction(id: "workspace.set-done", args: [:], context: context(session))
+        #expect(marked.didMutateState)
+        #expect(try group() == .string("done"))
+    }
+
     @Test func errorsComeBackAsInvalidPayload() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let executor = makeExecutor(fixture, coordinator: fixture.coordinator)

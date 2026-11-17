@@ -38,7 +38,7 @@ message fixed.
 Last review: 2026-11-13T17:00Z
 
 ## Open
-- mini-full · seen 4 · 2026-11-13 to 2026-11-14 · The validation Mac was full for hours. 3 tasks stopped and asked for permission to run tests there. [Home cards](toastty://task/<id>), [Zoom](toastty://task/<id>)
+- test-server-full · seen 4 · 2026-11-13 to 2026-11-14 · The shared test server was full for hours. 3 tasks stopped and asked for permission to run tests there. [Search filters](toastty://task/<id>), [Export CSV](toastty://task/<id>)
 
 ## Sent on
 - merge-dropped · seen 1 · 2026-11-14 · An accepted merge did not happen, with no message. → [Keep accepted merges](toastty://task/<id>)
