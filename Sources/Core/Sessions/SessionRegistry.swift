@@ -173,7 +173,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
 
     public mutating func updateDisplayTitleOverride(
         sessionID: String,
-        displayTitleOverride: String,
+        displayTitleOverride: String?,
         at now: Date
     ) {
         guard var record = sessionsByID[sessionID], record.isActive,

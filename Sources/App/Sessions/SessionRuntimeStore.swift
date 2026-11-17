@@ -3544,14 +3544,18 @@ final class SessionRuntimeStore: ObservableObject {
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
             // A restart can start the coordinator's agent in a new terminal
-            // before that terminal becomes the coordinator's panel.
-            if record.displayTitleOverride == nil,
-               let title = Self.coordinatorSessionTitle(
-                   agent: record.agent,
-                   panelID: record.panelID,
-                   coordinatorPanelID: coordinatorPanelID
-               ) {
-                nextRegistry.updateDisplayTitleOverride(sessionID: record.sessionID, displayTitleOverride: title, at: now)
+            // before that terminal becomes the coordinator's panel, and a
+            // panel moved out of the coordinator's workspace stops being it.
+            // Only process watches set their own name.
+            if record.agent != .processWatch {
+                let title = Self.coordinatorSessionTitle(
+                    agent: record.agent,
+                    panelID: record.panelID,
+                    coordinatorPanelID: coordinatorPanelID
+                )
+                if title != nil || record.displayTitleOverride == AppState.coordinatorWorkspaceTitle {
+                    nextRegistry.updateDisplayTitleOverride(sessionID: record.sessionID, displayTitleOverride: title, at: now)
+                }
             }
             guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 tearDownActiveSession(
