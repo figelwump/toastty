@@ -54,7 +54,6 @@ extension View {
 struct ToasttyTaskListRow: View {
     let task: RemoteTaskSummary
     var isLinkedChild = false
-    var isContext = false
     /// Off under a heading that already names the project, such as a To
     /// ship lane.
     var showsProject = true
@@ -81,7 +80,6 @@ struct ToasttyTaskListRow: View {
             }
         }
         .padding(.leading, isLinkedChild ? 18 : 0)
-        .opacity(isContext ? 0.55 : 1)
         .toasttyListRow()
     }
 }

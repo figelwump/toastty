@@ -602,8 +602,9 @@ in Home, except one for the coordinator, which opens its tab.
   task space takes its task's bucket, but an approval or an error in its
   sessions beats a review; a task with an open pull request, or one its agent
   marked ready, is Ready to review. A task and the tasks it started list
-  together in the bucket of the most urgent one, and a member whose own state
-  is calmer is dimmed. A parent shows how many of its child tasks merged, such
+  together in the bucket of the most urgent one. A member whose own state is
+  calmer draws at full strength, as on the Mac, and its status mark shows its
+  own state. A parent shows how many of its child tasks merged, such
   as **1/2 merged**. The card's name line counts each bucket: a yellow dot, a
   blue square, an arc and a gray dot. Tap the name to open the workspace, or
   the chevron to collapse the card to its name line; the phone saves the
