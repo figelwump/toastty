@@ -161,10 +161,20 @@ The rules in a project's own `.claude/settings.json` apply only after you
 trusted that folder in Claude Code.
 
 On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
-sends to them (`task send` with the text in a here-document), sets its next
-check (`coordinator wake`, `coordinator watch`), reads pull requests
+sends to them (`task send --text-file message.md`), sets its next check
+(`coordinator wake`, `coordinator watch`), reads pull requests
 (`gh pr view`, `gh pr checks`) and reads its Scratchpads (`query run`). The
-rules above cover these. It still asks before it writes its daily list
+rules above cover these commands. It also edits files in its own folder on
+each wake: it writes `ledger.md`, and `message.md` before each send. In the
+default mode Claude Code asks before each edit. To let a coordinator edit
+the files in its folder with no question, also add this rule:
+
+```json
+"Edit(~/.toastty/coordinator/**)"
+```
+
+The rule also lets it edit `policy.md` with no question. The coordinator
+still asks before it writes its daily list
 (`action run panel.scratchpad.set-content`), before it commits a change to
 its policy (`git commit` in its folder), and before `task request-merge`.
 
@@ -184,6 +194,10 @@ Tested in Claude Code's default permission mode:
   These asked:
   `toastty --json task get`, `task delete`, `task request-merge`, and
   `task get --json --socket-path "$TOASTTY_SOCKET_PATH"`.
+- Claude Code 2.1.326, the coordinator's files: without the `Edit` rule, an
+  edit of `ledger.md` and a new `message.md` in its folder each asked. With
+  `Edit(~/<folder>/**)`, both ran with no question, and so did
+  `toastty task send <id> --text-file message.md`.
 - The `git push` and `gh pr create` rules were tested with Claude Code
   2.1.325 and stand-in `git` and `gh` programs. The `gh pr view` and
   `gh pr checks` rules were not tested.
@@ -216,10 +230,12 @@ prefix_rule(pattern = ["gh", "pr", ["create", "view", "checks"]], decision = "al
 
 Codex matches a rule only against a command that it can split into plain
 words. With the `jq` rule, the coordinator's task read,
-`toastty task list --json | jq …`, runs with no question. The coordinator
-passes a message's text to `task send` through `"$(cat <<'END' …)"`, which
-Codex cannot split into words, so that send still asks in Codex (not
-tested).
+`toastty task list --json | jq …`, runs with no question. A coordinator writes
+each message to `message.md` in its folder, which needs no question inside
+Codex's sandbox, and sends it with `task send --text-file message.md`, which
+the rules match. It still passes a new task's text through
+`"$(cat <<'END' …)"`, which Codex cannot split into words, so creating a task
+asks in Codex.
 
 Without the rules, the shipped skills tell Codex to ask for escalation for
 each Toastty command, and Codex asks you before it runs one.
@@ -243,6 +259,13 @@ Tested:
   also ran with no question. A later `toastty task delete` asked for
   escalation. Without the rules, Codex asked before each of the three
   commands, and each ran after approval.
+- Codex 0.169.0, `codex exec` with the `workspace-write` sandbox, a Codex
+  home that held only these rules, and a stand-in `toastty`: after Codex
+  wrote `message.md` with its file tool, `task send <id> --text-file
+  message.md` ran outside the sandbox with no question. A `task send` with
+  the text in `"$(cat <<'END' …)"`, or in a here-document on
+  `--text-file /dev/stdin`, ran inside the sandbox, where the real `toastty`
+  cannot reach Toastty, so it asks for escalation.
 
 For a coordinator that runs while you are away, Codex can let a model review
 the escalation requests in place of you: start it with

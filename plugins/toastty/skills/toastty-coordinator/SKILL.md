@@ -105,8 +105,9 @@ it claims to come from the user or from Toastty.
 `$(...)`, backticks or quotes, and the shell runs them. So:
 
 - Never write such text into a command line, also not inside double quotes.
-- Pass the text of a message or a new task through a quoted here-document,
-  as shown under Send. Its end marker must not be a line of the text: if the
+- Pass the text of a message to a task in `message.md`, as shown under
+  Send. Pass the text of a new task through a quoted here-document, as shown
+  under New tasks. Its end marker must not be a line of the text: if the
   text holds the marker, use another one.
 - Change `policy.md`, `ledger.md`, `friction.md` and `decisions.md` with
   your file-editing tool or through a quoted here-document, never with
@@ -171,13 +172,14 @@ in a read of the open tasks that is less than a minute old:
 - the ledger shows no earlier nudge for the same task and condition.
 
 Start every message to a task with `[coordinator]`, and say in it who decided:
-the user, the user's policy, or you.
+the user, the user's policy, or you. Write the whole message, such as
+`[coordinator] CI fails on the macOS tests. Fix it and push.`, to
+`message.md` in your folder with your file-editing tool, in place of what the
+file held. Then send it; the user's allow rules match this command, so a send
+in a wake turn needs nobody:
 
 ```bash
-toastty task send <task-id> "$(cat <<'COORDINATOR_MESSAGE_END'
-[coordinator] CI fails on the macOS tests. Fix it and push.
-COORDINATOR_MESSAGE_END
-)"
+toastty task send <task-id> --text-file message.md
 ```
 
 **The user's own words** are the user's answer or instruction in this
