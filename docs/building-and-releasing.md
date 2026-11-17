@@ -416,7 +416,7 @@ The landing page in `website/` is static HTML with no build step. Its hero is an
 
 ```bash
 node scripts/website/render-hero-video.mjs --social \
-  --stills 'workflow-1=0@.qe-desk,workflow-2=15.9,workflow-3=18.0'
+  --stills 'workflow-1=0@.qe-desk,workflow-2=15.9,workflow-3=17.6'
 ```
 
 The script uses local Google Chrome (or `CHROME_PATH`) and `ffmpeg`, reads only local files, and writes to `artifacts/website-hero/`: `toastty-tour.mp4`, `poster.png`, one PNG per still, and `social-preview.png`. Copy `poster.png` to `docs/assets/toastty-hero.png`, `social-preview.png` to `website/assets/social-preview.png`, and the `workflow-2` and `workflow-3` stills, downscaled to 1600px wide, to `docs/assets/readme/`. The `workflow-1` still is the quick entry card of the page's Tasks section; pad it to the shape of the other stills with the page color: `sips --padToHeightWidth 635 1000 --padColor F5EEE2 artifacts/website-hero/workflow-1.png --out docs/assets/readme/workflow-1.png`.
