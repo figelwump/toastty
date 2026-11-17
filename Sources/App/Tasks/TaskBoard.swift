@@ -25,6 +25,10 @@ struct TaskBoardItem: Identifiable, Equatable {
     var agent: TaskAgentActivity
     /// A finished turn the user has not looked at yet, as the sidebar marks.
     var hasUnreadTurn = false
+    /// The status the sidebar's row for the open task space shows, from its
+    /// sessions and the stage; see `TaskBoard.taskSpaceStatus`. `nil` without
+    /// an open task space.
+    var taskSpaceStatus: SidebarSubspacePresentation.RowStatus? = nil
     /// The task this one's agent waits on through a pending watch.
     var waitingOnTitle: String?
     var pullRequest: WorkspacePullRequestLink?
@@ -240,12 +244,32 @@ enum TaskBoard {
     /// unread.
     static func hasUnreadTurn(_ statuses: [WorkspaceSessionStatus], in workspace: WorkspaceState?) -> Bool {
         guard let workspace else { return false }
-        return statuses.contains { status in
-            guard status.status.kind == .ready, let tabID = workspace.tabID(containingPanelID: status.panelID) else {
-                return false
-            }
-            return workspace.tab(id: tabID)?.unreadPanelIDs.contains(status.panelID) == true
+        return statuses.contains { isUnread($0, in: workspace) }
+    }
+
+    private static func isUnread(_ status: WorkspaceSessionStatus, in workspace: WorkspaceState) -> Bool {
+        guard status.status.kind == .ready, let tabID = workspace.tabID(containingPanelID: status.panelID) else {
+            return false
         }
+        return workspace.tab(id: tabID)?.unreadPanelIDs.contains(status.panelID) == true
+    }
+
+    /// The status of the task space's row, as the sidebar combines its
+    /// sessions with the task's stage. The sidebar lists the row by it, and
+    /// the Tasks view lists the task by it too.
+    static func taskSpaceStatus(
+        _ statuses: [WorkspaceSessionStatus],
+        in workspace: WorkspaceState?,
+        stage: TaskStage
+    ) -> SidebarSubspacePresentation.RowStatus? {
+        guard let workspace else { return nil }
+        return SidebarSubspacePresentation.rowStatus(
+            sessionStatus: SidebarSubspacePresentation.rowStatus(sessionStatuses: statuses.map { status in
+                (kind: status.status.kind, showsUnreadSessionAccent: isUnread(status, in: workspace))
+            }),
+            isDone: workspace.doneAt != nil,
+            stage: stage
+        )
     }
 
     /// The title of the first task `record` waits on through a pending watch.
@@ -366,6 +390,7 @@ enum TaskBoard {
             finishedThroughChildren: derived.finishedThroughChildren,
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: taskSpace),
+            taskSpaceStatus: taskSpaceStatus(statuses, in: taskSpace, stage: derived.stage),
             waitingOnTitle: waitingOn,
             pullRequest: link,
             pullRequestState: pullRequestState,
@@ -450,6 +475,7 @@ enum TaskBoard {
             stage: stage,
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: workspace),
+            taskSpaceStatus: taskSpaceStatus(statuses, in: workspace, stage: stage),
             pullRequest: link,
             pullRequestState: pullRequestState,
             pullRequestLookupProblem: pullRequestState == nil ? link.flatMap(inputs.pullRequestLookupProblem) : nil,
