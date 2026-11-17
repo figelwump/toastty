@@ -138,10 +138,10 @@ TRANSCRIPTS = {
 CHECKOUT_MOCKUP = '''<!doctype html><html><head><meta charset="utf-8"><style>
 body{margin:0;background:#fbf7ef;color:#2a241b;font:14px/1.5 -apple-system,system-ui,sans-serif;padding:24px}
 h1{font-size:20px;margin:0 0 4px}.m{color:#8a7f6f;font-size:12px;margin-bottom:18px}
-.row{display:flex;gap:18px;align-items:flex-start}.phone{width:170px;border:6px solid #1c1c1f;border-radius:22px;background:#fff;padding:12px 10px}
-.desk{flex:1;border:1px solid #d8cdb9;border-radius:8px;background:#fff;padding:12px}
+.row{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}.phone{width:170px;border:6px solid #1c1c1f;border-radius:22px;background:#fff;padding:12px 10px}
+.desk{flex:1;min-width:150px;border:1px solid #d8cdb9;border-radius:8px;background:#fff;padding:12px}
 .sum{border:1px dashed #d8cdb9;border-radius:8px;padding:8px;margin-bottom:10px;background:#fdfaf4;font-size:11px}
-.sum div{display:flex;justify-content:space-between}.sum b{font-size:12.5px}
+.sum div{display:flex;justify-content:space-between;gap:8px}.sum b{font-size:12.5px}
 .it{display:flex;gap:8px;align-items:center;margin-bottom:8px}.it i{width:24px;height:24px;border-radius:5px;background:#eadfcb}.it span{height:7px;border-radius:4px;background:#e6ded0;flex:1}
 .pay{background:#c9b79b;color:#fff;text-align:center;border-radius:6px;padding:7px 0;font-weight:700;font-size:12px}
 ol{color:#5d5346;font-size:13px;padding-left:20px;margin-top:18px}
