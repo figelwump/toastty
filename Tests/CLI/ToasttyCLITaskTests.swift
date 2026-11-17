@@ -228,6 +228,10 @@ struct ToasttyCLITaskTests {
             == .appControlRun(kind: .action, id: "task.send", args: [
                 "taskID": .string(taskID), "text": .string("Use the new name"), "steer": .bool(true),
             ]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "--from", "Grok Bot", "Yes, ship it"], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.send", args: [
+                "taskID": .string(taskID), "text": .string("Yes, ship it"), "from": .string("Grok Bot"),
+            ]))
 
         let notify = try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "idle", "--notify", other], environment: [:])
         #expect(notify.command == .appControlRun(kind: .action, id: "task.watch", args: [

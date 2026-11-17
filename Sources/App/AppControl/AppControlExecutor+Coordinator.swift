@@ -100,7 +100,10 @@ extension AppControlExecutor {
             // The first line says who sent it. Toastty writes that line
             // from the caller, so the text cannot pass as the user's or as
             // one of Toastty's own messages.
-            result = try controller.send(CoordinatorMessageHeader.message(from: messageSender(), text: text))
+            result = try controller.send(CoordinatorMessageHeader.message(
+                from: messageSender(statedName: try statedSenderName(args: args)),
+                text: text
+            ))
         } catch let error as CoordinatorError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
@@ -129,9 +132,14 @@ extension AppControlExecutor {
     /// Who runs this request, for the first line of a message that
     /// `coordinator send` or `task send` types: the coordinator's own agent
     /// session, else the task whose space the caller's session is in, else
-    /// that session, else a caller that named no running session.
-    func messageSender() -> CoordinatorMessageHeader.Sender {
-        guard let session = callerManagedSession() else { return .unknown }
+    /// that session, else the name the caller gave itself, else a caller
+    /// that named no running session. A caller in a session is named by its
+    /// session, so a name that it gives cannot hide where the message came
+    /// from.
+    func messageSender(statedName: String? = nil) -> CoordinatorMessageHeader.Sender {
+        guard let session = callerManagedSession() else {
+            return statedName.map { .named($0) } ?? .unknown
+        }
         if session.sessionID == coordinatorController?.session?.sessionID {
             return .coordinator
         }
@@ -143,6 +151,19 @@ extension AppControlExecutor {
             agent: session.agent.rawValue,
             workspaceTitle: (try? requiredStore())?.state.workspacesByID[session.workspaceID]?.title
         )
+    }
+
+    /// The name a caller gives itself with `from`, such as "Grok Bot".
+    /// `nil` without one. A name that the first line would change is
+    /// refused: the coordinator's policy names a sender by its exact text.
+    func statedSenderName(args: [String: AutomationJSONValue]) throws -> String? {
+        guard let value = args["from"] else { return nil }
+        guard case .string(let name) = value, CoordinatorMessageHeader.isSenderName(name) else {
+            throw AutomationSocketError.invalidPayload(
+                "from must be the sender's name: one line of at most 60 characters, without \", | or repeated spaces"
+            )
+        }
+        return name
     }
 
     private func requiredCoordinatorWakes() throws -> TaskWebhookService {
