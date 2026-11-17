@@ -127,11 +127,14 @@ extension AppControlExecutor {
     }
 
     /// Who runs this request, for the first line of a message that
-    /// `coordinator send` or `task send` types: the task whose space the
-    /// caller's session is in, else that session, else a caller that named
-    /// no running session.
+    /// `coordinator send` or `task send` types: the coordinator's own agent
+    /// session, else the task whose space the caller's session is in, else
+    /// that session, else a caller that named no running session.
     func messageSender() -> CoordinatorMessageHeader.Sender {
         guard let session = callerManagedSession() else { return .unknown }
+        if session.sessionID == coordinatorController?.session?.sessionID {
+            return .coordinator
+        }
         if let task = taskCoordinator?.task(inWorkspace: session.workspaceID) {
             return .task(id: task.id, title: task.title)
         }

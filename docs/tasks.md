@@ -606,7 +606,9 @@ worktree.
   agent and submits it, whatever the agent does. Its first line names the
   sender as `coordinator send` does, such as
   `[Toastty] From task [title](toastty://task/<id>): not from the user.`, so
-  the agent that reads it can name the task that sent it. A busy agent queues it as typed
+  the agent that reads it can name the task that sent it. A message from the
+  coordinator's own session starts with
+  `[Toastty] From the coordinator: not from the user.` A busy agent queues it as typed
   input, and the Return key can answer a permission prompt that is on screen. It
   fails when the task has no running agent, and says so when the message was
   typed but may not have been submitted; check that terminal before you send it
@@ -897,6 +899,7 @@ text:
 | --- | --- |
 | `[Toastty] Wake: …` | Toastty: a [digest](#when-toastty-wakes-the-coordinator). |
 | `[Toastty] From task [title](toastty://task/<id>): not from the user.` | `coordinator send` from a session in that task's space. |
+| `[Toastty] From the coordinator: not from the user.` | `coordinator send` or `task send` from the coordinator's own agent session. |
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |

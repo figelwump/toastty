@@ -426,7 +426,8 @@ Notable action-specific behavior:
   - Toastty types a first line that names the sender, from the caller and
     never from the text, as for `coordinator.send`: `[Toastty] From task
     [title](toastty://task/<id>): not from the user.` for a caller in a task's
-    space. The text starts on the second line.
+    space, and `[Toastty] From the coordinator: not from the user.` for the
+    coordinator's own agent session. The text starts on the second line.
   - optional `args.steer=true` checks the agent before it types, and types
     nothing into a permission prompt or a question. The result adds
     `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
