@@ -100,6 +100,9 @@ public struct ToasttyTranscriptView: View {
     }
 
     public var body: some View {
+        #if DEBUG && os(iOS)
+        let _ = ToasttyTranscriptBodyCount.record()
+        #endif
         let scrollTaskKey = self.scrollTaskKey
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
@@ -1041,6 +1044,20 @@ public struct ToasttyTranscriptView: View {
         }
     }
 }
+
+#if DEBUG && os(iOS)
+/// How many times a transcript's body has run, for the iPhone app's UI
+/// tests. A keystroke in the composer must not run it: with a long chat,
+/// each run cost the main thread enough to make typing slow.
+@MainActor
+public enum ToasttyTranscriptBodyCount {
+    public private(set) static var value = 0
+
+    static func record() {
+        value += 1
+    }
+}
+#endif
 
 /// Choose from the completed opening catch-up, not its first nonempty page.
 /// Offline content can supply a provisional position until that first live

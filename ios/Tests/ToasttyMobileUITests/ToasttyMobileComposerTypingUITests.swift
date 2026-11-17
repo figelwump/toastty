@@ -76,6 +76,61 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
         add(attachment)
     }
 
+    /// A keystroke updates the composer only. Each key used to run the
+    /// app's root view, the conversation screen and the transcript again,
+    /// and in a long chat that made typing slow. The app counts the
+    /// transcript's body runs (`TOASTTY_MOBILE_FIXTURE_RENDER_COUNTS`).
+    func testTypingDoesNotRunTheTranscriptAgainForEachKey() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_COORDINATOR"] = "working"
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_RENDER_COUNTS"] = "1"
+        app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
+        app.launch()
+        XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 10))
+        app.tabBars.buttons["Coordinator"].tap()
+        let input = app.descendants(matching: .any)["toastty-mobile-composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        // The first key turns Stop into Send; count from the second.
+        app.typeText("S")
+        Thread.sleep(forTimeInterval: 1)
+        let count = app.descendants(matching: .any)["toastty-mobile-fixture-transcript-body-count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 5))
+        let before = try XCTUnwrap(Int(count.value as? String ?? ""))
+        // One key at a time, so that each key gets its own update, and short
+        // enough that the field does not grow a line.
+        let keys = "hip it today"
+        for key in keys {
+            app.typeText(String(key))
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        Thread.sleep(forTimeInterval: 1)
+        let after = try XCTUnwrap(Int(count.value as? String ?? ""))
+        // UIKit can add an inline prediction to the value after the last word.
+        XCTAssertTrue((input.value as? String)?.lowercased().hasPrefix("ship it today") == true)
+        XCTAssertLessThanOrEqual(after - before, 2, "\(keys.count) keys ran the transcript's body \(after - before) times")
+
+        // The app keeps the draft, not the composer: it is still there after
+        // another tab shows. A slow drag down the transcript drops the
+        // keyboard, which covers the tab bar.
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).press(
+            forDuration: 0.1,
+            thenDragTo: transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertTrue((input.value as? String)?.lowercased().hasPrefix("ship it today") == true)
+    }
+
     func testTypingThroughFirstWrapAndContinuedLinesPreservesTextOrder() {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"

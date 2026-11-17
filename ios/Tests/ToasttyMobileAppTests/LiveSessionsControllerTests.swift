@@ -262,8 +262,10 @@ final class LiveSessionsControllerTests: XCTestCase {
         let controller = try XCTUnwrap(subject.activeConversationController)
         controller.stop()
         controller.consume(composerState(for: conversation, failure: .coordinatorNotLive))
+        let drafts = ToasttyComposerDraftStore()
+        drafts.update { $0.updateDraft("saved draft", for: conversation.id) }
         let host = UIHostingController(rootView: ForegroundProbeComposerHarness(
-            sessions: subject, home: home, conversation: conversation
+            sessions: subject, home: home, conversation: conversation, drafts: drafts
         ))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -1192,13 +1194,14 @@ private struct ForegroundProbeComposerHarness: View {
     let sessions: LiveSessionsController
     let home: HomeScreenController
     let conversation: MobileConversation
+    let drafts: ToasttyComposerDraftStore
 
     var body: some View {
         ToasttyConversationScreen(
             conversationID: conversation.id,
             controller: home,
             composer: sessions.composerPresentation(for: conversation),
-            draft: "saved draft",
+            drafts: drafts,
             canAcknowledgeRead: false
         )
     }

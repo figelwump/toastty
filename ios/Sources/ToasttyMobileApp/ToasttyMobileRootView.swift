@@ -23,7 +23,9 @@ struct ToasttyMobileRootView: View {
     /// waiting shared draft does not cover it.
     @State private var routedDestinationSinceActivation = false
     @State private var fixtureHasLoadedOlderTranscript = false
-    @State private var composerDraftState = ToasttyComposerDraftState()
+    /// Only the composer reads the drafts' state, so typing does not update
+    /// this view, its tabs or the transcript.
+    @State private var composerDrafts = ToasttyComposerDraftStore()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
     @State private var fixtureComposerIsReserved = false
     @State private var fixtureQueuedMessages: [RemoteQueuedMessage] = []
@@ -52,6 +54,9 @@ struct ToasttyMobileRootView: View {
     private let controlsFixtureSubmission: Bool
     private let fixtureSendEventOrder: ToasttyConversationFixture.SendEventOrder?
     private let showsNotificationTapButtons: Bool
+    /// `TOASTTY_MOBILE_FIXTURE_RENDER_COUNTS=1`: UI tests read how many times
+    /// a transcript's body ran.
+    private let showsTranscriptBodyCount: Bool
 #endif
     private let deepLinkParser: DeepLinkParser?
     private let sharedDraftStore: ToasttySharedDraftStore?
@@ -78,7 +83,7 @@ struct ToasttyMobileRootView: View {
                 )
             }
             _ = draft.addAttachments(attachments, for: Self.fixtureOpenPromptConversationID)
-            _composerDraftState = State(initialValue: draft)
+            _composerDrafts = State(initialValue: ToasttyComposerDraftStore(draft))
         }
         if configuration.fixtureScenario == .interactionAnswer {
             let key = ToasttyInteractionAnswerKey(
@@ -102,6 +107,8 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         entryLoadFixture = configuration.entryLoadFixture
         showsNotificationTapButtons = configuration.showsNotificationTapButtons
+        showsTranscriptBodyCount = configuration.fixtureScenario != nil
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_RENDER_COUNTS"] == "1"
         controlsFixtureSubmission = configuration.fixtureScenario == .gatedSend
             && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_CONTROLLED_SUBMIT"] == "1"
         fixtureSendEventOrder = configuration.fixtureScenario == .gatedSend
@@ -217,6 +224,14 @@ struct ToasttyMobileRootView: View {
             }
         }
         .onOpenURL(perform: handleDeepLink)
+#if DEBUG
+        .overlay(alignment: .topLeading) {
+            if showsTranscriptBodyCount {
+                ToasttyTranscriptBodyCountElement()
+                    .frame(width: 2, height: 2)
+            }
+        }
+#endif
         .preferredColorScheme(.dark)
 #if DEBUG
         .toasttyIncomingKeyboardLog($fixtureIncoming)
@@ -736,7 +751,7 @@ struct ToasttyMobileRootView: View {
     }
 
     private func conversationScreen(for conversationID: UUID, isCoordinatorRoot: Bool = false) -> some View {
-        let generation = composerDraftState.generation
+        let generation = composerDrafts.generation
         let liveConversation = sessionController.liveController?.activeConversationController
         let supportsAttachments = liveConversation?.conversationID == conversationID
             ? liveConversation?.supportsAttachments == true
@@ -746,32 +761,26 @@ struct ToasttyMobileRootView: View {
             controller: sessionController.homeController,
             presentation: conversationPresentation(for: conversationID),
             composer: conversationComposer(for: conversationID),
-            draft: composerDraftState.draft(for: conversationID),
-            draftGeneration: generation,
-            draftEditRevision: composerDraftState.editRevisions[conversationID, default: 0],
-            draftReplacement: composerDraftState.replacements[conversationID],
+            drafts: composerDrafts,
             draftDidChange: conversationDraftChange(for: conversationID, generation: generation),
             draftReplacementCompleted: { result in
-                guard composerDraftState.generation == generation,
+                guard composerDrafts.generation == generation,
                       sessionController.homeController.conversation(id: conversationID) != nil else { return }
-                composerDraftState.completeReplacement(result, for: conversationID)
+                composerDrafts.update { $0.completeReplacement(result, for: conversationID) }
                 reconcileAttachmentDrafts()
             },
-            isSubmitting: composerDraftState.isSubmitting(conversationID),
-            attachments: composerDraftState.attachments(for: conversationID),
             supportsAttachments: supportsAttachments,
             addAttachments: { additions in
-                guard composerDraftState.generation == generation,
+                guard composerDrafts.generation == generation,
                       sessionController.homeController.conversation(id: conversationID) != nil else {
                     return "This conversation is no longer available."
                 }
-                return composerDraftState.addAttachments(additions, for: conversationID)
+                return composerDrafts.update { $0.addAttachments(additions, for: conversationID) }
             },
-            removeAttachment: {
-                composerDraftState.removeAttachment($0, for: conversationID)
+            removeAttachment: { attachmentID in
+                composerDrafts.update { $0.removeAttachment(attachmentID, for: conversationID) }
                 reconcileAttachmentDrafts()
             },
-            attachmentRecoveryMessage: composerDraftState.attachmentRecoveryMessages[conversationID],
             loadOlder: conversationLoadOlderAction(for: conversationID),
             submitDraft: conversationSubmitAction(for: conversationID),
             interrupt: conversationInterruptAction(for: conversationID),
@@ -787,15 +796,13 @@ struct ToasttyMobileRootView: View {
             onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID),
             openTaskSpace: openTaskSpaceInPlaceOfConversation,
             isCoordinatorRoot: isCoordinatorRoot,
-            reply: isCoordinatorRoot ? composerDraftState.replies[conversationID] : nil,
-            replyNotice: isCoordinatorRoot ? composerDraftState.replyNotices[conversationID] : nil,
             replyToMessage: { target in
-                guard composerDraftState.generation == generation else { return false }
-                return composerDraftState.reply(to: target, for: conversationID)
+                guard composerDrafts.generation == generation else { return false }
+                return composerDrafts.update { $0.reply(to: target, for: conversationID) }
             },
             cancelReply: {
-                guard composerDraftState.generation == generation else { return }
-                composerDraftState.cancelReply(for: conversationID)
+                guard composerDrafts.generation == generation else { return }
+                composerDrafts.update { $0.cancelReply(for: conversationID) }
                 // A rejected message with files waits while the draft
                 // answers another message.
                 reconcileAttachmentDrafts()
@@ -1100,9 +1107,9 @@ struct ToasttyMobileRootView: View {
 
     private func conversationDraftChange(for conversationID: UUID, generation: UUID) -> (String, UInt64) -> Void {
         { text, editRevision in
-            guard composerDraftState.generation == generation,
+            guard composerDrafts.generation == generation,
                   sessionController.homeController.conversation(id: conversationID) != nil else { return }
-            composerDraftState.updateDraft(text, for: conversationID, editRevision: editRevision)
+            composerDrafts.update { $0.updateDraft(text, for: conversationID, editRevision: editRevision) }
             reconcileAttachmentDrafts()
             if let controller = sessionController.liveController?.activeConversationController,
                controller.conversationID == conversationID {
@@ -1113,9 +1120,7 @@ struct ToasttyMobileRootView: View {
 
     private func conversationSubmitAction(for conversationID: UUID) -> (RemoteMessageDeliveryMode?) -> Bool {
         { deliveryMode in
-            guard let submission = composerDraftState.beginSubmission(
-                for: conversationID
-            ) else {
+            guard let submission = composerDrafts.update({ $0.beginSubmission(for: conversationID) }) else {
                 return false
             }
             recordDiagnostic(.sendStarted)
@@ -1207,10 +1212,10 @@ struct ToasttyMobileRootView: View {
     /// Edit leaves a waiting reply where it is while the draft answers
     /// another, and says why.
     private func queuedEditIsAllowed(_ text: String, readsReplies: Bool, for conversationID: UUID) -> Bool {
-        guard readsReplies, let refusal = composerDraftState.queuedReplyEditRefusal(text, for: conversationID) else {
+        guard readsReplies, let refusal = composerDrafts.state.queuedReplyEditRefusal(text, for: conversationID) else {
             return true
         }
-        composerDraftState.showReplyNotice(refusal, for: conversationID)
+        composerDrafts.update { $0.showReplyNotice(refusal, for: conversationID) }
         return false
     }
 
@@ -1218,9 +1223,9 @@ struct ToasttyMobileRootView: View {
     /// reply comes back as a reply.
     private func restoreQueuedMessage(_ text: String, readsReplies: Bool, for conversationID: UUID) {
         if readsReplies {
-            composerDraftState.restoreQueuedReply(text, for: conversationID)
+            composerDrafts.update { $0.restoreQueuedReply(text, for: conversationID) }
         } else {
-            composerDraftState.restoreDraft(text, for: conversationID)
+            composerDrafts.update { $0.restoreDraft(text, for: conversationID) }
         }
     }
 
@@ -1228,7 +1233,7 @@ struct ToasttyMobileRootView: View {
         for conversationID: UUID
     ) -> (String) -> Void {
         { clientRequestID in
-            composerDraftState.discardAttachmentRecovery(clientRequestID: clientRequestID, for: conversationID)
+            composerDrafts.update { $0.discardAttachmentRecovery(clientRequestID: clientRequestID, for: conversationID) }
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
                 fixtureDismissReceipt(clientRequestID)
@@ -1744,7 +1749,7 @@ struct ToasttyMobileRootView: View {
     )!
 
     private func resetComposerPresentation() {
-        composerDraftState.reset()
+        composerDrafts.update { $0.reset() }
 #if DEBUG
         controlledFixtureSubmission = nil
 #endif
@@ -1771,14 +1776,14 @@ struct ToasttyMobileRootView: View {
         _ submission: ToasttyComposerSubmission,
         outcome: ConversationSendOutcome
     ) {
-        composerDraftState.finishSubmission(submission, outcome: outcome)
+        composerDrafts.update { $0.finishSubmission(submission, outcome: outcome) }
         reconcileAttachmentDrafts()
         recordDiagnostic(ToasttyAppDiagnosticProjection.event(for: outcome))
     }
 
     private func reconcileAttachmentDrafts() {
         guard let controller = sessionController.liveController?.activeConversationController else { return }
-        composerDraftState.reconcileAttachments(controller.sendReconciliation, for: controller.conversationID)
+        composerDrafts.update { $0.reconcileAttachments(controller.sendReconciliation, for: controller.conversationID) }
     }
 
     private func recordDiagnostic(_ event: ToasttyConnectionDiagnosticEvent) {
@@ -1789,7 +1794,7 @@ struct ToasttyMobileRootView: View {
         let conversationIDs = Set(
             snapshot.workspaces.flatMap(\.conversations).map(\.id)
         )
-        composerDraftState.retainConversations(conversationIDs)
+        composerDrafts.update { $0.retainConversations(conversationIDs) }
         if conversationIDs.contains(Self.fixtureOpenPromptConversationID) == false {
             fixtureSendItems.removeAll(keepingCapacity: false)
 #if DEBUG
@@ -1878,6 +1883,39 @@ private struct PairedConnectionBanner: View {
         }
     }
 }
+
+#if DEBUG
+/// How many times a transcript's body has run, as the accessibility value
+/// of a UIKit view. UIKit reads it when a UI test asks, so the count shows
+/// without updating any SwiftUI view.
+private struct ToasttyTranscriptBodyCountElement: UIViewRepresentable {
+    func makeUIView(context: Context) -> CountView {
+        CountView()
+    }
+
+    func updateUIView(_ view: CountView, context: Context) {}
+
+    final class CountView: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            isAccessibilityElement = true
+            accessibilityLabel = "Transcript body count"
+            accessibilityIdentifier = "toastty-mobile-fixture-transcript-body-count"
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            nil
+        }
+
+        override var accessibilityValue: String? {
+            get { String(ToasttyTranscriptBodyCount.value) }
+            set {}
+        }
+    }
+}
+#endif
 
 #Preview("Fixture home") {
     ToasttyMobileRootView(configuration: ToasttyMobileAppConfiguration(

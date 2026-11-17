@@ -4,10 +4,10 @@ import UIKit
 import XCTest
 @testable import ToasttyMobileApp
 
-/// Toasty's steam on the iPhone, which Core Animation moves outside
-/// SwiftUI's updates: it moves while the coordinator works, moves again
-/// after its view leaves the window and returns, as it does when the
-/// Coordinator tab hides and shows, and stands still when asked.
+/// Toasty's steam and the activity spinner on the iPhone, which Core
+/// Animation moves outside SwiftUI's updates: they move while shown, move
+/// again after their view leaves the window and returns, as it does when a
+/// tab hides and shows, and stand still when asked.
 @MainActor
 final class ToastyIconAnimationTests: XCTestCase {
     private static let wispAnimations = [
@@ -48,6 +48,28 @@ final class ToastyIconAnimationTests: XCTestCase {
         XCTAssertNil(find(ToasttyLayerAnimationUIView.self, in: quiet.view))
     }
 
+    /// The spinner turns in Core Animation. As a SwiftUI animation it
+    /// updated the window's whole view graph 24 times a second while any
+    /// session worked, and typing in the composer lagged.
+    func testSpinnerTurnsOutsideSwiftUIUpdates() throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        let spinner = UIHostingController(rootView: ToasttySpinner(size: 9).padding(20))
+        window.rootViewController = spinner
+        window.makeKeyAndVisible()
+        let arc = try layerView(in: spinner.view)
+        let rotation = [ToasttyLayerAnimationView.Animation.Property.rotation.rawValue]
+        XCTAssertEqual(arc.playingAnimationKeys, [rotation])
+
+        window.rootViewController = UIViewController()
+        pump()
+        window.rootViewController = spinner
+        pump()
+        XCTAssertEqual(arc.playingAnimationKeys, [rotation])
+    }
+
     private static func icon(_ status: ToastyIcon.Status) -> some View {
         ToastyIcon(style: .golden, size: 17, status: status, palette: .phone, badgeRingColor: .black)
             .padding(20)
@@ -56,7 +78,7 @@ final class ToastyIconAnimationTests: XCTestCase {
     private func layerView(in view: UIView) throws -> ToasttyLayerAnimationUIView {
         view.layoutIfNeeded()
         pump()
-        return try XCTUnwrap(find(ToasttyLayerAnimationUIView.self, in: view), "Toasty has no steam view")
+        return try XCTUnwrap(find(ToasttyLayerAnimationUIView.self, in: view), "No Core Animation view")
     }
 
     private func find<T: UIView>(_ type: T.Type, in view: UIView) -> T? {
