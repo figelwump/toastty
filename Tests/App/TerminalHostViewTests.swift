@@ -23,14 +23,14 @@ final class GhosttyClipboardBridgeTests: XCTestCase {
         XCTAssertTrue(GhosttyClipboardBridge.runtimeSupportsSelectionClipboard)
     }
 
-    func testLengthDelimitedWritePreservesBinaryAndEmptyRepresentations() {
+    func testLengthDelimitedWritePreservesBinaryAndEmptyRepresentations() throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         let bytes: [CChar] = [65, 0, -1, 66]
         let mime = "application/octet-stream"
-        mime.withCString { mimePointer in
-            bytes.withUnsafeBufferPointer { buffer in
-                var content = ghostty_clipboard_content_s(mime: mimePointer, data: buffer.baseAddress, len: buffer.count)
+        try mime.withCString { mimePointer in
+            try bytes.withUnsafeBufferPointer { buffer in
+                var content = ghostty_clipboard_content_s(mime: mimePointer, data: try XCTUnwrap(buffer.baseAddress), len: buffer.count)
                 let entries = GhosttyClipboardBridge.entries(from: &content, count: 1)
                 GhosttyClipboardBridge.write(entries, to: pasteboard)
             }
@@ -38,8 +38,11 @@ final class GhosttyClipboardBridgeTests: XCTestCase {
         let result = GhosttyClipboardBridge.read(from: pasteboard, mimes: [mime], list: false)
         XCTAssertEqual(result?.contents.first?.data, Data([65, 0, 255, 66]))
         "text/plain".withCString { mimePointer in
-            var content = ghostty_clipboard_content_s(mime: mimePointer, data: nil, len: 0)
-            GhosttyClipboardBridge.write(GhosttyClipboardBridge.entries(from: &content, count: 1), to: pasteboard)
+            var empty: CChar = 0
+            withUnsafePointer(to: &empty) { dataPointer in
+                var content = ghostty_clipboard_content_s(mime: mimePointer, data: dataPointer, len: 0)
+                GhosttyClipboardBridge.write(GhosttyClipboardBridge.entries(from: &content, count: 1), to: pasteboard)
+            }
         }
         XCTAssertEqual(GhosttyClipboardBridge.read(from: pasteboard, mimes: ["text/plain"], list: false)?.contents.first?.data, Data())
     }
