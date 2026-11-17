@@ -112,6 +112,11 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         }
     }
 
+    fileprivate static func setTakesText(_ takesText: Bool, on textView: ToasttyComposerUIKitTextView) {
+        textView.isEditable = takesText
+        textView.isSelectable = takesText
+    }
+
     static func clampedHeight(
         naturalHeight: CGFloat,
         lineHeight: CGFloat,
@@ -160,8 +165,12 @@ struct ToasttyComposerTextView: UIViewRepresentable {
 
     private func synchronize(_ textView: ToasttyComposerUIKitTextView) {
         textView.placeholder = placeholder
-        textView.isEditable = isEnabled
-        textView.isSelectable = isEnabled
+        // A text view that stops taking text gives up the keyboard at once:
+        // a responder change, which inside this SwiftUI update can spin in
+        // the AttributeGraph cycle that `scheduleFocusSync` avoids. The field
+        // that has the keyboard keeps taking text here; the focus sync drops
+        // the keyboard after the update and then locks the field.
+        Self.setTakesText(isEnabled || textView.isFirstResponder, on: textView)
         textView.accessibilityLabel = accessibilityLabel
         textView.accessibilityHint = accessibilityHint
         textView.accessibilityIdentifier = "toastty-mobile-composer-input"
@@ -272,6 +281,7 @@ struct ToasttyComposerTextView: UIViewRepresentable {
             guard needsFocusChange(textView) else { return }
             if textView.isFirstResponder {
                 textView.resignFirstResponder()
+                ToasttyComposerTextView.setTakesText(parent.isEnabled || textView.isFirstResponder, on: textView)
             } else if textView.becomeFirstResponder() {
                 textView.requestSelectionVisibility()
             }

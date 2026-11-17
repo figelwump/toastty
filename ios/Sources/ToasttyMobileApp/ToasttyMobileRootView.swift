@@ -40,6 +40,8 @@ struct ToasttyMobileRootView: View {
     @State private var fixtureSendUpdateCount = 0
     /// A send in the fixture coordinator chat removed its New line.
     @State private var fixtureCoordinatorLineCleared = false
+    /// What the Mac sends while the user types, from TOASTTY_MOBILE_FIXTURE_INCOMING=1.
+    @State private var fixtureIncoming: ToasttyIncomingFixture?
 #endif
     @State private var fixtureInteractionAnswerState: ToasttyInteractionAnswerState?
     @State private var fixtureInteractionAcceptedAnswers: [RemoteInteractionAnswer]?
@@ -113,6 +115,9 @@ struct ToasttyMobileRootView: View {
             ? ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_SEND_EVENT_ORDER"]
                 .flatMap(ToasttyConversationFixture.SendEventOrder.init(rawValue:))
             : nil
+        _fixtureIncoming = State(initialValue: configuration.fixtureScenario == .home
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_INCOMING"] == "1"
+            ? ToasttyIncomingFixture() : nil)
 #endif
         deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
         sharedDraftStore = configuration.sharedDraftStore
@@ -228,6 +233,9 @@ struct ToasttyMobileRootView: View {
         }
 #endif
         .preferredColorScheme(.dark)
+#if DEBUG
+        .toasttyIncomingKeyboardLog($fixtureIncoming)
+#endif
     }
 
     private var sessionGate: some View {
@@ -858,6 +866,13 @@ struct ToasttyMobileRootView: View {
                 .padding(8)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if let fixtureIncoming, fixtureIncomingTurn(for: conversationID) != nil {
+                ToasttyIncomingFixtureControls(fixture: fixtureIncoming) { step in
+                    applyFixtureIncoming(step, in: conversationID)
+                }
+            }
+        }
 #endif
     }
 
@@ -913,7 +928,9 @@ struct ToasttyMobileRootView: View {
             )
         }
         if isFixtureTaskSession(conversationID) {
-            return ToasttyConversationFixture.gatedSendPresentation(for: conversationID, sendItems: fixtureSendItems)
+            return ToasttyConversationFixture.gatedSendPresentation(
+                for: conversationID, sendItems: fixtureSendItems, responses: fixtureIncoming?.responses ?? 0
+            )
         }
         if conversationID == ToasttyMobileFixture.coordinatorConversationID {
             return ToasttyConversationFixture.coordinatorPresentation(
@@ -928,7 +945,8 @@ struct ToasttyMobileRootView: View {
                 hasLongMessage: ProcessInfo.processInfo.environment[
                     "TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"
                 ] == "1",
-                quietTurns: fixtureCoordinatorQuietTurns
+                quietTurns: fixtureCoordinatorQuietTurns,
+                responses: fixtureIncoming?.responses ?? 0
             )
         }
         switch fixtureScenario {
@@ -1404,11 +1422,52 @@ struct ToasttyMobileRootView: View {
         case .queueSteer:
             conversationID == Self.fixtureWorkingConversationID
         case .home:
-            conversationID == ToasttyMobileFixture.coordinatorConversationID
-                && sessionController.homeController.snapshot.coordinatorMark == .working
+            if let turn = fixtureIncomingTurn(for: conversationID) {
+                turn == .working
+            } else {
+                conversationID == ToasttyMobileFixture.coordinatorConversationID
+                    && sessionController.homeController.snapshot.coordinatorMark == .working
+            }
         default:
             false
         }
+    }
+
+    /// The incoming fixture's turn in the coordinator's chat or the task
+    /// fixture's session; nil elsewhere and without the fixture.
+    private func fixtureIncomingTurn(for conversationID: UUID) -> ToasttyIncomingFixture.Turn? {
+        guard let fixtureIncoming,
+              conversationID == ToasttyMobileFixture.coordinatorConversationID
+                || isFixtureTaskSession(conversationID) else { return nil }
+        return fixtureIncoming.turn
+    }
+
+    /// Applies one step of what the Mac sends. A status change and a turn's
+    /// end also change the coordinator's status in the home snapshot, as the
+    /// Mac's session list does.
+    private func applyFixtureIncoming(_ step: ToasttyIncomingFixture.Step, in conversationID: UUID) {
+        fixtureIncoming?.apply(step)
+        let snapshot = sessionController.homeController.snapshot
+        let status: RemoteSessionPresentationStatus
+        switch step {
+        case .status:
+            status = snapshot.coordinatorMark == .working ? .ready : .working
+        case .turnEnd where conversationID == ToasttyMobileFixture.coordinatorConversationID:
+            status = .ready
+        default:
+            return
+        }
+        guard snapshot.coordinatorMark != nil else { return }
+        let base = MobileHomeSnapshot(
+            hostName: snapshot.hostName,
+            workspaces: snapshot.workspaces.filter { $0.isCoordinator == false },
+            taskBoard: snapshot.taskBoard
+        )
+        sessionController.homeController.update(
+            snapshot: ToasttyMobileFixture.withCoordinator(base, status: status, chatRead: snapshot.coordinatorChatRead),
+            connectionState: .live,
+            freshness: .live
+        )
     }
 
     /// The session in the task fixture's early-session-titles task space
@@ -1456,6 +1515,9 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         if fixtureScenario == .queueSteer {
             return conversationID == Self.fixtureWorkingConversationID ? fixtureQueueSteerComposer() : nil
+        }
+        if fixtureIncomingTurn(for: conversationID) == .closing {
+            return ToasttyIncomingFixture.closingComposer
         }
         // The coordinator's chat while the fixture coordinator works.
         if isFixtureWorkingConversation(conversationID) {
