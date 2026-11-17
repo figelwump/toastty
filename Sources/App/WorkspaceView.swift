@@ -4157,7 +4157,7 @@ struct PanelCardView: View {
                 liveTitleModel: terminalLiveTitleStore.model(for: panelID),
                 fallbackTitle: panelLabel,
                 displayTitleForLiveTitle: { liveTitle in
-                    TerminalDisplayTitleResolver.panelHeaderTitle(
+                    coordinatorPanelTitle ?? TerminalDisplayTitleResolver.panelHeaderTitle(
                         panelState: panelState,
                         liveTerminalTitle: liveTitle,
                         panelSessionStatus: panelSessionStatus
@@ -4177,11 +4177,21 @@ struct PanelCardView: View {
     }
 
     private var panelLabel: String {
-        TerminalDisplayTitleResolver.panelHeaderTitle(
+        coordinatorPanelTitle ?? TerminalDisplayTitleResolver.panelHeaderTitle(
             panelState: panelState,
             liveTerminalTitle: nil,
             panelSessionStatus: panelSessionStatus
         )
+    }
+
+    /// The coordinator's terminal is named after it, not after the title
+    /// its agent writes to the terminal.
+    private var coordinatorPanelTitle: String? {
+        isCoordinatorPanel ? AppState.coordinatorWorkspaceTitle : nil
+    }
+
+    private var isCoordinatorPanel: Bool {
+        coordinatorController?.location?.panelID == panelID
     }
 
     private var terminalProfileBadge: TerminalProfileBadge? {
@@ -4473,7 +4483,7 @@ struct PanelCardView: View {
             scratchpadHeaderAccessory
         }
 
-        if let coordinatorController, coordinatorController.location?.panelID == panelID {
+        if let coordinatorController, isCoordinatorPanel {
             // Dock, Policy, then Terminal: the dock and the switch need the chat.
             if coordinatorController.chatIsAvailable {
                 CoordinatorPanelDockButton(controller: coordinatorController)

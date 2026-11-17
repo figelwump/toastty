@@ -171,6 +171,18 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionsByID[sessionID] = record
     }
 
+    public mutating func updateDisplayTitleOverride(
+        sessionID: String,
+        displayTitleOverride: String,
+        at now: Date
+    ) {
+        guard var record = sessionsByID[sessionID], record.isActive,
+              record.displayTitleOverride != displayTitleOverride else { return }
+        record.displayTitleOverride = displayTitleOverride
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+    }
+
     @discardableResult
     public mutating func updateBackgroundActivity(
         sessionID: String,

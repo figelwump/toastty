@@ -2325,6 +2325,16 @@ struct RemoteAccessServiceSafetyTests {
 
         #expect(panelLabelTitle != "Build system explanation")
         #expect(fixture.summary.title == "Build system explanation")
+
+        // The coordinator's session is always "Coordinator", also when its
+        // terminal becomes the coordinator's after the agent started there,
+        // as on a restart into a new terminal.
+        let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
+        fixture.sessionRuntimeStore.bind(store: fixture.store)
+        defer { fixture.sessionRuntimeStore.unbind() }
+        #expect(fixture.summary.title == "Build system explanation")
+        #expect(fixture.store.send(.restoreCoordinatorWorkspace(workspaceID: workspaceID, panelID: fixture.panelID)))
+        #expect(fixture.summary.title == AppState.coordinatorWorkspaceTitle)
     }
 
     /// The user answered a question of the agent's start in the terminal,
