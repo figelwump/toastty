@@ -79,8 +79,48 @@ struct ToasttyTaskListRow: View {
                 }
             }
         }
-        .padding(.leading, isLinkedChild ? 18 : 0)
+        .toasttyLinkedChild(isLinkedChild)
         .toasttyListRow()
+    }
+}
+
+extension View {
+    /// A row drawn under the task that started it: indented, with the Mac's
+    /// ↳ in the indent, level with the row's title and left of its status
+    /// mark. The Tasks tab and Home's cards both draw it.
+    func toasttyLinkedChild(_ isLinkedChild: Bool) -> some View {
+        padding(.leading, isLinkedChild ? ToasttyChildArrowMark.indent : 0)
+            .overlay(alignment: .topLeading) {
+                if isLinkedChild {
+                    ToasttyChildArrowMark()
+                }
+            }
+    }
+}
+
+/// The ↳ before a nested task's status mark, as the Mac's
+/// `TaskChildArrowMark` draws it. VoiceOver skips it, as on the Mac.
+struct ToasttyChildArrowMark: View {
+    /// How far a nested row moves right.
+    static let indent: CGFloat = 18
+    /// The rows' own top padding, so the arrow's line is the title's line.
+    private static let rowTopPadding: CGFloat = 9
+
+    var body: some View {
+        // A line in the rows' title font, so the arrow stays level with the
+        // title at every text size.
+        Text(" ")
+            .font(.subheadline)
+            .frame(width: Self.indent)
+            .overlay {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(ToasttyDesignTokens.mutedText.opacity(0.8))
+            }
+            .padding(.leading, 4)
+            .padding(.top, Self.rowTopPadding)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
