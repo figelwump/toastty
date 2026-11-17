@@ -20,11 +20,18 @@ struct CoordinatorControllerTests {
         /// The next delivery types the text but does not confirm Return.
         var nextSubmitIsUnconfirmed = false
         private let deliveryOverride = DeliveryOverride()
+        /// The lines the controller scrolled document panels to, in order.
+        let reveals = RevealRecorder()
 
         /// Lets the closure the controller holds read a fixture setting.
         @MainActor
         final class DeliveryOverride {
             var result: (() -> TerminalInputDeliveryResult?)?
+        }
+
+        @MainActor
+        final class RevealRecorder {
+            var lines: [(panelID: UUID, lineNumber: Int)] = []
         }
 
         /// What Toastty ships as the coordinator's instructions; a test can
@@ -51,6 +58,7 @@ struct CoordinatorControllerTests {
             terminals.bind(sessionLifecycleTracker: tasks.sessionRuntimeStore)
             let terminals = terminals
             let deliveryOverride = deliveryOverride
+            let reveals = reveals
             controller = CoordinatorController(
                 store: tasks.store,
                 sessionRuntimeStore: tasks.sessionRuntimeStore,
@@ -68,6 +76,10 @@ struct CoordinatorControllerTests {
                     return result == .delivered ? (deliveryOverride.result?() ?? result) : result
                 },
                 promptState: { [unowned tasks] panelID in tasks.router.promptState(panelID: panelID) },
+                revealDocumentLine: { panelID, lineNumber in
+                    reveals.lines.append((panelID, lineNumber))
+                    return true
+                },
                 terminalReadinessTimeout: readinessTimeout,
                 defaults: defaults
             )
@@ -625,7 +637,7 @@ struct CoordinatorControllerTests {
         #expect(try #require(fixture.tasks.router.sentTextByPanelID[newPanelID]).contains(ceiling))
     }
 
-    // MARK: - Policy
+    // MARK: - Documents
 
     /// The policy shows in the coordinator's right panel, from any workspace,
     /// and a second open shows the same panel.
@@ -636,7 +648,7 @@ struct CoordinatorControllerTests {
         let policyPath = fixture.directory.appending(path: "policy.md").resolvingSymlinksInPath().path
         _ = fixture.store.selectWorkspace(windowID: location.windowID, workspaceID: fixture.tasks.workspaceID, preferringUnreadSessionPanelIn: nil)
 
-        try fixture.controller.openPolicy()
+        try fixture.controller.openDocument(.policy)
 
         #expect(fixture.store.selectedWorkspaceID(in: location.windowID) == location.workspaceID)
         let workspace = try #require(fixture.store.state.workspacesByID[location.workspaceID])
@@ -661,7 +673,7 @@ struct CoordinatorControllerTests {
             workspaceID: location.workspaceID, tabID: otherTabID, panelID: UUID(), terminalCWD: fixture.directory.path
         )))
         #expect(fixture.store.send(.selectWorkspaceTab(workspaceID: location.workspaceID, tabID: otherTabID)))
-        try fixture.controller.openPolicy()
+        try fixture.controller.openDocument(.policy)
         let again = try #require(fixture.store.state.workspacesByID[location.workspaceID])
         #expect(again.resolvedSelectedTabID == coordinatorTabID)
         #expect(again.rightAuxPanel.tabIDs == workspace.rightAuxPanel.tabIDs)
@@ -669,23 +681,89 @@ struct CoordinatorControllerTests {
         #expect(otherTab.rightAuxPanel.tabIDs.isEmpty)
     }
 
-    /// A policy the user deleted comes back with its headings, so the
-    /// button always shows a file.
-    @Test func openPolicyCreatesAMissingPolicy() async throws {
+    /// A file the user deleted comes back with its headings, so each menu
+    /// item always shows a file.
+    @Test(arguments: CoordinatorDocument.allCases)
+    func openDocumentCreatesAMissingFile(_ document: CoordinatorDocument) async throws {
         let fixture = try Fixture()
         try await fixture.controller.open()
-        let policyURL = fixture.directory.appending(path: "policy.md")
-        try FileManager.default.removeItem(at: policyURL)
+        let url = fixture.directory.appending(path: document.fileName)
+        try FileManager.default.removeItem(at: url)
 
-        try fixture.controller.openPolicy()
+        try fixture.controller.openDocument(document)
 
-        #expect(try String(contentsOf: policyURL, encoding: .utf8) == CoordinatorFolder.policyTemplate)
+        let template = switch document {
+        case .policy: CoordinatorFolder.policyTemplate
+        case .ledger: CoordinatorFolder.ledgerTemplate
+        case .friction: CoordinatorFolder.frictionTemplate
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == template)
+        let workspace = try #require(fixture.store.state.workspacesByID[try #require(fixture.controller.location).workspaceID])
+        let paths = workspace.rightAuxPanel.tabIDs.compactMap { tabID -> String? in
+            guard case .web(let web)? = workspace.rightAuxPanel.tabsByID[tabID]?.panelState else { return nil }
+            return web.localDocument?.filePath
+        }
+        #expect(paths == [url.resolvingSymlinksInPath().path])
+    }
+
+    /// The ledger opens at its last line, where the newest entry is. A
+    /// second open uses the same panel and goes to the line the file ends
+    /// at now. The policy and the friction notes open at the top.
+    @Test func openLedgerShowsItsLastLineAndTheOtherFilesTheirTop() async throws {
+        let fixture = try Fixture()
+        try await fixture.controller.open()
+        let ledgerURL = fixture.directory.appending(path: "ledger.md")
+        try "# Coordinator ledger\n- one\n- two\n".write(to: ledgerURL, atomically: true, encoding: .utf8)
+
+        try fixture.controller.openDocument(.policy)
+        try fixture.controller.openDocument(.friction)
+        #expect(fixture.reveals.lines.isEmpty)
+
+        try fixture.controller.openDocument(.ledger)
+        let first = try #require(fixture.reveals.lines.last)
+        #expect(first.lineNumber == 3)
+        let workspaceID = try #require(fixture.controller.location).workspaceID
+        let tabIDs = try #require(fixture.store.state.workspacesByID[workspaceID]).rightAuxPanel.tabIDs
+
+        try "# Coordinator ledger\n- one\n- two\n- three".write(to: ledgerURL, atomically: true, encoding: .utf8)
+        try fixture.controller.openDocument(.ledger)
+        #expect(fixture.reveals.lines.map(\.lineNumber) == [3, 4])
+        #expect(fixture.reveals.lines.last?.panelID == first.panelID)
+        #expect(try #require(fixture.store.state.workspacesByID[workspaceID]).rightAuxPanel.tabIDs == tabIDs)
+    }
+
+    @Test(arguments: [
+        ("", 1), ("a", 1), ("a\n", 1), ("a\nb", 2), ("a\nb\n", 2), ("a\r\nb\r\n", 2), ("a\rb\r", 2), ("\n\n", 2),
+    ])
+    func lastLineNumberCountsTheTextsLines(_ text: String, _ expected: Int) {
+        #expect(CoordinatorController.lastLineNumber(of: text) == expected)
+    }
+
+    /// Each item of the "…" menu in the coordinator's header does what it
+    /// says.
+    @Test func headerMenuOpensEachFileAndRestarts() {
+        let button = CoordinatorActionsMenuButton.Coordinator()
+        var opened: [CoordinatorDocument] = []
+        var restarts = 0
+        button.openDocument = { opened.append($0) }
+        button.restart = { restarts += 1 }
+
+        let menu = button.menu()
+        #expect(menu.items.map(\.title) == [
+            "Open Policy", "Open Ledger", "Open Friction Notes", "", "Restart Coordinator",
+        ])
+        for index in menu.items.indices where menu.items[index].isSeparatorItem == false {
+            menu.performActionForItem(at: index)
+        }
+
+        #expect(opened == [.policy, .ledger, .friction])
+        #expect(restarts == 1)
     }
 
     @Test func openPolicyWithoutACoordinatorSaysSo() throws {
         let fixture = try Fixture()
         #expect(throws: CoordinatorError("There is no coordinator. Open Coordinator first.")) {
-            try fixture.controller.openPolicy()
+            try fixture.controller.openDocument(.policy)
         }
     }
 

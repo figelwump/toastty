@@ -4474,14 +4474,12 @@ struct PanelCardView: View {
         }
 
         if let coordinatorController, coordinatorController.location?.panelID == panelID {
-            // Dock, Policy, then Terminal: the dock and the switch need the chat.
+            // Dock, Terminal, then "…": the dock and the switch need the chat.
             if coordinatorController.chatIsAvailable {
                 CoordinatorPanelDockButton(controller: coordinatorController)
-            }
-            CoordinatorPolicyButton(controller: coordinatorController)
-            if coordinatorController.chatIsAvailable {
                 CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
             }
+            CoordinatorPanelActionsButton(controller: coordinatorController)
         }
 
         switch resolvedPanelHeaderTrailingAccessory {

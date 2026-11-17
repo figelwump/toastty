@@ -193,6 +193,9 @@ final class CoordinatorController: ObservableObject {
     private let trustFolder: @MainActor (_ profileID: String, _ directory: String) async -> Void
     private let deliverText: (String, UUID) -> TerminalInputDeliveryResult
     private let promptState: (UUID) -> TerminalPromptState
+    /// Scrolls a local-document panel to a line, from 1. See
+    /// `WebPanelRuntimeRegistry.requestLocalDocumentReveal`.
+    private let revealDocumentLine: (UUID, Int) -> Bool
     private let terminalReadinessTimeout: Duration
     private let now: () -> Date
 
@@ -384,6 +387,7 @@ final class CoordinatorController: ObservableObject {
         trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in },
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
+        revealDocumentLine: @escaping (UUID, Int) -> Bool = { _, _ in false },
         terminalReadinessTimeout: Duration = .seconds(10),
         now: @escaping () -> Date = Date.init,
         defaults: UserDefaults? = nil
@@ -402,6 +406,7 @@ final class CoordinatorController: ObservableObject {
         self.trustFolder = trustFolder
         self.deliverText = deliverText
         self.promptState = promptState
+        self.revealDocumentLine = revealDocumentLine
         self.terminalReadinessTimeout = terminalReadinessTimeout
         self.now = now
         // First, so that a coordinator whose mark the layout lost comes
@@ -953,20 +958,23 @@ final class CoordinatorController: ObservableObject {
         return response == .alertFirstButtonReturn
     }
 
-    // MARK: - Policy
+    // MARK: - Documents
 
-    /// Shows `policy.md` in the coordinator's workspace, in the right panel
-    /// of the tab that holds the coordinator's terminal, so the chat stays
-    /// in view; the user can read and edit it there. The workspace and that
-    /// tab become the selected ones, and a panel that already shows the
-    /// file is used again. A missing policy is created first, as at a start.
-    func openPolicy() throws {
+    /// Shows one of the coordinator's files, such as `policy.md`, in the
+    /// coordinator's workspace, in the right panel of the tab that holds the
+    /// coordinator's terminal, so the chat stays in view; the user can read
+    /// and edit it there. The workspace and that tab become the selected
+    /// ones, and a panel that already shows the file is used again. A
+    /// missing file is created first, as at a start. The ledger shows its
+    /// last line, also in a panel that was open already: the file grew
+    /// since.
+    func openDocument(_ document: CoordinatorDocument) throws {
         guard let location else {
             throw CoordinatorError("There is no coordinator. Open Coordinator first.")
         }
         let directory = try preparedDirectory()
         let path = URL(filePath: directory, directoryHint: .isDirectory)
-            .appending(path: CoordinatorFolder.policyFileName, directoryHint: .notDirectory)
+            .appending(path: document.fileName, directoryHint: .notDirectory)
             .path
         _ = store.selectWorkspace(
             windowID: location.windowID,
@@ -978,7 +986,7 @@ final class CoordinatorController: ObservableObject {
            let tabID = store.state.workspacesByID[location.workspaceID]?.tabID(containingPanelID: panelID) {
             _ = store.send(.selectWorkspaceTab(workspaceID: location.workspaceID, tabID: tabID))
         }
-        guard store.createLocalDocumentPanel(
+        guard let outcome = store.createLocalDocumentPanelOutcome(
             workspaceID: location.workspaceID,
             request: LocalDocumentPanelCreateRequest(
                 filePath: path,
@@ -988,6 +996,22 @@ final class CoordinatorController: ObservableObject {
         ) else {
             throw CoordinatorError("Toastty could not open \(path).")
         }
+        if document.opensAtLastLine,
+           let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            _ = revealDocumentLine(outcome.panelID, Self.lastLineNumber(of: text))
+        }
+    }
+
+    /// The number of the text's last line, from 1, as the document panel
+    /// counts lines (`contentLines` in `LocalDocumentPanelApp.tsx`): `\r\n`
+    /// and `\r` end a line as `\n` does, and a line end at the end of the
+    /// text starts no line.
+    static func lastLineNumber(of text: String) -> Int {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let newline = UInt8(ascii: "\n")
+        var count = normalized.utf8.reduce(0) { $1 == newline ? $0 + 1 : $0 }
+        if normalized.utf8.last != newline { count += 1 }
+        return max(count, 1)
     }
 
     /// A start that would make the coordinator's workspace checks its agent

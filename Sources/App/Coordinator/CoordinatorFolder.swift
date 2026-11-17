@@ -1,6 +1,42 @@
 import CoreState
 import Foundation
 
+/// A file of the coordinator's folder that the user can open beside the
+/// chat: from the "…" menu in the header of the coordinator's panel, and
+/// from the Coordinator row's context menu.
+enum CoordinatorDocument: CaseIterable, Sendable {
+    /// `policy.md`: the user's rules for the coordinator.
+    case policy
+    /// `ledger.md`: what the coordinator did, one line for each act.
+    case ledger
+    /// `friction.md`: what slows the user's tasks.
+    case friction
+
+    var fileName: String {
+        switch self {
+        case .policy: CoordinatorFolder.policyFileName
+        case .ledger: CoordinatorFolder.ledgerFileName
+        case .friction: CoordinatorFolder.frictionFileName
+        }
+    }
+
+    var name: String {
+        switch self {
+        case .policy: "Policy"
+        case .ledger: "Ledger"
+        case .friction: "Friction Notes"
+        }
+    }
+
+    var openTitle: String { "Open \(name)" }
+
+    var openFailureTitle: String { "Unable to Open the Coordinator's \(name)" }
+
+    /// The ledger gets a line at its end for each act, so it opens at its
+    /// last line, where the newest entries are.
+    var opensAtLastLine: Bool { self == .ledger }
+}
+
 /// The files Toastty keeps in the coordinator's folder.
 ///
 /// - `AGENTS.md` and `CLAUDE.md` are Toastty's. They carry the coordinator's

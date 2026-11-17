@@ -825,7 +825,8 @@ it are in [the policy file](#the-policy-file).
   workspace, opens from the row's hover button and context menu (**Open Full
   View**), and from **Open Coordinator**.
 - **Restart Coordinator**, in the **Agent** menu, the command palette, the
-  row's context menu and the workspace header, starts a fresh agent session
+  row's context menu, the **…** menu in the header of the coordinator's
+  panel and the workspace header, starts a fresh agent session
   in the same workspace. The menu offers it while the coordinator is open. An
   agent that still runs is ended: the new session starts in a new terminal,
   and then the old terminal closes. A start that fails leaves the running
@@ -1551,12 +1552,15 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 
 `policy.md` holds your choices. A rule there wins over the skill's defaults,
 except for the Never column. You can edit it at any time; the coordinator
-reads it on each wake. **Policy**, in the header of the coordinator's panel,
-and **Open Policy**, in the Coordinator row's context menu, show the file in
-the right panel of the coordinator's workspace, beside the chat, where you
-can read and edit it. They select the tab that holds the coordinator's
-terminal, and use a panel that already shows the file. A policy that is
-missing is first created with its headings. The next
+reads it on each wake. **Open Policy**, in the **…** menu in the header of
+the coordinator's panel and in the Coordinator row's context menu, shows the
+file in the right panel of the coordinator's workspace, beside the chat,
+where you can read and edit it. **Open Ledger** and **Open Friction Notes**,
+in the same two menus, show `ledger.md` and `friction.md` there in the same
+way. The ledger opens at its last line, where the newest entry is. These
+items select the tab that holds the coordinator's terminal, and use a panel
+that already shows the file. A file that is missing is first created, as at
+a start. The next
 time the coordinator changes the policy, it first commits your edit as
 "Edited outside the coordinator". The coordinator writes most of the policy
 by asking you:

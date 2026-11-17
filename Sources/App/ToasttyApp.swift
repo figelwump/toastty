@@ -1463,6 +1463,9 @@ struct ToasttyApp: App {
             promptState: { [weak terminalRuntimeRegistry] panelID in
                 terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
             },
+            revealDocumentLine: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
+                webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+            },
             defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
         )
         // Task changes and the coordinator's timer wake it from here on.
