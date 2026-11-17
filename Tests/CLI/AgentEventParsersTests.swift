@@ -906,6 +906,48 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudeCompactionSessionStartKeepsTheConversationFeed() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hook_event_name":"SessionStart","source":"compact","session_id":"claude-root","transcript_path":"/tmp/claude/session.jsonl","cwd":"/tmp/repo"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .claude,
+                nativeSessionID: "claude-root",
+                sessionFilePath: "/tmp/claude/session.jsonl",
+                cwd: "/tmp/repo"
+            ),
+        ])
+    }
+
+    @Test(arguments: ["startup", "resume", "clear"])
+    func claudeNonCompactionSessionStartResetsTheConversationFeed(source: String) throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: UUID(),
+            payload: Data(
+                #"{"hook_event_name":"SessionStart","source":"\#(source)","session_id":"claude-root","transcript_path":"/tmp/claude/session.jsonl","cwd":"/tmp/repo"}"#.utf8
+            )
+        )
+
+        #expect(commands.count == 2)
+        guard case .sessionProviderConversationReset = try #require(commands.last) else {
+            Issue.record("Expected Claude conversation reset for source \(source)")
+            return
+        }
+    }
+
+    @Test
     func claudeSessionStartHookAllowsMissingCwdForAppFallback() throws {
         let panelID = UUID()
         let commands = try AgentEventIngestor.commands(

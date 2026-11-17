@@ -67,6 +67,9 @@ final class WebPanelRuntimeRegistryTests: XCTestCase {
         )
     }
 
+    #if os(macOS)
+    // These drive the WKWebView runtime (bridge messages, NSAppearance, the
+    // context menu); the WebKitGTK runtime has none of them yet.
     func testMarkdownPanelLinkOpensLinkedDocumentAndViewChoiceCarriesToLaterPanels() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -173,8 +176,11 @@ final class WebPanelRuntimeRegistryTests: XCTestCase {
         }
         throw BootstrapTimeoutError()
     }
+    #endif
 }
 
+#if os(macOS)
 private struct BootstrapTimeoutError: Error, CustomStringConvertible {
     var description: String { "The local document runtime did not load its document in time" }
 }
+#endif

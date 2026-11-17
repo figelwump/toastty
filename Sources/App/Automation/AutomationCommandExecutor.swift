@@ -1326,8 +1326,17 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             guard let nativeSessionID = normalizedOptionalText(event.payload.string("nativeSessionID")) else {
                 throw AutomationSocketError.invalidPayload("nativeSessionID is required")
             }
-            guard let sessionFilePath = normalizedOptionalText(event.payload.string("sessionFilePath")) else {
+            guard var sessionFilePath = normalizedOptionalText(event.payload.string("sessionFilePath")) else {
                 throw AutomationSocketError.invalidPayload("sessionFilePath is required")
+            }
+            if agent == .claude {
+                // A session resumed from another directory reports a
+                // transcript path that does not exist; tailing it would
+                // leave paired devices with no history or live updates.
+                sessionFilePath = ManagedAgentResumeResolver.existingClaudeTranscriptPath(
+                    reported: sessionFilePath,
+                    nativeSessionID: nativeSessionID
+                )
             }
             guard let cwd = normalizedOptionalText(event.payload.string("cwd"))
                 ?? normalizedOptionalText(activeSession.cwd) else {

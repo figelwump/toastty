@@ -1,6 +1,6 @@
 ---
 name: toastty-debug
-description: Use this skill when debugging Toastty bugs, crashes, regressions, logs, runtime state, ambiguous running instances, production-vs-worktree target selection, or focused repro plans. It guides log discovery, instance.json targeting, hypothesis-driven debugging, instrumentation, remote/local GUI repro routing, and cleanup.
+description: Use this skill when debugging Toastty bugs, crashes, regressions, logs, runtime state, ambiguous running instances, production-vs-worktree target selection, or focused repro plans, on macOS or the Linux port. It guides log discovery, instance.json targeting, hypothesis-driven debugging, instrumentation, remote/local GUI repro routing, and cleanup.
 ---
 
 # Toastty Debug
@@ -8,6 +8,10 @@ description: Use this skill when debugging Toastty bugs, crashes, regressions, l
 ## Overview
 
 Use this workflow to identify the exact Toastty target, gather the right logs/runtime state, and choose a focused repro path before changing code. Keep deterministic validation in `.agents/skills/toastty-verify/SKILL.md`; use this skill for investigation and diagnosis.
+
+## Platform
+
+The core workflow, `instance.json` targeting and logging controls apply to both apps. The paths and repro routes below are for macOS. When debugging the Linux app (`toastty-linux`), read `references/linux.md` for its log, crash and socket locations and local repro routes. Linux repros are local: reproduce offscreen on a private Broadway display by default, and use a runtime-isolated real window (`TOASTTY_LINUX_NON_UNIQUE=1`) only for OpenGL or GPU symptoms (Ghostty GL/DMA-BUF rendering, WebKit GPU rendering, frame timing, scaling), because Broadway always uses the offscreen renderer. Tell the user before a real window opens. There is no remote GUI path on Linux, never run `gnome-shell --headless`, and never drive the user's installed Toastty.
 
 ## Core Workflow
 

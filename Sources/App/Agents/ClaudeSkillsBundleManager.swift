@@ -169,7 +169,11 @@ private extension ClaudeSkillsBundleManager {
         let temporaryPluginRoot = temporaryVersionRoot.appendingPathComponent("toastty", isDirectory: true)
         do {
             try fileManager.createDirectory(at: temporaryVersionRoot, withIntermediateDirectories: false)
-            try fileManager.copyItem(at: source.pluginRootURL, to: temporaryPluginRoot)
+            try BundledResourceCopier.copyItem(
+                at: source.pluginRootURL,
+                to: temporaryPluginRoot,
+                fileManager: fileManager
+            )
             try normalizeScriptPermissions(in: temporaryPluginRoot)
             clearQuarantine(from: temporaryPluginRoot)
             _ = try verifiedConfiguration(at: temporaryPluginRoot, expected: source)

@@ -3,6 +3,12 @@ import Foundation
 import XCTest
 @testable import ToasttyApp
 
+/// Merged-/usr systems (current Linux distributions) symlink /bin to
+/// /usr/bin, so PATH merging drops /bin as a canonical duplicate there.
+private let mergedSystemBinPath = URL(fileURLWithPath: "/bin").resolvingSymlinksInPath().path == "/usr/bin"
+    ? "/usr/bin"
+    : "/usr/bin:/bin"
+
 final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
     func testDirectLaunchUsesResolvedExecutableThenFailsOpen() async throws {
         let fixture = try Fixture()
@@ -27,7 +33,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
         XCTAssertEqual(invocation.executableURL, fixture.executableURL)
         XCTAssertEqual(
             invocation.processEnvironment.path,
-            "\(fixture.executableURL.deletingLastPathComponent().path):/usr/bin:/bin"
+            "\(fixture.executableURL.deletingLastPathComponent().path):\(mergedSystemBinPath)"
         )
         // Population targets a throwaway home, never the launch CODEX_HOME.
         XCTAssertNotEqual(invocation.codexHomeURL, customHome)
@@ -131,7 +137,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
 
         XCTAssertEqual(
             fixture.pluginClient.invocations.first?.processEnvironment.path,
-            "/typed/node/bin:/usr/bin:/bin"
+            "/typed/node/bin:\(mergedSystemBinPath)"
         )
     }
 
@@ -153,7 +159,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
 
         XCTAssertEqual(
             fixture.pluginClient.invocations.first?.processEnvironment.path,
-            "\(fixture.executableURL.deletingLastPathComponent().path):/usr/bin:/bin"
+            "\(fixture.executableURL.deletingLastPathComponent().path):\(mergedSystemBinPath)"
         )
     }
 

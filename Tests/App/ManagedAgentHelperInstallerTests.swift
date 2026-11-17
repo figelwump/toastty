@@ -404,6 +404,50 @@ final class ManagedAgentHelperInstallerTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: stdinURL, encoding: .utf8), payload)
     }
 
+    #if os(Linux)
+    /// An installed helper finds the Swift runtime only through `$ORIGIN`,
+    /// so each staged copy gets the library links that sat beside its source.
+    func testStagedHelpersKeepTheSharedLibrariesBesideTheirSource() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-managed-helper-libs")
+        defer { try? fileManager.removeItem(at: rootURL) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: rootURL.path,
+            environment: ["TOASTTY_RUNTIME_HOME": rootURL.appendingPathComponent("runtime-home").path]
+        )
+        try runtimePaths.prepare(fileManager: fileManager)
+        let libURL = rootURL.appendingPathComponent("lib", isDirectory: true)
+        let binURL = rootURL.appendingPathComponent("bin", isDirectory: true)
+        try fileManager.createDirectory(at: libURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: binURL, withIntermediateDirectories: true)
+        let library = libURL.appendingPathComponent("libswiftCore.so")
+        try Data("elf".utf8).write(to: library)
+        let cli = try makeExecutableScript(named: "toastty", contents: "#!/bin/sh\nexit 0\n", in: binURL)
+        let shim = try makeExecutableScript(named: "toastty-agent-shim", contents: "#!/bin/sh\nexit 0\n", in: binURL)
+        try fileManager.createSymbolicLink(
+            atPath: binURL.appendingPathComponent("libswiftCore.so").path,
+            withDestinationPath: "../lib/libswiftCore.so"
+        )
+
+        let paths = try ManagedAgentHelperInstaller(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager,
+            cliExecutablePathProvider: { cli.path },
+            agentShimExecutablePathProvider: { shim.path },
+            processID: 41_007
+        ).resolvePaths()
+
+        let stagedDirectories = [
+            URL(fileURLWithPath: try XCTUnwrap(paths.cliExecutablePath)).deletingLastPathComponent(),
+            runtimePaths.agentShimDirectoryURL,
+        ]
+        for directory in stagedDirectories {
+            let link = directory.appendingPathComponent("libswiftCore.so")
+            XCTAssertEqual(link.resolvingSymlinksInPath().path, library.resolvingSymlinksInPath().path, directory.path)
+        }
+    }
+    #endif
+
     private func makeTemporaryDirectory(prefix: String) throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)

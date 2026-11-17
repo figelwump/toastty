@@ -2,6 +2,8 @@
 
 Use this reference when a task needs smoke automation, remote validation, shortcut tracing, local dev runs, or custom launch flows.
 
+The smoke scripts (`smoke-ui`, `workspace-tabs`, `workspace-scope`, `smoke-cli-live-control`, `shortcut-hints`) and `scripts/automation/check.sh` also run on the Linux port, locally: `scripts/automation/smoke-platform.sh` builds with `scripts/linux/build.sh` and starts a private Broadway display, and `check.sh` hands off to `scripts/linux/check.sh`. `shortcut-trace` and the remote wrappers below are macOS-only. See `.agents/skills/toastty-verify/references/linux.md`.
+
 ## GitHub CI
 
 `.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR and manual dispatch. It does not run on pushes to `main`. A newer PR commit cancels that PR's older run; manual runs have separate groups and are not cancelled.

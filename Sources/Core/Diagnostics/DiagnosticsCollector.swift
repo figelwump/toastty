@@ -509,9 +509,24 @@ private enum DiagnosticsSystemCollector {
     static func collect() -> DiagnosticsSystemSection {
         DiagnosticsSystemSection(
             macosVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-            hardwareModel: sysctlString("hw.model"),
+            hardwareModel: hardwareModel(),
             arch: machineArchitecture()
         )
+    }
+
+    #if os(Linux)
+    private static func hardwareModel() -> String? {
+        // DMI on PCs, device tree on ARM boards; both may be absent in VMs.
+        for path in ["/sys/devices/virtual/dmi/id/product_name", "/sys/firmware/devicetree/base/model"] {
+            guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            let model = raw.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\0")))
+            if !model.isEmpty { return model }
+        }
+        return nil
+    }
+    #else
+    private static func hardwareModel() -> String? {
+        sysctlString("hw.model")
     }
 
     private static func sysctlString(_ name: String) -> String? {
@@ -526,6 +541,7 @@ private enum DiagnosticsSystemCollector {
         let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
         return String(decoding: bytes, as: UTF8.self)
     }
+    #endif
 
     private static func machineArchitecture() -> String {
         var systemInfo = utsname()

@@ -9,6 +9,7 @@ import {
   computeOffsetRevealLayout
 } from "./lineReveal.mjs";
 import { applyEditorIndentation } from "./editorIndentation.mjs";
+import { LocalDocumentLineEditor, type LocalDocumentLineEditorHandle } from "./LineEditor";
 import {
   highlightStatusMessage,
   useDocumentHighlightHTML
@@ -31,6 +32,12 @@ import {
 } from "./markdownDocument.mjs";
 import { useLocalDocumentSearchController } from "./localDocumentSearch";
 import { localDocumentNativeBridge } from "./nativeBridge";
+
+// The panel runs in WKWebView on macOS and WebKitGTK on Linux.
+const EDIT_SHORTCUT_LABEL =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+    ? "⌘E"
+    : "Ctrl+E";
 
 function normalizeLineEndings(content: string): string {
   return content.replace(/\r\n?/g, "\n");
@@ -396,7 +403,7 @@ function Header(props: {
               disabled={!bootstrap.filePath}
             >
               <span>Edit</span>
-              <span className="local-document-action-button-shortcut" aria-hidden="true">⌘E</span>
+              <span className="local-document-action-button-shortcut" aria-hidden="true">{EDIT_SHORTCUT_LABEL}</span>
             </button>
           </>
         )}
@@ -524,6 +531,7 @@ function LocalDocumentEditor(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   draftContent: string;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  lineEditorRef: React.RefObject<LocalDocumentLineEditorHandle | null>;
   updateDraftContent: (nextContent: string) => void;
 }) {
   React.useLayoutEffect(() => {
@@ -601,18 +609,27 @@ function LocalDocumentEditor(props: {
           )}
         </div>
       )}
-      <textarea
-        ref={props.textareaRef}
-        className="local-document-editor"
-        value={props.draftContent}
-        onChange={(event) => props.updateDraftContent(event.target.value)}
-        onKeyDown={handleKeyDown}
-        spellCheck={false}
-        autoCorrect="off"
-        autoCapitalize="off"
-        wrap="off"
-        readOnly={props.bootstrap.isSaving}
-      />
+      {props.bootstrap.editorEngine === "codemirror" ? (
+        <LocalDocumentLineEditor
+          bootstrap={props.bootstrap}
+          draftContent={props.draftContent}
+          editorRef={props.lineEditorRef}
+          updateDraftContent={props.updateDraftContent}
+        />
+      ) : (
+        <textarea
+          ref={props.textareaRef}
+          className="local-document-editor"
+          value={props.draftContent}
+          onChange={(event) => props.updateDraftContent(event.target.value)}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+          wrap="off"
+          readOnly={props.bootstrap.isSaving}
+        />
+      )}
     </section>
   );
 }
@@ -1547,6 +1564,13 @@ function LoadedLocalDocumentPanelApp(props: {
   const previewRootRef = React.useRef<HTMLElement | null>(null);
   const previewContentRef = React.useRef<HTMLElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const lineEditorRef = React.useRef<LocalDocumentLineEditorHandle | null>(null);
+  // Edit-mode search targets whichever editor is mounted.
+  const editorRef = React.useMemo(() => ({
+    get current() {
+      return lineEditorRef.current ?? textareaRef.current;
+    }
+  }), []);
   const markdownViewMode = effectiveMarkdownViewMode(props.bootstrap);
   const formattedHTML = useFormattedMarkdownHTML(
     !props.bootstrap.isEditing && markdownViewMode === "formatted" ? renderedContent : null
@@ -1559,7 +1583,7 @@ function LoadedLocalDocumentPanelApp(props: {
     surfaceKey: formattedHTML === null ? "source" : "formatted",
     previewRootRef,
     previewContentRef,
-    textareaRef
+    textareaRef: editorRef
   });
 
   return (
@@ -1584,6 +1608,7 @@ function LoadedLocalDocumentPanelApp(props: {
           bootstrap={props.bootstrap}
           draftContent={props.draftContent}
           textareaRef={textareaRef}
+          lineEditorRef={lineEditorRef}
           updateDraftContent={props.updateDraftContent}
         />
       ) : formattedHTML !== null ? (

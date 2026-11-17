@@ -1248,6 +1248,29 @@ struct ToasttyCLITests {
             #expect(message.contains("timed out"))
         }
     }
+
+    @Test
+    func socketClientRefusesASocketOwnedByAnotherUser() throws {
+        try #require(geteuid() != 0, "root may connect to any user's socket")
+        // Root owns /dev/null, standing in for a socket another account planted.
+        let client = ToasttySocketClient(socketPath: "/dev/null", timeoutInterval: 0.1)
+        let envelope = AutomationEventEnvelope(
+            eventType: "notification.emit",
+            requestID: UUID().uuidString,
+            payload: ["title": .string("Test")]
+        )
+
+        do {
+            _ = try client.send(envelope)
+            Issue.record("expected the client to refuse the socket")
+        } catch let error as ToasttyCLIError {
+            guard case .runtime(let message) = error else {
+                Issue.record("expected runtime error")
+                return
+            }
+            #expect(message.contains("belongs to another user"))
+        }
+    }
 }
 
 private func makeListeningSocket(at socketPath: String) throws -> Int32 {

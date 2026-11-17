@@ -9,7 +9,11 @@ struct ToasttyLogConfigurationTests {
 
         #expect(config.enabled == true)
         #expect(config.minimumLevel == .info)
+        #if os(Linux)
+        #expect(config.filePath?.hasSuffix("/.local/state/toastty/toastty.log") == true)
+        #else
         #expect(config.filePath?.hasSuffix("/Library/Logs/Toastty/toastty.log") == true)
+        #endif
         #expect(config.mirrorToStderr == false)
     }
 

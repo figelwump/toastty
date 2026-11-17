@@ -209,6 +209,19 @@ final class NotificationAccessGuidancePresenter {
 
     static let shared = NotificationAccessGuidancePresenter()
 
+    /// The observer below hops to the main actor itself. On Linux it posts
+    /// without a target queue: swift-corelibs-foundation runs a
+    /// queue-targeted observer by enqueueing it and waiting, which deadlocks
+    /// a main-actor poster that is not `OperationQueue.current` (Swift
+    /// Testing runs the main actor off the main thread under dispatchMain).
+    nonisolated fileprivate static var didBecomeActiveObserverQueue: OperationQueue? {
+        #if os(Linux)
+        nil
+        #else
+        .main
+        #endif
+    }
+
     private let isAppActive: @MainActor () -> Bool
     private let registerDidBecomeActiveObserver: ObserverRegistrar
     private let removeObserver: ObserverRemover
@@ -225,7 +238,7 @@ final class NotificationAccessGuidancePresenter {
             NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification,
                 object: nil,
-                queue: .main
+                queue: NotificationAccessGuidancePresenter.didBecomeActiveObserverQueue
             ) { _ in
                 Task { @MainActor in
                     handler()

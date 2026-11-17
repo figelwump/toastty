@@ -25,10 +25,49 @@ enum ToasttyAgentPluginBundle {
     static let pluginName = "toastty"
     static let skills = ToasttyShippedSkillCatalog.skills
 
-    static func bundledPluginURL(bundle: Bundle = .main) -> URL? {
-        bundle.resourceURL?
-            .appendingPathComponent("ToasttyAgentPluginBundle/plugins/toastty", isDirectory: true)
+    static let bundleDirectoryName = "ToasttyAgentPluginBundle"
+
+    /// The bundle root: `.agents/plugins/marketplace.json` (the Codex
+    /// marketplace) and `plugins/toastty`.
+    static func bundleRootURL(bundle: Bundle = .main) -> URL? {
+        #if os(Linux)
+        if bundle === Bundle.main, let root = linuxBundleRootURL() {
+            return root
+        }
+        #endif
+        return bundle.resourceURL?
+            .appendingPathComponent(bundleDirectoryName, isDirectory: true)
     }
+
+    static func bundledPluginURL(bundle: Bundle = .main) -> URL? {
+        bundleRootURL(bundle: bundle)?
+            .appendingPathComponent("plugins/toastty", isDirectory: true)
+    }
+
+    #if os(Linux)
+    /// Linux has no app bundle. An install (scripts/linux/install.sh) keeps
+    /// the bundle in the app resources directory; a checkout build uses the
+    /// repository root, which has the same layout.
+    static func linuxBundleRootURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard let resourcesPath = environment[ToasttyLaunchContextEnvironment.appResourcesPathKey],
+              resourcesPath.isEmpty == false else {
+            return nil
+        }
+        let resourcesURL = URL(fileURLWithPath: resourcesPath, isDirectory: true).standardizedFileURL
+        let candidates = [
+            resourcesURL.appendingPathComponent(bundleDirectoryName, isDirectory: true),
+            // <checkout>/Sources/App/Resources -> <checkout>
+            resourcesURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent(),
+        ]
+        return candidates.first { root in
+            fileManager.fileExists(atPath: root.appendingPathComponent("plugins/toastty/.claude-plugin/plugin.json").path)
+                && fileManager.fileExists(atPath: root.appendingPathComponent(".agents/plugins/marketplace.json").path)
+        }
+    }
+    #endif
 
     static func read(
         pluginRootURL: URL,
