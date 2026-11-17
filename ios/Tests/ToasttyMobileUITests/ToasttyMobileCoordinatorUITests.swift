@@ -136,8 +136,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         menu.tap()
         let entries = ["Policy", "Ledger", "Friction Notes", "Waiting on you"].map { menuItem($0, in: app) }
         XCTAssertTrue(entries[0].waitForExistence(timeout: 5))
-        XCTAssertTrue(entries.allSatisfy(\.exists))
-        XCTAssertEqual(entries.map(\.frame.minY), entries.map(\.frame.minY).sorted())
+        XCTAssertTrue(entries.allSatisfy { $0.exists })
+        let tops = entries.map { $0.frame.minY }
+        XCTAssertEqual(tops, tops.sorted())
         XCTAssertTrue(app.staticTexts["Your rules for the coordinator"].exists)
         XCTAssertFalse(menuItem("policy.md", in: app).exists)
         attachScreenshot(named: "coordinator-menu", of: app)
