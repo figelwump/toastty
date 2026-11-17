@@ -46,7 +46,7 @@ extension TaskWebhookService {
             let payload = CoordinatorReplyWebhookPayload(eventID: eventID, occurredAt: at, webhook: webhook.name, reply: reply)
             guard let body = try? payload.encoded() else { continue }
             replies.events.append(CoordinatorReplies.Event(
-                eventID: eventID, webhookID: webhook.id, replyID: reply.id, createdAt: at, body: body
+                eventID: eventID, webhookID: webhook.id, replyID: reply.id, sequence: nextEventSequence(), createdAt: at, body: body
             ))
             queued += 1
         }

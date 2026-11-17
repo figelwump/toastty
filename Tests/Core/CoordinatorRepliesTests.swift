@@ -128,6 +128,13 @@ struct CoordinatorRepliesTests {
         #expect(replies.message(id: typedEarly) == nil)
         #expect(replies.message(id: dropped) == nil)
         _ = try replies.addReply(messageID: typedLate, text: "Answered late.", at: t0.addingTimeInterval(8 * day))
+        // Many sends in a week do not push out an ID younger than 7 days.
+        for minute in 0..<600 {
+            replies.recordMessage(id: UUID(), from: "Grok Bot", at: t0.addingTimeInterval(6 * day + Double(minute) * 60), typed: true)
+        }
+        replies.prune(now: t0.addingTimeInterval(8 * day), waitingMessageIDs: [waiting])
+        #expect(replies.message(id: waiting) != nil)
+        _ = try replies.addReply(messageID: typedLate, text: "Still answerable.", at: t0.addingTimeInterval(8 * day))
         refused("older than 7 days") { _ = try replies.addReply(messageID: typedEarly, text: "Too late.", at: t0.addingTimeInterval(8 * day)) }
     }
 

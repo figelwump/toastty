@@ -15,6 +15,10 @@ struct TaskWebhookOutboxEntry: Codable, Equatable, Sendable {
     var body: Data
     var attempts: Int = 0
     var nextAttemptAt: Date
+    /// Orders this event among the webhook's coordinator reply events,
+    /// which wait in another file. The saved times keep whole seconds
+    /// only, so they cannot. `nil` in an entry from an earlier build.
+    var sequence: Int?
 }
 
 /// Sends task events to the webhooks the user approved, and to the
@@ -80,6 +84,9 @@ final class TaskWebhookService: ObservableObject {
     var coordinatorReplies: CoordinatorReplies
     /// Notes when Toastty types a message that has an ID.
     var coordinatorTypedObserver: AnyCancellable?
+    /// The last `sequence` given to a waiting event, a task event or a
+    /// coordinator reply event.
+    private var lastEventSequence: Int
     /// The coordinator that gets a digest of the events, once the app has
     /// one. Set with `attach(coordinator:)`.
     weak var coordinator: CoordinatorController?
@@ -137,6 +144,7 @@ final class TaskWebhookService: ObservableObject {
         entries = outbox?.entries ?? []
         coordinatorWake = outbox?.coordinator
         coordinatorReplies = Self.load(CoordinatorReplies.self, from: coordinatorRepliesFileURL) ?? CoordinatorReplies()
+        lastEventSequence = max(entries.compactMap(\.sequence).max() ?? 0, coordinatorReplies.events.map(\.sequence).max() ?? 0)
         loadKeychainItems()
     }
 
@@ -287,7 +295,8 @@ final class TaskWebhookService: ObservableObject {
             }
         }
         entries.append(TaskWebhookOutboxEntry(
-            eventID: eventID, webhookID: webhook.id, taskID: taskID, type: type, createdAt: at, body: body, nextAttemptAt: at
+            eventID: eventID, webhookID: webhook.id, taskID: taskID, type: type, createdAt: at, body: body, nextAttemptAt: at,
+            sequence: nextEventSequence()
         ))
         ToasttyLog.info("Queued a task webhook event", category: .tasks, metadata: [
             "webhook": webhook.name,
@@ -322,16 +331,25 @@ final class TaskWebhookService: ObservableObject {
             + coordinatorReplies.events.filter { $0.webhookID == webhookID }.count
     }
 
+    /// The next number that orders a waiting event.
+    func nextEventSequence() -> Int {
+        lastEventSequence += 1
+        return lastEventSequence
+    }
+
     /// The oldest event that waits for this webhook, a task event or a
     /// coordinator reply event, so each webhook gets its events in the
     /// order they happened.
     private func nextEvent(for webhookID: UUID) -> (eventID: UUID, body: Data, nextAttemptAt: Date)? {
         let task = entries.first { $0.webhookID == webhookID }
         let reply = coordinatorReplies.events.first { $0.webhookID == webhookID }
-        if let reply, task.map({ reply.createdAt < $0.createdAt }) ?? true {
-            return (reply.eventID, reply.body, reply.nextAttemptAt)
+        guard let reply else { return task.map { ($0.eventID, $0.body, $0.nextAttemptAt) } }
+        // A task event from an earlier build has no sequence: its time
+        // decides.
+        if let task, task.sequence.map({ $0 < reply.sequence }) ?? (task.createdAt <= reply.createdAt) {
+            return (task.eventID, task.body, task.nextAttemptAt)
         }
-        return task.map { ($0.eventID, $0.body, $0.nextAttemptAt) }
+        return (reply.eventID, reply.body, reply.nextAttemptAt)
     }
 
     func deliverDue(at: Date) {

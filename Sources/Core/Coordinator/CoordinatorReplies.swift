@@ -16,7 +16,6 @@ public struct CoordinatorReplies: Codable, Equatable, Sendable {
     /// How long a reply is kept, and a message after Toastty typed it. A
     /// message that still waits in the coordinator's queue is kept.
     public static let keepTime: TimeInterval = 7 * 24 * 3600
-    public static let maximumMessages = 500
     public static let maximumReplies = 500
     public static let maximumTextBytes = 16 * 1024
 
@@ -45,6 +44,9 @@ public struct CoordinatorReplies: Codable, Equatable, Sendable {
         public var eventID: UUID
         public var webhookID: UUID
         public var replyID: UUID
+        /// Orders this event among the webhook's task events. The saved
+        /// times keep whole seconds only, so they cannot.
+        public var sequence: Int
         public var createdAt: Date
         /// The encoded payload, kept as sent, so every retry sends the
         /// same bytes.
@@ -52,10 +54,11 @@ public struct CoordinatorReplies: Codable, Equatable, Sendable {
         public var attempts: Int
         public var nextAttemptAt: Date
 
-        public init(eventID: UUID, webhookID: UUID, replyID: UUID, createdAt: Date, body: Data) {
+        public init(eventID: UUID, webhookID: UUID, replyID: UUID, sequence: Int, createdAt: Date, body: Data) {
             self.eventID = eventID
             self.webhookID = webhookID
             self.replyID = replyID
+            self.sequence = sequence
             self.createdAt = createdAt
             self.body = body
             self.attempts = 0
@@ -97,9 +100,6 @@ public struct CoordinatorReplies: Codable, Equatable, Sendable {
     public mutating func recordMessage(id: UUID, from: String?, at: Date, typed: Bool) {
         messages.removeAll { $0.id == id }
         messages.append(Message(id: id, from: from, sentAt: at, typedAt: typed ? at : nil))
-        if messages.count > Self.maximumMessages {
-            messages.removeFirst(messages.count - Self.maximumMessages)
-        }
     }
 
     /// Notes that Toastty typed the message, which starts its keep time.

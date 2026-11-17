@@ -291,7 +291,8 @@ struct CoordinatorRepliesAppControlTests {
 
     /// A reply event that waits is saved with its reply, never in the task
     /// outbox, which a build that does not know it still reads. After a
-    /// relaunch it goes out after the task event that came before it.
+    /// relaunch it still goes out before the task event that came 0.1 s
+    /// after it, in the same second: the files keep whole seconds only.
     @Test func aWaitingReplyEventIsSavedApartAndSentInOrderAfterARelaunch() async throws {
         let fixture = try Fixture()
         let files = Files()
@@ -316,19 +317,19 @@ struct CoordinatorRepliesAppControlTests {
         try fixture.setStatus(.working)
         service.pass()
 
-        // A task event, then a reply. Neither gets through.
-        clock.advance(10)
-        states.value[task]?.key = .init(group: "needsYou", attention: "awaitingReply")
-        service.pass()
-        await fixture.waitUntil("the task event is tried") { failing.requests.count == 1 }
+        // A reply, then a task event 0.1 s later. Neither gets through.
+        clock.advance(10.1)
         let messageID = try await sendFromGrokBot("Fixed yet?", executor, fixture)
-        clock.advance(1)
         _ = try executor.runAction(id: "coordinator.reply", args: [
             "messageID": .string(messageID), "text": .string("Not yet."),
         ], context: context(try fixture.session().sessionID))
+        await fixture.waitUntil("the reply event is tried") { failing.requests.count == 1 }
+        clock.advance(0.1)
+        states.value[task]?.key = .init(group: "needsYou", attention: "awaitingReply")
+        service.pass()
         await fixture.settle()
-        // The reply waits behind the task event.
-        #expect(failing.types == ["task.needs_you"])
+        // The task event waits behind the reply.
+        #expect(failing.types == ["coordinator.reply"])
         #expect(service.queuedEventCount(webhookID: webhook.id) == 2)
 
         let outbox = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: files.outbox)) as? [String: Any])
@@ -345,7 +346,7 @@ struct CoordinatorRepliesAppControlTests {
         clock.advance(60)
         relaunched.pass()
         await fixture.waitUntil("both events are sent") { working.types.count == 2 }
-        #expect(working.types == ["task.needs_you", "coordinator.reply"])
+        #expect(working.types == ["coordinator.reply", "task.needs_you"])
         await fixture.waitUntil("nothing waits") { relaunched.queuedEventCount(webhookID: webhook.id) == 0 }
         let after = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: files.replies)) as? [String: Any])
         #expect((after["events"] as? [[String: Any]])?.isEmpty == true)
