@@ -1304,11 +1304,11 @@ final class CoordinatorController: ObservableObject {
     /// quiet.
     func isQuietDigest(_ text: String) -> Bool {
         let keys = quietDigestKeys()
-        return keys.isEmpty == false && keys.contains(CoordinatorMessageHeader.digestKey(text))
+        return keys.isEmpty == false && keys.contains(CoordinatorWakeState.digestKey(text))
     }
 
     /// The newest text this controller typed into the agent, from any
-    /// sender, as `CoordinatorMessageHeader.digestKey`, and when.
+    /// sender, as `CoordinatorWakeState.digestKey`, and when.
     private var lastTyped: (key: String, at: Date)?
     /// The wake turn that the coordinator marked quiet: its session and the
     /// key of the digest that started it.
@@ -1343,7 +1343,7 @@ final class CoordinatorController: ObservableObject {
         // A turn with more events than the page holds started with the
         // digest that this controller typed last.
         guard let newest = newestMessageToTheAgent(subscription) else { return true }
-        return CoordinatorMessageHeader.digestKey(newest) == digestKey
+        return CoordinatorWakeState.digestKey(newest) == digestKey
     }
 
     /// Marks the turn that runs now as quiet, when the digest with this key
@@ -1374,7 +1374,7 @@ final class CoordinatorController: ObservableObject {
         /// The turn ended with an error, such as an API error, and not
         /// normally.
         let failed: Bool
-        /// `CoordinatorMessageHeader.digestKey` of the message that this
+        /// `CoordinatorWakeState.digestKey` of the message that this
         /// controller typed at the open prompt and that started the turn.
         /// `nil` when something else started it, such as text typed in the
         /// terminal.
@@ -1622,7 +1622,7 @@ final class CoordinatorController: ObservableObject {
         if typedMessageIDs.count > Self.rememberedTypedMessages {
             typedMessageIDs.removeFirst(typedMessageIDs.count - Self.rememberedTypedMessages)
         }
-        let typed = (key: CoordinatorMessageHeader.digestKey(entry.text), at: now())
+        let typed = (key: CoordinatorWakeState.digestKey(entry.text), at: now())
         lastTyped = typed
         // A steer goes into a turn that runs already.
         if steered == false {

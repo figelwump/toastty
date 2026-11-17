@@ -1,3 +1,4 @@
+import ConversationUI
 import Foundation
 import RemoteProtocol
 
@@ -78,6 +79,6 @@ struct ToasttyCoordinatorQuietDigests: Equatable {
     /// Whether the digest with this text started a quiet turn.
     static func isQuiet(_ text: String, keys: Set<String>?) -> Bool {
         guard let keys, keys.isEmpty == false else { return false }
-        return keys.contains(CoordinatorMessageHeader.digestKey(text))
+        return keys.contains(CoordinatorChatTranscript.digestKey(text))
     }
 }

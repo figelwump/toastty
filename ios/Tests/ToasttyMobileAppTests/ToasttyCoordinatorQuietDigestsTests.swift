@@ -109,7 +109,7 @@ final class ToasttyCoordinatorQuietDigestsTests: XCTestCase {
     /// and the New line counts only the normal turn's answer. Without the
     /// marks, nothing folds and both answers count.
     func testAQuietTurnFoldsWholeAndTheNewLineLeavesItOut() {
-        let quiet = presentation(quietDigestKeys: [CoordinatorMessageHeader.digestKey(quietDigest)])
+        let quiet = presentation(quietDigestKeys: [CoordinatorChatTranscript.digestKey(quietDigest)])
         XCTAssertEqual(hostLines(quiet).map(\.foldsTurn), [true, false])
         XCTAssertEqual(quiet.turns.map(\.foldsWholeTurn), [true, false])
         XCTAssertEqual(quiet.turns.first?.toolCallCount, 2)
@@ -122,7 +122,7 @@ final class ToasttyCoordinatorQuietDigestsTests: XCTestCase {
             normalLine.map { ToasttyNewMessagesMarker(firstRowID: $0.id, count: 1) }
         )
 
-        for keys: Set<String>? in [nil, [], [CoordinatorMessageHeader.digestKey(normalDigest + " ")]] {
+        for keys: Set<String>? in [nil, [], [CoordinatorChatTranscript.digestKey("Another digest")]] {
             let open = presentation(quietDigestKeys: keys)
             XCTAssertEqual(hostLines(open).map(\.foldsTurn), [false, false], "keys: \(String(describing: keys))")
             XCTAssertEqual(open.turns.map(\.foldsWholeTurn), [false, false])
@@ -148,7 +148,7 @@ final class ToasttyCoordinatorQuietDigestsTests: XCTestCase {
         XCTAssertEqual(hostLines(subject.transcriptPresentation).map(\.foldsTurn), [false, false])
         XCTAssertEqual(subject.coordinatorNewMessages?.count, 2)
 
-        let key = CoordinatorMessageHeader.digestKey(quietDigest)
+        let key = CoordinatorChatTranscript.digestKey(quietDigest)
         subject.consumeCoordinatorQuietDigests([key])
         XCTAssertEqual(hostLines(subject.transcriptPresentation).map(\.foldsTurn), [true, false])
         XCTAssertEqual(subject.transcriptPresentation.revision, .appended, "The reader's place and open turns stay")
@@ -173,8 +173,8 @@ final class ToasttyCoordinatorQuietDigestsTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private let oneMark = RemoteCoordinatorQuietDigests(keys: ["key-1"])
-    private let twoMarks = RemoteCoordinatorQuietDigests(keys: ["key-1", "key-2"])
+    private let oneMark = RemoteCoordinatorQuietDigests(revision: "revision-1", keys: ["key-1"])
+    private let twoMarks = RemoteCoordinatorQuietDigests(revision: "revision-2", keys: ["key-1", "key-2"])
 
     private let quietDigest = """
         \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.

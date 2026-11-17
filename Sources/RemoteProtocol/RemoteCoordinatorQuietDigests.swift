@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// The coordinator's quiet wake turns, as the Mac shares them with paired
@@ -6,10 +5,12 @@ import Foundation
 /// `coordinator wake --quiet`. A chat folds such a turn whole under the
 /// digest's line, and its New line does not count it.
 ///
-/// A digest is named by `CoordinatorMessageHeader.digestKey` of its text.
-/// The Mac keeps the keys, and a device finds a digest's key from the text
-/// of the user message that the Mac's conversation reader sends, which is
-/// the text that the Mac's own chat reads.
+/// A digest is named by its key: the SHA-256, in hex, of its text without
+/// leading and trailing white space (`CoordinatorWakeState.digestKey` on
+/// the Mac). The Mac keeps the keys, and a device computes a digest's key
+/// from the text of the user message that the Mac's conversation reader
+/// sends, which is the text that the Mac's own chat reads. This module
+/// stays Foundation-only, so the hashing lives with each side.
 ///
 /// The Mac keeps up to 200 keys, too many for every session snapshot. The
 /// coordinator's workspace carries only `revision`, which changes when the
@@ -17,23 +18,16 @@ import Foundation
 /// `RemoteCoordinatorQuietDigestsPolicy.path` when the revision is new.
 public struct RemoteCoordinatorQuietDigests: Codable, Equatable, Sendable {
     public var protocolVersion: String
-    /// Names the set of `keys`: `revision(of:)`.
+    /// Names the set of `keys`. The Mac makes it from the keys, so the same
+    /// keys give the same revision, also after a relaunch.
     public var revision: String
     /// The key of each quiet digest, oldest first.
     public var keys: [String]
 
-    public init(protocolVersion: String = RemoteGatewayProtocol.version, keys: [String]) {
+    public init(protocolVersion: String = RemoteGatewayProtocol.version, revision: String, keys: [String]) {
         self.protocolVersion = protocolVersion
-        self.revision = Self.revision(of: keys)
+        self.revision = revision
         self.keys = keys
-    }
-
-    /// The first 16 hex digits of the SHA-256 of the keys, one per line.
-    /// The same keys give the same revision, also after a relaunch of the
-    /// Mac, so a device reads them again only when they change.
-    public static func revision(of keys: [String]) -> String {
-        let digest = SHA256.hash(data: Data(keys.joined(separator: "\n").utf8))
-        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }
 

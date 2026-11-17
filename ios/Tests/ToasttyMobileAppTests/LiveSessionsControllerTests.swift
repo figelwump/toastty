@@ -757,8 +757,8 @@ final class LiveSessionsControllerTests: XCTestCase {
     /// folds.
     func testTheCoordinatorChatReadsTheQuietTurnsWhenTheirRevisionChanges() async throws {
         let runtime = LiveRuntimeSpy()
-        let first = RemoteCoordinatorQuietDigests(keys: ["key-1"])
-        let second = RemoteCoordinatorQuietDigests(keys: ["key-1", "key-2"])
+        let first = RemoteCoordinatorQuietDigests(revision: "revision-1", keys: ["key-1"])
+        let second = RemoteCoordinatorQuietDigests(revision: "revision-2", keys: ["key-1", "key-2"])
         await runtime.scriptQuietDigests([.success(first), .failure(.network(reason: .timedOut)), .success(second)])
         let home = HomeScreenController(
             runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),

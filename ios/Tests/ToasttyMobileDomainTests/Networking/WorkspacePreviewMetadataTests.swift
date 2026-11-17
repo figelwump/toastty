@@ -312,10 +312,11 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
     }
 
     /// The phone finds a digest's key from the text that the Mac's
-    /// conversation reader sends. The text crosses the wire exactly: white
-    /// space, line endings, non-ASCII text and characters that JSON escapes
-    /// keep the key that the Mac computes from its own copy of the text.
-    func testADigestCrossingTheWireKeepsTheMacsKey() throws {
+    /// conversation reader sends, so that text must cross the wire byte for
+    /// byte: white space, line endings, non-ASCII text, text in either
+    /// Unicode normal form and characters that JSON escapes. Swift's `==`
+    /// treats canonically equal strings as equal, so the bytes are compared.
+    func testADigestCrossesTheWireByteForByte() throws {
         let header = "\(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user."
         let texts = [
             header + "\n- [Fix the login](toastty://task/1): needsYou (review) at 2026-11-16T15:25:00Z\nRead `toastty task list` for details.",
@@ -343,8 +344,7 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
             guard case .known(let known) = event, case .userMessage(let message) = known.payload else { return nil }
             return message.text
         }
-        XCTAssertEqual(received.map(CoordinatorMessageHeader.digestKey), texts.map(CoordinatorMessageHeader.digestKey))
-        XCTAssertEqual(Set(texts.map(CoordinatorMessageHeader.digestKey)).count, texts.count)
+        XCTAssertEqual(received.map { Array($0.utf8) }, texts.map { Array($0.utf8) })
     }
 
     private func snapshotData(workspaces: [[String: Any]]?, tasks: [String: Any]? = nil) throws -> Data {

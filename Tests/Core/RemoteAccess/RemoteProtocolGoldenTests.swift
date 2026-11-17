@@ -682,7 +682,7 @@ private extension RemoteProtocolGoldenTests {
     }
 
     /// One quiet wake turn's digest, by its key.
-    static let quietDigests = RemoteCoordinatorQuietDigests(keys: [CoordinatorMessageHeader.digestKey("""
+    static let quietDigests = RemoteCoordinatorQuietDigests(keys: [CoordinatorWakeState.digestKey("""
         [Toastty] Wake: this message is from Toastty, not from the user.
         - [Fix the login redirect](toastty://task/00000000-0000-0000-0000-000000000302): needsYou (agentFinished) at 2026-08-08T14:39:00Z
         Read `toastty task list` for details.

@@ -972,14 +972,16 @@ move the chat's read point. With an older Mac, the phone shows no New line and
 sends no reads. An older phone ignores the field.
 
 Only the Mac knows which wake turns are quiet, so it shares them. It names
-each quiet turn by its digest's key, `CoordinatorMessageHeader.digestKey`: the
+each quiet turn by its digest's key (`CoordinatorWakeState.digestKey`): the
 SHA-256, in hex, of the digest's text without leading and trailing white
 space. The Mac keeps these keys with the wake state, at most 200, and its own
-chat folds by them. The phone computes the same key from the text of the
-digest's user message, which it reads from the same conversation as the Mac's
-chat: JSON carries the text exactly, so the keys match without a lookup of
-transcript events, and a mark that comes before the Mac has read the digest
-from the transcript still matches when the digest arrives.
+chat folds by them. The phone computes the same key
+(`CoordinatorChatTranscript.digestKey`, in the shared conversation code) from
+the text of the digest's user message, which it reads from the same
+conversation as the Mac's chat: JSON carries the text exactly, so the keys
+match without a lookup of transcript events, and a mark that comes before the
+Mac has read the digest from the transcript still matches when the digest
+arrives. The wire models stay Foundation-only, so each side hashes for itself.
 
 200 keys are too large to send with every session snapshot, so a Mac with the
 coordinator advertises the `coordinator_quiet_digests` capability and sends

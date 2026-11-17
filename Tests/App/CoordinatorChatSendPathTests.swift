@@ -311,7 +311,7 @@ struct CoordinatorChatSendPathTests {
         #expect(ends == [CoordinatorController.TurnEnd(
             sessionID: fixture.conversations.sessionID,
             failed: true,
-            startedByKey: CoordinatorMessageHeader.digestKey(Self.digest)
+            startedByKey: CoordinatorWakeState.digestKey(Self.digest)
         )])
 
         // The message's own turn is its own.
@@ -319,7 +319,7 @@ struct CoordinatorChatSendPathTests {
         #expect(ends.last == CoordinatorController.TurnEnd(
             sessionID: fixture.conversations.sessionID,
             failed: false,
-            startedByKey: CoordinatorMessageHeader.digestKey("From the composer")
+            startedByKey: CoordinatorWakeState.digestKey("From the composer")
         ))
         #expect(ends.count == 2)
     }
@@ -1259,7 +1259,7 @@ struct CoordinatorChatSendPathTests {
         }
         let beforeMark = conversations.server.broadcasts.count
         try wakes.service.setCoordinatorWake(.clear, quiet: true)
-        let quiet = RemoteCoordinatorQuietDigests(keys: [CoordinatorMessageHeader.digestKey(digest)])
+        let quiet = RemoteCoordinatorQuietDigests(keys: [CoordinatorWakeState.digestKey(digest)])
         #expect(quiet.revision != none.revision)
         #expect(published().first?.coordinatorQuietDigestsRevision == quiet.revision)
         try await fixture.waitUntil("a session list with the new revision") {
@@ -1267,7 +1267,8 @@ struct CoordinatorChatSendPathTests {
         }
         #expect(try conversations.gatewayCoordinatorQuietDigests(credential: conversations.nativeCredential).digests == quiet)
 
-        // The device finds the key from the text that the gateway sends.
+        // The device finds the key, with its own copy of the rule, from the
+        // text that the gateway sends.
         let conversationID = try #require(conversations.conversationID(ofPanel: fixture.panelID))
         let sentDigests = try conversations.gatewayLatestEvents(of: conversationID, credential: conversations.nativeCredential)
             .compactMap { event -> String? in
@@ -1276,7 +1277,11 @@ struct CoordinatorChatSendPathTests {
                 return message.text
             }
         #expect(sentDigests.count == 1)
-        #expect(Set(sentDigests.map(CoordinatorMessageHeader.digestKey)) == Set(quiet.keys))
+        #expect(Set(sentDigests.map(CoordinatorChatTranscript.digestKey)) == Set(quiet.keys))
+        for text in [digest, "\n " + digest + "\r\n", digest.replacingOccurrences(of: "\n", with: "\r\n"),
+                     "Caf\u{E9} e\u{301} \u{1F35E} \u{2028}", ""] {
+            #expect(CoordinatorChatTranscript.digestKey(text) == CoordinatorWakeState.digestKey(text))
+        }
         try fixture.recordAgentMessage("Nothing needs you.")
         try fixture.endTurn(1)
 

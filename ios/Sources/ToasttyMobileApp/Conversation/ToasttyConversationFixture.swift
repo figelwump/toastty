@@ -618,7 +618,7 @@ enum ToasttyConversationFixture {
     ]
 
     static var coordinatorQuietDigestKeys: Set<String> {
-        Set(coordinatorQuietDigests.map(CoordinatorMessageHeader.digestKey))
+        Set(coordinatorQuietDigests.map(CoordinatorChatTranscript.digestKey))
     }
 
     /// Each quiet turn's answer, as in the user's report.

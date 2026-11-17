@@ -19,14 +19,14 @@ struct RemoteCoordinatorQuietDigestsGatewayTests {
 
     @Test func theRevisionNamesTheSetAndTheWorkspaceCarriesItSafely() throws {
         let decoder = ConversationEventCoding.makeDecoder()
-        let keys = ["a1", "b2"].map(CoordinatorMessageHeader.digestKey)
+        let keys = ["a1", "b2"].map(CoordinatorWakeState.digestKey)
         let digests = RemoteCoordinatorQuietDigests(keys: keys)
         #expect(try decoder.decode(RemoteCoordinatorQuietDigests.self, from: Self.encode(digests)) == digests)
         // The same keys give the same revision, also in another run of the
         // Mac; any change of the set gives another one.
         #expect(digests.revision == RemoteCoordinatorQuietDigests(keys: keys).revision)
         #expect(digests.revision.count == 16)
-        for other in [[], [keys[0]], [keys[1], keys[0]], keys + [CoordinatorMessageHeader.digestKey("c3")]] {
+        for other in [[], [keys[0]], [keys[1], keys[0]], keys + [CoordinatorWakeState.digestKey("c3")]] {
             #expect(RemoteCoordinatorQuietDigests(keys: other).revision != digests.revision)
         }
 
@@ -44,17 +44,6 @@ struct RemoteCoordinatorQuietDigestsGatewayTests {
         let malformed = try decoder.decode(RemoteWorkspaceSummary.self, from: JSONSerialization.data(withJSONObject: object))
         #expect(malformed.coordinatorQuietDigestsRevision == nil)
         #expect(malformed.isCoordinator)
-    }
-
-    /// The key is the Mac's: the trimmed text's SHA-256, so white space
-    /// around a digest does not change it, and any other change does.
-    @Test func aDigestsKeyIgnoresOnlySurroundingWhiteSpace() {
-        let digest = "\(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.\n- a"
-        let key = CoordinatorMessageHeader.digestKey(digest)
-        #expect(key.count == 64)
-        #expect(CoordinatorMessageHeader.digestKey("\n" + digest + " \n") == key)
-        #expect(CoordinatorMessageHeader.digestKey(digest.replacingOccurrences(of: "\n", with: "\r\n")) != key)
-        #expect(CoordinatorMessageHeader.digestKey(digest + "b") != key)
     }
 
     // MARK: - Hello
@@ -99,7 +88,7 @@ struct RemoteCoordinatorQuietDigestsGatewayTests {
         #expect(noHandler.status == 200)
         #expect(try digests(noHandler) == RemoteCoordinatorQuietDigests(keys: []))
 
-        let quiet = RemoteCoordinatorQuietDigests(keys: [CoordinatorMessageHeader.digestKey("a quiet digest")])
+        let quiet = RemoteCoordinatorQuietDigests(keys: [CoordinatorWakeState.digestKey("a quiet digest")])
         var reads = 0
         handler.coordinatorQuietDigestsHandler = {
             reads += 1

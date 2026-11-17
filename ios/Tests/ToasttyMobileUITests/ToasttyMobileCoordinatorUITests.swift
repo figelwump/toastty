@@ -581,7 +581,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertFalse(textView(containing: "Nothing new needs you.", in: app).exists, "The other quiet turn opened too")
         attachScreenshot(named: "coordinator-quiet-turn-open", of: app)
 
-        last.tap()
+        tapTheLine(of: last)
         XCTAssertTrue(waitForValue("Collapsed", of: last))
         XCTAssertTrue(textView(containing: "Nothing needs you.", in: app).waitForNonExistence(timeout: 5))
     }
@@ -906,6 +906,12 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
             predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element
         )
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    /// Taps a digest's line. While its turn is open the row's element covers
+    /// the digest's text too, and a tap in its middle lands on the text.
+    private func tapTheLine(of row: XCUIElement) {
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).tap()
     }
 
     /// The work strips of turns that do not fold whole.

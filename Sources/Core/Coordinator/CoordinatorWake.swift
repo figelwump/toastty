@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import RemoteProtocol
 
@@ -107,11 +108,10 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// project that releases on merge. Each is a project root as
     /// `TasksConfigFile.normalizedPath` writes it.
     public private(set) var watchedProjectRoots: [String] = []
-    /// `CoordinatorMessageHeader.digestKey` of the digest Toastty typed
-    /// last. `nil` before the first.
+    /// `digestKey` of the digest Toastty typed last. `nil` before the first.
     public private(set) var lastDigestKey: String?
-    /// `CoordinatorMessageHeader.digestKey` of each digest whose turn the
-    /// coordinator marked quiet, oldest first.
+    /// `digestKey` of each digest whose turn the coordinator marked quiet,
+    /// oldest first.
     public private(set) var quietDigestKeys: [String] = []
     /// When the turn of the digest typed last ended with an error. Its
     /// changes wait again, the next digest says so, and it is not typed
@@ -231,7 +231,7 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
         requestedWakeAt = nil
         failedTurnAt = nil
         lastWakeAt = at
-        lastDigestKey = CoordinatorMessageHeader.digestKey(digest)
+        lastDigestKey = Self.digestKey(digest)
         return delivered
     }
 
@@ -324,7 +324,19 @@ public struct CoordinatorWakeState: Codable, Equatable, Sendable {
     /// Whether the message is a digest whose turn the coordinator marked
     /// quiet.
     public func isQuietDigest(_ text: String) -> Bool {
-        quietDigestKeys.isEmpty == false && quietDigestKeys.contains(CoordinatorMessageHeader.digestKey(text))
+        quietDigestKeys.isEmpty == false && quietDigestKeys.contains(Self.digestKey(text))
+    }
+
+    /// Names a digest by its text: the SHA-256 of the text without leading
+    /// and trailing white space, in hex. The agent's transcript keeps the
+    /// text Toastty typed, so the key survives a relaunch, which forgets
+    /// which message Toastty sent. Every digest names the time of each
+    /// change it lists, so two digests do not share a text. A paired iPhone
+    /// computes the same key from the text it receives
+    /// (`CoordinatorChatTranscript.digestKey`).
+    public static func digestKey(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SHA256.hash(data: Data(trimmed.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Digest
@@ -506,5 +518,20 @@ public struct TaskAlertFacts: Equatable, Sendable {
                 return false
             }
         }
+    }
+}
+
+extension RemoteCoordinatorQuietDigests {
+    /// The quiet digests with these keys, oldest first, and their revision.
+    public init(keys: [String]) {
+        self.init(revision: Self.revision(of: keys), keys: keys)
+    }
+
+    /// The first 16 hex digits of the SHA-256 of the keys, one per line.
+    /// The same keys give the same revision, also after a relaunch, so a
+    /// device reads them again only when they change.
+    public static func revision(of keys: [String]) -> String {
+        let digest = SHA256.hash(data: Data(keys.joined(separator: "\n").utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }
