@@ -698,7 +698,8 @@ struct CoordinatorControllerTests {
         case .friction: CoordinatorFolder.frictionTemplate
         }
         #expect(try String(contentsOf: url, encoding: .utf8) == template)
-        let workspace = try #require(fixture.store.state.workspacesByID[try #require(fixture.controller.location).workspaceID])
+        let location = try #require(fixture.controller.location)
+        let workspace = try #require(fixture.store.state.workspacesByID[location.workspaceID])
         let paths = workspace.rightAuxPanel.tabIDs.compactMap { tabID -> String? in
             guard case .web(let web)? = workspace.rightAuxPanel.tabsByID[tabID]?.panelState else { return nil }
             return web.localDocument?.filePath
