@@ -97,7 +97,6 @@ struct ToasttyPreviewPage: View {
                     .padding(.vertical, 12)
                     .background(ToasttyDesignTokens.elevatedSurface)
                     .overlay(alignment: .top) { Divider() }
-                    .accessibilityIdentifier("toastty-preview-footer")
             }
         }
         .navigationTitle(selection.title)

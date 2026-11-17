@@ -132,6 +132,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertFalse(app.buttons["toastty-conversation-panels"].exists)
         let next = app.buttons["toastty-conversation-next"]
         if next.exists { XCTAssertLessThanOrEqual(menu.frame.maxX, next.frame.minX) }
+        attachScreenshot(named: "coordinator-top-bar", of: app)
 
         menu.tap()
         let entries = ["Policy", "Ledger", "Friction Notes", "Waiting on you"].map { menuItem($0, in: app) }
@@ -139,7 +140,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(entries.allSatisfy { $0.exists })
         let tops = entries.map { $0.frame.minY }
         XCTAssertEqual(tops, tops.sorted())
-        XCTAssertTrue(app.staticTexts["Your rules for the coordinator"].exists)
+        // A native menu item can carry its subtitle in its own label.
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Your rules for the coordinator")).firstMatch.exists)
         XCTAssertFalse(menuItem("policy.md", in: app).exists)
         attachScreenshot(named: "coordinator-menu", of: app)
 
@@ -148,9 +151,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(sheetTitle(in: app).label.contains("policy.md · on your Mac"))
         XCTAssertTrue(webText(containing: "Name tasks by title", in: app).waitForExistence(timeout: 10))
         XCTAssertTrue(waitUntilHittable(webText(containing: "Coordinator policy", in: app)))
-        let footer = app.staticTexts["toastty-preview-footer"]
+        // The page's own identifier covers its footer's, so find it by its text.
+        let footer = app.staticTexts["To change a rule, ask the coordinator in the chat."]
         XCTAssertTrue(footer.exists)
-        XCTAssertEqual(footer.label, "To change a rule, ask the coordinator in the chat.")
         attachScreenshot(named: "coordinator-policy-sheet", of: app)
         closeSheet(in: app)
 
@@ -161,7 +164,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         // The reveal scrolls a frame or two after the text appears.
         XCTAssertTrue(waitUntilHittable(newest))
         XCTAssertFalse(webText(containing: "09:02 started", in: app).isHittable)
-        XCTAssertFalse(app.staticTexts["toastty-preview-footer"].exists)
+        XCTAssertFalse(footer.exists)
         attachScreenshot(named: "coordinator-ledger-sheet", of: app)
         closeSheet(in: app)
 
