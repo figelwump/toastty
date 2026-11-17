@@ -138,6 +138,10 @@ private final class MergeFixture {
 
     @discardableResult
     func merge(thenCleanUp: Bool) -> Task<Void, Never>? {
+        answeringMerge(thenCleanUp: thenCleanUp).map { answer in Task { _ = await answer.value } }
+    }
+
+    func answeringMerge(thenCleanUp: Bool) -> Task<WorkspaceMergeCoordinator.MergeAnswer, Never>? {
         coordinator.merge(
             workspaceID: taskWorkspaceID,
             pullRequest: Self.pullRequest,
@@ -589,11 +593,13 @@ struct WorkspaceMergeCoordinatorTests {
             ))
         }
 
-        await fixture.merge(thenCleanUp: true)?.value
+        let answer = await fixture.answeringMerge(thenCleanUp: true)?.value
 
         #expect(fixture.request == nil)
         #expect(fixture.notifications.map(\.title) == ["Unable to Merge PR #59"])
         #expect(fixture.mergeFailures.isEmpty)
+        // The caller that started the merge still learns why it stopped.
+        #expect(answer == .stopped(reason: "the PR head is not the checked commit", cause: .refused))
     }
 
     @Test

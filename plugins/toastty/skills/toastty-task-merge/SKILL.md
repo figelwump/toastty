@@ -113,8 +113,9 @@ If nothing blocks, run:
 
 It waits a few seconds for Toastty's first answer, then reports it:
 
-- **The command fails:** Toastty refused the merge, or the merge failed. The
-  error gives the reason, such as an untracked file in the worktree. Nothing
+- **The command fails:** the error gives the reason. When Toastty refused the
+  merge, for example over an untracked file in the worktree, nothing changed.
+  Otherwise read the pull request with `gh pr view` to learn whether it
   merged. Report the reason and end your turn; do not say that Toastty
   accepted the merge.
 - **`merge` is `waitingForChecks`:** Toastty merges when the checks that
