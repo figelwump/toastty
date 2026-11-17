@@ -1707,7 +1707,7 @@ changes no stage. Most have a fixed limit of 30 minutes:
 
 | Alert | When | Digest text |
 | --- | --- | --- |
-| `silent` | The task's agent is `busy` and its `lastOutputAt` is 30 minutes old or more. | `busy, no output for 30 minutes` |
+| `silent` | The task's agent is `busy`, and 30 minutes or more have passed since the later of its `lastOutputAt` and the time it became `busy`. Without a `lastOutputAt`, no alert. | `busy, no output for 30 minutes` |
 | `checksFailing` | The checks of the task's open pull request fail, in GitHub's last answer. | `pull request checks failing` |
 | `checksSlow` | The checks have been pending for 30 minutes on the same commit (`checksPendingSince`). | `pull request checks pending for 30 minutes` |
 | `interrupted` | A quit or a crash cut off the agent's turn (`interruptedAtQuit`), and the restored agent is `idle` at its prompt. It clears when the agent starts its next turn. | `interrupted by the quit` |

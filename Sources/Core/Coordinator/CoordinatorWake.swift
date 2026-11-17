@@ -444,8 +444,8 @@ extension CoordinatorWakeState.TaskChange {
 /// not have to poll for it. Each alert wakes the coordinator once when it
 /// starts, and again only after it cleared and came back.
 public enum TaskAlert: String, Codable, CaseIterable, Sendable {
-    /// The task's agent is busy, and its transcript has not changed for
-    /// `limit`.
+    /// The task's agent is busy, and neither its transcript nor its busy
+    /// state has changed for `limit`.
     case silent
     /// The checks of the task's open pull request fail.
     case checksFailing
@@ -490,14 +490,23 @@ public struct TaskAlertFacts: Equatable, Sendable {
     /// When the agent's transcript last changed; `nil` when Toastty does
     /// not know.
     public var lastOutputAt: Date?
+    /// When the agent became busy; `nil` when Toastty does not know.
+    public var busySince: Date?
     public var checks: Checks
     /// A quit or a crash cut off the agent's turn, and the agent is idle
     /// at its prompt.
     public var interruptedAtQuit: Bool
 
-    public init(agentBusy: Bool, lastOutputAt: Date?, checks: Checks, interruptedAtQuit: Bool = false) {
+    public init(
+        agentBusy: Bool,
+        lastOutputAt: Date?,
+        busySince: Date? = nil,
+        checks: Checks,
+        interruptedAtQuit: Bool = false
+    ) {
         self.agentBusy = agentBusy
         self.lastOutputAt = lastOutputAt
+        self.busySince = busySince
         self.checks = checks
         self.interruptedAtQuit = interruptedAtQuit
     }
@@ -510,8 +519,13 @@ public struct TaskAlertFacts: Equatable, Sendable {
         TaskAlert.allCases.filter { alert in
             switch (alert, checks) {
             case (.silent, _):
+                // Silence counts from the later of the last transcript
+                // change and the start of the busy state: an agent that
+                // became busy a minute ago has not been silent for longer,
+                // even when its transcript is old.
                 guard agentBusy, let lastOutputAt else { return false }
-                return now.timeIntervalSince(lastOutputAt) >= TaskAlert.limit
+                let silentSince = max(lastOutputAt, busySince ?? lastOutputAt)
+                return now.timeIntervalSince(silentSince) >= TaskAlert.limit
             case (.checksFailing, .failing):
                 return true
             case (.checksSlow, .pending(let since?)):

@@ -402,9 +402,10 @@ nothing on their own and ends the watch, nothing for a stage
 that returns in under 3 seconds, and the timer set, cleared and fired with
 `coordinator wake`. It holds a task's turn open and moves the modification
 time of that agent's transcript 31 minutes back: the real 30-minute limit
-applies, and one digest with the silent alert arrives within seconds. The
-agent writing clears the alert, which wakes nothing, and a second silence
-wakes the coordinator again. It then kills the app with a digest waiting, a
+applies, but the agent became busy only a short time ago, so no silent alert
+starts and nothing wakes; the end of the turn then gives one digest with no
+alert. The alert's start, its clearing and its return are covered by the
+`CoordinatorWakeTests` unit tests, which use a fake clock. It then kills the app with a digest waiting, a
 timer set and a task's agent held in a turn, keeps it down until the timer's
 time passed, and checks that the relaunched app types the waiting change
 once and the scheduled check once, and that one digest line for the task
