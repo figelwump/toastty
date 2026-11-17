@@ -47,6 +47,15 @@ final class ToasttyCoordinatorQuietDigestsTests: XCTestCase {
         XCTAssertFalse(digests.didRead(nil), "A failed read does not try again at once")
         XCTAssertEqual(digests.keys, Set(oneMark.keys))
         XCTAssertTrue(digests.consume(revision: twoMarks.revision))
+
+        // A reconnect's snapshot comes while a read hangs, and then the read
+        // fails: that snapshot's read happens, also if no other comes.
+        digests.willRead()
+        XCTAssertFalse(digests.consume(revision: twoMarks.revision))
+        XCTAssertTrue(digests.didRead(nil))
+        digests.willRead()
+        XCTAssertFalse(digests.didRead(twoMarks))
+        XCTAssertEqual(digests.keys, Set(twoMarks.keys))
     }
 
     func testAReadThatRacesASnapshotEndsAtTheNewestMarks() {
@@ -62,14 +71,27 @@ final class ToasttyCoordinatorQuietDigestsTests: XCTestCase {
         XCTAssertEqual(digests.keys, Set(twoMarks.keys))
 
         // The Mac answered after a change that its next snapshot names:
-        // the answer counts, and the late snapshot asks for nothing.
+        // the answer counts, and the snapshot that asked reads nothing more.
         var late = ToasttyCoordinatorQuietDigests()
         XCTAssertTrue(late.consume(revision: oneMark.revision))
         late.willRead()
         XCTAssertFalse(late.didRead(twoMarks))
         XCTAssertEqual(late.keys, Set(twoMarks.keys))
-        XCTAssertFalse(late.consume(revision: oneMark.revision))
         XCTAssertFalse(late.consume(revision: twoMarks.revision))
+
+        // The marks change and change back while a read runs (a mark
+        // that PR #403 removes): the answer from between does not hide the
+        // snapshot that names the earlier marks again.
+        var back = ToasttyCoordinatorQuietDigests()
+        XCTAssertTrue(back.consume(revision: oneMark.revision))
+        back.willRead()
+        XCTAssertFalse(back.consume(revision: twoMarks.revision))
+        XCTAssertFalse(back.consume(revision: oneMark.revision))
+        XCTAssertTrue(back.didRead(twoMarks), "The newest snapshot names other marks than the answer")
+        back.willRead()
+        XCTAssertFalse(back.didRead(oneMark))
+        XCTAssertEqual(back.keys, Set(oneMark.keys))
+        XCTAssertFalse(back.consume(revision: oneMark.revision))
 
         // The Mac stops sharing the marks while a read runs: its answer
         // folds nothing.
