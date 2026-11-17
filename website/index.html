@@ -13,8 +13,8 @@
     <meta property="og:image" content="https://toastty.dev/assets/social-preview.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign task space is ready for review with its PR #128 chip.">
-    <meta name="twitter:image:alt" content="Toastty: Any agent. Any workflow. Beside the Toastty sidebar, where a checkout-redesign task space is ready for review with its PR #128 chip.">
+    <meta property="og:image:alt" content="Toastty: Coordinate all your agents. Beside the Toastty sidebar, where checkout-redesign is ready for review with its PR #128 chip, and the coordinator's chat says why.">
+    <meta name="twitter:image:alt" content="Toastty: Coordinate all your agents. Beside the Toastty sidebar, where checkout-redesign is ready for review with its PR #128 chip, and the coordinator's chat says why.">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Toastty — Coordinate all your agents.">
     <meta name="twitter:description" content="Tell the coordinator what you need. It turns your requests into tasks, keeps each one moving, and brings you only the decisions that need you, with any agent that runs in a terminal.">
@@ -55,11 +55,22 @@
   <symbol id="icon-toast" viewBox="170 190 684 660">
     <g filter="url(#ic-shadow-light)"><use href="#ic-toast"/></g>
   </symbol>
+  <!-- Toasty, the coordinator's icon, from Sources/ConversationUI/ToastyIcon.swift (16 x 16). -->
+  <symbol id="toasty-gold" viewBox="0 0 16 16"><path d="M3.4 7.4C1.9 6.9 1.3 5.6 1.7 4.3C2.3 2.4 4.6 1.3 8 1.3C11.4 1.3 13.7 2.4 14.3 4.3C14.7 5.6 14.1 6.9 12.6 7.4V13A1.8 1.8 0 0 1 10.8 14.8H5.2A1.8 1.8 0 0 1 3.4 13Z" fill="#E2A55C" stroke="#A8662C" stroke-width="1.3" stroke-linejoin="round"/><rect x="6.3" y="4.2" width="3.4" height="2.2" rx=".6" fill="#FFE08A"/><circle cx="6.3" cy="9.3" r=".8" fill="#3A220F"/><circle cx="9.7" cy="9.3" r=".8" fill="#3A220F"/><path d="M6.5 11.3Q8 12.5 9.5 11.3" fill="none" stroke="#3A220F" stroke-linecap="round"/></symbol>
+  <symbol id="toasty-line" viewBox="0 0 16 16"><path d="M3.4 7.4C1.9 6.9 1.3 5.6 1.7 4.3C2.3 2.4 4.6 1.3 8 1.3C11.4 1.3 13.7 2.4 14.3 4.3C14.7 5.6 14.1 6.9 12.6 7.4V13A1.8 1.8 0 0 1 10.8 14.8H5.2A1.8 1.8 0 0 1 3.4 13Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="6.3" cy="9.3" r=".8" fill="currentColor"/><circle cx="9.7" cy="9.3" r=".8" fill="currentColor"/><path d="M6.5 11.3Q8 12.5 9.5 11.3" fill="none" stroke="currentColor" stroke-linecap="round"/></symbol>
+  <symbol id="ic-checklist" viewBox="0 0 24 24"><circle cx="6" cy="7" r="3"/><path d="m4.7 7 1 1 1.7-1.8"/><path d="M12 7h9"/><circle cx="6" cy="17" r="3"/><path d="M12 17h9"/></symbol>
+  <symbol id="ic-sidebar" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9 4.5v15"/></symbol>
+  <symbol id="ic-expand" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-7 7"/><path d="M10 20H4v-6"/><path d="M4 20l7-7"/></symbol>
+  <symbol id="ic-hide-dock" viewBox="0 0 24 24"><path d="M4 4v16"/><path d="M20 12H9"/><path d="m13 7-5 5 5 5"/></symbol>
+  <symbol id="ic-house" viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5h4v5"/></symbol>
+  <symbol id="ic-grid4" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="ic-sparkle" viewBox="0 0 24 24"><path d="M12 2.5C12.9 8 16 11.1 21.5 12C16 12.9 12.9 16 12 21.5C11.1 16 8 12.9 2.5 12C8 11.1 11.1 8 12 2.5Z"/></symbol>
+  <symbol id="ic-merge" viewBox="0 0 24 24"><path d="M12 3v7c0 3-5 5-5 8v3"/><path d="M12 10c0 3 5 5 5 8v3"/><path d="m8.5 6.5 3.5-3.5 3.5 3.5"/></symbol>
 </svg>
 
 <header class="shell nav">
   <a class="brand" href="./" aria-label="Toastty home"><svg aria-hidden="true"><use href="#icon-toast"/></svg><span>Toastty</span></a>
-  <nav class="nav-links" aria-label="Page sections"><a href="#workflows">Workflows</a><a href="#features">Features</a><a href="#mobile">Mobile</a><a href="https://github.com/figelwump/toastty/tree/main/docs">Docs</a></nav>
+  <nav class="nav-links" aria-label="Page sections"><a href="#workflows">Workflows</a><a href="#features">Features</a><a href="#tasks">Tasks</a><a href="#mobile">Mobile</a><a href="https://github.com/figelwump/toastty/tree/main/docs">Docs</a></nav>
   <div class="nav-cta"><a class="btn btn-ghost gh" href="https://github.com/figelwump/toastty" aria-label="Toastty on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5c-5.25 0-9.5 4.15-9.5 9.27 0 4.1 2.73 7.58 6.52 8.8.48.08.66-.2.66-.45v-1.58c-2.65.56-3.21-1.1-3.21-1.1-.44-1.08-1.07-1.37-1.07-1.37-.87-.58.07-.57.07-.57.96.07 1.47.96 1.47.96.85 1.43 2.23 1.02 2.78.78.08-.6.33-1.02.6-1.25-2.12-.23-4.35-1.03-4.35-4.58 0-1.01.37-1.84.98-2.49-.1-.24-.43-1.2.09-2.46 0 0 .8-.25 2.62.95A9.25 9.25 0 0 1 12 7.08c.8 0 1.6.1 2.35.32 1.82-1.2 2.62-.95 2.62-.95.52 1.26.19 2.22.09 2.46.61.65.98 1.48.98 2.49 0 3.56-2.23 4.35-4.36 4.58.34.29.65.86.65 1.74v2.4c0 .25.18.54.66.45 3.79-1.22 6.51-4.7 6.51-8.8 0-5.12-4.25-9.27-9.5-9.27Z"/></svg><span>GitHub</span></a><a class="btn btn-dark" href="https://github.com/figelwump/toastty/releases/latest">Download</a></div>
 </header>
 
@@ -77,45 +88,40 @@
 
 <section class="shell video" aria-labelledby="video-title">
   <h2 class="sr-only" id="video-title">Example workflow</h2>
-  <p class="sr-only">An animated recreation of Toastty: a Claude Code session hands a checkout redesign off to a new worktree, which appears as a task space in the sidebar with the conversation forked into it. While it works, the user marks up a docs preview in the right panel and sends the comment to a Codex session, which fixes the page. The task space turns green when it is ready, and its PR opens from the chip in the sidebar.</p>
+  <p class="sr-only">An animated recreation of Toastty with the coordinator's chat docked beside the sidebar. The user asks the coordinator, Toasty, to build a checkout redesign from a mockup. Toasty makes a task in the lumen project, and the task's Claude Code session moves into its own git worktree. While it works, the user marks up a docs preview in the right panel and sends the comment to a Codex session, which fixes the page. Toasty reports that the checkout redesign is ready for review with PR #128, and why. The user replies "merge it", and the task merges.</p>
   <div class="stage-wrap" id="wrap" aria-hidden="true">
     <div class="stage" id="stage">
      <div class="viewport" id="viewport">
       <div class="cam" id="cam">
-      <div class="win">
+      <div class="win docked">
 
         <!-- Sidebar -->
         <aside class="sb">
-          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="lights"><i></i><i></i><i></i><span class="tbi"><svg viewBox="0 0 24 24"><use href="#ic-sidebar"/></svg></span><span class="tbi gold"><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg></span></div>
+          <div class="side-coord on"><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg>Coordinator</div>
+          <div class="side-tasks"><svg viewBox="0 0 24 24"><use href="#ic-checklist"/></svg>Tasks<span class="side-plus">+</span></div>
+          <div class="side-seg"><span class="on">All</span><span>Needs you<b class="side-n y">1</b><b class="side-n bl" id="seg-rev">1</b></span></div>
 
           <div class="card sel" id="card-lumen">
-            <div class="wsn"><span>lumen</span><span class="pill" id="pill"><span class="spin" id="pill-spin"></span><span id="pill-t">1/2</span></span></div>
-            <span class="branch">main</span>
-            <div class="row" id="row-plan">
-              <span class="ic" id="plan-ic"></span>
-              <div class="t">Plan checkout redesign</div>
-              <div class="s" id="plan-s">Waiting for your input</div>
-              <span class="chip fork" id="plan-fork" style="display:none">⑂ 1</span>
-            </div>
-            <div class="row">
-              <span class="ic"></span>
-              <div class="t">Fix flaky auth test</div>
-              <div class="s">Ready for prompt</div>
-            </div>
-            <div class="grow" data-at="5.0">
-              <div class="grp">⌄ TASK SPACES 1</div>
-              <div class="row working has-chip" id="row-sub">
-                <span class="ic" id="sub-ic"><span class="spin"></span></span>
+            <div class="wsn"><span>lumen</span><span class="side-hc" id="lumen-hc"></span></div>
+            <div class="grow" data-at="4.0">
+              <div class="side-bkt" id="sub-bkt">RUNNING 1</div>
+              <div class="row working" id="row-sub">
+                <span class="ic" id="sub-ic"></span>
                 <div class="t">checkout-redesign</div>
-                <div class="s" id="sub-s">Reading handoff…</div>
+                <div class="s" id="sub-s">Setting up…</div>
                 <span class="chip pr" id="sub-pr">PR #128</span>
                 <span class="elapsed" id="sub-el">0m 04s</span>
               </div>
             </div>
+            <div class="side-bkt">IDLE 2</div>
+            <div class="row"><span class="ic"></span><div class="t">Plan checkout redesign</div><div class="s">Plan agreed · mockup rev 3</div></div>
+            <div class="row"><span class="ic"></span><div class="t">Fix flaky auth test</div><div class="s">Ready for prompt</div></div>
           </div>
 
           <div class="card" id="card-docs">
-            <div class="wsn"><span>docs-site</span><span class="pill quiet" id="docs-pill"><span class="spin" id="docs-spin"></span><span id="docs-pill-t">0/1</span></span></div>
+            <div class="wsn"><span>docs-site</span><span class="side-hc" id="docs-hc"></span></div>
+            <div class="side-bkt" id="docs-bkt">IDLE 1</div>
             <div class="row" id="row-docs">
               <span class="ic" id="docs-ic"></span>
               <div class="t">Update API reference</div>
@@ -124,7 +130,8 @@
           </div>
 
           <div class="card">
-            <div class="wsn"><span>infra</span><span class="pill quiet">0/1</span></div>
+            <div class="wsn"><span>infra</span><span class="side-hc"><span class="y"><i></i>1</span></span></div>
+            <div class="side-bkt y">NEEDS YOU 1</div>
             <div class="row has-chip approval">
               <span class="ic"><span class="mk dot appr"></span></span>
               <div class="t">Rotate staging keys</div>
@@ -132,59 +139,61 @@
               <span class="chip appr">approval</span>
             </div>
           </div>
+        </aside>
 
-          <div class="newws">+ New workspace</div>
+        <!-- Coordinator dock -->
+        <aside class="dock">
+          <div class="dock-h"><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg><b>Coordinator</b><em id="dock-st">working</em><span><svg viewBox="0 0 24 24"><use href="#ic-expand"/></svg><svg viewBox="0 0 24 24"><use href="#ic-hide-dock"/></svg></span></div>
+          <div class="dock-x">
+            <div class="dock-dig always">Toastty · 2 updates · 9:12 AM ›</div>
+            <div class="dock-at always"><span class="tlink done">search-filters</span> merged into main, and its task space closes tomorrow. Nothing else waits for you.</div>
+            <div class="dock-ub" data-at="2.8">Build the checkout redesign from the mockup in lumen. Check it at 390 and 1280 px.</div>
+            <div class="dock-at" data-at="3.9">I made <span class="tlink tl-cr">checkout-redesign<span class="tl-d">&nbsp;·&nbsp;#128</span></span> in lumen with Claude Code, opus at high effort. I'll tell you when it's ready.</div>
+            <div class="dock-new" data-at="15.0" data-until="19.8">New</div>
+            <div class="dock-dig" data-at="15.0">Toastty · 1 update · 9:41 AM ›</div>
+            <div class="dock-at" data-at="15.4"><span class="tlink tl-cr">checkout-redesign<span class="tl-d">&nbsp;·&nbsp;#128</span></span> is ready for your review: its report shows the summary card above payment at 390 px with the totals pinned, and all 4 checks passed. PR #128.</div>
+            <div class="dock-ub" data-at="19.8">merge it</div>
+            <div class="dock-at" data-at="20.6">Asked <span class="tlink tl-cr">checkout-redesign<span class="tl-d">&nbsp;·&nbsp;#128</span></span>'s agent to merge PR #128.</div>
+            <div class="dock-wk" id="dock-wk"><span class="spin"></span><span id="dock-wk-t">working · 1s</span></div>
+          </div>
+          <div class="dock-f" id="dock-f"><span class="plus">+</span><span class="dock-in"><span class="dock-ph" id="dock-ph">Message Toasty…&nbsp;&nbsp;⌥⇧T from anywhere</span><span id="dock-typed"></span><span class="caret"></span></span><span class="dock-send" id="dock-send"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg><i></i></span></div>
         </aside>
 
         <!-- Top bar -->
         <div class="top">
-          <div class="wtitle" id="wtitle"><b>lumen</b><span>1 running</span></div>
-          <div class="tabs"><span class="tab on" id="tab-main">main</span><span class="tab">review</span></div>
+          <div class="wtitle" id="wtitle"><b>lumen</b><span>idle</span></div>
+          <div class="tabs"><span class="tab on">main</span></div>
         </div>
 
         <!-- Terminal -->
         <section class="term">
-          <div class="phead" id="phead">Claude Code</div>
+          <div class="phead" id="phead">Claude Code · lumen</div>
 
           <div class="view" id="view-lumen">
             <div class="lines">
               <div class="ln always"><span class="b">●</span> Published Scratchpad <span class="a">"Checkout mockup"</span> (rev 3).</div>
-              <div class="ln always m">  Summary card moves above payment; totals stay</div>
-              <div class="ln always m">  pinned while scrolling on mobile.</div>
+              <div class="ln always m">  Summary card moves above payment; totals stay pinned while scrolling on mobile.</div>
               <div class="ln always gap"></div>
               <div class="ln always"><span class="b">●</span> Plan agreed. Ready to build when you are.</div>
-              <div class="ln gap" data-at="3.2"></div>
-              <div class="ln m" data-at="3.2">› hand this off to a worktree and verify it visually</div>
-              <div class="ln gap" data-at="3.6"></div>
-              <div class="ln" data-at="3.6"><span class="b">●</span> <span class="b">Skill</span>(worktree-create)</div>
-              <div class="ln m" data-at="4.1">  ⎿ Wrote WORKTREE_HANDOFF.md</div>
-              <div class="ln m" data-at="4.5">  ⎿ Created worktree on <span class="a">feat/checkout-redesign</span></div>
-              <div class="ln m" data-at="4.9">  ⎿ Forked this session into a new task space</div>
-              <div class="ln m" data-at="5.3">  ⎿ Copied the checkout mockup to its right panel</div>
-              <div class="ln gap" data-at="5.9"></div>
-              <div class="ln" data-at="5.9"><span class="b">●</span> Handed off. The task space owns the build and the PR.</div>
             </div>
-            <div class="prompt"><span class="gt">›</span><span id="typed"></span><span class="caret"></span></div>
+            <div class="prompt"><span class="gt">›</span><span class="caret"></span></div>
           </div>
 
           <div class="view" id="view-child">
             <div class="lines">
-              <div class="ln" data-at="7.6"><span class="b">●</span> <span class="b">Read</span> WORKTREE_HANDOFF.md</div>
-              <div class="ln m" data-at="7.9">  ⎿ Goal, 4 decisions, 3 checks, mockup rev 3</div>
-              <div class="ln gap" data-at="8.5"></div>
-              <div class="ln" data-at="8.5"><span class="b">●</span> <span class="b">Edit</span> src/checkout/SummaryCard.tsx <span class="g">+86</span> <span style="color:#e2766a">−41</span></div>
-              <div class="ln" data-at="9.1"><span class="b">●</span> <span class="b">Edit</span> src/checkout/CheckoutPage.tsx <span class="g">+12</span> <span style="color:#e2766a">−30</span></div>
-              <div class="ln gap" data-at="9.8"></div>
-              <div class="ln" data-at="9.8"><span class="b">●</span> <span class="b">Bash</span>(npm test)</div>
-              <div class="ln" data-at="10.3">  ⎿ <span class="g">✓ 214 passing</span> <span class="m">(38s)</span></div>
-              <div class="ln gap" data-at="11.6"></div>
-              <div class="ln" data-at="11.6"><span class="b">●</span> <span class="b">Screenshot</span> checkout at 390px and 1280px</div>
-              <div class="ln m" data-at="12.0">  ⎿ Opened the handoff in the right panel</div>
-              <div class="ln gap" data-at="13.2"></div>
-              <div class="ln" data-at="13.2"><span class="b">●</span> Published verification report: <span class="g">3/3 checks passed</span></div>
-              <div class="ln gap" data-at="15.2"></div>
-              <div class="ln" data-at="15.2"><span class="b">●</span> Opened PR <span class="a">#128</span> feat/checkout-redesign → main</div>
-              <div class="ln" data-at="16.0"><span class="b">●</span> Ready for your review.</div>
+              <div class="ln always"><span class="b">●</span> <span class="b">Bash</span>(npm test)</div>
+              <div class="ln always">  ⎿ <span class="g">✓ 214 passing</span> <span class="m">(38s)</span></div>
+              <div class="ln always gap"></div>
+              <div class="ln always"><span class="b">●</span> Published verification report: <span class="g">3/3 checks passed</span></div>
+              <div class="ln always gap"></div>
+              <div class="ln always"><span class="b">●</span> Opened PR <span class="a">#128</span> feat/checkout-redesign → main</div>
+              <div class="ln always"><span class="b">●</span> Ready for your review.</div>
+              <div class="ln gap" data-at="20.9"></div>
+              <div class="ln a" data-at="20.9">› Use the toastty-task-merge skill.</div>
+              <div class="ln gap" data-at="21.4"></div>
+              <div class="ln" data-at="21.4"><span class="b">●</span> PR #128: 4 checks passed, no open review threads.</div>
+              <div class="ln" data-at="21.9"><span class="b">●</span> <span class="b">Bash</span>(toastty task merge --head 3f9a2c1)</div>
+              <div class="ln" data-at="22.4">  ⎿ <span class="g">Merged PR #128 into main</span></div>
             </div>
             <div class="prompt"><span class="gt">›</span><span class="caret"></span></div>
           </div>
@@ -211,10 +220,9 @@
         <aside class="rp">
           <div class="rtabs" id="rtabs">
             <span class="rtab" data-tab="mock" data-ws="lumen child">◧ Checkout mockup</span>
-            <span class="rtab" data-tab="handoff" data-ws="child" data-at="10.5">¶ WORKTREE_HANDOFF.md</span>
-            <span class="rtab" data-tab="verify" data-ws="child" data-at="12.0">◧ Verification</span>
-            <span class="rtab" data-tab="pr" data-ws="child" data-at="19.5">◎ PR #128</span>
+            <span class="rtab" data-tab="verify" data-ws="child">◧ Verification</span>
             <span class="rtab" data-tab="docsweb" data-ws="docs">◎ localhost:3000</span>
+            <span class="rtab" data-tab="pr" data-ws="child">◎ PR #128</span>
           </div>
           <div class="rbody">
 
@@ -266,25 +274,12 @@
               </div>
             </div>
 
-            <div class="rv" data-view="handoff">
-              <div class="doc">
-                <h3>Checkout redesign: handoff</h3>
-                <div class="dm">feat/checkout-redesign · base main @ 9f3c2e1 · draft PR</div>
-                <h4>Goal</h4>
-                <div>Move the order summary above payment and keep totals visible on small screens, matching mockup rev 3.</div>
-                <h4>Decisions</h4>
-                <ul><li>Summary card is a sticky header on mobile only</li><li>Keep the existing Pay button and payment form</li><li>No new dependencies</li><li>Follow the repo's verification guide</li></ul>
-                <h4>Checks</h4>
-                <ul class="cb" id="cb"><li>Summary above payment at 390px</li><li>Totals pinned while scrolling</li><li><code>npm test</code> passes</li></ul>
-              </div>
-            </div>
-
             <div class="rv" data-view="verify">
               <div class="doc">
                 <div class="rep-top"><h3>Verification</h3><span class="okpill">3/3 passed</span></div>
                 <div class="dm">checkout-redesign · 2 screenshots · npm test</div>
                 <div class="shots">
-                  <div class="shot"><div class="phone" style="width:112px">
+                  <div class="shot"><div class="phone" style="width:110px">
                     <div class="summary"><div class="r"><span>Subtotal</span><span>$76.00</span></div><div class="r"><span>Shipping</span><span>$8.00</span></div><div class="r tot"><span>Total</span><span>$84.00</span></div></div>
                     <div class="item"><i style="background:#f3c77e"></i><span></span></div><div class="item"><i style="background:#9fc6e8"></i><span></span></div><div class="item"><i style="background:#c9a2dc"></i><span></span></div>
                     <div class="pay">Pay $84.00</div>
@@ -301,7 +296,6 @@
                 <h3>Redesign checkout summary card <span>#128</span></h3>
                 <div class="prmeta"><span class="open">Open</span><span><span class="mono">feat/checkout-redesign</span> → <span class="mono">main</span></span></div>
                 <div class="box"><div class="h"><span class="okc">✓</span>All checks have passed</div><div class="c">4 successful checks</div></div>
-                <div class="box"><div class="h">Summary</div><div class="c"><p>Moves the order summary above payment and pins totals on mobile.</p><p>Verification: <span class="lnk">3/3 checks with screenshots</span></p><p class="m" style="color:#59636e">3 files changed · +98 −71</p></div></div>
               </div>
             </div>
 
@@ -314,23 +308,19 @@
         <svg viewBox="0 0 22 22" width="22" height="22"><path d="M3 2l14 9.2-6.3 1.2 3.7 7-2.8 1.4-3.7-7L3 18z" fill="#111" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
       </div>
       </div>
-      <div class="notif" data-at="15.2" data-until="17.2">
-        <svg aria-hidden="true"><use href="#icon-full"/></svg>
-        <div><small>Toastty · now</small><b>checkout-redesign is ready for review</b><br><span style="color:#cfcac1">PR #128 · 3/3 checks passed</span></div>
-      </div>
       <div class="fade" id="fade"></div>
      </div>
     </div>
   </div>
 
-  <div class="example-cap">Example: hand off a task, fix a docs page while it works, come back to a PR.</div>
+  <div class="example-cap">Example: hand the coordinator a task, fix a docs page while it works, and merge the result.</div>
   <div class="beats" id="beats" aria-label="Video steps">
     <button type="button" class="pp" id="pp" aria-label="Pause"><svg viewBox="0 0 24 24" id="pp-ic"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
-    <button type="button" class="beat" data-t="0" aria-label="Step 1: Hand off a task to a worktree"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Hand off a task to a worktree</span></button>
-    <button type="button" class="beat" data-t="3.5" aria-label="Step 2: It becomes a task space in the sidebar"><span class="bar"><i></i></span><span class="n">02</span><span class="l">It becomes a task space in the sidebar</span></button>
-    <button type="button" class="beat" data-t="8.0" aria-label="Step 3: Meanwhile, annotate a preview and send it to an agent"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Meanwhile, annotate a preview and send it to an agent</span></button>
-    <button type="button" class="beat" data-t="15.0" aria-label="Step 4: The task space turns green when it's ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">The task space turns green when it's ready</span></button>
-    <button type="button" class="beat" data-t="17.6" aria-label="Step 5: Open the PR right from the sidebar"><span class="bar"><i></i></span><span class="n">05</span><span class="l">Open the PR right from the sidebar</span></button>
+    <button type="button" class="beat" data-t="0" aria-label="Step 1: Tell the coordinator what you want"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Tell the coordinator what you want</span></button>
+    <button type="button" class="beat" data-t="4.6" aria-label="Step 2: It starts the task in its own worktree"><span class="bar"><i></i></span><span class="n">02</span><span class="l">It starts the task in its own worktree</span></button>
+    <button type="button" class="beat" data-t="8.4" aria-label="Step 3: Meanwhile, annotate a preview and send it to an agent"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Meanwhile, annotate a preview and send it to an agent</span></button>
+    <button type="button" class="beat" data-t="15.0" aria-label="Step 4: Toasty tells you when it's ready, and why"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Toasty tells you when it's ready, and why</span></button>
+    <button type="button" class="beat" data-t="19.0" aria-label="Step 5: Say merge it"><span class="bar"><i></i></span><span class="n">05</span><span class="l">Say "merge it"</span></button>
   </div>
 </section>
 
@@ -385,9 +375,10 @@
   <div class="split2">
     <div>
       <h2>See what needs you next.</h2>
-      <p class="lead">Every workspace is a card in the sidebar. Sessions report live status, and the rows that want you are tinted: green when ready, amber when waiting for approval, red on an error.</p>
+      <p class="lead">Every project is a card in the sidebar. Sessions and tasks report live status, and the rows that want you are tinted: green when ready, amber when waiting for approval, red on an error.</p>
       <ul class="feats">
         <li><b>Needs you first</b><span>Each project card sorts its sessions and tasks into Needs you, Ready to review, Running and Idle. A task that asks you something waits under Needs you as “Asks: which staging region?” until you answer.</span></li>
+        <li><b>Switch to Needs you</b><span>See only the questions, approvals and pull requests that wait on you, from every project, one line each.</span></li>
         <li><b>Jump to what's next</b><span><kbd>⌘⇧A</kbd> cycles through unread, approval, and active sessions.</span></li>
         <li><b>Mark for later</b><span><kbd>⌘⇧L</kbd> flags a session; the flag clears when it moves forward.</span></li>
         <li><b>OSC 7501 support</b><span>Programs that report <a href="https://mitchellh.com/writing/program-status-osc7501">OSC 7501</a> status appear in the sidebar with progress and approval, input, or login labels.</span><small class="watch-note">You can also watch any command with <kbd>⌘⇧M</kbd> and get notified when it exits.</small></li>
@@ -396,30 +387,140 @@
       <p class="agents-line">Rich status for Claude Code, Codex, Cursor, Grok Build, OpenCode, MiMo Code, and Pi. Any process or agent CLI that supports <a href="https://mitchellh.com/writing/program-status-osc7501">OSC 7501</a> will provide basic status updates as well.</p>
     </div>
     <figure class="sidebar-figure">
-      <div class="sbdemo" role="img" aria-label="Toastty sidebar with agent sessions, task spaces, and a deploy command reporting 65 percent progress through OSC 7501.">
-      <div class="card sel">
-        <div class="wsn"><span>lumen</span><span class="pill"><span class="spin"></span>2/6</span></div>
-        <span class="branch">main</span>
-        <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">Refactor cart totals</div><div class="s">Running tests…</div><span class="elapsed">2m 10s</span></div>
-        <div class="row ready"><span class="ic"><span class="mk dot ready"></span></span><div class="t">Plan checkout redesign</div><div class="s">Plan agreed. Ready to build.</div></div>
-        <div class="row approval has-chip"><span class="ic"><span class="mk dot appr"></span></span><div class="t">Migrate orders table</div><div class="s">Needs approval: run migration</div><span class="chip appr">approval</span></div>
-        <div class="grp">⌄ TASK SPACES 3</div>
-        <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">search-filters</div><div class="s">Editing FilterBar.tsx</div><span class="elapsed">6m 41s</span></div>
-        <div class="row ready has-chip"><span class="ic"><span class="mk sq ready"></span></span><div class="t">checkout-redesign</div><div class="s">Ready for review</div><span class="chip pr show">PR #128</span></div>
-        <div class="row has-chip"><span class="ic"><span class="mk done">✓</span></span><div class="t muted">sidebar-icons</div><div class="s">Merged</div><span class="chip pr show">PR #121</span></div>
+      <div class="sbdemo" id="sbdemo" data-view="needs">
+        <div class="side-coord"><svg viewBox="0 0 16 16" aria-hidden="true"><use href="#toasty-line"/></svg>Coordinator</div>
+        <div class="side-tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ic-checklist"/></svg>Tasks<span class="side-plus" aria-hidden="true">+</span></div>
+        <div class="side-seg" role="group" aria-label="Sidebar view">
+          <button type="button" data-view="all" aria-pressed="false">All</button>
+          <button type="button" data-view="needs" aria-pressed="true" aria-label="Needs you: 3 need you, 2 ready for review">Needs you<b class="side-n y">3</b><b class="side-n bl">2</b></button>
+        </div>
+
+        <div class="sbv sbv-needs" role="img" aria-label="Needs you: in lumen, Migrate orders table needs approval, and checkout-redesign with PR 128 and coupon-row-fix with PR 131 are ready for review. In docs-site, api-v2-reference asks a question. The OSC 7501 example's Rotate staging keys failed.">
+          <div class="card">
+            <div class="wsn"><span>lumen</span><span class="side-hc"><span class="y"><i></i>1</span><span class="bl"><i></i>2</span></span></div>
+            <div class="side-bkt y">NEEDS YOU 1</div>
+            <div class="row compact approval"><span class="ic"><span class="mk dot appr"></span></span><div class="t">Migrate orders table</div></div>
+            <div class="side-bkt bl">READY TO REVIEW 2</div>
+            <div class="row compact has-chip"><span class="ic"><span class="tmark rev"></span></span><div class="t">checkout-redesign</div><span class="chip pr show">PR #128</span></div>
+            <div class="row compact has-chip"><span class="ic"><span class="tmark rev"></span></span><div class="t">coupon-row-fix</div><span class="chip pr show">PR #131</span></div>
+          </div>
+          <div class="card">
+            <div class="wsn"><span>docs-site</span><span class="side-hc"><span class="y"><i></i>1</span></span></div>
+            <div class="side-bkt y">NEEDS YOU 1</div>
+            <div class="row compact approval"><span class="ic"><span class="tmark q">?</span></span><div class="t">api-v2-reference</div></div>
+          </div>
+          <div class="card">
+            <div class="wsn"><span>OSC 7501 example</span><span class="side-hc"><span class="y"><i></i>1</span></span></div>
+            <div class="side-bkt y">NEEDS YOU 1</div>
+            <div class="row compact error"><span class="ic"><span class="mk dot errd"></span></span><div class="t">Rotate staging keys</div></div>
+          </div>
+        </div>
+
+        <div class="sbv sbv-all" role="img" aria-label="All: every project's sessions and task spaces in Needs you, Ready to review, Running and Idle, with a deploy command reporting 65 percent progress through OSC 7501.">
+          <div class="card sel">
+            <div class="wsn"><span>lumen</span><span class="side-hc"><span class="y"><i></i>1</span><span class="bl"><i></i>2</span><span><span class="spin"></span>2</span><span><i></i>1</span></span></div>
+            <div class="side-bkt y">NEEDS YOU 1</div>
+            <div class="row approval has-chip"><span class="ic"><span class="mk dot appr"></span></span><div class="t">Migrate orders table</div><div class="s">Needs approval: run migration</div><span class="chip appr">approval</span></div>
+            <div class="side-bkt bl">READY TO REVIEW 2</div>
+            <div class="row has-chip"><span class="ic"><span class="tmark rev"></span></span><div class="t">checkout-redesign</div><div class="s">Ready for review</div><span class="chip pr show">PR #128</span></div>
+            <div class="row has-chip"><span class="ic"><span class="tmark rev"></span></span><div class="t">coupon-row-fix</div><div class="s">Ready for review</div><span class="chip pr show">PR #131</span></div>
+            <div class="side-bkt">RUNNING 2</div>
+            <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">Refactor cart totals</div><div class="s">Running tests…</div><span class="elapsed">2m 10s</span></div>
+            <div class="row working"><span class="ic"><span class="spin"></span></span><div class="t">search-filters</div><div class="s">Editing FilterBar.tsx</div><span class="elapsed">6m 41s</span></div>
+            <div class="side-bkt">IDLE 1</div>
+            <div class="row"><span class="ic"></span><div class="t">Fix flaky auth test</div><div class="s">Ready for prompt</div></div>
+            <div class="side-ship"><span class="up">↑</span>TO SHIP 1<span class="rel">Release</span><span class="dn">☑ Done 4</span></div>
+          </div>
+          <div class="card">
+            <div class="wsn"><span>docs-site</span><span class="side-hc"><span class="y"><i></i>1</span><span><i></i>1</span></span></div>
+            <div class="side-bkt y">NEEDS YOU 1</div>
+            <div class="row approval"><span class="ic"><span class="tmark q">?</span></span><div class="t">api-v2-reference</div><div class="s">Asks: Keep the v1 payload page?</div></div>
+            <div class="side-bkt">IDLE 1</div>
+            <div class="row"><span class="ic"></span><div class="t">Update API reference</div><div class="s">Ready for prompt</div><span class="flag">⚑</span></div>
+          </div>
+          <div class="card">
+            <div class="wsn"><span>OSC 7501 example</span><span class="side-hc"><span class="y"><i></i>1</span><span><span class="spin"></span>1</span></span></div>
+            <div class="side-bkt y">NEEDS YOU 1</div>
+            <div class="row error has-chip"><span class="ic"><span class="mk dot errd"></span></span><div class="t">Rotate staging keys</div><div class="s">terraform plan failed</div><span class="chip errc">error</span></div>
+            <div class="side-bkt">RUNNING 1</div>
+            <div class="row working osc-example"><span class="ic"><span class="spin"></span></span><div class="t">Deploy v2.4.1</div><div class="s">Uploading images to 3 regions…</div><span class="program-progress">65%</span></div>
+          </div>
+        </div>
       </div>
-      <div class="card">
-        <div class="wsn"><span>docs-site</span><span class="pill quiet">0/1</span></div>
-        <div class="row"><span class="ic"></span><div class="t">Update API reference</div><div class="s">Waiting for your input</div><span class="flag">⚑</span></div>
-      </div>
-      <div class="card">
-        <div class="wsn"><span>OSC 7501 example</span><span class="pill"><span class="spin"></span>1/2</span></div>
-        <div class="row working osc-example"><span class="ic"><span class="spin"></span></span><div class="t">Deploy v2.4.1</div><div class="s">Uploading images to 3 regions…</div><span class="program-progress">65%</span></div>
-        <div class="row error has-chip"><span class="ic"><span class="mk dot errd"></span></span><div class="t">Rotate staging keys</div><div class="s">terraform plan failed</div><span class="chip errc">error</span></div>
-      </div>
-    </div>
+      <figcaption>Click All to see every session.</figcaption>
     </figure>
   </div>
+</section>
+
+<section class="shell block-sec tasks-sec" id="tasks">
+  <div class="sec-eyebrow">Tasks and the coordinator</div>
+  <h2>From one line to a merged PR.</h2>
+  <p class="lead">Ask in the coordinator's dock, or press <kbd>⌥⇧T</kbd> in any app. Toasty makes the task, starts an agent on it in its own git worktree, and tells you when the work is ready and why. Say "merge it", or press Merge.</p>
+  <div class="trio">
+    <div>
+      <div class="tshot" role="img" aria-label="The coordinator's chat: a request for a CSV export, Toasty's answer that it made the task in lumen with Codex, and its later note that checkout-redesign is ready for review with PR 128.">
+        <div class="tshot-in">
+          <div class="cc">
+            <div class="cc-h"><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg><b>Coordinator</b><span><svg viewBox="0 0 24 24"><use href="#ic-expand"/></svg><svg viewBox="0 0 24 24"><use href="#ic-hide-dock"/></svg></span></div>
+            <div class="dock-x">
+              <div class="dock-ub always">Add a CSV export to the orders page, like this mockup.<small>▣ csv-export.png</small></div>
+              <div class="dock-at always">I made <span class="tlink run">csv-export</span> in lumen with Codex, at high effort. I'll tell you when it's ready.</div>
+              <div class="dock-new always">New</div>
+              <div class="dock-dig always">Toastty · 1 update · 10:52 AM ›</div>
+              <div class="dock-at always"><span class="tlink rev has-pr">checkout-redesign<span class="tl-d">&nbsp;·&nbsp;#128</span></span> is ready for your review: the report shows the summary card above payment at 390 px, and all 4 checks passed. PR #128.</div>
+            </div>
+            <div class="cc-f">Message Toasty…<b>⌥⇧T from anywhere</b></div>
+          </div>
+        </div>
+      </div>
+      <h3>The coordinator</h3>
+      <p>Toasty is an agent that follows your tasks. It picks the project and the agent, keeps stuck work moving, and brings you what is ready. Its chat stays docked beside your work; <kbd>⇧⌘K</kbd> opens it.</p>
+    </div>
+    <div>
+      <div class="tshot" role="img" aria-label="Quick entry over another app, sending to the coordinator: a sentence about the coupon row, an attached screenshot, the workspace and agent left on Auto, and the Create and Send buttons.">
+        <div class="tshot-in">
+          <div class="qe-desk"><div class="qe-app"><div class="bar"><i></i><i></i><i></i></div><div class="ln2" style="width:40%"></div><div class="ln2"></div><div class="shot2"></div></div></div>
+          <div class="qe">
+            <div class="qe-h"><i></i>TO COORDINATOR</div>
+            <div class="qe-t">The coupon row hides under the totals bar at 390 px. Screenshot attached.</div>
+            <div class="qe-a"><span class="qe-file"><i></i>Screenshot 10.42.png</span><span class="qe-add">+ Attach <span class="qe-k">⌘V</span></span></div>
+            <div class="qe-f"><span class="qe-pill"><svg viewBox="0 0 24 24"><use href="#ic-grid4"/></svg><b>Auto</b> <span class="qe-k">⌘1</span></span><span class="qe-pill"><svg viewBox="0 0 24 24"><use href="#ic-sparkle"/></svg><b>Auto</b> <span class="qe-k">⌘2</span></span><span class="qe-k qe-esc">esc</span><span class="qe-btn">Create <span class="qe-k">⌥⌘↩</span></span><span class="qe-go">Send <span class="qe-k">⌘↩</span></span></div>
+          </div>
+        </div>
+      </div>
+      <h3>Quick entry</h3>
+      <p><kbd>⌥⇧T</kbd> opens it over any app and sends to the coordinator. Drop in a screenshot, or pick the workspace and agent yourself. You are back where you were.</p>
+    </div>
+    <div>
+      <div class="tshot" role="img" aria-label="The Tasks view: tasks grouped as Needs you, Ready to review, Running and To ship, with checkout-redesign selected and its Merge button in the detail pane.">
+        <div class="tshot-in">
+          <div class="tv">
+            <div class="tv-l">
+              <div class="tv-ttl">Tasks <span>×</span></div>
+              <div class="tv-g y">NEEDS YOU 1</div>
+              <div class="tv-r"><span class="tmark q">?</span><b>api-v2-reference</b><em>8m</em><small><span class="ws">docs-site</span>Asks: Keep the v1 payload page?</small></div>
+              <div class="tv-g bl">READY TO REVIEW 2</div>
+              <div class="tv-r sel"><span class="tmark rev"></span><b>checkout-redesign</b><em>now</em><small><span class="ws">lumen</span><span class="pr">PR #128</span>Ready for your review</small></div>
+              <div class="tv-r"><span class="tmark rev"></span><b>coupon-row-fix</b><em>4m</em><small><span class="ws">lumen</span><span class="pr">PR #131</span>Ready for your review</small></div>
+              <div class="tv-g">RUNNING 1</div>
+              <div class="tv-r"><span class="spin"></span><b>csv-export</b><em>1m</em><small><span class="ws">lumen</span>Moving to worktree</small></div>
+              <div class="tv-g pu">TO SHIP 1</div>
+            </div>
+            <div class="tv-d">
+              <div class="tv-src">Created by an agent · 24m ago · lumen</div>
+              <h4>checkout-redesign</h4>
+              <div class="tv-req">Build the checkout redesign from the mockup in lumen.</div>
+              <div class="tv-card"><div class="hd">STATUS</div><dl><dt>Stage</dt><dd>Review</dd><dt>PR</dt><dd>PR #128 · open</dd><dt>Branch</dt><dd class="mono2">feat/checkout-redesign</dd><dt>Agent</dt><dd>claude · opus</dd></dl></div>
+              <div class="tv-b"><span class="tv-btn pri">Open Task Space</span><span class="tv-btn">Open PR #128</span><span class="tv-btn pri">Merge</span><span class="tv-btn">Archive…</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h3>Tasks and Merge</h3>
+      <p><kbd>⇧⌘T</kbd> lists every task by what it needs from you. Merge is your sign-off: the agent checks review threads and CI, then Toastty merges that commit and cleans up the worktree.</p>
+    </div>
+  </div>
+  <p class="fine">Without the coordinator, quick entry creates the task directly. Agents and scripts make tasks with <code>toastty task create</code>, and so does Toastty Mobile. The coordinator's chat and dock need macOS 15. <a href="https://github.com/figelwump/toastty/blob/main/docs/tasks.md">Tasks</a> covers the details.</p>
 </section>
 
 <section class="shell block-sec" id="right-panel">
@@ -450,10 +551,11 @@
   <div class="mobile-grid">
     <div>
       <h2 id="mobile-title">Check on your agents from your phone.</h2>
-      <p class="lead">The same sidebar, on your iPhone. See which sessions need you, answer the questions your agents ask, and send the next message, all over your private tailnet.</p>
+      <p class="lead">The same sidebar and the same coordinator, on your iPhone. See what needs you, answer the questions your agents ask, and hand the coordinator the next task, all over your private tailnet.</p>
       <ul class="feats">
-        <li><b>Every session, live</b><span>Workspaces and task spaces with live status. Rows that need you are tinted green, amber, or red, just like on the Mac.</span></li>
+        <li><b>What needs you, live</b><span>Needs you lists the questions, approvals and pull requests from every project; All shows every session and task, grouped as on the Mac.</span></li>
         <li><b>Answer your agents' questions</b><span>When an agent asks you to choose, pick an option or type a custom answer. It lands in the terminal on your Mac as if you were there.</span></li>
+        <li><b>The coordinator, in your pocket</b><span>The Coordinator tab is the same chat as the Mac's dock: ask for a task, read why one is ready, and say "merge it". The Tasks tab lists every task, and a task's own conversation has a Merge button.</span></li>
         <li><b>Reply from anywhere</b><span>Send the next prompt with photos and files attached. While the agent works, queue a follow-up for the next turn, steer a Codex or Claude Code turn, or stop it.</span></li>
         <li><b>Scratchpads and files</b><span>Open the pages, documents, and previews your agents published, and tap a PR chip to read the pull request.</span></li>
         <li><b>Private by design</b><span>Toastty listens only on your Mac, and Tailscale Serve carries conversations over your own tailnet. No Toastty account is needed. Optional iPhone notifications in push-enabled builds send session titles and status through Cloudflare and Apple.</span></li>
@@ -461,13 +563,13 @@
       <p class="agents-line">Available through TestFlight for now. <a href="https://github.com/figelwump/toastty/blob/main/docs/remote-access.md">Remote Access</a> covers pairing and the tailnet setup.</p>
     </div>
     <div class="mstage-col">
-      <p class="sr-only">An animated recreation of Toastty Mobile: the Home screen lists every session with live status. A session waiting on a Claude Code question is opened, the question is answered by choosing an option, and the agent gets back to work. A reply is typed and sent from the phone. Back on Home, the checkout-redesign task space turns green with its PR #128 chip, and the pull request opens in a sheet.</p>
+      <p class="sr-only">An animated recreation of Toastty Mobile: Home shows what needs you, a session that needs approval and two tasks ready for review. The waiting Claude Code question is opened and answered by choosing an option, and the agent gets back to work. In the Coordinator tab, a request for a CSV export is sent, and Toasty answers that it made the task. Later Toasty says why checkout-redesign is ready for review with PR #128; the user replies "merge it", and Toasty asks the task's agent to merge it.</p>
       <div class="mstage-wrap" id="mwrap" aria-hidden="true">
         <div class="mstage" id="mstage">
           <div class="ph">
             <div class="scr" id="scr">
 
-              <!-- Home -->
+              <!-- Home, on Needs you -->
               <div class="screen home" id="s-home">
                 <div class="mhead">
                   <span class="mbrand">TOASTTY</span>
@@ -475,17 +577,18 @@
                   <span class="plusb">+</span>
                   <span class="gearb"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
                 </div>
-                <div class="seg"><span class="on">All</span><span>Active</span></div>
+                <div class="seg"><span>All</span><span class="on segn">Needs you<b class="segy" id="seg-y">2</b><b class="segdot">·</b><b class="segb">2</b></span></div>
                 <div class="mlist">
-                  <div class="wsh"><div><b>lumen</b><small>3 sessions</small></div><span class="chev"></span></div>
-                  <div class="mrow ready"><span class="rail"><i class="mk dot ready"></i></span><div class="rt"><b>Plan checkout redesign</b><span class="age">4m</span></div><div class="rs">Plan agreed. Ready to build.</div><span class="fork">⑂ 1</span></div>
+                  <div class="wsh"><div><b>lumen</b></div><span class="phc"><span class="y" id="lumen-y"><i></i>1</span><span class="bl"><i></i>2</span></span></div>
+                  <div class="pbkt y" id="lumen-needs">NEEDS YOU 1</div>
                   <div class="mrow approval" id="row-migrate"><span class="rail" id="migrate-ic"><i class="mk dot appr"></i></span><div class="rt"><b id="migrate-t">Migrate orders table</b><em class="sbadge appr" id="migrate-badge">approval</em><span class="age" id="migrate-age">1m</span></div><div class="rs" id="migrate-s">Needs approval: run migration</div></div>
-                  <div class="mrow"><span class="rail"></span><div class="rt"><b class="idle">Fix flaky auth test</b><span class="age">2h</span></div><div class="rs">Ready for prompt</div></div>
-                  <div class="grph"><span class="chev down"></span>TASK SPACES <span>2/2</span><span class="tally" id="tally"><i></i>1</span></div>
-                  <div class="mrow subr" id="row-checkout"><span class="rail" id="checkout-ic"><span class="spin"></span></span><div class="rt"><b id="checkout-t">checkout-redesign</b><span class="age" id="checkout-age">6m 41s</span><em class="achip pr" id="checkout-pr">PR #128 <i>↗</i></em><span class="arrow">→</span></div><div class="rs" id="checkout-s">Capturing screenshots…</div></div>
-                  <div class="mrow subr"><span class="rail"><i class="idlebox"></i></span><div class="rt"><b class="idle">search-filters</b><span class="age">1d</span><span class="arrow">→</span></div><div class="rs">Paused for review</div></div>
-                  <div class="wsh"><div><b>docs-site</b><small>1 session</small></div><span class="chev"></span></div>
-                  <div class="mrow"><span class="rail"></span><div class="rt"><b class="idle">Update API reference</b><span class="age">12m</span></div><div class="rs">Updated the preview</div></div>
+                  <div class="pbkt bl">READY TO REVIEW 2</div>
+                  <div class="mrow subr rev"><span class="rail"><i class="pmark rev"></i></span><div class="rt"><b>checkout-redesign</b><em class="achip pr">PR #128 <i>↗</i></em><span class="arrow">→</span></div></div>
+                  <div class="mrow subr rev"><span class="rail"><i class="pmark rev"></i></span><div class="rt"><b>coupon-row-fix</b><em class="achip pr">PR #131 <i>↗</i></em><span class="arrow">→</span></div></div>
+                  <div class="wsh"><div><b>docs-site</b></div><span class="phc"><span class="y"><i></i>1</span></span></div>
+                  <div class="pbkt y">NEEDS YOU 1</div>
+                  <div class="mrow subr approval"><span class="rail"><i class="pmark q">?</i></span><div class="rt"><b>api-v2-reference</b><span class="arrow">→</span></div><div class="rs">Asks: Keep the v1 payload page?</div></div>
+                  <div class="pfoot">Running and idle work is in All.</div>
                 </div>
                 <div class="dim" id="home-dim"></div>
               </div>
@@ -520,32 +623,46 @@
                     </div>
                   </div>
                   <div class="tr strip" id="strip2" data-at="7.2"><span class="spin" id="strip2-spin"></span><span class="chev" id="strip2-chev"></span><span id="strip2-t">working · 1 tool call</span></div>
-                  <div class="tr at" data-at="8.6">Added <code>fulfillment_status</code> as a nullable column. Backfilling in batches of 5,000 rows…</div>
-                  <div class="tr at" data-at="11.9">Backfill done: 2.1M rows in 3m 12s. The constraint is in place and all 214 tests pass.</div>
-                  <div class="tr ub" data-at="12.4"><span>Then open a PR once CI is green</span></div>
-                  <div class="tr strip" data-at="12.8"><span class="spin"></span>working · 1 tool call</div>
-                  <!-- The working row sits below what reached the agent and above queued messages, as in the app. -->
+                  <div class="tr at" data-at="7.7">Added <code>fulfillment_status</code> as a nullable column. Backfilling in batches of 5,000 rows…</div>
                   <div class="tr wrow" id="wrow"><span class="spin"></span><span id="wrow-t">working · 3s</span></div>
-                  <div class="tr qd" data-at="10.75" data-until="12.4"><div><div class="qdh">Queued 1 · sends after this turn</div><div class="qdt">Then open a PR once CI is green</div><div class="qda"><span>Edit</span><span>Remove</span></div></div></div>
                 </div>
                 <div class="comp" id="comp">
                   <div class="cmeta">claude-opus-5-5 · high reasoning</div>
-                  <!-- One line until the field has focus or text; then a card with a button bar under the text. -->
                   <div class="cbox">
                     <div class="crow">
-                      <div class="cfield" id="cfield"><span class="cph" id="cph">Pending request — input paused</span><span class="ctyped" id="ctyped"></span><span class="ccaret" id="ccaret"></span><span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span></div>
+                      <div class="cfield" id="cfield"><span class="cph" id="cph">Pending request — input paused</span><span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span></div>
                       <span class="cstop" id="cstop"><i></i></span>
                       <span class="csend" id="csend"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></span>
                     </div>
-                    <div class="cbar">
-                      <span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span>
-                      <span class="cstop" id="cstop2"><i></i></span>
-                      <span class="cmode" id="cmode">Queue<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
-                      <span class="csend" id="csend2"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg><span class="spin"></span></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Coordinator tab -->
+              <div class="screen coord" id="s-coord">
+                <div class="chead"><b><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg>Coordinator <span>⌄</span></b><small>· claude</small></div>
+                <div class="ctx">
+                  <div class="tr at always"><span class="tlink done">search-filters</span> merged into main. Nothing else waits for you.</div>
+                  <div class="tr ub" data-at="11.4"><span>Add a CSV export to the orders page, like the mockup in lumen.</span></div>
+                  <div class="tr at" data-at="12.5">I made <span class="tlink run">csv-export</span> in lumen with Codex, at high effort. I'll tell you when it's ready.</div>
+                  <div class="tr cnew" data-at="13.6" data-until="16.5">New</div>
+                  <div class="tr cdig" data-at="13.6">Toastty · 1 update · 4:12 PM ›</div>
+                  <div class="tr at" data-at="14.0"><span class="tlink rev has-pr">checkout-redesign<span class="tl-d">&nbsp;·&nbsp;#128</span></span> is ready for your review: the report shows the summary card above payment at 390 px, and all 4 checks passed. PR #128.</div>
+                  <div class="tr ub" data-at="16.5"><span>merge it</span></div>
+                  <div class="tr at" data-at="17.5">Asked <span class="tlink rev has-pr">checkout-redesign<span class="tl-d">&nbsp;·&nbsp;#128</span></span>'s agent to merge PR #128.</div>
+                  <div class="tr wrow" id="cwrow"><span class="spin"></span><span id="cwrow-t">working · 1s</span></div>
+                </div>
+                <div class="comp" id="ccomp">
+                  <div class="cmeta ccmeta"><span>claude-opus-5-5</span><span>~/.toastty/coordinator</span></div>
+                  <div class="cbox">
+                    <div class="crow">
+                      <div class="cfield" id="cfield2"><span class="cph" id="cph2">Message Claude…</span><span class="ctyped" id="ctyped2"></span><span class="ccaret"></span><span class="clip"><svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></span></div>
+                      <span class="cstop" id="cstop3"><i></i></span>
+                      <span class="csend" id="csend3"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></span>
                     </div>
                   </div>
                 </div>
-                <div class="kbd" id="kbd">
+                <div class="kbd" id="ckbd">
                   <div class="krow"><span>q</span><span>w</span><span>e</span><span>r</span><span>t</span><span>y</span><span>u</span><span>i</span><span>o</span><span>p</span></div>
                   <div class="krow"><span>a</span><span>s</span><span>d</span><span>f</span><span>g</span><span>h</span><span>j</span><span>k</span><span>l</span></div>
                   <div class="krow"><span class="wide">⇧</span><span>z</span><span>x</span><span>c</span><span>v</span><span>b</span><span>n</span><span>m</span><span class="wide">⌫</span></div>
@@ -553,35 +670,10 @@
                 </div>
               </div>
 
-              <!-- Task space -->
-              <div class="screen subws" id="s-sub">
-                <div class="cnav">
-                  <span class="backb"></span>
-                  <div class="ctitle"><b>checkout-redesign</b></div>
-                </div>
-                <div class="mlist subspace">
-                  <div class="inp">in lumen</div>
-                  <div class="chips"><em class="achip pr big" id="msub-pr">PR #128 <i>↗</i></em><em class="achip br big">feat/checkout-redesign</em></div>
-                  <div class="grph">SESSIONS <span>1/1</span><span class="filt">All ⌃</span></div>
-                  <div class="mrow ready"><span class="rail"><i class="mk dot ready"></i></span><div class="rt"><b>Checkout redesign</b><span class="age">2m</span></div><div class="rs">Ready for your review.</div></div>
-                  <div class="grph">PANELS <span>2</span></div>
-                  <div class="prow"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 21h11a2 2 0 0 0 2-2V8"/></svg><div><b>Verification</b><small>Scratchpad · 2m</small></div><span class="chev"></span></div>
-                  <div class="prow"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><div><b>WORKTREE_HANDOFF.md</b><small>Document · 24m</small></div><span class="chev"></span></div>
-                </div>
-                <div class="dim" id="sub-dim"></div>
-              </div>
-
-              <!-- PR sheet -->
-              <div class="sheet" id="sheet">
-                <div class="grab"></div>
-                <div class="shead"><span class="sdone">Done</span><b>PR #128</b></div>
-                <div class="url"><i></i><i></i><span>github.com/lumen-app/lumen/pull/128</span></div>
-                <div class="prpage">
-                  <h3>Redesign checkout summary card <span>#128</span></h3>
-                  <div class="prmeta"><span class="open">Open</span><span><span class="mono">feat/checkout-redesign</span> → <span class="mono">main</span></span></div>
-                  <div class="box"><div class="h"><span class="okc">✓</span>All checks have passed</div><div class="c">4 successful checks</div></div>
-                  <div class="box"><div class="h">Summary</div><div class="c"><p>Moves the order summary above payment and pins totals on mobile.</p><p>Verification: <span class="lnk">3/3 checks with screenshots</span></p><p style="color:#59636e">3 files changed · +98 −71</p></div></div>
-                </div>
+              <div class="tabbar" id="tabbar">
+                <span class="tabi on" id="tab-home"><svg viewBox="0 0 24 24"><use href="#ic-house"/></svg>Home</span>
+                <span class="tabi" id="tab-coord"><svg viewBox="0 0 16 16"><use href="#toasty-line"/></svg>Coordinator</span>
+                <span class="tabi"><svg viewBox="0 0 24 24"><use href="#ic-checklist"/></svg>Tasks</span>
               </div>
 
               <div class="sbar"><span class="time">9:41</span><span class="sicons"><i class="cell"><b></b><b></b><b></b><b></b></i><svg class="wifi" viewBox="0 0 24 24"><path d="M2 8.5a16 16 0 0 1 20 0"/><path d="M5.5 12.5a11 11 0 0 1 13 0"/><path d="M9 16.5a5.5 5.5 0 0 1 6 0"/><circle cx="12" cy="20" r="1" fill="currentColor"/></svg><i class="batt"><b></b></i></span></div>
@@ -595,13 +687,13 @@
       </div>
     </div>
   </div>
-  <div class="example-cap">Example: answer a question from the train, queue the next step, and come back to a PR.</div>
+  <div class="example-cap">Example: answer a question from the train, hand the coordinator the next task, and merge the one that's ready.</div>
   <div class="beats mbeats" id="mbeats" aria-label="Mobile video steps">
     <button type="button" class="pp" id="mpp" aria-label="Pause"><svg viewBox="0 0 24 24" id="mpp-ic"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
-    <button type="button" class="beat" data-t="0" data-seek="0.6" aria-label="Step 1: Every session at a glance"><span class="bar"><i></i></span><span class="n">01</span><span class="l">Every session at a glance</span></button>
+    <button type="button" class="beat" data-t="0" data-seek="1.2" aria-label="Step 1: What needs you, at a glance"><span class="bar"><i></i></span><span class="n">01</span><span class="l">What needs you, at a glance</span></button>
     <button type="button" class="beat" data-t="2.5" data-seek="3.3" aria-label="Step 2: Answer the question your agent asked"><span class="bar"><i></i></span><span class="n">02</span><span class="l">Answer the question your agent asked</span></button>
-    <button type="button" class="beat" data-t="8.0" data-seek="11.4" aria-label="Step 3: Queue the next step while it works"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Queue the next step while it works</span></button>
-    <button type="button" class="beat" data-t="14.3" data-seek="18.5" aria-label="Step 4: Open the PR when a task space is ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Open the PR when a task space is ready</span></button>
+    <button type="button" class="beat" data-t="7.8" data-seek="12.9" aria-label="Step 3: Hand the coordinator the next task"><span class="bar"><i></i></span><span class="n">03</span><span class="l">Hand the coordinator the next task</span></button>
+    <button type="button" class="beat" data-t="13.6" data-seek="18.0" aria-label="Step 4: Say merge it when it's ready"><span class="bar"><i></i></span><span class="n">04</span><span class="l">Say "merge it" when it's ready</span></button>
   </div>
 </section>
 
@@ -647,6 +739,29 @@ Read the guide, narrate each step, dry-run every setup installer first (pass --d
 </footer>
 <script src="./hero.js"></script>
 <script src="./mobile.js"></script>
+<script>
+  // The sidebar demo's All | Needs you switch, and the Tasks section's panels scaled to their column.
+  (function () {
+    var demo = document.getElementById('sbdemo');
+    if (demo) {
+      var buttons = demo.querySelectorAll('.side-seg > button');
+      Array.prototype.forEach.call(buttons, function (button) {
+        button.addEventListener('click', function () {
+          demo.setAttribute('data-view', button.getAttribute('data-view'));
+          Array.prototype.forEach.call(buttons, function (b) { b.setAttribute('aria-pressed', String(b === button)); });
+        });
+      });
+    }
+    var shots = document.querySelectorAll('.tshot');
+    function fitShots() {
+      Array.prototype.forEach.call(shots, function (shot) {
+        shot.firstElementChild.style.transform = 'scale(' + shot.clientWidth / 480 + ')';
+      });
+    }
+    window.addEventListener('resize', fitShots);
+    fitShots();
+  })();
+</script>
 <script>
   // Copy button for the setup prompt.
   (function () {

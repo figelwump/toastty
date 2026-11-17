@@ -6,12 +6,12 @@
     var stage = document.getElementById('mstage');
     if (!wrap || !stage) return;
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    // POSTER is the still used for reduced motion, the README, and the mobile social card: Home,
-    // with the checkout-redesign task space just turned green with its PR chip.
-    var POSTER = 16.0;
+    // POSTER is the still used for reduced motion, the README, and the mobile social card: Home on
+    // Needs you, with a session that needs approval, two tasks ready for review and the tab bar.
+    var POSTER = 1.2;
     var t = reduce ? POSTER : 0, playing = !reduce, last = null, onScreen = true, rendering = false;
 
-    var W = 440, H = 900, SW = 390, SH = 844;
+    var W = 440, H = 900, SW = 390;
     function fit() {
       var s = wrap.clientWidth / W;
       stage.style.transform = 'scale(' + s + ')';
@@ -23,23 +23,27 @@
     function $(id) { return document.getElementById(id); }
     var scr = $('scr');
     var timed = Array.prototype.slice.call(stage.querySelectorAll('[data-at],[data-until]'));
-    var home = $('s-home'), conv = $('s-conv'), sub = $('s-sub'), sheet = $('sheet');
-    var homeDim = $('home-dim'), subDim = $('sub-dim');
+    var home = $('s-home'), conv = $('s-conv'), coord = $('s-coord');
+    var homeDim = $('home-dim');
+    var lumenNeeds = $('lumen-needs'), lumenY = $('lumen-y'), segY = $('seg-y');
     var rowMigrate = $('row-migrate'), migrateIc = $('migrate-ic'), migrateBadge = $('migrate-badge'), migrateS = $('migrate-s'), migrateAge = $('migrate-age');
-    var rowCheckout = $('row-checkout'), checkoutIc = $('checkout-ic'), checkoutS = $('checkout-s'), checkoutAge = $('checkout-age'), checkoutPr = $('checkout-pr'), tally = $('tally');
     var cstatIc = $('cstat-ic'), cstatT = $('cstat-t'), cstat = cstatT.parentNode;
     var qcard = $('qcard'), qstate = $('qstate'), opt1 = $('opt1'), qstatus = $('qstatus'), qsubmit = $('qsubmit');
     var strip2Spin = $('strip2-spin'), strip2Chev = $('strip2-chev'), strip2T = $('strip2-t');
-    var comp = $('comp'), cfield = $('cfield'), cph = $('cph'), ctyped = $('ctyped'), csend = $('csend'), cstop = $('cstop'), kbd = $('kbd');
-    var cstop2 = $('cstop2'), cmode = $('cmode'), csend2 = $('csend2'), wrow = $('wrow'), wrowT = $('wrow-t');
-    var backb = $('backb'), subPr = $('msub-pr'), touch = $('touch'), fade = $('mfade');
+    var comp = $('comp'), cph = $('cph'), csend = $('csend'), cstop = $('cstop'), wrow = $('wrow'), wrowT = $('wrow-t'), backb = $('backb');
+    var ccomp = $('ccomp'), cfield2 = $('cfield2'), cph2 = $('cph2'), ctyped2 = $('ctyped2'), csend3 = $('csend3'), cstop3 = $('cstop3'), ckbd = $('ckbd');
+    var cwrow = $('cwrow'), cwrowT = $('cwrow-t');
+    var tabbar = $('tabbar'), tabHome = $('tab-home'), tabCoord = $('tab-coord');
+    var touch = $('touch'), fade = $('mfade');
     var beats = Array.prototype.slice.call(document.querySelectorAll('#mbeats .beat'));
-    var REPLY = 'Then open a PR once CI is green';
+    var REQUEST = 'Add a CSV export to the orders page, like the mockup in lumen.';
+    var MERGE_IT = 'merge it';
 
     function setIcon(el, html) { if (el.__icon !== html) { el.innerHTML = html; el.__icon = html; } }
     function setText(el, s) { if (el.__text !== s) { el.textContent = s; el.__text = s; } }
     function ease(p) { return p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; }
     function seg(a, b) { return ease(Math.max(0, Math.min(1, (t - a) / (b - a)))); }
+    function inside(a, b) { return t >= a && t < b; }
     function pick(list) { var v = list[0][1]; for (var i = 0; i < list.length; i++) if (t >= list[i][0]) v = list[i][1]; return v; }
     function offsetIn(el) {
       var x = 0, y = 0, n = el;
@@ -48,31 +52,35 @@
     }
     function center(el) { var b = offsetIn(el); return { x: b.x + b.w / 2, y: b.y + b.h / 2 }; }
     function mmss(secs) { secs = Math.max(0, Math.round(secs)); return Math.floor(secs / 60) + 'm ' + ('0' + (secs % 60)).slice(-2) + 's'; }
+    function typedAt(text, a, b) { return text.slice(0, Math.round(Math.max(0, Math.min(1, (t - a) / (b - a))) * text.length)); }
 
     // Timeline
     var T = {
       tapRow: 2.5, push: [2.75, 3.1],
       tapOpt: 4.3, tapSubmit: 5.4, sending: [5.45, 6.0], sent: [6.0, 6.8], resolved: 6.8,
-      strip2: [[7.2, 'working · 1 tool call'], [7.9, 'working · 2 tool calls'], [8.6, 'working · 3 tool calls'], [9.8, 'working · 4 tool calls'], [11.9, 'worked · 5 tool calls']],
-      // While the agent works, the reply is queued; it reaches the agent when the turn ends (ready → working2).
-      tapField: 8.0, kbd: [8.1, 8.4], type: [8.5, 9.9], tapSend: 10.4, queueSend: [10.45, 10.75], kbdOut: [10.5, 10.8],
-      ready: 11.9, working2: 12.4,
-      tapBack: 14.3, pop: [14.4, 14.75],
-      checkoutReady: 15.8, tapCheckout: 16.4, pushSub: [16.55, 16.9], tapPr: 17.8, sheetUp: [17.95, 18.3],
+      strip2: [[7.2, 'working · 1 tool call'], [7.9, 'working · 2 tool calls'], [8.6, 'working · 3 tool calls']],
+      // Back to Home, where the tab bar is, then the Coordinator tab: ask for a task, then answer
+      // Toasty's review note with "merge it".
+      tapBack: 7.85, pop: [7.95, 8.3],
+      tapTab: 8.55, tab: [8.6, 8.8],
+      tapField: 9.15, kbd: [9.25, 9.55], type: [9.6, 11.0], tapSend: 11.3, kbdOut: [11.4, 11.7],
+      tapField2: 15.2, kbd2: [15.3, 15.6], type2: [15.7, 16.1], tapSend2: 16.4, kbdOut2: [16.5, 16.8],
       fadeOut: 20.2
     };
+    // Toasty works between a message and its answer.
+    var COORD_TURNS = [[11.45, 12.5], [13.6, 14.0], [16.55, 17.5]];
     var TAPS = [
       [T.tapRow, function () { return center(rowMigrate); }],
       [T.tapOpt, function () { var b = offsetIn(opt1); return { x: b.x + 9, y: b.y + 13 }; }],
       [T.tapSubmit, function () { return center(qsubmit); }],
-      [T.tapField, function () { var b = offsetIn(cfield); return { x: b.x + 120, y: b.y + b.h / 2 }; }],
-      [T.tapSend, function () { return center(csend2); }],
       [T.tapBack, function () { return center(backb); }],
-      [T.tapCheckout, function () { var b = offsetIn(rowCheckout); return { x: b.x + 110, y: b.y + b.h / 2 }; }],
-      [T.tapPr, function () { return center(subPr); }]
+      [T.tapTab, function () { return center(tabCoord); }],
+      [T.tapField, function () { var b = offsetIn(cfield2); return { x: b.x + 120, y: b.y + b.h / 2 }; }],
+      [T.tapSend, function () { return center(csend3); }],
+      [T.tapField2, function () { var b = offsetIn(cfield2); return { x: b.x + 120, y: b.y + b.h / 2 }; }],
+      [T.tapSend2, function () { return center(csend3); }]
     ];
-    var MIGRATE_S = [[0, 'Needs approval: run migration'], [T.resolved, 'Backfilling orders in batches…'], [T.ready, 'Backfill done. All 214 tests pass.'], [T.working2, 'Opening a pull request…']];
-    var CHECKOUT_S = [[0, 'Capturing screenshots…'], [11.0, 'Writing verification report…'], [14.6, 'Opening PR…'], [T.checkoutReady, 'Ready for review']];
+    var MIGRATE_S = [[0, 'Needs approval: run migration'], [T.resolved, 'Backfilling orders in batches…']];
 
     function render() {
       timed.forEach(function (el) {
@@ -81,51 +89,45 @@
         el.classList.toggle('show', t >= a && t < u);
       });
 
-      // Screen transitions: iOS push slides the new screen in from the right and nudges the old one left.
+      // Screen transitions: iOS push slides the conversation in from the right and nudges Home left;
+      // Back reverses it. The Coordinator tab replaces Home without a slide.
       var cx = seg(T.push[0], T.push[1]) - seg(T.pop[0], T.pop[1]);
-      var sx = seg(T.pushSub[0], T.pushSub[1]);
       conv.style.visibility = cx > 0.001 ? 'visible' : 'hidden';
       conv.style.transform = 'translateX(' + (SW * (1 - cx)) + 'px)';
-      sub.style.visibility = sx > 0.001 ? 'visible' : 'hidden';
-      var sp = seg(T.sheetUp[0], T.sheetUp[1]);
-      sub.style.transform = 'translateX(' + (SW * (1 - sx)) + 'px) translateY(' + (12 * sp) + 'px) scale(' + (1 - 0.07 * sp) + ')';
-      sub.style.borderRadius = (20 * sp) + 'px';
-      var hx = Math.max(cx, sx);
-      home.style.transform = 'translateX(' + (-0.3 * SW * hx) + 'px)';
-      homeDim.style.opacity = 0.4 * hx;
-      subDim.style.opacity = 0.45 * sp;
-      sheet.style.transform = 'translateY(' + (SH * (1 - sp)) + 'px)';
+      home.style.transform = 'translateX(' + (-0.3 * SW * cx) + 'px)';
+      homeDim.style.opacity = 0.4 * cx;
+      var tb = seg(T.tab[0], T.tab[1]);
+      coord.style.visibility = tb > 0.001 ? 'visible' : 'hidden';
+      coord.style.opacity = tb;
+      var onCoord = t >= T.tab[0];
+      tabHome.classList.toggle('on', !onCoord);
+      tabCoord.classList.toggle('on', onCoord);
 
-      // Home: the migration session moves through approval, working, ready, and working again.
-      var mstate = t < T.resolved ? 'approval' : t < T.ready ? 'working' : t < T.working2 ? 'ready' : 'working';
+      // Home: the migration session needs approval until the question is answered. Once its agent
+      // works again it leaves the Needs you list, which Home shows.
+      var mstate = t < T.resolved ? 'approval' : 'working';
+      var listed = mstate === 'approval';
+      rowMigrate.style.display = listed ? '' : 'none';
+      lumenNeeds.style.display = listed ? '' : 'none';
+      lumenY.style.display = listed ? '' : 'none';
+      setText(segY, listed ? '2' : '1');
       rowMigrate.className = 'mrow ' + mstate;
       migrateBadge.style.display = mstate === 'approval' ? '' : 'none';
-      setIcon(migrateIc, mstate === 'approval' ? '<i class="mk dot appr"></i>' : mstate === 'ready' ? '<i class="mk dot ready"></i>' : '<span class="spin"></span>');
+      setIcon(migrateIc, mstate === 'approval' ? '<i class="mk dot appr"></i>' : '<span class="spin"></span>');
       setText(migrateS, pick(MIGRATE_S));
-      setText(migrateAge, mstate === 'working' ? mmss((t - (t < T.ready ? T.resolved : T.working2)) * 9 + 3) : t < T.resolved ? '1m' : 'now');
-
-      // The task space works, then turns ready with its PR chip.
-      var cready = t >= T.checkoutReady;
-      rowCheckout.className = 'mrow subr ' + (cready ? 'ready' : 'working');
-      setIcon(checkoutIc, cready ? '<i class="mk sq ready"></i>' : '<span class="spin"></span>');
-      setText(checkoutS, pick(CHECKOUT_S));
-      setText(checkoutAge, cready ? '' : mmss(401 + t * 12));
-      checkoutAge.style.display = cready ? 'none' : '';
-      checkoutPr.classList.toggle('show', cready);
-      tally.classList.toggle('show', cready);
+      setText(migrateAge, mstate === 'working' ? mmss((t - T.resolved) * 9 + 3) : '1m');
 
       // Conversation header status
-      var hstate = mstate;
-      cstat.className = 'cstat ' + hstate;
-      setIcon(cstatIc, hstate === 'working' ? '<span class="spin"></span>' : '');
-      cstatIc.className = hstate === 'working' ? 'spin' : '';
-      setText(cstatT, hstate === 'approval' ? 'needs approval' : hstate);
+      cstat.className = 'cstat ' + mstate;
+      setIcon(cstatIc, mstate === 'working' ? '<span class="spin"></span>' : '');
+      cstatIc.className = mstate === 'working' ? 'spin' : '';
+      setText(cstatT, mstate === 'approval' ? 'needs approval' : mstate);
 
       // Question card
       var sel = t >= T.tapOpt + 0.05;
       opt1.classList.toggle('sel', sel);
       qsubmit.classList.toggle('on', sel && t < T.sending[0]);
-      qsubmit.classList.toggle('press', t >= T.tapSubmit && t < T.tapSubmit + 0.18);
+      qsubmit.classList.toggle('press', inside(T.tapSubmit, T.tapSubmit + 0.18));
       var qs = t < T.tapOpt + 0.05 ? 'Answer every question to continue' : t < T.sending[0] ? '' : t < T.sent[0] ? 'Sending answer…' : 'Answer sent · waiting for Claude';
       setText(qstatus, qs);
       qstatus.classList.toggle('sent', t >= T.sent[0]);
@@ -133,45 +135,47 @@
       setText(qstate, t >= T.resolved ? 'resolved' : 'pending');
 
       // Work strip after the answer
-      var s2 = pick(T.strip2);
-      setText(strip2T, s2);
-      var s2live = t < T.ready;
-      strip2Spin.style.display = s2live ? '' : 'none';
-      strip2Chev.style.display = s2live ? 'none' : '';
+      setText(strip2T, pick(T.strip2));
+      strip2Spin.style.display = '';
+      strip2Chev.style.display = 'none';
 
       // Working row at the transcript tail; the turn time runs at the same pace as the Home row.
-      var working = hstate === 'working';
+      var working = mstate === 'working';
       wrow.classList.toggle('show', working);
       if (working) {
-        var secs = Math.round((t - (t < T.ready ? T.resolved : T.working2)) * 9 + 3);
+        var secs = Math.round((t - T.resolved) * 9 + 3);
         setText(wrowT, 'working · ' + (secs < 60 ? secs + 's' : mmss(secs)));
       }
 
-      // Composer: locked while the question is pending. Once the agent works, input stays open: the
-      // one-line field shows Stop, focus expands it into a card, and text swaps Stop for Queue + Send.
-      var sendingNow = t >= T.queueSend[0] && t < T.queueSend[1];
-      var typed = t < T.type[0] || t >= T.queueSend[1] ? '' : REPLY.slice(0, Math.round(Math.max(0, Math.min(1, (t - T.type[0]) / (T.type[1] - T.type[0]))) * REPLY.length));
-      setText(ctyped, typed);
-      var focused = t >= T.tapField && t < T.queueSend[0];
-      var open = hstate !== 'approval';
-      var expanded = open && (focused || typed.length > 0);
-      comp.classList.toggle('exp', expanded);
-      cfield.classList.toggle('focus', focused);
-      comp.classList.toggle('focus', focused);
-      setText(cph, typed ? '' : open ? 'Message Claude Code…' : 'Pending request — input paused');
+      // Conversation composer: locked while the question is pending, then Stop while the agent works.
+      setText(cph, mstate === 'approval' ? 'Pending request — input paused' : 'Message Claude Code…');
       cstop.classList.toggle('show', working);
       csend.classList.toggle('hide', working);
-      var hasContent = typed.length > 0;
-      cstop2.classList.toggle('show', working && !hasContent && !sendingNow);
-      cmode.classList.toggle('show', working && (hasContent || sendingNow));
-      csend2.classList.toggle('show', !working || hasContent || sendingNow);
-      csend2.classList.toggle('on', hasContent && !sendingNow);
-      csend2.classList.toggle('busy', sendingNow);
-      csend2.classList.toggle('press', t >= T.tapSend && t < T.tapSend + 0.18);
-      var k = seg(T.kbd[0], T.kbd[1]) - seg(T.kbdOut[0], T.kbdOut[1]);
-      kbd.style.height = (248 * k) + 'px';
-      // The composer clears the home indicator until the keyboard, which has its own bottom inset, takes over.
-      comp.style.paddingBottom = (12 + 30 * (1 - k)) + 'px';
+
+      // Coordinator composer: type the request, then "merge it"; Stop shows while Toasty works.
+      var coordWorking = COORD_TURNS.some(function (r) { return inside(r[0], r[1]); });
+      cwrow.classList.toggle('show', coordWorking);
+      if (coordWorking) {
+        var turn = COORD_TURNS.filter(function (r) { return inside(r[0], r[1]); })[0];
+        setText(cwrowT, 'working · ' + Math.max(1, Math.round((t - turn[0]) * 4)) + 's');
+      }
+      var typed = inside(T.type[0], T.tapSend + 0.1) ? typedAt(REQUEST, T.type[0], T.type[1])
+        : inside(T.type2[0], T.tapSend2 + 0.1) ? typedAt(MERGE_IT, T.type2[0], T.type2[1]) : '';
+      setText(ctyped2, typed);
+      setText(cph2, typed ? '' : 'Message Claude…');
+      var focused = inside(T.tapField, T.tapSend + 0.1) || inside(T.tapField2, T.tapSend2 + 0.1);
+      cfield2.classList.toggle('focus', focused);
+      csend3.classList.toggle('on', typed.length > 0);
+      csend3.classList.toggle('press', inside(T.tapSend, T.tapSend + 0.18) || inside(T.tapSend2, T.tapSend2 + 0.18));
+      csend3.classList.toggle('hide', coordWorking);
+      cstop3.classList.toggle('show', coordWorking);
+      var k = Math.max(seg(T.kbd[0], T.kbd[1]) - seg(T.kbdOut[0], T.kbdOut[1]), seg(T.kbd2[0], T.kbd2[1]) - seg(T.kbdOut2[0], T.kbdOut2[1]));
+      ckbd.style.height = (248 * k) + 'px';
+      // A session screen hides the tab bar (ToasttyConversationScreen.swift); the coordinator's chat
+      // keeps it, and its composer clears it until the keyboard, which covers it, takes over.
+      comp.style.paddingBottom = '42px';
+      ccomp.style.paddingBottom = (12 + 96 * (1 - k)) + 'px';
+      tabbar.style.opacity = (1 - cx) * (1 - k);
 
       // Touch indicator
       touch.style.opacity = 0;
