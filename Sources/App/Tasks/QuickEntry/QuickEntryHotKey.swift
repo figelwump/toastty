@@ -225,8 +225,10 @@ extension QuickEntryShortcutAnswer {
     /// Makes the quick entry key wait for the What's new sheet. With no
     /// saved answer there is no key while the sheet still has its question,
     /// and the key is read again each time the question stops showing.
-    /// `presentMessage` shows why a key that the user allowed did not work,
-    /// such as another app that holds it.
+    /// `presentMessage` shows why the key is not set up as the user chose:
+    /// a `tasks.toml` that cannot be read, a shortcut that is not valid, or
+    /// a registration that the system refuses. Carbon does not refuse a key
+    /// that another app also registered, so Toastty cannot tell that case.
     @MainActor
     static func connect(
         _ quickEntry: QuickEntryController,
