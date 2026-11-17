@@ -43,6 +43,12 @@ struct PendingWorkspaceTabRenameRequest: Equatable {
     let tabID: UUID
 }
 
+struct PendingWorkspaceTabCloseRequest: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let tabID: UUID
+}
+
 struct PendingSidebarSessionFlashRequest: Equatable {
     let requestID: UUID
     let windowID: UUID
@@ -296,17 +302,19 @@ enum FocusedScaleCommandTarget: Equatable {
     case terminal(windowID: UUID)
     case markdown(windowID: UUID)
     case browser(windowID: UUID, panelID: UUID)
+    case scratchpad(windowID: UUID, panelID: UUID)
 
     var windowID: UUID {
         switch self {
-        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _):
+        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _),
+             .scratchpad(let windowID, _):
             return windowID
         }
     }
 
     var increaseMenuTitle: String {
         switch self {
-        case .browser:
+        case .browser, .scratchpad:
             return "Zoom In"
         case .terminal, .markdown:
             return "Increase Text Size"
@@ -315,7 +323,7 @@ enum FocusedScaleCommandTarget: Equatable {
 
     var decreaseMenuTitle: String {
         switch self {
-        case .browser:
+        case .browser, .scratchpad:
             return "Zoom Out"
         case .terminal, .markdown:
             return "Decrease Text Size"
@@ -324,7 +332,7 @@ enum FocusedScaleCommandTarget: Equatable {
 
     var resetMenuTitle: String {
         switch self {
-        case .browser:
+        case .browser, .scratchpad:
             return "Actual Size"
         case .terminal, .markdown:
             return "Reset Text Size"

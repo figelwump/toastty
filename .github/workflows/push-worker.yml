@@ -3,9 +3,6 @@ name: Push Worker checks
 on:
   pull_request:
     paths: ['workers/push/**', '.github/workflows/push-worker.yml']
-  push:
-    branches: [main]
-    paths: ['workers/push/**', '.github/workflows/push-worker.yml']
   workflow_dispatch:
 
 permissions:

@@ -91,6 +91,13 @@ final class AppStore: ObservableObject {
     /// Whether the subspace Merge button, its menu items, and its shortcut
     /// show at all. Read once at launch from a hidden defaults key.
     let isWorkspaceMergeEnabled: Bool
+    /// How Markdown panels open: formatted or as source. The last choice made
+    /// in any Markdown panel's header sets it, and it persists across launches.
+    private(set) var localDocumentMarkdownViewMode: LocalDocumentMarkdownViewMode
+    /// Light or dark colors for every document panel, or the app's
+    /// appearance. Set from any document panel's right-click menu; it
+    /// persists across launches.
+    private(set) var localDocumentAppearance: LocalDocumentAppearance
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
     @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
@@ -101,6 +108,9 @@ final class AppStore: ObservableObject {
     /// Set by tab rename commands; the selected workspace view in the target
     /// window observes this to enter inline-rename mode for the target tab.
     @Published var pendingRenameWorkspaceTabRequest: PendingWorkspaceTabRenameRequest?
+    /// Set by the Close Tab command; the target window's workspace view runs
+    /// the same close, with its confirmation, as the tab's close button.
+    @Published var pendingCloseWorkspaceTabRequest: PendingWorkspaceTabCloseRequest?
     @Published var pendingCloseWorkspaceRequest: PendingWorkspaceCloseRequest?
     /// Set by exhausted navigation commands so the target sidebar can briefly
     /// pulse the currently selected session row, or the workspace row when no
@@ -135,6 +145,8 @@ final class AppStore: ObservableObject {
         initialAskBeforeQuitting: Bool = true,
         initialWorkspaceMergeMode: WorkspaceMergeMode = .mergeAndCleanUp,
         isWorkspaceMergeEnabled: Bool = false,
+        initialLocalDocumentMarkdownViewMode: LocalDocumentMarkdownViewMode = .formatted,
+        initialLocalDocumentAppearance: LocalDocumentAppearance = .system,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit,
         appIsActiveProvider: @escaping AppIsActiveProvider = { NSApplication.shared.isActive },
@@ -145,6 +157,8 @@ final class AppStore: ObservableObject {
         askBeforeQuitting = initialAskBeforeQuitting
         workspaceMergeMode = initialWorkspaceMergeMode
         self.isWorkspaceMergeEnabled = isWorkspaceMergeEnabled
+        localDocumentMarkdownViewMode = initialLocalDocumentMarkdownViewMode
+        localDocumentAppearance = initialLocalDocumentAppearance
         self.recentRightPanelItems = recentRightPanelItemsStore.items
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
@@ -211,8 +225,12 @@ final class AppStore: ObservableObject {
         return true
     }
 
+    /// Invalidates runtime provenance when unread state is restored or replaced.
+    private(set) var stateReplacementGeneration: UInt64 = 0
+
     func replaceState(_ state: AppState, source: AppActionSource = .unknown) {
         let previousState = self.state
+        stateReplacementGeneration &+= 1
         self.state = state
         defaultScratchpadDocumentIDsBySessionID.removeAll()
         nextActiveCycleState = nil
@@ -528,7 +546,9 @@ final class AppStore: ObservableObject {
                 return .markdown(windowID: selection.windowID)
             case .browser:
                 return .browser(windowID: selection.windowID, panelID: focusedPanel.panelID)
-            case .scratchpad, .diff:
+            case .scratchpad:
+                return .scratchpad(windowID: selection.windowID, panelID: focusedPanel.panelID)
+            case .diff:
                 return nil
             }
         }
@@ -1675,6 +1695,26 @@ final class AppStore: ObservableObject {
         return true
     }
 
+    func canCloseSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
+        canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    @discardableResult
+    func closeSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return false }
+        let workspace = selection.workspace
+        guard let selectedTabID = workspace.resolvedSelectedTabID,
+              workspace.tab(id: selectedTabID) != nil else {
+            return false
+        }
+        pendingCloseWorkspaceTabRequest = PendingWorkspaceTabCloseRequest(
+            windowID: selection.windowID,
+            workspaceID: workspace.id,
+            tabID: selectedTabID
+        )
+        return true
+    }
+
     @discardableResult
     func requestWorkspaceClose(workspaceID: UUID) -> Bool {
         guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID) else { return false }
@@ -1722,6 +1762,15 @@ final class AppStore: ObservableObject {
         guard let request = pendingRenameWorkspaceTabRequest,
               request.windowID == windowID else { return nil }
         pendingRenameWorkspaceTabRequest = nil
+        return request
+    }
+
+    func consumePendingWorkspaceTabCloseRequest(
+        windowID: UUID
+    ) -> PendingWorkspaceTabCloseRequest? {
+        guard let request = pendingCloseWorkspaceTabRequest,
+              request.windowID == windowID else { return nil }
+        pendingCloseWorkspaceTabRequest = nil
         return request
     }
 
@@ -1843,6 +1892,15 @@ final class AppStore: ObservableObject {
             pendingRenameWorkspaceTabRequest = nil
         }
 
+        if let request = pendingCloseWorkspaceTabRequest,
+           pendingWorkspaceTabRequestIsValid(
+               windowID: request.windowID,
+               workspaceID: request.workspaceID,
+               tabID: request.tabID
+           ) == false {
+            pendingCloseWorkspaceTabRequest = nil
+        }
+
         if let request = pendingCloseWorkspaceRequest,
            pendingWorkspaceCloseRequestIsValid(request) == false {
             pendingCloseWorkspaceRequest = nil
@@ -1869,11 +1927,19 @@ final class AppStore: ObservableObject {
     }
 
     private func pendingRenameWorkspaceTabRequestIsValid(_ request: PendingWorkspaceTabRenameRequest) -> Bool {
-        guard pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID),
-              let workspace = state.workspacesByID[request.workspaceID] else {
+        pendingWorkspaceTabRequestIsValid(
+            windowID: request.windowID,
+            workspaceID: request.workspaceID,
+            tabID: request.tabID
+        )
+    }
+
+    private func pendingWorkspaceTabRequestIsValid(windowID: UUID, workspaceID: UUID, tabID: UUID) -> Bool {
+        guard pendingWorkspaceRequestExists(windowID: windowID, workspaceID: workspaceID),
+              let workspace = state.workspacesByID[workspaceID] else {
             return false
         }
-        return workspace.tab(id: request.tabID) != nil
+        return workspace.tab(id: tabID) != nil
     }
 
     private func pendingWorkspaceCloseRequestIsValid(_ request: PendingWorkspaceCloseRequest) -> Bool {
@@ -1969,6 +2035,20 @@ final class AppStore: ObservableObject {
         ToasttySettingsStore.persistAskBeforeQuitting(askBeforeQuitting)
     }
 
+    func setLocalDocumentMarkdownViewMode(_ mode: LocalDocumentMarkdownViewMode) {
+        guard localDocumentMarkdownViewMode != mode else { return }
+        localDocumentMarkdownViewMode = mode
+        guard persistUserSettings else { return }
+        ToasttySettingsStore.persistLocalDocumentMarkdownViewMode(mode)
+    }
+
+    func setLocalDocumentAppearance(_ appearance: LocalDocumentAppearance) {
+        guard localDocumentAppearance != appearance else { return }
+        localDocumentAppearance = appearance
+        guard persistUserSettings else { return }
+        ToasttySettingsStore.persistLocalDocumentAppearance(appearance)
+    }
+
     func setWorkspaceMergeMode(_ mode: WorkspaceMergeMode) {
         guard workspaceMergeMode != mode else { return }
         workspaceMergeMode = mode
@@ -2054,6 +2134,9 @@ final class AppStore: ObservableObject {
                   workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
                 return false
             }
+            guard sessionRuntimeStore?.skipsUnreadForNextActive(
+                panelID: target.panelID, workspaceID: target.workspaceID
+            ) != true else { return false }
             return workspace.doneAt == nil || livePanelIDs.contains(target.panelID)
         }) {
             if updatingCycleState {

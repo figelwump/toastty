@@ -76,6 +76,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.newWorkspace,
             ToasttyKeyboardShortcuts.renameWorkspace,
             ToasttyKeyboardShortcuts.renameTab,
+            ToasttyKeyboardShortcuts.closeTab,
             ToasttyKeyboardShortcuts.selectPreviousTab,
             ToasttyKeyboardShortcuts.selectNextTab,
             ToasttyKeyboardShortcuts.selectPreviousRightPanelTab,

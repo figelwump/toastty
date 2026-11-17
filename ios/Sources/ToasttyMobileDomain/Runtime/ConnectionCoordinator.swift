@@ -803,6 +803,20 @@ public actor ConnectionCoordinator {
         return try await gateway.setConversationFlag(request)
     }
 
+    /// Closes a session's pane on the Mac only while live against a host
+    /// that advertises the operation. `nil` is a capability/lifecycle
+    /// refusal, not a transport failure.
+    public func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.conversationClose),
+              deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return nil
+        }
+        return try await gateway.closeConversation(request)
+    }
+
     /// Removes a queued message or resumes a paused queue on the Mac. `nil`
     /// means the host does not offer queue controls or the connection is not
     /// live, not a transport failure. A confirmed removal also forgets this

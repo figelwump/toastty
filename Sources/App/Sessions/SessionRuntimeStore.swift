@@ -78,6 +78,9 @@ final class SessionRuntimeStore: ObservableObject {
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
     /// Set once at launch; runs what the Merge button asks for.
     var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
+    /// Set once at launch; exits an agent after its turn on request, and
+    /// closes a phone-started session's pane after a clean agent exit.
+    var sessionExitController: SessionExitController?
 
     /// Receives accepted actionable transitions after deduplication and any
     /// child/resume delay. Delivery is independent of shell hooks and Mac focus.
@@ -88,6 +91,13 @@ final class SessionRuntimeStore: ObservableObject {
 
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
+    private struct SessionUnreadNotice: Equatable {
+        let sessionID: String
+        let workspaceID: UUID
+        let stateReplacementGeneration: UInt64
+        var retiredFromNavigation = false
+    }
+    private var exclusiveSessionUnreadByPanelID: [UUID: SessionUnreadNotice] = [:]
     private let agentHookDispatcher: AgentHookDispatcher?
     private var lastAcceptedHookStatusKindBySessionID: [String: SessionStatusKind] = [:]
     private var pendingHookReadyBySessionID: [String: PendingHookReady] = [:]
@@ -113,6 +123,23 @@ final class SessionRuntimeStore: ObservableObject {
     ] = [:]
     private var nativeBindingIDBySessionID: [String: UUID] = [:]
     private var nativeBindingSessionIDsWithLocalInput: Set<String> = []
+    /// A launch command that Toastty typed into a shell and that the shell has
+    /// not been seen to start. While one is pending for a session, a shell at
+    /// its prompt does not mean that the session's agent has ended.
+    private struct PendingManagedLaunchCommand {
+        let submittedAt: Date
+        /// The shell showed its prompt at or after submission. Only then does
+        /// a busy shell mean that it runs the typed command. Before the first
+        /// prompt, a starting shell is busy too.
+        var shellShowedPrompt: Bool
+    }
+    private var pendingManagedLaunchCommandsBySessionID: [String: PendingManagedLaunchCommand] = [:]
+    /// How long a typed launch command may wait for its shell to start it.
+    /// The longest wait seen on a loaded machine was 2 s. The limit leaves a
+    /// wide margin, and still ends a launch whose command never starts.
+    static let managedLaunchCommandStartTimeout: TimeInterval = 30
+    /// When someone last typed into each panel, with or without a session.
+    private var lastLocalInputAtByPanelID: [UUID: Date] = [:]
     private struct ManagedProviderConversationFeedState {
         var snapshot: ManagedProviderConversationFeedSnapshot
         var seenFingerprints: Set<String>
@@ -281,6 +308,7 @@ final class SessionRuntimeStore: ObservableObject {
 
         guard storeActionObserverToken == nil else { return }
         storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
+            self?.trackSessionUnreadNotice(action: action, previousState: previousState, nextState: nextState)
             self?.acknowledgeProgramStatusAfterRead(action: action, previousState: previousState, state: nextState)
             self?.collapseReadyStatusAfterReadIfNeeded(
                 action: action,
@@ -297,6 +325,7 @@ final class SessionRuntimeStore: ObservableObject {
             store.removeActionAppliedObserver(storeActionObserverToken)
         }
         storeActionObserverToken = nil
+        exclusiveSessionUnreadByPanelID.removeAll()
         store = nil
         resumeGraceRepublishTask?.cancel()
         resumeGraceRepublishTask = nil
@@ -304,6 +333,7 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     func reset() {
+        exclusiveSessionUnreadByPanelID.removeAll()
         programStatusPublicationTask?.cancel()
         programStatusPublicationTask = nil
         programStatusRuntime = .init()
@@ -321,6 +351,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID = [:]
         nativeBindingIDBySessionID = [:]
         nativeBindingSessionIDsWithLocalInput = []
+        pendingManagedLaunchCommandsBySessionID = [:]
         providerConversationFeedsBySessionID = [:]
         providerConversationRevision = 0
         backgroundActivityFinishTombstonesBySessionID = [:]
@@ -451,8 +482,14 @@ final class SessionRuntimeStore: ObservableObject {
     /// baseline.
     func noteLocalInputForActiveSession(panelID: UUID) {
         acknowledgePresentedProgramStatusResults(panelID: panelID)
+        lastLocalInputAtByPanelID[panelID] = Date()
         guard let activeSession = sessionRegistry.activeSession(for: panelID) else { return }
         nativeBindingSessionIDsWithLocalInput.insert(activeSession.sessionID)
+    }
+
+    /// When user- or automation-authored input last reached `panelID`.
+    func lastLocalInputAt(panelID: UUID) -> Date? {
+        lastLocalInputAtByPanelID[panelID]
     }
 
     /// A remote user released the Mac draft lock: they say the composer holds
@@ -664,6 +701,7 @@ final class SessionRuntimeStore: ObservableObject {
         launchReason: AgentHookLaunchReason = .managed,
         at now: Date
     ) {
+        exclusiveSessionUnreadByPanelID.removeValue(forKey: panelID)
         var nextRegistry = sessionRegistry
         // A start that displaces this panel's active session (or restarts an
         // active session ID) ends the old lifecycle: tear it down through the
@@ -680,6 +718,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID[sessionID] = UUID()
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
+        pendingManagedLaunchCommandsBySessionID.removeValue(forKey: sessionID)
         if providerConversationFeedsBySessionID.removeValue(forKey: sessionID) != nil {
             providerConversationRevision &+= 1
         }
@@ -863,6 +902,13 @@ final class SessionRuntimeStore: ObservableObject {
         )
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
+        if previousRecord?.turnStartedAt == nil, nextRegistry.sessionsByID[sessionID]?.turnStartedAt != nil {
+            // Unread from an earlier turn must not be retired by this turn's exit.
+            if let panelID = previousRecord?.panelID {
+                exclusiveSessionUnreadByPanelID.removeValue(forKey: panelID)
+            }
+            sessionExitController?.handle(.turnStarted(sessionID: sessionID))
+        }
         clearLaterFlagForMeaningfulSessionAdvanceIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,
@@ -3017,6 +3063,7 @@ final class SessionRuntimeStore: ObservableObject {
             registry.stopSession(sessionID: record.sessionID, at: now)
         }
         completedHookLifecycleSessionIDs.remove(record.sessionID)
+        sessionExitController?.handle(.stopped(sessionID: record.sessionID, panelID: record.panelID, reason: reason))
     }
 
     private func clearSessionRuntimeState(sessionID: String) {
@@ -3031,6 +3078,7 @@ final class SessionRuntimeStore: ObservableObject {
         nativeBindingConfirmationBySessionID.removeValue(forKey: sessionID)
         nativeBindingIDBySessionID.removeValue(forKey: sessionID)
         nativeBindingSessionIDsWithLocalInput.remove(sessionID)
+        pendingManagedLaunchCommandsBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         claudeTeammateTemplatesBySessionID.removeValue(forKey: sessionID)
@@ -3223,10 +3271,14 @@ final class SessionRuntimeStore: ObservableObject {
             }
         }
 
+        let livePanelIDs = Set(state.workspacesByID.values.flatMap { $0.allTerminalPanelIDs })
         programStatusRuntime.synchronize(
-            livePanelIDs: Set(state.workspacesByID.values.flatMap { $0.allTerminalPanelIDs }),
+            livePanelIDs: livePanelIDs,
             activeSessionIDs: Set(nextRegistry.sessionsByID.values.filter(\.isActive).map(\.sessionID))
         )
+        if lastLocalInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
+            lastLocalInputAtByPanelID = lastLocalInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+        }
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         publish(nextRegistry, reason: "synchronize_app_state", at: now)
     }
@@ -3274,6 +3326,9 @@ final class SessionRuntimeStore: ObservableObject {
             // Non-emitting kinds still update transition state, and any
             // non-ready transition cancels a held ready event.
             pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+            if requestedKind == .idle, isRepeatedKind == false {
+                sessionExitController?.handle(.turnAbandoned(sessionID: sessionID))
+            }
 
         case .needsApproval:
             pendingHookReadyBySessionID.removeValue(forKey: sessionID)
@@ -3289,6 +3344,7 @@ final class SessionRuntimeStore: ObservableObject {
         case .error:
             pendingHookReadyBySessionID.removeValue(forKey: sessionID)
             guard isRepeatedKind == false else { return }
+            sessionExitController?.handle(.turnAbandoned(sessionID: sessionID))
             enqueueHookEvent(
                 kind: .sessionError,
                 record: record,
@@ -3388,6 +3444,7 @@ final class SessionRuntimeStore: ObservableObject {
         switch kind {
         case .turnComplete:
             actionableKind = .turnComplete
+            sessionExitController?.handle(.turnCompleted(sessionID: record.sessionID))
         case .needsApproval:
             actionableKind = .needsApproval
         case .sessionStart, .sessionError, .sessionStop:
@@ -4632,8 +4689,7 @@ final class SessionRuntimeStore: ObservableObject {
         removePendingCodexHookApproval(sessionID: sessionID)
         pendingCodexHookApprovalBySessionID[sessionID] = PendingCodexHookApproval(
             event: event,
-            token: token,
-            statusBeforeDeferral: record.status
+            token: token
         )
         logCodexHookEventDecision(
             sessionID: sessionID,
@@ -4707,19 +4763,18 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(sessionID: sessionID, status: status, at: Date())
 
         case .deferForContext(let reason):
-            var surfaced = pending
-            surfaced.didSurfaceAfterContextTimeout = true
-            pendingCodexHookApprovalBySessionID[sessionID] = surfaced
+            // PermissionRequest runs before Codex routes the request to its
+            // reviewer. Elapsed time does not prove that a person must answer.
+            // Retain the request so later context can accept or suppress it.
             pendingCodexHookApprovalTaskBySessionID.removeValue(forKey: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: pending.event,
-                decision: "accepted",
+                decision: "deferred",
                 reason: "context_timeout_\(codexApprovalReason(reason, source: .hook))"
             )
-            updateStatus(sessionID: sessionID, status: status, at: Date())
         }
     }
 
@@ -4755,10 +4810,6 @@ final class SessionRuntimeStore: ObservableObject {
                 decision: "suppressed",
                 reason: codexApprovalReason(reason, source: .hook)
             )
-            restoreStatusBeforeDeferredApprovalIfNeeded(
-                sessionID: sessionID,
-                pending: pending
-            )
 
         case .ignore(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
@@ -4769,10 +4820,6 @@ final class SessionRuntimeStore: ObservableObject {
                 event: pending.event,
                 decision: "ignored",
                 reason: "\(reasonPrefix)_\(codexApprovalReason(reason, source: .hook))"
-            )
-            restoreStatusBeforeDeferredApprovalIfNeeded(
-                sessionID: sessionID,
-                pending: pending
             )
 
         case .accept(let reason):
@@ -4787,17 +4834,6 @@ final class SessionRuntimeStore: ObservableObject {
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
         }
-    }
-
-    private func restoreStatusBeforeDeferredApprovalIfNeeded(
-        sessionID: String,
-        pending: PendingCodexHookApproval
-    ) {
-        guard pending.didSurfaceAfterContextTimeout,
-              let status = pending.statusBeforeDeferral else {
-            return
-        }
-        updateSynthesizedStatus(sessionID: sessionID, status: status, at: Date())
     }
 
     private func removePendingCodexHookApprovalIfSuperseded(
@@ -5152,7 +5188,8 @@ final class SessionRuntimeStore: ObservableObject {
         _ = store.send(
             .recordDesktopNotification(
                 workspaceID: currentRecord.workspaceID,
-                panelID: currentRecord.panelID
+                panelID: currentRecord.panelID,
+                sessionID: sessionID
             )
         )
 
@@ -5174,6 +5211,55 @@ final class SessionRuntimeStore: ObservableObject {
                 notificationContext
             )
         }
+    }
+
+    /// Keep provenance only while every unread notice belongs to one session.
+    /// Unknown/restored or mixed unread is deliberately ineligible for retirement.
+    private func trackSessionUnreadNotice(action: AppAction, previousState: AppState, nextState: AppState) {
+        guard let store else { return }
+        exclusiveSessionUnreadByPanelID = exclusiveSessionUnreadByPanelID.filter { panelID, notice in
+            notice.stateReplacementGeneration == store.stateReplacementGeneration
+                && panelIsUnread(panelID: panelID, in: previousState.workspacesByID[notice.workspaceID])
+                && panelIsUnread(panelID: panelID, in: nextState.workspacesByID[notice.workspaceID])
+        }
+        guard case .recordDesktopNotification(let workspaceID, let panelID?, let sessionID) = action else { return }
+        let previousNotice = exclusiveSessionUnreadByPanelID[panelID]
+        guard let sessionID,
+              panelIsUnread(panelID: panelID, in: nextState.workspacesByID[workspaceID]),
+              !panelIsUnread(panelID: panelID, in: previousState.workspacesByID[workspaceID])
+                || (previousNotice?.sessionID == sessionID && previousNotice?.workspaceID == workspaceID) else {
+            exclusiveSessionUnreadByPanelID.removeValue(forKey: panelID)
+            return
+        }
+        exclusiveSessionUnreadByPanelID[panelID] = SessionUnreadNotice(
+            sessionID: sessionID,
+            workspaceID: workspaceID,
+            stateReplacementGeneration: store.stateReplacementGeneration
+        )
+    }
+
+    /// Called during synchronous teardown only after a delivered self-exit
+    /// has a confirmed exit code of zero. Keep unread state and badges intact.
+    func retireUnreadFromNavigationAfterSelfExit(sessionID: String, panelID: UUID) {
+        guard let notice = exclusiveSessionUnreadByPanelID[panelID], notice.sessionID == sessionID,
+              sessionRegistry.sessionsByID[sessionID]?.status?.kind == .ready else { return }
+        exclusiveSessionUnreadByPanelID[panelID]?.retiredFromNavigation = true
+        ToasttyLog.info(
+            "Retired completion from navigation after self-exit",
+            category: .terminal,
+            metadata: ["session_id": sessionID, "panel_id": panelID.uuidString]
+        )
+    }
+
+    func skipsUnreadForNextActive(panelID: UUID, workspaceID: UUID) -> Bool {
+        guard let store, let notice = exclusiveSessionUnreadByPanelID[panelID],
+              notice.retiredFromNavigation, notice.workspaceID == workspaceID,
+              notice.stateReplacementGeneration == store.stateReplacementGeneration,
+              let record = sessionRegistry.sessionsByID[notice.sessionID],
+              !record.isActive, record.status?.kind == .ready,
+              record.panelID == panelID, record.workspaceID == workspaceID,
+              sessionRegistry.activeSession(for: panelID) == nil else { return false }
+        return true
     }
 
     private func collapseReadyStatusAfterReadIfNeeded(
@@ -5620,8 +5706,6 @@ private extension CodexRootTurnContextField {
 private struct PendingCodexHookApproval {
     let event: CodexHookEvent
     let token: UUID
-    let statusBeforeDeferral: SessionStatus?
-    var didSurfaceAfterContextTimeout = false
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
@@ -5821,6 +5905,72 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         stopSessionForPanel(panelID: panelID, reason: reason, at: now)
         return true
     }
+
+    func noteManagedLaunchCommandSubmitted(sessionID: String, shellWasAtPrompt: Bool, at now: Date) {
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else {
+            return
+        }
+        pendingManagedLaunchCommandsBySessionID[sessionID] = PendingManagedLaunchCommand(
+            submittedAt: now,
+            shellShowedPrompt: shellWasAtPrompt
+        )
+    }
+
+    func isAwaitingManagedLaunchCommandStart(panelID: UUID, at now: Date) -> Bool {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              var pending = pendingManagedLaunchCommandsBySessionID[record.sessionID] else {
+            return false
+        }
+        let waited = now.timeIntervalSince(pending.submittedAt)
+        guard waited < Self.managedLaunchCommandStartTimeout else {
+            // The command never started: for example the user cleared the
+            // typed line. The prompt now counts as the end of the session.
+            pendingManagedLaunchCommandsBySessionID.removeValue(forKey: record.sessionID)
+            ToasttyLog.warning(
+                "Managed launch command did not start in time",
+                category: .terminal,
+                metadata: [
+                    "session_id": record.sessionID,
+                    "panel_id": panelID.uuidString,
+                    "agent": record.agent.rawValue,
+                    "waited_seconds": String(format: "%.3f", waited),
+                ]
+            )
+            return false
+        }
+        if pending.shellShowedPrompt == false {
+            pending.shellShowedPrompt = true
+            pendingManagedLaunchCommandsBySessionID[record.sessionID] = pending
+        }
+        return true
+    }
+
+    func noteShellLeftPrompt(panelID: UUID, at now: Date) {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              let pending = pendingManagedLaunchCommandsBySessionID[record.sessionID] else {
+            return
+        }
+        let waited = now.timeIntervalSince(pending.submittedAt)
+        guard pending.shellShowedPrompt else {
+            // The shell has not shown a prompt since the command was typed, so
+            // it may still run its own startup. Keep waiting, up to the limit.
+            if waited >= Self.managedLaunchCommandStartTimeout {
+                pendingManagedLaunchCommandsBySessionID.removeValue(forKey: record.sessionID)
+            }
+            return
+        }
+        pendingManagedLaunchCommandsBySessionID.removeValue(forKey: record.sessionID)
+        ToasttyLog.info(
+            "Managed launch command started",
+            category: .terminal,
+            metadata: [
+                "session_id": record.sessionID,
+                "panel_id": panelID.uuidString,
+                "agent": record.agent.rawValue,
+                "waited_seconds": String(format: "%.3f", waited),
+            ]
+        )
+    }
 }
 
 private extension CodexHookEvent {
@@ -5907,10 +6057,11 @@ extension SessionRuntimeStore {
         }
         let reply = claudeQuestionBroker.handle(request, identity: identity, at: now)
         if request.phase == .begin, reply.status == .pending {
-            updateStatus(sessionID: request.sessionID,
-                status: SessionStatus(kind: .needsApproval, summary: "Needs input",
-                    detail: "Claude Code is waiting for your answers"),
-                at: now)
+            let status = request.event?.permission.map {
+                SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: $0.summary)
+            } ?? SessionStatus(kind: .needsApproval, summary: "Needs input",
+                               detail: "Claude Code is waiting for your answers")
+            updateStatus(sessionID: request.sessionID, status: status, at: now)
         }
         publishClaudeQuestionChanges(at: now)
         if claudeQuestionWatchdog == nil, !claudeQuestionBroker.entries.isEmpty {
@@ -5935,6 +6086,14 @@ extension SessionRuntimeStore {
         let now = Date()
         claudeQuestionBroker.reconcile(observations, identity: identity, at: now)
         publishClaudeQuestionChanges(at: now)
+        // Claude records an interrupt (Esc, or "No" to a permission request,
+        // including a phone Deny) only in the transcript; no hook reports it.
+        if observations.contains(where: {
+            guard $0.mayAuthorizeCurrentRuntime, case .turnEnded(_, .aborted) = $0.payload else { return false }
+            return true
+        }) {
+            _ = handleLocalInterruptForPanelIfActive(panelID: panelID, kind: .escape, at: now)
+        }
     }
 
     func submitClaudeQuestion(_ request: RemoteQuestionAnswerRequest, sessionID: String, panelID: UUID,

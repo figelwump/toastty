@@ -9,12 +9,14 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         status: SidebarSubspacePresentation.RowStatus,
         spawner: String? = "spawner-a",
         index: Int,
-        sessions: [SidebarSubspacePresentation.SessionLine] = []
+        sessions: [SidebarSubspacePresentation.SessionLine] = [],
+        doneAt: Date? = nil
     ) -> SidebarSubspacePresentation.Row {
         SidebarSubspacePresentation.Row(
             id: UUID(),
             title: name,
             status: status,
+            doneAt: doneAt,
             annotations: [:],
             summary: nil,
             spawningSessionID: spawner,
@@ -229,14 +231,15 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
-    func testEachStatusGroupSortsByNewestSessionActivityBeforeCreationOrder() {
-        let statuses: [SidebarSubspacePresentation.RowStatus] = [.ready, .needsApproval, .error, .working, .idle, .done]
+    func testQuietAndAttentionGroupsSortByNewestRelevantStatusBeforeCreationOrder() {
+        let statuses: [SidebarSubspacePresentation.RowStatus] = [.ready, .needsApproval, .error, .idle]
+        let kinds: [SessionStatusKind] = [.ready, .needsApproval, .error, .idle]
         let rows = statuses.enumerated().flatMap { index, status in
             [
                 row("old-\(status)", status: status, index: index * 2,
-                    sessions: [session(reportedAt: TimeInterval(100 - index))]),
+                    sessions: [session(kinds[index], reportedAt: TimeInterval(100 - index), unread: true)]),
                 row("new-\(status)", status: status, index: index * 2 + 1,
-                    sessions: [session(reportedAt: TimeInterval(200 + index))]),
+                    sessions: [session(kinds[index], reportedAt: TimeInterval(200 + index), unread: true)]),
             ]
         }
         XCTAssertEqual(
@@ -258,17 +261,53 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows.reversed()).map(\.title), expected)
     }
 
-    func testSubspaceActivityIncludesEverySessionRegardlessOfDisplayedStatus() {
+    func testBackgroundProgressDoesNotReorderAttentionOrUnreadReadyRows() {
+        for (status, kind) in [(SidebarSubspacePresentation.RowStatus.ready, SessionStatusKind.ready),
+                               (.needsApproval, .needsApproval), (.error, .error)] {
+            let recent = row("recent", status: status, index: 0,
+                             sessions: [session(kind, reportedAt: 20, unread: true)])
+            for progressAt: TimeInterval in [30, 50, 70] {
+                let lowerKinds: [SessionStatusKind] = status == .needsApproval ? [.error, .ready] :
+                    (status == .error ? [.ready] : [])
+                let older = row("older", status: status, index: 1, sessions: [
+                    session(kind, reportedAt: 10, unread: true),
+                    session(.working, reportedAt: progressAt),
+                    session(.idle, reportedAt: progressAt + 1),
+                ] + lowerKinds.map { session($0, reportedAt: progressAt, unread: true) })
+                XCTAssertEqual(SidebarSubspacePresentation.sortedRows([older, recent]).map(\.title),
+                               ["recent", "older"])
+            }
+        }
+    }
+
+    func testAttentionRecencyIgnoresDoneMarksAndTimestampsFromOtherStates() {
+        let now = Date(timeIntervalSince1970: 100)
+        for (status, kind) in [(SidebarSubspacePresentation.RowStatus.ready, SessionStatusKind.ready),
+                               (.needsApproval, .needsApproval), (.error, .error)] {
+            let timed = row("timed", status: status, index: 2,
+                            sessions: [session(kind, reportedAt: 20, unread: true)])
+            let old = row("old", status: status, index: 1,
+                          sessions: [session(kind, reportedAt: 10, unread: true)], doneAt: now)
+            let unreported = row("unreported", status: status, index: 0, sessions: [
+                session(kind, reportedAt: nil, unread: true), session(.working, reportedAt: 90),
+            ], doneAt: now)
+            XCTAssertEqual(SidebarSubspacePresentation.sortedRows([unreported, old, timed]).map(\.title),
+                           ["timed", "old", "unreported"])
+        }
+    }
+
+    func testDoneRowsUseLatestActivityOrDoneMarkIncludingRowsWithoutSessions() {
         let rows = [
-            row("recent-approval", status: .needsApproval, index: 0,
-                sessions: [session(.needsApproval, reportedAt: 20)]),
-            row("active-sibling", status: .needsApproval, index: 1,
-                sessions: [session(.needsApproval, reportedAt: 10), session(.working, reportedAt: 30)]),
+            row("old", status: .done, index: 0, sessions: [session(reportedAt: 10)],
+                doneAt: Date(timeIntervalSince1970: 20)),
+            row("new-mark", status: .done, index: 1, doneAt: Date(timeIntervalSince1970: 40)),
+            row("new-activity", status: .done, index: 2, sessions: [session(reportedAt: 50)],
+                doneAt: Date(timeIntervalSince1970: 30)),
         ]
-        XCTAssertEqual(
-            SidebarSubspacePresentation.sortedRows(rows).map(\.title),
-            ["active-sibling", "recent-approval"]
-        )
+        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows).map(\.title),
+                       ["new-activity", "new-mark", "old"])
+        XCTAssertEqual(SidebarSubspacePresentation.sortedRows(rows.reversed()).map(\.title),
+                       ["new-activity", "new-mark", "old"])
     }
 
     func testRecentlyIdleSubspaceLeadsIdleGroupAndKeepsHoverAndSelectionPosition() {
@@ -331,14 +370,16 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         let peer = row("peer", status: .working, index: 0, sessions: [session(.working, reportedAt: 20)])
         report(.working, at: 10)
         XCTAssertEqual(Presentation.sortedRows([peer, try runtimeRow()]).map(\.title), ["peer", "active"])
-        report(.working, at: 30)
-        XCTAssertEqual(Presentation.sortedRows([peer, try runtimeRow()]).map(\.title), ["active", "peer"])
+        for progressAt: TimeInterval in [30, 40, 50] {
+            report(.working, at: progressAt)
+            XCTAssertEqual(Presentation.sortedRows([peer, try runtimeRow()]).map(\.title), ["peer", "active"])
+        }
 
         runtime.updateFiles(
             sessionID: "activity", files: ["changed.swift"], cwd: "/repo/new",
             repoRoot: "/repo", at: Date(timeIntervalSince1970: 40)
         )
-        XCTAssertEqual(try runtimeRow().latestActivityAt, Date(timeIntervalSince1970: 30))
+        XCTAssertEqual(try runtimeRow().latestActivityAt, Date(timeIntervalSince1970: 50))
         let newerPeer = row("newer-peer", status: .working, index: 0, sessions: [session(.working, reportedAt: 35)])
         XCTAssertEqual(Presentation.sortedRows([newerPeer, try runtimeRow()]).map(\.title), ["newer-peer", "active"])
 

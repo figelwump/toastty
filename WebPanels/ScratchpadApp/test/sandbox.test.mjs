@@ -99,3 +99,37 @@ test("blank scratchpad documents render onboarding guidance instead of an empty 
   assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*tar -xz/);
   assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*mkdir -p/);
 });
+
+// A srcdoc iframe inherits the shell page's CSP, and the browser enforces both
+// policies. Media and font sources the generated policy allows must also pass
+// the shell policy, or embedded video, audio, and fonts are blocked.
+test("shell CSP allows the media and font sources the generated content CSP allows", () => {
+  const parsePolicy = (policy) => {
+    const directives = new Map();
+    for (const directive of policy.split(";")) {
+      const [name, ...sources] = directive.trim().split(/\s+/);
+      if (!name) {
+        continue;
+      }
+      // Browsers ignore repeated directives, so a duplicate would hide the effective one.
+      assert.ok(!directives.has(name), `duplicate CSP directive ${name}`);
+      directives.set(name, sources);
+    }
+    return directives;
+  };
+  const generatedPolicy = parsePolicy(
+    [...sandboxSource.match(/generatedContentCSP = \[([\s\S]*?)\]/)[1].matchAll(/"([^"]+)"/g)]
+      .map((match) => match[1])
+      .join("; ")
+  );
+  const shellPolicy = parsePolicy(shellSource.match(/content="(default-src[^"]+)"/)[1]);
+
+  for (const directive of ["media-src", "font-src"]) {
+    const generatedSources = generatedPolicy.get(directive);
+    assert.ok(generatedSources?.length, `generated CSP has no ${directive}`);
+    const shellSources = shellPolicy.get(directive) ?? shellPolicy.get("default-src");
+    for (const source of generatedSources) {
+      assert.ok(shellSources.includes(source), `shell CSP blocks generated ${directive} source ${source}`);
+    }
+  }
+});

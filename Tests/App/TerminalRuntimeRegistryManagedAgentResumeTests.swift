@@ -214,6 +214,9 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
         XCTAssertTrue(command.contains("claude --settings "))
         XCTAssertTrue(command.contains("--resume db4f311b-12d0-4f61-ba81-0ae44ed10492"))
+        // The shell has not started the typed command yet, so its prompt must
+        // not end the restored session.
+        XCTAssertTrue(sessionRuntimeStore.isAwaitingManagedLaunchCommandStart(panelID: panelID, at: Date()))
     }
 
     func testSurfaceLaunchConfigurationUsesValidPiResumeRecordForRestoredPanel() throws {

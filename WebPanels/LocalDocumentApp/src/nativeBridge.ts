@@ -1,3 +1,5 @@
+import type { LocalDocumentMarkdownViewMode } from "./bootstrap";
+
 export type LocalDocumentPanelEvent =
   | { type: "bridgeReady" }
   | { type: "consoleMessage"; level: "info" | "warn" | "error"; message: string }
@@ -25,6 +27,8 @@ export type LocalDocumentPanelEvent =
   | { type: "enterEdit" }
   | { type: "copyFullPath" }
   | { type: "openInDefaultApp" }
+  | { type: "setMarkdownViewMode"; mode: LocalDocumentMarkdownViewMode }
+  | { type: "openLink"; href: string }
   | { type: "draftDidChange"; content: string; baseContentRevision: number }
   | { type: "save"; baseContentRevision: number }
   | { type: "cancelEdit"; baseContentRevision: number }
@@ -84,6 +88,12 @@ export const localDocumentNativeBridge = {
   },
   openInDefaultApp() {
     postEvent({ type: "openInDefaultApp" });
+  },
+  setMarkdownViewMode(mode: LocalDocumentMarkdownViewMode) {
+    postEvent({ type: "setMarkdownViewMode", mode });
+  },
+  openLink(href: string) {
+    postEvent({ type: "openLink", href });
   },
   draftDidChange(content: string, baseContentRevision: number) {
     postEvent({ type: "draftDidChange", content, baseContentRevision });

@@ -10,6 +10,11 @@ struct ToasttyMobileRootView: View {
     @State private var navigationPath: [ToasttyMobileRoute] = []
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
     @State private var presentedSheet: ToasttyMobileSheet?
+    /// The new-session sheet for content shared from another app.
+    @State private var sharedNewSession: ToasttyNewSessionModel?
+    /// A notification or link opened something during this activation, so a
+    /// waiting shared draft does not cover it.
+    @State private var routedDestinationSinceActivation = false
     @State private var fixtureHasLoadedOlderTranscript = false
     @State private var composerDraftState = ToasttyComposerDraftState()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
@@ -37,6 +42,7 @@ struct ToasttyMobileRootView: View {
     private let fixtureSendEventOrder: ToasttyConversationFixture.SendEventOrder?
 #endif
     private let deepLinkParser: DeepLinkParser?
+    private let sharedDraftStore: ToasttySharedDraftStore?
     private let pushBridge: ToasttyPushNotificationBridge?
 
     init(configuration: ToasttyMobileAppConfiguration, pushBridge: ToasttyPushNotificationBridge? = nil) {
@@ -70,7 +76,7 @@ struct ToasttyMobileRootView: View {
             )
             _fixtureInteractionAnswerState = State(initialValue: ToasttyInteractionAnswerState(
                 key: key,
-                questions: ToasttyConversationFixture.questions
+                questions: ToasttyConversationFixture.answerQuestions
             ))
         } else {
             _fixtureInteractionAnswerState = State(initialValue: nil)
@@ -91,6 +97,16 @@ struct ToasttyMobileRootView: View {
             : nil
 #endif
         deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
+        sharedDraftStore = configuration.sharedDraftStore
+#if DEBUG
+        if configuration.runtimeMode == .fixture, let store = configuration.sharedDraftStore {
+            ToasttySharedDraftFixture.seed(
+                store,
+                handoff: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT"]
+                    .flatMap(ToasttySharedDraftFixture.Handoff.init(rawValue:))
+            )
+        }
+#endif
     }
 
     var body: some View {
@@ -129,12 +145,16 @@ struct ToasttyMobileRootView: View {
             ToasttyHapticFeedback.pairingCompleted(from: old, to: new)
         }
         .task {
+            sessionController.installDiagnosticRecordHandler { record in
+                ToasttyDiagnosticLogger.record(record.event, recordedAt: record.recordedAt,
+                    pushDetails: record.pushDetails, in: &diagnostics)
+            }
             if let pushBridge { sessionController.pushController?.attachBridge(pushBridge) }
-            sessionController.installDiagnosticEventHandler(recordDiagnostic)
             recordDiagnostic(.authStarted)
             observeSessionState(sessionController.state)
             await sessionController.restoreIfNeeded()
             observeSessionState(sessionController.state)
+            queueWaitingSharedDraft()
         }
         .onChange(of: sessionController.liveController?.activeConversationController?.sendReconciliation) {
             reconcileAttachmentDrafts()
@@ -149,8 +169,12 @@ struct ToasttyMobileRootView: View {
                 }
             } else {
                 routePendingDeepLinkIfAvailable()
+                queueWaitingSharedDraft()
                 presentNotificationIntroIfNeeded()
             }
+        }
+        .onChange(of: sessionController.homeController.isShowingNewSessionForm) { _, isShowing in
+            if isShowing == false { routePendingDeepLinkIfAvailable() }
         }
         .onChange(of: sessionController.homeController.snapshot) { _, newSnapshot in
             pruneComposerState(to: newSnapshot)
@@ -165,9 +189,11 @@ struct ToasttyMobileRootView: View {
             switch newPhase {
             case .active:
                 sessionController.sceneBecameActive()
+                queueWaitingSharedDraft()
             case .inactive:
                 sessionController.sceneBecameInactive()
             case .background:
+                routedDestinationSinceActivation = false
                 sessionController.sceneEnteredBackground()
             @unknown default:
                 sessionController.sceneBecameInactive()
@@ -206,9 +232,11 @@ struct ToasttyMobileRootView: View {
                 refresh: sessionController.refreshLiveSessions,
                 onSettings: { presentedSheet = .settings },
                 openWorkspace: openWorkspace,
+                // Reinstall advice outlasts the relay cooldown error that usually follows it.
                 notificationError: sessionController.pushController?.configuration == nil
-                    ? nil : sessionController.pushController?.errorMessage,
-                retryNotifications: { sessionController.pushController?.retry() }
+                    ? nil : sessionController.pushController.flatMap { $0.deliveryHint ?? $0.errorMessage },
+                retryNotifications: sessionController.pushController?.deliveryHint != nil
+                    ? nil : { sessionController.pushController?.retry() }
             )
                 .navigationDestination(for: ToasttyMobileRoute.self) { route in
                     switch route {
@@ -227,6 +255,9 @@ struct ToasttyMobileRootView: View {
         }
         .tint(ToasttyDesignTokens.amber)
         .background(ToasttyDesignTokens.background.ignoresSafeArea())
+        // Once for the whole stack: Home stays in it under a pushed
+        // workspace, so a per-screen dialog would present twice.
+        .toasttySessionCloseConfirmation(sessionController.homeController)
         .safeAreaInset(edge: .top, spacing: 0) {
             PairedConnectionBanner(presentation: presentation)
         }
@@ -251,7 +282,8 @@ struct ToasttyMobileRootView: View {
                 sessionController.homeController.dismissConversation()
             }
         }
-        .sheet(item: $presentedSheet) { sheet in
+        // A shared draft waits for these sheets to close before its own opens.
+        .sheet(item: $presentedSheet, onDismiss: routePendingDeepLinkIfAvailable) { sheet in
             switch sheet {
             case .settings:
               if let settingsPresentation {
@@ -268,6 +300,7 @@ struct ToasttyMobileRootView: View {
               }
             }
         }
+        .toasttyNewSessionSheet($sharedNewSession, controller: sessionController.homeController)
         .onChange(of: presentedSheet) { _, sheet in
             guard sheet == .settings else { presentNotificationIntroIfNeeded(); return }
             Task {
@@ -326,6 +359,7 @@ struct ToasttyMobileRootView: View {
             }
             pendingDeepLinkDestination = nil
             presentedSheet = nil
+            routedDestinationSinceActivation = true
         case .workspace(let workspaceID):
             guard sessionController.homeController.workspace(id: workspaceID) != nil else {
                 discardPendingDeepLinkAfterLiveSnapshot()
@@ -335,7 +369,54 @@ struct ToasttyMobileRootView: View {
             sessionController.homeController.dismissConversation()
             navigationPath = [.workspace(workspaceID)]
             presentedSheet = nil
+            routedDestinationSinceActivation = true
+        case .newSession(let draftID):
+            routeSharedDraft(draftID)
         }
+    }
+
+    /// Opens the new-session sheet with a draft the share extension saved,
+    /// over whatever screen is showing, in the workspace Home would use. A
+    /// draft that cannot open yet stays saved for `queueWaitingSharedDraft`.
+    private func routeSharedDraft(_ draftID: UUID) {
+        let home = sessionController.homeController
+        let preferences = ToasttyNewSessionPreferences()
+        guard home.canStartSessions,
+              let workspace = home.defaultSessionStartWorkspace(lastUsed: preferences.lastWorkspaceID) else {
+            discardPendingDeepLinkAfterLiveSnapshot()
+            return
+        }
+        // One sheet at a time. Settings closes for the draft; an open
+        // new-session form keeps its own draft, and this one waits for it.
+        guard home.isShowingNewSessionForm == false else { return }
+        guard presentedSheet == nil else {
+            presentedSheet = nil
+            return
+        }
+        pendingDeepLinkDestination = nil
+        guard let draft = sharedDraftStore?.take(id: draftID) else { return }
+        sharedNewSession = ToasttyNewSessionModel(
+            workspaceID: workspace.id,
+            workspaceTitle: workspace.title,
+            host: home,
+            preferences: preferences,
+            message: draft.text,
+            attachments: draft.attachments,
+            notice: draft.skippedItemsNotice
+        )
+    }
+
+    /// Opens a shared draft that its link did not open: the extension could
+    /// not open the app, or the app could not show the draft then.
+    private func queueWaitingSharedDraft() {
+        guard let sharedDraftStore else { return }
+        sharedDraftStore.removeExpired()
+        guard pendingDeepLinkDestination == nil,
+              routedDestinationSinceActivation == false,
+              sessionController.pushController?.pendingConversationID == nil,
+              let draftID = sharedDraftStore.waitingDraftID() else { return }
+        pendingDeepLinkDestination = .newSession(draftID)
+        routePendingDeepLinkIfAvailable()
     }
 
     private func discardPendingDeepLinkAfterLiveSnapshot() {
@@ -352,7 +433,7 @@ struct ToasttyMobileRootView: View {
     }
 
     private func presentNotificationIntroIfNeeded() {
-        guard presentedSheet == nil, navigationPath.isEmpty,
+        guard presentedSheet == nil, sharedNewSession == nil, navigationPath.isEmpty,
               pendingDeepLinkDestination == nil,
               sessionController.state == .paired(.live),
               sessionController.pushController?.canIntroduce == true else { return }
@@ -789,6 +870,14 @@ struct ToasttyMobileRootView: View {
                state.key.interactionID == interactionID,
                state.canSubmit,
                let answers = state.canonicalAnswers {
+                state.retryRequest = RemoteQuestionAnswerRequest(
+                    conversationID: RemoteConversationID(rawValue: conversationID),
+                    interactionID: interactionID,
+                    responseID: state.key.responseID,
+                    expectedInputEpoch: state.key.inputEpoch,
+                    clientRequestID: "fixture-answer",
+                    answers: answers
+                )
                 state.status = .submitting
                 fixtureInteractionAnswerState = state
                 Task { @MainActor in

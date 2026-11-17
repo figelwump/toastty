@@ -125,6 +125,30 @@ enum ToasttyConversationFixture {
             ]
         ),
     ]
+    /// Set with the interaction-answer scenario to show a Claude permission
+    /// request instead of the question form.
+    static var usesPermissionRequest: Bool {
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_PERMISSION"] == "1"
+    }
+    static let permissionCommand = """
+        xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp \\
+          -destination 'platform=macOS,arch=arm64' -derivedDataPath Derived test \\
+          -only-testing:ToasttyAppTests/ClaudePermissionBrokerTests
+        """
+    static let permissionQuestion = RemoteInteractionQuestion(
+        id: "decision",
+        header: "Bash",
+        question: "Approve Running xcodebuild -workspace toastty.xcworkspace\n\n\(permissionCommand)",
+        options: [
+            .init(id: "allow", label: "Allow once"),
+            .init(id: "always:0", label: "Always allow Bash(xcodebuild -workspace:*)",
+                  detail: "Saved for this project in .claude/settings.local.json"),
+            .init(id: "deny", label: "Deny", detail: "Stops Claude so you can say what to do instead"),
+        ]
+    )
+    static var answerQuestions: [RemoteInteractionQuestion] {
+        usesPermissionRequest ? [permissionQuestion] : questions
+    }
     private static let projectionRunID = UUID(
         uuidString: "D2000000-0000-0000-0000-000000000001"
     )!
@@ -376,18 +400,27 @@ enum ToasttyConversationFixture {
     ) -> ToasttyConversationPresentationState {
         let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
         let state: RemotePendingInteraction.State = answers == nil ? .pending : .resolved
+        let permission = usesPermissionRequest
+        // A permission resolves without accepted answers: no provider fact
+        // says which decision won, so the phone shows only what it sent.
         let interaction = RemotePendingInteraction(
             id: questionInteractionID,
-            kind: .question,
+            kind: permission ? .permission : .question,
             providerCallID: "fixture-question-call",
-            prompt: "Claude needs your answers before it can continue.",
+            prompt: permission
+                ? "Approve Running xcodebuild -workspace toastty.xcworkspace"
+                : "Claude needs your answers before it can continue.",
             inputEpoch: questionEpoch,
             presentedAt: timestamp,
             state: state,
-            questions: questions,
+            questions: answerQuestions,
             responseID: answers == nil ? questionResponseID : nil,
             responseExpiresAt: Date(timeIntervalSince1970: 1_786_410_000),
-            answers: answers
+            answers: permission ? nil : answers,
+            permission: permission
+                ? RemotePermissionRequestDetail(toolName: "Bash", description: "Run the permission broker tests",
+                                                preview: permissionCommand)
+                : nil
         )
         var rows = [
             row(

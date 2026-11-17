@@ -150,8 +150,11 @@ extension AppAction {
                 "target_tab_id": tabID.uuidString,
             ]
 
-        case .closePanel(let panelID):
-            return ["target_panel_id": panelID.uuidString]
+        case .closePanel(let panelID, let preservesTabSelection):
+            return [
+                "target_panel_id": panelID.uuidString,
+                "preserves_tab_selection": String(preservesTabSelection),
+            ]
 
         case .closeRightAuxPanelTab(let workspaceID, let tabID):
             return [

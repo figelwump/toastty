@@ -34,6 +34,12 @@ enum ToasttyHTMLPreviewPolicy {
     """
 
     static let maximumResourceBytes = 5 * 1024 * 1024
+    /// The Mac serves at most eight preview requests at once, across all
+    /// devices, and refuses the rest as busy. WebKit requests every image on
+    /// a page together, so a page fetches a few at a time and queues the rest.
+    static let maximumConcurrentResourceFetches = 4
+    /// Queued requests hold no data; this bounds a page's bookkeeping only.
+    static let maximumPendingResources = 256
 
     static func relativePath(for url: URL, host: String) -> String? {
         guard url.scheme == scheme, url.host == host, url.user == nil, url.password == nil,
@@ -139,7 +145,18 @@ final class ToasttyHTMLResourceLoader: NSObject, WKURLSchemeHandler {
     let document: RemotePreviewHTML
     let target: RemotePreviewTarget
     let resource: @Sendable (RemoteHTMLResourceRequest) async throws -> RemoteHTMLResourceResponse
+    private struct QueuedRequest {
+        let task: any WKURLSchemeTask
+        let url: URL
+        let path: String
+    }
+    /// Requests being fetched that WebKit has not stopped.
     private var pending: [ObjectIdentifier: Task<Void, Never>] = [:]
+    /// Requests waiting for a fetch slot, oldest first.
+    private var queued: [QueuedRequest] = []
+    /// Fetch tasks that have not ended. A stopped fetch keeps its slot until
+    /// its cancellation unwinds, so the Mac never sees more than the limit.
+    private var activeFetches = 0
     var entryURL: URL {
         var components = URLComponents()
         components.scheme = ToasttyHTMLPreviewPolicy.scheme
@@ -156,17 +173,46 @@ final class ToasttyHTMLResourceLoader: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
-        let id = ObjectIdentifier(urlSchemeTask)
-        guard pending.count < 32,
+        guard pending.count + queued.count < ToasttyHTMLPreviewPolicy.maximumPendingResources,
               let url = urlSchemeTask.request.url,
               let path = ToasttyHTMLPreviewPolicy.relativePath(for: url, host: host) else {
             urlSchemeTask.didFailWithError(URLError(.badURL))
             return
         }
+        queued.append(QueuedRequest(task: urlSchemeTask, url: url, path: path))
+        startQueuedRequests()
+    }
+    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
+        let id = ObjectIdentifier(urlSchemeTask)
+        queued.removeAll { ObjectIdentifier($0.task) == id }
+        pending.removeValue(forKey: id)?.cancel()
+    }
+    func cancelAll() {
+        queued.removeAll()
+        for task in pending.values { task.cancel() }
+        pending.removeAll()
+    }
+
+    private func startQueuedRequests() {
+        while activeFetches < ToasttyHTMLPreviewPolicy.maximumConcurrentResourceFetches, !queued.isEmpty {
+            load(queued.removeFirst())
+        }
+    }
+
+    private func load(_ request: QueuedRequest) {
+        let urlSchemeTask = request.task
+        let url = request.url
+        let path = request.path
+        let id = ObjectIdentifier(urlSchemeTask)
         let entryPath = (document.sourcePath as NSString).lastPathComponent
+        activeFetches += 1
         pending[id] = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { pending[id] = nil }
+            defer {
+                pending[id] = nil
+                activeFetches -= 1
+                startQueuedRequests()
+            }
             do {
                 try Task.checkCancellation()
                 let data: Data
@@ -198,13 +244,6 @@ final class ToasttyHTMLResourceLoader: NSObject, WKURLSchemeHandler {
                 urlSchemeTask.didFailWithError(error)
             }
         }
-    }
-    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
-        pending.removeValue(forKey: ObjectIdentifier(urlSchemeTask))?.cancel()
-    }
-    func cancelAll() {
-        for task in pending.values { task.cancel() }
-        pending.removeAll()
     }
 }
 

@@ -558,6 +558,12 @@ return "not handled".
 The local-document runtime does not yet load files, compute
 `LocalDocumentPanelBootstrap`, or watch files itself (macOS does that inside
 the WKWebView runtime); that logic belongs in the panels port.
+It accepts the registry's Markdown view mode, appearance and link opener and
+keeps the appearance in step across panels (`applyAppearance`), but the
+WebKitGTK host has no view-mode toggle or appearance menu yet: Markdown
+shows formatted, the bundle's default. Scratchpad zoom
+(`adjustMagnification`) returns `nil` (unsupported) and reports a
+magnification of 1.
 
 ### Remote Access on Linux
 
@@ -1076,6 +1082,7 @@ list). Inside mirrored files, these are guarded (`#if os(macOS)` or
 | `ManagedAgentNativeSessionObserverTests.observerCapturesCodexSessionFromShellSnapshot` | backdates a file's mtime; Linux birth times cannot move earlier |
 | `AgentLaunchServiceTests.launchQuotesDirectLaunchEnvironmentAndArgv` | disabled only when the host has `/tmp/.git` (its fixture path is a literal `/tmp` path) |
 | `AutomationSocketServerBrowserPanelTargetingTests` (2), `AutomationSocketServerLocalDocumentPanelTests` (4) | pending the WebKitGTK panel runtimes (need a live browser host / local-document loading) |
+| `WebPanelRuntimeRegistryTests`: `testMarkdownPanelLinkOpensLinkedDocumentAndViewChoiceCarriesToLaterPanels`, `testAppearanceChoiceAppliesToEveryDocumentPanel` | drive the WKWebView local-document runtime (bridge messages, `NSAppearance`, the appearance menu); the WebKitGTK runtime has no view-mode toggle or appearance menu yet |
 
 ## Known issues
 

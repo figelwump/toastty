@@ -481,7 +481,7 @@ public final class LinuxWindowController {
         case .actions(let actions):
             // Closing a terminal with a running process asks first (macOS
             // FocusedPanelCommandController); the host owns the prompt.
-            if actions.count == 1, case .closePanel(let panelID) = actions[0] {
+            if actions.count == 1, case .closePanel(let panelID, _) = actions[0] {
                 requestClosePanel(panelID)
                 return true
             }

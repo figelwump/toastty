@@ -71,6 +71,10 @@ public final class RemoteGatewayRequestHandler {
         RemoteConversationFlagRequest,
         RemoteDeviceRecord
     ) -> RemoteConversationFlagResult
+    public typealias ConversationCloseHandler = (
+        RemoteConversationCloseRequest,
+        RemoteDeviceRecord
+    ) -> RemoteConversationCloseResult
     public typealias QueueUpdateHandler = (
         RemoteConversationQueueUpdateRequest,
         RemoteDeviceRecord
@@ -110,6 +114,7 @@ public final class RemoteGatewayRequestHandler {
     private let readAcknowledgementHandler: ReadAcknowledgementHandler?
     private let workspaceDoneHandler: WorkspaceDoneHandler?
     private let conversationFlagHandler: ConversationFlagHandler?
+    private let conversationCloseHandler: ConversationCloseHandler?
     private let queueUpdateHandler: QueueUpdateHandler?
     private let interruptHandler: InterruptHandler?
     private let localDraftReleaseHandler: LocalDraftReleaseHandler?
@@ -282,6 +287,7 @@ public final class RemoteGatewayRequestHandler {
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         workspaceDoneHandler: WorkspaceDoneHandler? = nil,
         conversationFlagHandler: ConversationFlagHandler? = nil,
+        conversationCloseHandler: ConversationCloseHandler? = nil,
         queueUpdateHandler: QueueUpdateHandler? = nil,
         interruptHandler: InterruptHandler? = nil,
         localDraftReleaseHandler: LocalDraftReleaseHandler? = nil,
@@ -298,6 +304,7 @@ public final class RemoteGatewayRequestHandler {
             readAcknowledgementHandler: readAcknowledgementHandler,
             workspaceDoneHandler: workspaceDoneHandler,
             conversationFlagHandler: conversationFlagHandler,
+            conversationCloseHandler: conversationCloseHandler,
             queueUpdateHandler: queueUpdateHandler,
             interruptHandler: interruptHandler,
             localDraftReleaseHandler: localDraftReleaseHandler,
@@ -321,6 +328,7 @@ public final class RemoteGatewayRequestHandler {
         readAcknowledgementHandler: ReadAcknowledgementHandler? = nil,
         workspaceDoneHandler: WorkspaceDoneHandler? = nil,
         conversationFlagHandler: ConversationFlagHandler? = nil,
+        conversationCloseHandler: ConversationCloseHandler? = nil,
         queueUpdateHandler: QueueUpdateHandler? = nil,
         interruptHandler: InterruptHandler? = nil,
         localDraftReleaseHandler: LocalDraftReleaseHandler? = nil,
@@ -337,6 +345,7 @@ public final class RemoteGatewayRequestHandler {
         self.readAcknowledgementHandler = readAcknowledgementHandler
         self.workspaceDoneHandler = workspaceDoneHandler
         self.conversationFlagHandler = conversationFlagHandler
+        self.conversationCloseHandler = conversationCloseHandler
         self.queueUpdateHandler = queueUpdateHandler
         self.interruptHandler = interruptHandler
         self.localDraftReleaseHandler = localDraftReleaseHandler
@@ -488,7 +497,7 @@ public final class RemoteGatewayRequestHandler {
                     return .respond(.json(status: 403, reason: "Forbidden", body: body))
                 }
                 if policy.route == .workspaceDone || policy.route == .conversationFlag
-                    || policy.route == .conversationQueueUpdate {
+                    || policy.route == .conversationClose || policy.route == .conversationQueueUpdate {
                     // Not a message send, so it has neither a send result to
                     // return nor a send rejection to audit.
                     return .respond(errorResponse(
@@ -545,6 +554,8 @@ public final class RemoteGatewayRequestHandler {
             return handleWorkspaceDone(request, device: authenticated, at: date)
         case .conversationFlag:
             return handleConversationFlag(request, device: authenticated, at: date)
+        case .conversationClose:
+            return handleConversationClose(request, device: authenticated, at: date)
         case .conversationQueueUpdate:
             return handleQueueUpdate(request, device: authenticated, at: date)
         case .conversationInterrupt:
@@ -894,6 +905,44 @@ public final class RemoteGatewayRequestHandler {
             ))
         }
         let body = (try? encoder.encode(RemoteConversationFlagResponse(result: result))) ?? Data()
+        return .respond(.json(body: body))
+    }
+
+    private func handleConversationClose(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord,
+        at date: Date
+    ) -> Outcome {
+        guard request.body.count <= Self.maximumWorkspaceDoneBodyBytes,
+              let closeRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteConversationCloseRequest.self,
+                from: request.body
+              ) else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected conversation close JSON"
+            ))
+        }
+        guard closeRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        let result = conversationCloseHandler?(closeRequest, device) ?? .conversationNotFound
+        if result == .closed {
+            auditLog.record(.init(
+                at: date,
+                action: .conversationClosed,
+                deviceID: device.id,
+                detail: closeRequest.stopIfBusy ? "stopped_if_busy" : "finished"
+            ))
+        }
+        let body = (try? encoder.encode(RemoteConversationCloseResponse(result: result))) ?? Data()
         return .respond(.json(body: body))
     }
 

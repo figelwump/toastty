@@ -87,6 +87,8 @@
         "RemoteAccess/RemoteAccessSettingsView.swift",
         "RightAuxPanelView.swift",
         "SessionActivityRail.swift",
+        "SidebarHoverRegion.swift",
+        "SidebarScrollGeometry.swift",
         "SidebarView.swift",
         "Terminal/GhosttyClipboardBridge.swift",
         "Terminal/GhosttyHostStyleStore.swift",

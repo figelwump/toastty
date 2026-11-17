@@ -69,6 +69,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var renameWorkspaceResult = true
     var closeWorkspaceResult = true
     var renameTabResult = true
+    var canCloseTabValue = true
+    var closeTabResult = true
+    var closedTabWindowIDs: [UUID] = []
     var selectAdjacentTabResult = true
     var selectAdjacentRightPanelTabResult = true
     var jumpToNextActiveResult = true
@@ -368,6 +371,16 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return renameTabResult
     }
 
+    func canCloseTab(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canCloseTabValue
+    }
+
+    func closeTab(originWindowID: UUID) -> Bool {
+        closedTabWindowIDs.append(originWindowID)
+        return closeTabResult
+    }
+
     func canSelectAdjacentTab(
         direction: TabNavigationDirection,
         originWindowID: UUID
@@ -623,6 +636,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return closeWorkspace(originWindowID: originWindowID)
             case .renameTab:
                 return renameTab(originWindowID: originWindowID)
+            case .closeTab:
+                return closeTab(originWindowID: originWindowID)
             case .selectPreviousTab:
                 return selectAdjacentTab(direction: .previous, originWindowID: originWindowID)
             case .selectNextTab:

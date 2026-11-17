@@ -103,6 +103,8 @@ public struct CodexRootTurnSnapshot: Equatable, Sendable {
     public let rootTurnInputFingerprint: String?
     public let isAwaitingSessionLogContext: Bool
     public let pendingRootInputFingerprint: String?
+    /// Input arrived after the running hook turn, but no replacement turn was identified.
+    public let hasUnidentifiedHookInput: Bool
     public let pendingApprovalContext: CodexRootTurnApprovalContext?
     public let activeApprovalContext: CodexRootTurnApprovalContext?
     public let currentApprovalContext: CodexRootTurnApprovalContext?
@@ -115,6 +117,7 @@ public struct CodexRootTurnSnapshot: Equatable, Sendable {
         rootTurnInputFingerprint: String? = nil,
         isAwaitingSessionLogContext: Bool = false,
         pendingRootInputFingerprint: String? = nil,
+        hasUnidentifiedHookInput: Bool = false,
         pendingApprovalContext: CodexRootTurnApprovalContext? = nil,
         activeApprovalContext: CodexRootTurnApprovalContext? = nil,
         currentApprovalContext: CodexRootTurnApprovalContext? = nil,
@@ -126,6 +129,7 @@ public struct CodexRootTurnSnapshot: Equatable, Sendable {
         self.rootTurnInputFingerprint = rootTurnInputFingerprint
         self.isAwaitingSessionLogContext = isAwaitingSessionLogContext
         self.pendingRootInputFingerprint = pendingRootInputFingerprint
+        self.hasUnidentifiedHookInput = hasUnidentifiedHookInput
         self.pendingApprovalContext = pendingApprovalContext
         self.activeApprovalContext = activeApprovalContext
         self.currentApprovalContext = currentApprovalContext
@@ -194,6 +198,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
     private var rootTurnInputFingerprint: String?
     private var isAwaitingSessionLogContext = false
     private var pendingRootInputFingerprint: String?
+    private var hasUnidentifiedHookInput = false
     private var pendingApprovalContext: CodexRootTurnApprovalContext?
     private var activeApprovalContext: CodexRootTurnApprovalContext?
     private var currentApprovalContext: CodexRootTurnApprovalContext?
@@ -211,6 +216,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
             rootTurnInputFingerprint: rootTurnInputFingerprint,
             isAwaitingSessionLogContext: isAwaitingSessionLogContext,
             pendingRootInputFingerprint: pendingRootInputFingerprint,
+            hasUnidentifiedHookInput: hasUnidentifiedHookInput,
             pendingApprovalContext: pendingApprovalContext,
             activeApprovalContext: activeApprovalContext,
             currentApprovalContext: currentApprovalContext,
@@ -297,6 +303,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
             let previousRootThreadID = rootThreadID
             rootThreadID = threadID
             if let previousRootThreadID, previousRootThreadID != threadID {
+                hasUnidentifiedHookInput = false
                 rootTurnID = nil
                 rootTurnInputFingerprint = nil
                 isAwaitingSessionLogContext = false
@@ -315,6 +322,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
             preservingNilWhenUnspecified: true
         )
         if let turnID {
+            hasUnidentifiedHookInput = false
             rootTurnID = turnID
             rootTurnInputFingerprint = fingerprint
             isAwaitingSessionLogContext = false
@@ -334,6 +342,11 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                     pendingApprovalContext = nil
                     currentApprovalContext = nextApprovalContext
                 }
+            } else if authority == .hooks, rootTurnID != nil {
+                // Hook-tracked Steer and queued input have no turn ID. Keep
+                // the running turn until a hook identifies its replacement.
+                // Remember this even if later input repeats the original text.
+                hasUnidentifiedHookInput = true
             } else {
                 rootTurnID = nil
                 rootTurnInputFingerprint = nil
@@ -342,6 +355,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                 currentApprovalContext = nil
             }
         } else if context.hasSpecifiedField {
+            hasUnidentifiedHookInput = false
             rootTurnID = nil
             rootTurnInputFingerprint = nil
             isAwaitingSessionLogContext = false
@@ -451,6 +465,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
         }
 
         if kind == .userPromptSubmit, rootTurnID != turnID {
+            hasUnidentifiedHookInput = false
             // Correlation must use the old pending fingerprint/context before
             // this hook's fingerprint replaces the bridge below.
             let oldPendingRootInputFingerprint = pendingRootInputFingerprint
@@ -522,6 +537,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
     }
 
     private mutating func replaceRootThread(with threadID: String) {
+        hasUnidentifiedHookInput = false
         rootThreadID = threadID
         rootTurnID = nil
         rootTurnInputFingerprint = nil
@@ -602,6 +618,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
     }
 
     private func assertStateInvariants() {
+        assert(!hasUnidentifiedHookInput || (authority == .hooks && rootTurnID != nil))
         assert(!(isAwaitingSessionLogContext && pendingApprovalContext != nil))
         assert(!(isAwaitingSessionLogContext && currentApprovalContext != nil))
         assert(!(pendingApprovalContext != nil && currentApprovalContext != nil))

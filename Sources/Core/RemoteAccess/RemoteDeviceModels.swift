@@ -18,6 +18,13 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     /// And an older Mac or an older phone that met an unknown scope value
     /// would fail to decode the whole device record.
     public var sessionStartDisabled: Bool
+    /// True when "Approve requests" is turned on for this device on the Mac.
+    ///
+    /// Unlike starting sessions, this is opt-in: approving lets the device
+    /// allow tool use and save Claude permission rules, which no device could
+    /// do before. An absent value, including on records written before the
+    /// permission existed, means not allowed.
+    public var permissionApprovalEnabled: Bool
     public var authKind: RemoteDeviceAuthKind
     /// Exact Tailscale identity for a native credential. It is confined to the
     /// protected 0600 store and must never enter client responses, routine
@@ -34,6 +41,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         name: String,
         scopes: Set<RemoteDeviceScope> = [.read],
         sessionStartDisabled: Bool = false,
+        permissionApprovalEnabled: Bool = false,
         authKind: RemoteDeviceAuthKind = .browser,
         tailscaleLogin: String? = nil,
         createdAt: Date,
@@ -44,6 +52,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         self.name = name
         self.scopes = scopes
         self.sessionStartDisabled = sessionStartDisabled
+        self.permissionApprovalEnabled = permissionApprovalEnabled
         self.authKind = authKind
         self.tailscaleLogin = tailscaleLogin
         self.createdAt = createdAt
@@ -52,7 +61,8 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, scopes, sessionStartDisabled, authKind, tailscaleLogin, createdAt, lastSeenAt, revokedAt
+        case id, name, scopes, sessionStartDisabled, permissionApprovalEnabled, authKind, tailscaleLogin, createdAt,
+             lastSeenAt, revokedAt
     }
 
     /// Starting a session sends a first message, so it needs the send scope
@@ -61,12 +71,19 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         isRevoked == false && authKind == .native && scopes.contains(.send) && sessionStartDisabled == false
     }
 
+    /// Answering a permission request sends a decision to the agent, so it
+    /// needs the send scope as well as the opt-in. Only native clients have it.
+    public var canApprovePermissions: Bool {
+        isRevoked == false && authKind == .native && scopes.contains(.send) && permissionApprovalEnabled
+    }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         scopes = try container.decode(Set<RemoteDeviceScope>.self, forKey: .scopes)
         sessionStartDisabled = try container.decodeIfPresent(Bool.self, forKey: .sessionStartDisabled) ?? false
+        permissionApprovalEnabled = try container.decodeIfPresent(Bool.self, forKey: .permissionApprovalEnabled) ?? false
         authKind = try container.decodeIfPresent(RemoteDeviceAuthKind.self, forKey: .authKind) ?? .browser
         tailscaleLogin = try container.decodeIfPresent(String.self, forKey: .tailscaleLogin)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
@@ -97,6 +114,7 @@ public struct RemoteDeviceRecord: Codable, Equatable, Sendable, Identifiable {
         try container.encode(name, forKey: .name)
         try container.encode(scopes, forKey: .scopes)
         if sessionStartDisabled { try container.encode(true, forKey: .sessionStartDisabled) }
+        if permissionApprovalEnabled { try container.encode(true, forKey: .permissionApprovalEnabled) }
         try container.encode(authKind, forKey: .authKind)
         try container.encodeIfPresent(tailscaleLogin, forKey: .tailscaleLogin)
         try container.encode(createdAt, forKey: .createdAt)

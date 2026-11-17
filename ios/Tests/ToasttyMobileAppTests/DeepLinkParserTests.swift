@@ -21,6 +21,10 @@ final class DeepLinkParserTests: XCTestCase {
             parser.parse(try url("TOASTTY-MOBILE-DEV://workspace/\(workspaceID.uuidString.lowercased())")),
             .workspace(workspaceID)
         )
+        XCTAssertEqual(
+            parser.parse(try url("toastty-mobile-dev://new-session/\(conversationID.uuidString)")),
+            .newSession(conversationID)
+        )
     }
 
     func testRejectsOtherBuildSchemesAndHostileOrMalformedRoutes() throws {
@@ -36,6 +40,9 @@ final class DeepLinkParserTests: XCTestCase {
             "toastty-mobile-dev://conversation/\(conversationID.uuidString)/extra",
             "toastty-mobile-dev://unknown/\(conversationID.uuidString)",
             "toastty-mobile-dev://workspace/not-a-uuid",
+            "toastty-mobile-dev://new-session",
+            "toastty-mobile-dev://new-session/not-a-uuid",
+            "toastty-mobile-dev://new-session/\(conversationID.uuidString)?text=hello",
         ]
 
         for rawURL in rejected {

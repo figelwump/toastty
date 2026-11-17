@@ -1,4 +1,4 @@
-import { base64url, RelayError } from "./relay-protocol";
+import { base64url, RelayError, type VerificationOutcome } from "./relay-protocol";
 
 type ProviderTokenRow = { token: string; created_at: number; key_id: string; team_id: string };
 export type APNsResult = "accepted" | "inactive" | "invalid_device_token" | "unavailable" | "unknown";
@@ -9,23 +9,30 @@ export class RelayAPNsClient {
   private signing?: Promise<string>;
   constructor(private readonly env: RelayEnv, private readonly sql: SqlStorage) {}
 
-  async send(deviceToken: string, payload: unknown, expiresAt: number, collapseID: string): Promise<APNsResult> {
+  async send(deviceToken: string, payload: unknown, expiresAt: number, collapseID: string,
+    report?: (outcome: VerificationOutcome, providerRefreshAttempted: boolean) => void): Promise<APNsResult> {
+    let diagnostic: VerificationOutcome = "provider_unavailable";
+    let providerRefreshAttempted = false;
+    const observe = (value: VerificationOutcome) => { diagnostic = value; };
     try {
     const providerToken = await this.providerToken();
-    const first = await this.request(deviceToken, payload, expiresAt, collapseID, providerToken);
+    const first = await this.request(deviceToken, payload, expiresAt, collapseID, providerToken, observe);
     // A definite rejection did not deliver an alert. Refresh this rejected
     // provider token once; transport failures and ambiguous results never retry.
     if (first === "expired_provider_token") {
+      providerRefreshAttempted = true;
       const renewed = await this.providerToken(providerToken);
-      const second = await this.request(deviceToken, payload, expiresAt, collapseID, renewed);
+      const second = await this.request(deviceToken, payload, expiresAt, collapseID, renewed, observe);
       return second === "expired_provider_token" ? "unavailable" : second;
     }
     return first;
     } catch { return "unavailable"; }
+    finally { report?.(diagnostic, providerRefreshAttempted); }
   }
 
   private async request(
-    deviceToken: string, payload: unknown, expiresAt: number, collapseID: string, providerToken: string
+    deviceToken: string, payload: unknown, expiresAt: number, collapseID: string, providerToken: string,
+    observe: (outcome: VerificationOutcome) => void
   ): Promise<APNsResult | "expired_provider_token"> {
     const host = this.env.APNS_ENVIRONMENT === "development" ? "api.sandbox.push.apple.com"
       : this.env.APNS_ENVIRONMENT === "production" ? "api.push.apple.com" : undefined;
@@ -40,13 +47,14 @@ export class RelayAPNsClient {
         },
         body: JSON.stringify(payload)
       });
-      if (response.status === 200) { await response.body?.cancel().catch(() => {}); return "accepted"; }
+      if (response.status === 200) { observe("apple_accepted"); await response.body?.cancel().catch(() => {}); return "accepted"; }
       const reason = await boundedReason(response);
+      observe(verificationOutcome(response.status, reason));
       if (response.status === 410) return "inactive";
       if (response.status === 400 && (reason === "BadDeviceToken" || reason === "DeviceTokenNotForTopic")) return "invalid_device_token";
       if (response.status === 403 && reason === "ExpiredProviderToken") return "expired_provider_token";
       return response.status >= 400 && response.status < 500 && reason ? "unavailable" : "unknown";
-    } catch { return "unknown"; }
+    } catch { observe("apple_transport_unknown"); return "unknown"; }
   }
 
   private async providerToken(rejectedToken?: string): Promise<string> {
@@ -82,6 +90,19 @@ export class RelayAPNsClient {
       return token;
     } catch { throw new RelayError(503, "service_unavailable"); }
   }
+}
+
+function verificationOutcome(status: number, reason?: string): VerificationOutcome {
+  if (status === 410) return "apple_unregistered";
+  if (status === 400 && reason === "BadDeviceToken") return "apple_bad_device_token";
+  if (status === 400 && reason === "DeviceTokenNotForTopic") return "apple_token_topic_mismatch";
+  if (status === 403 && reason === "ExpiredProviderToken") return "apple_provider_expired";
+  if (status === 429 && reason === "TooManyProviderTokenUpdates") return "apple_provider_updates_limited";
+  if (status === 429) return "apple_rate_limited";
+  if (status >= 500 && status <= 599) return "apple_server_error";
+  if (!reason || status < 400 || status >= 500) return "apple_response_unknown";
+  if (status === 403) return "apple_provider_rejected";
+  return "apple_rejected";
 }
 
 async function boundedReason(response: Response): Promise<string | undefined> {

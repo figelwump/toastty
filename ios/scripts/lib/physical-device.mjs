@@ -175,14 +175,20 @@ export function warmConnectTargets(value, requested = "") {
     }));
 }
 
+// `xcodebuild -showdestinations` headings: Xcode 26 and earlier print
+// "Available destinations" / "Ineligible destinations"; Xcode 27 prints
+// "Destinations compatible with" / "Destinations incompatible with".
+const AVAILABLE_DESTINATIONS_HEADINGS = ["Available destinations", "Destinations compatible with"];
+const UNAVAILABLE_DESTINATIONS_HEADINGS = ["Ineligible destinations", "Destinations incompatible with"];
+
 export function destinationIsAvailable(value, udid) {
   let inAvailableSection = false;
   for (const line of String(value).split("\n")) {
-    if (line.includes("Available destinations")) {
+    if (AVAILABLE_DESTINATIONS_HEADINGS.some((heading) => line.includes(heading))) {
       inAvailableSection = true;
       continue;
     }
-    if (line.includes("Ineligible destinations")) {
+    if (UNAVAILABLE_DESTINATIONS_HEADINGS.some((heading) => line.includes(heading))) {
       inAvailableSection = false;
       continue;
     }
@@ -191,7 +197,7 @@ export function destinationIsAvailable(value, udid) {
       .replace(/[{}]/g, "")
       .split(",")
       .map((field) => field.trim());
-    if (fields.includes(`id:${udid}`)) return true;
+    if (fields.includes(`id:${udid}`) && !fields.some((field) => field.startsWith("error:"))) return true;
   }
   return false;
 }

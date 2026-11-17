@@ -4,9 +4,10 @@ import RemoteProtocol
 import ToasttyMobileDomain
 
 enum ToasttyPushFixtureMode: String, Equatable, Sendable {
-    case intro, pending, error, enabled, denied
+    case intro, pending, error, enabled, denied, diagnostics
     case systemIntro = "system-intro"
     case turningOff = "turning-off"
+    case missedProofs = "missed-proofs"
 }
 
 @MainActor
@@ -18,15 +19,18 @@ enum ToasttyPushFixtures {
         var state = MobilePushState()
         let introducesNotifications = mode == .intro || mode == .systemIntro
         // Disabled alert settings can precede push opt-in on a badge-only install.
-        state.desired = !introducesNotifications && mode != .turningOff && mode != .denied
+        if !introducesNotifications {
+            state.desired = mode != .turningOff && mode != .denied && mode != .diagnostics
+        }
         state.introHandled = !introducesNotifications
         let registration = MobilePushRegistration(pairingID: credential.device.id, gatewayURL: credential.gatewayURL,
             relayURL: config.relayURL, relayID: config.relayID, deviceToken: String(repeating: "ab", count: 32),
             managementToken: String(repeating: "A", count: 43), sendToken: String(repeating: "A", count: 43),
-            stage: mode == .enabled ? .enabled : mode == .pending ? .pending : .relayActive,
+            stage: mode == .enabled ? .enabled : mode == .pending || mode == .missedProofs ? .pending : .relayActive,
             expiresAt: Date().addingTimeInterval(300))
         if mode == .enabled { state.active = registration }
-        if mode == .pending || mode == .error { state.pending = registration }
+        if mode == .pending || mode == .error || mode == .missedProofs { state.pending = registration }
+        if mode == .missedProofs { state.missedProofs = ToasttyPushController.missedProofsBeforeHint }
         if mode == .turningOff { state.cleanup = [registration] }
         // Only the clean-simulator badge test uses real system permissions.
         // Mac, relay, and APNs registration remain inactive fixtures.
@@ -37,7 +41,7 @@ enum ToasttyPushFixtures {
             installation: FixturePushInstallation(state.installationID),
             relayFactory: { _ in FixturePushRelay(mode: mode) },
             nativeFactory: { _, _ in FixtureNativePush(mode: mode, registrationID: registration.registrationID) },
-            automaticallyReconciles: false)
+            automaticallyReconciles: mode == .diagnostics)
         Task {
             _ = await vault.restore()
             await controller.restore()
@@ -74,6 +78,14 @@ private final class FixturePushNotifications: ToasttyPushNotificationClient {
 }
 private struct FixturePushRelay: PushRelayClientProtocol {
     let mode: ToasttyPushFixtureMode
+    func begin(_ registration: MobilePushRegistration,
+               onDiagnostic: @escaping @Sendable (PushRelayDiagnostic) -> Void) async throws -> PushRelayBeginResponse {
+        if mode == .diagnostics {
+            onDiagnostic(PushRelayDiagnostic(statusCode: 429, code: .verificationTokenLimit, rateLimitSource: .relay))
+            throw PushRelayFailure.rateLimited(retryAfter: 120)
+        }
+        return try await begin(registration)
+    }
     func begin(_ registration: MobilePushRegistration) async throws -> PushRelayBeginResponse {
         PushRelayBeginResponse(registrationID: registration.registrationID, state: "pending", expiresAt: Date().addingTimeInterval(300).timeIntervalSince1970)
     }

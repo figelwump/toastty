@@ -31,6 +31,7 @@ export type LocalDocumentFormat =
   | "xml"
   | "shell"
   | "code";
+export type LocalDocumentMarkdownViewMode = "formatted" | "source";
 
 export interface LocalDocumentPanelBootstrap {
   contractVersion: 7;
@@ -53,6 +54,8 @@ export interface LocalDocumentPanelBootstrap {
   textScale: number;
   // Edit-mode editor; hosts that omit it get the textarea.
   editorEngine?: "textarea" | "codemirror";
+  /** Markdown only. Missing means "formatted", as for the iOS preview. */
+  markdownViewMode?: LocalDocumentMarkdownViewMode;
 }
 
 type BootstrapListener = (bootstrap: LocalDocumentPanelBootstrap | null) => void;

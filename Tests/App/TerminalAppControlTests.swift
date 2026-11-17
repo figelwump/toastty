@@ -187,6 +187,56 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertEqual(deliveryCount, 0)
     }
 
+    func testSessionExitAfterTurnArmsOnlyTheRunningTurnOfTheExpectedSession() throws {
+        let fixture = try TerminalAppControlFixture()
+        let sessionID = "exiting-session"
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            at: Date()
+        )
+        let exitController = SessionExitController(
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            sessionCloseController: SessionCloseController(
+                store: fixture.store,
+                sessionRuntimeStore: fixture.sessionRuntimeStore,
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: fixture.store,
+                    runtimeRegistry: fixture.terminalRuntimeRegistry,
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+                ),
+                terminalCloseAssessment: { _ in nil },
+                localDocumentCloseConfirmationState: { _ in nil }
+            ),
+            sendText: { _, _ in true }
+        )
+        fixture.sessionRuntimeStore.sessionExitController = exitController
+        func arm(_ expectedSessionID: String) throws -> AppControlActionOutcome {
+            try fixture.executor.runAction(
+                id: AppControlActionID.sessionExitAfterTurn.rawValue,
+                args: ["panelID": .string(fixture.panelID.uuidString), "expectedSessionID": .string(expectedSessionID)]
+            )
+        }
+
+        XCTAssertThrowsError(try arm(sessionID), "No turn is running yet")
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date()
+        )
+        XCTAssertThrowsError(try arm("another-session"))
+        XCTAssertTrue(exitController.armedExitsBySessionID.isEmpty)
+
+        let outcome = try arm(sessionID)
+        XCTAssertEqual(outcome.result?["exitCommand"], .string("/exit"))
+        XCTAssertEqual(exitController.armedExitsBySessionID[sessionID]?.panelID, fixture.panelID)
+    }
+
     func testTerminalSendTextDescriptorListsExpectedSessionID() throws {
         let fixture = try TerminalAppControlFixture()
         let descriptor = try XCTUnwrap(

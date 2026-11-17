@@ -147,9 +147,15 @@ private extension ClaudeTranscriptParser {
             return []
         }
         let recordUUID = Self.nonEmptyString(object["uuid"])
+        // Claude writes its interrupt record itself; a typed or pasted prompt
+        // carries where it came from, even when its text matches the marker.
+        let isProviderRecord = object["origin"] == nil && object["promptSource"] == nil
 
         // String content is always a real user turn.
         if let text = Self.nonEmptyString(message["content"]) {
+            if isProviderRecord, Self.interruptMarkers.contains(text) {
+                return [interruptObservation(recordUUID: recordUUID, timestamp: timestamp)]
+            }
             return [userMessageObservation(text: text, recordUUID: recordUUID, timestamp: timestamp)]
         }
 
@@ -171,7 +177,9 @@ private extension ClaudeTranscriptParser {
                 break
             }
         }
-        if userText.isEmpty == false {
+        if isProviderRecord, userText.count == 1, Self.interruptMarkers.contains(userText[0]) {
+            observations.append(interruptObservation(recordUUID: recordUUID, timestamp: timestamp))
+        } else if userText.isEmpty == false {
             observations.append(userMessageObservation(
                 text: userText.joined(separator: "\n"),
                 recordUUID: recordUUID,
@@ -179,6 +187,24 @@ private extension ClaudeTranscriptParser {
             ))
         }
         return observations
+    }
+
+    /// Claude writes one of these as a user record when Esc, or "No" in a
+    /// permission prompt, stops a turn. No hook reports that stop, so the
+    /// record is the turn's end, not something the user typed.
+    static let interruptMarkers: Set<String> = [
+        "[Request interrupted by user]",
+        "[Request interrupted by user for tool use]",
+    ]
+
+    mutating func interruptObservation(recordUUID: String?, timestamp: Date) -> ProviderTranscriptObservation {
+        ProviderTranscriptObservation(
+            timestamp: timestamp,
+            turnID: currentTurnID,
+            providerIdentity: recordUUID,
+            fingerprint: recordUUID.map { "interrupt:\($0)" } ?? fingerprintWithOccurrence("interrupt:\(currentTurnID ?? "")"),
+            payload: .turnEnded(turnID: currentTurnID, reason: .aborted)
+        )
     }
 
     mutating func userMessageObservation(text rawText: String, recordUUID: String?, timestamp: Date) -> ProviderTranscriptObservation {

@@ -394,6 +394,28 @@ final class ToasttyNewSessionModelTests: XCTestCase {
         XCTAssertEqual(model.message, "Keep the text")
     }
 
+    func testSharedContentStartsTheDraftAndReachesTheStartRequest() async {
+        let host = FakeNewSessionHost(options: options(agents: [claude()]))
+        let file = attachment()
+        let model = ToasttyNewSessionModel(
+            workspaceID: workspaceID,
+            workspaceTitle: "toastty",
+            host: host,
+            preferences: ToasttyNewSessionPreferences(defaults: defaults),
+            message: "Toastty docs\nhttps://example.com/docs",
+            attachments: [file],
+            notice: "Toastty left out 1 shared item."
+        )
+        XCTAssertTrue(model.preventsInteractiveDismissal, "A swipe must not lose shared content")
+        await model.loadOptions()
+        XCTAssertEqual(model.errorMessage, "Toastty left out 1 shared item.")
+        XCTAssertTrue(model.canStart)
+
+        await model.start()
+        XCTAssertEqual(host.startRequests.first?.text, "Toastty docs\nhttps://example.com/docs")
+        XCTAssertEqual(host.startRequests.first?.attachments, [file])
+    }
+
     func testCancelDiscardsImportsAndLateOptionsCannotRestoreTheDraft() async throws {
         let otherID = UUID()
         let host = FakeNewSessionHost(options: options(agents: [claude()]))

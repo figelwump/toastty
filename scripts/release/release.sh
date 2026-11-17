@@ -907,6 +907,13 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   exit 0
 fi
 
+# Reject an inherited test-only opt-out before accessing signing tools or secrets.
+case "${TUIST_TOASTTY_DISABLE_PUSH:-0}" in
+  0) ;;
+  1) fail "Distribution builds cannot disable push. Unset TUIST_TOASTTY_DISABLE_PUSH and configure the production push relay." ;;
+  *) fail "TUIST_TOASTTY_DISABLE_PUSH must be 0 or 1 when set." ;;
+esac
+
 require_command tuist
 require_command xcodebuild
 require_command codesign

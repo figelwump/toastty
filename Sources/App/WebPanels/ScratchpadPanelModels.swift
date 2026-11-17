@@ -22,6 +22,13 @@ struct ScratchpadPanelRuntimeAutomationState: Equatable, Sendable {
     let currentAssetPath: String?
     let currentBootstrap: ScratchpadPanelBootstrap?
     let recentDiagnostics: [ScratchpadPanelDiagnostic]
+    let magnification: Double
+}
+
+enum ScratchpadMagnificationAdjustment: Equatable, Sendable {
+    case increase
+    case decrease
+    case reset
 }
 
 struct ScratchpadPanelDiagnostic: Equatable, Sendable {

@@ -70,6 +70,7 @@ enum CommandPaletteCatalog {
             (.renameWorkspace, actions.canRenameWorkspace(originWindowID: originWindowID)),
             (.closeWorkspace, actions.canCloseWorkspace(originWindowID: originWindowID)),
             (.renameTab, actions.canRenameTab(originWindowID: originWindowID)),
+            (.closeTab, actions.canCloseTab(originWindowID: originWindowID)),
             (.selectPreviousTab, actions.canSelectAdjacentTab(direction: .previous, originWindowID: originWindowID)),
             (.selectNextTab, actions.canSelectAdjacentTab(direction: .next, originWindowID: originWindowID)),
             (

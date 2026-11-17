@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import ToasttyMobileDomain
 @testable import ToasttyMobileApp
 
 final class ToasttyConnectionDiagnosticsTests: XCTestCase {
@@ -27,6 +28,28 @@ final class ToasttyConnectionDiagnosticsTests: XCTestCase {
                 "connecting", "connected", "reconnecting", "disconnected",
                 "send_started", "send_enqueued", "send_accepted", "send_rejected", "send_uncertain",
                 "auth_started", "auth_succeeded", "auth_required", "auth_revoked",
+                "push_registration_restored",
+                "push_token_requested",
+                "push_token_received",
+                "push_token_request_failed",
+                "push_bridge_attached",
+                "push_payload_invalid",
+                "push_proof_buffered",
+                "push_verification_started",
+                "push_verification_response",
+                "push_setup_context_changed",
+                "push_proof_received",
+                "push_proof_invalid",
+                "push_proof_no_pending",
+                "push_proof_other_registration",
+                "push_proof_other_pairing",
+                "push_proof_disabled",
+                "push_proof_save_failed",
+                "push_proof_deferred_background", "push_proof_deferred_disconnected",
+                "push_proof_deferred_pairing", "push_proof_deferred_configuration", "push_proof_already_verified",
+                "push_proof_completion_started",
+                "push_proof_completed",
+                "push_mac_handoff_started",
                 "push_registration_missing", "push_token_changed", "push_relay_changed",
                 "push_pairing_changed", "push_proof_expired", "push_registration_expired",
                 "push_state_unavailable", "push_mac_configuration_failed", "push_relay_status_failed",
@@ -55,6 +78,31 @@ final class ToasttyConnectionDiagnosticsTests: XCTestCase {
             .authSucceeded: .auth,
             .authRequired: .auth,
             .authRevoked: .auth,
+            .pushRegistrationRestored: .gateway,
+            .pushTokenRequested: .gateway,
+            .pushTokenReceived: .gateway,
+            .pushTokenRequestFailed: .gateway,
+            .pushBridgeAttached: .gateway,
+            .pushPayloadInvalid: .gateway,
+            .pushProofBuffered: .gateway,
+            .pushVerificationStarted: .gateway,
+            .pushVerificationResponse: .gateway,
+            .pushSetupContextChanged: .gateway,
+            .pushProofReceived: .gateway,
+            .pushProofInvalid: .gateway,
+            .pushProofNoPending: .gateway,
+            .pushProofOtherRegistration: .gateway,
+            .pushProofOtherPairing: .gateway,
+            .pushProofDisabled: .gateway,
+            .pushProofSaveFailed: .gateway,
+            .pushProofDeferredBackground: .gateway,
+            .pushProofDeferredDisconnected: .gateway,
+            .pushProofDeferredPairing: .gateway,
+            .pushProofDeferredConfiguration: .gateway,
+            .pushProofAlreadyVerified: .gateway,
+            .pushProofCompletionStarted: .gateway,
+            .pushProofCompleted: .gateway,
+            .pushMacHandoffStarted: .gateway,
             .pushRegistrationMissing: .gateway,
             .pushTokenChanged: .gateway,
             .pushRelayChanged: .gateway,
@@ -119,6 +167,23 @@ final class ToasttyConnectionDiagnosticsTests: XCTestCase {
         XCTAssertEqual(emissions.count, 1)
         XCTAssertEqual(emissions.first?.0, .stream)
         XCTAssertEqual(emissions.first?.1, .streamConnected)
+    }
+
+    func testPushDetailsRemainBoundedAndRegistrationNumbersDoNotContainIdentifiers() {
+        let details = ToasttyPushDiagnosticDetails(registrationNumber: 2,
+            relay: PushRelayDiagnostic(statusCode: 429, code: .verificationTokenLimit, rateLimitSource: .relay),
+            retryAfter: 120)
+        var state = ToasttyDiagnosticsState(logCapacity: 3)
+        state.record(.pushVerificationStarted, pushDetails: details)
+        state.record(.pushRateLimited, pushDetails: details)
+        XCTAssertEqual(state.connectionLog.entries.last?.pushDetails?.retryAfterSeconds, 120)
+        XCTAssertTrue(details.displayText.contains("Registration 2 this run"))
+        XCTAssertTrue(details.displayText.contains("device token"))
+        XCTAssertEqual(ToasttyPushDiagnosticDetails(retryAfter: .infinity).retryAfterSeconds, nil)
+        XCTAssertEqual(ToasttyPushDiagnosticDetails(retryAfter: 1_000_000).retryAfterSeconds, 86_400)
+        for _ in 0..<4 { state.record(.gatewayRequestSucceeded) }
+        XCTAssertEqual(state.connectionLog.count, 3)
+        XCTAssertTrue(state.connectionLog.entries.allSatisfy { $0.pushDetails == nil })
     }
 
     private func date(_ offset: TimeInterval) -> Date {

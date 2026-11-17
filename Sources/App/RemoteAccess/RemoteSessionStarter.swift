@@ -92,6 +92,7 @@ final class RemoteSessionStarter {
     /// Publishes the session list after a launch, so the device sees the
     /// new conversation without waiting for the next change.
     private let publishSessionList: () -> Void
+    private let sessionStartedInNewTab: @MainActor (String) -> Void
 
     private var inFlight: [RequestKey: Task<RemoteSessionStartResult, Never>] = [:]
     /// Starts that succeeded, kept so a repeat of the same request returns
@@ -112,7 +113,8 @@ final class RemoteSessionStarter {
         terminalReadinessTimeout: Duration = RemoteSessionStarter.defaultTerminalReadinessTimeout,
         deviceMayStart: @escaping (UUID) -> Bool,
         recentModels: @escaping (AgentKind) -> [String],
-        publishSessionList: @escaping () -> Void
+        publishSessionList: @escaping () -> Void,
+        sessionStartedInNewTab: @escaping @MainActor (_ sessionID: String) -> Void = { _ in }
     ) {
         self.store = store
         self.launcher = launcher
@@ -123,6 +125,7 @@ final class RemoteSessionStarter {
         self.deviceMayStart = deviceMayStart
         self.recentModels = recentModels
         self.publishSessionList = publishSessionList
+        self.sessionStartedInNewTab = sessionStartedInNewTab
     }
 
     // MARK: - Options
@@ -305,7 +308,7 @@ final class RemoteSessionStarter {
         let conversationID = RemoteConversationID()
         var tabWasSelected = false
         do {
-            _ = try await launchWhenTerminalIsReady(
+            let launched = try await launchWhenTerminalIsReady(
                 launcher: launcher,
                 request: request,
                 initialPrompt: initialPrompt,
@@ -330,6 +333,9 @@ final class RemoteSessionStarter {
                     }
                 }
             )
+            // The tab exists only for this session, so it closes once the
+            // agent exits cleanly.
+            sessionStartedInNewTab(launched.sessionID)
         } catch {
             if case .commandDeliveryUncertain? = error as? AgentLaunchError {
                 // The terminal may hold part of the command. The tab stays,

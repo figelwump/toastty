@@ -40,7 +40,9 @@ final class ToasttyPushController {
     private let buildID: String
     private let automaticallyReconciles: Bool
     private let sleep: @Sendable (TimeInterval) async throws -> Void
-    private var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in }
+    private var onDiagnosticRecord: @MainActor (ToasttyDiagnosticRecord) -> Void = { _ in }
+    private var diagnosticRegistrations: [(id: UUID, number: UInt64)] = []
+    private var nextDiagnosticRegistration: UInt64 = 1
     @ObservationIgnored private var retryTask: Task<Void, Never>?
     private var retryWakeID: UUID?
     private var transientRetryAt: Date?
@@ -49,7 +51,7 @@ final class ToasttyPushController {
     private var consecutiveFailures = 0
     private var cleanupFailures = 0
     private var invalidToken = false
-    private var reportedFailures: Set<ToasttyConnectionDiagnosticEvent> = []
+    private var reportedFailures: Set<ToasttyPushFailureDiagnosticKey> = []
     private var context: Context?
     private var revision: UInt64 = 0
     private var isForeground = true
@@ -69,10 +71,18 @@ final class ToasttyPushController {
         configuration != nil && configurationMatches && context?.connected == true && context?.supported == true
             && storedState?.introHandled == false && permission != .denied
     }
+    /// iOS can keep returning an app token that Apple accepts but no longer
+    /// delivers to. Only deleting and reinstalling the app has replaced it.
+    var deliveryHint: String? {
+        guard presentation == .pending, (storedState?.missedProofs ?? 0) >= Self.missedProofsBeforeHint else { return nil }
+        return "This iPhone isn’t receiving Toastty’s test notifications. Delete and reinstall Toastty, then allow notifications."
+    }
+    static let missedProofsBeforeHint = 2
     var presentation: ToasttyPushPresentation {
         guard configuration != nil, storedState != nil else { return .unavailable }
         guard desired else { return storedState?.cleanup.isEmpty == false || storedState?.needsMacClear == true ? .turningOff : .off }
         guard permission != .denied else { return .permissionDenied }
+        guard permission == .allowed else { return .off }
         if storedState?.pending != nil || storedState?.active?.stage != .enabled { return .pending }
         return .enabled
     }
@@ -100,13 +110,19 @@ final class ToasttyPushController {
     deinit { retryTask?.cancel() }
 
     func installDiagnosticEventHandler(_ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void) {
-        onDiagnosticEvent = handler
+        onDiagnosticRecord = { handler($0.event) }
+    }
+
+    func installDiagnosticRecordHandler(_ handler: @escaping @MainActor (ToasttyDiagnosticRecord) -> Void) {
+        onDiagnosticRecord = handler
     }
 
     /// Attach only after SwiftUI retains its State controller. Root view
     /// construction can otherwise replace these handlers with a discarded
     /// controller during a later body update.
     func attachBridge(_ bridge: ToasttyPushNotificationBridge) {
+        bridge.onDiagnosticRecord = { [weak self] record in self?.onDiagnosticRecord(record) }
+        emit(.pushBridgeAttached)
         if let token = bridge.deviceToken { receivedToken(token) }
         bridge.onToken = { [weak self] in self?.receivedToken($0) }
         bridge.onRegistrationFailure = { [weak self] in
@@ -137,10 +153,15 @@ final class ToasttyPushController {
                 state.desired = false
                 state.introHandled = false
                 state.needsMacClear = true
+                state.missedProofs = nil
                 state.installationID = UUID()
             }
             try store.save(state)
             storedState = state
+            for registration in [state.active, state.pending].compactMap({ $0 }) {
+                registerDiagnosticRegistration(registration)
+                emit(.pushRegistrationRestored, registration: registration)
+            }
             installation.installationID = state.installationID
             let proofs = queuedProofs
             queuedProofs.removeAll()
@@ -198,9 +219,8 @@ final class ToasttyPushController {
         scheduleReconcile()
     }
 
-    func deferIntroduction() {
-        do { try persist { $0.introHandled = true } }
-        catch { errorMessage = "Couldn’t save notification settings. Try again." }
+    func deferIntroduction() async {
+        await setDesired(false)
     }
 
     func setDesired(_ value: Bool) async {
@@ -222,7 +242,15 @@ final class ToasttyPushController {
                 catch { errorMessage = "Couldn’t request notification permission. Try again."; return }
             }
         } else {
-            do { try persist { $0.desired = false; $0.queueCleanup(); $0.needsMacClear = true } }
+            do {
+                try persist {
+                    $0.introHandled = true
+                    $0.desired = false
+                    $0.needsMacClear = $0.needsMacClear || $0.active != nil || $0.pending != nil || !$0.cleanup.isEmpty
+                    $0.queueCleanup()
+                    $0.missedProofs = nil
+                }
+            }
             catch { errorMessage = "Couldn’t save notification settings. Try again."; return }
             revision &+= 1
         }
@@ -251,7 +279,7 @@ final class ToasttyPushController {
         queuedTaps.removeAll()
         await restore()
         if let pairingID, let context, context.pairingID != pairingID { return true }
-        do { try persist { $0.desired = false; $0.queueCleanup(); $0.needsMacClear = false } }
+        do { try persist { $0.desired = false; $0.queueCleanup(); $0.needsMacClear = false; $0.missedProofs = nil } }
         catch { errorMessage = "Couldn’t save notification cleanup. Try again."; return false }
         revision &+= 1
         scheduleReconcile()
@@ -260,6 +288,7 @@ final class ToasttyPushController {
 
     func receivedToken(_ value: String) {
         guard KeychainMobilePushStateStore.isDeviceToken(value) else { return }
+        emit(.pushTokenReceived)
         let changed = token != value
         token = value
         if changed {
@@ -304,6 +333,7 @@ final class ToasttyPushController {
         await restore()
         guard storedState != nil else { return }
         await cleanupRegistrations()
+        permission = await notifications.permission()
         guard isForeground, let configuration, let context, context.connected, context.supported else { return }
         if automaticallyReconciles, transientRetryAt.map({ now() < $0 }) == true { return }
         transientRetryAt = nil
@@ -315,6 +345,7 @@ final class ToasttyPushController {
         let native = nativeFactory(context.gatewayURL, ToasttyPushCredentialProvider(vault: vault,
             gatewayURL: context.gatewayURL, pairingID: context.pairingID, generation: generation))
         var operationRegistration: MobilePushRegistration?
+        var operationDiagnostic: PushRelayDiagnostic?
         var failedOperation = ToasttyConnectionDiagnosticEvent.pushStateUnavailable
         do {
             try abandonOtherPairing(context)
@@ -330,17 +361,15 @@ final class ToasttyPushController {
                     guard await isCurrent(operationRevision, generation: generation) else { return }
                     try persist { $0.needsMacClear = false }
                 }
-                permission = await notifications.permission()
                 return
             }
             guard configurationMatches else {
                 if desired { errorMessage = "Notification settings on this iPhone and Mac do not match." }
                 return
             }
-            permission = await notifications.permission()
             guard await isCurrent(operationRevision, generation: generation) else { return }
             guard permission == .allowed else { return }
-            if !requestedToken { requestedToken = true; notifications.register() }
+            if !requestedToken { requestedToken = true; emit(.pushTokenRequested); notifications.register() }
             let delivered = await notifications.deliveredPayloads()
             for payload in delivered where payload.kind == .verification { await acceptProof(payload) }
             let consumedProofs = delivered.filter { payload in
@@ -384,7 +413,7 @@ final class ToasttyPushController {
                     active.stage = .enabled
                     try persist { $0.active = active; $0.retryAfter = nil }
                     errorMessage = nil
-                    succeeded(.pushRegistrationReused)
+                    succeeded(.pushRegistrationReused, registration: active)
                     return
                 }
                 try persist { $0.cleanup.append(active); $0.active = nil }
@@ -393,10 +422,18 @@ final class ToasttyPushController {
                pending.deviceToken != token || pending.relayURL != configuration.relayURL
                 || pending.relayID != configuration.relayID
                 || (pending.stage == .pending && pending.nonce == nil && now().timeIntervalSince(pending.createdAt) >= 300) {
-                onDiagnosticEvent(pending.deviceToken != token ? .pushTokenChanged
-                    : pending.relayURL != configuration.relayURL || pending.relayID != configuration.relayID
-                        ? .pushRelayChanged : .pushProofExpired)
-                try persist { $0.cleanup.append(pending); $0.pending = nil }
+                let replaced = pending.deviceToken != token || pending.relayURL != configuration.relayURL
+                    || pending.relayID != configuration.relayID
+                emit(pending.deviceToken != token ? .pushTokenChanged
+                    : replaced ? .pushRelayChanged : .pushProofExpired, registration: pending)
+                try persist { state in
+                    state.cleanup.append(pending); state.pending = nil
+                    // Give an accepted push a minute to arrive before it counts as missed.
+                    if replaced { state.missedProofs = nil }
+                    else if let accepted = pending.appleAcceptedAt, now().timeIntervalSince(accepted) >= 60 {
+                        state.missedProofs = (state.missedProofs ?? 0) + 1
+                    }
+                }
             }
             if storedState?.pending == nil {
                 guard (storedState?.cleanup.count ?? 0) < 124 else {
@@ -408,11 +445,12 @@ final class ToasttyPushController {
                     managementToken: try KeychainMobilePushStateStore.randomCapability(),
                     sendToken: try KeychainMobilePushStateStore.randomCapability(), createdAt: now())
                 try persist { $0.pending = attempt }
+                registerDiagnosticRegistration(attempt)
                 if let active = storedState?.active {
-                    onDiagnosticEvent(active.deviceToken != token ? .pushTokenChanged
+                    emit(active.deviceToken != token ? .pushTokenChanged
                         : active.relayURL != configuration.relayURL || active.relayID != configuration.relayID
-                            ? .pushRelayChanged : .pushRegistrationMissing)
-                } else { onDiagnosticEvent(.pushRegistrationMissing) }
+                            ? .pushRelayChanged : .pushRegistrationMissing, registration: attempt)
+                } else { emit(.pushRegistrationMissing, registration: attempt) }
             }
             guard let attempt = storedState?.pending else { return }
             if attempt.stage == .pending {
@@ -420,11 +458,28 @@ final class ToasttyPushController {
                 else if attempt.expiresAt == nil {
                     operationRegistration = attempt
                     failedOperation = .pushRelayBeginFailed
-                    let result = try await relayFactory(attempt.relayURL).begin(attempt)
-                    guard await isCurrent(operationRevision, generation: generation), storedState?.pending?.registrationID == attempt.registrationID else { return }
+                    let capture = ToasttyPushDiagnosticCapture()
+                    emit(.pushVerificationStarted, registration: attempt)
+                    let result: PushRelayBeginResponse
+                    do {
+                        result = try await relayFactory(attempt.relayURL).begin(attempt, onDiagnostic: capture.record)
+                        operationDiagnostic = capture.value
+                        emit(.pushVerificationResponse, registration: attempt, relay: operationDiagnostic)
+                    } catch {
+                        operationDiagnostic = capture.value
+                        if operationDiagnostic != nil {
+                            emit(.pushVerificationResponse, registration: attempt, relay: operationDiagnostic)
+                        }
+                        throw error
+                    }
+                    guard await isCurrent(operationRevision, generation: generation), storedState?.pending?.registrationID == attempt.registrationID else {
+                        emit(.pushSetupContextChanged, registration: attempt)
+                        return
+                    }
                     try persist { state in
                         guard var current = state.pending, current.stage == .pending else { return }
                         current.expiresAt = result.expiresAt.map(Date.init(timeIntervalSince1970:))
+                        if operationDiagnostic?.code == .appleAccepted { current.appleAcceptedAt = now() }
                         if result.state == "active" { current.stage = .relayActive }
                         state.pending = current
                     }
@@ -435,37 +490,64 @@ final class ToasttyPushController {
                   await isCurrent(operationRevision, generation: generation) else { return }
             operationRegistration = ready
             failedOperation = .pushMacRegistrationFailed
+            operationDiagnostic = nil
+            emit(.pushMacHandoffStarted, registration: ready)
             _ = try await native.setRegistration(grant(ready))
             guard await isCurrent(operationRevision, generation: generation), storedState?.pending?.registrationID == ready.registrationID else { return }
             try persist { state in
                 if let old = state.active { state.cleanup.append(old) }
                 var enabled = ready; enabled.stage = .enabled; enabled.nonce = nil
                 state.active = enabled; state.pending = nil; state.needsMacClear = false; state.retryAfter = nil
+                state.missedProofs = nil
             }
             errorMessage = nil
-            succeeded(.pushRegistrationEnabled)
+            succeeded(.pushRegistrationEnabled, registration: ready)
         } catch {
             guard !Self.isCancellation(error) else { return }
             let current = await isCurrent(operationRevision, generation: generation)
+            if !current { emit(.pushSetupContextChanged, registration: operationRegistration) }
             if current || operationRegistration.map(isStoredRegistration) == true {
-                if current { recordFailure(error is MobilePushStoreFailure ? .pushStateUnavailable : failedOperation) }
-                handleFailure(error, registration: operationRegistration, displayError: current)
+                if current { recordFailure(error is MobilePushStoreFailure ? .pushStateUnavailable : failedOperation,
+                    registration: operationRegistration) }
+                handleFailure(error, registration: operationRegistration, displayError: current, relay: operationDiagnostic)
             }
         }
     }
 
     private func acceptProof(_ payload: RemotePushPayload) async {
-        guard payload.isValid, payload.kind == .verification else { return }
+        guard payload.kind == .verification else { return }
+        // Unknown payload IDs never create a diagnostic registration number.
+        emit(.pushProofReceived, registrationID: payload.registrationID)
+        guard payload.isValid else { emit(.pushProofInvalid, registrationID: payload.registrationID); return }
         guard storedState != nil else {
+            emit(.pushProofBuffered)
             queuedProofs = Array((queuedProofs.filter { $0.registrationID != payload.registrationID } + [payload]).suffix(8))
             return
         }
-        guard let attempt = storedState?.pending, attempt.stage == .pending,
-              attempt.registrationID == payload.registrationID, attempt.pairingID == payload.pairingID,
-              let nonce = payload.nonce, desired else { return }
-        do { try persist { $0.pending?.nonce = nonce } }
-        catch { handleFailure(error); return }
-        guard isForeground, context?.connected == true, context?.pairingID == payload.pairingID, configurationMatches else { return }
+        guard let attempt = storedState?.pending else {
+            emit(storedState?.active?.registrationID == payload.registrationID ? .pushProofAlreadyVerified : .pushProofNoPending,
+                registrationID: payload.registrationID)
+            return
+        }
+        guard attempt.stage == .pending else { emit(.pushProofAlreadyVerified, registration: attempt); return }
+        guard attempt.registrationID == payload.registrationID else {
+            emit(.pushProofOtherRegistration, registrationID: payload.registrationID)
+            return
+        }
+        guard attempt.pairingID == payload.pairingID else { emit(.pushProofOtherPairing, registration: attempt); return }
+        guard let nonce = payload.nonce else { emit(.pushProofInvalid, registration: attempt); return }
+        guard desired else { emit(.pushProofDisabled, registration: attempt); return }
+        // A delivered nonce proves receipt even if the relay completion fails.
+        do { try persist { $0.pending?.nonce = nonce; $0.missedProofs = nil } }
+        catch {
+            emit(.pushProofSaveFailed, registration: attempt)
+            handleFailure(error)
+            return
+        }
+        guard isForeground else { emit(.pushProofDeferredBackground, registration: attempt); return }
+        guard context?.connected == true else { emit(.pushProofDeferredDisconnected, registration: attempt); return }
+        guard context?.pairingID == payload.pairingID else { emit(.pushProofDeferredPairing, registration: attempt); return }
+        guard configurationMatches else { emit(.pushProofDeferredConfiguration, registration: attempt); return }
         let operationRevision = revision
         transientRetryAt = nil
         let generation = await vault.currentGeneration()
@@ -486,6 +568,7 @@ final class ToasttyPushController {
               storedState?.pending?.registrationID == attempt.registrationID,
               storedState?.pending?.stage == .pending else { return }
         do {
+            emit(.pushProofCompletionStarted, registration: attempt)
             let response = try await relayFactory(attempt.relayURL).complete(attempt, nonce: nonce)
             guard response.state == "active", response.pairingID == attempt.pairingID else {
                 throw PushRelayFailure.invalidResponse
@@ -493,13 +576,18 @@ final class ToasttyPushController {
             guard await isCurrent(operationRevision, generation: generation),
                   storedState?.pending?.registrationID == attempt.registrationID else { return }
             try persist { $0.pending?.stage = .relayActive; $0.pending?.nonce = nil }
+            emit(.pushProofCompleted, registration: attempt)
             consecutiveFailures = 0
             errorMessage = nil
         } catch {
             guard !Self.isCancellation(error) else { return }
-            guard storedState?.pending?.registrationID == attempt.registrationID else { return }
+            guard storedState?.pending?.registrationID == attempt.registrationID else {
+                emit(.pushSetupContextChanged, registration: attempt)
+                return
+            }
             let current = await isCurrent(operationRevision, generation: generation)
-            if current { recordFailure(.pushRelayCompleteFailed) }
+            if !current { emit(.pushSetupContextChanged, registration: attempt) }
+            if current { recordFailure(.pushRelayCompleteFailed, registration: attempt) }
             handleFailure(error, registration: attempt, displayError: current)
         }
     }
@@ -542,11 +630,12 @@ final class ToasttyPushController {
             $0.pairingID != context.pairingID || $0.gatewayURL != context.gatewayURL
         }
         guard !mismatched.isEmpty else { return }
-        onDiagnosticEvent(.pushPairingChanged)
+        emit(.pushPairingChanged)
         try persist { state in
             state.cleanup.append(contentsOf: mismatched)
             if mismatched.contains(where: { $0.registrationID == state.active?.registrationID }) { state.active = nil }
             if mismatched.contains(where: { $0.registrationID == state.pending?.registrationID }) { state.pending = nil }
+            state.missedProofs = nil
         }
     }
 
@@ -630,16 +719,50 @@ final class ToasttyPushController {
         return delay
     }
 
-    private func recordFailure(_ event: ToasttyConnectionDiagnosticEvent) {
-        if reportedFailures.insert(event).inserted { onDiagnosticEvent(event) }
+    private func registerDiagnosticRegistration(_ registration: MobilePushRegistration) {
+        guard !diagnosticRegistrations.contains(where: { $0.id == registration.registrationID }) else { return }
+        diagnosticRegistrations.append((registration.registrationID, nextDiagnosticRegistration))
+        nextDiagnosticRegistration &+= 1
+        if diagnosticRegistrations.count > 8,
+           let index = diagnosticRegistrations.firstIndex(where: {
+               $0.id != storedState?.active?.registrationID && $0.id != storedState?.pending?.registrationID
+           }) {
+            diagnosticRegistrations.remove(at: index)
+        }
     }
 
-    private func succeeded(_ event: ToasttyConnectionDiagnosticEvent) {
+    private func diagnosticNumber(for id: UUID?) -> UInt64? {
+        id.flatMap { id in diagnosticRegistrations.first { $0.id == id }?.number }
+    }
+
+    private func emit(_ event: ToasttyConnectionDiagnosticEvent, registration: MobilePushRegistration? = nil,
+                      registrationID: UUID? = nil, relay: PushRelayDiagnostic? = nil, retryAfter: TimeInterval? = nil) {
+        let number = diagnosticNumber(for: registration?.registrationID ?? registrationID)
+        let details = ToasttyPushDiagnosticDetails(registrationNumber: number, relay: relay, retryAfter: retryAfter)
+        onDiagnosticRecord(ToasttyDiagnosticRecord(event: event, pushDetails: details))
+    }
+
+    private func recordFailure(_ event: ToasttyConnectionDiagnosticEvent, registration: MobilePushRegistration? = nil,
+                               relay: PushRelayDiagnostic? = nil, retryAfter: TimeInterval? = nil) {
+        let number = diagnosticNumber(for: registration?.registrationID)
+        // Every actual cooldown response matters: the next response may apply
+        // a different delay even for the same pending registration.
+        if event == .pushRateLimited {
+            emit(event, registration: registration, relay: relay, retryAfter: retryAfter)
+            return
+        }
+        if reportedFailures.count >= 128 { reportedFailures.removeAll() }
+        if reportedFailures.insert(ToasttyPushFailureDiagnosticKey(event: event, registrationNumber: number)).inserted {
+            emit(event, registration: registration, relay: relay, retryAfter: retryAfter)
+        }
+    }
+
+    private func succeeded(_ event: ToasttyConnectionDiagnosticEvent, registration: MobilePushRegistration) {
         consecutiveFailures = 0
         transientRetryAt = nil
         relayRetryAt = nil
         reportedFailures.removeAll()
-        onDiagnosticEvent(event)
+        emit(event, registration: registration)
     }
 
     private static func isCancellation(_ error: Error) -> Bool {
@@ -649,7 +772,8 @@ final class ToasttyPushController {
         storedState?.pending?.registrationID == registration.registrationID
             || storedState?.active?.registrationID == registration.registrationID
     }
-    private func handleFailure(_ error: Error, registration: MobilePushRegistration? = nil, displayError: Bool = true) {
+    private func handleFailure(_ error: Error, registration: MobilePushRegistration? = nil, displayError: Bool = true,
+                               relay: PushRelayDiagnostic? = nil) {
         guard !Self.isCancellation(error) else { return }
         if error is MobilePushStoreFailure { recordFailure(.pushStateUnavailable) }
         let message: String
@@ -666,7 +790,7 @@ final class ToasttyPushController {
             relayRetryAt = deadline
             transientRetryAt = nil
             persistFailureState { $0.retryAfter = deadline }
-            recordFailure(.pushRateLimited)
+            recordFailure(.pushRateLimited, registration: registration, relay: relay, retryAfter: delay)
             message = "Notification setup is busy. Try again later."
         case .expired:
             recordFailure(.pushRegistrationExpired)

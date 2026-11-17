@@ -46,6 +46,10 @@ test("highlight status messages preserve format-specific guidance", () => {
     "Syntax highlighting is disabled for large files. Editing remains available, but performance may still degrade on very large documents."
   );
   assert.equal(
+    highlightStatusMessage("disabledForLargeFile", "Markdown", "markdown"),
+    "The formatted view and syntax highlighting are off for large files. Editing remains available, but performance may still degrade on very large documents."
+  );
+  assert.equal(
     highlightStatusMessage("unsupportedFormat", "JSONC"),
     "Syntax highlighting is not available for JSONC files yet."
   );

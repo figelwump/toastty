@@ -126,7 +126,7 @@ struct ToasttySettingsView: View {
             Label("Categorical connection diagnostics", systemImage: "hand.raised")
                 .font(.subheadline)
 
-            Text("Only fixed event names and times are recorded in memory for this app run. Addresses, credentials, paths, titles, and transcript content are never included.")
+            Text("This app run records fixed event names, times, and bounded push setup details. Registration numbers apply only to this run. Addresses, credentials, paths, titles, and transcript content are never included.")
                 .font(.footnote)
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -154,11 +154,17 @@ struct ToasttySettingsView: View {
                 ForEach(diagnostics.connectionLog.entries.reversed()) { entry in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(entry.event.displayName)
+                        if let details = entry.pushDetails, !details.displayText.isEmpty {
+                            Text(details.displayText)
+                                .font(.caption)
+                                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                        }
                         Text("\(entry.event.category.displayName) · \(entry.recordedAt.formatted(date: .omitted, time: .standard))")
                             .font(.caption)
                             .foregroundStyle(ToasttyDesignTokens.secondaryText)
                     }
                     .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("toastty-mobile-diagnostic-\(entry.event.rawValue)")
                 }
             }
         }

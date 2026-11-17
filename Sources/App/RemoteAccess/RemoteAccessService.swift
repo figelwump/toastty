@@ -117,6 +117,21 @@ final class RemoteAccessConversationFlagBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's authenticated close request into the main-actor-owned
+/// workspace layout.
+final class RemoteAccessConversationCloseBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func close(
+        _ request: RemoteConversationCloseRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteConversationCloseResult {
+        MainActor.assumeIsolated {
+            service?.closeConversation(request, device: device) ?? .conversationNotFound
+        }
+    }
+}
+
 /// Bridges the gateway's authenticated queue edit into the main-actor-owned
 /// send queue.
 final class RemoteAccessQueueUpdateBridge: @unchecked Sendable {
@@ -267,6 +282,10 @@ struct RemotePendingSendCorrelator: Sendable {
         var trimmedText: String
         var displayText: String?
         var deliveryMode: RemoteMessageDeliveryMode
+        /// Reported unconfirmed after its deadline. It may still be the next
+        /// user message: a provider can hold a delivery in its prompt until
+        /// someone submits it on the Mac.
+        var isExpired = false
     }
 
     private var pendingSendsByConversationID: [RemoteConversationID: [PendingSend]] = [:]
@@ -307,11 +326,18 @@ struct RemotePendingSendCorrelator: Sendable {
     mutating func discard(clientRequestID: String, for conversationID: RemoteConversationID) {
         guard var pending = pendingSendsByConversationID[conversationID] else { return }
         pending.removeAll { $0.clientRequestID == clientRequestID }
-        if pending.isEmpty {
-            pendingSendsByConversationID.removeValue(forKey: conversationID)
-        } else {
-            pendingSendsByConversationID[conversationID] = pending
+        store(pending, for: conversationID)
+    }
+
+    /// Keeps a send whose deadline passed matchable by the next user message
+    /// only. See `stamp`.
+    mutating func expire(clientRequestID: String, for conversationID: RemoteConversationID) {
+        guard var pending = pendingSendsByConversationID[conversationID],
+              let index = pending.firstIndex(where: { $0.clientRequestID == clientRequestID }) else {
+            return
         }
+        pending[index].isExpired = true
+        pendingSendsByConversationID[conversationID] = pending
     }
 
     mutating func stamp(
@@ -330,14 +356,9 @@ struct RemotePendingSendCorrelator: Sendable {
                 return observation
             }
             let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Delivery and provider logs are ordered. Only the oldest pending
-            // send can confirm against the next user message; if it does not
-            // match, expire it rather than misattributing a later identical
-            // local message.
-            guard let pending = consumeOldest(for: conversationID) else {
+            guard let pending = takeConfirmingSend(text: trimmed, for: conversationID) else {
                 return observation
             }
-            guard pending.trimmedText == trimmed else { return observation }
             var stampedPayload = payload
             if let displayText = pending.displayText { stampedPayload.text = displayText }
             stampedPayload.origin = .remote
@@ -349,19 +370,43 @@ struct RemotePendingSendCorrelator: Sendable {
         }
     }
 
-    private mutating func consumeOldest(for conversationID: RemoteConversationID) -> PendingSend? {
+    /// Delivery and provider logs are ordered, so normally only the oldest
+    /// pending send can confirm against the next user message; a mismatch
+    /// expires it rather than misattributing a later identical local message.
+    /// An expired send breaks that order: its late echo can arrive at any
+    /// point, or never. While one is pending, a user message confirms
+    /// whichever pending send has its text and consumes no other send. A user
+    /// message that matches nothing ends every expired send's chance to
+    /// confirm, so a much later identical message cannot claim one.
+    private mutating func takeConfirmingSend(
+        text: String,
+        for conversationID: RemoteConversationID
+    ) -> PendingSend? {
         guard var pendingSends = pendingSendsByConversationID[conversationID],
               pendingSends.isEmpty == false else {
             pendingSendsByConversationID.removeValue(forKey: conversationID)
             return nil
         }
-        let oldest = pendingSends.removeFirst()
+        let match: PendingSend?
+        if pendingSends.contains(where: \.isExpired) {
+            match = pendingSends.firstIndex { $0.trimmedText == text }.map { pendingSends.remove(at: $0) }
+            if match == nil {
+                pendingSends.removeAll(where: \.isExpired)
+            }
+        } else {
+            let oldest = pendingSends.removeFirst()
+            match = oldest.trimmedText == text ? oldest : nil
+        }
+        store(pendingSends, for: conversationID)
+        return match
+    }
+
+    private mutating func store(_ pendingSends: [PendingSend], for conversationID: RemoteConversationID) {
         if pendingSends.isEmpty {
             pendingSendsByConversationID.removeValue(forKey: conversationID)
         } else {
             pendingSendsByConversationID[conversationID] = pendingSends
         }
-        return oldest
     }
 }
 
@@ -448,6 +493,11 @@ final class RemoteAccessService: ObservableObject {
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
     private let workspaceDoneBridge = RemoteAccessWorkspaceDoneBridge()
     private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
+    private let conversationCloseBridge = RemoteAccessConversationCloseBridge()
+    private let sessionCloseController: SessionCloseController?
+    /// When a phone message or stop last reached each panel. Remote delivery
+    /// bypasses local-input tracking, so an exit after the turn asks here.
+    private var lastRemoteInputAtByPanelID: [UUID: Date] = [:]
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
@@ -463,9 +513,6 @@ final class RemoteAccessService: ObservableObject {
     /// Claude Code labels it queued, but reads it after active tool calls
     /// finish. Toastty's queue instead waits for the next open prompt.
     static let steerCapableProviders: Set<AgentKind> = [.codex, .claude]
-    /// A steer's confirming user message arrives when the provider next reads
-    /// its input, which can be well after a long tool call.
-    private static let steerConfirmationTimeout: Duration = .seconds(180)
     private let handler: RemoteGatewayRequestHandler
     private let server: any RemoteAccessGatewayServing
     private let port: UInt16
@@ -486,6 +533,9 @@ final class RemoteAccessService: ObservableObject {
     private var localDraftEpochBroadcastTask: Task<Void, Never>?
     private let claudePromptStabilizationDelay: Duration
     private let sendConfirmationTimeout: Duration
+    /// A steer's confirming user message arrives when the provider next reads
+    /// its input, which can be well after a long tool call.
+    private let steerConfirmationTimeout: Duration
     /// Codex writes `task_started` before the user message, and pre-turn work
     /// such as automatic context compaction can separate them by more than a
     /// minute. While a Codex turn that started after the send is running, a
@@ -586,10 +636,13 @@ final class RemoteAccessService: ObservableObject {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
         sessionLauncher: (any RemoteSessionLaunching)? = nil,
+        sessionCloseController: SessionCloseController? = nil,
+        sessionExitController: SessionExitController? = nil,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        steerConfirmationTimeout: Duration = .seconds(180),
         codexTurnConfirmationTimeout: Duration = .seconds(300),
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pushConfiguration: RemotePushConfiguration? = .configured(),
@@ -612,10 +665,12 @@ final class RemoteAccessService: ObservableObject {
         self.annotationStyleStore = annotationStyleStore
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.sessionCloseController = sessionCloseController
         self.port = port
         self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
+        self.steerConfirmationTimeout = steerConfirmationTimeout
         self.codexTurnConfirmationTimeout = codexTurnConfirmationTimeout
         self.localDraftEpochBroadcastInterval = localDraftEpochBroadcastInterval
         self.pushConfiguration = pushConfiguration
@@ -643,6 +698,9 @@ final class RemoteAccessService: ObservableObject {
             },
             conversationFlagHandler: { [conversationFlagBridge] request, device in
                 conversationFlagBridge.setFlag(request, device: device)
+            },
+            conversationCloseHandler: { [conversationCloseBridge] request, device in
+                conversationCloseBridge.close(request, device: device)
             },
             queueUpdateHandler: { [queueUpdateBridge] request, device in
                 queueUpdateBridge.update(request, device: device)
@@ -672,10 +730,12 @@ final class RemoteAccessService: ObservableObject {
         readAcknowledgementBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
+        conversationCloseBridge.service = self
         queueUpdateBridge.service = self
         interruptBridge.service = self
         localDraftReleaseBridge.service = self
         sessionStartBridge.service = self
+        sessionExitController?.remoteInputProbe = self
         sessionStarter = RemoteSessionStarter(
             store: store,
             launcher: sessionLauncher,
@@ -685,7 +745,10 @@ final class RemoteAccessService: ObservableObject {
                 return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
             },
             recentModels: { [weak self] provider in self?.recentModels(for: provider) ?? [] },
-            publishSessionList: { [weak self] in self?.syncConversations() }
+            publishSessionList: { [weak self] in self?.syncConversations() },
+            sessionStartedInNewTab: { [weak sessionExitController] sessionID in
+                sessionExitController?.markClosesPaneOnCleanExit(sessionID: sessionID)
+            }
         )
         handler.sessionStartOptionsHandler = { [sessionStartBridge] request, device in
             sessionStartBridge.options(request, device: device)
@@ -1009,7 +1072,7 @@ final class RemoteAccessService: ObservableObject {
                 self.syncConversations()
             case .focusPanel(let workspaceID, let panelID),
                  .markPanelNotificationsRead(let workspaceID, let panelID),
-                 .recordDesktopNotification(let workspaceID, let panelID?):
+                 .recordDesktopNotification(let workspaceID, let panelID?, _):
                 guard Self.panelIsUnread(
                     workspaceID: workspaceID,
                     panelID: panelID,
@@ -1773,6 +1836,54 @@ final class RemoteAccessService: ObservableObject {
         )
         if result == .updated {
             broadcastSessionList()
+        }
+        return result
+    }
+
+    /// Closes a session's pane for a remote client, through the same controller
+    /// as the sidebar's Close Session item. Like interrupt, it needs session
+    /// writes, because it can stop a running agent.
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest,
+        device _: RemoteDeviceRecord
+    ) -> RemoteConversationCloseResult {
+        var result = RemoteConversationCloseResult.conversationNotFound
+        // A fresh scan, as for flags, so a pane closed a moment ago is
+        // reported missing rather than closed twice.
+        if isReady, let candidate = scanConversationCandidates(mintingIDs: false)
+            .first(where: { $0.conversationID == request.conversationID }) {
+            if sessionWritePolicy.isEnabled(for: request.conversationID) == false {
+                result = .sessionWritesDisabled
+            } else if let sessionCloseController {
+                result = switch sessionCloseController.closeSession(
+                    panelID: candidate.panelID,
+                    stopIfBusy: request.stopIfBusy,
+                    confirmedWorkspaceCloseID: request.confirmedWorkspaceCloseID,
+                    source: AppActionSource("remote_access", detail: "conversation_close")
+                ) {
+                case .closed: .closed
+                case .confirmationRequired: .confirmationRequired
+                case .workspaceCloseConfirmationRequired: .workspaceConfirmationRequired
+                case .unsavedDocument: .unsavedDocument
+                case .notFound: .conversationNotFound
+                case .failed: .failed
+                }
+            } else {
+                result = .failed
+            }
+        }
+        ToasttyLog.info(
+            "Remote conversation close request evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": request.conversationID.rawValue.uuidString,
+                "stop_if_busy": String(request.stopIfBusy),
+                "confirmed_workspace_close_id": request.confirmedWorkspaceCloseID?.uuidString ?? "none",
+                "result": result.rawValue,
+            ]
+        )
+        if result == .closed {
+            syncConversations()
         }
         return result
     }
@@ -2869,6 +2980,9 @@ final class RemoteAccessService: ObservableObject {
             .first(where: { $0.id == request.interactionID }) else { return .rejected(reason: .notPending) }
         guard interaction.inputEpoch == request.expectedInputEpoch else { return .rejected(reason: .epochMismatch) }
         guard interaction.responseID == request.responseID else { return .rejected(reason: .notPending) }
+        if interaction.kind == .permission, device.canApprovePermissions == false {
+            return .rejected(reason: .approvalsDisabled)
+        }
         return sessionRuntimeStore.submitClaudeQuestion(request, sessionID: sessionID, panelID: panelID)
     }
 
@@ -3000,6 +3114,7 @@ final class RemoteAccessService: ObservableObject {
         case .reject(let reason):
             return .rejected(reason: reason)
         case .accept(let turnEpoch):
+            recordRemoteInput(panelID: panelID)
             let delivery = terminalRuntimeRegistry.sendRemoteText(
                 deliveredText ?? request.text,
                 submit: true,
@@ -3011,12 +3126,12 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
                 coordinator.markSteerUncertain(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: Self.steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
                 coordinator.markSteerDelivered(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: Self.steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
                 ToasttyLog.info(
                     "Remote steer delivered",
                     category: .automation,
@@ -3091,6 +3206,7 @@ final class RemoteAccessService: ObservableObject {
         case .reject(let reason):
             result = .rejected(reason: reason)
         case .accept:
+            recordRemoteInput(panelID: panelID)
             let delivery = terminalRuntimeRegistry.sendRemoteInterrupt(
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -3366,6 +3482,7 @@ final class RemoteAccessService: ObservableObject {
             // paste-oriented text plus a real Return key, which preserves
             // Ghostty bracketed-paste semantics for multi-line input and does
             // not steal the local first responder.
+            recordRemoteInput(panelID: panelID)
             let delivery = terminalRuntimeRegistry.sendRemoteText(
                 deliveredText ?? request.text,
                 submit: true,
@@ -3555,7 +3672,7 @@ final class RemoteAccessService: ObservableObject {
             } catch {
                 return
             }
-            self?.expireUnconfirmedSend(key)
+            self?.expireUnconfirmedSend(key, allowingLateEcho: true)
         }
         pendingSendConfirmationWork[key] = PendingSendConfirmationWork(
             acceptedAt: acceptedAt,
@@ -3588,14 +3705,23 @@ final class RemoteAccessService: ObservableObject {
         return remaining
     }
 
-    private func expireUnconfirmedSend(_ key: PendingSendConfirmationKey) {
+    /// Reports the send unconfirmed. When only the deadline passed, a late
+    /// echo may still confirm it.
+    private func expireUnconfirmedSend(_ key: PendingSendConfirmationKey, allowingLateEcho: Bool) {
         guard isEnabled,
               let work = pendingSendConfirmationWork.removeValue(forKey: key) else {
             return
         }
         work.task.cancel()
         let conversationID = key.conversationID
-        pendingSendCorrelator.discard(clientRequestID: key.clientRequestID, for: conversationID)
+        // Codex records a send's message within a turn, and a turn that ends
+        // without it settles the send (see `trackCodexTurn`), so only other
+        // providers keep an expired send matchable.
+        if allowingLateEcho, projectionStore.projectorState(for: conversationID)?.provider != .codex {
+            pendingSendCorrelator.expire(clientRequestID: key.clientRequestID, for: conversationID)
+        } else {
+            pendingSendCorrelator.discard(clientRequestID: key.clientRequestID, for: conversationID)
+        }
         let emitted = projectionStore.noteSendDeliveryUnconfirmed(
             for: conversationID,
             clientRequestID: key.clientRequestID,
@@ -3642,7 +3768,7 @@ final class RemoteAccessService: ObservableObject {
                     continue
                 }
                 if work.isWaitingForCodexTurn {
-                    expireUnconfirmedSend(key)
+                    expireUnconfirmedSend(key, allowingLateEcho: false)
                 } else {
                     pendingSendConfirmationWork[key]?.runningCodexTurnID = nil
                 }
@@ -3661,7 +3787,7 @@ final class RemoteAccessService: ObservableObject {
         where key.conversationID == conversationID
             && work.isWaitingForCodexTurn
             && pendingSendCorrelator.contains(clientRequestID: key.clientRequestID, for: conversationID) == false {
-            expireUnconfirmedSend(key)
+            expireUnconfirmedSend(key, allowingLateEcho: false)
         }
     }
 
@@ -3692,17 +3818,23 @@ final class RemoteAccessService: ObservableObject {
             let observation = pendingSendCorrelator.stamp([observation], for: conversationID)[0]
             stamped.append(observation)
             if case .transcript(.userMessage(let payload)) = observation.payload {
-                if payload.clientRequestID == nil, observation.mayAuthorizeCurrentRuntime {
-                    // The Mac user submitted what they typed: the running turn no
-                    // longer holds a local draft that a steer or the next prompt
-                    // must avoid.
-                    coordinator.noteLocalDraftSubmitted(for: conversationID)
-                }
+                var submittedOnMac = true
                 if let clientRequestID = payload.clientRequestID {
-                    confirmPendingSend(
+                    let confirmedInTime = confirmPendingSend(
                         conversationID: conversationID,
                         clientRequestID: clientRequestID
                     )
+                    // A late steer came from the provider's own input queue,
+                    // so it says nothing about the Mac composer.
+                    submittedOnMac = confirmedInTime == false && payload.deliveryMode != .steer
+                }
+                // The Mac user submitted what they typed, or a prompt send
+                // confirmed after its deadline waited in the provider's prompt
+                // until something, usually the Mac user's Return, submitted
+                // it. The running turn no longer holds a local draft that a
+                // steer or the next prompt must avoid.
+                if submittedOnMac, observation.mayAuthorizeCurrentRuntime {
+                    coordinator.noteLocalDraftSubmitted(for: conversationID)
                 }
             }
             if tracksCodexTurns {
@@ -3715,16 +3847,23 @@ final class RemoteAccessService: ObservableObject {
         return stamped
     }
 
+    /// Returns whether the send was still within its deadline. A later
+    /// confirmation corrects the earlier unconfirmed report on the phone.
     private func confirmPendingSend(
         conversationID: RemoteConversationID,
         clientRequestID: String
-    ) {
+    ) -> Bool {
         let key = PendingSendConfirmationKey(
             conversationID: conversationID,
             clientRequestID: clientRequestID
         )
         guard let work = pendingSendConfirmationWork.removeValue(forKey: key) else {
-            return
+            ToasttyLog.info(
+                "Remote send confirmed by provider transcript after it was reported unconfirmed",
+                category: .automation,
+                metadata: ["conversation_id": conversationID.rawValue.uuidString]
+            )
+            return false
         }
         work.task.cancel()
         let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
@@ -3736,6 +3875,7 @@ final class RemoteAccessService: ObservableObject {
                 "latency_ms": String(latencyMs),
             ]
         )
+        return true
     }
 
     private func cancelPendingSendConfirmations(for conversationID: RemoteConversationID) {
@@ -3807,6 +3947,25 @@ final class RemoteAccessService: ObservableObject {
             action: .deviceScopesChanged,
             deviceID: deviceID,
             detail: enabled ? "start_enabled" : "start_disabled"
+        ))
+        deviceManagementError = nil
+        refreshDevices()
+    }
+
+    func setDevicePermissionApproval(_ enabled: Bool, for deviceID: UUID) {
+        guard let device = deviceStore.devices.first(where: { $0.id == deviceID }),
+              device.isRevoked == false else { return }
+        do {
+            guard try deviceStore.setPermissionApprovalEnabled(enabled, forDevice: deviceID) else { return }
+        } catch {
+            reportDeviceManagementFailure("Could not update device permissions", error: error)
+            return
+        }
+        auditLog.record(RemoteAccessAuditEntry(
+            at: Date(),
+            action: .deviceScopesChanged,
+            deviceID: deviceID,
+            detail: enabled ? "approve_enabled" : "approve_disabled"
         ))
         deviceManagementError = nil
         refreshDevices()
@@ -3931,5 +4090,28 @@ final class RemoteAccessService: ObservableObject {
             )
         }
         return resources
+    }
+}
+
+extension RemoteAccessService: SessionRemoteInputProbe {
+    /// Phone input is rare, so each write also drops panels that are gone.
+    private func recordRemoteInput(panelID: UUID) {
+        lastRemoteInputAtByPanelID = lastRemoteInputAtByPanelID.filter {
+            store.state.workspaceSelection(containingPanelID: $0.key) != nil
+        }
+        lastRemoteInputAtByPanelID[panelID] = Date()
+    }
+
+    func hasRemoteInput(panelID: UUID, since date: Date) -> Bool {
+        if let deliveredAt = lastRemoteInputAtByPanelID[panelID], deliveredAt > date {
+            return true
+        }
+        // A queued message waits for the next open prompt, and a delivered
+        // one may still sit in the prompt until it is confirmed.
+        return panelIDByConversationID.contains { conversationID, mappedPanelID in
+            mappedPanelID == panelID
+                && (sendQueue.entries(for: conversationID).isEmpty == false
+                    || pendingSendCorrelator.conversationIDs.contains(conversationID))
+        }
     }
 }

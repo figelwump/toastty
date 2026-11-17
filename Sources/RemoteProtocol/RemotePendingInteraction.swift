@@ -73,6 +73,8 @@ public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiab
     public var responseID: String?
     public var responseExpiresAt: Date?
     public var answers: [RemoteInteractionAnswer]?
+    /// Present only for a provider permission request a client can answer.
+    public var permission: RemotePermissionRequestDetail?
 
     public init(
         id: ID,
@@ -87,7 +89,8 @@ public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiab
         questions: [RemoteInteractionQuestion]? = nil,
         responseID: String? = nil,
         responseExpiresAt: Date? = nil,
-        answers: [RemoteInteractionAnswer]? = nil
+        answers: [RemoteInteractionAnswer]? = nil,
+        permission: RemotePermissionRequestDetail? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -102,5 +105,27 @@ public struct RemotePendingInteraction: Codable, Equatable, Sendable, Identifiab
         self.responseID = responseID
         self.responseExpiresAt = responseExpiresAt
         self.answers = answers
+        self.permission = permission
+    }
+}
+
+/// What the provider asks permission to do, as a client shows it before the
+/// user decides. The decision itself travels as the interaction's single
+/// question, so the provider input never has to leave the Mac in full.
+public struct RemotePermissionRequestDetail: Codable, Equatable, Sendable {
+    /// The provider's tool name, such as `Bash`, `Edit`, or `mcp__server__tool`.
+    public var toolName: String
+    /// The provider's own reason for the request, when it gives one.
+    public var description: String?
+    /// The command, file change, or tool arguments the request would use.
+    public var preview: String
+    /// True when `preview` was shortened to fit the protocol bound.
+    public var previewTruncated: Bool
+
+    public init(toolName: String, description: String? = nil, preview: String, previewTruncated: Bool = false) {
+        self.toolName = toolName
+        self.description = description
+        self.preview = preview
+        self.previewTruncated = previewTruncated
     }
 }

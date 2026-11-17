@@ -35,6 +35,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     let runtimeMode: ToasttyMobileRuntimeMode
     let fixtureScenario: ToasttyMobileFixtureScenario?
     let urlScheme: String?
+    /// Where the share extension leaves drafts; `nil` in builds without it.
+    let sharedDraftStore: ToasttySharedDraftStore?
     let pushConfiguration: ToasttyPushConfiguration?
 #if DEBUG
     let pushFixtureMode: ToasttyPushFixtureMode?
@@ -53,6 +55,13 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             bundledGatewayURL: bundledURL
         )
         urlScheme = Self.routingURLScheme(in: infoDictionary)
+        let appGroupStore = ToasttySharedDraftStore(appGroupID: infoDictionary["ToasttyMobileAppGroup"] as? String)
+        // Fixtures use the App Group too, so a UI test can share through the
+        // real extension, and fall back to a temporary folder without one.
+        sharedDraftStore = runtimeMode == .fixture
+            ? appGroupStore ?? ToasttySharedDraftStore(directory: FileManager.default.temporaryDirectory
+                .appending(path: "ToasttyFixtureSharedDrafts", directoryHint: .isDirectory))
+            : appGroupStore
         pushConfiguration = ToasttyPushConfiguration(infoDictionary: infoDictionary)
 #if DEBUG
         pushFixtureMode = runtimeMode == .fixture

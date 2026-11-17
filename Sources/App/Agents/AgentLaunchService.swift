@@ -149,6 +149,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private weak var terminalCommandRouter: (any TerminalCommandRouting)?
     private let agentCatalogProvider: any AgentCatalogProviding
     private let fileManager: FileManager
+    private let nowProvider: @Sendable () -> Date
     private let managedLaunchPlanner: any ManagedAgentLaunchPlanning
     private let codexProcessPathProvider: @Sendable () -> String?
     private let codexProcessPathRefreshProvider: @Sendable () -> String?
@@ -194,6 +195,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         self.terminalCommandRouter = terminalCommandRouter
         self.agentCatalogProvider = agentCatalogProvider
         self.fileManager = fileManager
+        self.nowProvider = nowProvider
         self.codexProcessPathProvider = codexProcessPathProvider
         self.codexProcessPathRefreshProvider = codexProcessPathRefreshProvider
         self.managedAgentResolutionContextProvider = managedAgentResolutionContextProvider
@@ -482,7 +484,13 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             focusPolicy: preparation.focusPolicy
         ) {
         case .delivered:
-            break
+            // The session exists before the shell starts the typed command.
+            // Until the shell does, its prompt must not end the new session.
+            sessionRuntimeStore?.noteManagedLaunchCommandSubmitted(
+                sessionID: plan.sessionID,
+                shellWasAtPrompt: true,
+                at: nowProvider()
+            )
         case .unavailable:
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
             throw AgentLaunchError.terminalUnavailable(panelID: preparation.target.panelID)

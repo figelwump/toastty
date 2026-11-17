@@ -381,6 +381,13 @@ final class AppSessionController {
         pushController?.installDiagnosticEventHandler(handler)
     }
 
+    func installDiagnosticRecordHandler(
+        _ handler: @escaping @MainActor (ToasttyDiagnosticRecord) -> Void
+    ) {
+        installDiagnosticEventHandler { handler(ToasttyDiagnosticRecord(event: $0)) }
+        pushController?.installDiagnosticRecordHandler(handler)
+    }
+
     func refreshCurrentDevice() async {
         guard !usesFixtureHarness, let pairedDevice else { return }
         let requestID = UUID()
