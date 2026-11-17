@@ -65,8 +65,7 @@ public struct TaskBucketEntry<Key: Hashable, Payload>: Identifiable {
     public var isLinkedChild = false
     /// The row's own state is in a calmer bucket. It lists here to keep
     /// its family together, or because it is selected and holds its place.
-    /// The iPhone draws it dimmed; the Mac sidebar draws it like any other
-    /// row.
+    /// The Mac sidebar and the iPhone draw it like any other row.
     public var isContext = false
     /// Its parent task has a row, but the Needs you segment shows the row
     /// without it, so the row names the parent.

@@ -377,7 +377,25 @@ public enum ToasttyMobileFixture {
     /// A Mac with the task system on where nothing needs the user: one
     /// session works, one task runs and one is idle. Home's Needs you
     /// segment shows its empty state.
-    public static let quietTaskHome: MobileHomeSnapshot = {
+    public static let quietTaskHome = makeQuietTaskHome(needsYou: [])
+
+    public static let pickWorkspaceTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000020")!
+
+    /// `quietTaskHome` with a task that waits for the user to pick its
+    /// workspace, as the Mac sends one when no workspace was named and
+    /// triage is off: only Delete, and the step to take on the Mac.
+    public static let pickWorkspaceTaskHome = makeQuietTaskHome(needsYou: [
+        RemoteTaskSummary(
+            id: pickWorkspaceTaskID, title: "Fix the settings typo", group: .needsYou,
+            statusLine: "⚠ pick a workspace", rowSummary: "⚠ pick a workspace",
+            stageTitle: "Needs you", stageReason: "No workspace was named. Pick a workspace for this task.",
+            activityAt: Date(),
+            actions: [RemoteTaskActionItem(action: .delete, title: "Delete Task")],
+            macStep: "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace."
+        ),
+    ])
+
+    private static func makeQuietTaskHome(needsYou: [RemoteTaskSummary]) -> MobileHomeSnapshot {
         let toasttyID = previewWorkspaceID
         let now = Date()
         let toastty = MobileWorkspace(
@@ -400,16 +418,17 @@ public enum ToasttyMobileFixture {
             )
         }
         let board = RemoteTaskBoard(
-            tasks: [
+            tasks: needsYou + [
                 task(startingTaskID, "Split the parser", .running, "Claude · working"),
                 task(otherProjectTaskID, "Linux port spike", .idle, "Codex · idle"),
             ],
+            needsYou: needsYou.map { RemoteTaskBoardEntry(taskID: $0.id) },
             running: [RemoteTaskBoardEntry(taskID: startingTaskID)],
             idle: [RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
             doneCount: 3
         )
         return MobileHomeSnapshot(hostName: home.hostName, workspaces: [toastty], taskBoard: MobileTaskBoard(board))
-    }()
+    }
 
     public static let longNamesWorkspaceID = UUID(uuidString: "A3000000-0000-0000-0000-000000000001")!
     public static let longNamesQuestionSubspaceID = UUID(uuidString: "A3000000-0000-0000-0000-000000000011")!

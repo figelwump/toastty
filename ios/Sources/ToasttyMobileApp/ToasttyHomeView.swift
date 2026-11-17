@@ -1,3 +1,4 @@
+import ConversationUI
 import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
@@ -428,6 +429,24 @@ struct ToasttyHomeView: View {
                 onSpawnerChip: { toggleSpawnerFilter($0, proxy: proxy) }
             )
         }
+        // The Coordinator tab shows once the coordinator's workspace exists;
+        // until then Home says where it starts.
+        if controller.snapshot.coordinator == nil {
+            ToasttyMacHintCard(
+                title: "Coordinator",
+                message: "Not started yet. It starts on your Mac: choose Open Coordinator in the Agent menu.",
+                identifier: "toastty-mobile-home-coordinator-hint"
+            ) {
+                ToastyIcon(
+                    style: .golden,
+                    size: 30,
+                    palette: .phone,
+                    badgeRingColor: ToasttyDesignTokens.raisedSurface
+                )
+            }
+            .padding(.top, 14)
+            .toasttyListRow()
+        }
     }
 
     @ViewBuilder
@@ -483,6 +502,19 @@ struct ToasttyHomeView: View {
         // much Active is hiding.
         hiddenSessionsFooter
             .toasttyListRow()
+        if controller.asksToUpdateMacForTasks {
+            ToasttyMacHintCard(
+                title: "Tasks and the coordinator",
+                message: "Update Toastty on your Mac to see them here.",
+                identifier: "toastty-mobile-home-update-mac-hint"
+            ) {
+                Image(systemName: "desktopcomputer")
+                    .font(.title3)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            }
+            .padding(.top, 14)
+            .toasttyListRow()
+        }
     }
 
     private static func subspaceGroupID(_ parentID: UUID) -> String {
@@ -671,5 +703,44 @@ struct ToasttyHomeView: View {
         .foregroundStyle(ToasttyDesignTokens.mutedText)
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("toastty-mobile-settings-button")
+    }
+}
+
+/// A card at the end of Home that says what to do on the Mac for something
+/// the phone cannot show yet.
+private struct ToasttyMacHintCard<Icon: View>: View {
+    let title: String
+    let message: String
+    let identifier: String
+    @ViewBuilder let icon: Icon
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            icon
+                .frame(width: 30, height: 30)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(ToasttyDesignTokens.primaryText)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            ToasttyDesignTokens.raisedSurface,
+            in: RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius)
+                .strokeBorder(ToasttyDesignTokens.border)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(identifier)
     }
 }

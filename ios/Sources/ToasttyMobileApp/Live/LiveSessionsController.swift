@@ -833,6 +833,13 @@ final class LiveSessionsController {
         coordinatorState.capabilities.contains(.coordinatorChatRead) && deviceScopes.contains(.read)
     }
 
+    /// Whether the Mac has the task system, once its capabilities are
+    /// known. Nil before the first hello and between connections, so Home
+    /// keeps what it knew.
+    private var hostHasTasks: Bool? {
+        coordinatorState.capabilities.isEmpty ? nil : coordinatorState.capabilities.contains(.tasks)
+    }
+
     private var acceptsCoordinatorSend: Bool {
         coordinatorState.capabilities.contains(.coordinatorSend) && deviceScopes.contains(.send)
     }
@@ -1004,6 +1011,7 @@ final class LiveSessionsController {
             hostSupportsTaskActions: acceptsTaskActions,
             hostSupportsProjectRelease: acceptsProjectRelease,
             hostSupportsCoordinatorSend: acceptsCoordinatorSend,
+            hostSupportsTasks: hostHasTasks,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)
