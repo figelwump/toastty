@@ -42,9 +42,9 @@ Updating from 0.9.x? See [what changes](docs/tasks.md#updating-from-09x). To bui
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/readme/workflow-1.png" alt="The quick entry panel over another app, with a checkout-redesign task, its project and its agent chosen"></td>
+    <td width="33%"><img src="docs/assets/readme/workflow-1.png" alt="The quick entry panel over another app, with a message for the coordinator, an attached screenshot, and its Create and Send buttons"></td>
     <td width="33%"><img src="docs/assets/readme/workflow-2.png" alt="The sidebar's project card with the checkout-redesign task under Ready to review, its PR #128 chip beside it"></td>
-    <td width="33%"><img src="docs/assets/readme/workflow-3.png" alt="The checkout-redesign task space open, with the Merge PR #128 button in its top bar, the agent's terminal, and the pull request in the right panel"></td>
+    <td width="33%"><img src="docs/assets/readme/workflow-3.png" alt="The checkout-redesign task space open, with the Merge PR #128 button in its top bar, the agent's terminal, and its verification report in the right panel"></td>
   </tr>
   <tr>
     <td>Press <code>Option+Shift+T</code> in any app and describe the task. Its agent starts in a task space of its own and moves into a git worktree when you say to implement.</td>
@@ -119,7 +119,7 @@ See [Right Panel](docs/right-panel.md) for shortcuts, Recently Opened, and link 
 
 ### Toastty Mobile (TestFlight)
 
-<img src="docs/assets/readme/mobile.png" alt="Toastty Mobile on an iPhone: Home with the lumen project's sessions and tasks under Needs you, Ready to review and Running, the checkout-redesign task with its PR #128 chip, and the Home, Coordinator and Tasks tabs" width="260" align="right">
+<img src="docs/assets/readme/mobile.png" alt="Toastty Mobile on an iPhone: Home on Needs you, with the lumen project's session and tasks under Needs you and Ready to review, the checkout-redesign task with its PR #128 chip, and the Home, Coordinator and Tasks tabs" width="260" align="right">
 
 The same sidebar, on your iPhone, over your private tailnet.
 

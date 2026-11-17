@@ -356,8 +356,9 @@ Other ways to open the same panel:
 Change the shortcut with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`,
 or turn it off with `shortcut = "none"`. Toastty reads it at launch and on
 Reload Configuration. The shortcut needs no Accessibility permission. If
-another app already uses it, Reload Configuration says so, and the shortcut
-still works inside Toastty from the File menu. Smoke runs and test hosts do
+Toastty cannot register it, a message says so at launch or on Reload
+Configuration, and the shortcut still works inside Toastty from the File
+menu. Smoke runs and test hosts do
 not register it.
 
 Toastty Mobile has the same form: **+** on its Home screen and content shared
@@ -1227,7 +1228,7 @@ sets its next check.
 | An agent waits at a permission prompt | Never answers it. Tells you after 10 minutes. |
 | An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. |
 | An agent ended a turn, and the task is not done | Reads the reply. It then waits for CI, notes the task or pull request the agent waits for and tells the agent when that merged, treats the reply as a question, or tells the agent to open its pull request or to mark the work ready. |
-| CI failed | Tells the task to fix it, or to rerun a check your policy names as a flake. |
+| CI failed | When the failed tests are outside the pull request's change, tells the task to rerun them once before it changes code. Otherwise, or when the rerun fails again, tells the task to fix it. A test that passed on the rerun goes in its ledger. |
 | CI runs for more than 30 minutes | Looks at the run, and tells you when it is queued or hangs. |
 | The pull request has merge conflicts | Tells the task to rebase and resolve them. |
 | An agent is busy, with no output for 30 minutes | Never interrupts. Tells you which command seems to hang. |
@@ -1341,7 +1342,7 @@ holds. Otherwise it brings the task to you, as for any review.
 | The diff | It read all of it. Every changed file and line fits the rule's kind and size, and the change does only what the task asked. It judges the kind from the files, not from the description. With no size in the rule, the limit is 40 changed lines in 3 files. |
 | The proof | Good proof under your Reviewing rules, for the current commit. |
 | The report | No review finding that the agent rejected or left open, no follow-up that the change still needs, and no question for you. |
-| The pull request | Not a draft. Every check passed, with none still running; a known flake does not count as passed. No conflict, and no requested or missing review. |
+| The pull request | Not a draft. Every check passed, with none still running; a failed check counts only after a rerun of it passed. No conflict, and no requested or missing review. |
 | The base branch | The repository's default branch, or a branch that the rule names. |
 | The task | It waits for review, its agent is idle, you did not type in it in the last 15 minutes, and it is not a child of another task. |
 
@@ -1508,7 +1509,7 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 | `AGENTS.md`, `CLAUDE.md` | Toastty | The agent's instructions: the text of the shipped `toastty-coordinator` skill. `CLAUDE.md` imports `AGENTS.md` for Claude Code. |
 | `references/` | Toastty | The skill's reference files, which the instructions tell the agent to read when it needs them. `references/merging.md` holds the rules for [merges by the coordinator](#merges-by-the-coordinator), `references/improving.md` the rules for [its two records and its review](#how-the-coordinator-improves-the-work), `references/first-run.md` the questions of [the first run](#the-policy-file), and `references/releases.md` the rules for [releases](#release). Your own rules go in `policy.md`. |
 | `policy.md` | you and the coordinator | Your rules. See [the policy file](#the-policy-file). |
-| `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, and the outside pull requests it watches. |
+| `ledger.md` | the coordinator | What it must not repeat or forget: each message it sent to a task, what it told or asked you, the outside pull requests it watches, and the tests that failed and then passed on a rerun. |
 | `friction.md` | the coordinator | What slows the work: one line for each pattern, with a count. See [How the coordinator improves the work](#how-the-coordinator-improves-the-work). You can edit it. |
 | `decisions.md` | the coordinator | What waited for you: one line for each review and each question, with what you then decided. |
 | `attachments/` | Toastty | Copies of the files you attached to a quick entry message, in one folder for each message, kept out of the repository. See [Quick entry with the coordinator](#quick-entry-with-the-coordinator). |
@@ -1523,7 +1524,14 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
   instruction files, all files together (`project_doc_max_bytes` in its
   configuration). So when `[coordinator] agent` names a Codex profile,
   Toastty starts the agent, and resumes it after a relaunch, with
-  `project_doc_max_bytes` set to 128 KiB for that command only. Your
+  `project_doc_max_bytes` set to 128 KiB for that command only. When the
+  profile's arguments cannot take it, as for a shell helper or an attached
+  `-c`, the coordinator's chat says that Codex may read only part of the
+  instructions and how to fix it: a `codex` profile that runs `codex`
+  itself, or `project_doc_max_bytes` in Codex's own configuration. When
+  the helper or that configuration already sets it, choose Don't Show
+  Again: Toastty then hides the notice until the profile's arguments
+  change. Your
   `~/.codex/config.toml` and the task agents do not change. The
   instruction file stays under 128 KiB, and the reference files hold the
   rules that the coordinator reads only when it needs them. An agent
@@ -1557,7 +1565,9 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 
 ### The policy file
 
-`policy.md` holds your choices. A rule there wins over the skill's defaults,
+`policy.md` holds your choices, and only rules: facts that the coordinator
+keeps, such as a test that passed on a rerun, go in its ledger. A rule there
+wins over the skill's defaults,
 except for the Never column. You can edit it at any time; the coordinator
 reads it on each wake. **Policy**, in the header of the coordinator's panel,
 and **Open Policy**, in the Coordinator row's context menu, show the file in
@@ -1607,9 +1617,6 @@ by asking you:
 
 ## Senders
 - Grok Bot: passes on my decisions.
-
-## Notes (kept by the coordinator)
-- toastty: testLongSidebarScroll fails on the mini; CI decides.
 ```
 
 **The first run.** The first time you write to the coordinator while one
@@ -1639,8 +1646,11 @@ again, and the defaults apply: for Improving, a review only when you ask.
 Say "set yourself up again" to answer all five parts again. A policy from an
 older version has no Talking or Improving section; the coordinator asks
 about it once and adds the heading. It does not ask about
-Merging or Senders: those sections stay empty until you ask for a rule, and the
-coordinator adds the heading to an older policy when it first writes one.
+Merging or Senders: those sections stay empty until you ask for a rule, and
+the coordinator adds the heading to an older policy when it first writes one. An
+older policy can also end with a Notes section. Its lines still apply; the
+coordinator adds nothing to it, and asks you once whether to move each fact
+there to its ledger and each rule to its section.
 
 **Undo.** The coordinator commits each change it makes to the policy as one
 commit, named `Policy: change <section>`, and shows you the line it added.
@@ -2476,9 +2486,17 @@ release_prompt = "Wait for my approval before any production change."  # optiona
 - With only `merge_prompt` set, Merge sends that prompt as written, with no
   skill line. Each key is looked up on its own, so a `merge_skill` in
   `[defaults]` also comes before a project's own `merge_prompt`.
-- Toastty does not check that the skill is installed. Name a skill the task's
-  agent can load: one in `~/.toastty/skills/`, the repository's
+- Toastty does not check that a skill you name is installed. Name a skill the
+  task's agent can load: one in `~/.toastty/skills/`, the repository's
   `.agents/skills/`, or one Toastty ships.
+- Some launches do not give the agent the skills that Toastty ships: Toastty
+  could not prepare Claude's skills plugin or Codex's profile, the profile
+  runs a wrapper script, or pi runs with `--no-skills`. When Toastty knows
+  this, the first message and Merge's message also give the path of the
+  shipped skill's `SKILL.md` in the app, and the first message keeps the
+  `coordinator send` and `task needs-reply` lines. For Claude and Codex, a
+  banner over the window also says that the agent launched without
+  Toastty's skills.
 
 ## `~/.toastty/tasks.toml`
 
@@ -2510,7 +2528,12 @@ effort = "high"
 runs your `claude` profile with that profile's own model and effort.
 `[defaults]` does not apply to it. Toastty reads the table each time it starts
 the coordinator's agent, and a resumed conversation keeps what it started
-with. With a Codex profile, Toastty also raises `project_doc_max_bytes` for
+with. Before a start, Toastty checks that the agent's command is installed.
+If it is not, the start stops with an error that names the agent and this
+setting, and makes no Coordinator workspace. When Claude Code or Codex is
+installed, the error offers to start with it, with its own model and
+effort. That choice applies to that start only: Toastty does not change
+`tasks.toml`. With a Codex profile, Toastty also raises `project_doc_max_bytes` for
 the coordinator, so that Codex reads all of its instructions (see
 [The coordinator's folder](#the-coordinators-folder)).
 

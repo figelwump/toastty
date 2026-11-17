@@ -2,6 +2,7 @@
 import AppKit
 import CoreState
 import Foundation
+import SwiftUI
 import Testing
 
 /// The coordinator's dock: where it shows, how the chat moves between the
@@ -296,6 +297,76 @@ struct CoordinatorDockTests {
         #expect(controller.dockShortcutAction == .showDock)
     }
 
+    /// Show Terminal, in the full view's chat or in the dock, shows the
+    /// coordinator's terminal with the keyboard, so that the user can
+    /// answer a folder-trust question with the keys at once. The chat's
+    /// field had the keyboard, and a terminal that shows does not take the
+    /// keyboard from that field by itself. The real workspace view shows
+    /// the chat over the terminal, as in the app.
+    @Test func showTerminalGivesTheTerminalTheKeyboard() async throws {
+        guard #available(macOS 15.0, *) else { return }
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let store = fixture.store
+        let controller = fixture.controller
+        let location = try #require(store.state.coordinator)
+        let windowID = location.windowID
+        let taskWorkspaceID = try #require(store.state.topLevelWorkspaceIDs(in: windowID).first)
+        let host = try HostedCoordinatorWindow(fixture, windowID: windowID)
+        defer { host.close() }
+        let terminal = fixture.conversations.terminalRuntimeRegistry.controller(
+            for: fixture.panelID, workspaceID: location.workspaceID, windowID: windowID
+        )
+        func chatFieldHasTheKeyboard() -> Bool {
+            fixture.chat.composerTextView.map { $0.window === host.window && host.window.firstResponder === $0 } ?? false
+        }
+
+        // The full view: the chat covers the terminal, and the chat's field
+        // has the keyboard.
+        try await fixture.waitUntil("the chat's field to take the keyboard", chatFieldHasTheKeyboard)
+        #expect(terminal.hasKeyboardFocus == false)
+
+        // Show Terminal in the chat's notice, or Terminal in the panel's
+        // header. The terminal keeps the keyboard after the chat has gone.
+        controller.showTerminal()
+        try await fixture.waitUntil("the terminal to take the keyboard") { terminal.hasKeyboardFocus }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(terminal.hasKeyboardFocus)
+
+        // Chat in the panel's header: the chat's field takes it back.
+        controller.showsTerminal = false
+        try await fixture.waitUntil("the chat's field to take the keyboard again", chatFieldHasTheKeyboard)
+
+        // Another panel beside the chat, as policy.md's can be, has the
+        // focus: Show Terminal focuses the coordinator's panel too. Each
+        // change shows before the next click, as it does for a user.
+        #expect(store.send(.splitFocusedSlot(workspaceID: location.workspaceID, orientation: .horizontal)))
+        #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID != fixture.panelID)
+        try await Task.sleep(for: .milliseconds(300))
+        controller.showTerminal()
+        try await fixture.waitUntil("the terminal to take the keyboard from the panel beside it") { terminal.hasKeyboardFocus }
+        #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID == fixture.panelID)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(terminal.hasKeyboardFocus)
+        controller.showsTerminal = false
+        try await fixture.waitUntil("the chat's field to take the keyboard once more", chatFieldHasTheKeyboard)
+
+        // The dock beside another workspace: its field, outside every
+        // panel, has the keyboard. Its Show Terminal opens the full view
+        // with the terminal, and the terminal takes the keyboard.
+        #expect(store.selectWorkspace(windowID: windowID, workspaceID: taskWorkspaceID, preferringUnreadSessionPanelIn: nil))
+        let dockField = CoordinatorComposerTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 20))
+        host.window.contentView?.addSubview(dockField)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(host.window.makeFirstResponder(dockField))
+        controller.openFullView(showingTerminal: true)
+        try await fixture.waitUntil("the terminal to take the keyboard from the dock's field") { terminal.hasKeyboardFocus }
+        #expect(store.selectedWorkspaceID(in: windowID) == location.workspaceID)
+        #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID == fixture.panelID)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(terminal.hasKeyboardFocus)
+    }
+
     /// A file dropped on the chat, perhaps from Finder, gives that view's
     /// field the keyboard and makes Toastty the active app, so that the
     /// user can type the message that goes with it. In the full view the
@@ -345,6 +416,95 @@ struct CoordinatorDockTests {
         #expect(store.selectedWorkspaceID(in: windowID) == taskWorkspaceID)
         #expect(controller.dockShows(in: windowID))
         chat.hide(panelID: fixture.panelID, host: .dock)
+    }
+
+    /// The coordinator's window as the app shows it: the real workspace
+    /// view, with the chat over the coordinator's terminal, and the
+    /// keyboard connected between them as the app connects it.
+    @MainActor
+    private final class HostedCoordinatorWindow {
+        let window: NSWindow
+        private let home: URL
+        /// The views reach the coordinator through the task system, which
+        /// they do not keep.
+        private let tasks: TaskCoordinator
+
+        init(_ fixture: CoordinatorChatFixture, windowID: UUID) throws {
+            let store = fixture.store
+            let conversations = fixture.conversations
+            let registry = conversations.terminalRuntimeRegistry
+            let sessions = conversations.sessionRuntimeStore
+            registry.bind(store: store)
+            registry.synchronize(with: store.state)
+            sessions.bind(store: store)
+            home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            tasks = TaskCoordinator(
+                records: TaskRecordStore(fileURL: home.appendingPathComponent("tasks.json")),
+                store: store, launcher: nil,
+                configLoader: { TasksConfig() },
+                attachmentsDirectoryURL: home.appendingPathComponent("attachments"),
+                hasActiveSession: { _ in false }, grantScope: { _, _ in }
+            )
+            tasks.coordinatorController = fixture.controller
+            sessions.taskCoordinator = tasks
+            fixture.controller.connectKeyboard(to: registry)
+
+            let agents = AgentCatalogStore(homeDirectoryPath: home.path)
+            let webPanels = WebPanelRuntimeRegistry()
+            webPanels.bind(store: store)
+            let view = WorkspaceView(
+                windowID: windowID,
+                store: store,
+                agentCatalogStore: agents,
+                terminalProfileStore: TerminalProfileStore(homeDirectoryPath: home.path, environment: [:]),
+                terminalRuntimeRegistry: registry,
+                terminalLiveTitleStore: registry.terminalLiveTitleStore,
+                webPanelRuntimeRegistry: webPanels,
+                sessionRuntimeStore: sessions,
+                profileShortcutRegistry: ProfileShortcutRegistry(
+                    terminalProfiles: .empty,
+                    terminalProfilesFilePath: home.appendingPathComponent("terminal-profiles.toml").path,
+                    agentProfiles: .empty,
+                    agentProfilesFilePath: home.appendingPathComponent("agents.toml").path
+                ),
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: store,
+                    runtimeRegistry: registry,
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator(),
+                    webPanelRuntimeRegistry: webPanels
+                ),
+                agentLaunchService: AgentLaunchService(
+                    store: store,
+                    terminalCommandRouter: registry,
+                    sessionRuntimeStore: sessions,
+                    agentCatalogProvider: agents
+                ),
+                openGettingStartedPanel: {},
+                toggleCommandPalette: { _ in },
+                presentCommandPalette: { _, _ in },
+                terminalRuntimeContext: TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry),
+                leftColumnVisible: true
+            )
+            .frame(width: 900, height: 600)
+            // Off the screen: only which view has the keyboard matters.
+            window = NSWindow(
+                contentRect: NSRect(x: -10_000, y: -10_000, width: 900, height: 600),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let content = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = content.bounds
+            content.addSubview(hosting)
+            window.contentView = content
+            window.makeKeyAndOrderFront(nil)
+        }
+
+        func close() {
+            window.close()
+            try? FileManager.default.removeItem(at: home)
+        }
     }
 
     private func addWorkspace(to store: AppStore, windowID: UUID, title: String) throws -> UUID {

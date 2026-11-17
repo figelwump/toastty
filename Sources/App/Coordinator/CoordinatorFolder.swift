@@ -69,8 +69,6 @@ struct CoordinatorFolder: Sendable {
 
     ## Senders
 
-    ## Notes (kept by the coordinator)
-
     """
 
     static let ledgerTemplate = """

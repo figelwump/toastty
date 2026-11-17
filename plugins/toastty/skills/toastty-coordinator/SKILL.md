@@ -299,7 +299,7 @@ Limits here are defaults. The Unblocking section of `policy.md` changes them.
 | Question | stage `needsYou (awaitingReply)`, with `question` | Read `lastReply`. If `policy.md`, or an answer the user gave you to the same question, settles it: send the answer, name the rule in it, and tell the user what you answered. If not: pass the question to the user with the answer you suggest, and send the user's answer to the task when it comes. |
 | Ended a turn, not done | stage `needsYou (agentFinished)` | Read `lastReply` and sort it. It waits for CI: nothing to send. It waits for another task or pull request: see the next row. It asks something: treat it as a question. The work is finished but it has no pull request and no ready mark: tell it once to open the pull request or to run `toastty task ready-for-review`. It answers the user: tell the user it waits for them. |
 | Waits for another task or pull request | the reply names it | Add a `watch` line to the ledger. For another Toastty task, also run `"$TOASTTY_CLI_PATH" coordinator watch --task <that task's id>`: its merge, or its end without a merge, then wakes you. A pull request outside Toastty answers `gh pr view <url> --json state,mergedAt`; set your next check to look again. When it merged, tell the waiting task, under the rules for Send. Do not use `toastty task watch --notify` for another task: Toastty types that notice whatever the agent does at that moment. |
-| CI failed | `checks` is `failing` and the agent is `idle`. Toastty wakes you when the checks start to fail. | Read which checks fail with `gh pr checks <pr>`. Tell the task to fix them, or to rerun a check that Notes in `policy.md` names as a flake. |
+| CI failed | `checks` is `failing` and the agent is `idle`. Toastty wakes you when the checks start to fail. | Read which checks fail with `gh pr checks <pr>`, and which tests fail with `gh run view <run-id> --log-failed`. When every failed test, and the code it checks, is outside the pull request's change, tell the task to rerun the failed jobs once before it changes code. Otherwise, or when the rerun fails again, tell the task to fix them: a second failure is a real failure. The rerun failed only when the check ran again after your message: a new run or attempt, or the task's reply says so. A wake about the same failed run is not a second failure. When the rerun passes, add or update a `flake` line in the ledger. The rerun and the fix are two conditions for One nudge: `ci-rerun` and `ci-failed`. |
 | CI slow | `checksPendingMinutes` passes 30. Toastty wakes you then. | Look with `gh pr checks <pr>` and `gh run view`. Tell the user if a run is queued or hangs. Do not rerun or cancel it. |
 | Merge conflict | `mergeState` is `DIRTY` and the agent is `idle` | Tell the task to merge its base branch into its branch, resolve the conflicts, and push without force. |
 | Busy but silent | `agent` is `busy` and `silentMinutes` passes 30. Toastty wakes you then. | Never interrupt. Read its screen with `toastty --json query run terminal.visible-text --panel <panelID> tail=40`, and tell the user which command seems to hang. A long build or a sub-agent can be silent and healthy. |
@@ -428,8 +428,8 @@ line in `decisions.md`; see Improve.
    there, or a rule to use the defaults, good proof is: a list of the
    scenarios a user can hit; each one checked through the real surface (UI,
    CLI or API) with output you can inspect; screenshots or video for a UI
-   change; and checks that pass, or fail only on a flake that Notes names.
-   Unit tests alone are not enough.
+   change; and checks that pass. A failed check goes through the CI failed
+   row of Unblock first. Unit tests alone are not enough.
 4. **Checks still run:** wait for them; do not report yet.
 5. **Weak or missing proof:** tell the task exactly what to add, once. If the
    task is ready again and the proof is still weak, bring it to the user and
@@ -480,12 +480,17 @@ archive would refuse.
 ## Your files
 
 `policy.md` has these sections: Projects, Agents, Talking, Reviewing, Merging,
-Improving, Unblocking, Releases, Senders, and Notes (facts you keep, such as a test
-that is a known flake). Read it at the start of every turn that a digest started, and
+Improving, Unblocking, Releases and Senders. It holds the user's rules
+only. Facts that you keep, such as a test that failed and then passed on a
+rerun, go in the ledger. Read it at the start of every turn that a digest started, and
 before you choose anything for a new task. The user can edit it at any time;
 **Policy**, in the header of your panel, shows it to them.
 A policy from an older version can miss a section, such as Improving: when
-you first write a rule to it, add its heading before Notes.
+you first write a rule to it, add its heading where the list above puts
+it. It can also end with a Notes section. Its lines still apply, and you add
+nothing to it. In a turn that the user started, ask once, with an `asked
+notes` ledger line, whether to move them: each fact to the ledger, and each
+rule to its section. Keep that line while the Notes section stays.
 
 ### Change the policy
 
@@ -519,13 +524,17 @@ a new change.
 - 2026-11-09T19:00Z asked release-rule webapp: on merge or in batches?
 - 2026-11-09T19:05Z watch https://github.com/o/r/pull/12 for [Add the export API](toastty://task/<id>).
 - 2026-11-09T19:10Z reviewed 4f2c1ab [Fix the unread dot](toastty://task/<id>): good proof, told the user.
+- 2026-11-17T18:20Z flake o/r testLongSidebarScroll: failed in o/r#412, passed on a rerun; 1 time.
 ```
 
 The second word is `nudged`, `told`, `asked`, `watch`, `reviewed`, `merging`,
-`merged`, `followup` or `list`; then the condition; then the task. Read the ledger before you
+`merged`, `followup`, `list` or `flake`; then the condition; then the task. Read the ledger before you
 send, tell or ask. Remove a task's lines when the task is Done or
 Archived (a `merged` line after 30 days), an `asked` line when the user
-answered, and a `watch` line when you told the task. Before you remove a
+answered, and a `watch` line when you told the task. A `flake` line names a
+repository and a test, not a task, so it stays when the task is Done: when
+the same test passes on a rerun again, change its time and count in place,
+and remove the line 30 days after its time. Before you remove a
 `reviewed` line, add the outcome to the task's line in `decisions.md`; see
 Improve. Do not commit the ledger.
 

@@ -1463,7 +1463,7 @@ struct ToasttyApp: App {
             promptState: { [weak terminalRuntimeRegistry] panelID in
                 terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
             },
-            chatReadDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
         )
         // Task changes and the coordinator's timer wake it from here on.
         if let coordinatorController = taskCoordinator.coordinatorController {
@@ -1509,10 +1509,17 @@ struct ToasttyApp: App {
             quickEntryController,
             to: taskCoordinator.coordinatorController?.startOffer,
             defaults: userDefaults
-        ) { message in
-            TaskActions.presentFailure("Quick Entry Shortcut", message)
+        ) { [weak quickEntryController] in
+            // As at launch, over the window in front. A window that cannot
+            // show it now leaves it for the next window that gets the
+            // keyboard.
+            guard let windowID = currentToasttyWorkspaceCommandWindowID(in: store) else { return }
+            quickEntryController?.presentLaunchMessageIfNeeded(
+                windowID: windowID,
+                present: Self.presentLaunchConfigurationWarning
+            )
         }
-        quickEntryController.reloadShortcut()
+        quickEntryController.loadShortcutAtLaunch()
         whatsNewActions.chooseDefaultShortcut = { allowed in
             QuickEntryShortcutAnswer.save(allowed, in: userDefaults)
         }
@@ -1562,15 +1569,8 @@ struct ToasttyApp: App {
                 defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
             )
             // Keyboard focus meant for the terminal under the chat goes to
-            // the chat's composer.
-            terminalRuntimeRegistry.coveringInputFocus = { [weak coordinatorController] panelID in
-                guard let coordinatorController, coordinatorController.coversTerminal(panelID: panelID) else {
-                    return nil
-                }
-                return { [weak coordinatorController] in
-                    coordinatorController?.chat?.focusComposer() ?? false
-                }
-            }
+            // the chat's composer, and Show Terminal gives it back.
+            coordinatorController.connectKeyboard(to: terminalRuntimeRegistry)
         }
         // The quick entry Agent picker offers the models the iPhone's
         // start-session screen offers.
@@ -1975,7 +1975,13 @@ struct ToasttyApp: App {
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
-                disableAnimations: disableAnimations
+                disableAnimations: disableAnimations,
+                presentLaunchMessages: { [quickEntryController] windowID in
+                    quickEntryController.presentLaunchMessageIfNeeded(
+                        windowID: windowID,
+                        present: Self.presentLaunchConfigurationWarning
+                    )
+                }
             )
             .frame(minWidth: 980, minHeight: 620)
             .onAppear {
@@ -2200,14 +2206,38 @@ struct ToasttyApp: App {
 
         guard failureMessages.isEmpty == false || warningMessages.isEmpty == false else { return }
 
+        makeConfigurationAlert(
+            title: failureMessages.isEmpty ? "Configuration Reload Warnings" : "Unable to Reload Configuration",
+            messages: failureMessages + warningMessages,
+            style: failureMessages.isEmpty ? .informational : .warning
+        ).runModal()
+    }
+
+    /// The alert that lists what reading the configuration found, after
+    /// Reload Configuration and at launch.
+    private static func makeConfigurationAlert(
+        title: String,
+        messages: [String],
+        style: NSAlert.Style
+    ) -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = failureMessages.isEmpty
-            ? "Configuration Reload Warnings"
-            : "Unable to Reload Configuration"
-        alert.informativeText = (failureMessages + warningMessages).joined(separator: "\n")
-        alert.alertStyle = failureMessages.isEmpty ? .informational : .warning
+        alert.messageText = title
+        alert.informativeText = messages.joined(separator: "\n")
+        alert.alertStyle = style
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        return alert
+    }
+
+    /// Shows what reading the configuration at launch found, as a sheet
+    /// over the window, so restored terminals and agents carry on while it
+    /// shows. Returns false when the window cannot show a sheet now.
+    @MainActor
+    static func presentLaunchConfigurationWarning(windowID: UUID, message: String) -> Bool {
+        guard let window = AgentLaunchUI.window(for: windowID), window.attachedSheet == nil else { return false }
+        let alert = makeConfigurationAlert(title: "Configuration Warnings", messages: [message], style: .informational)
+        alert.window.setAccessibilityIdentifier("configuration.launch-warnings")
+        alert.beginSheetModal(for: window)
+        return true
     }
 
     nonisolated private static func resolveCodexProcessPath(

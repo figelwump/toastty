@@ -185,6 +185,13 @@ struct CoordinatorChatView: View {
                 dismissButton
             case .typingInterrupted:
                 showTerminalButton
+            case .instructionsMayBeCut:
+                noticeButton("Restart Coordinator", identifier: "coordinator.chat.notice.restart") {
+                    controller.perform(.restart)
+                }
+                noticeButton("Don't Show Again", identifier: "coordinator.chat.notice.hide") {
+                    controller.hideInstructionsNotice()
+                }
             case .failure:
                 dismissButton
             }
@@ -202,7 +209,7 @@ struct CoordinatorChatView: View {
     private var showTerminalButton: some View {
         noticeButton("Show Terminal", identifier: "coordinator.chat.notice.show-terminal") {
             switch host {
-            case .panel: controller.showsTerminal = true
+            case .panel: controller.showTerminal()
             case .dock: controller.openFullView(showingTerminal: true)
             }
         }
@@ -247,6 +254,9 @@ struct CoordinatorChatView: View {
             "Toastty typed your message, but the conversation did not show it. Check the terminal before you send it again."
         case .typingInterrupted:
             "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation, then choose Send next or Remove on the paused message."
+        case .instructionsMayBeCut:
+            "Codex may read only the first 32 KiB of the coordinator's instructions: Toastty cannot add project_doc_max_bytes to the arguments of your codex profile. "
+                + "Use a codex profile in ~/.toastty/agents.toml that runs codex itself, or set project_doc_max_bytes = \(CoordinatorFolder.codexProjectDocMaxBytes) in Codex's config.toml, then restart the coordinator."
         case .failure(let message):
             message
         }

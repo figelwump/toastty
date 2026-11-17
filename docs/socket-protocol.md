@@ -1617,6 +1617,11 @@ Request payload:
 
 - `step: String`
 - `fixture?: String`
+- `window?: String`: the identifier or accessibility identifier of the visible
+  window to capture, such as `quick-entry.panel`. If it is omitted, the first
+  visible window is captured.
+- `frame?: Bool`: when `true`, the capture includes the title bar and its
+  window buttons, not only the window's content. The default is `false`.
 
 Result:
 
@@ -1624,6 +1629,8 @@ Result:
 
 Behavior:
 
+- The PNG has the window's backing scale: 2x on a Retina display.
+- If no visible window has the `window` identifier, return `INVALID_PAYLOAD`.
 - If `fixture` is omitted, the current fixture name is used.
 - If `fixture` is provided and does not match the current fixture, return
   `INVALID_PAYLOAD`.

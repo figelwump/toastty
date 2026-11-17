@@ -107,6 +107,26 @@ struct TaskLifecycleTests {
         #expect(launch.workspaceID == task.taskSpaceWorkspaceID)
         #expect(launch.panelID != task.operation.taskSpace?.panelID)
         #expect(launch.prompt.hasPrefix("Use the toastty-task-merge skill.\n\n"))
+        // A launch without its skills gets the skill's file.
+        let skillFile = try #require(ToasttyAgentPluginBundle.skillFiles()[TaskPrompt.defaultMergeSkill])
+        #expect(launch.promptWithoutSkills?.contains("The toastty-task-merge skill's instructions are in \(skillFile)") == true)
+    }
+
+    /// The task's agent runs but did not get its skills at launch.
+    @Test func mergeToAnAgentWithoutItsSkillsSaysWhereTheMergeSkillIs() async throws {
+        let fixture = try Fixture()
+        let task = try await taskInWorktree(fixture)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        fixture.launcher.sessionIDsWithoutSkills.insert(session)
+        let skillFile = try #require(ToasttyAgentPluginBundle.skillFiles()[TaskPrompt.defaultMergeSkill])
+        // The name the Skills sheet shows finds the same file.
+        #expect(ToasttyAgentPluginBundle.skillFiles()["toastty:\(TaskPrompt.defaultMergeSkill)"] == skillFile)
+
+        try fixture.coordinator.requestMerge(taskID: task.id)
+
+        #expect(fixture.sessions.delivered.last?.text == "Use the toastty-task-merge skill.\n\n"
+            + "Toastty could not give this session its skills. The toastty-task-merge skill's instructions are in \(skillFile): "
+            + "read that file and follow it.\n\nThe user accepted \(pullRequestURL) for merging.")
     }
 
     @Test func mergeWithoutAPullRequestOrAfterCancelIsRefused() async throws {

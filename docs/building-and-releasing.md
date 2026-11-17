@@ -415,32 +415,34 @@ Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create
 The landing page in `website/` is static HTML with no build step. Its hero is an HTML recreation of the app driven by one timeline in `website/hero.js`; when the UI it imitates changes, update that markup and timeline. The README hero, the README workflow images, and the social preview card are all rendered from that page, so they stay consistent with it:
 
 ```bash
-node scripts/website/render-hero-video.mjs \
-  --stills 'workflow-1=6.0,workflow-2=15.9,workflow-3=20.8,right-panel=11.7@.rp,sidebar=0@.sbdemo' \
-  --social
+node scripts/website/render-hero-video.mjs --social \
+  --stills 'workflow-1=0@.qe-desk,workflow-2=15.9,workflow-3=17.6'
 ```
 
-The script uses local Google Chrome (or `CHROME_PATH`) and `ffmpeg`, reads only local files, and writes to `artifacts/website-hero/`: `toastty-tour.mp4`, `poster.png`, one PNG per still, and `social-preview.png`. Copy `poster.png` to `docs/assets/toastty-hero.png` and the workflow stills, downscaled to 1600px wide, to `docs/assets/readme/`.
+The script uses local Google Chrome (or `CHROME_PATH`) and `ffmpeg`, reads only local files, and writes to `artifacts/website-hero/`: `toastty-tour.mp4`, `poster.png`, one PNG per still, and `social-preview.png`. Copy `poster.png` to `docs/assets/toastty-hero.png`, `social-preview.png` to `website/assets/social-preview.png`, and the `workflow-2` and `workflow-3` stills, downscaled to 1600px wide, to `docs/assets/readme/`. The `workflow-1` still is the quick entry card of the page's Tasks section; pad it to the shape of the other stills with the page color: `sips --padToHeightWidth 635 1000 --padColor F5EEE2 artifacts/website-hero/workflow-1.png --out docs/assets/readme/workflow-1.png`.
 
 The Toastty Mobile section of the page is a second recreation, an iPhone driven by `website/mobile.js`; its colors mirror `ios/Sources/ToasttyMobileApp/ToasttyDesignTokens.swift`, so update both when the native client's look changes. `--target mobile` renders it the same way, to a portrait MP4 for social posts plus a poster, stills, and a 1200x630 card with the phone beside the Toastty Mobile tagline:
 
 ```bash
-node scripts/website/render-hero-video.mjs --target mobile --social \
-  --stills 'question=3.6,typing=12.2,ready=16.0'
+node scripts/website/render-hero-video.mjs --target mobile --social --stills 'ready=1.2'
 ```
 
-This writes `toastty-mobile.mp4`, `mobile-poster.png`, `mobile-<name>.png`, and `mobile-social.png` into the same directory. The site keeps using the desktop card as its share image; the mobile card is for posts about the iPhone app. The README's Toastty Mobile image is the phone cropped out of the `ready` still with transparent corners: `scripts/website/crop-mobile-phone.sh artifacts/website-hero/mobile-ready.png docs/assets/readme/mobile.png`.
+This writes `toastty-mobile.mp4`, `mobile-poster.png`, `mobile-<name>.png`, and `mobile-social.png` into the same directory. The site keeps using the desktop card as its share image; the mobile card is for posts about the iPhone app. The README's Toastty Mobile image is the phone cropped out of the `ready` still (Home on Needs you) with transparent corners: `scripts/website/crop-mobile-phone.sh artifacts/website-hero/mobile-ready.png docs/assets/readme/mobile.png`.
 
-The README's other images and the social card's close-up are screenshots of the real app. `scripts/website/capture-demo-screenshots.sh` launches an isolated Debug build with its own runtime home, home folder, shell, and Ghostty config, builds a made-up `lumen` demo through the `toastty` CLI with fake sessions, and captures the window with `screencapture -l`. It needs a Mac GUI session with Screen Recording permission for your terminal, and it shows a Toastty window on screen for about a minute without focusing or clicking anything. The demo app gets its own home folder and temporary directory, so it never reads or changes your Toastty settings, `~/.toastty`, Codex hooks, or the socket discovery record your CLI uses:
+The README's sidebar, right panel, and window images, and the screenshots of quick entry, the Tasks view, and the coordinator chat, are screenshots of the real app. `scripts/website/capture-demo-screenshots.sh` launches an isolated Debug build in automation mode, with its own runtime home, home folder, shell, and Ghostty config, and builds a made-up `lumen` demo through the `toastty` CLI: real tasks whose agents are fake `claude` scripts that print a canned transcript, a fake coordinator whose chat shows a seeded conversation, and a fake `gh` that reports PR #128 as open with passing checks. No real agent or GitHub account is used. The app draws each capture itself (`automation.capture_screenshot`), so the script needs no Screen Recording permission. It opens menus, presses buttons, and types through Accessibility (`scripts/automation/ax-drive.swift`), so it needs Accessibility permission for your terminal and an unlocked screen, and it brings the demo window to the front for about two minutes. The demo app gets its own home folder and temporary directory, so it never reads or changes your Toastty settings, `~/.toastty`, Codex hooks, or the socket discovery record your CLI uses:
 
 ```bash
 scripts/website/capture-demo-screenshots.sh --build --out artifacts/website-capture/latest
-node scripts/website/render-hero-video.mjs --no-video --social \
-  --social-image artifacts/website-capture/latest/sidebar.png \
-  --social-crop "$(cat artifacts/website-capture/latest/social-crop.txt)"
 ```
 
-Copy `sidebar.png` and `right-panel.png` to `docs/assets/readme/`, `window.png` (downscaled to 1600px wide) to `docs/assets/readme/window.png`, and `artifacts/website-hero/social-preview.png` to `website/assets/social-preview.png`. The GitHub repository's own social preview is set separately under the repository's Settings.
+On a Mac whose display is not Retina, such as the remote Mac mini, add `--hidpi-display 1600x1000`: the script adds a temporary 2x display for the run, so the captures are 2x. macOS makes that display the main display while it exists, so run it only while no other GUI check uses the Mac. On the mini, through the remote wrapper, which builds the app and holds the mini's desktop for the run:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree --validation-command \
+  'scripts/website/capture-demo-screenshots.sh --app "$TOASTTY_APP_BUNDLE" --hidpi-display 1600x1000 --out "$TOASTTY_ARTIFACTS_DIR/demo"'
+```
+
+The images land in `demo/` under the run's artifacts. Copy `sidebar.png` and `right-panel.png` to `docs/assets/readme/`, and `window.png`, `quick-entry.png`, `tasks-view.png`, and `coordinator-dock.png`, each downscaled to 1600px wide at most, to `docs/assets/readme/` too. The GitHub repository's own social preview is set separately under the repository's Settings.
 
 ## Related docs
 

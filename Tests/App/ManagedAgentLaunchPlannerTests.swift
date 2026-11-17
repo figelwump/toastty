@@ -117,12 +117,16 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexLaunchWithoutSkillsPostsActionableUnavailableNotice() throws {
         let fixture = try makePlannerFixture()
         let recorder = CodexSkillsUnavailableNoticeRecorder()
+        let windowID = try XCTUnwrap(fixture.store.state.windows.first?.id)
         let observer = NotificationCenter.default.addObserver(
-            forName: .toasttyManagedCodexSkillsUnavailable,
+            forName: .toasttyManagedAgentSkillsUnavailable,
             object: nil,
             queue: nil
         ) { notification in
-            recorder.record(notification.object as? ManagedCodexSkillsUnavailableNotice)
+            // Launches in other tests post the same notification.
+            guard let notice = notification.object as? ManagedAgentSkillsUnavailableNotice,
+                  notice.windowID == windowID else { return }
+            recorder.record(notice)
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
@@ -138,10 +142,67 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 
         XCTAssertEqual(recorder.notices.count, 1)
         XCTAssertEqual(recorder.notices.first?.reasonCode, "configuration_unavailable")
-        XCTAssertEqual(
-            recorder.notices.first?.windowID,
-            fixture.store.state.windows.first?.id
+        XCTAssertEqual(recorder.notices.first?.agent, .codex)
+        XCTAssertTrue(plan.lacksShippedSkills)
+        XCTAssertTrue(fixture.planner.lacksShippedSkills(sessionID: plan.sessionID))
+    }
+
+    /// A Claude launch whose skills plugin could not be staged, or whose
+    /// command Toastty does not add it to, shows the banner Codex shows and
+    /// is known to lack the skills. One with the plugin is not.
+    func testClaudeLaunchWithoutSkillsPostsTheBannerAndIsRecorded() throws {
+        let recorder = CodexSkillsUnavailableNoticeRecorder()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .toasttyManagedAgentSkillsUnavailable,
+            object: nil,
+            queue: nil
+        ) { notification in
+            recorder.record(notification.object as? ManagedAgentSkillsUnavailableNotice)
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        func notices(in windowID: UUID) -> [ManagedAgentSkillsUnavailableNotice] {
+            recorder.notices.filter { $0.windowID == windowID }
+        }
+
+        // The plugin could not be staged.
+        let unstaged = try makePlannerFixture()
+        let unstagedWindowID = try XCTUnwrap(unstaged.store.state.windows.first?.id)
+        let unstagedPlan = try unstaged.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: unstaged.panelID, argv: ["claude"], cwd: "/tmp/repo")
         )
+        defer { unstaged.sessionRuntimeStore.stopSession(sessionID: unstagedPlan.sessionID, at: Date()) }
+        XCTAssertEqual(notices(in: unstagedWindowID).map(\.agent), [.claude])
+        XCTAssertEqual(notices(in: unstagedWindowID).map(\.reasonCode), ["plugin_unavailable"])
+        XCTAssertTrue(unstagedPlan.lacksShippedSkills)
+        XCTAssertTrue(unstaged.planner.lacksShippedSkills(sessionID: unstagedPlan.sessionID))
+        XCTAssertFalse(unstagedPlan.argv.contains("--plugin-dir"))
+
+        // A wrapper script: the plugin is staged, but not added.
+        let configuration = makeStagedSkillsConfigurationFixture()
+        let wrapped = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration)
+        )
+        let wrappedWindowID = try XCTUnwrap(wrapped.store.state.windows.first?.id)
+        let wrappedPlan = try wrapped.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: wrapped.panelID, argv: ["my-claude-wrapper"], cwd: "/tmp/repo")
+        )
+        defer { wrapped.sessionRuntimeStore.stopSession(sessionID: wrappedPlan.sessionID, at: Date()) }
+        XCTAssertEqual(notices(in: wrappedWindowID).map(\.reasonCode), ["command_not_supported"])
+        XCTAssertTrue(wrapped.planner.lacksShippedSkills(sessionID: wrappedPlan.sessionID))
+
+        // With the plugin, nothing to report.
+        let delivered = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration)
+        )
+        let deliveredWindowID = try XCTUnwrap(delivered.store.state.windows.first?.id)
+        let deliveredPlan = try delivered.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: delivered.panelID, argv: ["claude"], cwd: "/tmp/repo")
+        )
+        defer { delivered.sessionRuntimeStore.stopSession(sessionID: deliveredPlan.sessionID, at: Date()) }
+        XCTAssertTrue(notices(in: deliveredWindowID).isEmpty)
+        XCTAssertFalse(deliveredPlan.lacksShippedSkills)
+        XCTAssertFalse(delivered.planner.lacksShippedSkills(sessionID: deliveredPlan.sessionID))
+        XCTAssertTrue(deliveredPlan.argv.contains("--plugin-dir"))
     }
 
     func testRestoredCodexPreparationUsesBoundedRestoreProvisioning() throws {
@@ -636,6 +697,36 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 ]
             )
         }
+    }
+
+    /// A staged plugin that the launch left out, as for a wrapper command,
+    /// is not provisioned: the unavailable banner stays.
+    func testAsyncClaudeWrapperLaunchPostsOnlyTheUnavailableNotice() async throws {
+        let provisioned = SkillsProvisionedNoticeRecorder()
+        let unavailable = CodexSkillsUnavailableNoticeRecorder()
+        let observers = [
+            NotificationCenter.default.addObserver(forName: .toasttyManagedAgentSkillsProvisioned, object: nil, queue: nil) {
+                provisioned.record($0.object as? ManagedAgentSkillsProvisionedNotice)
+            },
+            NotificationCenter.default.addObserver(forName: .toasttyManagedAgentSkillsUnavailable, object: nil, queue: nil) {
+                unavailable.record($0.object as? ManagedAgentSkillsUnavailableNotice)
+            },
+        ]
+        defer {
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        }
+        let fixture = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: makeStagedSkillsConfigurationFixture())
+        )
+        let windowID = try XCTUnwrap(fixture.store.state.windows.first?.id)
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: fixture.panelID, argv: ["my-claude-wrapper"], cwd: "/tmp/repo")
+        )
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+
+        XCTAssertTrue(plan.lacksShippedSkills)
+        XCTAssertEqual(unavailable.notices.filter { $0.windowID == windowID }.map(\.reasonCode), ["command_not_supported"])
+        XCTAssertTrue(provisioned.notices.filter { $0.windowID == windowID }.isEmpty)
     }
 
     func testAsyncManagedLaunchSkipsSkillsNoticeForAdditiveRuntimeWithoutStagedConfiguration() async throws {
@@ -3464,11 +3555,11 @@ private final class SkillsProvisionedNoticeRecorder: @unchecked Sendable {
 
 private final class CodexSkillsUnavailableNoticeRecorder: @unchecked Sendable {
     private let lock = NSLock()
-    private var storage: [ManagedCodexSkillsUnavailableNotice] = []
+    private var storage: [ManagedAgentSkillsUnavailableNotice] = []
 
-    var notices: [ManagedCodexSkillsUnavailableNotice] { lock.withLock { storage } }
+    var notices: [ManagedAgentSkillsUnavailableNotice] { lock.withLock { storage } }
 
-    func record(_ notice: ManagedCodexSkillsUnavailableNotice?) {
+    func record(_ notice: ManagedAgentSkillsUnavailableNotice?) {
         guard let notice else { return }
         lock.withLock { storage.append(notice) }
     }
