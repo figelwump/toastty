@@ -470,6 +470,51 @@ final class MobileHomeBucketsTests: XCTestCase {
         XCTAssertTrue(MobileTaskSections.make(MobileTaskBoard(RemoteTaskBoard())).isEmpty)
     }
 
+    /// The Tasks tab draws a task with an open task space as that row, so
+    /// it lists the task where the row's bucket is, as Home and the Mac
+    /// sidebar do. A parent whose agent ended its turn to wait on another
+    /// task is Running on the Mac; while that turn is unread, it lists in
+    /// Needs you, and once read, in Running.
+    func testTheTasksTabListsATaskWithATaskSpaceWhereItsRowIs() {
+        func space(_ number: Int, _ status: RemoteSessionPresentationStatus) -> MobileWorkspace {
+            taskSpace(number, "space \(number)", session: status)
+        }
+        func spaceID(_ number: Int) -> UUID { uuid(number, prefix: "A2") }
+        let spaces = [
+            space(31, .ready), space(32, .ready), space(33, .working), space(34, .idle), space(35, .working),
+            space(36, .working), space(37, .ready), space(38, .working),
+        ]
+        let board = RemoteTaskBoard(
+            tasks: [
+                // Waits on a task that is not its child.
+                task(31, "Waits, unread", .running, taskSpace: spaceID(31)),
+                // Waits on its own running child.
+                task(32, "Waits on child, unread", .running, taskSpace: spaceID(32)),
+                task(33, "Child of unread", .running, taskSpace: spaceID(33), parent: 32),
+                task(34, "Waits on child, read", .running, taskSpace: spaceID(34)),
+                task(35, "Child of read", .running, taskSpace: spaceID(35), parent: 34),
+                // A stage more urgent than the sessions still wins.
+                task(36, "Asks while a helper works", .needsYou, mark: .question, taskSpace: spaceID(36)),
+                // A review shows over an unread turn.
+                task(37, "Review, unread", .needsYou, mark: .review, taskSpace: spaceID(37)),
+                // A merged task whose agent still works keeps its lane.
+                task(38, "Merged, still working", .toShip, mark: .toShip, taskSpace: spaceID(38)),
+                // A task space the phone does not list: the stage alone.
+                task(39, "Unlisted space", .running, taskSpace: spaceID(99)),
+            ],
+            toShip: [RemoteTaskShipLane(id: "/toastty", projectTitle: "toastty", count: 1, recentTaskIDs: [uuid(38)])]
+        )
+        let sections = MobileTaskSections.make(snapshot(subspaces: spaces, board: board))
+        XCTAssertEqual(sections.needsYou.map(label), ["Waits, unread", "Waits on child, unread", "Asks while a helper works"])
+        XCTAssertEqual(sections.readyToReview.map(label), ["Review, unread"])
+        // A child whose parent lists in another group lists in its own.
+        XCTAssertEqual(sections.running.map(label), ["Child of unread", "Waits on child, read", "  Child of read", "Unlisted space"])
+        XCTAssertTrue(sections.idle.isEmpty)
+        XCTAssertEqual(sections.toShip.first?.tasks.map(\.title), ["Merged, still working"])
+        // Without a board there is nothing to list.
+        XCTAssertTrue(MobileTaskSections.make(snapshot(subspaces: spaces, board: nil)).isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func uuid(_ number: Int, prefix: String = "D2") -> UUID {

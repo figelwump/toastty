@@ -18,6 +18,7 @@ BUILD_ONLY="${TOASTTY_REMOTE_TEST_BUILD_ONLY:-0}"
 RESOURCE=""
 BUILD_JOBS="${TOASTTY_REMOTE_BUILD_JOBS:-4}"
 QUEUE_TIMEOUT="${TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS:-3600}"
+EXPLICIT_RUN_LABEL="${RUN_LABEL:-}"
 RUN_LABEL="${RUN_LABEL:-$(toastty_default_run_label test)}"
 VALIDATION_SCOPE="working-tree"
 REF_SPEC=""
@@ -649,7 +650,7 @@ wait_for_remote_completion() {
   local remote_stderr="$LOCAL_ARTIFACTS_DIR/remote-stderr.log"
   local ssh_exit_code=0
 
-  emit_remote_test_script() {
+  emit_remote_session_script() {
     cat <<'EOF'
 set +xv
 unset BASH_XTRACEFD 2>/dev/null || true
@@ -781,12 +782,28 @@ if [[ -n "$live_gateway_url" || -n "$live_gateway_credential" ]]; then
 fi
 
 cd "$remote_worktree_dir"
+admission_resource="$resource"
+if [[ "$resource" == desktop && "$test_platform" == macos && "$build_only" != 1 ]]; then
+  # Build as compute work, then take the desktop only for the tests.
+  admission_resource=compute
+  export TOASTTY_REMOTE_DESKTOP_AFTER_BUILD=1
+fi
 /usr/bin/python3 "$remote_run_root/controller/scripts/remote/admission.py" run \
-  --root "$(dirname "$(dirname "$remote_run_root")")" --resource "$resource" \
+  --root "$(dirname "$(dirname "$remote_run_root")")" --resource "$admission_resource" \
   --label "$run_label" --timeout "$queue_timeout" --report "$remote_run_root/admission.json" \
   --release-marker "$remote_run_root/desktop-active" \
   -- /bin/bash "$script_path" --remote-exec
 EOF
+  }
+
+  emit_remote_test_script() {
+    if [[ "$LIVE_GATEWAY" == "1" ]]; then
+      # This session contains the live gateway credential. Never write it to
+      # disk, so it stays attached to the SSH session as before.
+      emit_remote_session_script
+    else
+      toastty_emit_detached_launcher emit_remote_session_script
+    fi
   }
 
   if ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
@@ -831,7 +848,30 @@ run_local_mode() {
     assert_supported_xcodebuild_args "${XCODEBUILD_ARGS[@]}"
   fi
 
-  prepare_local_artifacts
+  local request_key="" reattach_label="" source_identity
+  if [[ "$LIVE_GATEWAY" != 1 && -n "$REMOTE_HOST" ]]; then
+    if source_identity="$(toastty_source_identity)"; then
+      request_key="$(toastty_request_key test "$ROOT_DIR" "$VALIDATION_SCOPE" "$source_identity" \
+        "$(toastty_controller_identity)" "$REMOTE_REPO_ROOT" "$REMOTE_GUI_ROOT" "$QUEUE_TIMEOUT" \
+        "${TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS:-}" "${TOASTTY_ALLOW_REMOTE_X86_64_TESTS:-}" \
+        "$TEST_PLATFORM" "$RESOURCE" "$BUILD_ONLY" "$BUILD_JOBS" ${XCODEBUILD_ARGS[@]+"${XCODEBUILD_ARGS[@]}"})"
+      if reattach_label="$(toastty_find_reattachable_run "$ROOT_DIR/artifacts/remote-tests" "$request_key" "$EXPLICIT_RUN_LABEL")" \
+        && toastty_remote_run_reattachable "$REMOTE_GUI_ROOT/test-runs/$reattach_label"; then
+        RUN_LABEL="$reattach_label"
+        log "Reattaching to remote run $RUN_LABEL, which kept running after its earlier wrapper stopped"
+      else
+        reattach_label=""
+      fi
+    else
+      warn "Could not identify the selected source; a rerun cannot reattach to this run"
+    fi
+  fi
+
+  if [[ -n "$reattach_label" ]]; then
+    LOCAL_ARTIFACTS_DIR="$ROOT_DIR/artifacts/remote-tests/$RUN_LABEL"
+  else
+    prepare_local_artifacts
+  fi
   toastty_begin_run_metadata xcodebuild "$TEST_PLATFORM" "xcodebuild-$([[ "$BUILD_ONLY" == 1 ]] && echo build || echo test)"
 
   local xcodebuild_command_display
@@ -840,7 +880,7 @@ run_local_mode() {
   else
     xcodebuild_command_display="$(build_display_command "${XCODEBUILD_ARGS[@]}")"
   fi
-  write_request_env "$LOCAL_ARTIFACTS_DIR/request.env" "$xcodebuild_command_display"
+  [[ -n "$reattach_label" ]] || write_request_env "$LOCAL_ARTIFACTS_DIR/request.env" "$xcodebuild_command_display"
 
   local started_at
   started_at="$(timestamp_utc)"
@@ -880,6 +920,21 @@ run_local_mode() {
 
   TOASTTY_METADATA_REMOTE_RUN_ROOT="$remote_run_root"
   TOASTTY_METADATA_REMOTE_WORKTREE="$remote_worktree_dir"
+  local remote_test_exit_code=0
+  if [[ -n "$reattach_label" ]]; then
+    TOASTTY_METADATA_REMOTE_ALLOCATED=true
+    toastty_write_attach_record "$LOCAL_ARTIFACTS_DIR" "$request_key"
+    toastty_run_phase buildAndTest
+    toastty_detached_run_notice "$RUN_LABEL"
+    if toastty_remote_detached follow "$remote_run_root" \
+        > >(tee "$LOCAL_ARTIFACTS_DIR/remote-stdout.log") \
+        2> >(tee "$LOCAL_ARTIFACTS_DIR/remote-stderr.log" >&2); then
+      :
+    else
+      remote_test_exit_code=$?
+      warn "Remote xcodebuild test failed"
+    fi
+  else
   log "Preparing remote worktree on $REMOTE_HOST"
   remote_shell "
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
@@ -934,12 +989,25 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
 
   toastty_run_phase buildAndTest
   log "Running remote xcodebuild ($RESOURCE worker)"
-  local remote_test_exit_code=0
+  if [[ -n "$request_key" ]]; then
+    toastty_write_attach_record "$LOCAL_ARTIFACTS_DIR" "$request_key"
+    toastty_detached_run_notice "$RUN_LABEL"
+  fi
   if wait_for_remote_completion "$remote_worktree_dir" "$remote_run_root" "$xcodebuild_args_b64"; then
     :
   else
     remote_test_exit_code=$?
     warn "Remote xcodebuild test failed"
+  fi
+  fi
+  if [[ "$remote_test_exit_code" != 0 && -n "$request_key" ]] && toastty_remote_run_continues "$remote_run_root"; then
+    warn "Lost the connection to remote run $RUN_LABEL; it keeps running. Run the same command again to reattach."
+    return "$remote_test_exit_code"
+  fi
+  if [[ "$remote_test_exit_code" != 0 && -n "$request_key" ]] && toastty_remote_run_removed "$remote_run_root"; then
+    write_result_json "$LOCAL_ARTIFACTS_DIR/result.json" fail "$started_at" "$(timestamp_utc)" "$remote_run_root" \
+      "The remote run was cancelled before it started; its remote folders were removed" "$xcodebuild_command_display"
+    return "$remote_test_exit_code"
   fi
 
   toastty_run_phase artifactCopy
@@ -1132,7 +1200,7 @@ EOF
       cleanup_failed=1
     fi
     if [[ "$cleanup_failed" == "0" ]] \
-      && toastty_run_paths_have_live_process "$derived_path" "$runtime_home"; then
+      && ! toastty_wait_run_paths_idle "$derived_path" "$runtime_home" 15; then
       warn "A process still references the run-owned DerivedData or runtime home"
       cleanup_failed=1
     fi
@@ -1277,12 +1345,33 @@ EOF
       :
     else
 
-      if [[ "${TOASTTY_REMOTE_ADMISSION_RESOURCE:-}" == desktop ]]; then
-        : >"$TOASTTY_REMOTE_ADMISSION_MARKER"
+      # A desktop test run builds first as compute work. It asks for the
+      # desktop only when the build passed, and its tests reuse that build.
+      local xcodebuild_phases=("$action")
+      local xcodebuild_phase
+      if [[ "${TOASTTY_REMOTE_DESKTOP_AFTER_BUILD:-0}" == 1 && "$action" == test ]]; then
+        xcodebuild_phases=(build-for-testing test-without-building)
+        xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" build-for-testing) && $(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test-without-building)"
       fi
 
       tail -n +1 -f "$xcodebuild_log" &
       tail_pid=$!
+
+    for xcodebuild_phase in "${xcodebuild_phases[@]}"; do
+      if [[ "$xcodebuild_phase" != build-for-testing && "${TOASTTY_REMOTE_ADMISSION_RESOURCE:-}" == desktop ]]; then
+        if [[ "${TOASTTY_REMOTE_DESKTOP_AFTER_BUILD:-0}" == 1 ]] \
+          && ! /usr/bin/python3 "$remote_run_root/controller/scripts/remote/admission.py" acquire-desktop \
+            --root "${TOASTTY_ADMISSION_ROOT:?}" >>"$xcodebuild_log" 2>&1; then
+          exit_code=75
+          status="fail"
+          failure_summary="The build passed, but the run did not get the desktop for its tests; see xcodebuild.log"
+          break
+        fi
+        : >"$TOASTTY_REMOTE_ADMISSION_MARKER"
+      fi
+      local result_bundle_args=(-resultBundlePath "$result_bundle")
+      [[ "$xcodebuild_phase" != build-for-testing ]] || result_bundle_args=()
+      rm -f "$timeout_marker" "$watchdog_reaped_marker"
 
     (
       cd "$remote_worktree_dir"
@@ -1293,8 +1382,8 @@ EOF
       xcodebuild \
         "${xcodebuild_args[@]}" \
         -derivedDataPath "$derived_path" \
-        -resultBundlePath "$result_bundle" \
-        "$action" >>"$xcodebuild_log" 2>&1
+        ${result_bundle_args[@]+"${result_bundle_args[@]}"} \
+        "$xcodebuild_phase" >>"$xcodebuild_log" 2>&1
     ) &
     xcodebuild_pid=$!
       # AppKit window animations in the test host never finish while the
@@ -1374,6 +1463,8 @@ EOF
         failure_summary="Remote timeout watchdog did not confirm that it reaped its timer child"
       fi
     fi
+    [[ "$exit_code" == "0" ]] || break
+    done
     if [[ -n "$tail_pid" ]]; then
       kill "$tail_pid" >/dev/null 2>&1 || true
       wait "$tail_pid" >/dev/null 2>&1 || true
@@ -1449,6 +1540,7 @@ main() {
       --run-label)
         [[ $# -ge 2 ]] || fail "--run-label requires a value"
         RUN_LABEL="$2"
+        EXPLICIT_RUN_LABEL="$2"
         shift 2
         ;;
       --full-artifacts)

@@ -496,3 +496,18 @@ toastty_run_paths_have_live_process() {
   done <<<"$process_inventory"
   return 1
 }
+
+# Build and test helper processes can take a few seconds to exit after their
+# xcodebuild is stopped. Wait a bounded time before cleanup counts a process
+# as left behind, which keeps the desktop reserved.
+toastty_wait_run_paths_idle() {
+  local derived_path="$1" runtime_home="$2" seconds="${3:-15}" waited=0
+  while toastty_run_paths_have_live_process "$derived_path" "$runtime_home"; do
+    if (( waited >= seconds * 2 )); then
+      return 1
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  return 0
+}

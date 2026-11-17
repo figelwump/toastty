@@ -43,7 +43,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     let entryLoadFixture: ToasttyConversationFixture.EntryLoad?
     /// The fixture Mac sends a task board, as one with the task system does:
     /// "1" for one with work in every state, "quiet" for one where nothing
-    /// needs the user, "long-names" for one whose names are long.
+    /// needs the user, "long-names" for one whose names are long, "families"
+    /// for parent tasks that wait on other tasks with their nested tasks.
     let taskFixture: String?
     /// The fixture Mac has a coordinator workspace, and its session is in
     /// this state: "quiet", "working", "unread", "approval", "error", or
@@ -166,6 +167,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
         if taskFixture == "quiet" { return ToasttyMobileFixture.quietTaskHome }
         if taskFixture == "pick-workspace" { return ToasttyMobileFixture.pickWorkspaceTaskHome }
         if taskFixture == "long-names" { return ToasttyMobileFixture.longNamesTaskHome }
+        if taskFixture == "families" { return ToasttyMobileFixture.familiesTaskHome }
         return runtimeMode == .fixture && coordinatorFixture != nil ? ToasttyMobileFixture.home : nil
     }
 #endif
