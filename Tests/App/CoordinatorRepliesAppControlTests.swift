@@ -157,7 +157,8 @@ struct CoordinatorRepliesAppControlTests {
         #expect(typed == "[Toastty] From \"Grok Bot\" (named by the caller): Toastty cannot tell who ran it. "
             + "Message ID \(messageID).\nWhere do the bera symlinks point?")
         #expect(CoordinatorMessageHeader.kind(of: typed) == .fromSender(sender: "\"Grok Bot\" (named by the caller)"))
-        #expect(service.coordinatorReplies.message(id: try #require(UUID(uuidString: messageID)))?.typedAt == clock.now)
+        let messageUUID = try #require(UUID(uuidString: messageID))
+        #expect(service.coordinatorReplies.message(id: messageUUID)?.typedAt == clock.now)
 
         // The coordinator's own message needs no answer: no ID.
         try fixture.setStatus(.idle)
@@ -221,7 +222,8 @@ struct CoordinatorRepliesAppControlTests {
             id: "coordinator.send", args: ["text": .string("Status?"), "from": .string("Grok Bot")], context: context(nil)
         ).result
         #expect(result?["delivery"] == .string("queued"))
-        let messageID = try #require(string(result?["messageID"]).flatMap(UUID.init(uuidString:)))
+        let rawMessageID = try #require(string(result?["messageID"]))
+        let messageID = try #require(UUID(uuidString: rawMessageID))
         #expect(service.coordinatorReplies.message(id: messageID)?.typedAt == nil)
 
         clock.advance(120)
