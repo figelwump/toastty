@@ -282,6 +282,8 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         select(.needsYou, in: app)
         XCTAssertTrue(app.buttons["toastty-subspace-row-\(familiesFinishedChildSubspaceID)"].waitForExistence(timeout: 5))
         attachScreenshot(named: "home-needs-you-families", of: app)
+        // Home keeps the segment across launches; later tests expect All.
+        select(.all, in: app)
         app.tabBars.buttons["Tasks"].tap()
         let running = app.descendants(matching: .any)["toastty-tasks-group-running"]
         XCTAssertTrue(running.waitForExistence(timeout: 5))
