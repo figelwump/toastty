@@ -65,7 +65,7 @@ struct WhatsNewSheet: View {
         static let coordinatorTitle = "The coordinator"
         static let coordinator = "One agent that follows your tasks: it tells you what needs you, unblocks stuck tasks and turns your requests into tasks. The first time, it asks you a few questions about how you work. It can also run by itself each day. It keeps your rules in policy.md and changes them when you ask it to work differently. In friction.md it notes what slows your tasks, and it suggests fixes."
         static let startLater = "Not now? Start it later with Open Coordinator in the Agent menu."
-        static let sidebar = "In the sidebar, Tasks shows all your tasks, and Needs you lists what waits for you."
+        static let sidebar = "The sidebar now groups your sessions and tasks under Needs you, Ready to review, Running and Idle."
         static let taskSpacesFromBefore = "Your task spaces from before now show as tasks."
         static let phone = "Your paired phone can now merge, archive and delete tasks."
         static let phoneLink = "Change in Remote Access…"

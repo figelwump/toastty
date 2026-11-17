@@ -231,14 +231,16 @@ when you update:
   them off for one phone, open **Remote Access** in Toastty's settings and
   turn off **Task actions** for that device under **Paired Devices**. See
   [Acting on tasks](remote-access.md#acting-on-tasks).
-- **`Option+Shift+T` is taken in every app.** It opens quick entry, so other
-  apps, a terminal that uses Option as Meta among them, no longer get it.
-  Change it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`, or turn
-  it off with `shortcut = "none"`, then choose **Toastty > Reload
-  Configuration**. See [Quick entry](#quick-entry).
+- **Toastty asks before it takes `Option+Shift+T` in every app.** The key
+  opens quick entry, so other apps, a terminal that uses Option as Meta among
+  them, no longer get it. The What's new sheet at the first launch after the
+  update has **Use ⌥⇧T in every app**, on by default; clear it to leave the
+  key to other apps. Change the key later with `[quick_entry] shortcut` in
+  `~/.toastty/tasks.toml`, or turn it off with `shortcut = "none"`, then
+  choose **Toastty > Reload Configuration**. See [Quick entry](#quick-entry).
 - **Toastty offers the coordinator once.** At the first launch after the
-  update, it asks whether to start the coordinator. **Not Now** is saved; open
-  it later from **Agent > Open Coordinator**. See
+  update, the What's new sheet asks whether to start the coordinator.
+  **Not Now** is saved; open it later from **Agent > Open Coordinator**. See
   [Then start the coordinator](#then-start-the-coordinator).
 - **The sidebar groups by state.** Each project card lists its sessions and
   task spaces under **Needs you**, **Ready to review**, **Running** and

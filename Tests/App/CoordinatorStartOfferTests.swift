@@ -366,8 +366,9 @@ struct CoordinatorStartOfferTests {
         #expect(Words.coordinator.contains("asks you a few questions"))
         #expect(Words.coordinator.contains("run by itself"))
         #expect(Words.startLater.contains(ToasttyCommandMenus.openCoordinatorTitle))
-        // The sidebar's own names: the Tasks row and the Needs you segment.
-        #expect(Words.sidebar.contains(SidebarTasksHeader.tasksRowAccessibilityLabel))
-        #expect(Words.sidebar.contains(SidebarTasksHeader.title(.needsYou)))
+        // The names of the groups that the sidebar shows in each card.
+        for bucket in SidebarBucket.allCases {
+            #expect(Words.sidebar.contains(bucket.title))
+        }
     }
 }
