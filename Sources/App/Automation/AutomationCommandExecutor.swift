@@ -643,7 +643,10 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             }
             let fixture = requestedFixture ?? currentFixtureName
             let screenshotURL = try screenshotURL(fixture: fixture, step: step)
-            let screenshotData = try captureScreenshotPNG()
+            let screenshotData = try captureScreenshotPNG(
+                windowIdentifier: payload.string("window"),
+                includesFrame: payload.bool("frame") ?? false
+            )
             try screenshotData.write(to: screenshotURL, options: [.atomic])
             return [
                 "path": .string(screenshotURL.path),
@@ -2434,24 +2437,43 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func captureScreenshotPNG() throws -> Data {
-        guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }) else {
-            throw AutomationSocketError.internalError("no visible app window")
+    /// Draws one window into a PNG at the window's backing scale. Without
+    /// an identifier it draws the first visible window. `includesFrame`
+    /// draws the window's frame view, which adds the title bar and its
+    /// window buttons to the content.
+    private func captureScreenshotPNG(windowIdentifier: String?, includesFrame: Bool) throws -> Data {
+        let visibleWindows = NSApplication.shared.windows.filter(\.isVisible)
+        let window: NSWindow
+        if let windowIdentifier {
+            // Panels such as quick entry name themselves only through
+            // their accessibility identifier.
+            guard let match = visibleWindows.first(where: {
+                $0.identifier?.rawValue == windowIdentifier || $0.accessibilityIdentifier() == windowIdentifier
+            }) else {
+                throw AutomationSocketError.invalidPayload("no visible window has the identifier \(windowIdentifier)")
+            }
+            window = match
+        } else {
+            guard let first = visibleWindows.first else {
+                throw AutomationSocketError.internalError("no visible app window")
+            }
+            window = first
         }
         window.displayIfNeeded()
 
         guard let contentView = window.contentView else {
             throw AutomationSocketError.internalError("window has no content view")
         }
-        let bounds = contentView.bounds.integral
+        let view = includesFrame ? (contentView.superview ?? contentView) : contentView
+        let bounds = view.bounds.integral
         guard bounds.width > 0, bounds.height > 0 else {
             throw AutomationSocketError.internalError("window content bounds are empty")
         }
 
-        guard let imageRep = contentView.bitmapImageRepForCachingDisplay(in: bounds) else {
+        guard let imageRep = view.bitmapImageRepForCachingDisplay(in: bounds) else {
             throw AutomationSocketError.internalError("failed to create image representation")
         }
-        contentView.cacheDisplay(in: bounds, to: imageRep)
+        view.cacheDisplay(in: bounds, to: imageRep)
         guard let data = imageRep.representation(using: .png, properties: [:]) else {
             throw AutomationSocketError.internalError("failed to encode png")
         }
