@@ -13,8 +13,11 @@ struct ManagedAgentSkillsProvisionedNotice: Equatable, Sendable {
     let deliveredUserSkillCount: Int
 }
 
-struct ManagedCodexSkillsUnavailableNotice: Equatable, Sendable {
+/// A managed launch that did not give the agent Toastty's skills, for the
+/// banner over the window. Codex and Claude post it.
+struct ManagedAgentSkillsUnavailableNotice: Equatable, Sendable {
     let windowID: UUID
+    let agent: AgentKind
     let reasonCode: String
     let detail: String
 }
@@ -1000,8 +1003,8 @@ struct ManagedAgentSkillsProvisionedBanner: View {
     }
 }
 
-struct ManagedCodexSkillsUnavailableBanner: View {
-    let notice: ManagedCodexSkillsUnavailableNotice
+struct ManagedAgentSkillsUnavailableBanner: View {
+    let notice: ManagedAgentSkillsUnavailableNotice
     let manage: () -> Void
     let dismiss: () -> Void
 
@@ -1014,7 +1017,7 @@ struct ManagedCodexSkillsUnavailableBanner: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Codex launched without Toastty skills")
+                Text("\(notice.agent.displayName) launched without Toastty skills")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ToastyTheme.primaryText)
                 Text(notice.detail)
@@ -1050,6 +1053,6 @@ struct ManagedCodexSkillsUnavailableBanner: View {
         }
         .shadow(color: .black.opacity(0.48), radius: 18, y: 8)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("banner.managed-codex-skills-unavailable")
+        .accessibilityIdentifier("banner.managed-agent-skills-unavailable")
     }
 }

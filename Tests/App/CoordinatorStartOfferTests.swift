@@ -60,10 +60,19 @@ struct CoordinatorStartOfferTests {
         private let failureLog = FailureLog()
         /// The titles of the failures that the offer showed.
         var failures: [String] { failureLog.titles }
+        /// The failures that offered another agent, and the agents offered.
+        var agentOffers: [(message: String, choice: CoordinatorAgentChoice)] { failureLog.agentOffers }
+        /// What the user answers when a failure offers another agent.
+        var startsWithOfferedAgent: Bool {
+            get { failureLog.startsWithOfferedAgent }
+            set { failureLog.startsWithOfferedAgent = newValue }
+        }
 
         @MainActor
         final class FailureLog {
             var titles: [String] = []
+            var agentOffers: [(message: String, choice: CoordinatorAgentChoice)] = []
+            var startsWithOfferedAgent = false
         }
 
         init(_ fixture: CoordinatorControllerTests.Fixture, defaultsSuite: String?) throws {
@@ -77,7 +86,12 @@ struct CoordinatorStartOfferTests {
                 defaults: try defaultsSuite.map { try #require(UserDefaults(suiteName: $0)) },
                 coordinatorDirectoryURL: fixture.directory,
                 present: { windowID, answer in sheet.present(windowID: windowID, answer: answer) },
-                presentFailure: { title, _ in failureLog.titles.append(title) }
+                presentFailure: { title, _ in failureLog.titles.append(title) },
+                offerAgent: { title, message, choice, _ in
+                    failureLog.titles.append(title)
+                    failureLog.agentOffers.append((message, choice))
+                    return failureLog.startsWithOfferedAgent
+                }
             )
         }
 
@@ -259,6 +273,80 @@ struct CoordinatorStartOfferTests {
         let relaunch = try Launch(fixture, defaultsSuite: suite)
         try relaunch.windowBecameKey()
         #expect(relaunch.sheet.shownOverWindowIDs.isEmpty)
+    }
+
+    /// A user with no `claude` and no `codex` installed.
+    @Test func aStartWithoutAnInstalledAgentSaysWhichAndAsksAgainAtTheNextLaunch() async throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        try fixture.uninstall("claude")
+        try fixture.uninstall("codex")
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        try launch.windowBecameKey()
+        launch.sheet.choose(.start)
+        await fixture.waitUntil("the failure") { launch.failures.isEmpty == false }
+        #expect(launch.failures == [CoordinatorController.UserCommand.open.failureTitle])
+        #expect(launch.agentOffers.isEmpty, "No other agent is installed")
+        // Nothing half made: no workspace, no folder, no command typed.
+        #expect(fixture.controller.location == nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.path) == false)
+        #expect(fixture.tasks.router.sendAttemptCount == 0)
+        // Not again in this launch, after the alert gives the keyboard back.
+        #expect(launch.offer.shouldOffer == false)
+        try launch.windowBecameKey()
+        #expect(launch.sheet.shownOverWindowIDs.count == 1)
+
+        // The next launch asks again.
+        let relaunch = try Launch(fixture, defaultsSuite: suite)
+        #expect(relaunch.offer.shouldOffer)
+        try relaunch.windowBecameKey()
+        #expect(relaunch.sheet.shownOverWindowIDs.count == 1)
+    }
+
+    /// A user with only Codex installed.
+    @Test func aStartWithoutClaudeOffersCodexAndStartsWithIt() async throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        try fixture.uninstall("claude")
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        launch.startsWithOfferedAgent = true
+        try launch.windowBecameKey()
+        launch.sheet.choose(.start)
+        await fixture.waitUntil("the coordinator's agent") { fixture.controller.session != nil }
+        #expect(try fixture.session().agent == .codex)
+        let offer = try #require(launch.agentOffers.first)
+        #expect(launch.agentOffers.count == 1)
+        #expect(offer.choice == CoordinatorAgentChoice(profileID: "codex", displayName: "Codex", configuredProfileID: "claude"))
+        #expect(offer.message.contains("claude is not installed"))
+        #expect(offer.message.contains("[coordinator] in ~/.toastty/tasks.toml"))
+        #expect(offer.message.contains("Start with Codex starts the coordinator with Codex now"))
+        #expect(offer.message.contains("a later start tries claude again"))
+        #expect(launch.failures == [CoordinatorController.UserCommand.open.failureTitle])
+        // A start that worked is saved.
+        await fixture.waitUntil("the answer is saved") { launch.offer.shouldOffer == false }
+        #expect(UserDefaults(suiteName: suite)?.bool(forKey: CoordinatorStartOffer.answeredKey) == true)
+    }
+
+    @Test func cancellingTheOfferedAgentAsksAgainAtTheNextLaunch() async throws {
+        let suite = Self.suite()
+        defer { Self.removeSuite(suite) }
+        let fixture = try CoordinatorControllerTests.Fixture()
+        try fixture.uninstall("claude")
+        let launch = try Launch(fixture, defaultsSuite: suite)
+        try launch.windowBecameKey()
+        launch.sheet.choose(.start)
+        await fixture.waitUntil("the offer") { launch.agentOffers.isEmpty == false }
+        // Let the start finish its answer.
+        await fixture.settle()
+        #expect(fixture.controller.location == nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.path) == false)
+        #expect(UserDefaults(suiteName: suite)?.bool(forKey: CoordinatorStartOffer.answeredKey) == false)
+
+        let relaunch = try Launch(fixture, defaultsSuite: suite)
+        try relaunch.windowBecameKey()
+        #expect(relaunch.sheet.shownOverWindowIDs.count == 1)
     }
 
     // MARK: - The words

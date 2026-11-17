@@ -298,6 +298,13 @@ extension TaskCoordinator {
             // 7. The session.
             let resolved = record.resolved?.agent == source.agent ? record.resolved : nil
             let prompt = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: record.operation.base, forked: forked)
+            let promptWithoutSkills = Self.promptWithoutSkills(prompt, TaskPrompt.movedToWorktree(
+                record: record,
+                worktree: worktree,
+                base: record.operation.base,
+                forked: forked,
+                skills: Self.skillsMissing()
+            ))
             let forkSourceID = current?.sessionID
             let launchTarget = terminal
             let result: AgentLaunchResult
@@ -312,6 +319,7 @@ extension TaskCoordinator {
                             model: resolved?.model,
                             reasoningEffort: resolved?.effort,
                             initialPrompt: prompt,
+                            initialPromptWithoutSkills: promptWithoutSkills,
                             parentSessionID: forked ? nil : forkSourceID,
                             forkFromSessionID: forked ? forkSourceID : nil,
                             // The continuing session keeps the moving

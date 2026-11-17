@@ -85,10 +85,16 @@ extension TaskCoordinator {
             try startMerge(record, target: target, expectedHead: nil)
             return
         }
-        let prompt = TaskPrompt.merge(
-            skill: workspaceConfig?.mergeSkill ?? config?.defaults.mergeSkill,
-            prompt: workspaceConfig?.mergePrompt ?? config?.defaults.mergePrompt,
-            pullRequestURL: target.pullRequest.url
+        let mergeSkill = workspaceConfig?.mergeSkill ?? config?.defaults.mergeSkill
+        let mergePrompt = workspaceConfig?.mergePrompt ?? config?.defaults.mergePrompt
+        let prompt = MergePrompt(
+            text: TaskPrompt.merge(skill: mergeSkill, prompt: mergePrompt, pullRequestURL: target.pullRequest.url),
+            withoutSkills: TaskPrompt.merge(
+                skill: mergeSkill,
+                prompt: mergePrompt,
+                pullRequestURL: target.pullRequest.url,
+                skills: Self.skillsMissing()
+            )
         )
         let requestedAt = now()
         try saveMergeState(taskID: taskID) {
@@ -577,14 +583,27 @@ extension TaskCoordinator {
         throw TaskError("The user cancelled this merge. Do not merge unless the user asks again.")
     }
 
+    /// What Merge sends, and the same message for an agent that Toastty
+    /// knows did not get its skills.
+    struct MergePrompt {
+        var text: String
+        var withoutSkills: String
+
+        /// The message for `session`.
+        @MainActor
+        func text(for session: TaskSessionInfo, launcher: (any TaskAgentLaunching)?) -> String {
+            launcher?.lacksShippedSkills(sessionID: session.sessionID) == true ? withoutSkills : text
+        }
+    }
+
     /// Sends the merge prompt to the task's agent once it is at rest, or
     /// starts an agent for it when none runs. A busy agent finishes its
     /// turn first, so the prompt is the next thing it reads.
-    private func deliverMergePrompt(_ prompt: String, taskID: UUID, target: MergeTarget, requestedAt: Date) throws {
+    private func deliverMergePrompt(_ prompt: MergePrompt, taskID: UUID, target: MergeTarget, requestedAt: Date) throws {
         guard let record = records.record(id: taskID) else { return }
         if let session = liveAgentSession(of: record) {
             guard session.isInTurn else {
-                try send(taskID: taskID, text: prompt)
+                try send(taskID: taskID, text: prompt.text(for: session, launcher: launcher))
                 return
             }
             mergeDeliveryTasks[taskID] = Task { [weak self] in
@@ -600,7 +619,7 @@ extension TaskCoordinator {
                         // The request starts when the agent can read it, so
                         // its earlier statuses do not count as a reply.
                         try self.saveMergeState(taskID: taskID) { $0.mergeRequestedAt = self.now() }
-                        try self.send(taskID: taskID, text: prompt)
+                        try self.send(taskID: taskID, text: prompt.text(for: current, launcher: self.launcher))
                     } catch {
                         self.mergePromptFailed(taskID: taskID, reason: error.localizedDescription)
                     }
@@ -617,7 +636,7 @@ extension TaskCoordinator {
 
     /// Starts the task's agent in a new terminal tab in its checkout, with
     /// the merge prompt as its first message.
-    private func launchMergeAgent(prompt: String, record: TaskRecord, target: MergeTarget, requestedAt: Date) throws {
+    private func launchMergeAgent(prompt: MergePrompt, record: TaskRecord, target: MergeTarget, requestedAt: Date) throws {
         guard let launcher else {
             throw TaskError("The agent launcher is not available.")
         }
@@ -642,7 +661,8 @@ extension TaskCoordinator {
                         cwd: target.repoPath,
                         model: model,
                         reasoningEffort: effort,
-                        initialPrompt: prompt,
+                        initialPrompt: prompt.text,
+                        initialPromptWithoutSkills: Self.promptWithoutSkills(prompt.text, prompt.withoutSkills),
                         parentSessionID: nil,
                         forkFromSessionID: nil,
                         scopedWorkspaceIDs: record.creatorScope.map { $0.union([target.taskSpaceID]) },

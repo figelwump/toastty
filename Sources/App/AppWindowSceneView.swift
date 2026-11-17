@@ -23,6 +23,10 @@ struct AppWindowSceneView: View {
     let onWindowCloseInitiated: @MainActor () -> Void
     let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
+    /// Shows what Toastty found at launch, such as a quick entry shortcut
+    /// that another app holds, over the first window that gets the
+    /// keyboard.
+    var presentLaunchMessages: (@MainActor (UUID) -> Void)? = nil
 
     @State private var fontHUDValue: FontHUDValue?
     @State private var hideFontHUDTask: Task<Void, Never>?
@@ -231,7 +235,17 @@ struct AppWindowSceneView: View {
         _ = store.send(.selectWindow(windowID: windowID))
         scheduleWindowFocusRestore()
         openGettingStartedPanelIfNeeded()
+        presentLaunchMessagesIfNeeded()
         offerCoordinatorStartIfNeeded()
+    }
+
+    /// After this notification, as the coordinator's question, because the
+    /// message is a sheet, which takes the keyboard itself. It goes first:
+    /// the question then waits until the window gets the keyboard back.
+    private func presentLaunchMessagesIfNeeded() {
+        guard let presentLaunchMessages else { return }
+        let windowID = windowID
+        Task { @MainActor in presentLaunchMessages(windowID) }
     }
 
     /// Asks once whether to start the coordinator. After this notification,

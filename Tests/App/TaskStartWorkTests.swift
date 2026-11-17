@@ -23,10 +23,18 @@ struct TaskStartWorkTests {
             var prompt: String
             var forkFromSessionID: String?
             var scopedWorkspaceIDs: Set<UUID>? = nil
+            var promptWithoutSkills: String? = nil
         }
 
         private(set) var calls: [Call] = []
         weak var sessions: FakeSessions?
+        /// Sessions whose launch, as a test says, did not give the agent its
+        /// skills.
+        var sessionIDsWithoutSkills: Set<String> = []
+
+        func lacksShippedSkills(sessionID: String) -> Bool {
+            sessionIDsWithoutSkills.contains(sessionID)
+        }
 
         func launchProfileSummaries() -> [AgentLaunchProfileSummary] {
             ["claude", "codex", "cursor"].map { id in
@@ -51,6 +59,7 @@ struct TaskStartWorkTests {
             model: String?,
             reasoningEffort: String?,
             initialPrompt: String,
+            initialPromptWithoutSkills: String?,
             parentSessionID: String?,
             forkFromSessionID: String?,
             scopedWorkspaceIDs: Set<UUID>?,
@@ -65,7 +74,8 @@ struct TaskStartWorkTests {
                 model: model,
                 prompt: initialPrompt,
                 forkFromSessionID: forkFromSessionID,
-                scopedWorkspaceIDs: scopedWorkspaceIDs
+                scopedWorkspaceIDs: scopedWorkspaceIDs,
+                promptWithoutSkills: initialPromptWithoutSkills
             ))
             let sessionID = "launched-\(calls.count)"
             let agent = AgentKind(rawValue: profileID)!

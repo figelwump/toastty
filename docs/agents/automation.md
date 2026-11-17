@@ -617,6 +617,29 @@ Claude CLI than the one on the `PATH`.
 permission question or a crash report, and exits with code 4: that prompt is
 the user's to answer.
 
+### Launch failures
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-launch-failure-check.py --gui-session'
+```
+
+This check mutates disposable Toastty instances on the dedicated validation
+Mac, each with a throwaway runtime home and user home. No agent takes a turn.
+It needs the remote Mac's screen unlocked. `--scenario no-claude|bad-shortcut`
+runs one scenario; the default is both.
+
+- `no-claude`: the app's `PATH` has Codex but not `claude`, as for a user who
+  has only Codex. Start in the first-launch question shows the alert that
+  names `claude` and `[coordinator] agent` and offers **Start with Codex**.
+  Cancel leaves no Coordinator workspace or folder, the next launch asks
+  again, and **Start with Codex** then starts the coordinator with Codex.
+- `bad-shortcut`: `tasks.toml` sets a quick entry shortcut that is not
+  valid. The first window shows the message as a sheet, and the coordinator
+  question comes after it. Another app that holds the shortcut cannot stand
+  in: Toastty registers it without `kEventHotKeyExclusive`, and Carbon then
+  accepts it whatever another app holds.
+
 ### Coordinator skill
 
 ```bash

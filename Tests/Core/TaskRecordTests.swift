@@ -167,6 +167,74 @@ struct TaskRecordTests {
         #expect(TaskPrompt.merge(skill: skill, prompt: prompt, pullRequestURL: "URL") == expected)
     }
 
+    /// An agent that Toastty knows did not get its skills: a skill that
+    /// Toastty ships comes with the path of its instructions, and the first
+    /// message keeps the coordinator and reply lines.
+    @Test
+    func messagesToAnAgentWithoutItsSkillsSayWhereTheShippedSkillIs() {
+        let missing = TaskPrompt.SkillDelivery.missing(shippedSkillFiles: [
+            "toastty-task-start": "/App/skills/toastty-task-start/SKILL.md",
+            "toastty-task-merge": "/App/skills/toastty-task-merge/SKILL.md",
+        ])
+        let worktree = TaskOperation.Worktree(path: "/w/fix", branch: "fix/composer", checkoutRoot: "/r", added: true)
+        #expect(TaskPrompt.compose(
+            skill: TaskPrompt.defaultStartSkill,
+            firstPrompt: nil,
+            text: "Fix it",
+            attachmentPaths: [],
+            worktree: worktree,
+            skills: missing
+        ) == """
+        Use the toastty-task-start skill.
+
+        Toastty could not give this session its skills. The toastty-task-start skill's instructions are in /App/skills/toastty-task-start/SKILL.md: read that file and follow it.
+
+        You are in the git worktree /w/fix, on branch fix/composer.
+
+        Fix it
+
+        \(TaskPrompt.coordinatorLine)
+
+        \(TaskPrompt.replyLine)
+        """)
+        #expect(TaskPrompt.merge(skill: nil, prompt: nil, pullRequestURL: "URL", skills: missing) == """
+        Use the toastty-task-merge skill.
+
+        Toastty could not give this session its skills. The toastty-task-merge skill's instructions are in /App/skills/toastty-task-merge/SKILL.md: read that file and follow it.
+
+        The user accepted URL for merging.
+        """)
+        // A skill Toastty does not ship has no known file; the first message
+        // already carries the coordinator and reply lines.
+        let custom = TaskPrompt.compose(skill: "my-start", firstPrompt: nil, text: "Fix it", attachmentPaths: [], skills: missing)
+        #expect(custom == TaskPrompt.compose(skill: "my-start", firstPrompt: nil, text: "Fix it", attachmentPaths: []))
+        #expect(TaskPrompt.merge(skill: "my-merge", prompt: nil, pullRequestURL: "URL", skills: missing)
+            == "Use the my-merge skill.\n\nThe user accepted URL for merging.")
+
+        // A fresh session that continues a move, and a fork.
+        let record = TaskRecord(
+            createdAt: Date(),
+            text: "Fix it",
+            title: "Fix it",
+            slug: "fix-it",
+            source: .cli,
+            resolved: TaskFields(agent: "claude", skill: TaskPrompt.defaultStartSkill)
+        )
+        let moved = TaskPrompt.movedToWorktree(record: record, worktree: worktree, base: nil, forked: false, skills: missing)
+        #expect(moved.contains("instructions are in /App/skills/toastty-task-start/SKILL.md"))
+        #expect(moved.hasSuffix("\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"))
+        let forked = TaskPrompt.forkedTask(
+            record: record,
+            taskSpaceWorkspaceID: UUID(),
+            sourceWorkspaceID: nil,
+            worktree: worktree,
+            base: nil,
+            skills: missing
+        )
+        #expect(forked.contains("instructions are in /App/skills/toastty-task-start/SKILL.md"))
+        #expect(forked.hasSuffix(TaskPrompt.replyLine))
+    }
+
     @Test
     func recordRoundTripsThroughJSON() throws {
         var record = TaskRecord(

@@ -303,6 +303,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         model: String? = nil,
         reasoningEffort: String? = nil,
         initialPrompt: String? = nil,
+        initialPromptWithoutSkills: String? = nil,
         initialCommands: [String] = [],
         forkFromSessionID: String? = nil,
         additionalDirectories: [String] = [],
@@ -336,10 +337,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             panelID: preparation.target.panelID,
             terminalCommandRouter: terminalCommandRouter
         )
-        let plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
+        var plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
             preparation.request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )
+        // An agent that Toastty knows did not get its skills gets the first
+        // message that says where they are.
+        if plan.lacksShippedSkills, let initialPrompt, let initialPromptWithoutSkills,
+           (try? normalizedInitialPrompt(initialPromptWithoutSkills)) != nil {
+            plan = plan.replacingLastArgument(initialPrompt, with: initialPromptWithoutSkills)
+        }
         // The caller's last check runs here, after the final suspension, so
         // nothing can change between it and the command reaching the shell.
         if let beforeDispatch {
@@ -552,6 +559,21 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     func cancelNativeSessionObservation(sessionID: String) {
         managedLaunchPlanner.cancelNativeSessionObservation(sessionID: sessionID)
+    }
+
+    func lacksShippedSkills(sessionID: String) -> Bool {
+        managedLaunchPlanner.lacksShippedSkills(sessionID: sessionID)
+    }
+
+    /// The argv of a Codex profile whose arguments cannot take the raised
+    /// `project_doc_max_bytes` that the coordinator's start and resume
+    /// add. `nil` when they can, or when the profile is not Codex's.
+    func codexArgvLackingProjectDocMaxBytes(profileID: String) -> [String]? {
+        guard let profile = resolvedLaunchProfile(profileID: profileID),
+              AgentKind(rawValue: profile.id) == .codex,
+              AgentLaunchArgumentOverrideAdapter.canApplyCodexProjectDocMaxBytes(to: profile.argv, profileID: profile.id) == false
+        else { return nil }
+        return profile.argv
     }
 
     private func resolvedLaunchProfile(profileID: String) -> AgentProfile? {

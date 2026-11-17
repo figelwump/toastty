@@ -34,6 +34,8 @@ struct CoordinatorControllerTests {
         /// Where the controller saves the user's waiting messages, as the
         /// app does.
         let queueFileURL: URL
+        /// The controller's user defaults, as the app's.
+        let defaults = UserDefaults(suiteName: "CoordinatorControllerTests-\(UUID().uuidString)")!
 
         /// `trustFolder` is the app's step that tells the agent that the
         /// coordinator's folder is trusted.
@@ -66,7 +68,8 @@ struct CoordinatorControllerTests {
                     return result == .delivered ? (deliveryOverride.result?() ?? result) : result
                 },
                 promptState: { [unowned tasks] panelID in tasks.router.promptState(panelID: panelID) },
-                terminalReadinessTimeout: readinessTimeout
+                terminalReadinessTimeout: readinessTimeout,
+                defaults: defaults
             )
             tasks.coordinator.coordinatorController = controller
             terminals.setAutomationSendTextHandlerForTesting { [unowned self] text, submit, panelID, _ in
@@ -88,6 +91,11 @@ struct CoordinatorControllerTests {
 
         func status() throws -> CoordinatorController.Status {
             try #require(controller.status)
+        }
+
+        /// Takes an agent's command away, as on a Mac without that agent.
+        func uninstall(_ agent: String) throws {
+            try FileManager.default.removeItem(at: tasks.root.appendingPathComponent("bin/\(agent)"))
         }
 
         func session() throws -> SessionRecord {
@@ -184,6 +192,132 @@ struct CoordinatorControllerTests {
         #expect(fixture.tasks.router.sendAttemptCount == 1)
     }
 
+    /// The default agent is `claude`, and this user has only Codex.
+    @Test func anAgentThatIsNotInstalledLeavesNoWorkspaceAndNamesTheSetting() async throws {
+        let fixture = try Fixture()
+        try fixture.uninstall("claude")
+        do {
+            try await fixture.controller.open()
+            Issue.record("expected the start to fail")
+        } catch let error as CoordinatorError {
+            #expect(error.message.hasPrefix("The coordinator's agent claude is not installed"))
+            #expect(error.message.hasSuffix(
+                "Install it, or set agent under [coordinator] in ~/.toastty/tasks.toml to an agent profile that is installed, such as codex."
+            ))
+            #expect(error.alternativeAgent == CoordinatorAgentChoice(profileID: "codex", displayName: "Codex", configuredProfileID: "claude"))
+        }
+        #expect(fixture.controller.location == nil)
+        #expect(fixture.store.state.workspacesByID.values.contains(where: \.isCoordinator) == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.path) == false)
+        #expect(fixture.tasks.router.sendAttemptCount == 0)
+
+        // A profile that does not exist, with no other agent installed.
+        try fixture.uninstall("codex")
+        fixture.tasks.config.coordinator = TasksConfig.Coordinator(agent: "nobody")
+        do {
+            try await fixture.controller.restart()
+            Issue.record("expected the start to fail")
+        } catch let error as CoordinatorError {
+            #expect(error.message == "The coordinator's agent nobody is not an agent profile. Set agent under [coordinator] in ~/.toastty/tasks.toml to an agent profile that is installed.")
+            #expect(error.alternativeAgent == nil)
+        }
+        #expect(fixture.controller.location == nil)
+    }
+
+    /// The agent a person chose in place of the configured one runs with
+    /// its own model and effort, and the setting stays as it was.
+    @Test func aStartWithTheOfferedAgentUsesItsOwnModel() async throws {
+        let fixture = try Fixture()
+        fixture.tasks.config.coordinator = TasksConfig.Coordinator(agent: "claude", model: "claude-opus-5-5", effort: "high")
+        try fixture.uninstall("claude")
+        let result = try await fixture.controller.open(agent: "codex")
+        #expect(result.startedAgent)
+        #expect(try fixture.session().agent == .codex)
+        let commandPanelID = try #require(result.location.panelID)
+        let command = try #require(fixture.tasks.router.sentTextByPanelID[commandPanelID])
+        #expect(command.contains("/bin/codex"))
+        #expect(command.contains("claude-opus-5-5") == false)
+        #expect(command.contains("reasoning_effort") == false)
+    }
+
+    /// A codex profile whose command is a shell helper cannot take the
+    /// raised `project_doc_max_bytes`: the chat says so for the session that
+    /// started with it, until the user chooses not to see it again for
+    /// that profile.
+    @Test func aCodexProfileThatCannotTakeTheDocLimitIsNamedInTheChat() async throws {
+        let fixture = try Fixture()
+        fixture.tasks.config.coordinator = TasksConfig.Coordinator(agent: "codex")
+        let editable = fixture.tasks.agentCatalog.catalog
+        let helper = fixture.tasks.root.appendingPathComponent("bin/scodex")
+        FileManager.default.createFile(atPath: helper.path, contents: Data("#!/bin/sh\nexec codex \"$@\"\n".utf8))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+        func useHelper(_ argv: [String]) {
+            fixture.tasks.agentCatalog.catalog = AgentCatalog(profiles: editable.profiles.map {
+                $0.id == "codex" ? AgentProfile(id: "codex", displayName: "Codex", argv: argv) : $0
+            })
+        }
+        useHelper([helper.path])
+
+        let first = try await fixture.controller.open()
+        let firstCommandPanelID = try #require(first.location.panelID)
+        let firstCommand = try #require(fixture.tasks.router.sentTextByPanelID[firstCommandPanelID])
+        #expect(firstCommand.contains("/bin/scodex"))
+        #expect(firstCommand.contains("project_doc_max_bytes") == false)
+        #expect(fixture.controller.mayReadPartOfItsInstructions)
+        if #available(macOS 15.0, *) {
+            let text = CoordinatorChatView.text(for: .instructionsMayBeCut)
+            #expect(text.contains("first 32 KiB"))
+            #expect(text.contains("~/.toastty/agents.toml"))
+            #expect(text.contains("project_doc_max_bytes = \(CoordinatorFolder.codexProjectDocMaxBytes)"))
+        }
+        // A fixed profile does not change what the running session got.
+        fixture.tasks.agentCatalog.catalog = editable
+        #expect(fixture.controller.mayReadPartOfItsInstructions)
+
+        // With a profile Toastty can edit, the next session reads it all.
+        let restarted = try await fixture.controller.restart()
+        let restartedCommandPanelID = try #require(restarted.location.panelID)
+        let restartedCommand = try #require(fixture.tasks.router.sentTextByPanelID[restartedCommandPanelID])
+        #expect(restartedCommand.contains("project_doc_max_bytes=\(CoordinatorFolder.codexProjectDocMaxBytes)"))
+        #expect(try fixture.session().sessionID == restarted.sessionID)
+        #expect(fixture.controller.mayReadPartOfItsInstructions == false)
+
+        // The helper sets the limit itself: the user hides the notice, and
+        // it stays hidden for later sessions with the same profile.
+        useHelper([helper.path])
+        try await fixture.controller.restart()
+        #expect(fixture.controller.mayReadPartOfItsInstructions)
+        fixture.controller.hideInstructionsNotice()
+        #expect(fixture.controller.mayReadPartOfItsInstructions == false)
+        try await fixture.controller.restart()
+        #expect(fixture.controller.mayReadPartOfItsInstructions == false)
+        #expect(fixture.defaults.stringArray(forKey: CoordinatorController.instructionsNoticeHiddenArgvKey) == [helper.path])
+
+        // Another profile argv is checked again.
+        useHelper([helper.path, "--profile", "fast"])
+        try await fixture.controller.restart()
+        #expect(fixture.controller.mayReadPartOfItsInstructions)
+    }
+
+    /// The coordinator runs; then its agent goes away and the user restarts.
+    @Test func aRestartWithoutTheAgentKeepsTheRunningOneAndSaysWhy() async throws {
+        let fixture = try Fixture()
+        let first = try await fixture.controller.open()
+        try fixture.uninstall("claude")
+        do {
+            try await fixture.controller.restart()
+            Issue.record("expected the restart to fail")
+        } catch let error as CoordinatorError {
+            #expect(error.message.contains("claude is not installed"))
+            #expect(error.alternativeAgent?.profileID == "codex")
+        }
+        #expect(try fixture.session().sessionID == first.sessionID)
+        // The old agent runs on, so the chat shows no failed start.
+        #expect(try fixture.status().agentState == .running)
+        #expect(try fixture.status().startFailure == nil)
+        #expect(fixture.tasks.router.sendAttemptCount == 1)
+    }
+
     @Test func openWithoutSelectLeavesTheSelectionAlone() async throws {
         let fixture = try Fixture()
         let result = try await fixture.controller.open(select: false)
@@ -206,20 +340,21 @@ struct CoordinatorControllerTests {
 
     @Test func aStartThatFailsKeepsTheWorkspaceAndSaysWhy() async throws {
         let fixture = try Fixture()
-        fixture.tasks.config.coordinator = TasksConfig.Coordinator(agent: "nobody")
+        // The agent's command may not have reached the terminal.
+        fixture.tasks.router.failingSendCount = 1
+        fixture.tasks.router.sendFailure = .uncertain
         do {
             try await fixture.controller.open()
             Issue.record("expected the start to fail")
         } catch let error as CoordinatorError {
-            #expect(error.message.contains("nobody"))
+            #expect(error.message.contains("may not have reached the terminal"))
         }
         var status = try fixture.status()
         #expect(status.agentState == .notRunning)
-        #expect(status.startFailure?.contains("nobody") == true)
+        #expect(status.startFailure?.contains("may not have reached the terminal") == true)
         #expect(fixture.store.state.workspacesByID.values.filter(\.isCoordinator).count == 1)
 
-        // With the setting fixed, the same workspace gets its agent.
-        fixture.tasks.config.coordinator = TasksConfig.Coordinator()
+        // The next start reaches it, and the same workspace gets its agent.
         let result = try await fixture.controller.open()
         #expect(result.createdWorkspace == false)
         #expect(result.startedAgent)

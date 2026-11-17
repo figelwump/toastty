@@ -113,13 +113,22 @@ extension TaskCoordinator {
                   let record = records.record(id: taskID) else {
                 return false
             }
+            let sourceWorkspaceID = store.state.workspaceSelection(containingPanelID: source.panelID)?.workspace.id
             let prompt = TaskPrompt.forkedTask(
                 record: record,
                 taskSpaceWorkspaceID: taskSpace.workspaceID,
-                sourceWorkspaceID: store.state.workspaceSelection(containingPanelID: source.panelID)?.workspace.id,
+                sourceWorkspaceID: sourceWorkspaceID,
                 worktree: worktree,
                 base: record.operation.base
             )
+            let promptWithoutSkills = Self.promptWithoutSkills(prompt, TaskPrompt.forkedTask(
+                record: record,
+                taskSpaceWorkspaceID: taskSpace.workspaceID,
+                sourceWorkspaceID: sourceWorkspaceID,
+                worktree: worktree,
+                base: record.operation.base,
+                skills: Self.skillsMissing()
+            ))
             let result: AgentLaunchResult
             do {
                 result = try await Self.launchWhenSourceIsKnown(deadline: discoveryDeadline, pollInterval: timing.pollInterval) {
@@ -132,6 +141,7 @@ extension TaskCoordinator {
                             model: resolved.model,
                             reasoningEffort: resolved.effort,
                             initialPrompt: prompt,
+                            initialPromptWithoutSkills: promptWithoutSkills,
                             parentSessionID: nil,
                             forkFromSessionID: source.sessionID,
                             // As for any task: unscoped unless the session

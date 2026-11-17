@@ -21,7 +21,8 @@ struct QuickEntryTests {
             fixture existing: TaskCoordinatorTests.Fixture? = nil,
             create: (@MainActor (TaskCreateRequest) async throws -> TaskRecord)? = nil,
             recordsPresetUsage: Bool = false,
-            agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil
+            agentProfiles: (@MainActor () -> [AgentLaunchProfileSummary])? = nil,
+            registersGlobalHotKey: Bool = false
         ) throws {
             let fixture = try existing ?? TaskCoordinatorTests.Fixture()
             fixture.config = TasksConfig(defaults: .init(agent: "claude"))
@@ -42,7 +43,7 @@ struct QuickEntryTests {
                     return fixture.config
                 },
                 stagingRootURL: stagingRoot,
-                registersGlobalHotKey: false,
+                registersGlobalHotKey: registersGlobalHotKey,
                 toastDuration: .milliseconds(50),
                 // Opened over Toastty, whatever app the test host is behind.
                 frontmostApplication: { nil }
@@ -1019,6 +1020,54 @@ struct QuickEntryTests {
         let message = try #require(harness.controller.reloadShortcut())
         #expect(message.contains("⌥⇧T until the file is fixed"))
         #expect(harness.controller.shortcut == .default)
+    }
+
+    /// The shortcut cannot be registered when Toastty starts. The message
+    /// waits for a window that can show it, and shows once. A second
+    /// registration in the same process fails; another app's registration
+    /// does not make Toastty's fail, because Carbon refuses a hot key only
+    /// when both ask for it with `kEventHotKeyExclusive`.
+    @Test func aShortcutThatCannotBeRegisteredAtLaunchIsShownOnce() throws {
+        // An unlikely combination, so it does not collide with the
+        // machine's own shortcuts.
+        let shortcut = QuickEntryShortcut(modifiers: [.control, .option, .shift, .command], key: .function(17))
+        let earlier = QuickEntryHotKey {}
+        #expect(earlier.register(shortcut) == .registered(shortcut))
+        defer { earlier.unregister() }
+        let harness = try Harness(registersGlobalHotKey: true)
+        harness.fixture.config.quickEntry = .init(shortcut: shortcut)
+
+        harness.controller.loadShortcutAtLaunch()
+        #expect(harness.controller.isShortcutGlobal == false)
+        let expected = "Toastty could not register the quick entry shortcut \(shortcut.symbolLabel). "
+            + "Set another one with [quick_entry] shortcut in ~/.toastty/tasks.toml."
+        #expect(harness.controller.launchMessage == expected)
+
+        var shown: [String] = []
+        let windowID = UUID()
+        // The first window already shows a sheet.
+        harness.controller.presentLaunchMessageIfNeeded(windowID: windowID) { _, _ in false }
+        #expect(harness.controller.launchMessage == expected)
+        for _ in 0..<2 {
+            harness.controller.presentLaunchMessageIfNeeded(windowID: windowID) { _, message in
+                shown.append(message)
+                return true
+            }
+        }
+        #expect(shown == [expected])
+        #expect(harness.controller.launchMessage == nil)
+    }
+
+    @Test func aReloadReplacesALaunchMessageThatNoWindowShowed() throws {
+        let harness = try Harness()
+        harness.fixture.configError = TasksConfigParseError(line: 2, message: "[quick_entry] the shortcut \"t\" needs Command")
+        harness.controller.loadShortcutAtLaunch()
+        #expect(harness.controller.launchMessage?.contains("until the file is fixed") == true)
+
+        // The user fixes the file and reloads before any window showed it.
+        harness.fixture.configError = nil
+        #expect(harness.controller.reloadShortcut() == nil)
+        #expect(harness.controller.launchMessage == nil)
     }
 
     @Test func aBrokenFileOnReloadKeepsTheShortcutInUse() throws {

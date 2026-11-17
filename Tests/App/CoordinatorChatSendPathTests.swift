@@ -1527,7 +1527,7 @@ final class CoordinatorChatFixture {
             promptState: { [weak registry = conversations.terminalRuntimeRegistry] panelID in
                 registry?.promptState(panelID: panelID) ?? .unavailable
             },
-            chatReadDefaults: defaults
+            defaults: defaults
         )
         controller.conversationAccess = conversations.service
         let chat = CoordinatorChatModel(

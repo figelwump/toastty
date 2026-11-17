@@ -1186,13 +1186,7 @@ struct SidebarView: View {
                     }
                 },
                 restart: {
-                    Task { @MainActor in
-                        do {
-                            try await controller.restart()
-                        } catch {
-                            TaskActions.presentFailure("Unable to Restart the Coordinator", error.localizedDescription)
-                        }
-                    }
+                    controller.perform(.restart)
                 },
                 close: { requestWorkspaceClose(workspaceID: location.workspaceID) }
             )
