@@ -296,6 +296,16 @@ final class ToasttyMobileTaskUITests: XCTestCase {
             [needsYou, unread, unreadParent, running, unreadChild, readParent, readChild].map(\.frame.minY),
             [needsYou, unread, unreadParent, running, unreadChild, readParent, readChild].map(\.frame.minY).sorted()
         )
+
+        // At a large text size the nested row still lists under its parent;
+        // the screenshot shows the ↳ level with its wrapped title.
+        app.terminate()
+        let large = launchTaskFixture(tasks: "families", contentSize: .accessibilityMedium)
+        large.tabBars.buttons["Tasks"].tap()
+        let largeChild = large.buttons["toastty-subspace-row-\(familiesReadChildSubspaceID)"]
+        XCTAssertTrue(scrollTo(largeChild, in: large, list: "toastty-mobile-tasks"))
+        XCTAssertGreaterThan(largeChild.frame.minY, large.buttons["toastty-subspace-row-\(familiesReadParentSubspaceID)"].frame.minY)
+        attachScreenshot(named: "tasks-tab-families-large-text", of: large)
     }
 
     /// A session's screen has no tab bar, as a chat has none: the bar leaves
