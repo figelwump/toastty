@@ -213,7 +213,9 @@ struct WhatsNewSheet: View {
                 .accessibilityIdentifier("whats-new.phone")
             }
             if facts.oldExampleSkills.isEmpty == false {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                // The link under the text: beside text that wraps, it would
+                // split the sentence.
+                VStack(alignment: .leading, spacing: 3) {
                     Text("⚠ " + Words.oldSkills(facts.oldExampleSkills.map(\.name)))
                         .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
                         .fixedSize(horizontal: false, vertical: true)
