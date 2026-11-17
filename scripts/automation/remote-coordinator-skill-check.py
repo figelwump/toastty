@@ -300,9 +300,7 @@ POLICY = '''# Coordinator policy
 ## Unblocking
 {unblocking}
 ## Releases
-{releases}
-## Notes (kept by the coordinator)
-'''
+{releases}'''
 
 GOOD_PROOF = '''## Summary
 The unread dot stayed on after the user read an agent's answer. The sidebar now clears it when the answer is read.
@@ -1120,7 +1118,7 @@ def first_run_upgrade(run):
     run.tell('Answer short questions about code yourself, and make a task for the rest. Otherwise your defaults.')
     run.check('the policy has a Talking section with a rule', '## Talking' in run.policy() and run.section('Talking'),
               run.policy())
-    run.check('Talking comes before Notes', run.policy().index('## Talking') < run.policy().index('## Notes'),
+    run.check('Talking comes before Releases', run.policy().index('## Talking') < run.policy().index('## Releases'),
               run.policy())
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     said = run.said(run.tell("Short question: what is the first line of the app project's README.md?"))
@@ -1197,11 +1195,22 @@ def to_review(run, task, **pull_request):
                   and (t.get('pullRequest') or {}).get('checks') is not None)
 
 
+# The change of the login redirect pull requests: a test of LoginRedirect is
+# in the change, a test of the sidebar is not.
+LOGIN_FILES = ['Sources/Login/LoginRedirect.swift', 'Tests/Login/LoginRedirectTests.swift']
+LOGIN_DIFF = ('diff --git a/Sources/Login/LoginRedirect.swift b/Sources/Login/LoginRedirect.swift\n'
+              '+    return savedDeepLink ?? "/inbox"\n'
+              'diff --git a/Tests/Login/LoginRedirectTests.swift b/Tests/Login/LoginRedirectTests.swift\n'
+              '+    func testDeepLink() { XCTAssertEqual(redirect(), "/inbox") }\n')
+SIDEBAR_FAILURE = dict(name='macOS tests', conclusion='FAILURE',
+                       summary='SidebarScrollTests.testLongSidebarScroll failed: timed out after 5 s')
+
+
 def ci_failed(run):
-    """CI failed: one instruction. A second failure goes to the user."""
+    """CI failed in a test of the change: one instruction to fix it. A second failure goes to the user."""
     task = run.create_task('Fix the login redirect', status='working')
     run.set_pr(task, 11, checks=[dict(name='macOS tests', status='IN_PROGRESS'), dict(name='lint', conclusion='SUCCESS')],
-               body='Fixes the redirect after login.')
+               body='Fixes the redirect after login.', files=LOGIN_FILES, diff=LOGIN_DIFF)
     run.seed_policy()
     run.open_coordinator()
     to_review(run, task, checks=[
@@ -1223,6 +1232,57 @@ def ci_failed(run):
     run.check('the second failure brings no second message', len(messages) == 1, messages)
     run.check('the second failure goes to the user, with the task link', task.link in run.said(later), run.said(later))
     return first
+
+
+def ci_rerun(run, number):
+    """A check fails in a test outside the change: the task is told to rerun it, and no policy line is written."""
+    task = run.create_task('Fix the login redirect', status='working')
+    run.set_pr(task, number, checks=[dict(name='macOS tests', status='IN_PROGRESS'), dict(name='lint', conclusion='SUCCESS')],
+               body='Fixes the redirect after login.', files=LOGIN_FILES, diff=LOGIN_DIFF)
+    run.seed_policy()
+    policy = run.policy()
+    run.open_coordinator()
+    to_review(run, task, checks=[dict(SIDEBAR_FAILURE), dict(name='lint', conclusion='SUCCESS')])
+    run.wait_task(task, 'failing checks', lambda t: t['pullRequest']['checks'] == 'failing')
+    run.new_turns(wake=True)
+    messages = [m['text'] for m in run.messages(task)]
+    run.check('the task got one message, to rerun the failed check', len(messages) == 1
+              and re.search(r'rerun|re-run|run (it |them )?again', messages[0].lower()), messages)
+    run.check('the policy is unchanged', run.policy() == policy, run.policy())
+    # The agent reruns the failed jobs on the same commit.
+    run.status(task, 'working')
+    run.update_pr(task, checks=[dict(name='macOS tests', status='IN_PROGRESS'), dict(name='lint', conclusion='SUCCESS')])
+    time.sleep(SETTLE + 2)
+    return task, policy
+
+
+def ci_rerun_passes(run):
+    """The rerun passes: the coordinator keeps the test's name in the ledger, not in the policy."""
+    task, policy = ci_rerun(run, 22)
+    run.reply(task, 'I reran the failed jobs with `gh run rerun --failed`. They passed.')
+    to_review(run, task, checks=[dict(name='macOS tests', conclusion='SUCCESS'), dict(name='lint', conclusion='SUCCESS')])
+    run.new_turns(wake=True)
+    run.check('the ledger names the test that passed on the rerun', 'testLongSidebarScroll' in run.ledger(), run.ledger())
+    run.check('the policy is still unchanged, with no Notes section', run.policy() == policy
+              and '## Notes' not in run.policy(), run.policy())
+
+
+def ci_rerun_fails(run):
+    """The rerun fails again: a real failure, so the task is told to fix it, not to rerun again."""
+    task, policy = ci_rerun(run, 23)
+    run.reply(task, 'I reran the failed jobs with `gh run rerun --failed`. macOS tests failed again.')
+    to_review(run, task, checks=[dict(SIDEBAR_FAILURE), dict(name='lint', conclusion='SUCCESS')])
+    run.wait_task(task, 'failing checks', lambda t: t['pullRequest']['checks'] == 'failing')
+    later = run.new_turns(wake=True)
+    messages = [m['text'] for m in run.messages(task)]
+    run.check('the second failure brings one message, to fix it', len(messages) == 2
+              and re.search(r'\bfix|investigat|real failure', messages[1].lower()), messages)
+    run.check('it does not ask for a second rerun', len(messages) == 2
+              and not re.search(r'rerun once|run (it |them )?again', messages[1].lower()), messages, required=False)
+    run.check('the ledger has no flake line for the test', not re.search(r'^- \S+ flake .*testLongSidebarScroll',
+              run.ledger(), re.M), run.ledger())
+    run.check('the policy is unchanged', run.policy() == policy, run.policy())
+    return later
 
 
 def conflict(run):
@@ -1433,8 +1493,8 @@ def merge_rule_setup(run):
     run.check('after the yes, the policy has a Merging section with a rule for the app project',
               '## Merging' in run.policy() and bool(rules) and any(re.search(r'\bapp\b', line.lower()) for line in rules),
               run.policy())
-    run.check('Merging comes before Notes', '## Merging' in run.policy()
-              and run.policy().index('## Merging') < run.policy().index('## Notes'), run.policy())
+    run.check('Merging comes before Releases', '## Merging' in run.policy()
+              and run.policy().index('## Merging') < run.policy().index('## Releases'), run.policy())
     run.check('it commits the rule, and only the policy',
               int(run.git('rev-list', '--count', 'HEAD') or 0) > commits
               and run.git('show', '--format=', '--name-only', 'HEAD') == 'policy.md'
@@ -1811,8 +1871,8 @@ def first_run_improving(run):
     rules = run.section('Improving')
     run.check('the policy has an Improving section with the user\'s time',
               '## Improving' in run.policy() and any(re.search(r'9[:.]30', line) for line in rules), run.policy())
-    run.check('Improving comes before Notes', '## Improving' in run.policy()
-              and run.policy().index('## Improving') < run.policy().index('## Notes'), run.policy())
+    run.check('Improving comes before Releases', '## Improving' in run.policy()
+              and run.policy().index('## Improving') < run.policy().index('## Releases'), run.policy())
     run.check('it commits the rule, and only the policy',
               int(run.git('rev-list', '--count', 'HEAD') or 0) > commits
               and run.git('show', '--format=', '--name-only', 'HEAD') == 'policy.md', run.git('log', '--stat', '--format=%h %s'))
@@ -2461,6 +2521,8 @@ SCENARIOS = {
     'question-settled': question_settled,
     'question-open': question_open,
     'ci-failed': ci_failed,
+    'ci-rerun-passes': ci_rerun_passes,
+    'ci-rerun-fails': ci_rerun_fails,
     'conflict': conflict,
     'dependency': dependency,
     'quiet-wake': quiet_wake,
@@ -2493,7 +2555,7 @@ SCENARIOS = {
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
-            'new-task', 'release', 'user-words-busy',
+            'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails',
             'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',
             'followup-merge', 'daily-list', 'daily-list-quiet')
 
