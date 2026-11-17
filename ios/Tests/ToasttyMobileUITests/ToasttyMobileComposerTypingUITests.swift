@@ -140,10 +140,12 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         input.typeText("draft.")
         // Put the insertion point at the start, where a field that was made
-        // again or lost its place would not type. A tap right after typing
-        // can be lost, so let the keyboard settle first.
+        // again or lost its place would not type. In the simulator, a tap
+        // right before or after typing can leave the insertion point at the
+        // end, so let the keyboard settle on both sides of the tap.
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         input.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
         input.typeText("One ")
         XCTAssertEqual(input.value as? String, "One draft.")
 
