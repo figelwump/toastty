@@ -168,14 +168,20 @@ rules above cover these. It still asks before it writes its daily list
 (`action run panel.scratchpad.set-content`), before it commits a change to
 its policy (`git commit` in its folder), and before `task request-merge`.
 
-Tested with Claude Code 2.1.326 in its default permission mode:
+Tested in Claude Code's default permission mode:
 
-- LIVE_CLAUDE_RESULT
-- With a stand-in `toastty` (`claude -p`, only these rules): these ran with
-  no question: `toastty task get` with and without `--json`, a `task create`
-  over several lines, `task send` with the text in a here-document, the
-  coordinator's `task list --json | jq …` read, `coordinator wake` and
-  `coordinator watch`, and `query run … --json`. These asked:
+- Claude Code 2.1.310, in a real task session of a Toastty build with these
+  skills, with only these rules: the agent followed `toastty-task-start` and
+  ran `toastty task get --json`, `toastty task ready-for-review --json` and
+  `toastty task get --json` with no question. A later
+  `toastty task delete` asked. Without the rules, it asked before each of
+  the three commands, and each ran after approval.
+- Claude Code 2.1.326 with a stand-in `toastty` (`claude -p`, only these
+  rules): these ran with no question: `toastty task get` with and without
+  `--json`, a `task create` over several lines, `task send` with the text in
+  a here-document, the coordinator's `task list --json | jq …` read,
+  `coordinator wake` and `coordinator watch`, and `query run … --json`.
+  These asked:
   `toastty --json task get`, `task delete`, `task request-merge`, and
   `task get --json --socket-path "$TOASTTY_SOCKET_PATH"`.
 - The `git push` and `gh pr create` rules were tested with Claude Code
@@ -202,24 +208,41 @@ prefix_rule(
     decision = "allow",
 )
 prefix_rule(pattern = ["toastty", "query", "run"], decision = "allow")
+# The coordinator reads tasks through jq.
+prefix_rule(pattern = ["jq"], decision = "allow")
 prefix_rule(pattern = ["git", "push"], decision = "allow")
 prefix_rule(pattern = ["gh", "pr", ["create", "view", "checks"]], decision = "allow")
 ```
 
 Codex matches a rule only against a command that it can split into plain
-words. CODEX_COMPOUND_RESULT
+words. With the `jq` rule, the coordinator's task read,
+`toastty task list --json | jq …`, runs with no question. The coordinator
+passes a message's text to `task send` through `"$(cat <<'END' …)"`, which
+Codex cannot split into words, so that send still asks in Codex (not
+tested).
 
 Without the rules, the shipped skills tell Codex to ask for escalation for
 each Toastty command, and Codex asks you before it runs one.
 
-Tested with Codex 0.169.0:
+Tested:
 
-- `codex execpolicy check --rules toastty.rules -- toastty task get --json`
+- Codex 0.169.0:
+  `codex execpolicy check --rules toastty.rules -- toastty task get --json`
   reports `allow`, and so do the other allowed commands in the forms the
   skills write. `toastty --json task get`, `task delete`, `task merge`,
   `task request-merge`, `task archive`, `task mark-done` and `action run`
-  match no rule.
-- LIVE_CODEX_RESULT
+  match no rule. `git push -u origin HEAD` matches the `git push` rule. The
+  `git` and `gh` rules were not tried in a real session.
+- Codex 0.167.0 in its default sandbox and approval mode
+  (`workspace-write`, `on-request`), in a real task session of a Toastty
+  build with these skills, with a Codex home that held only these rules
+  (without the `git` and `gh` lines): the agent followed
+  `toastty-task-start` and ran `toastty task get --json`,
+  `toastty task ready-for-review --json` and `toastty task get --json` with
+  no question, and each reached Toastty. `toastty task list --json | jq -c …`
+  also ran with no question. A later `toastty task delete` asked for
+  escalation. Without the rules, Codex asked before each of the three
+  commands, and each ran after approval.
 
 For a coordinator that runs while you are away, Codex can let a model review
 the escalation requests in place of you: start it with
