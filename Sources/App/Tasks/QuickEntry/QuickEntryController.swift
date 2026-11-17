@@ -57,8 +57,8 @@ final class QuickEntryController: ObservableObject {
     }
     /// Whether `tasks.toml` has been read without error since launch.
     private var hasLoadedShortcut = false
-    /// Why the shortcut did not work as configured at launch, such as a key
-    /// that another app holds, until a window shows it.
+    /// Why the shortcut did not work as configured at launch, such as an
+    /// error in `tasks.toml`, until a window shows it.
     private(set) var launchMessage: String?
     // Removed in deinit, which is not main-actor isolated.
     nonisolated(unsafe) private var terminationObserver: (any NSObjectProtocol)?
@@ -157,12 +157,12 @@ final class QuickEntryController: ObservableObject {
                 // At launch there is no earlier setting: use the default
                 // rather than leave the user with no way in.
                 configured = .default
-                message = "tasks.toml: \(error.localizedDescription). The quick entry shortcut is \(QuickEntryShortcut.default.symbolLabel) until the file is fixed."
+                message = "\(error.localizedDescription). The quick entry shortcut is \(QuickEntryShortcut.default.symbolLabel) until the file is fixed."
                 return applyShortcut(configured, message: message)
             }
             // A typo must not change the shortcut: keep the one in use,
             // including no shortcut at all.
-            return "tasks.toml: \(error.localizedDescription). The quick entry shortcut stays \(shortcut?.symbolLabel ?? "off") until the file is fixed."
+            return "\(error.localizedDescription). The quick entry shortcut stays \(shortcut?.symbolLabel ?? "off") until the file is fixed."
         }
         return applyShortcut(configured, message: message)
     }
@@ -272,7 +272,7 @@ final class QuickEntryController: ObservableObject {
             }
         )
         if case .failure(let error) = config {
-            model.showError("tasks.toml: \(error.localizedDescription)")
+            model.showError(error.localizedDescription)
         }
         self.model = model
 

@@ -23,9 +23,8 @@ struct AppWindowSceneView: View {
     let onWindowCloseInitiated: @MainActor () -> Void
     let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
-    /// Shows what Toastty found at launch, such as a quick entry shortcut
-    /// that another app holds, over the first window that gets the
-    /// keyboard.
+    /// Shows what Toastty found at launch, such as an error in
+    /// `tasks.toml`, over the first window that gets the keyboard.
     var presentLaunchMessages: (@MainActor (UUID) -> Void)? = nil
 
     @State private var fontHUDValue: FontHUDValue?

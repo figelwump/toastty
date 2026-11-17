@@ -275,10 +275,11 @@ struct QuickEntryTests {
         let harness = try Harness()
         let fixture = harness.fixture
         // Broken when the panel opens: the error shows at once, since the
-        // Agent pill has no preset and Create Task stays off.
-        fixture.configError = TaskError("tasks.toml line 3: [defaults] agent is empty")
+        // Agent pill has no preset and Create Task stays off. The error
+        // names the file once.
+        fixture.configError = TasksConfigParseError(line: 3, message: "[defaults] agent is empty")
         harness.controller.present(prefill: .empty)
-        #expect(harness.controller.model?.errorMessage?.contains("[defaults] agent is empty") == true)
+        #expect(harness.controller.model?.errorMessage == "tasks.toml line 3: [defaults] agent is empty")
         #expect(harness.controller.model?.preset == nil)
         harness.controller.dismiss()
 
@@ -1018,7 +1019,8 @@ struct QuickEntryTests {
         let harness = try Harness()
         harness.fixture.configError = TasksConfigParseError(line: 2, message: "[quick_entry] the shortcut \"t\" needs Command")
         let message = try #require(harness.controller.reloadShortcut())
-        #expect(message.contains("⌥⇧T until the file is fixed"))
+        #expect(message == "tasks.toml line 2: [quick_entry] the shortcut \"t\" needs Command. "
+            + "The quick entry shortcut is ⌥⇧T until the file is fixed.")
         #expect(harness.controller.shortcut == .default)
     }
 
@@ -1084,7 +1086,8 @@ struct QuickEntryTests {
         // A typo elsewhere in the file must not turn the shortcut back on.
         fixture.configError = TasksConfigParseError(line: 9, message: "[defaults] agent is empty")
         let message = try #require(harness.controller.reloadShortcut())
-        #expect(message.contains("stays off until the file is fixed"))
+        #expect(message == "tasks.toml line 9: [defaults] agent is empty. "
+            + "The quick entry shortcut stays off until the file is fixed.")
         #expect(harness.controller.shortcut == nil)
     }
 }
