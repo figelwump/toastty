@@ -98,8 +98,9 @@ items and keeps the time.
 `asked done` line with `listed=1`, read the task again. Mark it Done with
 `"$TOASTTY_CLI_PATH" task mark-done <task-id>` when all of this holds: it is
 still open; every point of its item under Collect still holds; its stage did
-not change since the line's time; and since then the user typed nothing in it
-(`lastUserInputAt`) and said nothing to you about it. Remove the line in
+not change after the line's time (`stageMinutes` is at least the minutes since
+then); and since then the user typed nothing in it (`lastUserInputAt`) and
+said nothing to you about it. Remove the line in
 either case. Name each task that you marked Done in one line of your message;
 a turn with that line is not quiet.
 
@@ -119,7 +120,8 @@ a turn with that line is not quiet.
    - each open task with no pull request whose work is finished: its stage
      is `idle` or `needsYou (readyForReview)`; no open task has it as
      `parentTaskID`; you told the user its result, or the results of its
-     child tasks; and its last reply names no remaining work, no question
+     child tasks; and its last reply, whole in `task get`
+     (`lastReply.truncated` is false), names no remaining work, no question
      and no child task that it will still create. Such a task is this item
      only, not the first one. Leave out a task with a `watch`, `followup` or
      `told keep-open` line. Write an `asked done` line with the task's link. When the user answers that the task stays
@@ -156,8 +158,9 @@ a turn with that line is not quiet.
    the number of offers and what was dropped. Write nothing else about the
    items: the dashboard shows them.
 7. **Nothing waits:** publish the dashboard with the line "Nothing waits for
-   you.", write the `list` line, mark the turn quiet if nothing else needs
-   the user, and answer only "Nothing needs you."
+   you.", and write the `list` line. When this list marked no task Done, mark
+   the turn quiet if nothing else needs the user, and answer only "Nothing
+   needs you." Otherwise answer only with the line that names those tasks.
 
 When a review follows the list in the same turn, it numbers its proposals
 after the list's last number. When the user answers with a number, find the

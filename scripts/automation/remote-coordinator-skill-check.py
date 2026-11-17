@@ -2418,7 +2418,10 @@ def done_no_pr(run):
               run.get(finished).get('doneAt'))
     run.check('the parent that will still create child tasks is not offered',
               not any(parent.id in line for line in done_offers(run)), run.ledger())
-    run.check('the dashboard shows the finished task', 'export api options' in page.lower(), page[:3000], required=False)
+    run.check('the dashboard shows the finished task before it is closed', 'export api options' in page.lower(),
+              page[:3000])
+    run.check('the dashboard says that it will be marked Done', re.search(r'\bdone\b', page.lower()), page[:3000],
+              required=False)
     run.check('nothing is sent to the tasks', not run.messages(finished) and not run.messages(parent),
               [run.messages(finished), run.messages(parent)])
 
