@@ -184,7 +184,8 @@ struct CoordinatorAppControlTests {
         try fixture.reportAgentStarted()
         let sent = try executor.runAction(id: "coordinator.send", args: ["text": .string("One task needs you.")], context: context())
         #expect(sent.didMutateState == false)
-        #expect(sent.result == ["delivery": .string("sent"), "queuedCount": .int(0)])
+        // This fixture has no webhook service, which keeps message IDs.
+        #expect(sent.result == ["delivery": .string("sent"), "queuedCount": .int(0), "messageID": .null])
         // A caller that names no session: Toastty says so in the first line.
         #expect(fixture.typedTexts == [
             "[Toastty] From a terminal command: Toastty cannot tell who ran it.\nOne task needs you.",
@@ -193,6 +194,7 @@ struct CoordinatorAppControlTests {
         let queued = try executor.runAction(id: "coordinator.send", args: ["text": .string("Another.")], context: context())
         #expect(queued.result == [
             "delivery": .string("queued"), "position": .int(1), "hold": .string("busy"), "queuedCount": .int(1),
+            "messageID": .null,
         ])
         let status = try executor.runQuery(id: "coordinator.get", args: [:])
         #expect(status["queuedCount"] == .int(1))
