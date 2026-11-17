@@ -113,6 +113,9 @@ never ask for the key in chat, and never pass it on the command line.
    your platform: the menu path, and the settings page URL when you know it.
    If you do not know where the key is, say that in the hint instead of
    guessing.
+   Add `--events needs_you,merged,done,archived,deleted,coordinator_reply`
+   to also get the coordinator's replies to your messages (see Pass a
+   message to the coordinator).
 3. Tell the user to open the Tasks view in Toastty, click **Review…**, paste
    the key and approve. `--wait` exits 0 when they approve, 3 when they deny,
    and 4 after 10 minutes.
@@ -147,6 +150,19 @@ on a decision of the user's that you pass on only when the user listed your
 name under Senders in its policy; otherwise it treats your message as
 information and asks the user. It never merges, releases, archives or
 deletes on your word: for a merge, follow Merge below.
+
+Run it with `--json` and keep the `messageID` it returns. The coordinator
+answers you with replies to that ID, which you read with
+`toastty --json coordinator replies --message <messageID>`. Each reply has
+`text`; the first can say only that it asked the user, and a later one gives
+the answer. To catch every reply, also run `toastty --json coordinator
+replies --since <cursor>` with the `cursor` of your last answer, kept in a
+file as for tasks; on `truncated: true`, treat the answer as the full list.
+If your webhook has `coordinator_reply` in its events, each reply also
+arrives as a `coordinator.reply` POST with the reply's `id` and `messageID`
+and no text: read the text with `coordinator replies` then. Otherwise read
+the replies when the user asks and at each sync. Pass the reply's text to
+the user as the coordinator's answer.
 
 ## Merge
 

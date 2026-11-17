@@ -15,7 +15,13 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
     public var name: String
     public var url: String
     public var events: [TaskWebhookEventType]
-    /// Project roots, normalized. Empty means every root.
+    /// The webhook also gets a `coordinator.reply` event each time the
+    /// coordinator replies to a message that `coordinator send` brought
+    /// (`--events coordinator_reply`). Kept apart from `events`, so a build
+    /// that does not know the event still reads the webhook.
+    public var coordinatorReplies: Bool
+    /// Project roots, normalized. Empty means every root. This filter and
+    /// the next apply to task events only.
     public var roots: [String]
     /// Only tasks whose `externalRef.id` starts with this.
     public var externalRefPrefix: String?
@@ -37,6 +43,7 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
         name: String,
         url: String,
         events: [TaskWebhookEventType] = TaskWebhookEventType.defaults,
+        coordinatorReplies: Bool = false,
         roots: [String] = [],
         externalRefPrefix: String? = nil,
         auth: TaskWebhookAuth,
@@ -52,6 +59,7 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
         self.name = name
         self.url = url
         self.events = events
+        self.coordinatorReplies = coordinatorReplies
         self.roots = roots
         self.externalRefPrefix = externalRefPrefix
         self.auth = auth
@@ -73,6 +81,9 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
             var version = 1
             var url: String
             var events: [String]
+            /// Only when true, so the digest of a webhook without it stays
+            /// the one the user approved before it existed.
+            var coordinatorReplies: Bool?
             var roots: [String]
             var externalRefPrefix: String?
             var auth: String
@@ -80,6 +91,7 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
         let approved = Approved(
             url: url,
             events: events.map(\.rawValue).sorted(),
+            coordinatorReplies: coordinatorReplies ? true : nil,
             roots: roots.sorted(),
             externalRefPrefix: externalRefPrefix,
             auth: auth.description
@@ -89,6 +101,20 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
         let data = (try? encoder.encode(approved)) ?? Data()
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// The events as `--events` and `webhook list` name them: the task
+    /// events, then `coordinator_reply` when the webhook opted in.
+    public var eventNames: [String] {
+        events.map(\.rawValue) + (coordinatorReplies ? [Self.coordinatorReplyEventName] : [])
+    }
+
+    /// The events as the approval sheet names them.
+    public var eventTitles: [String] {
+        events.map(\.title) + (coordinatorReplies ? ["Coordinator replies"] : [])
+    }
+
+    /// `--events` name of the coordinator's replies.
+    public static let coordinatorReplyEventName = "coordinator_reply"
 
     /// Whether events for a task with this root and external reference go
     /// to this webhook.
@@ -114,6 +140,28 @@ public struct TaskWebhook: Codable, Equatable, Identifiable, Sendable {
 
     public var host: String {
         URLComponents(string: url)?.host ?? url
+    }
+}
+
+extension TaskWebhook {
+    /// A webhook saved before coordinator replies has none.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        url = try container.decode(String.self, forKey: .url)
+        events = try container.decode([TaskWebhookEventType].self, forKey: .events)
+        coordinatorReplies = try container.decodeIfPresent(Bool.self, forKey: .coordinatorReplies) ?? false
+        roots = try container.decode([String].self, forKey: .roots)
+        externalRefPrefix = try container.decodeIfPresent(String.self, forKey: .externalRefPrefix)
+        auth = try container.decode(TaskWebhookAuth.self, forKey: .auth)
+        secretHint = try container.decodeIfPresent(String.self, forKey: .secretHint)
+        status = try container.decode(TaskWebhookStatus.self, forKey: .status)
+        disabledReason = try container.decodeIfPresent(String.self, forKey: .disabledReason)
+        requestedAt = try container.decode(Date.self, forKey: .requestedAt)
+        requestedBy = try container.decode(TaskWebhookRequester.self, forKey: .requestedBy)
+        approvedAt = try container.decodeIfPresent(Date.self, forKey: .approvedAt)
+        lastDelivery = try container.decodeIfPresent(TaskWebhookDelivery.self, forKey: .lastDelivery)
     }
 }
 

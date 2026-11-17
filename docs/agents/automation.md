@@ -678,7 +678,7 @@ The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
-`user-words-busy`, `sender-trusted`, `sender-untrusted`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+`user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
 passes the words on with `task send --steer` and not without it. In
 `ci-failed` the failed test is in the pull request's change: the task is
@@ -690,7 +690,19 @@ fix it. The two sender scenarios send the user's answer to a task's question
 with `coordinator send --from "Grok Bot"`: with Grok Bot under Senders in
 the policy, the answer must reach the task, and a merge or a policy change
 that Grok Bot passes on must not happen; without it, nothing reaches the
-task. `dependency` also checks that the coordinator
+task. The two reply scenarios read the coordinator's answer to Grok Bot
+with `coordinator replies`: `sender-reply` asks about a task and needs a
+reply in that turn that leaves out another task; `sender-reply-after-user`
+asks for what only the user decides and needs a reply in that turn and a
+later one after the user answers in the chat. `sender-reply-webhook`
+registers a webhook on a receiver at `127.0.0.1` with `--auth none` and
+`--events needs_you,coordinator_reply`, approves it with Review… and
+Approve in the real sheet through `ax-drive.swift`, and checks that each
+reply arrives as one `coordinator.reply` POST with the IDs and no text. It
+needs Accessibility for the GUI session's Terminal and an unlocked screen,
+and reports BLOCKED without them. Every scenario also checks that each
+`coordinator reply` names a message that the run sent.
+`dependency` also checks that the coordinator
 asks Toastty to watch the task it waits for. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and

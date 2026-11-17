@@ -144,6 +144,30 @@ struct CoordinatorMessageHeaderTests {
         #expect(sender(.unknown) == "a terminal command")
     }
 
+    /// A message from outside a task ends its first line with an ID that
+    /// the coordinator replies to. The ID comes after Toastty's note, so a
+    /// chat that reads the name from before the note's ": ", as an older
+    /// iPhone app does, shows the same name.
+    @Test func aMessageFromOutsideATaskEndsItsFirstLineWithItsID() {
+        let messageID = UUID()
+        let message = CoordinatorMessageHeader.message(from: .named("Grok: Bot"), text: "Message ID 0000.\nCI: it failed", messageID: messageID)
+        let lines = message.split(separator: "\n", omittingEmptySubsequences: false)
+        #expect(lines.first.map(String.init)
+            == "[Toastty] From \"Grok: Bot\" (named by the caller): Toastty cannot tell who ran it. Message ID \(messageID.uuidString).")
+        #expect(lines.dropFirst().joined(separator: "\n") == "Message ID 0000.\nCI: it failed")
+        #expect(CoordinatorMessageHeader.kind(of: message) == .fromSender(sender: "\"Grok: Bot\" (named by the caller)"))
+        for sender: CoordinatorMessageHeader.Sender in [.named("Grok Bot"), .unknown, .session(id: "A1B2", agent: "codex", workspaceTitle: nil)] {
+            #expect(CoordinatorMessageHeader.getsMessageID(sender))
+            let withID = CoordinatorMessageHeader.message(from: sender, text: "Hi", messageID: messageID)
+            #expect(CoordinatorMessageHeader.kind(of: withID) == CoordinatorMessageHeader.kind(
+                of: CoordinatorMessageHeader.message(from: sender, text: "Hi")
+            ))
+        }
+        // The coordinator answers a task with task send.
+        #expect(CoordinatorMessageHeader.getsMessageID(.task(id: taskID, title: "Fix it")) == false)
+        #expect(CoordinatorMessageHeader.getsMessageID(.coordinator) == false)
+    }
+
     // MARK: - Quick entry
 
     @Test func aQuickEntryLineCarriesTheChoicesAndTheHint() {

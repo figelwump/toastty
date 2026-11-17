@@ -291,6 +291,14 @@ struct CoordinatorAppControlTests {
                 id: "coordinator.get", args: [:],
                 context: AutomationRequestContext(callerSessionID: scoped, commandName: "app_control.run_query")
             ) },
+            // The coordinator's replies can name other projects.
+            { _ = try executor.runQuery(
+                id: "coordinator.replies", args: [:],
+                context: AutomationRequestContext(callerSessionID: scoped, commandName: "app_control.run_query")
+            ) },
+            { _ = try executor.runAction(
+                id: "coordinator.reply", args: ["messageID": .string(UUID().uuidString), "text": .string("Hi")], context: context(scoped)
+            ) },
         ] as [() throws -> Void] {
             do {
                 try run()

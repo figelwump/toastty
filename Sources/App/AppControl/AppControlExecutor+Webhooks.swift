@@ -97,16 +97,18 @@ extension AppControlExecutor {
         var settings = TaskWebhookService.Settings()
         settings.url = args.webhookString("url")
         if args["events"] != nil {
-            settings.events = try Self.webhookStrings("events", args: args).flatMap { raw in
-                try raw.split(separator: ",").map { part -> TaskWebhookEventType in
-                    let trimmed = part.trimmingCharacters(in: .whitespaces)
-                    guard let event = TaskWebhookEventType(rawValue: trimmed) else {
-                        throw AutomationSocketError.invalidPayload(
-                            "\(trimmed) is not an event; use: \(TaskWebhookEventType.allCases.map(\.rawValue).joined(separator: ", "))"
-                        )
-                    }
-                    return event
+            let names = try Self.webhookStrings("events", args: args).flatMap { raw in
+                raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            }
+            // The list is the whole set: without coordinator_reply, a
+            // webhook that had it stops getting it.
+            settings.coordinatorReplies = names.contains(TaskWebhook.coordinatorReplyEventName)
+            settings.events = try names.filter { $0 != TaskWebhook.coordinatorReplyEventName }.map { name in
+                guard let event = TaskWebhookEventType(rawValue: name) else {
+                    let known = TaskWebhookEventType.allCases.map(\.rawValue) + [TaskWebhook.coordinatorReplyEventName]
+                    throw AutomationSocketError.invalidPayload("\(name) is not an event; use: \(known.joined(separator: ", "))")
                 }
+                return event
             }
         }
         if args["roots"] != nil {
@@ -160,7 +162,7 @@ extension AppControlExecutor {
             "active": .bool(service.isActive(webhook)),
             "host": .string(webhook.host),
             "url": .string(webhook.displayURL),
-            "events": .array(webhook.events.map { .string($0.rawValue) }),
+            "events": .array(webhook.eventNames.map(AutomationJSONValue.string)),
             "roots": .array(webhook.roots.map(AutomationJSONValue.string)),
             "externalRefPrefix": webhook.externalRefPrefix.map(AutomationJSONValue.string) ?? .null,
             "auth": .string(webhook.auth.description),
@@ -169,7 +171,7 @@ extension AppControlExecutor {
             "requestedAt": date(webhook.requestedAt),
             "approvedAt": date(webhook.approvedAt),
             "disabledReason": webhook.disabledReason.map(AutomationJSONValue.string) ?? .null,
-            "queuedEvents": .int(service.entries.filter { $0.webhookID == webhook.id }.count),
+            "queuedEvents": .int(service.queuedEventCount(webhookID: webhook.id)),
         ]
         if let delivery = webhook.lastDelivery {
             var object: [String: AutomationJSONValue] = ["at": date(delivery.at), "result": .string(delivery.summary)]
