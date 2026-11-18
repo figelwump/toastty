@@ -15,8 +15,8 @@ settings unless they set their own values.
   batches, and when? Write the answer to Releases.
 - **On merge:** when a task of that project reaches `toShip`, start the
   release. When a project has this rule, run
-  `"$TOASTTY_CLI_PATH" coordinator watch --workspace <project's workspace ID>`
-  once; `"$TOASTTY_CLI_PATH" coordinator status` lists the watched projects
+  `toastty coordinator watch --workspace <project's workspace ID>`
+  once; `toastty coordinator status` lists the watched projects
   under `wake.watchedProjectRoots`. Remove the watch with `--remove` when
   the rule changes.
 - **Batch:** propose a release when the rule says so, with the list of
@@ -30,7 +30,7 @@ settings unless they set their own values.
   same repository. Before you start one for a single
   task, name the others: "This also ships 3 other merged tasks: …".
 - **Start:** `toastty task release --workspace <workspaceID>`, with the
-  project's workspace ID; `toastty --json task workspace-choices` lists it.
+  project's workspace ID; `toastty task workspace-choices --json` lists it.
   When the user asks for a release, start it also when no task of the project
   is in To ship. Do not start one while a release task of the same repository
   is open. If the command refuses, tell the user why.

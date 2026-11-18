@@ -28,7 +28,7 @@ stops, so nothing else keeps that work.
 1. **When you review a task** (Review in your instructions), look for that
    heading in the description and in `lastReply`. If it names work, add a
    `followup` line to the ledger, and run
-   `"$TOASTTY_CLI_PATH" coordinator watch --task <task-id>`, so that the
+   `toastty coordinator watch --task <task-id>`, so that the
    task's merge or its end wakes you:
 
    ```text
@@ -86,7 +86,7 @@ turn. Your next check makes sure that such a turn comes: set it for the next
 list time, unless a deadline comes earlier. A turn of the user can also leave
 something waiting, and then no digest may come for days. So in any turn in
 which you write an `asked`, `told` or `followup` line, or write or change the
-time in Talking, read `"$TOASTTY_CLI_PATH" --json coordinator status`. If
+time in Talking, read `toastty coordinator status --json`. If
 `wake.nextWakeAt` is null or later than the next list time, set your check
 for that time with `coordinator wake --at`.
 
@@ -161,7 +161,7 @@ there wins over the default below. A review can propose such a rule when
 Find your dashboard first:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.list "sessionID=$TOASTTY_SESSION_ID"
+toastty query run panel.scratchpad.list --json "sessionID=$TOASTTY_SESSION_ID"
 ```
 
 If the result has a Scratchpad titled "Waiting on you", pass
@@ -170,7 +170,7 @@ instead: Toastty then opens a new one, and leaves any other Scratchpad as it
 is. Publish the page through a quoted here-document:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.set-content --stdin content \
+toastty action run panel.scratchpad.set-content --json --stdin content \
   "sessionID=$TOASTTY_SESSION_ID" "title=Waiting on you" "documentID=<documentID>" <<'COORDINATOR_DASHBOARD_END'
 <!doctype html>
 …the page…

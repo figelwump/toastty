@@ -2334,6 +2334,15 @@ struct WorkspaceView: View {
         guard let terminalPanelID = Self.terminalTitleSourcePanelID(for: tab) else {
             return nil
         }
+        // A tab that shows the coordinator's terminal is named after it,
+        // not after the title its agent writes to the terminal.
+        if terminalPanelID == store.state.coordinator?.panelID {
+            return TerminalLiveTitleDisplayConfiguration(
+                liveTitleModel: terminalLiveTitleStore.model(for: terminalPanelID),
+                fallbackTitle: AppState.coordinatorWorkspaceTitle,
+                displayTitleForLiveTitle: { _ in AppState.coordinatorWorkspaceTitle }
+            )
+        }
 
         return TerminalLiveTitleDisplayConfiguration(
             liveTitleModel: terminalLiveTitleStore.model(for: terminalPanelID),
@@ -2351,9 +2360,11 @@ struct WorkspaceView: View {
     }
 
     private func workspaceTabDisplayTitle(for tab: WorkspaceTabState) -> String {
-        guard let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab),
-              let liveTitle = titleConfiguration.liveTitleModel.title else {
+        guard let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab) else {
             return tab.displayTitle
+        }
+        guard let liveTitle = titleConfiguration.liveTitleModel.title else {
+            return titleConfiguration.fallbackTitle
         }
 
         return titleConfiguration.displayTitleForLiveTitle(liveTitle)
@@ -4157,7 +4168,7 @@ struct PanelCardView: View {
                 liveTitleModel: terminalLiveTitleStore.model(for: panelID),
                 fallbackTitle: panelLabel,
                 displayTitleForLiveTitle: { liveTitle in
-                    TerminalDisplayTitleResolver.panelHeaderTitle(
+                    coordinatorPanelTitle ?? TerminalDisplayTitleResolver.panelHeaderTitle(
                         panelState: panelState,
                         liveTerminalTitle: liveTitle,
                         panelSessionStatus: panelSessionStatus
@@ -4177,11 +4188,21 @@ struct PanelCardView: View {
     }
 
     private var panelLabel: String {
-        TerminalDisplayTitleResolver.panelHeaderTitle(
+        coordinatorPanelTitle ?? TerminalDisplayTitleResolver.panelHeaderTitle(
             panelState: panelState,
             liveTerminalTitle: nil,
             panelSessionStatus: panelSessionStatus
         )
+    }
+
+    /// The coordinator's terminal is named after it, not after the title
+    /// its agent writes to the terminal.
+    private var coordinatorPanelTitle: String? {
+        isCoordinatorPanel ? AppState.coordinatorWorkspaceTitle : nil
+    }
+
+    private var isCoordinatorPanel: Bool {
+        coordinatorController?.location?.panelID == panelID
     }
 
     private var terminalProfileBadge: TerminalProfileBadge? {
@@ -4473,7 +4494,7 @@ struct PanelCardView: View {
             scratchpadHeaderAccessory
         }
 
-        if let coordinatorController, coordinatorController.location?.panelID == panelID {
+        if let coordinatorController, isCoordinatorPanel {
             // Dock, Terminal, then "…": the dock and the switch need the chat.
             if coordinatorController.chatIsAvailable {
                 CoordinatorPanelDockButton(controller: coordinatorController)

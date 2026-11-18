@@ -620,6 +620,90 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         }
     }
 
+    // MARK: - Scroll position
+
+    /// The chat opens at its New line, also when what is new is shorter than
+    /// the screen: the chat then shows its end, with the line on screen, and
+    /// no empty space under the last message. In a long chat, which the
+    /// transcript lays out lazily, the line went to the top of the screen
+    /// and left the rest of it empty until the user dragged.
+    func testTheNewLineOverAShortEndLeavesNoEmptySpace() {
+        let app = launch(coordinator: "quiet", environment: [
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS": "60",
+            // Through the last wake turn's tool call: only its answer is new.
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH": "-2",
+            "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
+        ])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let line = app.descendants(matching: .any)["toastty-transcript-new-messages"]
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        let answer = textView(containing: "Wake 60.", in: app)
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        // The opening moves for a moment after the chat shows.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(waitUntil(timeout: 5) { isAtTheChatsEnd(app) },
+                      "The chat rests past its end: \(scrollMetrics(in: app) ?? [:])")
+        let top = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertTrue(line.frame.minY >= top - 1 && line.frame.maxY <= answer.frame.minY + 1,
+                      "The line is at \(line.frame), the answer at \(answer.frame)")
+        XCTAssertFalse(app.buttons["toastty-mobile-transcript-jump-latest"].exists)
+        attachScreenshot(named: "coordinator-new-line-short-end", of: app)
+    }
+
+    /// Back on the Coordinator tab, the chat opens at its end again, also
+    /// after the user scrolled up in it. The phone loads the chat again each
+    /// time it opens; the chat opened at its first message.
+    func testTheChatOpensAtItsEndAgainAfterAnotherTab() {
+        let app = launch(coordinator: "quiet", environment: [
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS": "20",
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS": "1",
+            "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
+        ])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let newest = textView(containing: "Wake 20.", in: app)
+        XCTAssertTrue(newest.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) { isAtTheChatsEnd(app) })
+
+        let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
+        for _ in 0..<4 where jump.exists == false {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 220)),
+                        withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        XCTAssertTrue(jump.waitForExistence(timeout: 5))
+
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(newest.waitForExistence(timeout: 5))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(waitUntil(timeout: 5) { isAtTheChatsEnd(app) && newest.isHittable },
+                      "The chat opened at \(scrollMetrics(in: app) ?? [:])")
+        XCTAssertFalse(jump.exists)
+        attachScreenshot(named: "coordinator-end-after-another-tab", of: app)
+    }
+
+    /// The transcript's latest scroll geometry, from the fixture's scroll
+    /// trace (`TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE=1`).
+    private func scrollMetrics(in app: XCUIApplication) -> [String: Double]? {
+        let element = app.descendants(matching: .any)["toastty-mobile-transcript-scroll-metrics"]
+        guard element.exists, let value = element.value as? String,
+              let object = try? JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any]
+        else { return nil }
+        return object.compactMapValues { ($0 as? NSNumber)?.doubleValue }
+    }
+
+    /// The screen's bottom is at the transcript's end: not above it, and
+    /// not past it.
+    private func isAtTheChatsEnd(_ app: XCUIApplication) -> Bool {
+        guard let metrics = scrollMetrics(in: app),
+              let content = metrics["contentHeight"], let bottom = metrics["visibleMaxY"]
+        else { return false }
+        return abs(content - bottom) <= 2
+    }
+
     // MARK: - Copy and Reply
 
     /// As in the Mac's coordinator chat: Copy under the user's and the
