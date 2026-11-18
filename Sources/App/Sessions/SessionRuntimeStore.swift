@@ -831,6 +831,9 @@ final class SessionRuntimeStore: ObservableObject {
         let previousProgramRecords = programStatusRuntime.recordsByPanel
         programStatusRuntime.start(panelID: panelID, sessionID: sessionID)
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
+        let displayTitleOverride = displayTitleOverride ?? store.flatMap {
+            Self.coordinatorSessionTitle(agent: agent, panelID: panelID, coordinatorPanelID: $0.state.coordinator?.panelID)
+        }
         nextRegistry.startSession(
             sessionID: sessionID,
             agent: agent,
@@ -3526,11 +3529,34 @@ final class SessionRuntimeStore: ObservableObject {
             .first?.panelID
     }
 
+    /// The coordinator's agent session is always named "Coordinator". The
+    /// name its provider generates comes from the first wake digest it
+    /// read, which says nothing about what the session is.
+    private static func coordinatorSessionTitle(agent: AgentKind, panelID: UUID, coordinatorPanelID: UUID?) -> String? {
+        guard agent != .processWatch, panelID == coordinatorPanelID else { return nil }
+        return AppState.coordinatorWorkspaceTitle
+    }
+
     private func synchronize(with state: AppState, now: Date = Date()) {
         let previousProgramRecords = programStatusRuntime.recordsByPanel
         var nextRegistry = sessionRegistry
+        let coordinatorPanelID = state.coordinator?.panelID
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
+            // A restart can start the coordinator's agent in a new terminal
+            // before that terminal becomes the coordinator's panel, and a
+            // panel moved out of the coordinator's workspace stops being it.
+            // Only process watches set their own name.
+            if record.agent != .processWatch {
+                let title = Self.coordinatorSessionTitle(
+                    agent: record.agent,
+                    panelID: record.panelID,
+                    coordinatorPanelID: coordinatorPanelID
+                )
+                if title != nil || record.displayTitleOverride == AppState.coordinatorWorkspaceTitle {
+                    nextRegistry.updateDisplayTitleOverride(sessionID: record.sessionID, displayTitleOverride: title, at: now)
+                }
+            }
             guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 tearDownActiveSession(
                     record,

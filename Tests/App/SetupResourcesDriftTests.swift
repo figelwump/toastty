@@ -127,12 +127,12 @@ final class SetupResourcesDriftTests: XCTestCase {
         let launchSection = contentFromSection[..<sectionEnd.lowerBound]
 
         let orderedCommandFragments = [
-            "--json session scope show \\\n    --session \"$TOASTTY_SESSION_ID\"",
-            "--json session scope set-current \\\n      --session \"$TOASTTY_SESSION_ID\"",
-            "--json action run workspace.create",
-            "--json action run agent.launch",
-            "--json session scope set \\\n    --session \"$child_session_id\" \\\n    --workspace \"$workspace_id\"",
-            "--json session scope show \\\n    --session \"$child_session_id\"",
+            "toastty session scope show --json \\\n    --session \"$TOASTTY_SESSION_ID\"",
+            "toastty session scope set-current --json \\\n      --session \"$TOASTTY_SESSION_ID\"",
+            "toastty action run workspace.create --json",
+            "toastty action run agent.launch --json",
+            "toastty session scope set --json \\\n    --session \"$child_session_id\" \\\n    --workspace \"$workspace_id\"",
+            "toastty session scope show --json \\\n    --session \"$child_session_id\"",
         ]
 
         var remainingSection = launchSection[...]
@@ -149,7 +149,7 @@ final class SetupResourcesDriftTests: XCTestCase {
             "parent_began_unrestricted=\"false\"",
             "launch_attempted=\"false\"",
             "trap report_launch_failure EXIT",
-            "--json session scope clear",
+            "toastty session scope clear --json",
             "Restored the parent session to its previous unrestricted state",
             "x.get(\"isScoped\") is True",
             "x.get(\"workspaceIDs\") == [w]",

@@ -241,7 +241,7 @@ gates of step 4.
   Move a line that the user called not a problem to Closed, with
   `→ the user: not a problem`.
 - **A time in Improving.** When a turn of the user writes or changes the
-  time of the review, read `"$TOASTTY_CLI_PATH" --json coordinator status`.
+  time of the review, read `toastty coordinator status --json`.
   If `wake.nextWakeAt` is null or later than the next review time, set your
   check for that time with `coordinator wake --at`: no digest may come
   before it.
@@ -254,6 +254,6 @@ gates of step 4.
   the line `[coordinator review]`: the user reads each change that comes
   from a review.
 - Propose no task while 2 tasks with that line are open; the `text` field
-  of `toastty --json task list` shows it. Say that they come first.
+  of `toastty task list --json` shows it. Say that they come first.
 - Never propose a change to the Never list, to the limits in
   `references/merging.md`, or to these limits.
