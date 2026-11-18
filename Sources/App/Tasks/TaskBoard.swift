@@ -25,6 +25,12 @@ struct TaskBoardItem: Identifiable, Equatable {
     var agent: TaskAgentActivity
     /// A finished turn the user has not looked at yet, as the sidebar marks.
     var hasUnreadTurn = false
+    /// The status the sidebar's row for the open task space shows, from its
+    /// sessions and the stage; see `TaskBoard.taskSpaceStatus`. `nil` unless
+    /// the task space is open under its project: a task space that became a
+    /// top-level workspace, such as when its project closed, has no such
+    /// row, and the sidebar lists the task by its stage alone.
+    var taskSpaceStatus: SidebarSubspacePresentation.RowStatus? = nil
     /// The task this one's agent waits on through a pending watch.
     var waitingOnTitle: String?
     var pullRequest: WorkspacePullRequestLink?
@@ -97,7 +103,9 @@ enum TaskBoard {
         for (workspaceID, parentID) in state.subspaceParentIDsByWorkspaceID() {
             guard let workspace = state.workspacesByID[workspaceID] else { continue }
             if let taskID = workspace.taskID, recordsByID[taskID] != nil { continue }
-            items.append(observedItem(workspace: workspace, parentID: parentID, inputs: inputs, releaseTags: builder.releaseTags))
+            items.append(observedItem(
+                workspace: workspace, parentID: parentID, isNested: true, inputs: inputs, releaseTags: builder.releaseTags
+            ))
         }
         return items.sorted { lhs, rhs in
             lhs.activityAt != rhs.activityAt ? lhs.activityAt > rhs.activityAt : lhs.title < rhs.title
@@ -130,6 +138,7 @@ enum TaskBoard {
         }
         return observedItem(
             workspace: workspace, parentID: workspace.parentWorkspaceID ?? workspace.id,
+            isNested: builder.nestedWorkspaceIDs.contains(workspace.id),
             inputs: inputs, releaseTags: builder.releaseTags
         )
     }
@@ -154,6 +163,10 @@ enum TaskBoard {
             by: { $0.parentTaskID ?? $0.id }
         )
 
+        /// Task spaces the sidebar lists as rows under their project; see
+        /// `TaskBoardItem.taskSpaceStatus`.
+        lazy var nestedWorkspaceIDs = Set(inputs.state.subspaceParentIDsByWorkspaceID().keys)
+
         init(inputs: Inputs) {
             self.inputs = inputs
             releaseTags = ReleaseTagsLookup(inputs: inputs)
@@ -163,6 +176,7 @@ enum TaskBoard {
             if let item = built[record.id] { return item }
             let item = TaskBoard.item(
                 for: record, inputs: inputs, releaseTags: releaseTags,
+                isNested: { [unowned self] in nestedWorkspaceIDs.contains($0) },
                 childRecords: { [unowned self] in childRecordsByParentID[record.id] ?? [] },
                 children: { [unowned self] in childrenOutcome(of: record) }
             )
@@ -240,12 +254,32 @@ enum TaskBoard {
     /// unread.
     static func hasUnreadTurn(_ statuses: [WorkspaceSessionStatus], in workspace: WorkspaceState?) -> Bool {
         guard let workspace else { return false }
-        return statuses.contains { status in
-            guard status.status.kind == .ready, let tabID = workspace.tabID(containingPanelID: status.panelID) else {
-                return false
-            }
-            return workspace.tab(id: tabID)?.unreadPanelIDs.contains(status.panelID) == true
+        return statuses.contains { isUnread($0, in: workspace) }
+    }
+
+    private static func isUnread(_ status: WorkspaceSessionStatus, in workspace: WorkspaceState) -> Bool {
+        guard status.status.kind == .ready, let tabID = workspace.tabID(containingPanelID: status.panelID) else {
+            return false
         }
+        return workspace.tab(id: tabID)?.unreadPanelIDs.contains(status.panelID) == true
+    }
+
+    /// The status of the task space's row, as the sidebar combines its
+    /// sessions with the task's stage. The sidebar lists the row by it, and
+    /// the Tasks view lists the task by it too.
+    static func taskSpaceStatus(
+        _ statuses: [WorkspaceSessionStatus],
+        in workspace: WorkspaceState?,
+        stage: TaskStage
+    ) -> SidebarSubspacePresentation.RowStatus? {
+        guard let workspace else { return nil }
+        return SidebarSubspacePresentation.rowStatus(
+            sessionStatus: SidebarSubspacePresentation.rowStatus(sessionStatuses: statuses.map { status in
+                (kind: status.status.kind, showsUnreadSessionAccent: isUnread(status, in: workspace))
+            }),
+            isDone: workspace.doneAt != nil,
+            stage: stage
+        )
     }
 
     /// The title of the first task `record` waits on through a pending watch.
@@ -297,6 +331,7 @@ enum TaskBoard {
         for record: TaskRecord,
         inputs: Inputs,
         releaseTags: ReleaseTagsLookup,
+        isNested: (UUID) -> Bool,
         childRecords: () -> [TaskRecord],
         children: () -> TaskChildrenOutcome?
     ) -> TaskBoardItem {
@@ -366,6 +401,8 @@ enum TaskBoard {
             finishedThroughChildren: derived.finishedThroughChildren,
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: taskSpace),
+            taskSpaceStatus: taskSpaceID.map(isNested) == true
+                ? taskSpaceStatus(statuses, in: taskSpace, stage: derived.stage) : nil,
             waitingOnTitle: waitingOn,
             pullRequest: link,
             pullRequestState: pullRequestState,
@@ -420,6 +457,7 @@ enum TaskBoard {
     private static func observedItem(
         workspace: WorkspaceState,
         parentID: UUID,
+        isNested: Bool,
         inputs: Inputs,
         releaseTags: ReleaseTagsLookup
     ) -> TaskBoardItem {
@@ -450,6 +488,7 @@ enum TaskBoard {
             stage: stage,
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: workspace),
+            taskSpaceStatus: isNested ? taskSpaceStatus(statuses, in: workspace, stage: stage) : nil,
             pullRequest: link,
             pullRequestState: pullRequestState,
             pullRequestLookupProblem: pullRequestState == nil ? link.flatMap(inputs.pullRequestLookupProblem) : nil,

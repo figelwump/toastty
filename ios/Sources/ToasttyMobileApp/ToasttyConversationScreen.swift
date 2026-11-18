@@ -152,6 +152,12 @@ struct ToasttyConversationScreen: View {
                     } : nil,
                     newMessages: newMessages
                 )
+                // The phone has a transcript only while the conversation is
+                // open, and each opening loads it again; another tab, or a
+                // screen pushed over it, closes it. Each load gets a new
+                // transcript view, which opens where a chat opens. The old
+                // view kept the position of the emptied transcript: its top.
+                .id(presentation != nil)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     ToasttyConversationComposerBar(
                         conversation: conversation,
@@ -231,10 +237,15 @@ struct ToasttyConversationScreen: View {
                 }
             }
             // Next sits rightmost, with Panels just inside it. Each shows
-            // only when it has somewhere to go.
+            // only when it has somewhere to go. The coordinator's tab has a
+            // … menu in Panels' place, which also lists the panels.
             ToolbarItemGroup(placement: .topBarTrailing) {
                 taskDetailButton
-                panelsButton
+                if isCoordinatorRoot {
+                    coordinatorMenuButton
+                } else {
+                    panelsButton
+                }
                 nextSessionButton
             }
         }
@@ -294,26 +305,71 @@ struct ToasttyConversationScreen: View {
             .accessibilityIdentifier("toastty-conversation-panels")
         } else if panels.count > 1 {
             Menu {
-                ForEach(sections) { section in
-                    Section {
-                        ForEach(section.panels) { panel in
-                            Button { openPanel(panel) } label: {
-                                Label(panel.panel.title,
-                                      systemImage: ToasttyWorkspacePanels.symbol(for: panel.panel.kind))
-                                if let folderHint = panel.folderHint {
-                                    Text(folderHint)
-                                }
-                            }
-                        }
-                    } header: {
-                        // Only a menu that spans workspaces names them.
-                        if sections.count > 1 { Text(section.workspaceTitle) }
-                    }
+                panelMenuSections(sections) { section in
+                    // Only a menu that spans workspaces names them.
+                    sections.count > 1 ? section.workspaceTitle : nil
                 }
             } label: {
                 Label("Panels", systemImage: "square.on.square")
             }
             .accessibilityIdentifier("toastty-conversation-panels")
+        }
+    }
+
+    @ViewBuilder
+    private func panelMenuSections(
+        _ sections: [ToasttyConversationPanelSection],
+        header: @escaping (ToasttyConversationPanelSection) -> String?
+    ) -> some View {
+        ForEach(sections) { section in
+            Section {
+                ForEach(section.panels) { panel in
+                    Button { openPanel(panel) } label: {
+                        Label(panel.panel.title,
+                              systemImage: ToasttyWorkspacePanels.symbol(for: panel.panel.kind))
+                        if let folderHint = panel.folderHint {
+                            Text(folderHint)
+                        }
+                    }
+                }
+            } header: {
+                if let title = header(section) { Text(title) }
+            }
+        }
+    }
+
+    /// The coordinator tab's … menu: the coordinator's policy, ledger and
+    /// friction notes, read-only, then the panels the Panels button would
+    /// list. A panel that already shows one of the three files is left out
+    /// while the menu lists the file. The Mac finds the files in the
+    /// session's working folder, so without that folder, or without the
+    /// Mac's file previews, the menu lists only the panels.
+    @ViewBuilder
+    private var coordinatorMenuButton: some View {
+        let conversation = controller.conversation(id: conversationID)
+        let folder = controller.hostSupportsLocalFilePreview ? conversation?.cwd : nil
+        let showsFiles = folder != nil
+        let all = ToasttyConversationPanels.sections(in: controller.snapshot, for: conversationID)
+        let sections = folder.map { ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: $0) } ?? all
+        if showsFiles || !sections.isEmpty {
+            Menu {
+                if showsFiles {
+                    Section {
+                        ForEach(ToasttyCoordinatorFile.allCases) { file in
+                            Button { openCoordinatorFile(file) } label: {
+                                Label(file.title, systemImage: file.symbol)
+                                Text(file.subtitle)
+                            }
+                        }
+                    }
+                }
+                panelMenuSections(sections) { section in
+                    section.workspaceID == conversation?.workspaceID ? "Panels" : section.workspaceTitle
+                }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+            .accessibilityIdentifier("toastty-coordinator-menu")
         }
     }
 
@@ -382,17 +438,27 @@ struct ToasttyConversationScreen: View {
               let current = ToasttyConversationPanels.sections(in: controller.snapshot, for: conversationID)
                 .lazy.flatMap(\.panels)
                 .first(where: { $0.workspaceID == panel.workspaceID && $0.id == panel.id }) else { return }
+        presentPreview(current.selection)
+    }
+
+    private func openCoordinatorFile(_ file: ToasttyCoordinatorFile) {
+        guard selectedPreview == nil else { return }
+        presentPreview(file.selection(conversationID: conversationID))
+    }
+
+    private func presentPreview(_ selection: ToasttyPreviewSelection) {
         isComposerFocused = false
         // The composer drops the keyboard only after the next view update,
         // and the sheet opens in that update. UIKit gives the focus back to
         // the responder that had it when a sheet opened, so drop the keyboard
         // now: this action runs outside any view update.
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        selectedPreview = current.selection
+        selectedPreview = selection
     }
 
     private func previewDetents(for selection: ToasttyPreviewSelection) -> Set<PresentationDetent> {
-        switch selection.target {
+        if selection.coordinatorFile != nil { return [.large] }
+        return switch selection.target {
         case .panel: [.large]
         case .conversationFile: [.medium, .large]
         }

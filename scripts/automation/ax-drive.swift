@@ -6,6 +6,7 @@
 //   activate                      Bring the app and its main window to the front.
 //   frame <identifier>            Print the element's frame as "x y width height".
 //   texts <identifier>            Print the text under the element, one item on each line.
+//   font-size <identifier>        Print the first character's font size in points.
 //   status                        Print whether this process is trusted and the screen is locked.
 //   click <identifier>            Click the middle of the element with the mouse.
 //   click-prefix <prefix>         Click the first element whose identifier starts with `prefix`.
@@ -20,6 +21,8 @@
 //                                 Click the element whose label starts with `prefix` and whose top
 //                                 is nearest below `y`: the button under the message at `y`.
 //   focus <identifier>            Click the element, so it takes the keyboard.
+//   press <identifier>            Perform the element's press action through Accessibility, with no
+//                                 mouse event: a button that a click does not reach.
 //   type <text>                   Type the text with key events.
 //   key <return|shift-return|escape|up|down|tab|delete|cmd-a|cmd-c|cmd-z|cmd-period|cmd-shift-p|cmd-v|cmd-shift-g>
 //   click-at <x> <y>              Click the point without bringing the app forward, as in an open menu.
@@ -392,6 +395,30 @@ case "frame":
     print("\(Int(rect.minX)) \(Int(rect.minY)) \(Int(rect.width)) \(Int(rect.height))")
 case "texts":
     print(texts(element(identifier: argument)).joined(separator: "\n"))
+case "press":
+    let target = element(identifier: argument)
+    let result = AXUIElementPerformAction(target, kAXPressAction as CFString)
+    guard result == .success else {
+        print("PRESS FAILED \(argument): \(result.rawValue)")
+        exit(3)
+    }
+    print("pressed \(argument)")
+case "font-size":
+    let textArea = element(identifier: argument)
+    let fontAttribute = NSAttributedString.Key(kAXFontTextAttribute.takeUnretainedValue() as String)
+    let sizeKey = kAXFontSizeKey.takeUnretainedValue() as String
+    var range = CFRange(location: 0, length: 1)
+    guard let rangeValue = AXValueCreate(.cfRange, &range) else { exit(2) }
+    var value: AnyObject?
+    guard AXUIElementCopyParameterizedAttributeValue(
+        textArea, kAXAttributedStringForRangeParameterizedAttribute as CFString, rangeValue, &value
+    ) == .success, let text = value as? NSAttributedString, text.length > 0,
+          let font = text.attribute(fontAttribute, at: 0, effectiveRange: nil) as? [String: Any],
+          let size = font[sizeKey] as? NSNumber else {
+        print("NO FONT SIZE for \(argument)")
+        exit(2)
+    }
+    print(size)
 case "click", "focus":
     guard let rect = frame(element(identifier: argument)) else { exit(2) }
     activate()

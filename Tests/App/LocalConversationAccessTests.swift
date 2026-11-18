@@ -775,7 +775,8 @@ final class LocalConversationFixture {
         startsSession: Bool = true,
         savedConversationID: RemoteConversationID? = nil,
         inCoordinatorWorkspace: Bool = false,
-        initialTranscript: Data = Data()
+        initialTranscript: Data = Data(),
+        sendConfirmationTimeout: Duration = .seconds(10)
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         if inCoordinatorWorkspace {
@@ -881,6 +882,7 @@ final class LocalConversationFixture {
             runtimePaths: runtimePaths,
             port: 42_996,
             initiallyEnabled: false,
+            sendConfirmationTimeout: sendConfirmationTimeout,
             pushConfiguration: nil,
             gatewayServerFactory: { handler in
                 capturedHandler = handler

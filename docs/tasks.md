@@ -91,118 +91,183 @@ workspace to stop it. See
 
 ## Approval prompts
 
-A task's agent runs commands such as `"$TOASTTY_CLI_PATH" task start-work`,
-`git push` and `gh pr create`. In their default permission modes, Claude Code
-and Codex ask you before such commands. A coordinator asks again on each wake,
-often while you are away. Toastty adds no allow rules of its own. The setups
-below let the commands run without a question. Each one gives the agent more
-power, so add only what you accept.
+A task's agent runs commands such as `toastty task start-work`, `git push`
+and `gh pr create`. In their default permission modes, Claude Code and Codex
+ask you before such commands. A coordinator asks again on each wake, often
+while you are away. Toastty adds no allow rules of its own. The rules below
+let the commands run without a question. Each one gives the agent more power,
+so add only what you accept.
 
-The shipped skills write the Toastty CLI as `"$TOASTTY_CLI_PATH"`, a variable
-that holds a different path in each Toastty process. Neither agent's allow
-rules can match a command that starts with a variable, so the Toastty commands
-need the hook below for Claude Code and still ask in Codex.
+The shipped skills write each Toastty command as `toastty`, then the command
+words, then `--json` and the other arguments, such as
+`toastty task get --json`. Toastty puts `toastty` on `PATH` in each terminal
+and agent session it manages, so a rule on the first words of the command
+matches it. Without the rules, the agent asks before each of these commands
+and runs it when you approve.
+
+The rules below allow the Toastty commands that read, create, start, message
+and watch tasks (`task get`, `list`, `workspace-choices`, `watches`, `create`,
+`start-work`, `send`, `watch`, `unwatch`, `needs-reply` and
+`ready-for-review`), the coordinator's `status`, `send`, `reply`, `wake` and
+`watch`, and `query run`, which only reads. Every other Toastty command still asks,
+among them `task merge`, `task request-merge`, `task archive`, `task delete`
+and `task mark-done`.
+
+A rule does not match these forms, so they still ask:
+
+- `--json` before the command words, as in `toastty --json task get`.
+- `"$TOASTTY_CLI_PATH"` in place of `toastty`. The skills use it only when
+  `toastty` is not on `PATH`, as when `enable-agent-command-shims = false`
+  (see [Configuration](configuration.md)).
+- A variable in the command's words, such as
+  `--socket-path "$TOASTTY_SOCKET_PATH"`.
 
 ### Claude Code
 
-Tested with Claude Code 2.1.325 in its default permission mode, with stand-in
-`toastty`, `git` and `gh` programs:
-
-- A rule such as `Bash("$TOASTTY_CLI_PATH" task *)` in `permissions.allow`
-  does not help. Claude Code says "A variable in this command can't be
-  checked before it runs" and asks.
-- A `PreToolUse` hook that approves the command does work.
-- `Bash(git push *)` and `Bash(gh pr create *)` rules work.
-
-Save this hook as `~/.claude/hooks/toastty-task-commands.py` and make it
-executable (`chmod +x`). It approves one plain Toastty command from a fixed
-list: the `task` commands that read, create, start, message and watch tasks,
-the coordinator's `status`, `send`, `wake` and `watch`, and `query run`,
-which only reads. Every other command asks as before, among them `task merge`,
-`task request-merge`, `task archive`, `task delete` and `task mark-done`, and
-any command with a variable after the first word, a command substitution, a
-chain, a pipe or a redirect.
-
-```python
-#!/usr/bin/env python3
-# Claude Code PreToolUse hook: approve plain Toastty task and coordinator
-# commands. Everything else goes through Claude Code's normal checks.
-import json, re, sys
-
-ALLOWED = re.compile(
-    r'"\$TOASTTY_CLI_PATH" (--json )?'
-    r'(task (get|list|workspace-choices|watches|create|start-work|send'
-    r'|watch|unwatch|needs-reply|ready-for-review)'
-    r'|coordinator (status|send|wake|watch)'
-    r'|query run)'
-    r'( [^$`;&|<>()\\\n]*)?'
-)
-
-command = json.load(sys.stdin).get("tool_input", {}).get("command", "")
-if ALLOWED.fullmatch(command):
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "allow",
-        "permissionDecisionReason": "Toastty task command",
-    }}))
-```
-
-Then add the hook and the rules to `~/.claude/settings.json`:
+Add the rules to `permissions.allow` in `~/.claude/settings.json`, beside the
+rules that you already have:
 
 ```json
 {
   "permissions": {
     "allow": [
+      "Bash(toastty task get *)",
+      "Bash(toastty task list *)",
+      "Bash(toastty task workspace-choices *)",
+      "Bash(toastty task watches *)",
+      "Bash(toastty task create *)",
+      "Bash(toastty task start-work *)",
+      "Bash(toastty task send *)",
+      "Bash(toastty task watch *)",
+      "Bash(toastty task unwatch *)",
+      "Bash(toastty task needs-reply *)",
+      "Bash(toastty task ready-for-review *)",
+      "Bash(toastty coordinator status *)",
+      "Bash(toastty coordinator send *)",
+      "Bash(toastty coordinator reply *)",
+      "Bash(toastty coordinator wake *)",
+      "Bash(toastty coordinator watch *)",
+      "Bash(toastty query run *)",
       "Bash(git push *)",
       "Bash(gh pr create *)",
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)"
     ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/toastty-task-commands.py" }]
-      }
-    ]
   }
 }
 ```
 
-Merge it into the file's existing `permissions` and `hooks`. The rules in a
-project's own `.claude/settings.json` apply only after you trusted that folder
-in Claude Code.
+`Bash(toastty task get *)` also matches `toastty task get` with no arguments.
+The rules in a project's own `.claude/settings.json` apply only after you
+trusted that folder in Claude Code.
 
-On a wake, a coordinator reads tasks (`task list`, `task get`), sends to them
-(`task send`), sets its next check (`coordinator wake`, `coordinator watch`),
-reads pull requests (`gh pr view`, `gh pr checks`) and reads its Scratchpads
-(`query run`). The setup above covers these. It still asks before it writes
-its daily list (`action run panel.scratchpad.set-content`), before it commits
-a change to its policy (`git commit` in its folder), and before
-`task request-merge`.
+On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
+sends to them (`task send --text-file message.md`), answers a sender
+outside Toastty (`coordinator reply <id> --text-file message.md`), sets its next check
+(`coordinator wake`, `coordinator watch`), reads pull requests
+(`gh pr view`, `gh pr checks`) and reads its Scratchpads (`query run`). The
+rules above cover these commands. It also edits files in its own folder on
+each wake: it writes `ledger.md`, and `message.md` before each send. In the
+default mode Claude Code asks before each edit. To let a coordinator edit
+the files in its folder with no question, also add this rule:
+
+```json
+"Edit(~/.toastty/coordinator/**)"
+```
+
+The rule also lets it edit `policy.md` with no question. The coordinator
+still asks before it writes its daily list
+(`action run panel.scratchpad.set-content`), before it commits a change to
+its policy (`git commit` in its folder), and before `task request-merge`.
+
+Tested in Claude Code's default permission mode:
+
+- Claude Code 2.1.310, in a real task session of a Toastty build with these
+  skills, with only these rules: the agent followed `toastty-task-start` and
+  ran `toastty task get --json`, `toastty task ready-for-review --json` and
+  `toastty task get --json` with no question. A later
+  `toastty task delete` asked. Without the rules, it asked before each of
+  the three commands, and each ran after approval.
+- Claude Code 2.1.326 with a stand-in `toastty` (`claude -p`, only these
+  rules): these ran with no question: `toastty task get` with and without
+  `--json`, a `task create` over several lines, `task send` with the text in
+  a here-document, the coordinator's `task list --json | jq …` read,
+  `coordinator wake` and `coordinator watch`, and `query run … --json`.
+  These asked:
+  `toastty --json task get`, `task delete`, `task request-merge`, and
+  `task get --json --socket-path "$TOASTTY_SOCKET_PATH"`.
+- Claude Code 2.1.326, the coordinator's files: without the `Edit` rule, an
+  edit of `ledger.md` and a new `message.md` in its folder each asked. With
+  `Edit(~/<folder>/**)`, both ran with no question, and so did
+  `toastty task send <id> --text-file message.md`.
+- The `git push` and `gh pr create` rules were tested with Claude Code
+  2.1.325 and stand-in `git` and `gh` programs. The `gh pr view` and
+  `gh pr checks` rules were not tested.
 
 ### Codex
 
 Codex [rules](https://developers.openai.com/codex/rules) go in a file under
 `~/.codex/rules/`, such as `~/.codex/rules/toastty.rules`. A rule with
-`decision="allow"` runs a matching command outside the sandbox with no
-question:
+`decision = "allow"` runs a matching command outside the sandbox with no
+question. The Toastty commands need that: they connect to Toastty's local
+socket, which Codex's `workspace-write` sandbox blocks.
 
 ```python
-prefix_rule(pattern=["git", "push"], decision="allow")
-prefix_rule(pattern=["gh", "pr", ["create", "view", "checks"]], decision="allow")
+prefix_rule(
+    pattern = ["toastty", "task", ["get", "list", "workspace-choices", "watches",
+        "create", "start-work", "send", "watch", "unwatch", "needs-reply",
+        "ready-for-review"]],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["toastty", "coordinator", ["status", "send", "reply", "wake", "watch"]],
+    decision = "allow",
+)
+prefix_rule(pattern = ["toastty", "query", "run"], decision = "allow")
+# The coordinator reads tasks through jq.
+prefix_rule(pattern = ["jq"], decision = "allow")
+prefix_rule(pattern = ["git", "push"], decision = "allow")
+prefix_rule(pattern = ["gh", "pr", ["create", "view", "checks"]], decision = "allow")
 ```
 
-`codex execpolicy check --rules toastty.rules -- git push -u origin HEAD`
-(Codex 0.169.0) reports both rules as matching. Not tested: a full Codex
-session with these rules.
+Codex matches a rule only against a command that it can split into plain
+words. With the `jq` rule, the coordinator's task read,
+`toastty task list --json | jq …`, runs with no question. A coordinator writes
+each message to `message.md` in its folder, which needs no question inside
+Codex's sandbox, and sends it with `task send --text-file message.md`, which
+the rules match. It still passes a new task's text through
+`"$(cat <<'END' …)"`, which Codex cannot split into words, so creating a task
+asks in Codex.
 
-The Toastty commands still ask. They connect to Toastty's local socket, which
-Codex's `workspace-write` sandbox blocks, so the shipped skills tell Codex to
-ask for escalation. A rule cannot allow them: Codex splits a shell command
-into words for its rules only when it has no variable, and the skills write
-`"$TOASTTY_CLI_PATH"`.
+Without the rules, the shipped skills tell Codex to ask for escalation for
+each Toastty command, and Codex asks you before it runs one.
+
+Tested:
+
+- Codex 0.169.0:
+  `codex execpolicy check --rules toastty.rules -- toastty task get --json`
+  reports `allow`, and so do the other allowed commands in the forms the
+  skills write. `toastty --json task get`, `task delete`, `task merge`,
+  `task request-merge`, `task archive`, `task mark-done` and `action run`
+  match no rule. `git push -u origin HEAD` matches the `git push` rule. The
+  `git` and `gh` rules were not tried in a real session.
+- Codex 0.167.0 in its default sandbox and approval mode
+  (`workspace-write`, `on-request`), in a real task session of a Toastty
+  build with these skills, with a Codex home that held only these rules
+  (without the `git` and `gh` lines): the agent followed
+  `toastty-task-start` and ran `toastty task get --json`,
+  `toastty task ready-for-review --json` and `toastty task get --json` with
+  no question, and each reached Toastty. `toastty task list --json | jq -c …`
+  also ran with no question. A later `toastty task delete` asked for
+  escalation. Without the rules, Codex asked before each of the three
+  commands, and each ran after approval.
+- Codex 0.169.0, `codex exec` with the `workspace-write` sandbox, a Codex
+  home that held only these rules, and a stand-in `toastty`: after Codex
+  wrote `message.md` with its file tool, `task send <id> --text-file
+  message.md` ran outside the sandbox with no question. A `task send` with
+  the text in `"$(cat <<'END' …)"`, or in a here-document on
+  `--text-file /dev/stdin`, ran inside the sandbox, where the real `toastty`
+  cannot reach Toastty, so it asks for escalation.
 
 For a coordinator that runs while you are away, Codex can let a model review
 the escalation requests in place of you: start it with
@@ -825,7 +890,8 @@ it are in [the policy file](#the-policy-file).
   workspace, opens from the row's hover button and context menu (**Open Full
   View**), and from **Open Coordinator**.
 - **Restart Coordinator**, in the **Agent** menu, the command palette, the
-  row's context menu and the workspace header, starts a fresh agent session
+  row's context menu, the **…** menu in the header of the coordinator's
+  panel and the workspace header, starts a fresh agent session
   in the same workspace. The menu offers it while the coordinator is open. An
   agent that still runs is ended: the new session starts in a new terminal,
   and then the old terminal closes. A start that fails leaves the running
@@ -887,7 +953,10 @@ survive an app quit; a message from `coordinator send` waits in memory, and
 an app quit loses it. Closing the coordinator's workspace drops the queue.
 
 Each message from `coordinator send` gets a first line that names its
-sender; see "Who a message is from" below.
+sender; see "Who a message is from" below. A message from outside a task
+also gets a message ID, which `coordinator send --json` returns as
+`messageID`, and the coordinator answers it with `coordinator reply`; see
+[Coordinator replies](#coordinator-replies).
 
 The chat's composer, quick entry, `coordinator send` and Toastty's own
 digests all go through this one queue, so their text never mixes. For an agent whose
@@ -916,6 +985,7 @@ text:
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran it.` | `coordinator send --from <name>` from a caller that names no running session, such as Grok Bot running the command from its own shell. Toastty does not check the name. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
+| `[Toastty] From …: … Message ID <uuid>.` | The same `From` line for a message from outside a task (an agent session outside a task, a named caller or a terminal command) ends with the message's ID, which the coordinator [replies](#coordinator-replies) to. A task's message and the coordinator's own have none. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
 | `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. |
 | no `[Toastty]` line | You, in the chat or in the terminal. |
@@ -1584,12 +1654,15 @@ coordinator to resume, Toastty makes sure that the folder holds these files:
 keeps, such as a test that passed on a rerun, go in its ledger. A rule there
 wins over the skill's defaults,
 except for the Never column. You can edit it at any time; the coordinator
-reads it on each wake. **Policy**, in the header of the coordinator's panel,
-and **Open Policy**, in the Coordinator row's context menu, show the file in
-the right panel of the coordinator's workspace, beside the chat, where you
-can read and edit it. They select the tab that holds the coordinator's
-terminal, and use a panel that already shows the file. A policy that is
-missing is first created with its headings. The next
+reads it on each wake. **Open Policy**, in the **…** menu in the header of
+the coordinator's panel and in the Coordinator row's context menu, shows the
+file in the right panel of the coordinator's workspace, beside the chat,
+where you can read and edit it. **Open Ledger** and **Open Friction Notes**,
+in the same two menus, show `ledger.md` and `friction.md` there in the same
+way. The ledger opens at its last line, where the newest entry is. These
+items select the tab that holds the coordinator's terminal, and use a panel
+that already shows the file. A file that is missing is first created, as at
+a start. The next
 time the coordinator changes the policy, it first commits your edit as
 "Edited outside the coordinator". The coordinator writes most of the policy
 by asking you:
@@ -1973,6 +2046,71 @@ that workspace exists the checks do not stop, so a webhook that you approve
 or start again then begins with the next check: it can get a change that was
 under way in the seconds before.
 
+## Coordinator replies
+
+A program outside Toastty that gives the coordinator a message, such as
+Grok Bot with `coordinator send --from "Grok Bot"`, gets the coordinator's
+answer back:
+
+```bash
+toastty coordinator send --json --from "Grok Bot" --text-file question.md
+# {"delivery":"sent","messageID":"6F1C2A90-…","queuedCount":0}
+toastty coordinator replies --json --message 6F1C2A90-…
+```
+
+1. `coordinator send` gives a message from outside a task an ID, a UUID. It
+   is `messageID` in the answer, and the message's first line ends with
+   `Message ID <uuid>.` A message from a task's session has none
+   (`messageID` is null): the coordinator answers a task with `task send`.
+2. The coordinator answers the sender with
+   `toastty coordinator reply <message-id> --text-file message.md`, with the
+   reply written to `message.md` in its folder. Only the coordinator's own
+   agent can run it. It can reply more than once, such as
+   "I asked Vishal" and later "Vishal said yes; the task started". It still
+   tells you in its chat what you need to know: a reply goes only to the
+   sender.
+3. The sender reads the text with `toastty coordinator replies`. Each reply
+   has `id`, `messageID`, `from` (the `--from` name, or null), `text` and
+   `repliedAt`. `--message <id>` keeps the replies to one message. `--since
+   <cursor>` keeps the replies after an earlier answer's `cursor`, as `task
+   list --changed-since` does for tasks. `truncated` is true when replies
+   after the cursor are gone; the answer then has every reply Toastty keeps.
+4. A [webhook](#webhooks-for-task-events) that adds `coordinator_reply` to
+   `--events`, such as `--events needs_you,merged,done,coordinator_reply`,
+   also gets a `coordinator.reply` event for each reply. A webhook needs at
+   least one task event besides it. The event goes through the same queue,
+   retries and signing as task events, in the order the events happened:
+
+   ```json
+   {"version": 1, "eventID": "…", "type": "coordinator.reply",
+    "occurredAt": "2026-11-17T16:53:12Z", "webhook": "grok",
+    "reply": {"id": "…", "messageID": "6F1C2A90-…", "from": "Grok Bot"}}
+   ```
+
+   It never carries the reply's text: read that with `coordinator replies`.
+   `--root` and `--external-ref-prefix` apply to task events only. Adding
+   `coordinator_reply` to a webhook, or removing it, needs your approval
+   again, and the review sheet lists **Coordinator replies** under Events.
+
+**Who can read replies.** Any program that can run `coordinator send` can
+read every reply: a program of yours on this Mac, not a workspace-scoped
+session outside the coordinator's workspace. This needs no approval: such a
+program can already read the coordinator's conversation on disk. A reply
+holds only what the coordinator wrote for that sender, and its instructions
+tell it to leave out other projects and people that the message did not ask
+about. Only the webhook's approval decides what Toastty sends off the Mac
+by itself, and the event carries no text.
+
+**How long.** Toastty keeps a message's ID while the message waits in the
+coordinator's queue and for 7 days after it types it, and a reply for 7
+days, up to 500 replies. A cursor stays valid across a relaunch, also after
+every kept reply expired. A reply to a message whose ID is gone is refused.
+The replies, the message IDs and the events waiting to send are in
+`~/.toastty/coordinator-replies.json`, apart from the task outbox.
+
+A coordinator session that started before Toastty had replies does not know
+the command: restart it with `toastty coordinator restart`.
+
 ## Starting tasks
 
 A task whose setup or triage is still running, or that is moving into a
@@ -2107,7 +2245,11 @@ review. The choice is saved for each window.
   starts collapsed; click it to show the merged tasks as rows, then **Show N
   more** when some merged children's task spaces already closed, which opens
   the parent in the Tasks view. A folded task does not count in a bucket.
-  Without a listed parent, a kept task space lists in Idle until it closes.
+  A kept task space that has no open task beside it, such as one without a
+  parent, or a parent whose children all merged, leaves the buckets with
+  its family: To ship tasks list under the To ship line, Done tasks under
+  the Done line. A selected row keeps its place until you select another
+  row, as when it merges while you look at it.
   After the buckets, a To ship line with
   the purple To ship mark lists the project's other To ship tasks, with
   **Release** when the project can release (see [Release](#release)) and the
@@ -2116,7 +2258,14 @@ review. The choice is saved for each window.
   Expanded, the 3 most recently merged To ship tasks show as rows, then
   **Show N more** when the project has more. When every To ship task shows
   as a task space row, the footer counts To ship tasks instead. A parent in
-  To ship counts in its project's To ship line with its children.
+  To ship counts in its project's To ship line with its children. While
+  Toastty keeps Done tasks' task spaces open after their merge, Done takes
+  a line of its own under the To ship line, such as **Done 91** with **9
+  open** on its right, and expands the same way: their task space rows,
+  newest merge first, then **Show N more**, which opens the Tasks view at
+  Done. It also expands while one of those task spaces is selected.
+  Without such task spaces, the Done count stays on the To ship line and
+  opens the Tasks view at Done.
 - **Needs you** lists only the rows that need you, from every project, under
   each project's name and counts, in two sections: **Needs you**, then
   **Ready to review**. Each row takes one line: its mark, its title and one
@@ -2136,8 +2285,8 @@ closed at the merge; if you kept it open, the row opens it instead. **Show N mor
 opens the Tasks view at To ship with the first task the sidebar did not show
 selected, and the To ship and Done counts open it at their group. The newest
 merge comes first; a task with no merge time uses its latest change. A To ship
-task whose task space is still open keeps its task space row and does not show
-a second time.
+task whose task space row the card lists, such as one whose agent works or one
+folded under its parent, does not show a second time.
 
 Task space rows use square marks: green for a finished turn (filled while it
 is unread, when the Tasks view also shows the title in bold), amber ? for a
@@ -2683,6 +2832,10 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
   task webhooks and the events waiting to send. Webhook secrets and approvals
   are in the login Keychain. The outbox file also holds the task changes and
   alerts that wait for the coordinator, and its timer.
+- `~/.toastty/coordinator-replies.json`: the coordinator's replies to
+  messages from outside a task, the IDs of those messages, and the
+  `coordinator.reply` webhook events waiting to send; see
+  [Coordinator replies](#coordinator-replies).
 - `~/.toastty/coordinator/`: the coordinator's instructions, your policy and
   its ledger, in a git repository; see
   [The coordinator's folder](#the-coordinators-folder).

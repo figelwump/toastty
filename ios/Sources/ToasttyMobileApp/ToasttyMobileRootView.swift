@@ -42,6 +42,9 @@ struct ToasttyMobileRootView: View {
     @State private var fixtureCoordinatorLineCleared = false
     /// What the Mac sends while the user types, from TOASTTY_MOBILE_FIXTURE_INCOMING=1.
     @State private var fixtureIncoming: ToasttyIncomingFixture?
+    /// The fixture coordinator chat finished loading since it last opened,
+    /// with `TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS=1`.
+    @State private var fixtureCoordinatorIsLoaded = false
 #endif
     @State private var fixtureInteractionAnswerState: ToasttyInteractionAnswerState?
     @State private var fixtureInteractionAcceptedAnswers: [RemoteInteractionAnswer]?
@@ -235,6 +238,11 @@ struct ToasttyMobileRootView: View {
         .preferredColorScheme(.dark)
 #if DEBUG
         .toasttyIncomingKeyboardLog($fixtureIncoming)
+        .modifier(FixtureCoordinatorReopenLoad(
+            isEnabled: Self.fixtureCoordinatorReopens,
+            selectedConversationID: sessionController.homeController.selectedConversationPresentation?.id,
+            isLoaded: $fixtureCoordinatorIsLoaded
+        ))
 #endif
     }
 
@@ -933,6 +941,13 @@ struct ToasttyMobileRootView: View {
             )
         }
         if conversationID == ToasttyMobileFixture.coordinatorConversationID {
+            // As the live app: a closed chat has no transcript, and each
+            // opening loads it again.
+            if Self.fixtureCoordinatorReopens {
+                guard sessionController.homeController.selectedConversationPresentation?.id == conversationID
+                else { return nil }
+                if fixtureCoordinatorIsLoaded == false { return .loading }
+            }
             return ToasttyConversationFixture.coordinatorPresentation(
                 for: conversationID,
                 sendItems: isFixtureWorkingConversation(conversationID)
@@ -946,6 +961,7 @@ struct ToasttyMobileRootView: View {
                     "TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"
                 ] == "1",
                 quietTurns: fixtureCoordinatorQuietTurns,
+                wakeTurns: Self.fixtureCoordinatorWakeTurns,
                 responses: fixtureIncoming?.responses ?? 0
             )
         }
@@ -1039,10 +1055,23 @@ struct ToasttyMobileRootView: View {
         let rows = ToasttyConversationFixture.coordinatorPresentation(
             for: ToasttyMobileFixture.coordinatorConversationID,
             hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
-            quietTurns: fixtureCoordinatorQuietTurns
+            quietTurns: fixtureCoordinatorQuietTurns,
+            wakeTurns: Self.fixtureCoordinatorWakeTurns
         ).rows
         return CoordinatorChatReadPoint.marker(in: rows, after: sessionController.homeController.snapshot.coordinatorChatRead)
     }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS=<n>` adds n wake
+    /// turns to the fixture coordinator chat, for a long chat.
+    private static let fixtureCoordinatorWakeTurns = Int(
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? ""
+    ) ?? 0
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS=1`: the fixture
+    /// coordinator chat has no transcript while it is closed and loads for a
+    /// moment each time it opens, as the live app's does.
+    private static let fixtureCoordinatorReopens =
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS"] == "1"
 
     /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS=1` ends the fixture
     /// coordinator chat with two quiet wake turns, from a Mac that shares
@@ -1060,6 +1089,12 @@ struct ToasttyMobileRootView: View {
     private func conversationNewMessages(for conversationID: UUID) -> ToasttyNewMessagesMarker? {
 #if DEBUG
         if conversationID == ToasttyMobileFixture.coordinatorConversationID, fixtureScenario != nil {
+            // As the live app: no line while the chat is closed or loads.
+            if Self.fixtureCoordinatorReopens,
+               fixtureCoordinatorIsLoaded == false
+                || sessionController.homeController.selectedConversationPresentation?.id != conversationID {
+                return nil
+            }
             return fixtureCoordinatorNewMessages
         }
 #endif
@@ -1933,3 +1968,25 @@ private struct ToasttyTranscriptBodyCountElement: UIViewRepresentable {
         infoDictionary: [:]
     ))
 }
+
+#if DEBUG
+/// With `TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS=1`, the fixture
+/// coordinator chat loads for a moment each time it opens, as the live
+/// app's new conversation controller does.
+private struct FixtureCoordinatorReopenLoad: ViewModifier {
+    let isEnabled: Bool
+    let selectedConversationID: UUID?
+    @Binding var isLoaded: Bool
+
+    func body(content: Content) -> some View {
+        content.task(id: selectedConversationID) {
+            guard isEnabled else { return }
+            isLoaded = false
+            guard selectedConversationID == ToasttyMobileFixture.coordinatorConversationID else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard Task.isCancelled == false else { return }
+            isLoaded = true
+        }
+    }
+}
+#endif

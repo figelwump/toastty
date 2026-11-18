@@ -850,8 +850,11 @@ def run_check(run):
     run.cli('coordinator', 'send', 'A note from a script.')
     run.new_turns(wake=False)
     from_terminal = [turn['prompt'] for turn in run.turns() if 'A note from a script.' in turn['prompt']]
+    # The first line ends with the message's ID, which the coordinator replies to.
     check('a caller with no session is named as a terminal command',
-          from_terminal == ['[Toastty] From a terminal command: Toastty cannot tell who ran it.\nA note from a script.'], from_terminal)
+          len(from_terminal) == 1 and re.fullmatch(
+              r'\[Toastty\] From a terminal command: Toastty cannot tell who ran it\. Message ID [0-9A-F-]{36}\.\n'
+              r'A note from a script\.', from_terminal[0]), from_terminal)
     step('coordinator send named its sender', said={name: run.said(turns) for name, turns in turns_of.items()})
 
 

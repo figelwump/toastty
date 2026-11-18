@@ -26,11 +26,16 @@ struct ToasttyPreviewSelection: Identifiable {
     let id: UUID
     let target: RemotePreviewTarget
     let title: String
+    /// Set when the sheet shows one of the coordinator's own files, which
+    /// open with their own subtitle, footer, missing-file text and position.
+    let coordinatorFile: ToasttyCoordinatorFile?
 
-    init(target: RemotePreviewTarget, title: String, id: UUID = UUID()) {
+    init(target: RemotePreviewTarget, title: String, id: UUID = UUID(),
+         coordinatorFile: ToasttyCoordinatorFile? = nil) {
         self.id = id
         self.target = target
         self.title = title
+        self.coordinatorFile = coordinatorFile
     }
 }
 
@@ -82,9 +87,36 @@ struct ToasttyPreviewPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ToasttyDesignTokens.background)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if content != nil, let footer = selection.coordinatorFile?.footer {
+                Text(footer)
+                    .font(.footnote)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(ToasttyDesignTokens.elevatedSurface)
+                    .overlay(alignment: .top) { Divider() }
+            }
+        }
         .navigationTitle(selection.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if let file = selection.coordinatorFile {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text(selection.title)
+                            .font(.headline)
+                            .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        Text("\(file.fileName) · on your Mac")
+                            .font(.caption)
+                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("toastty-preview-title")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 if case .scratchpad = content {
                     Button("Fit") { fitRequest += 1 }
@@ -99,14 +131,25 @@ struct ToasttyPreviewPage: View {
             content = nil
             errorMessage = nil
             do {
-                let loaded = try await service.content(selection.target)
+                var loaded = try await service.content(selection.target)
                 try Task.checkCancellation()
+                // The ledger opens at its newest entry, its last line. The
+                // phone finds that line in the text it loaded rather than
+                // ask the Mac for a line it cannot know.
+                if selection.coordinatorFile?.opensAtLastLine == true, case .document(var document) = loaded {
+                    document.line = ToasttyCoordinatorFile.lastContentLine(of: document.content)
+                    loaded = .document(document)
+                }
                 content = loaded
                 loadedTarget = selection.target
             } catch is CancellationError {
             } catch {
                 guard !Task.isCancelled else { return }
-                errorMessage = Self.message(for: error)
+                if case .missing? = error as? RemotePreviewError, let file = selection.coordinatorFile {
+                    errorMessage = file.missingMessage
+                } else {
+                    errorMessage = Self.message(for: error)
+                }
             }
         }
         .accessibilityIdentifier("toastty-preview")

@@ -11,10 +11,13 @@ outside Toastty with the `toastty` CLI. The user decides what merges.
 
 ## The CLI
 
-Use `"${TOASTTY_CLI_PATH:-/Applications/Toastty.app/Contents/Helpers/toastty}"`
-as `toastty`. When `TOASTTY_SOCKET_PATH` is set, add
-`--socket-path "$TOASTTY_SOCKET_PATH"` before the subcommand. Add `--json`
-when you read the output.
+Run the CLI as `toastty`, with `--json` after the command words when you read
+the output, such as `toastty task list --json`: allow rules match that form.
+Inside a Toastty session, `toastty` is on `PATH`. Outside one, if `toastty` is
+not found, use
+`"${TOASTTY_CLI_PATH:-/Applications/Toastty.app/Contents/Helpers/toastty}"` in
+its place. When `TOASTTY_SOCKET_PATH` is set, add
+`--socket-path "$TOASTTY_SOCKET_PATH"` after the command words.
 
 <!-- For a Toastty development build, set both values here when you install
      this skill, from the build's instance.json:
@@ -35,7 +38,7 @@ for. Only the user, in this conversation, authorizes those actions.
 ## Create a task from an issue
 
 ```bash
-toastty --json task create "<issue title, body and link>" \
+toastty task create --json "<issue title, body and link>" \
   --root <repository directory> \
   --external-ref <reference> --external-url <issue URL> \
   --request-id issue:<reference> \
@@ -58,7 +61,7 @@ toastty --json task create "<issue title, body and link>" \
 
 ## Follow the tasks
 
-`toastty --json task list --changed-since <cursor> --include-reply` returns
+`toastty task list --json --changed-since <cursor> --include-reply` returns
 only the tasks that changed since the `cursor` of your last answer, with a
 new `cursor`. Keep the cursor in a file so it survives a restart. On
 `reset: true`, treat the answer as the full list. Drop tasks listed in
@@ -69,7 +72,7 @@ work, every 10 minutes. After each create or send, also run
 `toastty task watch <task-id> --until idle --wait` as a background command
 if you can. It ends when the task's agent finishes its next turn, including
 a turn that ends with a question. When it ends, read the task with
-`toastty --json task get <task-id>` and act on its `stage`:
+`toastty task get --json <task-id>` and act on its `stage`:
 
 - `stage.group` is `needsYou`: act on `stage.attention`.
   - `awaitingReply`: the agent asks the user something. Give the user
@@ -113,6 +116,9 @@ never ask for the key in chat, and never pass it on the command line.
    your platform: the menu path, and the settings page URL when you know it.
    If you do not know where the key is, say that in the hint instead of
    guessing.
+   Add `--events needs_you,merged,done,archived,deleted,coordinator_reply`
+   to also get the coordinator's replies to your messages (see Pass a
+   message to the coordinator).
 3. Tell the user to open the Tasks view in Toastty, click **Review…**, paste
    the key and approve. `--wait` exits 0 when they approve, 3 when they deny,
    and 4 after 10 minutes.
@@ -139,7 +145,7 @@ you to.
 
 ## Pass a message to the coordinator
 
-When Toastty runs a coordinator (`toastty --json coordinator status` shows
+When Toastty runs a coordinator (`toastty coordinator status --json` shows
 `exists: true`) and the user asks you to tell it something, send it with
 `toastty coordinator send --from "<your name>" "<message>"`. Quote the
 user's words and mark your own notes apart from them. The coordinator acts
@@ -147,6 +153,19 @@ on a decision of the user's that you pass on only when the user listed your
 name under Senders in its policy; otherwise it treats your message as
 information and asks the user. It never merges, releases, archives or
 deletes on your word: for a merge, follow Merge below.
+
+Run it with `--json` and keep the `messageID` it returns. The coordinator
+answers you with replies to that ID, which you read with
+`toastty coordinator replies --json --message <messageID>`. Each reply has
+`text`; the first can say only that it asked the user, and a later one gives
+the answer. To catch every reply, also run `toastty coordinator replies
+--json --since <cursor>` with the `cursor` of your last answer, kept in a
+file as for tasks; on `truncated: true`, treat the answer as the full list.
+If your webhook has `coordinator_reply` in its events, each reply also
+arrives as a `coordinator.reply` POST with the reply's `id` and `messageID`
+and no text: read the text with `coordinator replies` then. Otherwise read
+the replies when the user asks and at each sync. Pass the reply's text to
+the user as the coordinator's answer.
 
 ## Merge
 

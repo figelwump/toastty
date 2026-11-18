@@ -130,6 +130,37 @@ struct SidebarBucketsTests {
         #expect(idle == ["Grandchild merged", "Lone merged", "Orphan merged"])
     }
 
+    @Test func onlyFamiliesWithNothingOpenLeaveTheBuckets() {
+        let candidates = [
+            row("Open parent", .needsYou),
+            row("Merged under open parent", .idle, parent: "Open parent"),
+            row("Merged parent", .idle),
+            row("Merged child", .idle, parent: "Merged parent"),
+            row("Merged parent, open child", .idle),
+            row("Open child", .running, parent: "Merged parent, open child"),
+            row("Lone merged", .idle),
+            row("Orphan merged", .idle, parent: "Closed parent"),
+            row("Merged grandchild", .idle, parent: "Merged under open parent"),
+            row("Lone open", .idle),
+        ]
+        let finished: Set = [
+            "Merged under open parent", "Merged parent", "Merged child", "Merged parent, open child",
+            "Lone merged", "Orphan merged", "Merged grandchild",
+        ]
+        let leaving = SidebarBuckets.finishedFamilyKeys(candidates) { finished.contains($0.payload) }
+        // A family leaves only when all of it is finished. A finished row
+        // in a family with an open row stays: under an open parent it
+        // folds, and a finished parent keeps its open child company. A row
+        // whose parent has no row, or lists under another task, is a family
+        // of its own, as families list.
+        #expect(leaving == Set(["Merged parent", "Merged child", "Lone merged", "Orphan merged", "Merged grandchild"].map(key)))
+        #expect(SidebarBuckets.foldedKeys(candidates) { finished.contains($0.payload) }.contains(key("Merged under open parent")))
+        // The selected row's family stays while the row is pinned, so a
+        // task that merges while the user looks at it does not move.
+        let keepingChild = SidebarBuckets.finishedFamilyKeys(candidates, keeping: key("Merged child")) { finished.contains($0.payload) }
+        #expect(keepingChild == Set(["Lone merged", "Orphan merged", "Merged grandchild"].map(key)))
+    }
+
     @Test func theSelectedRowHoldsWhileItsTurnIsReadAndMovesWhenWorkResumes() {
         var candidates = [row("Thumbnail", .needsYou), row("Hostname", .needsYou), row("Deploy", .running)]
         var layout = SidebarBuckets.layout(candidates, pin: nil)

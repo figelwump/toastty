@@ -1,3 +1,4 @@
+import Combine
 import CoreState
 import Foundation
 
@@ -98,6 +99,8 @@ extension TaskWebhookService {
         coordinator.onTurnEnd = { [weak self] end in
             self?.coordinatorTurnEnded(end)
         }
+        coordinatorTypedObserver = coordinator.typedEntries
+            .sink { [weak self] entry in self?.coordinatorTypedMessage(id: entry.id) }
         coordinatorWorkspaceChanged(to: coordinator.location?.workspaceID)
     }
 

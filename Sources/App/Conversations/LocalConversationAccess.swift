@@ -59,6 +59,10 @@ protocol LocalConversationSubscription: AnyObject {
 
     func events(before cursor: ConversationEventBackwardCursor?, limit: Int) -> ConversationEventPageOutcome
 
+    /// Whether the host still waits for this send's receipt. A rebuilt page
+    /// may omit the receipt even after the host has settled the send.
+    func awaitsSendConfirmation(clientRequestID: String) -> Bool
+
     /// Sends a message through the queue, steer and prompt-epoch rules of a
     /// phone send, with the Mac as the origin. `request` names the epoch the
     /// caller read from the snapshot and the delivery mode. Attachments are

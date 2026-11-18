@@ -697,6 +697,9 @@ struct SidebarView: View {
     /// collapsed, and like a collapsed Subspaces group the choice is not
     /// saved: it resets when the sidebar hides or the app quits.
     @State private var expandedToShipProjectIDs: Set<UUID> = []
+    /// Project cards whose Done line lists the task spaces Toastty still
+    /// keeps open after their merge.
+    @State private var expandedDoneProjectIDs: Set<UUID> = []
     /// Parent task rows whose merged children show. Each starts collapsed;
     /// like the To ship group, the choice is not saved.
     @State private var expandedFinishedChildrenParents: Set<SidebarRowKey> = []
@@ -1180,12 +1183,12 @@ struct SidebarView: View {
                     cancelWorkspaceRename()
                     controller.toggleDock()
                 },
-                openPolicy: {
+                openDocument: { document in
                     cancelWorkspaceRename()
                     do {
-                        try controller.openPolicy()
+                        try controller.openDocument(document)
                     } catch {
-                        TaskActions.presentFailure("Unable to Open the Coordinator's Policy", error.localizedDescription)
+                        TaskActions.presentFailure(document.openFailureTitle, error.localizedDescription)
                     }
                 },
                 restart: {
@@ -1238,6 +1241,15 @@ struct SidebarView: View {
         /// among the rows the ⑂ filter shows. Folded rows do not count in a
         /// bucket.
         var folded: Set<SidebarRowKey> = []
+        /// Merged tasks whose task spaces Toastty still keeps open, in
+        /// families with nothing open, newest merge first. They leave the
+        /// buckets: To ship ones list under the card's To ship line, Done
+        /// ones under its Done line.
+        var finished: [SidebarBucketEntry<CardRow>] = []
+        /// The task spaces that every card in the window lists under its
+        /// footer. ⑂ chips and filters leave them out, since the buckets
+        /// do not list them.
+        var footerTaskSpaceIDs: Set<UUID> = []
         var layout = SidebarBuckets.Layout<CardRow>()
         /// The card's rows in the Needs you segment.
         var needsYou = SidebarBuckets.Layout<CardRow>()
@@ -1336,6 +1348,15 @@ struct SidebarView: View {
         var nextPin: SidebarBucketPin?
         var needsYouCount = 0
         var readyToReviewCount = 0
+        func taskItem(_ row: SidebarSubspacePresentation.Row) -> TaskBoardItem? {
+            store.state.workspacesByID[row.id]?.taskID.flatMap { itemsByTaskID[$0] }
+        }
+        // When a task space row's task merged, for the footer's newest
+        // first order, as the To ship list orders its rows.
+        func mergedAt(_ candidate: SidebarBucketCandidate<CardRow>) -> Date {
+            guard case .subspace(let row) = candidate.payload.kind, let item = taskItem(row) else { return .distantPast }
+            return SidebarRecentToShip.mergedAt(item)
+        }
         func card(
             workspaceID: UUID?,
             title: String,
@@ -1345,11 +1366,23 @@ struct SidebarView: View {
             candidates: [SidebarBucketCandidate<CardRow>],
             shown: [SidebarBucketCandidate<CardRow>]
         ) -> BucketedCard {
+            func isHeldFinished(_ candidate: SidebarBucketCandidate<CardRow>) -> Bool {
+                guard case .subspace(let row) = candidate.payload.kind else { return false }
+                return SidebarSubspacePresentation.isHeldFinished(row)
+            }
+            // Families with nothing open leave the buckets for the footer,
+            // whatever the ⑂ filter shows. The footer lists its project's
+            // tasks, so a task space moved under another project's card
+            // stays in that card's buckets.
+            let finishedKeys = SidebarBuckets.finishedFamilyKeys(candidates, keeping: pin?.key) { candidate in
+                guard isHeldFinished(candidate), case .subspace(let row) = candidate.payload.kind else { return false }
+                return workspaceID != nil && taskItem(row)?.projectWorkspaceID == workspaceID
+            }
+            let finished = candidates.filter { finishedKeys.contains($0.key) }
+            let candidates = candidates.filter { finishedKeys.contains($0.key) == false }
+            let shown = shown.filter { finishedKeys.contains($0.key) == false }
             func folded(_ rows: [SidebarBucketCandidate<CardRow>]) -> Set<SidebarRowKey> {
-                SidebarBuckets.foldedKeys(rows) { candidate in
-                    guard case .subspace(let row) = candidate.payload.kind else { return false }
-                    return SidebarSubspacePresentation.isHeldFinished(row)
-                }
+                SidebarBuckets.foldedKeys(rows, isFinished: isHeldFinished)
             }
             // The counts ignore the ⑂ filter; the folds follow the families
             // that the filtered layout draws.
@@ -1358,7 +1391,10 @@ struct SidebarView: View {
                 workspaceID: workspaceID, title: title, sessionStatuses: sessionStatuses,
                 subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns,
                 counts: SidebarBuckets.counts(candidates.filter { countedFolded.contains($0.key) == false }),
-                folded: folded(shown)
+                folded: folded(shown),
+                finished: finished
+                    .sorted { mergedAt($0) > mergedAt($1) }
+                    .map { SidebarBucketEntry(key: $0.key, payload: $0.payload, ownBucket: $0.bucket) }
             )
             switch segment {
             case .all:
@@ -1425,6 +1461,15 @@ struct SidebarView: View {
         if otherCandidates.isEmpty == false || otherFinishedItems(.toShip).isEmpty == false {
             result.other = card(workspaceID: nil, title: Self.otherTasksCardTitle, candidates: otherCandidates, shown: otherCandidates)
         }
+        let footerTaskSpaceIDs = Set(result.cards.values.flatMap { card in
+            card.finished.compactMap { entry -> UUID? in
+                guard case .workspace(let id) = entry.key else { return nil }
+                return id
+            }
+        })
+        for id in result.cards.keys {
+            result.cards[id]?.footerTaskSpaceIDs = footerTaskSpaceIDs
+        }
         result.needsYouCount = needsYouCount
         result.readyToReviewCount = readyToReviewCount
         bucketMemory.pin = nextPin
@@ -1444,7 +1489,10 @@ struct SidebarView: View {
     /// each with its header. Empty buckets do not show.
     private func bucketedCardBody(_ card: BucketedCard, workspace: WorkspaceState?) -> some View {
         let filterSessionID = workspace.flatMap { subspaceFilterSessionIDByParentID[$0.id] }
-        let filteredRows = SidebarSubspacePresentation.filteredRows(card.subspaceRows, spawningSessionID: filterSessionID)
+        let filteredRows = SidebarSubspacePresentation.filteredRows(
+            card.subspaceRows.filter { card.footerTaskSpaceIDs.contains($0.id) == false },
+            spawningSessionID: filterSessionID
+        )
         let attentionRowIDs = Set(card.subspaceRows.filter { $0.status.needsAttention }.map(\.id))
         let orderedKeys = SidebarBucket.allCases.flatMap { card.layout.entries($0).map(\.key) }
         let expandedFolds = expandedFinishedChildrenParents
@@ -1579,7 +1627,8 @@ struct SidebarView: View {
                 if let workspace {
                     terminalStatusRowView(
                         row, workspace: workspace, subspaceRows: card.subspaceRows,
-                        otherCardSpawns: card.otherCardSpawns, isCompact: isCompact
+                        otherCardSpawns: card.otherCardSpawns, footerTaskSpaceIDs: card.footerTaskSpaceIDs,
+                        isCompact: isCompact
                     )
                 }
             case .subspace(let row):
@@ -2045,9 +2094,16 @@ struct SidebarView: View {
     /// with Release when the project can release and the Done count on the
     /// same line. Expanded, the latest To ship tasks show as rows, then
     /// "Show N more". When every To ship task shows as a task space row, the
-    /// line counts them instead.
+    /// line counts them instead. While Toastty keeps merged Done tasks'
+    /// task spaces open, the Done count expands the same way to list them
+    /// (`BucketedCard.finished`); otherwise it opens the Tasks view.
     @ViewBuilder
-    private func finishedTasksFooter(projectWorkspaceID: UUID, shownTaskSpaceIDs: Set<UUID>) -> some View {
+    private func finishedTasksFooter(
+        projectWorkspaceID: UUID,
+        shownTaskSpaceIDs: Set<UUID>,
+        card: BucketedCard? = nil,
+        workspace: WorkspaceState? = nil
+    ) -> some View {
         if taskBoard.isEnabled {
             let items = taskBoardSnapshot.windowItems.filter { $0.projectWorkspaceID == projectWorkspaceID }
             let recent = SidebarRecentToShip.card(items, projectWorkspaceID: projectWorkspaceID, shownTaskSpaceIDs: shownTaskSpaceIDs)
@@ -2058,23 +2114,58 @@ struct SidebarView: View {
                 items.filter { $0.stage == .toShip },
                 releasable: taskBoard.canRelease
             )
-            if listed > 0 {
-                VStack(alignment: .leading, spacing: 3) {
-                    // The toggle takes the width the Release button and the
-                    // Done count leave.
-                    HStack(spacing: 12) {
-                        cardToShipToggle(count: listed, projectWorkspaceID: projectWorkspaceID)
-                        if let releaseWorkspaceID {
-                            cardReleaseButton(releaseWorkspaceID, projectWorkspaceID: projectWorkspaceID)
-                        }
-                        if done > 0 {
-                            finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
-                                .font(ToastyTheme.fontWorkspaceSessionChip)
-                                .labelStyle(.titleAndIcon)
-                        }
+            let openDone = (card?.finished ?? []).filter { entry in
+                guard case .subspace(let row) = entry.payload.kind else { return false }
+                return row.stage != .toShip
+            }
+            let isDoneExpanded = Binding(
+                get: {
+                    expandedDoneProjectIDs.contains(projectWorkspaceID)
+                        || openDone.contains { $0.key == selectedRowKey }
+                },
+                set: { isExpanded in
+                    if isExpanded {
+                        expandedDoneProjectIDs.insert(projectWorkspaceID)
+                    } else {
+                        expandedDoneProjectIDs.remove(projectWorkspaceID)
                     }
-                    .padding(.horizontal, 10)
-                    if expandedToShipProjectIDs.contains(projectWorkspaceID) {
+                }
+            )
+            // While Done tasks' task spaces are open, Done takes a toggle line
+            // of its own under the To ship line; otherwise it is a count on it.
+            let doneCountOnLine = done > 0 && openDone.isEmpty
+            if listed > 0 || toShip > 0 || done > 0 {
+                VStack(alignment: .leading, spacing: 3) {
+                    if listed > 0 || toShip > 0 || doneCountOnLine {
+                        // A To ship toggle takes the width the Release button
+                        // and the Done count leave. Each count opens the
+                        // Tasks view at its own group.
+                        HStack(spacing: 12) {
+                            if listed > 0 {
+                                cardToShipToggle(count: listed, projectWorkspaceID: projectWorkspaceID)
+                            } else if toShip > 0 {
+                                finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
+                                    Label("To ship \(toShip)", systemImage: "arrow.up.square")
+                                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                                }
+                            }
+                            if let releaseWorkspaceID {
+                                cardReleaseButton(releaseWorkspaceID, projectWorkspaceID: projectWorkspaceID)
+                            }
+                            if doneCountOnLine {
+                                finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
+                            }
+                            if listed == 0 {
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .font(ToastyTheme.fontWorkspaceSessionChip)
+                        .labelStyle(.titleAndIcon)
+                        // A toggle lines up with the card's other toggles; a
+                        // count lines up its mark with the rows' marks.
+                        .padding(.horizontal, listed > 0 ? 10 : 18)
+                    }
+                    if listed > 0, expandedToShipProjectIDs.contains(projectWorkspaceID) {
                         VStack(alignment: .leading, spacing: 1) {
                             ForEach(recent.shown) { item in
                                 toShipTaskRow(item)
@@ -2092,28 +2183,37 @@ struct SidebarView: View {
                         }
                         .padding(.horizontal, 10)
                     }
-                }
-                .padding(.bottom, 10)
-            } else if toShip > 0 || done > 0 {
-                // Each count opens the Tasks view at its own group.
-                HStack(spacing: 12) {
-                    if toShip > 0 {
-                        finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
-                            Label("To ship \(toShip)", systemImage: "arrow.up.square")
-                                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
-                        }
-                        if let releaseWorkspaceID {
-                            cardReleaseButton(releaseWorkspaceID, projectWorkspaceID: projectWorkspaceID)
-                        }
+                    if done > 0, openDone.isEmpty == false {
+                        cardDoneToggle(
+                            count: done, openCount: openDone.count,
+                            isExpanded: isDoneExpanded, projectWorkspaceID: projectWorkspaceID
+                        )
+                        .padding(.horizontal, 10)
                     }
-                    if done > 0 {
-                        finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
+                    if let card, done > 0, openDone.isEmpty == false, isDoneExpanded.wrappedValue {
+                        // The task spaces Toastty still keeps open, newest
+                        // merge first, then the rest in the Tasks view.
+                        VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
+                            ForEach(openDone) { entry in
+                                bucketRow(entry, card: card, workspace: workspace)
+                            }
+                            let closedCount = max(0, done - openDone.count)
+                            if closedCount > 0 {
+                                SidebarShowMoreToShipButton(
+                                    count: closedCount,
+                                    help: "Show the other done tasks in the Tasks view",
+                                    accessibilityText: "Show \(closedCount) more done \(closedCount == 1 ? "task" : "tasks") in the Tasks view"
+                                ) {
+                                    openTasksView(selecting: nil, revealing: .done)
+                                }
+                                .padding(.leading, 8 + Self.sessionStatusRailWidth + Self.sessionStatusRailGap)
+                                .padding(.vertical, 3)
+                                .accessibilityIdentifier("sidebar.workspace.finishedTasks.doneMore.\(projectWorkspaceID.uuidString)")
+                            }
+                        }
+                        .padding(.horizontal, 10)
                     }
-                    Spacer(minLength: 0)
                 }
-                .font(ToastyTheme.fontWorkspaceSessionChip)
-                .labelStyle(.titleAndIcon)
-                .padding(.horizontal, 18)
                 .padding(.bottom, 10)
             }
         }
@@ -2159,6 +2259,32 @@ struct SidebarView: View {
             accessibilityText: SidebarToShipGroupToggle.label(count: count, isExpanded: isExpanded.wrappedValue)
         )
         .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipToggle.\(projectWorkspaceID.uuidString)")
+    }
+
+    /// "› ☑ DONE 91   9 open" under a project card while Toastty keeps
+    /// merged Done tasks' task spaces open: it expands to list them.
+    private func cardDoneToggle(
+        count: Int,
+        openCount: Int,
+        isExpanded: Binding<Bool>,
+        projectWorkspaceID: UUID
+    ) -> some View {
+        SidebarToShipGroupToggle(
+            count: count,
+            isExpanded: isExpanded,
+            summary: Text("\(openCount) open")
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText),
+            showsMark: true,
+            group: .done,
+            accessibilityText: Self.cardDoneToggleLabel(count: count, openCount: openCount, isExpanded: isExpanded.wrappedValue)
+        )
+        .accessibilityIdentifier("sidebar.workspace.finishedTasks.doneToggle.\(projectWorkspaceID.uuidString)")
+    }
+
+    static func cardDoneToggleLabel(count: Int, openCount: Int, isExpanded: Bool) -> String {
+        let spaces = "\(openCount) task \(openCount == 1 ? "space" : "spaces") open"
+        return "Done, \(count) \(count == 1 ? "task" : "tasks"), \(spaces), \(isExpanded ? "expanded" : "collapsed")"
     }
 
     private func finishedTasksDoneButton(count: Int, projectWorkspaceID: UUID) -> some View {
@@ -2458,7 +2584,17 @@ struct SidebarView: View {
                         if card.hasRows {
                             bucketedCardBody(card, workspace: workspace)
                         }
-                        finishedTasksFooter(projectWorkspaceID: workspace.id, shownTaskSpaceIDs: Set(subspaceRows.map(\.id)))
+                        // A merged task that leaves the buckets lists in
+                        // the footer, as a To ship row or under Done.
+                        let finishedIDs = Set(card.finished.compactMap { entry -> UUID? in
+                            guard case .workspace(let id) = entry.key else { return nil }
+                            return id
+                        })
+                        finishedTasksFooter(
+                            projectWorkspaceID: workspace.id,
+                            shownTaskSpaceIDs: Set(subspaceRows.map(\.id)).subtracting(finishedIDs),
+                            card: card, workspace: workspace
+                        )
                     }
                 } else {
                     // Rendered below and outside the title header's AppKit
@@ -2867,6 +3003,7 @@ struct SidebarView: View {
         workspace: WorkspaceState,
         subspaceRows: [SidebarSubspacePresentation.Row],
         otherCardSpawns: [String: OtherCardSubspaceSpawn],
+        footerTaskSpaceIDs: Set<UUID> = [],
         isCompact: Bool = false
     ) -> some View {
         switch row {
@@ -2874,9 +3011,12 @@ struct SidebarView: View {
             programStatusContent(program, workspace: workspace, isCompact: isCompact)
         case .session(let workspaceSessionStatus):
             let sessionID = workspaceSessionStatus.sessionID
+            // The ⑂ chip counts the task spaces its filter can show: not
+            // the merged ones a card lists under its footer.
+            let isListed = { (row: SidebarSubspacePresentation.Row) in footerTaskSpaceIDs.contains(row.id) == false }
             let ownChip = SidebarSubspacePresentation.spawnerChip(
                 sessionID: sessionID,
-                rows: subspaceRows,
+                rows: subspaceRows.filter(isListed),
                 activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
             )
             // The card's own group wins; a session that nested its
@@ -2893,7 +3033,7 @@ struct SidebarView: View {
                     spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
                         SidebarSubspacePresentation.spawnerChip(
                             sessionID: sessionID,
-                            rows: spawn.spawnedRows,
+                            rows: spawn.spawnedRows.filter(isListed),
                             activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
                             targetWorkspaceTitle: spawn.parentWorkspaceTitle
                         )

@@ -96,6 +96,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorOpen = "coordinator.open"
     case coordinatorRestart = "coordinator.restart"
     case coordinatorSend = "coordinator.send"
+    case coordinatorReply = "coordinator.reply"
     case coordinatorWake = "coordinator.wake"
     case coordinatorWatch = "coordinator.watch"
     case webhookAdd = "webhook.add"
@@ -614,9 +615,20 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key, after which later messages wait until a turn runs; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while text the user typed in the coordinator's terminal may still be in its prompt (userDraft), while no agent runs (noSession), while the agent starts, and while the agent's conversation shows no open prompt after a stopped or failed turn (promptNotOpen). One message is typed for each open prompt, in order, through the queue that the coordinator's chat and Toastty's digests also use. The queue holds up to 50 messages: it survives an agent restart, and an app quit loses a message of this action. Toastty types the text after a first line that names the sender, which it takes from the caller and not from the text: the task whose space the calling session is in, else that session, else the name in from, marked as the caller's own, else a terminal command. The coordinator reads such a message as data from that sender, not as the user's input, unless its policy names that sender as one that passes on the user's decisions. Fails when there is no coordinator.",
+                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key, after which later messages wait until a turn runs; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while text the user typed in the coordinator's terminal may still be in its prompt (userDraft), while no agent runs (noSession), while the agent starts, and while the agent's conversation shows no open prompt after a stopped or failed turn (promptNotOpen). One message is typed for each open prompt, in order, through the queue that the coordinator's chat and Toastty's digests also use. The queue holds up to 50 messages: it survives an agent restart, and an app quit loses a message of this action. Toastty types the text after a first line that names the sender, which it takes from the caller and not from the text: the task whose space the calling session is in, else that session, else the name in from, marked as the caller's own, else a terminal command. The coordinator reads such a message as data from that sender, not as the user's input, unless its policy names that sender as one that passes on the user's decisions. A message from outside a task gets a messageID, a UUID, which the first line ends with (\"Message ID <uuid>.\"): the coordinator answers it with coordinator.reply, and the sender reads the answer with coordinator.replies. Toastty keeps the ID while the message waits and for 7 days after it types it. messageID is null for a message from a task, which the coordinator answers with task.send. Fails when there is no coordinator.",
                 selectors: [],
                 parameters: [.taskMessage(required: true), .senderName(required: false)]
+            )
+        case .coordinatorReply:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Reply to a message that coordinator.send brought from outside a task, named by the messageID that its first line ends with. Only the coordinator's own agent can reply. Toastty keeps the reply for 7 days, and the sender reads it with coordinator.replies. Each approved webhook whose events include coordinator_reply gets a coordinator.reply event with the reply's ID, the messageID and the sender's name, never the text. A message can have several replies, such as one that says the user was asked and one with the user's answer. The text is at most 16 KB. Returns replyID, messageID, repliedAt and webhookEvents, the number of events queued. Fails for a message that has no ID, such as a task's, or whose ID is older than 7 days.",
+                selectors: [],
+                parameters: [
+                    .init(name: "messageID", summary: "The ID at the end of the message's first line.", valueType: .string, required: true),
+                    .init(name: "text", summary: "The reply, for the sender. It leaves Toastty: the sender and any program on this Mac that runs toastty can read it.", valueType: .string, required: true),
+                ]
             )
         case .coordinatorWake:
             return .init(
@@ -836,6 +848,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case taskWorkspaceChoices = "task.workspace-choices"
     case taskWatches = "task.watches"
     case coordinatorGet = "coordinator.get"
+    case coordinatorReplies = "coordinator.replies"
     case webhookList = "webhook.list"
 
     static func resolve(_ rawValue: String) -> Self? {
@@ -959,6 +972,17 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 kind: .query,
                 summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a change that wakes nothing on its own, such as a task that started running or is Done, or an alert that cleared; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator; and watchedTaskIDs and watchedProjectRoots, what coordinator.watch watches.",
                 selectors: []
+            )
+        case .coordinatorReplies:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return the coordinator's replies to messages from coordinator.send, oldest first: each with id, messageID, from (the sender's own name, or null), text and repliedAt. With messageID, only the replies to that message. With since, a cursor from an earlier answer, only newer replies. Every answer has a cursor. truncated is true when replies after since are no longer kept, or since is from a store that no longer exists; the answer then has every kept reply. Toastty keeps replies for 7 days, up to 500. Any caller that may run coordinator.send may read them; a workspace-scoped session cannot unless the coordinator's workspace is in its scope.",
+                selectors: [],
+                parameters: [
+                    .init(name: "messageID", summary: "Only the replies to this message.", valueType: .string, required: false),
+                    .init(name: "since", summary: "A cursor from an earlier coordinator.replies answer.", valueType: .string, required: false),
+                ]
             )
         case .webhookList:
             return .init(
@@ -1262,11 +1286,11 @@ private extension AppControlParameterDescriptor {
     static func webhookEvents(required: Bool) -> Self {
         .init(
             name: "events",
-            summary: "Events to send. Defaults to needs_you, merged, done, archived, deleted.",
+            summary: "Events to send. Defaults to needs_you, merged, done, archived, deleted. coordinator_reply adds an event each time the coordinator replies to a message from coordinator.send; it needs at least one task event with it.",
             valueType: .string,
             required: required,
             repeatable: true,
-            allowedValues: TaskWebhookEventType.allCases.map(\.rawValue)
+            allowedValues: TaskWebhookEventType.allCases.map(\.rawValue) + [TaskWebhook.coordinatorReplyEventName]
         )
     }
 

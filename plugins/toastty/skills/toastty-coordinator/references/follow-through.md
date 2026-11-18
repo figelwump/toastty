@@ -28,7 +28,7 @@ stops, so nothing else keeps that work.
 1. **When you review a task** (Review in your instructions), look for that
    heading in the description and in `lastReply`. If it names work, add a
    `followup` line to the ledger, and run
-   `"$TOASTTY_CLI_PATH" coordinator watch --task <task-id>`, so that the
+   `toastty coordinator watch --task <task-id>`, so that the
    task's merge or its end wakes you:
 
    ```text
@@ -86,7 +86,7 @@ turn. Your next check makes sure that such a turn comes: set it for the next
 list time, unless a deadline comes earlier. A turn of the user can also leave
 something waiting, and then no digest may come for days. So in any turn in
 which you write an `asked`, `told` or `followup` line, or write or change the
-time in Talking, read `"$TOASTTY_CLI_PATH" --json coordinator status`. If
+time in Talking, read `toastty coordinator status --json`. If
 `wake.nextWakeAt` is null or later than the next list time, set your check
 for that time with `coordinator wake --at`.
 
@@ -96,13 +96,13 @@ items and keeps the time.
 
 **First, in a list at its time, close what the last list offered.** For each
 `asked done` line with `listed=1`, read the task again. Mark it Done with
-`"$TOASTTY_CLI_PATH" task mark-done <task-id>` when all of this holds: it is
-still open; every point of its item under Collect still holds; its stage did
-not change after the line's time (`stageMinutes` is at least the minutes since
-then); and since then the user typed nothing in it (`lastUserInputAt`) and
-said nothing to you about it. Remove the line in
-either case. Name each task that you marked Done in one line of your message;
-a turn with that line is not quiet.
+`toastty task mark-done <task-id>` when all of this holds: it is still open;
+every point of its item under Collect still holds; its stage did not change
+after the line's time (`stageMinutes` is at least the minutes since then);
+and since then the user typed nothing in it (`lastUserInputAt`) and said
+nothing to you about it. Remove the line in either case. Name each task that
+you marked Done in one line of your message; a turn with that line is not
+quiet.
 
 1. **Collect** what waits for the user:
    - each open task that you brought to the user, such as a review, a
@@ -124,8 +124,9 @@ a turn with that line is not quiet.
      (`lastReply.truncated` is false), names no remaining work, no question
      and no child task that it will still create. Such a task is this item
      only, not the first one. Leave out a task with a `watch`, `followup` or
-     `told keep-open` line. Write an `asked done` line with the task's link. When the user answers that the task stays
-     open, replace that line with a `told keep-open` line.
+     `told keep-open` line. Write an `asked done` line with the task's link.
+     When the user answers that the task stays open, replace that line with
+     a `told keep-open` line.
 2. **Sort** each item into one group. Inside a group, put first the item
    that waited longest.
    - **Blocks work you started:** a decision without which a task, a
@@ -182,7 +183,7 @@ there wins over the default below. A review can propose such a rule when
 Find your dashboard first:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.list "sessionID=$TOASTTY_SESSION_ID"
+toastty query run panel.scratchpad.list --json "sessionID=$TOASTTY_SESSION_ID"
 ```
 
 If the result has a Scratchpad titled "Waiting on you", pass
@@ -191,7 +192,7 @@ instead: Toastty then opens a new one, and leaves any other Scratchpad as it
 is. Publish the page through a quoted here-document:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.set-content --stdin content \
+toastty action run panel.scratchpad.set-content --json --stdin content \
   "sessionID=$TOASTTY_SESSION_ID" "title=Waiting on you" "documentID=<documentID>" <<'COORDINATOR_DASHBOARD_END'
 <!doctype html>
 …the page…

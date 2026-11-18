@@ -9,7 +9,7 @@ again, ask about all five sections, with the current rules as your
 suggestions.
 
 Read the task history with the command under New tasks in your instructions,
-and the projects with `"$TOASTTY_CLI_PATH" --json task workspace-choices`.
+and the projects with `toastty task workspace-choices --json`.
 
 Ask in one message, only about the sections that hold no rule. Start it
 with one line that introduces you by name, such as "Hi, I'm Toasty, your

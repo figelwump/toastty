@@ -120,6 +120,91 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-not-running", of: app)
     }
 
+    /// The tab's … menu, in Panels' place left of Next, opens the
+    /// coordinator's policy, ledger and friction notes read-only. It lists
+    /// the workspace's panels after them, without the panel that already
+    /// shows the policy. The ledger opens at its newest entry, the others at
+    /// their top, and only the policy says how to change it.
+    func testTheMenuOpensThePolicyLedgerAndFrictionNotes() {
+        let app = openCoordinatorChat()
+        let menu = app.buttons["toastty-coordinator-menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["toastty-conversation-panels"].exists)
+        let next = app.buttons["toastty-conversation-next"]
+        if next.exists { XCTAssertLessThanOrEqual(menu.frame.maxX, next.frame.minX) }
+        attachScreenshot(named: "coordinator-top-bar", of: app)
+
+        menu.tap()
+        let entries = ["Policy", "Ledger", "Friction Notes", "Waiting on you"].map { menuItem($0, in: app) }
+        XCTAssertTrue(entries[0].waitForExistence(timeout: 5))
+        XCTAssertTrue(entries.allSatisfy { $0.exists })
+        let tops = entries.map { $0.frame.minY }
+        XCTAssertEqual(tops, tops.sorted())
+        // iOS 27 reads a native menu item's subtitle as part of its label;
+        // iOS 26 reports it to no element, so there the screenshot shows it.
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 {
+            XCTAssertTrue(entries[0].label.contains("Your rules for the coordinator"), entries[0].label)
+        }
+        XCTAssertFalse(menuItem("policy.md", in: app).exists)
+        attachScreenshot(named: "coordinator-menu", of: app)
+
+        entries[0].tap()
+        XCTAssertTrue(sheetTitle(in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(sheetTitle(in: app).label.contains("policy.md · on your Mac"))
+        XCTAssertTrue(webText(containing: "Name tasks by title", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntilHittable(webText(containing: "Coordinator policy", in: app)))
+        // The page's own identifier covers its footer's, so find it by its text.
+        let footer = app.staticTexts["To change a rule, ask the coordinator in the chat."]
+        XCTAssertTrue(footer.exists)
+        attachScreenshot(named: "coordinator-policy-sheet", of: app)
+        closeSheet(in: app)
+
+        menu.tap()
+        menuItem("Ledger", in: app).tap()
+        let newest = webText(containing: "17:29 created", in: app)
+        XCTAssertTrue(newest.waitForExistence(timeout: 10))
+        // The reveal scrolls a frame or two after the text appears.
+        XCTAssertTrue(waitUntilHittable(newest))
+        XCTAssertFalse(webText(containing: "09:02 started", in: app).isHittable)
+        XCTAssertFalse(footer.exists)
+        attachScreenshot(named: "coordinator-ledger-sheet", of: app)
+        closeSheet(in: app)
+
+        menu.tap()
+        menuItem("Friction Notes", in: app).tap()
+        XCTAssertTrue(webText(containing: "Remote checks wait", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntilHittable(webText(containing: "Friction notes", in: app)))
+        attachScreenshot(named: "coordinator-friction-sheet", of: app)
+        closeSheet(in: app)
+
+        menu.tap()
+        menuItem("Waiting on you", in: app).tap()
+        XCTAssertTrue(app.buttons["toastty-scratchpad-fit"].waitForExistence(timeout: 10))
+        closeSheet(in: app)
+    }
+
+    /// A folder from before the coordinator wrote a file says so instead of
+    /// the generic text. A Mac without file previews gets no file entries,
+    /// and its policy panel lists as before.
+    func testTheMenuSaysWhenAFileIsMissingAndHidesFilesWithoutPreviews() {
+        let missing = openCoordinatorChat(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_FILES": "missing"])
+        missing.buttons["toastty-coordinator-menu"].tap()
+        menuItem("Ledger", in: missing).tap()
+        let message = missing.staticTexts["The coordinator has not written its ledger yet."]
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        XCTAssertTrue(missing.buttons["Retry"].exists)
+        attachScreenshot(named: "coordinator-ledger-missing", of: missing)
+        missing.terminate()
+
+        let older = openCoordinatorChat(environment: ["TOASTTY_MOBILE_FIXTURE_FILE_PREVIEW": "unsupported"])
+        older.buttons["toastty-coordinator-menu"].tap()
+        XCTAssertTrue(menuItem("Waiting on you", in: older).waitForExistence(timeout: 5))
+        XCTAssertTrue(menuItem("policy.md", in: older).exists)
+        XCTAssertFalse(menuItem("Ledger", in: older).exists)
+        XCTAssertFalse(menuItem("Policy", in: older).exists)
+        attachScreenshot(named: "coordinator-menu-without-file-previews", of: older)
+    }
+
     /// Each tab keeps its own stack. A task the coordinator's chat links to
     /// opens over the chat, and Back returns to the chat.
     func testEachTabKeepsItsStackWhileSwitching() {
@@ -620,6 +705,90 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         }
     }
 
+    // MARK: - Scroll position
+
+    /// The chat opens at its New line, also when what is new is shorter than
+    /// the screen: the chat then shows its end, with the line on screen, and
+    /// no empty space under the last message. In a long chat, which the
+    /// transcript lays out lazily, the line went to the top of the screen
+    /// and left the rest of it empty until the user dragged.
+    func testTheNewLineOverAShortEndLeavesNoEmptySpace() {
+        let app = launch(coordinator: "quiet", environment: [
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS": "60",
+            // Through the last wake turn's tool call: only its answer is new.
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH": "-2",
+            "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
+        ])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let line = app.descendants(matching: .any)["toastty-transcript-new-messages"]
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        let answer = textView(containing: "Wake 60.", in: app)
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        // The opening moves for a moment after the chat shows.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(waitUntil(timeout: 5) { isAtTheChatsEnd(app) },
+                      "The chat rests past its end: \(scrollMetrics(in: app) ?? [:])")
+        let top = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertTrue(line.frame.minY >= top - 1 && line.frame.maxY <= answer.frame.minY + 1,
+                      "The line is at \(line.frame), the answer at \(answer.frame)")
+        XCTAssertFalse(app.buttons["toastty-mobile-transcript-jump-latest"].exists)
+        attachScreenshot(named: "coordinator-new-line-short-end", of: app)
+    }
+
+    /// Back on the Coordinator tab, the chat opens at its end again, also
+    /// after the user scrolled up in it. The phone loads the chat again each
+    /// time it opens; the chat opened at its first message.
+    func testTheChatOpensAtItsEndAgainAfterAnotherTab() {
+        let app = launch(coordinator: "quiet", environment: [
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS": "20",
+            "TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS": "1",
+            "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE": "1",
+        ])
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        let newest = textView(containing: "Wake 20.", in: app)
+        XCTAssertTrue(newest.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) { isAtTheChatsEnd(app) })
+
+        let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
+        for _ in 0..<4 where jump.exists == false {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 220)),
+                        withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        XCTAssertTrue(jump.waitForExistence(timeout: 5))
+
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(newest.waitForExistence(timeout: 5))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertTrue(waitUntil(timeout: 5) { isAtTheChatsEnd(app) && newest.isHittable },
+                      "The chat opened at \(scrollMetrics(in: app) ?? [:])")
+        XCTAssertFalse(jump.exists)
+        attachScreenshot(named: "coordinator-end-after-another-tab", of: app)
+    }
+
+    /// The transcript's latest scroll geometry, from the fixture's scroll
+    /// trace (`TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE=1`).
+    private func scrollMetrics(in app: XCUIApplication) -> [String: Double]? {
+        let element = app.descendants(matching: .any)["toastty-mobile-transcript-scroll-metrics"]
+        guard element.exists, let value = element.value as? String,
+              let object = try? JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any]
+        else { return nil }
+        return object.compactMapValues { ($0 as? NSNumber)?.doubleValue }
+    }
+
+    /// The screen's bottom is at the transcript's end: not above it, and
+    /// not past it.
+    private func isAtTheChatsEnd(_ app: XCUIApplication) -> Bool {
+        guard let metrics = scrollMetrics(in: app),
+              let content = metrics["contentHeight"], let bottom = metrics["visibleMaxY"]
+        else { return false }
+        return abs(content - bottom) <= 2
+    }
+
     // MARK: - Copy and Reply
 
     /// As in the Mac's coordinator chat: Copy under the user's and the
@@ -842,6 +1011,32 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 10))
         return app
+    }
+
+    private func openCoordinatorChat(environment: [String: String] = [:]) -> XCUIApplication {
+        let app = launch(coordinator: "quiet", environment: environment)
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        return app
+    }
+
+    /// Native menu actions expose their title, with any subtitle after it,
+    /// and not the SwiftUI identifier.
+    private func menuItem(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", title, "\(title),")).firstMatch
+    }
+
+    private func sheetTitle(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["toastty-preview-title"]
+    }
+
+    private func webText(containing text: String, in app: XCUIApplication) -> XCUIElement {
+        app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    private func closeSheet(in app: XCUIApplication) {
+        app.buttons["toastty-preview-close"].tap()
+        XCTAssertTrue(app.buttons["toastty-preview-close"].waitForNonExistence(timeout: 5))
     }
 
     private func select(_ segment: String, in app: XCUIApplication) {

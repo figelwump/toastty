@@ -40,12 +40,16 @@ that:
   at the window's left edge; while it is hidden, a reply leaves the
   coordinator's row unread, and showing the dock reads it; after the
   relaunch it shows again at its width;
-- the header's switch shows the terminal and the chat again;
+- the header's switch shows the terminal and the chat again, and the
+  terminal's header and its workspace tab say "Coordinator", not the name
+  Claude generated;
 - after the app is killed and relaunched, the chat shows the same
   conversation and takes a message;
-- with Remote Access on, a message from a paired device shows in the chat,
+- with Remote Access on, the device gets the session titled "Coordinator",
+  a message from a paired device shows in the chat,
   and a message that the device queued is typed before one from the Mac;
-- after Restart Coordinator, the chat follows the new agent.
+- after Restart Coordinator, the chat follows the new agent, still titled
+  "Coordinator".
 
 Evidence goes to remote-coordinator-chat-check.json, the app log, Claude's
 transcripts and, when the build can capture its window, PNG frames under
@@ -67,6 +71,8 @@ import uuid
 
 HERE = Path(__file__).parent
 NAME = 'remote-coordinator-chat-check'
+# The name the coordinator's session shows on every surface.
+COORDINATOR_TITLE = 'Coordinator'
 
 
 def load(name, file):
@@ -322,6 +328,21 @@ def run(check):
                     entries.append(dict(role=record['type'], text=text, file=path.name))
         return entries
 
+    def generated_names():
+        """The names Claude generated for the coordinator's conversations."""
+        names = []
+        for path in project.glob('*.jsonl'):
+            for line in path.read_text().splitlines():
+                if '"ai-title"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get('type') == 'ai-title' and record.get('aiTitle') not in names:
+                    names.append(record['aiTitle'])
+        return names
+
     def index_of(role, fragment, after=-1):
         return next((index for index, entry in enumerate(transcript())
                      if index > after and entry['role'] == role and fragment in entry['text']), None)
@@ -537,17 +558,43 @@ def run(check):
 
         # 9. The toolbar button hides the dock; Cmd+Shift+K shows it with the
         # keyboard in its field, where Cmd+= changes the chat's text size.
+        composer = 'coordinator.chat.composer'
+        draft = 'Dock text size'
+
+        def type_text_size_draft():
+            ui.run('type', draft)
+            wait_for('the draft in the dock', lambda: ui.texts(composer) == draft, timeout=10)
+
+        def clear_text_size_draft():
+            ui.run('key', 'cmd-a')
+            ui.run('key', 'delete')
+            wait_for('the text size draft to clear', lambda: draft not in ui.texts(composer), timeout=10)
+
+        # Read the draft's font directly: the one-line field can stay the
+        # same height while the text grows inside it.
+        def composer_font_size():
+            return float(ui.run('font-size', composer)[1])
+
+        ui.run('focus', composer)
+        type_text_size_draft()
+        before_scale = composer_font_size()
+        clear_text_size_draft()
         ui.run('click', 'titlebar.toggle.coordinator-dock')
         wait_for('the dock to hide', lambda: not ui.exists('coordinator.dock'), timeout=30)
         ui.run('key', 'cmd-shift-k')
         wait_for('the dock to show', lambda: ui.exists('coordinator.dock'), timeout=30)
         time.sleep(0.6)
-        composer_height = lambda: int(ui.run('frame', 'coordinator.chat.composer')[1].split()[3])
-        before_scale = composer_height()
+        # Press Cmd+= with the field still empty, as when it first opens.
         ui.run('key', 'cmd-equal')
-        wait_for('a larger text size in the dock', lambda: composer_height() > before_scale, timeout=10)
+        # Typing without a click also proves Cmd+Shift+K focused the field.
+        type_text_size_draft()
+        larger_scale = wait_for('a larger text size in the dock',
+                                lambda: (size := composer_font_size()) > before_scale and size, timeout=10)
         ui.run('key', 'cmd-0')
-        wait_for('the text size again', lambda: composer_height() == before_scale, timeout=10)
+        reset_scale = wait_for('the text size again',
+                               lambda: (size := composer_font_size()) == before_scale and size, timeout=10)
+        require(ui.texts(composer) == draft, 'Changing the text size changed the draft')
+        clear_text_size_draft()
         require(selected_workspace() == task_space, 'The shortcut left the task')
         # Cmd+W in the dock's field closes neither the task's panel nor the window.
         task_terminals = lambda: [w for w in instance.query('workspace.list')['workspaces']
@@ -559,7 +606,7 @@ def run(check):
         require(task_terminals() == terminals_before and ui.exists('coordinator.dock'),
                 'Cmd+W in the dock\'s field closed something')
         step('the toolbar button and Cmd+Shift+K hid and showed the dock; Cmd+= sized its chat; Cmd+W closed nothing',
-             composerHeight=before_scale)
+             composerFontPoints=dict(before=before_scale, larger=larger_scale, reset=reset_scale))
         check_dock_split_keys(task_space)
 
         # A drag on the dock's edge sets its width, up to 40% of the window's
@@ -627,11 +674,22 @@ def run(check):
         wait_for('the terminal in place of the chat', lambda: not ui.exists('coordinator.chat'), timeout=30)
         panel = status()['panelID']
         screen = instance.request('app_control.run_query', dict(id='terminal.visible-text', args=dict(panelID=panel)))
+        # The terminal's header names the coordinator, not the name Claude
+        # generated for the conversation and writes to the terminal.
+        header = wait_for('the terminal\'s header', lambda: ui.texts(f'panel.header.title.{panel}'), timeout=30)
+        require(COORDINATOR_TITLE in header.splitlines() and not set(generated_names()) & set(header.splitlines()),
+                f'The terminal\'s header is not "{COORDINATOR_TITLE}": {header!r}; Claude\'s names: {generated_names()}')
+        # So is the workspace tab that shows the terminal.
+        tab_id = instance.query('workspace.snapshot', workspaceID=coordinator_id)['selectedTabID']
+        tab = wait_for('the workspace tab', lambda: ui.texts(f'workspace.tab.{tab_id}'), timeout=30)
+        require(COORDINATOR_TITLE in tab.splitlines() and not set(generated_names()) & set(tab.splitlines()),
+                f'The workspace tab is not "{COORDINATOR_TITLE}": {tab!r}; Claude\'s names: {generated_names()}')
         capture('terminal')
         ui.run('click', 'coordinator.panel.mode-toggle')
         wait_for('the chat again', lambda: ui.exists('coordinator.chat') and 'CHAT-ONE' in ui.texts(), timeout=30)
         capture('chat-after-terminal')
-        step('the switch showed the terminal and the chat', terminal=((screen.get('result') or {}).get('text') or '')[-600:])
+        step('the switch showed the terminal and the chat', terminal=((screen.get('result') or {}).get('text') or '')[-600:],
+             header=header, tab=tab, generatedNames=generated_names())
 
         # 13. Kill and relaunch with the chat open, now with Remote Access on.
         before = status()
@@ -683,6 +741,9 @@ def run(check):
 
         wait_for('the gateway and the coordinator\'s conversation',
                  lambda: (c := conversation()) and c['inputAvailability'].get('kind') == 'open_prompt', timeout=120)
+        # A paired device gets the coordinator's own name for its session.
+        phone_title = conversation()['title']
+        require(phone_title == COORDINATOR_TITLE, f'The device got the title {phone_title!r}; Claude\'s names: {generated_names()}')
         phone_send('phone-1', 'Reply with exactly this one word and nothing else: PHONE-ONE')
         wait_for_reply('PHONE-ONE')
         wait_for('the chat to mark the device\'s message', lambda: 'sent remotely' in ui.texts(), timeout=30)
@@ -706,7 +767,8 @@ def run(check):
         require(order == sorted(order), f'The device\'s and the Mac\'s messages did not each get a turn in order: {order}')
         wait_for('the queue to empty', lambda: status()['queuedCount'] == 0 and at_prompt(), timeout=120)
         capture('device-then-mac')
-        step('a paired device and the Mac shared the prompt in order', order=order)
+        step('a paired device and the Mac shared the prompt in order', order=order, title=phone_title,
+             generatedNames=generated_names())
 
         # 15. Restart Coordinator while the chat shows.
         old_session = status()['sessionID']
@@ -723,7 +785,10 @@ def run(check):
         require(newest != transcript()[index_of('assistant', 'CHAT-ONE')]['file'],
                 'The message after the restart went to the old conversation')
         capture('after-restart-send')
-        step('the chat followed the restarted agent', restarted=restarted)
+        restarted_title = wait_for('the restarted conversation', lambda: (c := conversation()) and c['title'], timeout=60)
+        require(restarted_title == COORDINATOR_TITLE, f'After the restart the device got {restarted_title!r}')
+        step('the chat followed the restarted agent', restarted=restarted, title=restarted_title,
+             generatedNames=generated_names())
     except Exception:
         # What the window showed when the check stopped.
         try:
