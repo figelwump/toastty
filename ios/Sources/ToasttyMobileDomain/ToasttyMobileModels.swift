@@ -813,6 +813,9 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     case review
     case working
     case idle
+    /// The task rests while it waits on something outside Toastty
+    /// (`task waiting`): a still clock in place of the quiet box.
+    case waiting
     /// The task merged and waits for a release.
     case toShip
     case done
@@ -824,7 +827,7 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     public var isActive: Bool {
         switch self {
         case .ready, .question, .needsApproval, .error, .review, .working: true
-        case .idle, .toShip, .done: false
+        case .idle, .waiting, .toShip, .done: false
         }
     }
 
@@ -833,7 +836,8 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     public var showsDoneToggle: Bool {
         switch self {
         case .idle, .ready, .done, .question, .review: true
-        case .needsApproval, .error, .working, .toShip: false
+        // The clock says what the box would hide; the menu still marks it.
+        case .needsApproval, .error, .working, .toShip, .waiting: false
         }
     }
 
@@ -844,7 +848,7 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
         case .question: "question"
         case .needsApproval: "approval"
         case .error: "error"
-        case .ready, .review, .working, .idle, .toShip, .done: nil
+        case .ready, .review, .working, .idle, .waiting, .toShip, .done: nil
         }
     }
 
@@ -856,7 +860,7 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
         case .error: 3
         case .ready: 2
         case .working: 1
-        case .idle, .question, .review, .toShip, .done: 0
+        case .idle, .question, .review, .waiting, .toShip, .done: 0
         }
     }
 
@@ -917,7 +921,7 @@ public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
     ) -> MobileSubspaceStatus {
         switch sessionStatus {
         case .needsApproval, .error, .working: return sessionStatus
-        case .ready, .question, .review, .idle, .toShip, .done: break
+        case .ready, .question, .review, .idle, .waiting, .toShip, .done: break
         }
         guard let task else { return isDone ? .done : sessionStatus }
         switch task.mark {
@@ -928,6 +932,9 @@ public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
         // Setup or the move into a worktree runs, often before any agent
         // in the task space reports.
         case .starting?: return .working
+        // A quiet task space of a task that waits outside Toastty; an
+        // unread turn still shows first.
+        case .waiting?: return sessionStatus == .idle ? .waiting : sessionStatus
         // The task's stage already counts a done mark that finishes it.
         case nil: return sessionStatus
         }

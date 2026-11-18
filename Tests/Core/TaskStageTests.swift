@@ -277,6 +277,13 @@ struct TaskStageTests {
         #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .working)) == (.running, false))
         #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .needsInput)) == (.needsYou(.agentNeedsInput), false))
         #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .idle, waitsOnTask: true)) == (.running, false))
+        // A wait outside Toastty keeps the parent open, resting in Idle.
+        var waits = started()
+        waits.waitsOutside = true
+        #expect(parent(finished, facts: waits) == (.idle, false))
+        #expect(parent(finished, TaskLiveFacts(taskSpaceOpen: true, agent: .finished), facts: waits) == (.needsYou(.agentFinished), false))
+        waits.replyRequestedAt = date
+        #expect(parent(finished, facts: waits) == (.needsYou(.awaitingReply), false))
         // Recorded endings keep their own stage.
         var archived = started()
         archived.archivedAt = date
@@ -345,6 +352,9 @@ struct TaskStageTests {
         #expect(parent([child(.done)], closed, facts: asked) == (.needsYou(.taskSpaceClosed), false))
         #expect(parent([child(.done)], closed, facts: started(readyForReviewAt: date)) == (.needsYou(.taskSpaceClosed), false))
         #expect(parent([child(.done)], TaskLiveFacts(taskSpaceOpen: false, waitsOnTask: true)) == (.needsYou(.taskSpaceClosed), false))
+        var waits = started()
+        waits.waitsOutside = true
+        #expect(parent([child(.done)], closed, facts: waits) == (.needsYou(.taskSpaceClosed), false))
     }
 
     // MARK: - Task spaces without a record

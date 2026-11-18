@@ -1503,6 +1503,107 @@ struct TaskBoardTests {
         #expect(fixture.record(task.id)?.replyRequest == nil)
     }
 
+    /// The reported case: a parent task that owns work for months after its
+    /// child tasks merged, waiting on email replies and dated work, could
+    /// only sit in Needs you with a question for nobody, or finish through
+    /// its children.
+    @Test func aTaskThatWaitsOutsideToasttyRestsInIdleWithItsReasonAndStaysOpen() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        // The coordinator finds the task's agent through the live sessions,
+        // as in the app, so the agent's turns clear its turn marks.
+        fixture.coordinator.sessions = LiveTaskSessions(
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            closeController: SessionCloseController(
+                store: fixture.store,
+                sessionRuntimeStore: fixture.sessionRuntimeStore,
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: fixture.store,
+                    runtimeRegistry: TerminalRuntimeRegistry(),
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+                ),
+                terminalCloseAssessment: { _ in nil },
+                localDocumentCloseConfirmationState: { _ in nil },
+                shouldBypassConfirmation: true
+            ),
+            exitController: nil,
+            sendText: { _, _ in true }
+        )
+        let parent = try await startTask(fixture, text: "Own steps 4 and 5 until February")
+        let session = try #require(parent.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(parent.taskSpaceWorkspaceID)
+        let panel = try #require(parent.operation.taskSpace?.panelID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(parent.id) }) }
+        /// One turn of the parent's agent, which the user reads.
+        var clock = Date().addingTimeInterval(1)
+        func turn(_ work: () throws -> Void) throws {
+            runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: clock)
+            try work()
+            runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: clock.addingTimeInterval(0.5))
+            _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+            clock = clock.addingTimeInterval(1)
+        }
+        func read() { _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel)) }
+        try insertTask(fixture, "step-4-change", parent: parent.id, change: Self.merge)
+        let wake = Date().addingTimeInterval(14 * 86_400)
+
+        // The agent marks the wait and ends its turn. Until the user reads
+        // the turn it waits in Needs you, as any finished turn does.
+        try turn { _ = try fixture.coordinator.setWaiting(taskID: parent.id, reason: "email replies", wakeAt: wake) }
+        #expect(try item().stage == .needsYou(.agentFinished))
+        read()
+        let resting = try item()
+        #expect(resting.stage == .idle, "\(resting.stage)")
+        #expect(resting.finishedThroughChildren == false)
+        let agent = TaskBoardPresentation.agentName(resting)
+        let wakes = TaskBoardPresentation.wakePhrase(wake, now: Date())
+        #expect(TaskBoardPresentation.statusLine(resting) == "\(agent) · waiting for email replies · wakes \(wakes)")
+        #expect(resting.taskSpaceStatus == .waiting)
+        #expect(RemoteTaskBoardProjection.rowSummary(resting) == "Waiting for email replies · wakes \(wakes)")
+        #expect(TaskBoardPresentation.stageDescription(resting).why.hasPrefix("waiting for email replies; Toastty wakes the agent on "))
+
+        // A child's report starts another turn: the mark stays.
+        try turn {}
+        read()
+        #expect(fixture.record(parent.id)?.waiting?.on == "email replies")
+        #expect(try item().stage == .idle)
+
+        // A real question comes first. After the answer, the task returns to
+        // its wait.
+        try turn { _ = try fixture.coordinator.needsReply(taskID: parent.id, question: "Send the draft?") }
+        read()
+        #expect(try item().stage == .needsYou(.awaitingReply))
+        try turn {}
+        read()
+        #expect(fixture.record(parent.id)?.replyRequest == nil)
+        #expect(try item().stage == .idle)
+        #expect(try item().taskSpaceStatus == .waiting)
+
+        // The latest mark wins: ready for review ends the wait, and a new
+        // wait, here without a wake, ends a ready mark.
+        _ = try fixture.coordinator.readyForReview(taskID: parent.id)
+        #expect(fixture.record(parent.id)?.waiting == nil)
+        #expect(try item().stage == .needsYou(.readyForReview))
+        _ = try fixture.coordinator.setWaiting(taskID: parent.id, reason: "the vendor's\nanswer", wakeAt: nil)
+        #expect(fixture.record(parent.id)?.readyForReviewAt == nil)
+        #expect(TaskBoardPresentation.statusLine(try item()) == "\(agent) · waiting for the vendor's answer")
+        #expect(throws: TaskError("The wake time has passed. Give a time in the future, or leave the wake out.")) {
+            try fixture.coordinator.setWaiting(taskID: parent.id, reason: "later", wakeAt: Date().addingTimeInterval(-60))
+        }
+        #expect(throws: TaskError("Say what the task waits for.")) {
+            try fixture.coordinator.setWaiting(taskID: parent.id, reason: " \n ", wakeAt: nil)
+        }
+
+        // Without the mark, the parent finishes through its merged child.
+        _ = try fixture.coordinator.clearWaiting(taskID: parent.id)
+        let finished = try item()
+        #expect(finished.stage == .done, "\(finished.stage)")
+        #expect(finished.finishedThroughChildren)
+    }
+
     // MARK: - Tasks that coordinate child tasks
 
     /// A task as `task create` records it, here without a task space. A

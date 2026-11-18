@@ -10,7 +10,9 @@ in one of three states:
 
 - **Finished:** merged and shipped, Done, or archived by the user.
 - **Moving:** a task's agent works on it, or the task waits for its checks,
-  for another task, or for a release that a rule starts.
+  for another task, or for a release that a rule starts. A task with
+  `waitingOn` also moves: its agent waits on something outside Toastty, and
+  Toastty wakes it at `wakeAt`.
 - **Waiting on the user:** one question or decision, with the answer you
   suggest, in your daily list until the user answers it.
 
@@ -123,7 +125,8 @@ quiet.
      child tasks; and its last reply, whole in `task get`
      (`lastReply.truncated` is false), names no remaining work, no question
      and no child task that it will still create. Such a task is this item
-     only, not the first one. Leave out a task with a `watch`, `followup` or
+     only, not the first one. Leave out a task with `waitingOn`, which still
+     waits for work outside Toastty, and a task with a `watch`, `followup` or
      `told keep-open` line. Write an `asked done` line with the task's link.
      When the user answers that the task stays open, replace that line with
      a `told keep-open` line.

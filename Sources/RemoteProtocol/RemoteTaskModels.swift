@@ -136,6 +136,10 @@ public enum RemoteTaskMark: String, Codable, Equatable, Sendable {
     case done
     /// Setup or the move into a worktree is under way.
     case starting
+    /// The task rests in Idle while it waits on something outside Toastty,
+    /// such as an email reply or a date (`task waiting`): a still clock.
+    /// A phone that does not know it reads it as no mark.
+    case waiting
 }
 
 public enum RemoteTaskPullRequestState: String, Codable, Equatable, Sendable {

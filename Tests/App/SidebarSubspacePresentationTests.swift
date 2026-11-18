@@ -413,6 +413,16 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         for agent in [P.RowStatus.working, .needsApproval, .error] {
             XCTAssertEqual(P.rowStatus(sessionStatus: agent, isDone: true, stage: .toShip), agent)
         }
+        // A task that waits outside Toastty shows its clock while it rests
+        // in Idle. An unread turn, an agent that works or asks, and the
+        // stage's own marks still come first.
+        XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: false, stage: .idle, waitsOutside: true), .waiting)
+        XCTAssertEqual(P.rowStatus(sessionStatus: .ready, isDone: false, stage: .idle, waitsOutside: true), .ready)
+        XCTAssertEqual(P.rowStatus(sessionStatus: .working, isDone: false, stage: .running, waitsOutside: true), .working)
+        XCTAssertEqual(
+            P.rowStatus(sessionStatus: .idle, isDone: false, stage: .needsYou(.awaitingReply), waitsOutside: true), .question
+        )
+        XCTAssertEqual(P.rowStatus(sessionStatus: .idle, isDone: false, stage: .idle), .idle)
 
         // Finished rows leave a project card only while nothing in them runs
         // or waits for the user.

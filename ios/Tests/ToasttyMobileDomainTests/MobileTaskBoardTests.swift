@@ -284,6 +284,13 @@ final class MobileTaskBoardTests: XCTestCase {
         XCTAssertEqual(status(.idle, mark: nil, isDone: true), .idle)
         // A subspace without a task keeps the done mark rule.
         XCTAssertEqual(row(.ready, mark: nil, isDone: true, hasTask: false).status, .done)
+        // A task that waits outside Toastty shows its clock while its agent
+        // is quiet; an unread turn or an agent at work shows first.
+        XCTAssertEqual(status(.idle, mark: .waiting), .waiting)
+        XCTAssertEqual(status(nil, mark: .waiting), .waiting)
+        XCTAssertEqual(status(.ready, mark: .waiting), .ready)
+        XCTAssertEqual(status(.working, mark: .waiting), .working)
+        XCTAssertFalse(MobileSubspaceStatus.waiting.isActive)
 
         let question = row(.ready, mark: .question)
         XCTAssertEqual(question.summary, "Asks: which badge?")

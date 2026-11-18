@@ -107,7 +107,7 @@ and runs it when you approve.
 
 The rules below allow the Toastty commands that read, create, start, message
 and watch tasks (`task get`, `list`, `workspace-choices`, `watches`, `create`,
-`start-work`, `send`, `watch`, `unwatch`, `needs-reply` and
+`start-work`, `send`, `watch`, `unwatch`, `needs-reply`, `waiting` and
 `ready-for-review`), the coordinator's `status`, `send`, `reply`, `wake` and
 `watch`, and `query run`, which only reads. Every other Toastty command still asks,
 among them `task merge`, `task request-merge`, `task archive`, `task delete`
@@ -141,6 +141,7 @@ rules that you already have:
       "Bash(toastty task watch *)",
       "Bash(toastty task unwatch *)",
       "Bash(toastty task needs-reply *)",
+      "Bash(toastty task waiting *)",
       "Bash(toastty task ready-for-review *)",
       "Bash(toastty coordinator status *)",
       "Bash(toastty coordinator send *)",
@@ -216,7 +217,7 @@ socket, which Codex's `workspace-write` sandbox blocks.
 prefix_rule(
     pattern = ["toastty", "task", ["get", "list", "workspace-choices", "watches",
         "create", "start-work", "send", "watch", "unwatch", "needs-reply",
-        "ready-for-review"]],
+        "waiting", "ready-for-review"]],
     decision = "allow",
 )
 prefix_rule(
@@ -606,9 +607,11 @@ A task created from another task's agent records that task as its parent. A
 parent that has no pull request and no worktree of its own finishes when its
 child tasks finish: once each child is To ship, Done or Archived and at least
 one merged, the parent moves to To ship or Done after you read its last turn.
-You do not mark it done or archive it. A parent agent that still has work to
-do after the children merge keeps its task open with `task needs-reply` or
-`task ready-for-review`. See [Stages](#stages).
+You do not mark it done or archive it. A pending `task watch` on a child keeps
+the parent open. A parent agent that still has work to do after the children
+merge, and waits on something outside Toastty for it, keeps its task open with
+`task waiting`; see [Wait outside Toastty](#wait-outside-toastty). It uses
+`task needs-reply` only for a real question. See [Stages](#stages).
 
 ### Fork the conversation into new tasks
 
@@ -1497,8 +1500,9 @@ which you typed nothing since it began to wait. The groups:
 - **Closes by default:** a question with a default, such as the first-run
   question. It is on one list, which names the default. A finished task with
   no pull request is such an item: an answer, an investigation, or a parent
-  whose child tasks ended, when its last reply names no remaining work.
-  Unless you answer, the coordinator marks it Done at the next list. Say
+  whose child tasks ended, when its last reply names no remaining work and
+  it has no `task waiting` mark. Unless you answer, the coordinator marks it
+  Done at the next list. Say
   that it stays open, and it is not offered again. A rule in the Unblocking
   section of your policy can close such tasks sooner.
 - **Moving:** work that it follows after a merge, one line each.
@@ -2144,8 +2148,8 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | Needs you | its pull request is open and not a draft while no agent works on it, or its agent marked work without a pull request ready with `task ready-for-review` |
 | Running | its agent ended its turn to wait on another task through `task watch`, shown as "waiting for <task>" |
 | Needs you | its agent finished a turn you have not read yet: "Claude finished · waiting for you". Once you read the answer, or after a relaunch restores the agent, the task is Idle |
-| To ship or Done | it has no pull request and no worktree of its own, it started child tasks, and they all finished: each child is To ship, Done or Archived, and at least one merged. It is To ship while a child waits for a release, shown as "Child tasks merged · waiting for a release", and Done once every child that is not archived is Done. This also applies after its task space closed, unless it still waits for a reply or a review |
-| Idle | anything else: its agent is idle at its prompt, or no agent runs in its task space |
+| To ship or Done | it has no pull request and no worktree of its own, it started child tasks, and they all finished: each child is To ship, Done or Archived, and at least one merged. It is To ship while a child waits for a release, shown as "Child tasks merged · waiting for a release", and Done once every child that is not archived is Done. This also applies after its task space closed, unless it still waits for a reply or a review, or its agent marked it with `task waiting` |
+| Idle | anything else: its agent is idle at its prompt, or no agent runs in its task space. With a `task waiting` mark, it shows a clock and what it waits for: "Claude · waiting for email replies · wakes Dec 1"; see [Wait outside Toastty](#wait-outside-toastty) |
 
 When continuing a task depends on your decision about a proposed change or
 plan, the agent asks a clear question and runs `task needs-reply`, even if its
@@ -2154,6 +2158,45 @@ own can be marked ready for review once delivered, even if it suggests
 possible future work. An explanation or proposed fix does not finish
 requested or approved implementation. Once you approve the work, the agent
 continues within that scope instead of asking for the same approval again.
+
+### Wait outside Toastty
+
+A task can wait on something that Toastty cannot watch: an email reply, a
+person outside Toastty, or work dated weeks ahead. Its agent marks that before
+it ends its turn:
+
+```bash
+toastty task waiting --on "email replies; step 4 work on Dec 1" --wake 2026-12-01T17:00:00Z
+```
+
+- The task rests in Idle, not in Needs you. Its rows show a clock in place of
+  the quiet box, with what it waits for and when it wakes: "Claude · waiting
+  for email replies; step 4 work on Dec 1 · wakes Dec 1". The iPhone shows
+  the same. A finished turn that you have not read still lists the task in
+  Needs you until you read it, as for any task.
+- A task with child tasks does not finish through them while the mark is set.
+- The mark stays across turns, such as a child's report or your message. It
+  clears when the agent runs `task waiting --clear` or sets a new mark, when
+  the agent runs `task ready-for-review`, and when the task is marked Done or
+  archived. Setting the mark also ends an earlier ready mark.
+- `--wake` is optional. It takes an ISO 8601 time in the future. At that
+  time, Toastty types one line into the terminal of the task's own agent,
+  starting `[Toastty wake]`, that names the time and what the task waited
+  for. It types the line only while the agent's own report says that it
+  waits at its prompt, so never into a permission prompt; while no question
+  from `task needs-reply` waits for you; and while nobody typed in that
+  terminal since the agent's last turn ended, since that text can still be in
+  its prompt. Otherwise it tries again 30 seconds later. If Toastty was not
+  running at that time, it sends the line after the next launch, once the
+  agent runs. The mark clears when the turn that the line starts begins, so
+  the agent runs `task waiting` again if the task still waits.
+- A question still comes first: `task needs-reply` puts the task in Needs
+  you, and after your answer the task returns to its wait.
+- To wait for another Toastty task, use `task watch` instead; see
+  [Coordinate tasks](#coordinate-tasks).
+
+`task get` and `task list` report the mark as `waiting`, with `on`, `since`,
+`wakeAt` and `wokenAt`.
 
 A parent that finishes through its child tasks stores nothing: its stage
 follows theirs. A new child that is not finished moves it back to Idle, and its
@@ -2291,7 +2334,9 @@ folded under its parent, does not show a second time.
 Task space rows use square marks: green for a finished turn (filled while it
 is unread, when the Tasks view also shows the title in bold), amber ? for a
 question that waits for your reply, blue for a pull request waiting for review, violet ↑ for a merge waiting for a release, a green
-check for done, and a dashed box for a task that is starting.
+check for done, and a dashed box for a task that is starting. A gray clock
+marks an Idle task that waits on something outside Toastty; see
+[Wait outside Toastty](#wait-outside-toastty).
 When an agent splits its work, the new tasks draw under the task that started
 them, and that task shows how many of them have merged.
 

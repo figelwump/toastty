@@ -107,6 +107,7 @@ extension TaskCoordinator {
         try saveMergeState(taskID: taskID) {
             $0.archivedAt = $0.archivedAt ?? self.now()
             $0.mergeRequestedAt = nil
+            $0.waiting = nil
         }
         startTeardown(taskID: taskID, kind: .archive, options: options)
         ToasttyLog.info("Archiving a task", category: .tasks, metadata: [

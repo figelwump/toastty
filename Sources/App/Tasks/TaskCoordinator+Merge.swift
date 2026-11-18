@@ -228,10 +228,59 @@ extension TaskCoordinator {
         guard records.record(id: taskID) != nil else {
             throw TaskError("No task has ID \(taskID.uuidString).")
         }
-        // The latest mark wins: work marked ready no longer waits for a reply.
+        // The latest mark wins: work marked ready no longer waits for a
+        // reply, or on anything outside Toastty.
         try saveMergeState(taskID: taskID) {
             $0.readyForReviewAt = self.now()
             $0.replyRequest = nil
+            $0.waiting = nil
+        }
+        return records.record(id: taskID)!
+    }
+
+    /// `task.waiting`: the agent ends its turn to wait on something outside
+    /// Toastty, such as an email reply or a date. The task rests in Idle
+    /// with `reason`, and a parent does not finish through its children.
+    /// At `wakeAt`, Toastty sends the agent one line to go on. A new mark
+    /// replaces the old one, and, as the latest mark, ends a ready mark:
+    /// the work is not ready while it still waits.
+    @discardableResult
+    func setWaiting(taskID: UUID, reason: String, wakeAt: Date?) throws -> TaskRecord {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        guard record.archivedAt == nil else {
+            throw TaskError("Task \(record.title) is archived.")
+        }
+        // One line: the row shows it, and the wake's line repeats it.
+        let reason = reason.split(whereSeparator: \.isNewline).joined(separator: " ")
+        guard let reason = taskNonEmpty(reason) else {
+            throw TaskError("Say what the task waits for.")
+        }
+        let since = now()
+        if let wakeAt, wakeAt <= since {
+            throw TaskError("The wake time has passed. Give a time in the future, or leave the wake out.")
+        }
+        try saveMergeState(taskID: taskID) {
+            $0.waiting = TaskWaiting(on: reason, since: since, wakeAt: wakeAt)
+            $0.readyForReviewAt = nil
+        }
+        startWakeMonitorIfNeeded()
+        ToasttyLog.info("Marked a task as waiting", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "has_wake": String(wakeAt != nil),
+        ])
+        return records.record(id: taskID)!
+    }
+
+    /// `task.waiting --clear`: the task no longer waits.
+    @discardableResult
+    func clearWaiting(taskID: UUID) throws -> TaskRecord {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        if record.waiting != nil {
+            try saveMergeState(taskID: taskID) { $0.waiting = nil }
         }
         return records.record(id: taskID)!
     }
@@ -249,16 +298,24 @@ extension TaskCoordinator {
         return records.record(id: taskID)!
     }
 
-    /// Clears the reply request of the task whose task space is
-    /// `workspaceID` when the task's own agent, `sessionID`, starts new work:
-    /// the user answered, or the work went on without an answer. Another
-    /// agent in the task space does not answer the question.
-    func clearReplyRequest(taskSpaceWorkspaceID workspaceID: UUID, sessionID: String) {
-        guard let record = records.record(taskSpaceWorkspaceID: workspaceID), record.replyRequest != nil,
+    /// Clears the marks that end with the next turn of the task whose task
+    /// space is `workspaceID`, when the task's own agent, `sessionID`,
+    /// starts new work: a reply request, since the user answered or the
+    /// work went on without an answer; and a wait whose wake Toastty sent,
+    /// since this is the turn the wake started. Another agent in the task
+    /// space does neither.
+    func clearMarksForNewWork(taskSpaceWorkspaceID workspaceID: UUID, sessionID: String) {
+        guard let record = records.record(taskSpaceWorkspaceID: workspaceID),
+              record.replyRequest != nil || record.waiting?.wokenAt != nil,
               liveAgentSession(of: record)?.sessionID == sessionID else { return }
-        saveOrDefer(taskID: record.id) { $0.replyRequest = nil }
-        ToasttyLog.info("Cleared a task's reply request for new work", category: .tasks, metadata: [
+        saveOrDefer(taskID: record.id) {
+            $0.replyRequest = nil
+            if $0.waiting?.wokenAt != nil { $0.waiting = nil }
+        }
+        ToasttyLog.info("Cleared a task's turn marks for new work", category: .tasks, metadata: [
             "task_id": record.id.uuidString,
+            "reply_request": String(record.replyRequest != nil),
+            "woken_wait": String(record.waiting?.wokenAt != nil),
         ])
     }
 
@@ -273,7 +330,11 @@ extension TaskCoordinator {
             throw TaskError("Task \(record.title) is archived.")
         }
         let doneAt = now()
-        try saveMergeState(taskID: taskID) { $0.doneAt = doneAt }
+        // A finished task waits on nothing, and gets no wake.
+        try saveMergeState(taskID: taskID) {
+            $0.doneAt = doneAt
+            $0.waiting = nil
+        }
         if let taskSpaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[taskSpaceID] != nil {
             _ = store.send(.setWorkspaceDone(workspaceID: taskSpaceID, doneAt: doneAt))
         }

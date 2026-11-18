@@ -142,7 +142,7 @@ enum RemoteTaskBoardProjection {
             hasRecord: item.record != nil,
             title: item.title,
             group: group(item.stage.group),
-            mark: mark(item.stage),
+            mark: mark(item.stage, waitsOutside: item.record?.waiting != nil),
             statusLine: TaskBoardPresentation.statusLine(item),
             rowSummary: rowSummary(item),
             stageTitle: stage.stage,
@@ -281,15 +281,17 @@ enum RemoteTaskBoardProjection {
     }
 
     /// The part of the row status the stage decides, as
-    /// `SidebarSubspacePresentation.rowStatus(sessionStatus:isDone:stage:)`
-    /// reads it.
-    static func mark(_ stage: TaskStage) -> RemoteTaskMark? {
+    /// `SidebarSubspacePresentation.rowStatus(sessionStatus:isDone:stage:waitsOutside:)`
+    /// reads it. `waitsOutside` is the task's `task waiting` mark, which
+    /// gives an Idle task the clock.
+    static func mark(_ stage: TaskStage, waitsOutside: Bool = false) -> RemoteTaskMark? {
         switch stage {
         case .needsYou(.awaitingReply): .question
         case .needsYou(.review), .needsYou(.readyForReview): .review
         case .toShip: .toShip
         case .done, .archived: .done
         case .starting: .starting
+        case .idle where waitsOutside: .waiting
         case .running, .idle, .needsYou: nil
         }
     }
@@ -299,6 +301,10 @@ enum RemoteTaskBoardProjection {
     static func rowSummary(_ item: TaskBoardItem) -> String? {
         if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
         if case .needsYou(.startWaitsInTerminal) = item.stage { return TaskBoardPresentation.statusLine(item) }
+        // Under the clock, while the agent is quiet and its turn read.
+        if TaskBoardPresentation.restingWait(item) != nil, item.taskSpaceStatus != .ready {
+            return TaskBoardPresentation.waitingLine(item)
+        }
         return item.stage.isBeforeStart ? TaskBoardPresentation.statusLine(item) : nil
     }
 

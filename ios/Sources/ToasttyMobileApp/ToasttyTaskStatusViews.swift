@@ -510,6 +510,8 @@ struct ToasttyTaskMark: View {
             ToasttySubspaceRailMark(status: .toShip, freshness: freshness)
         case .done?:
             ToasttySubspaceRailMark(status: .done, freshness: freshness)
+        case .waiting?:
+            ToasttySubspaceRailMark(status: .waiting, freshness: freshness)
         case nil:
             if task.group == .needsYou {
                 RoundedRectangle(cornerRadius: 2)
@@ -661,7 +663,7 @@ struct ToasttyTaskDetailSheet: View {
         case .review?: return ToasttyDesignTokens.taskReview
         case .toShip?: return ToasttyDesignTokens.taskToShip
         case .done?: return ToasttyDesignTokens.green
-        case .starting?: return ToasttyDesignTokens.mutedText
+        case .starting?, .waiting?: return ToasttyDesignTokens.mutedText
         case nil: return task.group == .needsYou ? ToasttyDesignTokens.amberText : ToasttyDesignTokens.secondaryText
         }
     }

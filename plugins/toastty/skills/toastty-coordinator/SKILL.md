@@ -171,6 +171,7 @@ toastty task list --json | jq -c '
     silentMinutes: (.agentState.lastOutputAt | age),
     userTypedMinutesAgo: (.lastUserInputAt | age),
     question: .replyRequest.question,
+    waitingOn: .waiting.on, wakeAt: .waiting.wakeAt,
     pr: .pullRequestURL, draft: .pullRequest.isDraft, checks: .pullRequest.checks,
     checksPendingMinutes: (.pullRequest.checksPendingSince | age),
     mergeState: .pullRequest.mergeStateStatus, mergedAt,
@@ -186,6 +187,10 @@ the same fields with another tool.
   `idle` (at its prompt), `notRunning` or `error`.
 - `parentTaskID` is the task that created this one. A task's open child
   tasks are the open tasks with its ID there.
+- `waitingOn` is what the task waits for outside Toastty, such as an email
+  reply or a date, from its agent's `toastty task waiting` mark; `wakeAt` is
+  when Toastty wakes its agent. Such a task rests in `idle` on purpose and
+  needs nothing from you or the user.
 - `toastty task get --json <task-id>` gives one task with `lastReply.text`,
   the agent's latest message. Read it only for a task that needs a decision.
 

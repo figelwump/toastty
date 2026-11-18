@@ -262,9 +262,12 @@ task's Scratchpad.
 - **Work in child tasks:** do not mark this task ready for review or Done.
   Toastty finishes it when its children finish and at least one of them
   merged. A ready-for-review mark from before the newest child task does not
-  keep it open. If this task still owns work after they merge, use
-  `task needs-reply` or `task ready-for-review` after you create the child
-  tasks, to keep it open.
+  keep it open. A pending `task watch` on a child keeps it open. If this task
+  still owns work after its children merge, and that work waits on something
+  outside Toastty, such as an email reply or a date, mark it with
+  `task waiting` before you end the turn (see
+  [Wait for other tasks](#wait-for-other-tasks)). Use `task needs-reply`
+  only for a real question for the user: it puts the task in Needs you.
 - **Done:** mark a task Done only when the user explicitly accepts the result
   and asks to finish it. Answering the question, finishing a turn, or having
   no file changes is not acceptance. Use `task mark-done <task-id>`.
@@ -317,6 +320,17 @@ you started watching), `waiting` (it waits for an approval or an answer),
 Toastty can send that line only to a task's agent. In a session that is not
 a task, add `--wait --timeout <seconds>` instead: the command then waits for
 the condition and returns its result.
+
+To wait on something outside Toastty, such as an email reply, a person
+outside Toastty, or a date, run
+`toastty task waiting --on "<what the task waits for>"` and end your turn.
+The task then rests in Idle with a clock and that reason, not in Needs you,
+and a task with child tasks stays open. The mark stays across turns. For
+dated work, add `--wake <ISO time>`, such as `--wake 2026-12-01T17:00:00Z`:
+at that time Toastty sends you one line, starting `[Toastty wake`, and the
+mark clears when that turn starts. Run `task waiting` again before the turn
+ends if the task still waits. When the wait is over, run
+`toastty task waiting --clear`, or mark the work ready for review.
 
 To ask another task's agent something, run `toastty task send <task-id>
 "<question>"`, then watch it `--until idle` and read the answer with

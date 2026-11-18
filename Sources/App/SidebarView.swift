@@ -442,7 +442,8 @@ private struct SubspaceRailStatusIcon: View {
         case .working:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
         case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed,
-             .question where isDoneTogglePreviewed, .review where isDoneTogglePreviewed:
+             .question where isDoneTogglePreviewed, .review where isDoneTogglePreviewed,
+             .waiting where isDoneTogglePreviewed:
             RoundedRectangle(cornerRadius: 2)
                 .strokeBorder(ToastyTheme.sidebarSubspaceDoneMark, lineWidth: 1.2)
                 .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
@@ -451,6 +452,8 @@ private struct SubspaceRailStatusIcon: View {
             RoundedRectangle(cornerRadius: Self.cornerRadius)
                 .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
                 .frame(width: Self.markSize, height: Self.markSize)
+        case .waiting:
+            TaskWaitingGlyph()
         case .done:
             RoundedRectangle(cornerRadius: 2)
                 .fill(ToastyTheme.sidebarSubspaceDoneMarkBackground)
@@ -4867,18 +4870,20 @@ struct SidebarView: View {
                 statusUpdatedAt: TaskBoard.agentActivityAt(status)
             )
         }
+        let rowStatus = SidebarSubspacePresentation.rowStatus(
+            sessionStatus: SidebarSubspacePresentation.rowStatus(
+                sessionStatuses: sessions.map { session in
+                    (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
+                }
+            ),
+            isDone: workspace.doneAt != nil,
+            stage: boardItem?.stage,
+            waitsOutside: boardItem?.record?.waiting != nil
+        )
         return SidebarSubspacePresentation.Row(
             id: subspaceID,
             title: boardItem?.title ?? workspace.title,
-            status: SidebarSubspacePresentation.rowStatus(
-                sessionStatus: SidebarSubspacePresentation.rowStatus(
-                    sessionStatuses: sessions.map { session in
-                        (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
-                    }
-                ),
-                isDone: workspace.doneAt != nil,
-                stage: boardItem?.stage
-            ),
+            status: rowStatus,
             stage: boardItem?.stage,
             isTask: workspace.taskID != nil,
             isCleanupHeld: boardItem?.cleanupHeldUntil != nil,
@@ -4899,6 +4904,9 @@ struct SidebarView: View {
                 // So does a start that may wait in the terminal: the session
                 // itself only shows that it waits.
                 if case .needsYou(.startWaitsInTerminal) = item.stage { return TaskBoardPresentation.statusLine(item) }
+                // A task that waits outside Toastty says what for, under
+                // its clock.
+                if rowStatus == .waiting { return TaskBoardPresentation.waitingLine(item) }
                 // A merged task's held task space says when it closes.
                 return item.stage.isBeforeStart || item.cleanupHeldUntil != nil ? TaskBoardPresentation.statusLine(item) : nil
             } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
@@ -5692,7 +5700,7 @@ struct SidebarView: View {
         case .ready: return .ready
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .working, .idle, .question, .review, .toShip, .done: return nil
+        case .working, .idle, .question, .review, .toShip, .done, .waiting: return nil
         }
     }
 
@@ -5705,7 +5713,7 @@ struct SidebarView: View {
         switch status {
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .ready, .working, .idle, .question, .review, .toShip, .done: return nil
+        case .ready, .working, .idle, .question, .review, .toShip, .done, .waiting: return nil
         }
     }
 

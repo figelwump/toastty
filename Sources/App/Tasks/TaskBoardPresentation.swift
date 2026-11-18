@@ -25,7 +25,7 @@ enum TaskBoardPresentation {
 
     /// One line on what the task is doing or waiting for.
     static func statusLine(_ item: TaskBoardItem, now: Date = Date()) -> String {
-        let line = stageStatusLine(item)
+        let line = stageStatusLine(item, now: now)
         guard let until = item.cleanupHeldUntil else { return line }
         return "\(line) · \(heldCleanupPhrase(until: until, now: now))"
     }
@@ -60,7 +60,7 @@ enum TaskBoardPresentation {
         return "task space closes in \(Int((remaining / 3_600).rounded(.up))) h"
     }
 
-    private static func stageStatusLine(_ item: TaskBoardItem) -> String {
+    private static func stageStatusLine(_ item: TaskBoardItem, now: Date) -> String {
         switch item.stage {
         case .starting:
             switch item.record?.setup {
@@ -108,6 +108,10 @@ enum TaskBoardPresentation {
                 return "\(agentName(item)) · idle"
             }
         case .idle:
+            if restingWait(item) != nil {
+                let agent = item.agent == TaskAgentActivity.none ? "No agent running" : agentName(item)
+                return "\(agent) · \(waitingLine(item, now: now, capitalized: false))"
+            }
             return item.agent == TaskAgentActivity.none ? "No agent running" : "\(agentName(item)) · idle"
         case .toShip: return item.finishedThroughChildren ? "Child tasks merged · waiting for a release" : "Merged · waiting for a release"
         case .done: return item.record?.shippedAt != nil ? "Shipped" : "Done"
@@ -147,6 +151,43 @@ enum TaskBoardPresentation {
         return "\(agentName(item)) is waiting for your reply"
     }
 
+    /// The agent's `task waiting` mark while the task rests in Idle: the
+    /// task waits on something outside Toastty, and its rows show a clock.
+    /// A task whose agent works, or that needs the user, shows that
+    /// instead.
+    static func restingWait(_ item: TaskBoardItem) -> TaskWaiting? {
+        item.stage == .idle ? item.record?.waiting : nil
+    }
+
+    /// What a task that waits outside Toastty waits for, and when its wake
+    /// comes: "Waiting for email replies · wakes Dec 1". The sidebar row
+    /// shows it under the clock; the status line adds the agent's name.
+    static func waitingLine(_ item: TaskBoardItem, now: Date = Date(), capitalized: Bool = true) -> String {
+        guard let waiting = item.record?.waiting else { return "" }
+        let wake = waiting.hasPendingWake ? waiting.wakeAt.map { " · wakes \(wakePhrase($0, now: now))" } : nil
+        return "\(capitalized ? "Waiting" : "waiting") for \(waiting.on)\(wake ?? "")"
+    }
+
+    /// When a wait's wake comes, for a row: "9:00 AM" today, "Dec 1" this
+    /// year, "Feb 1, 2027" later.
+    static func wakePhrase(_ date: Date, now: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: now) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+
+    /// When a wait's wake comes, for the detail pane: "on Dec 1 at 9:00 AM".
+    static func wakeDetailPhrase(_ date: Date, now: Date) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if Calendar.current.isDate(date, inSameDayAs: now) { return "today at \(time)" }
+        return "on \(wakePhrase(date, now: now)) at \(time)"
+    }
+
     /// What the mark of a task the user asked to release right after its
     /// merge says, in tooltips and spoken labels.
     static let releaseAfterMergeLabel = "release right after merge"
@@ -164,12 +205,12 @@ enum TaskBoardPresentation {
 
     /// The stage's name and why, for the detail pane.
     static func stageDescription(_ item: TaskBoardItem, now: Date = Date()) -> (stage: String, why: String) {
-        let description = stageDescriptionWithoutHold(item)
+        let description = stageDescriptionWithoutHold(item, now: now)
         guard let until = item.cleanupHeldUntil else { return description }
         return (description.stage, "\(description.why), \(heldCleanupPhrase(until: until, now: now))")
     }
 
-    private static func stageDescriptionWithoutHold(_ item: TaskBoardItem) -> (stage: String, why: String) {
+    private static func stageDescriptionWithoutHold(_ item: TaskBoardItem, now: Date) -> (stage: String, why: String) {
         switch item.stage {
         case .starting: return ("Starting", statusLine(item))
         case .needsYou(let attention):
@@ -192,8 +233,14 @@ enum TaskBoardPresentation {
             case .agentFinished: return ("Needs you", "the agent finished its turn")
             case .cleanupStopped(let reason): return ("Needs you", reason)
             }
-        case .running: return ("Running", statusLine(item))
-        case .idle: return ("Idle", statusLine(item))
+        case .running: return ("Running", statusLine(item, now: now))
+        case .idle:
+            if let waiting = restingWait(item) {
+                let wake = waiting.hasPendingWake
+                    ? waiting.wakeAt.map { "; Toastty wakes the agent \(wakeDetailPhrase($0, now: now))" } : nil
+                return ("Idle", "waiting for \(waiting.on)\(wake ?? "")")
+            }
+            return ("Idle", statusLine(item, now: now))
         case .toShip:
             return ("To ship", item.finishedThroughChildren ? "child tasks merged, waiting for a release tag" : "merged, waiting for a release tag")
         case .done:
@@ -516,6 +563,19 @@ struct TaskQuestionGlyph: View {
     }
 }
 
+/// The clock mark of a task that rests in Idle while it waits on
+/// something outside Toastty (`task waiting`), in the sidebar and the
+/// Tasks view. It is still, unlike the spinner of work under way: the wait
+/// can last months.
+struct TaskWaitingGlyph: View {
+    var body: some View {
+        Image(systemName: "clock")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(ToastyTheme.sidebarSubspaceQuietMark)
+            .accessibilityHidden(true)
+    }
+}
+
 /// The small mark on the rows of a task the user asked to release right
 /// after it merges, in the To ship color. It is not a control: the request
 /// is set by asking an agent, or with `toastty task set-release`.
@@ -585,6 +645,8 @@ struct TaskStageMark: View {
                     readySquare
                 } else if item.agent == .working {
                     SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
+                } else if TaskBoardPresentation.restingWait(item) != nil {
+                    TaskWaitingGlyph()
                 } else {
                     RoundedRectangle(cornerRadius: 1.5)
                         .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
