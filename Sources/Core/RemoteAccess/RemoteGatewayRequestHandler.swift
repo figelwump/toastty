@@ -436,9 +436,9 @@ public final class RemoteGatewayRequestHandler {
         deviceID: UUID,
         request: RemoteCoordinatorAttachmentImageRequest
     ) async -> RemoteGatewayHTTPResponse {
-        let response: RemoteCoordinatorAttachmentImageResponse
+        let body: Data
         do {
-            response = try await coordinatorAttachmentImage(deviceID: deviceID, request: request)
+            body = try await coordinatorAttachmentImage(deviceID: deviceID, request: request)
         } catch {
             let reason = (error as? RemotePreviewError) ?? .missing
             ToasttyLog.info(
@@ -451,16 +451,18 @@ public final class RemoteGatewayRequestHandler {
                     "reason": reason.rawValue,
                 ]
             )
-            response = RemoteCoordinatorAttachmentImageResponse(error: reason)
+            body = (try? encoder.encode(RemoteCoordinatorAttachmentImageResponse(error: reason))) ?? Data()
         }
-        return .json(body: (try? encoder.encode(response)) ?? Data())
+        return .json(body: body)
     }
 
+    /// The answer's JSON, made off the main thread: a full-size image can
+    /// be megabytes of base64.
     @MainActor
     private func coordinatorAttachmentImage(
         deviceID: UUID,
         request: RemoteCoordinatorAttachmentImageRequest
-    ) async throws -> RemoteCoordinatorAttachmentImageResponse {
+    ) async throws -> Data {
         guard deviceCanRead(deviceID) else { throw RemotePreviewError.denied }
         guard let events = coordinatorConversationEventsHandler?(request.conversationID) else {
             // Another conversation, or no coordinator.
@@ -469,16 +471,18 @@ public final class RemoteGatewayRequestHandler {
         let path = try RemoteCoordinatorAttachmentImageReader.attachmentPath(
             in: events, eventID: request.eventID, index: request.attachmentIndex)
         let size = request.size
-        let work = Task.detached(priority: .utility) {
-            try RemoteCoordinatorAttachmentImageReader.image(atRecordedPath: path, size: size)
+        let work = Task.detached(priority: .utility) { () throws -> Data in
+            let image = try RemoteCoordinatorAttachmentImageReader.image(atRecordedPath: path, size: size)
+            try Task.checkCancellation()
+            return try ConversationEventCoding.makeEncoder().encode(image)
         }
-        let image = try await withTaskCancellationHandler {
+        let body = try await withTaskCancellationHandler {
             try await work.value
         } onCancel: {
             work.cancel()
         }
         guard Task.isCancelled == false, deviceCanRead(deviceID) else { throw RemotePreviewError.denied }
-        return image
+        return body
     }
 
     private func deviceCanRead(_ deviceID: UUID) -> Bool {

@@ -96,12 +96,22 @@ public struct ToasttyAttachmentImage: @unchecked Sendable {
 
 /// The images a chat loaded, kept while the transcript scrolls its rows
 /// out and back in, and the loads under way, so that two boxes, or a box
-/// and the full-screen view, never load the same image twice at once.
+/// and the full-screen view, never load the same image twice at once. A
+/// load stops when no view waits for it any more, such as a box that
+/// scrolled away before its image came.
 @MainActor
 public enum ToasttyAttachmentImageStore {
     private final class Box: NSObject {
         let image: ToasttyAttachmentImage
         init(_ image: ToasttyAttachmentImage) { self.image = image }
+    }
+
+    /// One load under way, and the views that wait for it.
+    @MainActor
+    private final class Load {
+        let id = UUID()
+        var task: Task<ToasttyAttachmentImage?, Never>?
+        var waiters: Set<UUID> = []
     }
 
     private static let thumbnails: NSCache<NSString, Box> = {
@@ -110,11 +120,12 @@ public enum ToasttyAttachmentImageStore {
         return cache
     }()
 
-    private static var loads: [String: Task<ToasttyAttachmentImage?, Never>] = [:]
+    private static var loads: [String: Load] = [:]
 
     /// The image, from the cache or loaded now; `nil` when it cannot be
-    /// read now. A thumbnail stays in the cache; a full-size image does
-    /// not, as it can take tens of megabytes.
+    /// read now, or when the calling view went away. A thumbnail stays in
+    /// the cache; a full-size image does not, as it can take tens of
+    /// megabytes.
     public static func image(
         for image: ToasttyAttachedImage,
         size: ToasttyAttachmentImageSource.Size,
@@ -123,18 +134,17 @@ public enum ToasttyAttachmentImageStore {
     ) async -> ToasttyAttachmentImage? {
         guard let key = source.cacheKey(image, size, maximumPixelSize) else { return nil }
         if let cached = thumbnails.object(forKey: key as NSString) { return cached.image }
-        if let load = loads[key] { return await load.value }
-        // The load does not end with the box that started it: another box
-        // can wait for it, and a box that scrolls back finds it cached.
-        let load = Task { @MainActor () -> ToasttyAttachmentImage? in
-            let work = Task.detached(priority: .utility) { await source.load(image, size, maximumPixelSize) }
-            let loaded = await work.value
-            loads[key] = nil
-            if let loaded, size == .thumbnail { thumbnails.setObject(Box(loaded), forKey: key as NSString) }
-            return loaded
+        let load = loads[key] ?? startLoad(key: key, image: image, size: size, maximumPixelSize: maximumPixelSize, source: source)
+        let waiter = UUID()
+        load.waiters.insert(waiter)
+        guard let task = load.task else { return nil }
+        let loaded = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor in leave(key, load, waiter) }
         }
-        loads[key] = load
-        return await load.value
+        leave(key, load, waiter)
+        return loaded
     }
 
     /// The thumbnail that a box has loaded, if it is still cached. The
@@ -147,29 +157,79 @@ public enum ToasttyAttachmentImageStore {
         guard let key = source.cacheKey(image, .thumbnail, maximumPixelSize) else { return nil }
         return thumbnails.object(forKey: key as NSString)?.image
     }
+
+    private static func startLoad(
+        key: String,
+        image: ToasttyAttachedImage,
+        size: ToasttyAttachmentImageSource.Size,
+        maximumPixelSize: Int,
+        source: ToasttyAttachmentImageSource
+    ) -> Load {
+        let load = Load()
+        let id = load.id
+        load.task = Task { @MainActor () -> ToasttyAttachmentImage? in
+            let work = Task.detached(priority: .utility) { await source.load(image, size, maximumPixelSize) }
+            let loaded = await withTaskCancellationHandler {
+                await work.value
+            } onCancel: {
+                work.cancel()
+            }
+            if loads[key]?.id == id { loads[key] = nil }
+            if let loaded, size == .thumbnail, Task.isCancelled == false {
+                thumbnails.setObject(Box(loaded), forKey: key as NSString)
+            }
+            return loaded
+        }
+        loads[key] = load
+        return load
+    }
+
+    /// A view stopped waiting. When it was the last one, the load stops.
+    private static func leave(_ key: String, _ load: Load, _ waiter: UUID) {
+        guard load.waiters.remove(waiter) != nil, load.waiters.isEmpty, loads[key]?.id == load.id else { return }
+        loads[key] = nil
+        load.task?.cancel()
+    }
 }
 
-/// Lets a few fetches run at a time; the others wait their turn.
+/// Lets a few fetches run at a time; the others wait their turn. A fetch
+/// whose caller is cancelled while it waits leaves the line and never runs.
 actor ToasttyAttachmentFetchGate {
     static let shared = ToasttyAttachmentFetchGate(limit: 3)
 
     private let limit: Int
     private var running = 0
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var waiting: [(id: UUID, turn: CheckedContinuation<Bool, Never>)] = []
 
     init(limit: Int) { self.limit = limit }
 
-    func run<Value: Sendable>(_ work: @Sendable () async -> Value) async -> Value {
-        if running >= limit {
-            await withCheckedContinuation { waiting.append($0) }
-        } else {
+    func run<Value: Sendable>(_ work: @Sendable () async -> Value?) async -> Value? {
+        if running < limit {
             running += 1
+        } else {
+            let id = UUID()
+            let admitted = await withTaskCancellationHandler {
+                await withCheckedContinuation { (turn: CheckedContinuation<Bool, Never>) in
+                    waiting.append((id, turn))
+                }
+            } onCancel: {
+                Task { await self.leaveLine(id) }
+            }
+            guard admitted else { return nil }
         }
-        defer {
-            // The slot passes to the next waiter, or frees.
-            if waiting.isEmpty { running -= 1 } else { waiting.removeFirst().resume() }
-        }
+        defer { passTurn() }
+        guard Task.isCancelled == false else { return nil }
         return await work()
+    }
+
+    private func leaveLine(_ id: UUID) {
+        guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
+        waiting.remove(at: index).turn.resume(returning: false)
+    }
+
+    /// The slot passes to the next in line, or frees.
+    private func passTurn() {
+        if waiting.isEmpty { running -= 1 } else { waiting.removeFirst().turn.resume(returning: true) }
     }
 }
 

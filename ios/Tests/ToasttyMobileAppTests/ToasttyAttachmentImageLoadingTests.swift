@@ -60,6 +60,40 @@ final class ToasttyAttachmentImageLoadingTests: XCTestCase {
         XCTAssertEqual(log.count, 5)
     }
 
+    /// Boxes that scroll away before their images come stop their loads: a
+    /// fetch under way is cancelled, and one still waiting for a turn never
+    /// reaches the Mac, so the boxes on screen are not kept waiting.
+    func testALoadStopsWhenNoViewWaitsForIt() async throws {
+        let fetches = FetchLog()
+        let source = ToasttyAttachmentImageSource.remote { image, _ in
+            await fetches.record("start \(image.index)")
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                await fetches.record("cancelled \(image.index)")
+                return nil
+            }
+            await fetches.record("done \(image.index)")
+            return nil
+        }
+        // Three fetches at a time: the fourth waits for a turn.
+        let images = (0..<4).map { Self.image(index: $0) }
+        let views = images.map { image in
+            Task { await ToasttyAttachmentImageStore.image(for: image, size: .thumbnail, maximumPixelSize: 600, source: source) }
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        var log = await fetches.entries
+        XCTAssertEqual(Set(log), ["start 0", "start 1", "start 2"])
+
+        views[0].cancel()
+        views[3].cancel()
+        for view in views { _ = await view.value }
+        log = await fetches.entries
+        XCTAssertTrue(log.contains("cancelled 0"), "\(log)")
+        XCTAssertFalse(log.contains("start 3"), "\(log)")
+        XCTAssertTrue(log.contains("done 1") && log.contains("done 2"), "\(log)")
+    }
+
     private static let conversationID = UUID()
 
     private static func image(index: Int) -> ToasttyAttachedImage {

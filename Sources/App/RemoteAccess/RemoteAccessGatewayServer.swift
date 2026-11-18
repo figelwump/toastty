@@ -592,6 +592,15 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                 }
                 connection.deviceID = deviceID
                 connection.authKind = .native
+                // A full-size image can take a phone on a slow link longer to
+                // download than the deadline for reading a request: it gets
+                // the time an attachment upload gets.
+                connection.requestTimeoutTask?.cancel()
+                let timeout = attachmentUploadTimeoutNanoseconds
+                connection.requestTimeoutTask = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: timeout) } catch { return }
+                    self?.drop(connectionID)
+                }
                 activePreviewCount += 1
                 connection.previewTask = Task { @MainActor [weak self] in
                     guard let self else { return }
