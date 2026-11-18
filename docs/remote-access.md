@@ -937,9 +937,8 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   A message the phone queues waits in the phone's own queue, which the Mac
   types before the coordinator's waiting messages. **Stop** holds the
   coordinator's waiting messages too.
-- **Not on the phone yet.** The coordinator's own queue (the Mac chat's
-  Queued and Paused rows with Edit, Remove, Steer now and Send next) stays on
-  the Mac.
+- **Not on the phone yet.** Edit and Steer now on the coordinator's own
+  waiting messages, and Send next on one paused row, stay on the Mac's chat.
 - **The tab's icon is Toasty's outline.** While another tab shows, its badge
   says what the coordinator waits for, from its session's status, as the
   Mac's coordinator row marks it: **New** for output you have not read, **!**
