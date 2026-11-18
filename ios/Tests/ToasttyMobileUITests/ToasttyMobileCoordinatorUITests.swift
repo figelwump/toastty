@@ -657,8 +657,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-queue-older-mac", of: app)
     }
 
-    /// At the largest text size each queue's actions stay reachable: the
-    /// one Resume on the first row and Remove on the last.
+    /// At the largest text size each queue's actions stay reachable and
+    /// whole, one above the other: the one Resume on the first row and
+    /// Remove on the last.
     func testWaitingMessagesStayReachableAtTheLargestTextSize() {
         let app = openWaitingMessages(
             arguments: ["-UIPreferredContentSizeCategoryName", UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue]
@@ -674,6 +675,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 5) { queuedRow("fixture-own-3", in: app).exists == false })
         XCTAssertTrue(scrollIntoUncoveredTranscript(resume, in: app))
         XCTAssertEqual(resume.label, "Resume all 4")
+        // The actions stand one above the other, so no title breaks.
+        let edit = queuedAction("edit", "fixture-chat-1", in: app)
+        XCTAssertGreaterThanOrEqual(edit.frame.minY, resume.frame.maxY - 1)
         attachScreenshot(named: "coordinator-queue-large-text-resume", of: app)
         resume.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { resume.exists == false })
@@ -699,10 +703,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
     /// the composer, where Jump to latest does not cover it, with drags long
     /// enough for the largest text size.
     private func scrollIntoUncoveredTranscript(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
-        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.34))
         let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
-        for _ in 0..<40 {
+        for _ in 0..<60 {
             let navigationBar = app.navigationBars.firstMatch
             let top = navigationBar.exists ? navigationBar.frame.maxY : app.frame.minY
             let bottom = composerTop(in: app)
@@ -711,6 +713,11 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
             if element.exists, frame.minY >= top, frame.maxY <= bottom, covered == false, element.isHittable {
                 return true
             }
+            // Long drags until the element shows, then short ones, so that a
+            // drag does not carry it past the room it fits in.
+            let onScreen = element.exists && frame.maxY > top && frame.minY < bottom
+            let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: onScreen ? 0.26 : 0.15))
+            let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: onScreen ? 0.31 : 0.34))
             // Toward the end of the chat while the element is in its lower
             // part or covered; toward its start otherwise.
             if element.exists, frame.maxY > top + (bottom - top) / 2 || covered {

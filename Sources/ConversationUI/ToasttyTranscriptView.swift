@@ -1953,6 +1953,16 @@ private struct ToasttySendTailItemView: View {
     let dismiss: () -> Void
     var queuedMessageAction: (ToasttyQueuedMessageAction) -> Void = { _ in }
     @Environment(\.toasttyTranscriptOptions) private var options
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// A waiting message's actions stand in a row. At an accessibility
+    /// text size a row breaks their titles in the middle of a word, so
+    /// they stand one above the other.
+    private var queuedActionsLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: 16))
+    }
 
     @ViewBuilder
     var body: some View {
@@ -1989,7 +1999,7 @@ private struct ToasttySendTailItemView: View {
                     .foregroundStyle(ConversationDesignTokens.mutedText)
             }
             if queued.canChange || queued.canSteer || queued.resumeTitle != nil {
-                HStack(spacing: 16) {
+                queuedActionsLayout {
                     if let resumeTitle = queued.resumeTitle {
                         queuedAction(resumeTitle, "resume") { queuedMessageAction(.resume) }
                     }
