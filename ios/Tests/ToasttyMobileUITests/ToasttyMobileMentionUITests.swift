@@ -145,6 +145,38 @@ final class ToasttyMobileMentionUITests: XCTestCase {
         XCTAssertTrue(list.waitForNonExistence(timeout: 5))
     }
 
+    /// The coordinator's waiting messages sit at the end of the chat, just
+    /// above the composer, where the list opens. The list draws over them,
+    /// and a tap on one of its rows reaches the list, not a waiting
+    /// message's buttons below it.
+    func testTheListDrawsOverTheCoordinatorsWaitingMessages() {
+        let app = openCoordinator("working", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE": "1"])
+        let waitingIDs = ["fixture-chat-1", "fixture-chat-2", "fixture-own-1", "fixture-own-2", "fixture-own-3"]
+        let waiting = waitingIDs.map { app.descendants(matching: .any)["toastty-mobile-send-queued-\($0)"] }
+        XCTAssertTrue(waiting[waiting.count - 1].waitForExistence(timeout: 5))
+        let input = composer(in: app)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        attachScreenshot(named: "mention-waiting-messages-keyboard", of: app)
+
+        input.typeText("@")
+        let list = mentionList(in: app)
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        let parser = row("Split the parser", in: app)
+        XCTAssertTrue(waitUntilHittable(parser))
+        let covered = waiting.filter { $0.exists && $0.frame.intersects(list.frame) }
+        XCTAssertFalse(covered.isEmpty, "The list opens over the waiting messages at the chat's end")
+        attachScreenshot(named: "mention-list-over-waiting-messages", of: app)
+
+        parser.tap()
+        XCTAssertTrue(list.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(waitForValue("mention, Split the parser ", of: input, allowsPrediction: true))
+        for (id, row) in zip(waitingIDs, waiting) {
+            XCTAssertTrue(row.exists, "\(id) is still waiting")
+        }
+        attachScreenshot(named: "mention-in-field-waiting-messages", of: app)
+    }
+
     /// A draft with a mention comes back with it, after another tab and
     /// after Edit on a waiting message.
     func testADraftWithAMentionComesBack() {
@@ -230,11 +262,16 @@ final class ToasttyMobileMentionUITests: XCTestCase {
 
     // MARK: - Support
 
-    private func openCoordinator(_ coordinator: String, textSize: String? = nil) -> XCUIApplication {
+    private func openCoordinator(
+        _ coordinator: String,
+        textSize: String? = nil,
+        environment: [String: String] = [:]
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_COORDINATOR"] = coordinator
+        app.launchEnvironment.merge(environment) { _, new in new }
         app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
         if let textSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", textSize] }
         app.launch()
