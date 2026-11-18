@@ -619,6 +619,72 @@ extension ToasttyComposerPresentationTests {
         XCTAssertEqual(items[3].text, "second")
     }
 
+    /// The coordinator's chat lists both of its queues in the order the
+    /// messages go once nothing is held: the conversation's, then the
+    /// coordinator's held messages, then its waiting ones. The one Resume
+    /// sits on the first held row, here the coordinator's, and counts every
+    /// held message. A coordinator row offers Remove, never Edit or Steer.
+    /// A queued message's own pending record does not show twice.
+    func testTheCoordinatorsTwoQueuesListAsOneWithOneResume() {
+        let state = SendReconciliationState(records: [
+            record("chat-1", text: "first", .pending(.queued(position: 1))),
+        ])
+        let control = RemoteConversationInputControl(
+            turnEpoch: turnEpoch, canQueue: true, canSteer: true, canInterrupt: true,
+            queuedMessages: [RemoteQueuedMessage(clientRequestID: "chat-1", text: "first", enqueuedAt: Date())]
+        )
+        let queue = RemoteCoordinatorQueue(
+            revision: "r", conversationID: RemoteConversationID(rawValue: UUID()), heldSetToken: "stop",
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "held-1", text: "Held one", fileNames: ["a.txt", "b.png"], isHeld: true),
+                RemoteCoordinatorQueueEntry(id: "held-2", text: "Yes.", quote: "Merge it?", quoteTime: "9:41", isHeld: true),
+                RemoteCoordinatorQueueEntry(id: "waiting-1", text: "Later"),
+            ]
+        )
+
+        let items = ToasttySendPresentationAdapter.makeItems(
+            from: state, inputControl: control, readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: true)
+        )
+
+        XCTAssertEqual(items.map(\.id), ["chat-1", "held-1", "held-2", "waiting-1"])
+        let queued = items.compactMap { item -> ToasttyQueuedSendPresentation? in
+            guard case .queued(let queued) = item.content else { return nil }
+            return queued
+        }
+        XCTAssertEqual(queued.map(\.position), [1, 2, 3, 4])
+        XCTAssertEqual(queued.map(\.isPaused), [false, true, true, false])
+        XCTAssertEqual(queued.map(\.resumeTitle), [nil, "Resume all 2", nil, nil])
+        XCTAssertEqual(queued.map(\.canEdit), [true, false, false, false])
+        XCTAssertEqual(queued.map(\.canSteer), [true, false, false, false])
+        XCTAssertEqual(queued.map(\.canChange), [true, true, true, true])
+        XCTAssertEqual(queued[1].attachmentCount, 2)
+        XCTAssertEqual(items[2].quote, ToasttyMessageQuote(text: "Merge it?", timeText: "9:41"))
+
+        // A Stop reaches the session list before the phone reads its token:
+        // no row offers Resume until then.
+        var beforeTheRead = queue
+        beforeTheRead.heldSetToken = nil
+        var heldControl = control
+        heldControl.isQueuePaused = true
+        let early = ToasttySendPresentationAdapter.makeItems(
+            from: state, inputControl: heldControl, readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: beforeTheRead, mayChange: true)
+        )
+        XCTAssertTrue(early.allSatisfy { item in
+            guard case .queued(let queued) = item.content else { return true }
+            return queued.resumeTitle == nil
+        })
+
+        // Without the coordinator's queue, each paused row keeps Send next.
+        var paused = control
+        paused.isQueuePaused = true
+        let single = ToasttySendPresentationAdapter.makeItems(from: state, inputControl: paused)
+        guard case .queued(let alone) = single.first?.content else { return XCTFail("The message waits") }
+        XCTAssertEqual(alone.resumeTitle, "Send next")
+        XCTAssertTrue(alone.canEdit)
+    }
+
     func testQueueRejectionReceiptsExplainTheQueue() {
         for reason in [RemoteMessageRejectionReason.queueFull, .notWorking, .turnMismatch, .steerUnavailable] {
             let receipt = ToasttySendReceiptPresentation(kind: .rejected(reason))

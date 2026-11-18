@@ -90,6 +90,7 @@ protocol LiveConnectionRuntime: Sendable {
         _ request: RemoteCoordinatorChatReadRequest
     ) async throws -> RemoteCoordinatorChatReadResponse?
     func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests?
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue?
 }
 
 extension LiveConnectionRuntime {
@@ -183,6 +184,10 @@ extension LiveConnectionRuntime {
     }
 
     func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        nil
+    }
+
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
         nil
     }
 
@@ -391,6 +396,10 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
         try await coordinator.coordinatorQuietDigests()
     }
+
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
+        try await coordinator.coordinatorQueue()
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -445,6 +454,10 @@ final class LiveSessionsController {
     /// answered. Its chat folds them.
     private var quietDigests = ToasttyCoordinatorQuietDigests()
     private var quietDigestsReadTask: Task<Void, Never>?
+    /// The coordinator's own queue, as the Mac last answered. Its chat
+    /// lists it with the conversation's queue.
+    private var coordinatorQueueReads = ToasttyMacRevisionedRead<RemoteCoordinatorQueue>()
+    private var coordinatorQueueReadTask: Task<Void, Never>?
 
     init(
         runtime: any LiveConnectionRuntime,
@@ -781,6 +794,7 @@ final class LiveSessionsController {
         )
         controller.consumeCoordinatorQuietDigests(quietDigests.keys)
         controller.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
+        controller.consumeCoordinatorQueue(coordinatorQueueReads.answer, mayChange: mayChangeCoordinatorQueue)
         activeConversationController = controller
         await controller.start()
 
@@ -821,6 +835,7 @@ final class LiveSessionsController {
             readPoint: homeController.snapshot.coordinatorChatRead
         )
         activeConversationController?.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
+        updateCoordinatorQueue()
         await runtime.updateDeviceScopes(scopes)
     }
 
@@ -858,6 +873,17 @@ final class LiveSessionsController {
     /// only read access.
     private var acceptsCoordinatorQuietDigests: Bool {
         coordinatorState.capabilities.contains(.coordinatorQuietDigests) && deviceScopes.contains(.read)
+    }
+
+    /// The Mac shares the coordinator's own queue. Showing its messages
+    /// needs only read access; letting them go or removing them needs send
+    /// access, which the Mac checks again.
+    private var acceptsCoordinatorQueue: Bool {
+        coordinatorState.capabilities.contains(.coordinatorQueue) && deviceScopes.contains(.read)
+    }
+
+    private var mayChangeCoordinatorQueue: Bool {
+        deviceScopes.contains(.send)
     }
 
     /// The Mac serves the images attached to the coordinator chat's
@@ -916,6 +942,9 @@ final class LiveSessionsController {
         quietDigestsReadTask?.cancel()
         quietDigestsReadTask = nil
         quietDigests = ToasttyCoordinatorQuietDigests()
+        coordinatorQueueReadTask?.cancel()
+        coordinatorQueueReadTask = nil
+        coordinatorQueueReads = ToasttyMacRevisionedRead()
         if let activeConversationID {
             conversationRuntimeOwners[RemoteConversationID(rawValue: activeConversationID)] = nil
         }
@@ -966,6 +995,7 @@ final class LiveSessionsController {
         )
         activeConversationController?.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         updateQuietDigests()
+        updateCoordinatorQueue()
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403
         // must not overwrite the paired authorization-denied explanation.
@@ -993,6 +1023,34 @@ final class LiveSessionsController {
             controller.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         }
         updateQuietDigests()
+        updateCoordinatorQueue()
+    }
+
+    /// Reads the coordinator's own queue when the snapshot names a revision
+    /// this phone does not have, and gives the open chat the queue it has.
+    /// A reconnect starts without one, so it reads again.
+    private func updateCoordinatorQueue() {
+        let revision = acceptsCoordinatorQueue ? homeController.snapshot.coordinatorQueueRevision : nil
+        if coordinatorQueueReads.consume(revision: revision) {
+            readCoordinatorQueue()
+        }
+        activeConversationController?.consumeCoordinatorQueue(
+            coordinatorQueueReads.answer, mayChange: mayChangeCoordinatorQueue
+        )
+    }
+
+    private func readCoordinatorQueue() {
+        coordinatorQueueReads.willRead()
+        coordinatorQueueReadTask = Task { @MainActor [weak self, runtime] in
+            let answer = try? await runtime.coordinatorQueue()
+            guard let self, Task.isCancelled == false else { return }
+            coordinatorQueueReadTask = nil
+            let readsAgain = coordinatorQueueReads.didRead(answer)
+            activeConversationController?.consumeCoordinatorQueue(
+                coordinatorQueueReads.answer, mayChange: mayChangeCoordinatorQueue
+            )
+            if readsAgain { readCoordinatorQueue() }
+        }
     }
 
     /// Reads the quiet turns' keys when the snapshot names a revision this

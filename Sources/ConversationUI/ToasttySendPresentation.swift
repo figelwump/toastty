@@ -85,6 +85,22 @@ public struct ToasttyQueuedSendPresentation: Equatable, Sendable {
     /// Says why the message waits when that is not the running turn, for
     /// example "Queued 1 · waits for the agent to start".
     public let waitingCaption: String?
+    /// "Edit" is offered on the row. By default whenever `canChange` is.
+    public let canEdit: Bool
+    /// The title of the row's button that lets the paused queue go, or
+    /// `nil` for none (`ResumeOffer`).
+    public let resumeTitle: String?
+
+    /// Which rows offer the button that lets a paused queue go.
+    public enum ResumeOffer: Equatable, Sendable {
+        /// "Send next" on each paused row that `canChange`: one queue.
+        case onEachPausedRow
+        /// This row offers it under this title: a list of two queues with
+        /// one Resume, on its first held row.
+        case titled(String)
+        /// This row does not offer it.
+        case none
+    }
 
     public init(
         position: Int,
@@ -92,7 +108,9 @@ public struct ToasttyQueuedSendPresentation: Equatable, Sendable {
         isPaused: Bool,
         canSteer: Bool,
         canChange: Bool = true,
-        waitingCaption: String? = nil
+        waitingCaption: String? = nil,
+        canEdit: Bool? = nil,
+        resume: ResumeOffer = .onEachPausedRow
     ) {
         self.position = position
         self.attachmentCount = attachmentCount
@@ -100,6 +118,12 @@ public struct ToasttyQueuedSendPresentation: Equatable, Sendable {
         self.canSteer = canSteer
         self.canChange = canChange
         self.waitingCaption = waitingCaption
+        self.canEdit = canEdit ?? canChange
+        switch resume {
+        case .onEachPausedRow: resumeTitle = isPaused && canChange ? "Send next" : nil
+        case .titled(let title): resumeTitle = title
+        case .none: resumeTitle = nil
+        }
     }
 }
 

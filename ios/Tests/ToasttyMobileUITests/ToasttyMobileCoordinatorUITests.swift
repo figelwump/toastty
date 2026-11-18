@@ -566,6 +566,191 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
             .waitForExistence(timeout: 5))
     }
 
+    // MARK: - The coordinator's waiting messages
+
+    private static let waitingRows = ["fixture-chat-1", "fixture-chat-2", "fixture-own-1", "fixture-own-2", "fixture-own-3"]
+
+    /// The messages that wait in both of the coordinator's queues show as
+    /// one list, in the order they go: this phone's queued messages, then
+    /// the Mac's quick entry with its files, a task's message under its
+    /// sender, and a reply under its quote. A row of the coordinator's own
+    /// queue offers Remove, not Edit.
+    func testTheCoordinatorsWaitingMessagesShowAsOneListInSendOrder() {
+        let app = openWaitingMessages()
+        for id in Self.waitingRows {
+            XCTAssertTrue(queuedRow(id, in: app).waitForExistence(timeout: 5), id)
+        }
+        let tops = Self.waitingRows.map { queuedRow($0, in: app).frame.minY }
+        XCTAssertEqual(tops, tops.sorted())
+        XCTAssertTrue(queuedRow("fixture-own-2", in: app).label.contains("From task iOS parity with the Mac coordinator UI"))
+        XCTAssertTrue(queuedRow("fixture-own-1", in: app).label.contains("notes.txt, sketch.png"))
+        XCTAssertTrue(quote(containing: "PR #431 is ready", in: app).exists)
+        XCTAssertTrue(queuedAction("edit", "fixture-chat-1", in: app).exists)
+        for id in ["fixture-own-1", "fixture-own-2", "fixture-own-3"] {
+            XCTAssertFalse(queuedAction("edit", id, in: app).exists, id)
+            XCTAssertFalse(queuedAction("steer", id, in: app).exists, id)
+            XCTAssertTrue(queuedAction("remove", id, in: app).exists, id)
+        }
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifierPrefix: "toastty-mobile-queued-resume-").firstMatch.exists)
+        attachScreenshot(named: "coordinator-queue-waiting", of: app)
+    }
+
+    /// A Stop holds the messages of both queues. One Resume, on the first
+    /// held row, names them all and lets them all go.
+    func testOneResumeLetsGoWhatAStopHoldsInBothQueues() {
+        let app = openWaitingMessages()
+        XCTAssertTrue(queuedRow("fixture-own-3", in: app).waitForExistence(timeout: 5))
+        app.buttons["toastty-mobile-composer-stop"].tap()
+        let resume = queuedAction("resume", "fixture-chat-1", in: app)
+        XCTAssertTrue(resume.waitForExistence(timeout: 5))
+        XCTAssertEqual(resume.label, "Resume all 5")
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifierPrefix: "toastty-mobile-queued-resume-").count, 1)
+        for id in Self.waitingRows {
+            XCTAssertTrue(queuedRow(id, in: app).label.hasSuffix("Paused in queue"), id)
+        }
+        attachScreenshot(named: "coordinator-queue-held", of: app)
+
+        XCTAssertTrue(scrollIntoView(resume, in: app))
+        resume.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { resume.exists == false })
+        for id in Self.waitingRows {
+            XCTAssertTrue(queuedRow(id, in: app).label.hasSuffix("Queued, sends after this turn"), id)
+        }
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifierPrefix: "toastty-mobile-queued-resume-").firstMatch.exists)
+        attachScreenshot(named: "coordinator-queue-resumed", of: app)
+    }
+
+    /// Remove takes a row out of whichever queue holds it, and the one
+    /// Resume counts what is left.
+    func testRemoveTakesARowOutOfEitherQueue() {
+        let app = openWaitingMessages()
+        XCTAssertTrue(queuedRow("fixture-own-3", in: app).waitForExistence(timeout: 5))
+        app.buttons["toastty-mobile-composer-stop"].tap()
+        XCTAssertTrue(queuedAction("resume", "fixture-chat-1", in: app).waitForExistence(timeout: 5))
+        for id in ["fixture-chat-2", "fixture-own-2"] {
+            let remove = queuedAction("remove", id, in: app)
+            XCTAssertTrue(scrollIntoView(remove, in: app), id)
+            remove.tap()
+            XCTAssertTrue(waitUntil(timeout: 5) { queuedRow(id, in: app).exists == false }, id)
+        }
+        for id in ["fixture-chat-1", "fixture-own-1", "fixture-own-3"] {
+            XCTAssertTrue(queuedRow(id, in: app).exists, id)
+        }
+        XCTAssertEqual(queuedAction("resume", "fixture-chat-1", in: app).label, "Resume all 3")
+        attachScreenshot(named: "coordinator-queue-removed", of: app)
+    }
+
+    /// An older Mac does not share the coordinator's own queue: the chat
+    /// lists this phone's queued messages as before, each with Send next
+    /// after a Stop.
+    func testAnOlderMacListsOnlyTheConversationsQueueAsBefore() {
+        let app = openWaitingMessages(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE": "unsupported"])
+        XCTAssertTrue(queuedRow("fixture-chat-2", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(queuedRow("fixture-own-1", in: app).exists)
+        app.buttons["toastty-mobile-composer-stop"].tap()
+        for id in ["fixture-chat-1", "fixture-chat-2"] {
+            let resume = queuedAction("resume", id, in: app)
+            XCTAssertTrue(resume.waitForExistence(timeout: 5), id)
+            XCTAssertEqual(resume.label, "Send next")
+            XCTAssertTrue(queuedAction("edit", id, in: app).exists, id)
+        }
+        attachScreenshot(named: "coordinator-queue-older-mac", of: app)
+    }
+
+    /// At the largest text size each queue's actions stay reachable and
+    /// whole, one above the other: the one Resume on the first row and
+    /// Remove on the last.
+    func testWaitingMessagesStayReachableAtTheLargestTextSize() {
+        let app = openWaitingMessages(
+            arguments: ["-UIPreferredContentSizeCategoryName", UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue]
+        )
+        XCTAssertTrue(queuedRow("fixture-own-3", in: app).waitForExistence(timeout: 5))
+        app.buttons["toastty-mobile-composer-stop"].tap()
+        let resume = queuedAction("resume", "fixture-chat-1", in: app)
+        XCTAssertTrue(resume.waitForExistence(timeout: 5))
+        let removeLast = queuedAction("remove", "fixture-own-3", in: app)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(removeLast, in: app))
+        attachScreenshot(named: "coordinator-queue-large-text-remove", of: app)
+        removeLast.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { queuedRow("fixture-own-3", in: app).exists == false })
+        XCTAssertTrue(scrollIntoUncoveredTranscript(resume, in: app))
+        XCTAssertEqual(resume.label, "Resume all 4")
+        // The actions stand one above the other, so no title breaks.
+        let edit = queuedAction("edit", "fixture-chat-1", in: app)
+        XCTAssertGreaterThanOrEqual(edit.frame.minY, resume.frame.maxY - 1)
+        attachScreenshot(named: "coordinator-queue-large-text-resume", of: app)
+        resume.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { resume.exists == false })
+    }
+
+    /// A message longer than the Mac sends comes shortened, ends with an
+    /// ellipsis, and keeps its Remove.
+    func testALongWaitingMessageComesShortenedWithItsRemove() {
+        let app = openWaitingMessages(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_LONG": "1"])
+        let row = queuedRow("fixture-own-1", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.contains("retry budget"))
+        XCTAssertTrue(row.label.contains("…"))
+        let remove = queuedAction("remove", "fixture-own-1", in: app)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(remove, in: app))
+        attachScreenshot(named: "coordinator-queue-long-message", of: app)
+        remove.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { row.exists == false })
+        XCTAssertTrue(queuedRow("fixture-own-2", in: app).exists)
+    }
+
+    /// Scrolls the chat until `element` shows whole between the header and
+    /// the composer, where Jump to latest does not cover it, with drags long
+    /// enough for the largest text size.
+    private func scrollIntoUncoveredTranscript(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
+        for _ in 0..<60 {
+            let navigationBar = app.navigationBars.firstMatch
+            let top = navigationBar.exists ? navigationBar.frame.maxY : app.frame.minY
+            let bottom = composerTop(in: app)
+            let frame = element.frame
+            let covered = jump.exists && jump.frame.intersects(frame)
+            if element.exists, frame.minY >= top, frame.maxY <= bottom, covered == false, element.isHittable {
+                return true
+            }
+            // Long drags until the element shows, then short ones, so that a
+            // drag does not carry it past the room it fits in.
+            let onScreen = element.exists && frame.maxY > top && frame.minY < bottom
+            let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: onScreen ? 0.26 : 0.15))
+            let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: onScreen ? 0.31 : 0.34))
+            // Toward the end of the chat while the element is in its lower
+            // part or covered; toward its start otherwise.
+            if element.exists, frame.maxY > top + (bottom - top) / 2 || covered {
+                lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0.3)
+            } else {
+                upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.3)
+            }
+        }
+        return false
+    }
+
+    private func openWaitingMessages(
+        environment: [String: String] = [:],
+        arguments: [String] = []
+    ) -> XCUIApplication {
+        var environment = environment
+        if environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE"] == nil {
+            environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE"] = "1"
+        }
+        let app = launch(coordinator: "working", environment: environment, arguments: arguments)
+        app.tabBars.buttons["Coordinator"].tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
+        return app
+    }
+
+    private func queuedRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["toastty-mobile-send-queued-\(id)"]
+    }
+
+    private func queuedAction(_ key: String, _ id: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons["toastty-mobile-queued-\(key)-\(id)"]
+    }
+
     // MARK: - The New line
 
     /// The coordinator's chat opens at the line above the first message
@@ -1114,13 +1299,17 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         return condition()
     }
 
-    private func launch(coordinator: String?, environment: [String: String] = [:]) -> XCUIApplication {
+    private func launch(
+        coordinator: String?,
+        environment: [String: String] = [:],
+        arguments: [String] = []
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
         if let coordinator { app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_COORDINATOR"] = coordinator }
         for (key, value) in environment { app.launchEnvironment[key] = value }
-        app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""]
+        app.launchArguments += ["-toastty-mobile-collapsed-project-cards", ""] + arguments
         app.launch()
         XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 10))
         return app
@@ -1244,5 +1433,11 @@ private extension XCUIElement {
     func waitForSelection(timeout: TimeInterval = 5) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: self)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+}
+
+private extension XCUIElementQuery {
+    func matching(identifierPrefix prefix: String) -> XCUIElementQuery {
+        matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix))
     }
 }

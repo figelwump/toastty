@@ -62,6 +62,12 @@ extension MobileHomeSnapshot {
         coordinator?.coordinatorQuietDigestsRevision
     }
 
+    /// The revision of the coordinator's own queue, as the Mac last sent
+    /// it. `nil` from an older Mac.
+    public var coordinatorQueueRevision: String? {
+        coordinator?.coordinatorQueueRevision
+    }
+
     /// The coordinator's mark, or `nil` when the phone has no Coordinator
     /// tab.
     public var coordinatorMark: MobileCoordinatorMark? {

@@ -418,6 +418,11 @@ public final class RemoteGatewayRequestHandler {
     /// Invoked on the main thread, as the chat read handler is.
     public var coordinatorQuietDigestsHandler: (() -> RemoteCoordinatorQuietDigests)?
 
+    /// The coordinator's own queue now. Installing it is what advertises
+    /// `RemoteGatewayCapability.coordinatorQueue`. Invoked on the main
+    /// thread, as the chat read handler is.
+    public var coordinatorQueueHandler: (() -> RemoteCoordinatorQueue)?
+
     /// The events of the coordinator's conversation, as this Mac has them,
     /// when `conversationID` names it, and `nil` for any other
     /// conversation. A device's request for an attached image is checked
@@ -990,6 +995,13 @@ public final class RemoteGatewayRequestHandler {
             // Without a coordinator, no digest is quiet.
             let digests = coordinatorQuietDigestsHandler?() ?? RemoteCoordinatorQuietDigests(keys: [])
             return .respond(.json(body: (try? encoder.encode(digests)) ?? Data()))
+        case .coordinatorQueue:
+            guard let coordinatorQueueHandler else {
+                return .respond(errorResponse(
+                    status: 404, reason: "Not Found", code: "unsupported", message: "No coordinator queue"
+                ))
+            }
+            return .respond(.json(body: (try? encoder.encode(coordinatorQueueHandler())) ?? Data()))
         case .coordinatorAttachmentImage:
             return handleCoordinatorAttachmentImage(request, device: authenticated)
         case .workspaceDone:
@@ -1089,6 +1101,7 @@ public final class RemoteGatewayRequestHandler {
         if coordinatorSendHandler != nil { response.capabilities.append(.coordinatorSend) }
         if coordinatorChatReadHandler != nil { response.capabilities.append(.coordinatorChatRead) }
         if coordinatorQuietDigestsHandler != nil { response.capabilities.append(.coordinatorQuietDigests) }
+        if coordinatorQueueHandler != nil { response.capabilities.append(.coordinatorQueue) }
         if coordinatorConversationEventsHandler != nil { response.capabilities.append(.coordinatorAttachmentImages) }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))

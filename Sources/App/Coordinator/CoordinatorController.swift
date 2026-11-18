@@ -256,6 +256,12 @@ final class CoordinatorController: ObservableObject {
     /// Entries that the user's Stop set aside. They are not typed, and do
     /// not hold later entries back, until `resumeQueue`.
     @Published private(set) var pausedEntries: [QueuedEntry] = []
+    /// Names the newest Stop of the coordinator's turn, from any app, or
+    /// the set-aside entries that a relaunch restored. Each changes it. A
+    /// paired device's Resume presents the token it read, so a Resume that
+    /// comes late cannot let go what a later Stop holds
+    /// (`RemoteAccessService`). `nil` before the first.
+    @Published private(set) var heldSetToken: String?
     /// Each message as it is typed, for a view that shows it until the
     /// agent's conversation does.
     let typedEntries = PassthroughSubject<TypedEntry, Never>()
@@ -1493,6 +1499,9 @@ final class CoordinatorController: ObservableObject {
     /// conversation calls this before the stopped turn's end can open the
     /// prompt.
     private func setWaitingEntriesAside() {
+        // Also a Stop that sets none of these aside holds the messages of
+        // the conversation's own queue: it names them.
+        heldSetToken = UUID().uuidString
         guard queuedEntries.isEmpty == false else { return }
         ToasttyLog.info("Set the coordinator's waiting messages aside after a stop", category: .tasks, metadata: [
             "set_aside": String(queuedEntries.count),
@@ -2010,6 +2019,7 @@ final class CoordinatorController: ObservableObject {
         queueWorkspaceID = workspaceID
         queuedEntries = queued
         pausedEntries = paused
+        if paused.isEmpty == false { heldSetToken = UUID().uuidString }
         queuedCount = queued.count + paused.count
         savedQueue = snapshot
         saveQueue()

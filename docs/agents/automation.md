@@ -548,6 +548,25 @@ transcripts under the run's artifacts directory. A build that can capture its
 window outside automation mode also writes PNG frames; a normal build cannot,
 and the check records that and continues.
 
+`--waiting-messages` runs only the coordinator's waiting messages on a paired
+device, with Remote Access on from the start:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-chat-check.py --gui-session --waiting-messages'
+```
+
+While the coordinator works, the device queues a chat message, and the Mac's
+chat, the device's quick entry and `toastty coordinator send` each add a
+message to the coordinator's own queue. A Stop from the device holds both
+queues. The check removes the `coordinator send` message from the device,
+resumes with a stale token and then the Stop's token, and proves from Claude's
+transcript that the rest are typed one per turn, the device's chat message
+first. After a second Stop, the device's Resume follows Send next in the Mac's
+chat by milliseconds, with the same token, and each message is typed once. A third Stop holds a Mac chat message
+over a relaunch of the app: it waits under a new token and goes on Resume. It
+writes `remote-coordinator-chat-check-waiting-messages.json` and the app log.
+
 ### Coordinator composer attachments
 
 ```bash

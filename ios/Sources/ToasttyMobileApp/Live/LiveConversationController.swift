@@ -91,6 +91,13 @@ final class LiveConversationController {
     /// The Mac serves the images attached to the coordinator chat's
     /// messages: the chat shows them as thumbnails rather than names.
     private(set) var showsCoordinatorAttachedImages = false
+    /// The coordinator's own queue, from a Mac that shares it, for this
+    /// conversation. `nil` in other chats and with an older Mac: the chat
+    /// then lists only the conversation's own queue, as before.
+    private(set) var coordinatorQueue: RemoteCoordinatorQueue?
+    /// This phone may let the coordinator's waiting messages go or remove
+    /// them: it has send access.
+    private var mayChangeCoordinatorQueue = false
     /// The app is active. The chat is on screen while this controller
     /// exists: it closes when another screen covers it.
     private var isSceneActive = true
@@ -264,13 +271,15 @@ final class LiveConversationController {
         return outcome
     }
 
-    /// Asks the Mac to drop one queued message. True only when the Mac
-    /// confirmed it was still queued; a message already typed or gone
-    /// returns false so the caller does not act on stale text.
+    /// Asks the Mac to drop one queued message, from whichever of the
+    /// coordinator's queues holds it. True only when the Mac confirmed it
+    /// was still queued; a message already typed or gone returns false so
+    /// the caller does not act on stale text.
     func removeQueuedMessage(_ clientRequestID: String) async -> Bool {
+        let inCoordinatorQueue = coordinatorQueue?.entries.contains { $0.id == clientRequestID } == true
         let request = RemoteConversationQueueUpdateRequest(
             conversationID: RemoteConversationID(rawValue: conversationID),
-            action: .remove,
+            action: inCoordinatorQueue ? .coordinatorRemove : .remove,
             clientRequestID: clientRequestID
         )
         guard let response = try? await updateQueueAction(request) else { return false }
@@ -283,11 +292,22 @@ final class LiveConversationController {
         inputControl?.queuedMessages.first { $0.clientRequestID == clientRequestID }?.text
     }
 
+    /// Lets the held messages go. With a Mac that shares the coordinator's
+    /// own queue, one Resume lets go everything that the Stop holds, in both
+    /// of the coordinator's queues, by the Stop's token; before this phone
+    /// has the token, nothing is sent, so the Resume never lets go only the
+    /// conversation's queue.
     func resumeQueue() async {
-        let request = RemoteConversationQueueUpdateRequest(
-            conversationID: RemoteConversationID(rawValue: conversationID),
-            action: .resume
-        )
+        let conversation = RemoteConversationID(rawValue: conversationID)
+        let request: RemoteConversationQueueUpdateRequest
+        if let coordinatorQueue {
+            guard let token = coordinatorQueue.heldSetToken else { return }
+            request = RemoteConversationQueueUpdateRequest(
+                conversationID: conversation, action: .coordinatorResume, heldSetToken: token
+            )
+        } else {
+            request = RemoteConversationQueueUpdateRequest(conversationID: conversation, action: .resume)
+        }
         _ = try? await updateQueueAction(request)
     }
 
@@ -370,6 +390,19 @@ final class LiveConversationController {
         guard isCoordinatorChat else { return }
         change = .append
         refreshTranscriptPresentation(contentChanged: true)
+    }
+
+    /// The coordinator's own queue, as the Mac last answered, and whether
+    /// this phone may change it. A queue for another conversation, from an
+    /// earlier agent of the coordinator, is not this chat's.
+    func consumeCoordinatorQueue(_ queue: RemoteCoordinatorQueue?, mayChange: Bool) {
+        let queue = queue.flatMap { $0.conversationID?.rawValue == conversationID ? $0 : nil }
+        guard coordinatorQueue != queue || mayChangeCoordinatorQueue != mayChange else { return }
+        coordinatorQueue = queue
+        mayChangeCoordinatorQueue = mayChange
+        guard isCoordinatorChat else { return }
+        change = .metadataOnly
+        refreshTranscriptPresentation()
     }
 
     /// Whether the Mac serves the images attached to the coordinator
@@ -694,14 +727,27 @@ final class LiveConversationController {
         }
     }
 
+    /// The messages this phone sent that have no row yet, then the
+    /// messages that wait on the Mac, in the order they are typed. In the
+    /// coordinator's chat that is both of the coordinator's queues; an
+    /// entry whose echo is a row already is left out.
+    private var sendItemsForPresentation: [ToasttySendPresentationItem] {
+        var shownQueue = isCoordinatorChat ? self.coordinatorQueue : nil
+        shownQueue?.entries.removeAll { canonicalRequestIDs.contains($0.id) }
+        return ToasttySendPresentationAdapter.makeItems(
+            from: sendReconciliationForPresentation,
+            inputControl: inputControl,
+            readsCoordinatorMessages: isCoordinatorChat,
+            coordinatorQueue: shownQueue.map {
+                .init(queue: $0, mayChange: mayChangeCoordinatorQueue && inputControl?.canQueue == true)
+            }
+        )
+    }
+
     private func refreshTranscriptPresentation(contentChanged: Bool = false) {
         guard contentChanged else {
             transcriptPresentation = transcriptPresentation.updatingMetadata(
-                sendItems: ToasttySendPresentationAdapter.makeItems(
-                    from: sendReconciliationForPresentation,
-                    inputControl: inputControl,
-                    readsCoordinatorMessages: isCoordinatorChat
-                ),
+                sendItems: sendItemsForPresentation,
                 phase: transcriptPhase,
                 revision: transcriptRevision,
                 historyTruncated: historyTruncated,
@@ -719,11 +765,7 @@ final class LiveConversationController {
             phase: transcriptPhase,
             revision: transcriptRevision,
             historyTruncated: historyTruncated,
-            sendItems: ToasttySendPresentationAdapter.makeItems(
-                from: sendReconciliationForPresentation,
-                inputControl: inputControl,
-                readsCoordinatorMessages: isCoordinatorChat
-            ),
+            sendItems: sendItemsForPresentation,
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,
             prependAnchorID: prependAnchorID,

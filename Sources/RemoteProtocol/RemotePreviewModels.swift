@@ -44,6 +44,11 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
     /// of the quiet digests now. A device reads the keys again when it
     /// changes.
     public var coordinatorQuietDigestsRevision: String?
+    /// On the coordinator's workspace, while the Mac advertises
+    /// `coordinatorQueue`: `RemoteCoordinatorQueue.revision` of the
+    /// coordinator's own queue now. A native device reads the queue again
+    /// when it changes.
+    public var coordinatorQueueRevision: String?
     public init(
         id: UUID, title: String, panels: [RemoteWorkspacePanel],
         annotations: [RemoteWorkspaceAnnotation] = [],
@@ -55,7 +60,8 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         isCoordinator: Bool = false,
         coordinatorConversationID: RemoteConversationID? = nil,
         coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil,
-        coordinatorQuietDigestsRevision: String? = nil
+        coordinatorQuietDigestsRevision: String? = nil,
+        coordinatorQueueRevision: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -70,6 +76,7 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         self.coordinatorConversationID = coordinatorConversationID
         self.coordinatorChatRead = coordinatorChatRead
         self.coordinatorQuietDigestsRevision = coordinatorQuietDigestsRevision
+        self.coordinatorQueueRevision = coordinatorQueueRevision
     }
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -86,11 +93,12 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         try container.encodeIfPresent(coordinatorConversationID, forKey: .coordinatorConversationID)
         try container.encodeIfPresent(coordinatorChatRead, forKey: .coordinatorChatRead)
         try container.encodeIfPresent(coordinatorQuietDigestsRevision, forKey: .coordinatorQuietDigestsRevision)
+        try container.encodeIfPresent(coordinatorQueueRevision, forKey: .coordinatorQueueRevision)
     }
     private enum CodingKeys: String, CodingKey {
         case id, title, panels, annotations
         case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt, acceptsDoneMark, isCoordinator
-        case coordinatorConversationID, coordinatorChatRead, coordinatorQuietDigestsRevision
+        case coordinatorConversationID, coordinatorChatRead, coordinatorQuietDigestsRevision, coordinatorQueueRevision
     }
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -113,6 +121,8 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
             RemoteCoordinatorChatReadPoint.self, forKey: .coordinatorChatRead)
         coordinatorQuietDigestsRevision = try? container.decodeIfPresent(
             String.self, forKey: .coordinatorQuietDigestsRevision)
+        coordinatorQueueRevision = try? container.decodeIfPresent(
+            String.self, forKey: .coordinatorQueueRevision)
     }
 }
 
