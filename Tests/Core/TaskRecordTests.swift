@@ -306,6 +306,10 @@ struct TaskRecordTests {
         record.operation.worktree = .init(path: "/w", branch: "fix/fix-it", checkoutRoot: "/repo", added: false)
         record.operation.worktreeSession = .init(workspaceID: UUID(), panelID: UUID(), sessionID: "s2", forked: true)
         record.operation.sourceOutcome = .kept(reason: "typed")
+        // A wait outside Toastty, with its wake to come, survives a relaunch.
+        record.waiting = TaskWaiting(
+            on: "email replies", since: Date(timeIntervalSince1970: 2_000), wakeAt: Date(timeIntervalSince1970: 3_000)
+        )
         #expect(try JSONDecoder().decode(TaskRecord.self, from: JSONEncoder().encode(record)) == record)
         // Reserved but not added yet: not the task's worktree.
         #expect(record.worktree == nil)
@@ -321,6 +325,7 @@ struct TaskRecordTests {
         let decoded = try JSONDecoder().decode(TaskRecord.self, from: JSONSerialization.data(withJSONObject: old))
         #expect(decoded.startWork == nil)
         #expect(decoded.operation == TaskOperation())
+        #expect(decoded.waiting == nil)
     }
 
     @Test
