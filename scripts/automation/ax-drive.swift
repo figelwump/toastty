@@ -20,6 +20,8 @@
 //                                 Click the element whose label starts with `prefix` and whose top
 //                                 is nearest below `y`: the button under the message at `y`.
 //   focus <identifier>            Click the element, so it takes the keyboard.
+//   press <identifier>            Perform the element's press action through Accessibility, with no
+//                                 mouse event: a button that a click does not reach.
 //   type <text>                   Type the text with key events.
 //   key <return|shift-return|escape|up|down|tab|delete|cmd-a|cmd-c|cmd-z|cmd-period|cmd-shift-p|cmd-v|cmd-shift-g>
 //   click-at <x> <y>              Click the point without bringing the app forward, as in an open menu.
@@ -392,6 +394,14 @@ case "frame":
     print("\(Int(rect.minX)) \(Int(rect.minY)) \(Int(rect.width)) \(Int(rect.height))")
 case "texts":
     print(texts(element(identifier: argument)).joined(separator: "\n"))
+case "press":
+    let target = element(identifier: argument)
+    let result = AXUIElementPerformAction(target, kAXPressAction as CFString)
+    guard result == .success else {
+        print("PRESS FAILED \(argument): \(result.rawValue)")
+        exit(3)
+    }
+    print("pressed \(argument)")
 case "click", "focus":
     guard let rect = frame(element(identifier: argument)) else { exit(2) }
     activate()

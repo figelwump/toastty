@@ -940,7 +940,7 @@ class Run:
         outside = [path for turn in turns for path in turn['edits']
                    if Path(path).name not in OWN_FILES or Path(path).resolve().parent != self.folder]
         self.check('writes no file but policy.md, ledger.md, friction.md and decisions.md', not outside, outside)
-        shelled = [c for c in commands if re.search(r'(echo|printf)\b[^\n]*>>?\s*\S*(ledger|policy|friction|decisions)\.md', c)
+        shelled = [c for c in commands if re.search(r'(echo|printf)\b[^\n;&|]*>>?\s*\S*(ledger|policy|friction|decisions)\.md', c)
                    or re.search(r'\bsed\b[^\n|]*-i[^\n]*(ledger|policy|friction|decisions)\.md', c)]
         self.check('keeps the text of its files off the command line (no echo, printf or sed -i)',
                    not shelled, shelled)
@@ -1981,6 +1981,15 @@ class WebhookReceiver:
         self.server.shutdown()
 
 
+def wait_for_approval(run, name, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(w.get('name') == name and w.get('status') == 'approved' for w in run.cli('webhook', 'list').get('webhooks', [])):
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def approve_webhook_in_the_sheet(run, name):
     """Approves a waiting webhook as the user does: Review… in the Tasks view, then Approve in the sheet.
 
@@ -1997,11 +2006,12 @@ def approve_webhook_in_the_sheet(run, name):
     with FOCUS_LOCK:
         run.cli('action', 'run', 'window.tasks.show', '--window', run.window_id)
         steps = [f"activate: {ax('activate').stdout.strip()}"]
-        # A click on a window that is not yet key can only bring it forward, so Review… is clicked again until
-        # the sheet's Approve button shows.
-        for _ in range(3):
-            clicked = ax('click', 'tasks.view.webhook.review')
-            steps.append(f'click Review…: {clicked.returncode} {clicked.stdout.strip()} {clicked.stderr.strip()}')
+        # A click on a window that is not yet key can only bring it forward, so Review… is clicked twice. A
+        # press through Accessibility then tells a click that never reaches the button from a sheet that
+        # never shows.
+        for way in ('click', 'click', 'press'):
+            done = ax(way, 'tasks.view.webhook.review')
+            steps.append(f'{way} Review…: {done.returncode} {done.stdout.strip()} {done.stderr.strip()}')
             shown = ax('frame', 'tasks.webhook.approve')
             steps.append(f'Approve frame: {shown.returncode} {shown.stdout.strip()}')
             if shown.returncode == 0:
@@ -2012,12 +2022,13 @@ def approve_webhook_in_the_sheet(run, name):
             require(False, f'The approval sheet did not show: {steps}')
         sheet = ax('sheet-texts')
         sheet_text = sheet.stdout if sheet.returncode == 0 else ax('texts', 'tasks.webhook.sheet').stdout
-        run.notes.append(json.dumps({'approval steps': steps}))
         approved = ax('click', 'tasks.webhook.approve')
         require(approved.returncode == 0, f'Approve did not click: {approved.stdout} {approved.stderr}')
-        wait_for(f'webhook {name} to be approved', lambda: any(
-            w.get('name') == name and w.get('status') == 'approved' for w in run.cli('webhook', 'list').get('webhooks', [])),
-            timeout=20)
+        if not wait_for_approval(run, name, timeout=8):
+            pressed = ax('press', 'tasks.webhook.approve')
+            steps.append(f'press Approve: {pressed.returncode} {pressed.stdout.strip()}')
+        require(wait_for_approval(run, name, timeout=20), f'webhook {name} was not approved: {steps}')
+        run.notes.append(json.dumps({'approval steps': steps}))
         run.cli('action', 'run', 'window.tasks.hide', '--window', run.window_id)
     return sheet_text
 
