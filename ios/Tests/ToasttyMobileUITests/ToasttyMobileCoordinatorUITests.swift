@@ -140,9 +140,11 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(entries.allSatisfy { $0.exists })
         let tops = entries.map { $0.frame.minY }
         XCTAssertEqual(tops, tops.sorted())
-        // A native menu item can carry its subtitle in its own label.
-        XCTAssertTrue(app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "Your rules for the coordinator")).firstMatch.exists)
+        // iOS 27 reads a native menu item's subtitle as part of its label;
+        // iOS 26 reports it to no element, so there the screenshot shows it.
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 {
+            XCTAssertTrue(entries[0].label.contains("Your rules for the coordinator"), entries[0].label)
+        }
         XCTAssertFalse(menuItem("policy.md", in: app).exists)
         attachScreenshot(named: "coordinator-menu", of: app)
 
