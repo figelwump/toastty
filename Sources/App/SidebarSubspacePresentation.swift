@@ -57,6 +57,12 @@ enum SidebarSubspacePresentation {
         var statusUpdatedAt: Date? = nil
     }
 
+    /// The task that started a row's task.
+    struct ParentTask: Equatable, Sendable {
+        let taskID: UUID
+        let title: String
+    }
+
     struct Row: Equatable, Identifiable, Sendable {
         let id: UUID
         let title: String
@@ -77,9 +83,13 @@ enum SidebarSubspacePresentation {
         var linkedParentID: UUID? = nil
         /// Set when the row draws under its parent in this list.
         var isLinkedChild = false
-        /// The task that started this one, named on the row with a ↖ when
-        /// the list shows the row without that task.
-        var parentTaskTitle: String? = nil
+        /// The task that started this one. The hover card's Parent button
+        /// opens it.
+        var parentTask: ParentTask? = nil
+        /// The list shows the row without its parent task, so the row names
+        /// that task with a ↖.
+        var listsApartFromParent = false
+        var parentTaskTitle: String? { listsApartFromParent ? parentTask?.title : nil }
         /// How many of the tasks this one started have merged, such as
         /// "1/3 merged".
         var childProgressLabel: String? = nil
@@ -545,6 +555,7 @@ enum SidebarSubspacePresentation {
             }
         return SubspaceHoverTipModel(
             name: row.title,
+            stage: hoverTipStage(row),
             sessions: Array(sessions.prefix(hoverTipSessionLimit)),
             hiddenSessionCount: max(0, sessions.count - hoverTipSessionLimit),
             annotations: row.annotations.sorted { $0.key < $1.key }.map { key, annotation in
@@ -558,8 +569,21 @@ enum SidebarSubspacePresentation {
             absolutePath: row.path,
             spawnerName: row.spawnerName,
             rowSummary: row.isCompact ? row.summary : nil,
-            parentTaskTitle: row.isCompact ? row.parentTaskTitle : nil
+            parentTaskTitle: row.parentTask?.title
         )
+    }
+
+    /// The card's stage chip: the group the row lists in, or the task's
+    /// own stage once it has left the groups. A subspace that is not a task
+    /// has none.
+    static func hoverTipStage(_ row: Row) -> SubspaceHoverTipModel.Stage? {
+        guard row.isTask, let stage = row.stage else { return nil }
+        switch stage {
+        case .toShip: return .toShip
+        case .done: return .done
+        case .archived: return .archived
+        case .starting, .needsYou, .running, .idle: return .bucket(.subspace(row))
+        }
     }
 
     /// Where the subspace lives. Toastty does not record a directory for the

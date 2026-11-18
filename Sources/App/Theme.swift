@@ -62,6 +62,9 @@ enum ToastyTheme {
     static let sidebarSubspaceDoneMarkBackground = Color(hex: 0x7CC47F, alpha: 0.2)
     /// A task whose pull request waits for the user's review. Blue, so it
     /// reads apart from amber "the agent asked you something".
+    /// The Needs you group's yellow: its heading, count mark, and stage chip.
+    static let sidebarNeedsYouMark = Color(hex: 0xF2C46B)
+    static let sidebarNeedsYouMarkBackground = Color(hex: 0xF2C46B, alpha: 0.18)
     static let sidebarTaskReviewMark = Color(hex: 0x6E9FE6)
     static let sidebarTaskReviewMarkBackground = Color(hex: 0x6E9FE6, alpha: 0.22)
     /// A task whose agent ended its turn with a question. Amber, as when the
@@ -89,6 +92,11 @@ enum ToastyTheme {
     static let hoverTipTabPillText = Color(hex: 0xBCD0F5)
     static let hoverTipTabPillBackground = Color(hex: 0x6E96E6, alpha: 0.2)
     static let hoverTipTabPillBorder = Color(hex: 0xBCD0F5, alpha: 0.42)
+    /// The task space card's Parent button wears the tab pill's colors,
+    /// with a stronger fill under the pointer.
+    static let hoverTipParentButtonHoverBackground = Color(hex: 0x6E96E6, alpha: 0.34)
+    /// The faint panel under a task space card's sessions.
+    static let hoverTipSessionPanelBackground = Color(hex: 0xFFFFFF, alpha: 0.035)
     static let hoverTipAgentPillText = Color(hex: 0xD9D1C7)
     static let hoverTipAgentPillBackground = Color(hex: 0xB7AEA5, alpha: 0.16)
     static let hoverTipAgentPillBorder = Color(hex: 0xB7AEA5, alpha: 0.3)
