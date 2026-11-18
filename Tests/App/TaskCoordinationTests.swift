@@ -195,9 +195,9 @@ struct TaskCoordinationTests {
 
     // MARK: - Wakes of waiting tasks
 
-    /// `task waiting --wake`: at the time the agent set, its own idle agent
-    /// gets one line under the checks of a steered send, and the turn that
-    /// line starts clears the mark.
+    /// `task waiting --wake`: at the time the agent set, its own agent gets
+    /// one line while it waits at its prompt, and the turn that line starts
+    /// clears the mark.
     @Test func aDueWakeGoesOnceToTheTasksIdleAgentAndItsTurnClearsTheMark() async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
@@ -206,6 +206,7 @@ struct TaskCoordinationTests {
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
         let coordinator = fixture.coordinator!
         func waiting() -> TaskWaiting? { fixture.record(task.id)?.waiting }
+        func wakes() throws -> [String] { try messages(fixture, to: task).filter { $0.hasPrefix("[Toastty wake] ") } }
         func comeDue() throws {
             try coordinator.records.save(id: task.id) { $0.waiting?.wakeAt = Date().addingTimeInterval(-1) }
             coordinator.wakeRetryAt = [:]
@@ -216,45 +217,41 @@ struct TaskCoordinationTests {
         _ = try coordinator.setWaiting(taskID: task.id, reason: "email replies", wakeAt: Date().addingTimeInterval(14 * 86_400))
         fixture.sessions.report(session, .ready)
         #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeCheckMaximumInterval)
-        #expect(fixture.sessions.steered.isEmpty)
+        #expect(try wakes().isEmpty)
 
-        // The time comes while a question waits for the user, or while the
-        // agent works: the wake waits and tries again later.
+        // The time comes while a question waits for the user, while the
+        // agent works, while a person's typing since its last turn can still
+        // be in its prompt, or while its terminal takes no text: the wake
+        // waits and tries again later.
         try comeDue()
         _ = try coordinator.needsReply(taskID: task.id, question: "Send the draft?")
         #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
         try coordinator.records.save(id: task.id) { $0.replyRequest = nil }
         coordinator.wakeRetryAt = [:]
         fixture.sessions.report(session, .working)
-        coordinator.evaluateWakes()
-        #expect(fixture.sessions.steered.isEmpty)
-        #expect(waiting()?.wokenAt == nil)
-
-        // The agent cannot take the line, such as when a person typed in its
-        // prompt: nothing was typed, so the wake stays due.
+        #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
         fixture.sessions.report(session, .ready)
+        fixture.sessions.userInputAt[panel] = Date()
         coordinator.wakeRetryAt = [:]
-        fixture.sessions.steerResult = .failure(.typedInTerminal)
-        coordinator.evaluateWakes()
-        await fixture.waitUntil("the refused wake ends") { coordinator.wakesInFlight.isEmpty }
-        #expect(fixture.sessions.steered.count == 1)
+        #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
+        fixture.sessions.userInputAt[panel] = nil
+        fixture.sessions.deliveryResult = .unavailable
+        coordinator.wakeRetryAt = [:]
+        #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
+        #expect(try wakes().isEmpty)
         #expect(waiting()?.wokenAt == nil)
-        #expect(coordinator.wakeRetryAt[task.id] != nil)
 
-        // At an open prompt the agent gets one line that says what it waited for.
+        // At its prompt the agent gets one line that says what it waited for.
+        fixture.sessions.deliveryResult = .delivered
         coordinator.wakeRetryAt = [:]
-        fixture.sessions.steerResult = .success(.sent)
-        coordinator.evaluateWakes()
-        await fixture.waitUntil("the wake is sent") { coordinator.wakesInFlight.isEmpty }
-        #expect(fixture.sessions.steered.count == 2)
-        let line = try #require(fixture.sessions.steered.last)
-        #expect(line.panelID == panel)
-        #expect(line.text.hasPrefix("[Toastty wake] "))
-        #expect(line.text.contains("The task waited for: email replies."))
-        #expect(line.text.contains("\n") == false)
+        #expect(coordinator.evaluateWakes() == nil)
+        let lines = try wakes()
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("The task waited for: email replies.") == true)
+        #expect(lines.first?.contains("\n") == false)
         #expect(waiting()?.wokenAt != nil)
         #expect(coordinator.evaluateWakes() == nil)
-        #expect(fixture.sessions.steered.count == 2)
+        #expect(try wakes().count == 1)
 
         // Another agent's turn in the task space does not clear the mark;
         // the turn of the task's own agent does.
@@ -262,29 +259,6 @@ struct TaskCoordinationTests {
         #expect(waiting() != nil)
         coordinator.clearMarksForNewWork(taskSpaceWorkspaceID: taskSpace, sessionID: session)
         #expect(waiting() == nil)
-
-        // An agent whose conversation Toastty does not read gets the line as
-        // a watch's line goes, but not while a person's typing since its last
-        // turn can still be in its prompt.
-        fixture.sessions.report(session, .working)
-        fixture.sessions.report(session, .ready)
-        _ = try coordinator.setWaiting(taskID: task.id, reason: "the vendor's answer", wakeAt: Date().addingTimeInterval(3600))
-        try comeDue()
-        fixture.sessions.steerResult = .failure(.stateUnknown)
-        fixture.sessions.userInputAt[panel] = Date()
-        coordinator.evaluateWakes()
-        await fixture.waitUntil("the held wake ends") { coordinator.wakesInFlight.isEmpty }
-        #expect(try messages(fixture, to: task).isEmpty)
-        #expect(waiting()?.wokenAt == nil)
-        fixture.sessions.userInputAt[panel] = nil
-        coordinator.wakeRetryAt = [:]
-        coordinator.evaluateWakes()
-        await fixture.waitUntil("the typed wake ends") { coordinator.wakesInFlight.isEmpty }
-        let typed = try messages(fixture, to: task)
-        #expect(typed.count == 1)
-        #expect(typed.first?.hasPrefix("[Toastty wake] ") == true)
-        #expect(typed.first?.contains("The task waited for: the vendor's answer.") == true)
-        #expect(waiting()?.wokenAt != nil)
     }
 
     /// A finished task waits on nothing: its wake is dropped, not sent,
@@ -296,14 +270,25 @@ struct TaskCoordinationTests {
         let taskSpace = try #require(task.taskSpaceWorkspaceID)
         let coordinator = fixture.coordinator!
         fixture.sessions.report(session, .ready)
-        fixture.sessions.steerResult = .success(.sent)
         _ = try coordinator.setWaiting(taskID: task.id, reason: "email replies", wakeAt: Date().addingTimeInterval(3600))
         // The sidebar's done box marks only the task space.
         _ = fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: Date()))
         try coordinator.records.save(id: task.id) { $0.waiting?.wakeAt = Date().addingTimeInterval(-1) }
         #expect(coordinator.evaluateWakes() == nil)
-        #expect(fixture.sessions.steered.isEmpty)
+        #expect(fixture.sessions.delivered.isEmpty)
         #expect(fixture.record(task.id)?.waiting == nil)
+
+        // So is the wake of a shipped task.
+        _ = try coordinator.setWaiting(taskID: task.id, reason: "email replies", wakeAt: Date().addingTimeInterval(3600))
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: nil))
+        try coordinator.records.save(id: task.id) {
+            $0.shippedAt = Date()
+            $0.waiting?.wakeAt = Date().addingTimeInterval(-1)
+        }
+        #expect(coordinator.evaluateWakes() == nil)
+        #expect(fixture.record(task.id)?.waiting == nil)
+        try coordinator.records.save(id: task.id) { $0.shippedAt = nil }
+        #expect(fixture.sessions.delivered.isEmpty)
 
         // Mark Done and archive clear the mark themselves.
         _ = try coordinator.setWaiting(taskID: task.id, reason: "email replies", wakeAt: nil)

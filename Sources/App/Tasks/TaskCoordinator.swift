@@ -320,8 +320,6 @@ final class TaskCoordinator {
     var watchMonitor: Task<Void, Never>?
     /// Sends the wakes of `task waiting` marks when their time comes.
     var wakeMonitor: Task<Void, Never>?
-    /// Tasks whose wake line is being given to their agent now.
-    var wakesInFlight: Set<UUID> = []
     /// When to try a due wake again after its agent could not take it.
     var wakeRetryAt: [UUID: Date] = [:]
     /// The change cursor behind `task.list changedSince`.

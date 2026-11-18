@@ -532,9 +532,11 @@ Notable action-specific behavior:
     (`{on, since, wakeAt, wokenAt}`) and returns the task. Setting it clears
     `readyForReviewAt`; `task.ready-for-review`, `task.mark-done` and an
     archive clear it. The task stays Idle with the reason, and a task with
-    child tasks does not finish through them. At `wakeAt`, Toastty gives the
-    task's own agent one line at its open prompt and sets `wokenAt`; the mark
-    clears when that agent's next turn starts.
+    child tasks does not finish through them. At `wakeAt`, Toastty types one
+    line into the terminal of the task's own agent while the agent reports
+    that it waits at its prompt, no reply request waits, and nobody typed
+    there since its last turn ended, and sets `wokenAt`; the mark clears
+    when that agent's next turn starts.
     `task.mark-done` requires `taskID`, sets `doneAt`, and marks the task space
     done.
 - `task.set-release`

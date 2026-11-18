@@ -2164,17 +2164,16 @@ toastty task waiting --on "email replies; step 4 work on Dec 1" --wake 2026-12-0
   the agent runs `task ready-for-review`, and when the task is marked Done or
   archived. Setting the mark also ends an earlier ready mark.
 - `--wake` is optional. It takes an ISO 8601 time in the future. At that
-  time, Toastty sends the task's own agent one line, starting
-  `[Toastty wake]`, that names the time and what the task waited for. Toastty
-  sends it as `task send --steer` does: only at the agent's open prompt,
-  never into a permission prompt or text you typed, and not while a question
-  from `task needs-reply` waits for you. For an agent whose conversation
-  Toastty does not read, it types the line as a watch's line goes, but only
-  while the agent's own reports say it waits at its prompt and nobody typed
-  in its terminal since its last turn ended. If Toastty was not running at that
-  time, it sends the line after the next launch, once the agent runs. The mark
-  clears when the turn that the line starts begins, so the agent runs
-  `task waiting` again if the task still waits.
+  time, Toastty types one line into the terminal of the task's own agent,
+  starting `[Toastty wake]`, that names the time and what the task waited
+  for. It types the line only while the agent's own report says that it
+  waits at its prompt, so never into a permission prompt; while no question
+  from `task needs-reply` waits for you; and while nobody typed in that
+  terminal since the agent's last turn ended, since that text can still be in
+  its prompt. Otherwise it tries again 30 seconds later. If Toastty was not
+  running at that time, it sends the line after the next launch, once the
+  agent runs. The mark clears when the turn that the line starts begins, so
+  the agent runs `task waiting` again if the task still waits.
 - A question still comes first: `task needs-reply` puts the task in Needs
   you, and after your answer the task returns to its wait.
 - To wait for another Toastty task, use `task watch` instead; see
