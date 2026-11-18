@@ -855,7 +855,8 @@ final class DisplayShortcutInterceptor {
     /// the coordinator's dock shortcut also work from text views such as the
     /// Coordinator message bar and its transcript. Cmd+] and Cmd+[ also
     /// leave the Coordinator message bar: the coordinator's dock is a stop
-    /// of Select Next Split and Select Previous Split.
+    /// of Select Next Split and Select Previous Split. Text size shortcuts
+    /// also work from the Coordinator message bar.
     static func shortcutWindowID(
         for event: NSEvent,
         keyWindow: NSWindow?,
@@ -864,8 +865,8 @@ final class DisplayShortcutInterceptor {
         if isCommandPaletteShortcut(event) || isCoordinatorDockShortcut(event) {
             return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
         }
-        if focusSplitDirection(for: event) != nil,
-           keyWindow?.firstResponder is CoordinatorComposerTextView {
+        if keyWindow?.firstResponder is CoordinatorComposerTextView,
+           focusSplitDirection(for: event) != nil || textSizeShortcutDirection(for: event) != nil {
             return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
         }
         return closePanelShortcutWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
