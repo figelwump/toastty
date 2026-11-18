@@ -57,7 +57,11 @@ public enum RemoteCoordinatorAttachmentImageReader {
         return try encodedImage(from: snapshot.data, maximumPixelSize: size.maximumPixelSize)
     }
 
-    static func encodedImage(from data: Data, maximumPixelSize: Int) throws -> RemoteCoordinatorAttachmentImageResponse {
+    static func encodedImage(
+        from data: Data,
+        maximumPixelSize: Int,
+        maximumSourcePixels: Int = RemoteCoordinatorAttachmentImagePolicy.maximumSourcePixels
+    ) throws -> RemoteCoordinatorAttachmentImageResponse {
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let type = CGImageSourceGetType(source) as String?,
               UTType(type)?.conforms(to: .image) == true,
@@ -70,7 +74,7 @@ public enum RemoteCoordinatorAttachmentImageReader {
         // A small file can still decode to more pixels than the Mac should
         // hold in memory.
         guard width.multipliedReportingOverflow(by: height).overflow == false,
-              width * height <= RemoteCoordinatorAttachmentImagePolicy.maximumSourcePixels
+              width * height <= maximumSourcePixels
         else { throw RemotePreviewError.tooLarge }
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
             kCGImageSourceCreateThumbnailFromImageAlways: true,

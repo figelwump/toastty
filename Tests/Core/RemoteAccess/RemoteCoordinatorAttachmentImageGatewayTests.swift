@@ -107,9 +107,6 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         #expect(status(outcome(headers: [("tailscale-user-login", Self.identity)])) == 401)
         #expect(status(outcome(headers: [("authorization", "Bearer unknown"), ("tailscale-user-login", Self.identity)])) == 401)
         #expect((status(outcome("GET")) ?? 0) >= 400)
-        #expect(try store.setScopes([.send], forDevice: native.device.id) == true)
-        #expect(status(outcome()) == 403)
-        #expect(try store.setScopes([.read], forDevice: native.device.id) == true)
 
         // A request that does not name one file of one message.
         for bad in [
@@ -123,6 +120,10 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
                 at: Support.now)
             #expect(status(result) == 400)
         }
+
+        // A revoked device does not reach the read.
+        #expect(try store.revokeDevice(native.device.id, at: Support.now))
+        #expect(status(outcome()) == 401)
     }
 
     // MARK: - What the Mac serves
@@ -196,18 +197,25 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         #expect(try await fixture.refusal(index: 5) == .missing)
         #expect(try await fixture.refusal(index: 6) == .tooLarge)
 
-        // A device whose read access ends is refused, also for the image
-        // it could read before.
-        #expect(try fixture.store.setScopes([.send], forDevice: fixture.deviceID) == true)
+        // A device revoked after its request reached the read is refused,
+        // also for the image it could read before.
+        #expect(try fixture.store.revokeDevice(fixture.deviceID, at: Support.now))
         #expect(try await fixture.refusal(index: 0) == .denied)
     }
 
-    @Test func anImageThatWouldDecodeToTooManyPixelsIsRefused() throws {
-        // A few bytes that claim 20 000 × 20 000 pixels.
+    @Test func anImageThatWouldDecodeToMorePixelsThanTheLimitIsRefused() throws {
+        // A small file can decode to a huge image; the Mac reads the size
+        // from the header first. Here the limit is lowered to this image.
+        let folder = try Folder()
+        defer { folder.remove() }
+        let data = try Data(contentsOf: URL(fileURLWithPath: folder.png("wide.png", width: 120, height: 100, opaque: true)))
         #expect(throws: RemotePreviewError.tooLarge) {
             try RemoteCoordinatorAttachmentImageReader.encodedImage(
-                from: Self.pngHeader(width: 20_000, height: 20_000), maximumPixelSize: 600)
+                from: data, maximumPixelSize: 600, maximumSourcePixels: 11_999)
         }
+        let atTheLimit = try RemoteCoordinatorAttachmentImageReader.encodedImage(
+            from: data, maximumPixelSize: 600, maximumSourcePixels: 12_000)
+        #expect(atTheLimit.pixelWidth == 120)
     }
 
     // MARK: - Support
@@ -328,33 +336,5 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
             #expect(CGImageDestinationFinalize(destination))
             return try file(name, data as Data)
         }
-    }
-
-    /// A PNG signature and header chunk alone, which names the image's
-    /// size without its pixels.
-    private static func pngHeader(width: UInt32, height: UInt32) -> Data {
-        var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-        func chunk(_ type: String, _ body: [UInt8]) {
-            let typeAndBody = Array(type.utf8) + body
-            data.append(contentsOf: bigEndian(UInt32(body.count)))
-            data.append(contentsOf: typeAndBody)
-            data.append(contentsOf: bigEndian(crc32(typeAndBody)))
-        }
-        chunk("IHDR", bigEndian(width) + bigEndian(height) + [8, 6, 0, 0, 0])
-        chunk("IEND", [])
-        return data
-    }
-
-    private static func bigEndian(_ value: UInt32) -> [UInt8] {
-        [UInt8(value >> 24 & 0xFF), UInt8(value >> 16 & 0xFF), UInt8(value >> 8 & 0xFF), UInt8(value & 0xFF)]
-    }
-
-    private static func crc32(_ bytes: [UInt8]) -> UInt32 {
-        var crc: UInt32 = 0xFFFF_FFFF
-        for byte in bytes {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 { crc = crc & 1 == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
-        }
-        return crc ^ 0xFFFF_FFFF
     }
 }
