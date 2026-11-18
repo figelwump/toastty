@@ -78,9 +78,15 @@ final class ToasttyAttachmentImageLoadingTests: XCTestCase {
         }
         // Three fetches at a time: the fourth waits for a turn.
         let images = (0..<4).map { Self.image(index: $0) }
-        let views = images.map { image in
+        func view(_ image: ToasttyAttachedImage) -> Task<ToasttyAttachmentImage?, Never> {
             Task { await ToasttyAttachmentImageStore.image(for: image, size: .thumbnail, maximumPixelSize: 600, source: source) }
         }
+        var views = images.prefix(3).map(view)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while await fetches.entries.count < 3, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        views.append(view(images[3]))
         try await Task.sleep(for: .milliseconds(300))
         var log = await fetches.entries
         XCTAssertEqual(Set(log), ["start 0", "start 1", "start 2"])
