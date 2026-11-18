@@ -802,11 +802,15 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertFalse(((photoText.value as? String) ?? "").contains("[Attachment:"), "The photo shows by itself")
         XCTAssertTrue(app.buttons["Image \(phonePhoto)"].waitForExistence(timeout: 10))
 
+        // The Mac's message is above: its boxes load as they come on screen.
+        let crashBox = attachedImage("crash-screen.png", in: app)
+        XCTAssertTrue(crashBox.waitForExistence(timeout: 5))
+        XCTAssertTrue(scrollIntoView(crashBox, in: app))
+        // Loaded thumbnails open the full-size view, so they are buttons.
+        XCTAssertTrue(app.buttons["Image crash-screen.png"].waitForExistence(timeout: 10))
         let slow = attachedImage("slow-capture.png", in: app)
         XCTAssertTrue(slow.waitForExistence(timeout: 5))
         XCTAssertTrue(scrollIntoView(slow, in: app))
-        // Loaded thumbnails open the full-size view, so they are buttons.
-        XCTAssertTrue(app.buttons["Image crash-screen.png"].waitForExistence(timeout: 10))
         let gone = attachedImage("Photo-91C2.jpg", in: app)
         XCTAssertTrue(waitForValue("Not available", of: gone))
         XCTAssertEqual(slow.value as? String, "Loading")
@@ -848,9 +852,13 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
     func testATapOnAThumbnailShowsTheImageFullSize() {
         let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES": "1"])
         app.tabBars.buttons["Coordinator"].tap()
+        // A box loads its image once it is on screen; then it is a button.
+        let crashBox = attachedImage("crash-screen.png", in: app)
+        XCTAssertTrue(crashBox.waitForExistence(timeout: 10))
+        XCTAssertTrue(scrollIntoView(crashBox, in: app))
         let crash = app.buttons["Image crash-screen.png"]
         XCTAssertTrue(crash.waitForExistence(timeout: 10))
-        XCTAssertTrue(scrollIntoView(crash, in: app))
+        XCTAssertTrue(waitUntilHittable(crash))
         crash.tap()
 
         let viewer = app.descendants(matching: .any)["toastty-mobile-attachment-viewer-image"]
