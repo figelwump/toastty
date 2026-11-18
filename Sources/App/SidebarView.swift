@@ -1180,12 +1180,12 @@ struct SidebarView: View {
                     cancelWorkspaceRename()
                     controller.toggleDock()
                 },
-                openPolicy: {
+                openDocument: { document in
                     cancelWorkspaceRename()
                     do {
-                        try controller.openPolicy()
+                        try controller.openDocument(document)
                     } catch {
-                        TaskActions.presentFailure("Unable to Open the Coordinator's Policy", error.localizedDescription)
+                        TaskActions.presentFailure(document.openFailureTitle, error.localizedDescription)
                     }
                 },
                 restart: {

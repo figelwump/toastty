@@ -50,6 +50,11 @@ public struct ToasttyTranscriptView: View {
     /// Counts the reader's own scrolls, so that a scroll to the new
     /// messages' line gives way to one.
     @State private var scrollInteractionCount = 0
+    /// The scroll view's phase; a programmatic move ends at rest in `.idle`.
+    @State private var scrollPhase: ScrollPhase = .idle
+    /// Until when the transcript's own move to a row's top may still be
+    /// landing; see `repairRowTopOvershoot`.
+    @State private var rowTopMoveDeadline: ContinuousClock.Instant?
     #if DEBUG && os(iOS)
     @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
     #endif
@@ -160,6 +165,7 @@ public struct ToasttyTranscriptView: View {
                             .accessibilityLabel("Transcript scroll trace")
                             .accessibilityValue(fixtureScrollTrace.encodedSamples)
                             .accessibilityIdentifier("toastty-mobile-transcript-scroll-trace")
+                        TranscriptFixtureScrollMetricsElement(trace: fixtureScrollTrace)
                     }
                     #endif
                 }
@@ -220,6 +226,9 @@ public struct ToasttyTranscriptView: View {
                             using: proxy
                         )
                     }
+                    if scrollPhase == .idle {
+                        repairRowTopOvershoot(new, using: proxy)
+                    }
                     if reachedPhysicalLiveEdge {
                         if case .send(let request)? = scrollCoordinator.liveEdgeOwner,
                            jumpToLiveEdgeRequest == request,
@@ -233,7 +242,13 @@ public struct ToasttyTranscriptView: View {
                     }
                 }
                 .onScrollPhaseChange { oldPhase, newPhase, context in
+                    scrollPhase = newPhase
+                    if newPhase == .idle {
+                        // An animated move to a quote's row ends here.
+                        repairRowTopOvershoot(TranscriptScrollMetrics(geometry: context.geometry), using: proxy)
+                    }
                     if newPhase == .tracking || newPhase == .interacting {
+                        rowTopMoveDeadline = nil
                         // Finger-down or a direct drag owns the reader's
                         // position until it settles, including any momentum
                         // after finger lift.
@@ -334,6 +349,7 @@ public struct ToasttyTranscriptView: View {
                                 continue
                             }
                             if let target = scrollTaskKey.materializationTarget {
+                                markRowTopMove()
                                 scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                 // The first move can stop at the lazy stack's
                                 // estimated bottom without realizing this target.
@@ -365,6 +381,7 @@ public struct ToasttyTranscriptView: View {
                                     case .wait:
                                         continue
                                     case .retry:
+                                        markRowTopMove()
                                         scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
                                     case .expire:
                                         scrollCoordinator.abandonHistoryMove(command)
@@ -919,6 +936,7 @@ public struct ToasttyTranscriptView: View {
             target = responseContext?.target ?? .transcript(blockID)
             anchor = .top
         }
+        if anchor == .top { markRowTopMove() }
 
         if command.motion == .animated, !reducesMotion {
             withAnimation(.easeOut(duration: 0.2)) {
@@ -959,6 +977,7 @@ public struct ToasttyTranscriptView: View {
                   scrollInteractionCount == interactions,
                   let target = newMessages?.itemID(in: displayItems)
             else { return }
+            markRowTopMove()
             scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
         }
         try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
@@ -983,15 +1002,41 @@ public struct ToasttyTranscriptView: View {
             turnFold.toggle(turn.id)
             // The row is laid out on the next pass.
             DispatchQueue.main.async {
+                markRowTopMove()
                 withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
                     proxy.scrollTo(target, anchor: .top)
                 }
             }
             return
         }
+        markRowTopMove()
         withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
             proxy.scrollTo(target, anchor: .top)
         }
+    }
+
+    /// How long the transcript's own move to a row's top may take to land,
+    /// with the lazy stack's corrections and an animation.
+    private static let rowTopMoveLandingTime: Duration = .milliseconds(500)
+
+    /// Marks the start of the transcript's own move to a row's top.
+    private func markRowTopMove() {
+        rowTopMoveDeadline = .now + Self.rowTopMoveLandingTime
+    }
+
+    /// In a lazy transcript, a move to a row's top near the end, such as the
+    /// new messages' line, can leave iOS's scroll view resting past the
+    /// content's end by the bottom inset: the screen stays blank under the
+    /// last row until a gesture bounces it back. While such a move lands,
+    /// the transcript shows its end instead, which still shows the row.
+    /// Only the move's own landing counts: while content changes, such as a
+    /// card that opens, iOS 26 can report the end passed for a moment.
+    private func repairRowTopOvershoot(_ metrics: TranscriptScrollMetrics, using proxy: ScrollViewProxy) {
+        guard let rowTopMoveDeadline, ContinuousClock.now < rowTopMoveDeadline,
+              metrics.isPastContentEnd, lastScrollTarget != nil
+        else { return }
+        self.rowTopMoveDeadline = nil
+        scrollWithoutAnimation(to: ToasttyConversationScrollTarget.liveEdge, anchor: .bottom, using: proxy)
     }
 
     private func scrollWithoutAnimation(
@@ -1201,6 +1246,15 @@ struct TranscriptScrollMetrics: Equatable {
     var isAtLiveEdge: Bool {
         isNearLiveEdge
     }
+
+    /// The viewport ends past the content's end although the content could
+    /// fill it: the scroll view rests beyond its largest offset. iOS lets a
+    /// programmatic move get there; a reader's own overscroll bounces back.
+    var isPastContentEnd: Bool {
+        let visibleTop = visibleMaxY - visibleHeight
+        return visibleTop > Self.physicalLiveEdgeEpsilon
+            && visibleMaxY - max(contentHeight, visibleHeight) > Self.physicalLiveEdgeEpsilon
+    }
 }
 
 #if DEBUG && os(iOS)
@@ -1248,6 +1302,18 @@ private final class TranscriptFixtureScrollTrace {
 
     var encodedSamples: String {
         guard let data = try? JSONEncoder().encode(samples) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// The latest geometry, whether or not a trace runs.
+    var encodedLatest: String {
+        guard let latest else { return "{}" }
+        let sample = Sample(
+            elapsed: 0, contentHeight: latest.contentHeight, visibleMaxY: latest.visibleMaxY,
+            visibleHeight: latest.visibleHeight, topInset: latest.topInset, bottomInset: latest.bottomInset,
+            containerHeight: latest.containerHeight, hasSendItems: false, layoutPasses: 1, intermediateDistances: []
+        )
+        guard let data = try? JSONEncoder().encode(sample) else { return "{}" }
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -1333,6 +1399,21 @@ private final class TranscriptFixtureScrollTrace {
             layoutPasses: max(1, intermediateDistances.count),
             intermediateDistances: intermediateDistances
         ))
+    }
+}
+
+/// The latest scroll geometry for UI tests, in its own view so that only it
+/// updates with each geometry change.
+private struct TranscriptFixtureScrollMetricsElement: View {
+    let trace: TranscriptFixtureScrollTrace
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel("Transcript scroll metrics")
+            .accessibilityValue(trace.encodedLatest)
+            .accessibilityIdentifier("toastty-mobile-transcript-scroll-metrics")
     }
 }
 

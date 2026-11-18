@@ -282,8 +282,9 @@ SENDER_LINE = re.compile(r'^\[Toastty\] From the coordinator: not from the user\
 
 # A long message as Claude Code records it: the whole text inside one wrapper.
 PASTED = re.compile(r'^\s*<pasted_content id="([^"\n]+)">\n(.*?)\n</pasted_content id="\1">\s*$', re.S)
-# The files in its folder that the coordinator may change.
-OWN_FILES = ('policy.md', 'ledger.md', 'friction.md', 'decisions.md')
+# The files in its folder that the coordinator may change. It writes each
+# message to a task to message.md and sends it with --text-file.
+OWN_FILES = ('policy.md', 'ledger.md', 'friction.md', 'decisions.md', 'message.md')
 # The Improving rule of a user who wants no review on a timer.
 REVIEW_ON_REQUEST = '- Review only when I ask.'
 # The Talking rules of a scenario that is not about the daily list: with the
@@ -812,7 +813,7 @@ class Run:
                 text = pasted.group(2).strip() if pasted else text
                 if text and not any(p.get('type') == 'tool_result' for p in parts) and not text.startswith('<'):
                     turns.append(dict(prompt=text, wake=text.startswith(WAKE), commands=[], edits=[], tools=[], texts=[],
-                                      at=record.get('timestamp')))
+                                      messages=[], at=record.get('timestamp')))
             elif record.get('type') == 'assistant' and turns:
                 turn = turns[-1]
                 for part in parts:
@@ -825,6 +826,8 @@ class Run:
                             turn['commands'].append(tool_input.get('command', ''))
                         elif tool in ('Edit', 'Write', 'NotebookEdit', 'MultiEdit'):
                             turn['edits'].append(tool_input.get('file_path', ''))
+                            if Path(tool_input.get('file_path', '')).name == 'message.md':
+                                turn['messages'].append(tool_input.get('content') or tool_input.get('new_string') or '')
         for turn in turns:
             turn['said'] = '\n\n'.join(turn['texts'])
         return turns
@@ -913,11 +916,17 @@ class Run:
         # `task send --steer` may reach an agent that works: Toastty checks
         # the agent before it types. It never types at a prompt.
         steered = [c for c in commands if re.search(r'task\s+send\b', c) and '--steer' in c]
+        # A send with --text-file holds its text in message.md, which the
+        # coordinator wrote in the same turn.
+        steered_texts = [text for turn in turns
+                         if any(re.search(r'task\s+send\b', c) and '--steer' in c for c in turn['commands'])
+                         for text in turn['messages']]
         interrupted = []
         for task, message in received:
             before = [kind for at, kind in task.statuses if at <= message['at']]
+            snippet = typed_text(message['text']).strip()[:60]
             checked = before and before[-1] == 'working' and any(
-                task.id in c and typed_text(message['text']).strip()[:60] in c for c in steered)
+                task.id in c and (snippet in c or any(snippet in text for text in steered_texts)) for c in steered)
             if before and before[-1] in ('working', 'needs_approval') and not checked:
                 interrupted.append(f'{task.title} was {before[-1]}: {message["text"][:120]}')
         self.check('no message to an agent that works or waits at a prompt, but a --steer send to one that works',
@@ -939,7 +948,8 @@ class Run:
         self.check(f'every turn a digest started set or cleared the next check ({wakes} such turns)', not missing, missing)
         outside = [path for turn in turns for path in turn['edits']
                    if Path(path).name not in OWN_FILES or Path(path).resolve().parent != self.folder]
-        self.check('writes no file but policy.md, ledger.md, friction.md and decisions.md', not outside, outside)
+        self.check('writes no file but policy.md, ledger.md, friction.md, decisions.md and message.md',
+                   not outside, outside)
         shelled = [c for c in commands if re.search(r'(echo|printf)\b[^\n;&|]*>>?\s*\S*(ledger|policy|friction|decisions)\.md', c)
                    or re.search(r'\bsed\b[^\n|]*-i[^\n]*(ledger|policy|friction|decisions)\.md', c)]
         self.check('keeps the text of its files off the command line (no echo, printf or sed -i)',
@@ -1332,8 +1342,10 @@ def conflict(run):
     to_review(run, task, mergeStateStatus='DIRTY')
     run.new_turns(wake=True)
     messages = [m['text'] for m in run.messages(task)]
+    # The base branch is main: "merge main into your branch" names it.
     run.check('the task got one instruction to merge its base branch',
-              len(messages) == 1 and 'merge' in messages[0].lower() and 'base' in messages[0].lower(), messages)
+              len(messages) == 1 and 'merge' in messages[0].lower()
+              and re.search(r'\b(base|main)\b', messages[0].lower()), messages)
 
 
 def dependency(run):
@@ -1803,7 +1815,9 @@ def user_words_busy(run):
     sends = [c for c in commands if re.search(r'task\s+send\b', c) and task.id in c]
     run.check("it passes the user's words to the busy task with --steer", any('--steer' in c for c in sends), commands)
     run.check('it sends nothing to the busy task without --steer', all('--steer' in c for c in sends), sends)
-    run.check("the message holds the user's words", any('query string' in c for c in sends), sends)
+    # The coordinator writes the message to message.md and sends that file.
+    written = [text for turn in turns for text in turn['messages']]
+    run.check("the message holds the user's words", any('query string' in c for c in sends + written), sends + written)
     created = [t['title'] for t in run.cli('task', 'list')['tasks'] if t['taskID'] not in before]
     run.check('it makes no new task for the correction', created == [], created)
     # The task's agent is a fake with no turn in its transcript, so what

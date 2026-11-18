@@ -16,8 +16,13 @@ the merge, at the first check when no agent turn runs. `toastty task get`
 reports that time as `cleanup.taskSpaceClosesAt`. Do not merge with `gh`,
 close this workspace, or remove the worktree.
 
-Run the commands below with `"$TOASTTY_CLI_PATH"`. If it is not set, report that
-this skill must run inside a Toastty-managed agent session, and stop.
+Run the Toastty commands below as written: `toastty`, then the command words,
+then the arguments. Where a command has `--json`, it comes after the command
+words, as in `toastty task get --json`. Toastty puts `toastty` on `PATH` in each
+agent session it manages, and the user's allow rules match this form. If
+`toastty` is not found, run `"$TOASTTY_CLI_PATH"` in its place. If that is not
+set either, report that this skill
+must run inside a Toastty-managed agent session, and stop.
 
 ## Sandbox permissions
 
@@ -72,9 +77,9 @@ Do not retarget the pull request as part of this check.
 
 ## Check tasks that must land first
 
-Read this task with `"$TOASTTY_CLI_PATH" task get`. Check tasks or pull requests
+Read this task with `toastty task get`. Check tasks or pull requests
 that its description names as merge prerequisites with
-`"$TOASTTY_CLI_PATH" task get <task-id>` and `gh pr view`. A prerequisite that
+`toastty task get <task-id>` and `gh pr view`. A prerequisite that
 has not merged blocks this merge. Check that where it merged satisfies what
 the description requires.
 
@@ -125,7 +130,7 @@ keep the rest of the description.
 If nothing blocks, run:
 
 ```bash
-"$TOASTTY_CLI_PATH" task merge --head <headRefOid>
+toastty task merge --head <headRefOid>
 ```
 
 It waits a few seconds for Toastty's first answer, then reports it:
@@ -139,7 +144,7 @@ It waits a few seconds for Toastty's first answer, then reports it:
   still run pass.
 - **`merge` is `cleaningUp`, or `mergedAt` is set:** the pull request merged.
 - **`merge` is `merging`:** Toastty has not answered yet. Read the task again
-  with `"$TOASTTY_CLI_PATH" --json task get` before you report.
+  with `toastty task get --json` before you report.
 
 Report the pull request, the commit, and that answer. Then end your turn and
 run nothing else: Toastty cleans up later, after this turn ends. If the user
@@ -157,10 +162,10 @@ report it, so that the user can fix the cause.
 ## Coordinating tasks
 
 A task that coordinates child tasks merges them in dependency order. List them
-with `"$TOASTTY_CLI_PATH" task list --parent <this-task-id>`. For each child,
+with `toastty task list --parent <this-task-id>`. For each child,
 check it as above from its own pull request and worktree, then run
-`"$TOASTTY_CLI_PATH" task merge <child-task-id> --head <sha>`. Wait for one
+`toastty task merge <child-task-id> --head <sha>`. Wait for one
 child's merge before you merge a child that builds on it, for example with
-`"$TOASTTY_CLI_PATH" task watch <child-task-id> --until merged`.
+`toastty task watch <child-task-id> --until merged`.
 In your report, name each child by its title, as its `markdownLink` from
 `task list` gives it, not by its ID.
