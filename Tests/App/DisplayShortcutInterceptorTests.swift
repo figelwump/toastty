@@ -1966,6 +1966,42 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
     }
 
+    func testTextSizeShortcutsResolveTheWindowFromTheCoordinatorComposer() throws {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        let events = [
+            try makeKeyEvent(characters: "=", modifiers: [.command], keyCode: 0x18),
+            try makeKeyEvent(characters: "+", modifiers: [.command, .shift], keyCode: 0x18),
+            try makeKeyEvent(characters: "-", modifiers: [.command], keyCode: 0x1B),
+            try makeKeyEvent(characters: "0", modifiers: [.command], keyCode: 0x1D),
+        ]
+        let modalWindow = NSWindow()
+
+        window.forcedFirstResponder = CoordinatorComposerTextView()
+        for event in events {
+            XCTAssertEqual(
+                DisplayShortcutInterceptor.shortcutWindowID(for: event, keyWindow: window, modalWindow: nil),
+                windowID
+            )
+            XCTAssertNil(
+                DisplayShortcutInterceptor.shortcutWindowID(for: event, keyWindow: window, modalWindow: modalWindow)
+            )
+        }
+
+        window.forcedSheetParent = modalWindow
+        XCTAssertNil(
+            DisplayShortcutInterceptor.shortcutWindowID(for: events[0], keyWindow: window, modalWindow: nil)
+        )
+        window.forcedSheetParent = nil
+        window.forcedFirstResponder = NSTextView()
+        for event in events {
+            XCTAssertNil(
+                DisplayShortcutInterceptor.shortcutWindowID(for: event, keyWindow: window, modalWindow: nil)
+            )
+        }
+    }
+
     func testClosePanelShortcutWindowIDAllowsTerminalHostViewResponder() {
         let windowID = UUID()
         let window = ShortcutTestWindow()

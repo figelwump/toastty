@@ -558,17 +558,43 @@ def run(check):
 
         # 9. The toolbar button hides the dock; Cmd+Shift+K shows it with the
         # keyboard in its field, where Cmd+= changes the chat's text size.
+        composer = 'coordinator.chat.composer'
+        draft = 'Dock text size'
+
+        def type_text_size_draft():
+            ui.run('type', draft)
+            wait_for('the draft in the dock', lambda: ui.texts(composer) == draft, timeout=10)
+
+        def clear_text_size_draft():
+            ui.run('key', 'cmd-a')
+            ui.run('key', 'delete')
+            wait_for('the text size draft to clear', lambda: draft not in ui.texts(composer), timeout=10)
+
+        # Read the draft's font directly: the one-line field can stay the
+        # same height while the text grows inside it.
+        def composer_font_size():
+            return float(ui.run('font-size', composer)[1])
+
+        ui.run('focus', composer)
+        type_text_size_draft()
+        before_scale = composer_font_size()
+        clear_text_size_draft()
         ui.run('click', 'titlebar.toggle.coordinator-dock')
         wait_for('the dock to hide', lambda: not ui.exists('coordinator.dock'), timeout=30)
         ui.run('key', 'cmd-shift-k')
         wait_for('the dock to show', lambda: ui.exists('coordinator.dock'), timeout=30)
         time.sleep(0.6)
-        composer_height = lambda: int(ui.run('frame', 'coordinator.chat.composer')[1].split()[3])
-        before_scale = composer_height()
+        # Press Cmd+= with the field still empty, as when it first opens.
         ui.run('key', 'cmd-equal')
-        wait_for('a larger text size in the dock', lambda: composer_height() > before_scale, timeout=10)
+        # Typing without a click also proves Cmd+Shift+K focused the field.
+        type_text_size_draft()
+        larger_scale = wait_for('a larger text size in the dock',
+                                lambda: (size := composer_font_size()) > before_scale and size, timeout=10)
         ui.run('key', 'cmd-0')
-        wait_for('the text size again', lambda: composer_height() == before_scale, timeout=10)
+        reset_scale = wait_for('the text size again',
+                               lambda: (size := composer_font_size()) == before_scale and size, timeout=10)
+        require(ui.texts(composer) == draft, 'Changing the text size changed the draft')
+        clear_text_size_draft()
         require(selected_workspace() == task_space, 'The shortcut left the task')
         # Cmd+W in the dock's field closes neither the task's panel nor the window.
         task_terminals = lambda: [w for w in instance.query('workspace.list')['workspaces']
@@ -580,7 +606,7 @@ def run(check):
         require(task_terminals() == terminals_before and ui.exists('coordinator.dock'),
                 'Cmd+W in the dock\'s field closed something')
         step('the toolbar button and Cmd+Shift+K hid and showed the dock; Cmd+= sized its chat; Cmd+W closed nothing',
-             composerHeight=before_scale)
+             composerFontPoints=dict(before=before_scale, larger=larger_scale, reset=reset_scale))
         check_dock_split_keys(task_space)
 
         # A drag on the dock's edge sets its width, up to 40% of the window's
