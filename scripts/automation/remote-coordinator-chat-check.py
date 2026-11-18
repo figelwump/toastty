@@ -40,12 +40,16 @@ that:
   at the window's left edge; while it is hidden, a reply leaves the
   coordinator's row unread, and showing the dock reads it; after the
   relaunch it shows again at its width;
-- the header's switch shows the terminal and the chat again;
+- the header's switch shows the terminal and the chat again, and the
+  terminal's header and its workspace tab say "Coordinator", not the name
+  Claude generated;
 - after the app is killed and relaunched, the chat shows the same
   conversation and takes a message;
-- with Remote Access on, a message from a paired device shows in the chat,
+- with Remote Access on, the device gets the session titled "Coordinator",
+  a message from a paired device shows in the chat,
   and a message that the device queued is typed before one from the Mac;
-- after Restart Coordinator, the chat follows the new agent.
+- after Restart Coordinator, the chat follows the new agent, still titled
+  "Coordinator".
 
 Evidence goes to remote-coordinator-chat-check.json, the app log, Claude's
 transcripts and, when the build can capture its window, PNG frames under
@@ -67,6 +71,8 @@ import uuid
 
 HERE = Path(__file__).parent
 NAME = 'remote-coordinator-chat-check'
+# The name the coordinator's session shows on every surface.
+COORDINATOR_TITLE = 'Coordinator'
 
 
 def load(name, file):
@@ -321,6 +327,21 @@ def run(check):
                 if text:
                     entries.append(dict(role=record['type'], text=text, file=path.name))
         return entries
+
+    def generated_names():
+        """The names Claude generated for the coordinator's conversations."""
+        names = []
+        for path in project.glob('*.jsonl'):
+            for line in path.read_text().splitlines():
+                if '"ai-title"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get('type') == 'ai-title' and record.get('aiTitle') not in names:
+                    names.append(record['aiTitle'])
+        return names
 
     def index_of(role, fragment, after=-1):
         return next((index for index, entry in enumerate(transcript())
@@ -627,11 +648,22 @@ def run(check):
         wait_for('the terminal in place of the chat', lambda: not ui.exists('coordinator.chat'), timeout=30)
         panel = status()['panelID']
         screen = instance.request('app_control.run_query', dict(id='terminal.visible-text', args=dict(panelID=panel)))
+        # The terminal's header names the coordinator, not the name Claude
+        # generated for the conversation and writes to the terminal.
+        header = wait_for('the terminal\'s header', lambda: ui.texts(f'panel.header.title.{panel}'), timeout=30)
+        require(COORDINATOR_TITLE in header.splitlines() and not set(generated_names()) & set(header.splitlines()),
+                f'The terminal\'s header is not "{COORDINATOR_TITLE}": {header!r}; Claude\'s names: {generated_names()}')
+        # So is the workspace tab that shows the terminal.
+        tab_id = instance.query('workspace.snapshot', workspaceID=coordinator_id)['selectedTabID']
+        tab = wait_for('the workspace tab', lambda: ui.texts(f'workspace.tab.{tab_id}'), timeout=30)
+        require(COORDINATOR_TITLE in tab.splitlines() and not set(generated_names()) & set(tab.splitlines()),
+                f'The workspace tab is not "{COORDINATOR_TITLE}": {tab!r}; Claude\'s names: {generated_names()}')
         capture('terminal')
         ui.run('click', 'coordinator.panel.mode-toggle')
         wait_for('the chat again', lambda: ui.exists('coordinator.chat') and 'CHAT-ONE' in ui.texts(), timeout=30)
         capture('chat-after-terminal')
-        step('the switch showed the terminal and the chat', terminal=((screen.get('result') or {}).get('text') or '')[-600:])
+        step('the switch showed the terminal and the chat', terminal=((screen.get('result') or {}).get('text') or '')[-600:],
+             header=header, tab=tab, generatedNames=generated_names())
 
         # 13. Kill and relaunch with the chat open, now with Remote Access on.
         before = status()
@@ -683,6 +715,9 @@ def run(check):
 
         wait_for('the gateway and the coordinator\'s conversation',
                  lambda: (c := conversation()) and c['inputAvailability'].get('kind') == 'open_prompt', timeout=120)
+        # A paired device gets the coordinator's own name for its session.
+        phone_title = conversation()['title']
+        require(phone_title == COORDINATOR_TITLE, f'The device got the title {phone_title!r}; Claude\'s names: {generated_names()}')
         phone_send('phone-1', 'Reply with exactly this one word and nothing else: PHONE-ONE')
         wait_for_reply('PHONE-ONE')
         wait_for('the chat to mark the device\'s message', lambda: 'sent remotely' in ui.texts(), timeout=30)
@@ -706,7 +741,8 @@ def run(check):
         require(order == sorted(order), f'The device\'s and the Mac\'s messages did not each get a turn in order: {order}')
         wait_for('the queue to empty', lambda: status()['queuedCount'] == 0 and at_prompt(), timeout=120)
         capture('device-then-mac')
-        step('a paired device and the Mac shared the prompt in order', order=order)
+        step('a paired device and the Mac shared the prompt in order', order=order, title=phone_title,
+             generatedNames=generated_names())
 
         # 15. Restart Coordinator while the chat shows.
         old_session = status()['sessionID']
@@ -723,7 +759,10 @@ def run(check):
         require(newest != transcript()[index_of('assistant', 'CHAT-ONE')]['file'],
                 'The message after the restart went to the old conversation')
         capture('after-restart-send')
-        step('the chat followed the restarted agent', restarted=restarted)
+        restarted_title = wait_for('the restarted conversation', lambda: (c := conversation()) and c['title'], timeout=60)
+        require(restarted_title == COORDINATOR_TITLE, f'After the restart the device got {restarted_title!r}')
+        step('the chat followed the restarted agent', restarted=restarted, title=restarted_title,
+             generatedNames=generated_names())
     except Exception:
         # What the window showed when the check stopped.
         try:
