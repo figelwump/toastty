@@ -786,12 +786,14 @@ enum ToasttySendPresentationAdapter {
     }
 
     /// The row that offers the one Resume: the first held message of the
-    /// list, while this phone may change the queue.
+    /// list, while this phone may change the queue and has the token of the
+    /// Stop that holds it. A Stop reaches the session list before this
+    /// phone reads the queue it holds; until then no row offers Resume.
     private static func firstHeldRowID(
         inputControl: RemoteConversationInputControl?,
         coordinatorQueue: CoordinatorQueue
     ) -> String? {
-        guard coordinatorQueue.mayChange else { return nil }
+        guard coordinatorQueue.mayChange, coordinatorQueue.queue.heldSetToken != nil else { return nil }
         if inputControl?.isQueuePaused == true, let first = inputControl?.queuedMessages.first {
             return first.clientRequestID
         }

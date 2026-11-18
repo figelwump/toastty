@@ -661,6 +661,21 @@ extension ToasttyComposerPresentationTests {
         XCTAssertEqual(queued[1].attachmentCount, 2)
         XCTAssertEqual(items[2].quote, ToasttyMessageQuote(text: "Merge it?", timeText: "9:41"))
 
+        // A Stop reaches the session list before the phone reads its token:
+        // no row offers Resume until then.
+        var beforeTheRead = queue
+        beforeTheRead.heldSetToken = nil
+        var heldControl = control
+        heldControl.isQueuePaused = true
+        let early = ToasttySendPresentationAdapter.makeItems(
+            from: state, inputControl: heldControl, readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: beforeTheRead, mayChange: true)
+        )
+        XCTAssertTrue(early.allSatisfy { item in
+            guard case .queued(let queued) = item.content else { return true }
+            return queued.resumeTitle == nil
+        })
+
         // Without the coordinator's queue, each paused row keeps Send next.
         var paused = control
         paused.isQueuePaused = true

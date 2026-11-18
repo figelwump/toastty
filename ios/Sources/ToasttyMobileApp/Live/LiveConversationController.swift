@@ -294,15 +294,19 @@ final class LiveConversationController {
 
     /// Lets the held messages go. With a Mac that shares the coordinator's
     /// own queue, one Resume lets go everything that the Stop holds, in both
-    /// of the coordinator's queues, by the Stop's token.
+    /// of the coordinator's queues, by the Stop's token; before this phone
+    /// has the token, nothing is sent, so the Resume never lets go only the
+    /// conversation's queue.
     func resumeQueue() async {
         let conversation = RemoteConversationID(rawValue: conversationID)
-        let request = if let token = coordinatorQueue?.heldSetToken {
-            RemoteConversationQueueUpdateRequest(
+        let request: RemoteConversationQueueUpdateRequest
+        if let coordinatorQueue {
+            guard let token = coordinatorQueue.heldSetToken else { return }
+            request = RemoteConversationQueueUpdateRequest(
                 conversationID: conversation, action: .coordinatorResume, heldSetToken: token
             )
         } else {
-            RemoteConversationQueueUpdateRequest(conversationID: conversation, action: .resume)
+            request = RemoteConversationQueueUpdateRequest(conversationID: conversation, action: .resume)
         }
         _ = try? await updateQueueAction(request)
     }

@@ -657,26 +657,65 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-queue-older-mac", of: app)
     }
 
-    /// At the largest text size, a long waiting message and the actions
-    /// of each queue stay reachable.
+    /// At the largest text size each queue's actions stay reachable: the
+    /// one Resume on the first row and Remove on the last.
     func testWaitingMessagesStayReachableAtTheLargestTextSize() {
         let app = openWaitingMessages(
-            environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_LONG": "1"],
             arguments: ["-UIPreferredContentSizeCategoryName", UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue]
         )
-        XCTAssertTrue(queuedRow("fixture-own-1", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(queuedRow("fixture-own-3", in: app).waitForExistence(timeout: 5))
         app.buttons["toastty-mobile-composer-stop"].tap()
         let resume = queuedAction("resume", "fixture-chat-1", in: app)
         XCTAssertTrue(resume.waitForExistence(timeout: 5))
-        XCTAssertTrue(scrollIntoView(resume, in: app))
-        attachScreenshot(named: "coordinator-queue-large-text-resume", of: app)
-        let removeLong = queuedAction("remove", "fixture-own-1", in: app)
-        XCTAssertTrue(scrollIntoView(removeLong, in: app))
-        attachScreenshot(named: "coordinator-queue-large-text-long", of: app)
         let removeLast = queuedAction("remove", "fixture-own-3", in: app)
-        XCTAssertTrue(scrollIntoView(removeLast, in: app))
+        XCTAssertTrue(scrollIntoUpperTranscript(removeLast, in: app))
+        attachScreenshot(named: "coordinator-queue-large-text-remove", of: app)
         removeLast.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { queuedRow("fixture-own-3", in: app).exists == false })
+        XCTAssertTrue(scrollIntoUpperTranscript(resume, in: app))
+        XCTAssertEqual(resume.label, "Resume all 4")
+        attachScreenshot(named: "coordinator-queue-large-text-resume", of: app)
+        resume.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { resume.exists == false })
+    }
+
+    /// A message longer than the Mac sends comes shortened, ends with an
+    /// ellipsis, and keeps its Remove.
+    func testALongWaitingMessageComesShortenedWithItsRemove() {
+        let app = openWaitingMessages(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_LONG": "1"])
+        let row = queuedRow("fixture-own-1", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.contains("retry budget"))
+        XCTAssertTrue(row.label.contains("…"))
+        let remove = queuedAction("remove", "fixture-own-1", in: app)
+        XCTAssertTrue(scrollIntoUpperTranscript(remove, in: app))
+        attachScreenshot(named: "coordinator-queue-long-message", of: app)
+        remove.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { row.exists == false })
+        XCTAssertTrue(queuedRow("fixture-own-2", in: app).exists)
+    }
+
+    /// Scrolls the chat until `element` shows in the upper part of the
+    /// transcript, clear of the composer and of Jump to latest, with drags
+    /// long enough for the largest text size.
+    private func scrollIntoUpperTranscript(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.34))
+        for _ in 0..<40 {
+            let navigationBar = app.navigationBars.firstMatch
+            let top = navigationBar.exists ? navigationBar.frame.maxY : app.frame.minY
+            let limit = top + (composerTop(in: app) - top) * 0.6
+            let frame = element.frame
+            if element.exists, frame.minY >= top, frame.maxY <= limit, element.isHittable {
+                return true
+            }
+            if element.exists, frame.maxY > limit {
+                lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0.3)
+            } else {
+                upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.3)
+            }
+        }
+        return false
     }
 
     private func openWaitingMessages(

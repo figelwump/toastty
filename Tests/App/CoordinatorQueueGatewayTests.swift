@@ -50,6 +50,9 @@ struct CoordinatorQueueGatewayTests {
         let device = try #require(conversations.service.devices.first { $0.authKind == .native })
         conversations.service.revokeDevice(device.id)
         #expect(try conversations.gatewayCoordinatorQueue(credential: conversations.nativeCredential).status == 401)
+        #expect(try conversations.gatewayQueueUpdate(RemoteConversationQueueUpdateRequest(
+            conversationID: conversationID, action: .coordinatorResume, heldSetToken: "any"
+        ), credential: conversations.nativeCredential).status == 401)
     }
 
     /// A message waits in the queue as the Mac chat's waiting bubble shows
@@ -80,6 +83,14 @@ struct CoordinatorQueueGatewayTests {
         #expect(try fixture.controller.send(fromTask, id: "from-task").isQueued)
         let reply = CoordinatorMessageHeader.replyMessage(quote: "Merge PR 431?", time: "9:41", text: "Yes, merge it.")
         #expect(try fixture.controller.sendUserText(reply, steering: false, id: "reply").isQueued)
+        // The user's own text can start with Toastty's line for a sender;
+        // its files still go by name.
+        fixture.chat.attachmentDraft.attachText("second log", named: "second.txt")
+        fixture.chat.draft = CoordinatorMessageHeader.senderLine(.unknown) + "\nPasted from a script"
+        fixture.chat.send(queueing: true)
+        let lookalike = try await fixture.waitFor("the look-alike message") {
+            fixture.controller.queuedEntries.first { $0.text.contains("Pasted from a script") }
+        }
 
         // The Mac's chat is closed: the queue still changes the revision.
         fixture.chat.hide()
@@ -97,7 +108,7 @@ struct CoordinatorQueueGatewayTests {
         #expect(queue.revision != before.revision)
         #expect(conversations.service.facadeSessionList(at: .now).workspaces.first(where: \.isCoordinator)?
             .coordinatorQueueRevision == queue.revision)
-        #expect(queue.entries.map(\.id) == [withFile.id, "from-task", "reply", "closed"])
+        #expect(queue.entries.map(\.id) == [withFile.id, "from-task", "reply", lookalike.id, "closed"])
         #expect(queue.entries.allSatisfy { $0.isHeld == false })
         let file = queue.entries[0]
         #expect(file.fileNames == ["terminal-log.txt"])
@@ -109,6 +120,10 @@ struct CoordinatorQueueGatewayTests {
         #expect(replyEntry.quote == "Merge PR 431?")
         #expect(replyEntry.quoteTime == "9:41")
         #expect(replyEntry.text == "Yes, merge it.")
+        let pasted = queue.entries[3]
+        #expect(pasted.fileNames == ["second.txt"])
+        #expect(pasted.text.contains("Pasted from a script"))
+        #expect(pasted.text.contains("second.txt"))
         // The body names no folder of this Mac.
         let body = String(decoding: read.body, as: UTF8.self)
         #expect(body.contains(fixture.coordinatorDirectory.path) == false)

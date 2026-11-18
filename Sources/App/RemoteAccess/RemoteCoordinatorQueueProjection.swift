@@ -40,6 +40,13 @@ enum RemoteCoordinatorQueueProjection {
         case .digest, .quickEntry, .plain:
             text = CoordinatorMessageHeader.displayText(of: entry.text)
         }
+        // Toastty's list of attached files names each copy by its path. A
+        // message whose first line is any of Toastty's shows the names in
+        // its place, as `displayText` does for the user's own.
+        if let (rest, paths) = CoordinatorMessageHeader.attachedFiles(in: text) {
+            let names = paths.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
+            text = [rest, names].filter { $0.isEmpty == false }.joined(separator: "\n\n")
+        }
         let (shortText, isShortened) = shortened(text, to: RemoteCoordinatorQueuePolicy.maximumTextLength)
         return RemoteCoordinatorQueueEntry(
             id: entry.id,
