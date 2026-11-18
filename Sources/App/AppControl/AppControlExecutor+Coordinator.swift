@@ -5,7 +5,7 @@ import RemoteProtocol
 extension AppControlActionID {
     var isCoordinatorAction: Bool {
         switch self {
-        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorWake, .coordinatorWatch: true
+        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorReply, .coordinatorWake, .coordinatorWatch: true
         default: false
         }
     }
@@ -92,6 +92,11 @@ extension AppControlExecutor {
         guard let text = args.coordinatorString("text") else {
             throw AutomationSocketError.invalidPayload("text is required")
         }
+        let sender = messageSender(statedName: try statedSenderName(args: args))
+        // A sender outside a task gets an ID that the coordinator replies
+        // to. The coordinator answers a task with task send.
+        let replies = taskCoordinator?.webhooks
+        let messageID: UUID? = replies != nil && CoordinatorMessageHeader.getsMessageID(sender) ? UUID() : nil
         let result: CoordinatorController.SendResult
         do {
             guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
@@ -100,14 +105,22 @@ extension AppControlExecutor {
             // The first line says who sent it. Toastty writes that line
             // from the caller, so the text cannot pass as the user's or as
             // one of Toastty's own messages.
-            result = try controller.send(CoordinatorMessageHeader.message(
-                from: messageSender(statedName: try statedSenderName(args: args)),
-                text: text
-            ))
+            result = try controller.send(
+                CoordinatorMessageHeader.message(from: sender, text: text, messageID: messageID),
+                id: (messageID ?? UUID()).uuidString
+            )
         } catch let error as CoordinatorError {
             throw AutomationSocketError.invalidPayload(error.message)
         }
-        var response: [String: AutomationJSONValue] = ["queuedCount": .int(controller.queuedCount)]
+        if let messageID, let replies {
+            var name: String?
+            if case .named(let stated) = sender { name = stated }
+            replies.recordCoordinatorMessage(id: messageID, from: name, typed: result.wasTyped)
+        }
+        var response: [String: AutomationJSONValue] = [
+            "queuedCount": .int(controller.queuedCount),
+            "messageID": messageID.map { .string($0.uuidString) } ?? .null,
+        ]
         switch result {
         case .sent:
             response["delivery"] = .string("sent")
@@ -164,6 +177,81 @@ extension AppControlExecutor {
             )
         }
         return name
+    }
+
+    /// Keeps the coordinator's reply to a message from outside a task. Only
+    /// the coordinator's own agent replies: the sender reads the reply as
+    /// the coordinator's.
+    func runCoordinatorReply(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        guard let coordinatorSessionID = controller.session?.sessionID,
+              callerManagedSession()?.sessionID == coordinatorSessionID else {
+            throw AutomationSocketError.invalidPayload(
+                "Only the coordinator's own agent replies to a message. Read the replies with coordinator replies."
+            )
+        }
+        guard let rawID = args.coordinatorString("messageID"), let messageID = UUID(uuidString: rawID) else {
+            throw AutomationSocketError.invalidPayload("messageID must be the ID at the end of the message's first line")
+        }
+        guard let text = args.coordinatorString("text") else {
+            throw AutomationSocketError.invalidPayload("text is required")
+        }
+        let service = try requiredCoordinatorReplies()
+        let added: (reply: CoordinatorReplies.Reply, webhookEvents: Int)
+        do {
+            added = try service.addCoordinatorReply(messageID: messageID, text: text)
+        } catch let error as CoordinatorReplyError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        return .init(didMutateState: false, result: [
+            "replyID": .string(added.reply.id.uuidString),
+            "messageID": .string(messageID.uuidString),
+            "repliedAt": .string(ISO8601DateFormatter().string(from: added.reply.repliedAt)),
+            "webhookEvents": .int(added.webhookEvents),
+        ])
+    }
+
+    /// The coordinator's replies. Any caller that may give the coordinator
+    /// a message may read them: such a caller can already read the
+    /// coordinator's conversation on disk.
+    func coordinatorRepliesQuery(args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
+        _ = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        var messageID: UUID?
+        if let raw = args.coordinatorString("messageID") {
+            guard let id = UUID(uuidString: raw) else {
+                throw AutomationSocketError.invalidPayload("messageID must be a message ID")
+            }
+            messageID = id
+        }
+        let page: CoordinatorReplies.Page
+        do {
+            page = try requiredCoordinatorReplies().coordinatorReplyPage(since: args.coordinatorString("since"), messageID: messageID)
+        } catch let error as CoordinatorReplyError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        let formatter = ISO8601DateFormatter()
+        return [
+            "replies": .array(page.replies.map { reply in
+                .object([
+                    "id": .string(reply.id.uuidString),
+                    "messageID": .string(reply.messageID.uuidString),
+                    "from": reply.from.map(AutomationJSONValue.string) ?? .null,
+                    "text": .string(reply.text),
+                    "repliedAt": .string(formatter.string(from: reply.repliedAt)),
+                ])
+            }),
+            "cursor": .string(page.cursor),
+            "truncated": .bool(page.truncated),
+        ]
+    }
+
+    private func requiredCoordinatorReplies() throws -> TaskWebhookService {
+        guard let service = taskCoordinator?.webhooks else {
+            throw AutomationSocketError.invalidPayload("coordinator replies are not available in this Toastty instance")
+        }
+        return service
     }
 
     private func requiredCoordinatorWakes() throws -> TaskWebhookService {

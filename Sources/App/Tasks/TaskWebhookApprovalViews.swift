@@ -106,7 +106,7 @@ struct TaskWebhookApprovalSheet: View {
                         }
                     }
                 }
-                row("Events") { Text(webhook.events.map(\.title).joined(separator: ", ")) }
+                row("Events") { Text(webhook.eventTitles.joined(separator: ", ")) }
                 row("Tasks") { Text(Self.taskFilter(webhook)) }
                 row("Sign-in") {
                     Text(webhook.auth.needsSecret && needsKey == false

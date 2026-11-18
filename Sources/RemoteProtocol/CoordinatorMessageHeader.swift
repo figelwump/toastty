@@ -71,8 +71,21 @@ public enum CoordinatorMessageHeader {
     }
 
     /// The text to type for a message that `coordinator send` brought.
-    public static func message(from sender: Sender, text: String) -> String {
-        senderLine(sender) + "\n" + text
+    /// With `messageID`, the first line ends with it, after Toastty's note,
+    /// so a reader that takes the sender's name from before the note's
+    /// `": "` reads the same name. The coordinator replies to that ID.
+    public static func message(from sender: Sender, text: String, messageID: UUID? = nil) -> String {
+        senderLine(sender) + (messageID.map { " Message ID \($0.uuidString)." } ?? "") + "\n" + text
+    }
+
+    /// Whether a message from this sender gets an ID that the coordinator
+    /// replies to: a sender outside a task. The coordinator answers a task
+    /// with `task send`, and its own messages need no answer.
+    public static func getsMessageID(_ sender: Sender) -> Bool {
+        switch sender {
+        case .named, .unknown, .session: true
+        case .task, .coordinator: false
+        }
     }
 
     // MARK: - Quick entry

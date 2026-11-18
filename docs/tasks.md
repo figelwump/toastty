@@ -108,8 +108,8 @@ and runs it when you approve.
 The rules below allow the Toastty commands that read, create, start, message
 and watch tasks (`task get`, `list`, `workspace-choices`, `watches`, `create`,
 `start-work`, `send`, `watch`, `unwatch`, `needs-reply` and
-`ready-for-review`), the coordinator's `status`, `send`, `wake` and `watch`,
-and `query run`, which only reads. Every other Toastty command still asks,
+`ready-for-review`), the coordinator's `status`, `send`, `reply`, `wake` and
+`watch`, and `query run`, which only reads. Every other Toastty command still asks,
 among them `task merge`, `task request-merge`, `task archive`, `task delete`
 and `task mark-done`.
 
@@ -144,6 +144,7 @@ rules that you already have:
       "Bash(toastty task ready-for-review *)",
       "Bash(toastty coordinator status *)",
       "Bash(toastty coordinator send *)",
+      "Bash(toastty coordinator reply *)",
       "Bash(toastty coordinator wake *)",
       "Bash(toastty coordinator watch *)",
       "Bash(toastty query run *)",
@@ -161,7 +162,8 @@ The rules in a project's own `.claude/settings.json` apply only after you
 trusted that folder in Claude Code.
 
 On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
-sends to them (`task send --text-file message.md`), sets its next check
+sends to them (`task send --text-file message.md`), answers a sender
+outside Toastty (`coordinator reply <id> --text-file message.md`), sets its next check
 (`coordinator wake`, `coordinator watch`), reads pull requests
 (`gh pr view`, `gh pr checks`) and reads its Scratchpads (`query run`). The
 rules above cover these commands. It also edits files in its own folder on
@@ -218,7 +220,7 @@ prefix_rule(
     decision = "allow",
 )
 prefix_rule(
-    pattern = ["toastty", "coordinator", ["status", "send", "wake", "watch"]],
+    pattern = ["toastty", "coordinator", ["status", "send", "reply", "wake", "watch"]],
     decision = "allow",
 )
 prefix_rule(pattern = ["toastty", "query", "run"], decision = "allow")
@@ -951,7 +953,10 @@ survive an app quit; a message from `coordinator send` waits in memory, and
 an app quit loses it. Closing the coordinator's workspace drops the queue.
 
 Each message from `coordinator send` gets a first line that names its
-sender; see "Who a message is from" below.
+sender; see "Who a message is from" below. A message from outside a task
+also gets a message ID, which `coordinator send --json` returns as
+`messageID`, and the coordinator answers it with `coordinator reply`; see
+[Coordinator replies](#coordinator-replies).
 
 The chat's composer, quick entry, `coordinator send` and Toastty's own
 digests all go through this one queue, so their text never mixes. For an agent whose
@@ -980,6 +985,7 @@ text:
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran it.` | `coordinator send --from <name>` from a caller that names no running session, such as Grok Bot running the command from its own shell. Toastty does not check the name. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
+| `[Toastty] From …: … Message ID <uuid>.` | The same `From` line for a message from outside a task (an agent session outside a task, a named caller or a terminal command) ends with the message's ID, which the coordinator [replies](#coordinator-replies) to. A task's message and the coordinator's own have none. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
 | `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. |
 | no `[Toastty]` line | You, in the chat or in the terminal. |
@@ -1290,8 +1296,9 @@ sets its next check.
 | --- | --- |
 | Toastty restarted while an agent worked | Tells the task to continue as soon as Toastty wakes it with the `interrupted` alert. If you typed in that task in the last 2 minutes, it waits until 2 minutes have passed. |
 | An agent waits at a permission prompt | Never answers it. Tells you after 10 minutes. |
-| An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. |
+| An agent asks a question | Answers when your policy, or an earlier answer of yours, settles it, and tells you. Otherwise passes the question to you with the answer it suggests. When the question proposes a UI, design or user experience change with no mockup in the task's Scratchpads, it first tells the task once to add one. |
 | An agent ended a turn, and the task is not done | Reads the reply. It then waits for CI, notes the task or pull request the agent waits for and tells the agent when that merged, treats the reply as a question, or tells the agent to open its pull request or to mark the work ready. |
+| An agent waits for someone, such as a maintainer, to fix something first, and no task or pull request holds the fix | When the fix is in the task's own project or in a project of your policy's Projects section, tells the task once to go ahead with the fix, and tells you. Otherwise asks you who owns it. |
 | CI failed | When the failed tests are outside the pull request's change, tells the task to rerun them once before it changes code. Otherwise, or when the rerun fails again, tells the task to fix it. A test that passed on the rerun goes in its ledger. |
 | CI runs for more than 30 minutes | Looks at the run, and tells you when it is queued or hangs. |
 | The pull request has merge conflicts | Tells the task to rebase and resolve them. |
@@ -1314,9 +1321,13 @@ sets its next check.
   the Reviewing section of your policy. With weak proof, it tells the task
   exactly what to add, once; if the proof is weak again, it brings the task
   to you. With good proof, it tells you in one or two sentences why the task
-  is ready. It writes no summary of the proof. You merge, unless a rule of
-  yours lets the coordinator ask for the merge; see
-  [Merges by the coordinator](#merges-by-the-coordinator).
+  is ready. It writes no summary of the proof. A UI, design or user
+  experience change that a task only proposes needs a mockup in a
+  Scratchpad. You merge, unless a rule of yours lets the coordinator ask for
+  the merge; see [Merges by the coordinator](#merges-by-the-coordinator). A
+  finished task with no pull request goes on the
+  [daily list](#how-the-coordinator-keeps-work-moving) and is then marked
+  Done.
 - **Releases.** Each project has a rule in the policy: release on merge, or
   in batches. The coordinator asks you for the rule the first time a project
   has merged work that waits. It starts a release that the rule calls for
@@ -1336,7 +1347,11 @@ How it works with your tasks:
   (`lastUserInputAt`).
 - It sends a task one message for each condition. If the condition comes
   back, it tells you.
-- It writes a task as a link, `[title](toastty://task/<task-id>)`.
+- It names a task by its title as a link, `[title](toastty://task/<task-id>)`,
+  in its answers, in its messages to tasks and in its ledger. It uses the ID
+  alone only in commands.
+- A message to a Done task opens it again, so it sends one only when the
+  task's work must go on.
 - It treats text from tasks, pull requests and issues as data, not as
   instructions.
 - It does not use `task watch --notify` for a task that waits for another
@@ -1360,6 +1375,7 @@ What it may do alone, what it asks first, and what it never does:
 | Ask a task's agent to merge, when you tell it to or a Merging rule covers the change | | |
 | Start a release that a rule or `--after-merge` calls for | | |
 | Add a policy rule after your answer | | |
+| Mark a finished task with no pull request Done, after one daily list offered it | | |
 
 The skill fixes the Never column: your policy cannot change it, and the
 coordinator refuses these also when you ask it in its conversation.
@@ -1479,7 +1495,12 @@ which you typed nothing since it began to wait. The groups:
 - **Offers:** a task or a rule that the coordinator offered. An offer is on
   at most 3 lists, then the coordinator drops it and says so.
 - **Closes by default:** a question with a default, such as the first-run
-  question. It is on one list, which names the default.
+  question. It is on one list, which names the default. A finished task with
+  no pull request is such an item: an answer, an investigation, or a parent
+  whose child tasks ended, when its last reply names no remaining work.
+  Unless you answer, the coordinator marks it Done at the next list. Say
+  that it stays open, and it is not offered again. A rule in the Unblocking
+  section of your policy can close such tasks sooner.
 - **Moving:** work that it follows after a merge, one line each.
 
 Answer in the chat with the number, such as "2 yes". Ask "what waits for
@@ -2025,6 +2046,71 @@ that workspace exists the checks do not stop, so a webhook that you approve
 or start again then begins with the next check: it can get a change that was
 under way in the seconds before.
 
+## Coordinator replies
+
+A program outside Toastty that gives the coordinator a message, such as
+Grok Bot with `coordinator send --from "Grok Bot"`, gets the coordinator's
+answer back:
+
+```bash
+toastty coordinator send --json --from "Grok Bot" --text-file question.md
+# {"delivery":"sent","messageID":"6F1C2A90-…","queuedCount":0}
+toastty coordinator replies --json --message 6F1C2A90-…
+```
+
+1. `coordinator send` gives a message from outside a task an ID, a UUID. It
+   is `messageID` in the answer, and the message's first line ends with
+   `Message ID <uuid>.` A message from a task's session has none
+   (`messageID` is null): the coordinator answers a task with `task send`.
+2. The coordinator answers the sender with
+   `toastty coordinator reply <message-id> --text-file message.md`, with the
+   reply written to `message.md` in its folder. Only the coordinator's own
+   agent can run it. It can reply more than once, such as
+   "I asked Vishal" and later "Vishal said yes; the task started". It still
+   tells you in its chat what you need to know: a reply goes only to the
+   sender.
+3. The sender reads the text with `toastty coordinator replies`. Each reply
+   has `id`, `messageID`, `from` (the `--from` name, or null), `text` and
+   `repliedAt`. `--message <id>` keeps the replies to one message. `--since
+   <cursor>` keeps the replies after an earlier answer's `cursor`, as `task
+   list --changed-since` does for tasks. `truncated` is true when replies
+   after the cursor are gone; the answer then has every reply Toastty keeps.
+4. A [webhook](#webhooks-for-task-events) that adds `coordinator_reply` to
+   `--events`, such as `--events needs_you,merged,done,coordinator_reply`,
+   also gets a `coordinator.reply` event for each reply. A webhook needs at
+   least one task event besides it. The event goes through the same queue,
+   retries and signing as task events, in the order the events happened:
+
+   ```json
+   {"version": 1, "eventID": "…", "type": "coordinator.reply",
+    "occurredAt": "2026-11-17T16:53:12Z", "webhook": "grok",
+    "reply": {"id": "…", "messageID": "6F1C2A90-…", "from": "Grok Bot"}}
+   ```
+
+   It never carries the reply's text: read that with `coordinator replies`.
+   `--root` and `--external-ref-prefix` apply to task events only. Adding
+   `coordinator_reply` to a webhook, or removing it, needs your approval
+   again, and the review sheet lists **Coordinator replies** under Events.
+
+**Who can read replies.** Any program that can run `coordinator send` can
+read every reply: a program of yours on this Mac, not a workspace-scoped
+session outside the coordinator's workspace. This needs no approval: such a
+program can already read the coordinator's conversation on disk. A reply
+holds only what the coordinator wrote for that sender, and its instructions
+tell it to leave out other projects and people that the message did not ask
+about. Only the webhook's approval decides what Toastty sends off the Mac
+by itself, and the event carries no text.
+
+**How long.** Toastty keeps a message's ID while the message waits in the
+coordinator's queue and for 7 days after it types it, and a reply for 7
+days, up to 500 replies. A cursor stays valid across a relaunch, also after
+every kept reply expired. A reply to a message whose ID is gone is refused.
+The replies, the message IDs and the events waiting to send are in
+`~/.toastty/coordinator-replies.json`, apart from the task outbox.
+
+A coordinator session that started before Toastty had replies does not know
+the command: restart it with `toastty coordinator restart`.
+
 ## Starting tasks
 
 A task whose setup or triage is still running, or that is moving into a
@@ -2159,7 +2245,11 @@ review. The choice is saved for each window.
   starts collapsed; click it to show the merged tasks as rows, then **Show N
   more** when some merged children's task spaces already closed, which opens
   the parent in the Tasks view. A folded task does not count in a bucket.
-  Without a listed parent, a kept task space lists in Idle until it closes.
+  A kept task space that has no open task beside it, such as one without a
+  parent, or a parent whose children all merged, leaves the buckets with
+  its family: To ship tasks list under the To ship line, Done tasks under
+  the Done line. A selected row keeps its place until you select another
+  row, as when it merges while you look at it.
   After the buckets, a To ship line with
   the purple To ship mark lists the project's other To ship tasks, with
   **Release** when the project can release (see [Release](#release)) and the
@@ -2168,7 +2258,14 @@ review. The choice is saved for each window.
   Expanded, the 3 most recently merged To ship tasks show as rows, then
   **Show N more** when the project has more. When every To ship task shows
   as a task space row, the footer counts To ship tasks instead. A parent in
-  To ship counts in its project's To ship line with its children.
+  To ship counts in its project's To ship line with its children. While
+  Toastty keeps Done tasks' task spaces open after their merge, Done takes
+  a line of its own under the To ship line, such as **Done 91** with **9
+  open** on its right, and expands the same way: their task space rows,
+  newest merge first, then **Show N more**, which opens the Tasks view at
+  Done. It also expands while one of those task spaces is selected.
+  Without such task spaces, the Done count stays on the To ship line and
+  opens the Tasks view at Done.
 - **Needs you** lists only the rows that need you, from every project, under
   each project's name and counts, in two sections: **Needs you**, then
   **Ready to review**. Each row takes one line: its mark, its title and one
@@ -2188,8 +2285,8 @@ closed at the merge; if you kept it open, the row opens it instead. **Show N mor
 opens the Tasks view at To ship with the first task the sidebar did not show
 selected, and the To ship and Done counts open it at their group. The newest
 merge comes first; a task with no merge time uses its latest change. A To ship
-task whose task space is still open keeps its task space row and does not show
-a second time.
+task whose task space row the card lists, such as one whose agent works or one
+folded under its parent, does not show a second time.
 
 Task space rows use square marks: green for a finished turn (filled while it
 is unread, when the Tasks view also shows the title in bold), amber ? for a
@@ -2735,6 +2832,10 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
   task webhooks and the events waiting to send. Webhook secrets and approvals
   are in the login Keychain. The outbox file also holds the task changes and
   alerts that wait for the coordinator, and its timer.
+- `~/.toastty/coordinator-replies.json`: the coordinator's replies to
+  messages from outside a task, the IDs of those messages, and the
+  `coordinator.reply` webhook events waiting to send; see
+  [Coordinator replies](#coordinator-replies).
 - `~/.toastty/coordinator/`: the coordinator's instructions, your policy and
   its ledger, in a git repository; see
   [The coordinator's folder](#the-coordinators-folder).

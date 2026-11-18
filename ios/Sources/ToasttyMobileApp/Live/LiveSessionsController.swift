@@ -813,6 +813,9 @@ final class LiveSessionsController {
         homeController.setHostSupportsProjectRelease(acceptsProjectRelease)
         homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
         homeController.setHostSupportsCoordinatorSend(acceptsCoordinatorSend)
+        if let acceptsLocalFilePreview {
+            homeController.setHostSupportsLocalFilePreview(acceptsLocalFilePreview)
+        }
         activeConversationController?.consumeCoordinatorChatRead(
             isSupported: acceptsCoordinatorChatRead,
             readPoint: homeController.snapshot.coordinatorChatRead
@@ -874,6 +877,15 @@ final class LiveSessionsController {
     /// task create is.
     private var acceptsCoordinatorSend: Bool {
         coordinatorState.capabilities.contains(.coordinatorSend) && deviceScopes.contains(.send)
+    }
+
+    /// A file preview is a read. Nil before the first hello and between
+    /// connections, so the Coordinator tab's menu keeps its files while the
+    /// phone reconnects; the sheet then shows its usual error and Retry.
+    private var acceptsLocalFilePreview: Bool? {
+        coordinatorState.capabilities.isEmpty
+            ? nil
+            : coordinatorState.capabilities.contains(.localFilePreview) && deviceScopes.contains(.read)
     }
 
     private var acceptsConversationFlag: Bool {
@@ -1072,6 +1084,7 @@ final class LiveSessionsController {
             hostSupportsTaskActions: acceptsTaskActions,
             hostSupportsProjectRelease: acceptsProjectRelease,
             hostSupportsCoordinatorSend: acceptsCoordinatorSend,
+            hostSupportsLocalFilePreview: acceptsLocalFilePreview,
             hostSupportsTasks: hostHasTasks,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )

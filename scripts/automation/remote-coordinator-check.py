@@ -48,6 +48,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -285,7 +286,10 @@ def run_fake(check):
         send_at_prompt('wake one')
         # The check's shell names no session, and the first line says so.
         senders = (records / 'senders.log').read_text().splitlines()
-        require(senders == ['[Toastty] From a terminal command: Toastty cannot tell who ran it.'],
+        # The line ends with the message's ID, which the coordinator replies to.
+        require(len(senders) == 1 and re.fullmatch(
+                    r'\[Toastty\] From a terminal command: Toastty cannot tell who ran it\. Message ID [0-9A-F-]{36}\.',
+                    senders[0]),
                 f'coordinator send did not name its sender: {senders}')
         step('sent at the open prompt', received=received(), senders=senders)
         (records / 'hold').write_text('')

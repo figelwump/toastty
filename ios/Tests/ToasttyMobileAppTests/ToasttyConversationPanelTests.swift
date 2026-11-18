@@ -105,6 +105,46 @@ final class ToasttyConversationPanelTests: XCTestCase {
         XCTAssertEqual(sections[1].workspaceTitle, "Preview playground")
     }
 
+    /// The Coordinator tab's menu lists the policy, ledger and friction notes
+    /// itself, so it leaves out a panel that shows one of them from the
+    /// coordinator's folder, which the Mac can send with `~` or in full.
+    /// The same file name from another folder stays.
+    func testCoordinatorMenuLeavesOutPanelsThatShowItsFiles() {
+        let snapshot = ToasttyMobileFixture.withCoordinator(ToasttyMobileFixture.home, status: .idle)
+        let all = ToasttyConversationPanels.sections(in: snapshot, for: ToasttyMobileFixture.coordinatorConversationID)
+        XCTAssertEqual(Set(all.flatMap(\.panels).map(\.id)),
+                       [ToasttyMobileFixture.coordinatorWaitingPanelID, ToasttyMobileFixture.coordinatorPolicyPanelID])
+        for folder in ["~/.toastty/coordinator", "~/.toastty/coordinator/"] {
+            XCTAssertEqual(ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: folder)
+                .flatMap(\.panels).map(\.id), [ToasttyMobileFixture.coordinatorWaitingPanelID], folder)
+        }
+        XCTAssertEqual(ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: "~/elsewhere")
+            .flatMap(\.panels).count, 2)
+
+        func panel(_ path: String) -> RemoteWorkspacePanel {
+            RemoteWorkspacePanel(panelID: UUID(), auxiliaryTabID: UUID(), workspaceTabID: UUID(),
+                                 workspaceTabTitle: "Coordinator", kind: "localDocument",
+                                 title: (path as NSString).lastPathComponent, filePath: path)
+        }
+        let folder = "/Users/me/.toastty/coordinator"
+        XCTAssertTrue(ToasttyCoordinatorFile.isShown(by: panel("\(folder)/ledger.md"), folder: folder))
+        XCTAssertTrue(ToasttyCoordinatorFile.isShown(by: panel("\(folder)/friction.md"), folder: folder + "/"))
+        XCTAssertFalse(ToasttyCoordinatorFile.isShown(by: panel("/Users/me/repo/policy.md"), folder: folder))
+        XCTAssertFalse(ToasttyCoordinatorFile.isShown(by: panel("\(folder)/notes.md"), folder: folder))
+        XCTAssertFalse(ToasttyCoordinatorFile.isShown(by: panel("\(folder)/old/policy.md"), folder: folder))
+    }
+
+    /// The ledger opens at its last entry, not at the blank line after a
+    /// final newline.
+    func testLedgerRevealLineIsTheLastLineWithText() {
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\n\n- one\n- two\n"), 4)
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\n- one\n- two\n\n  \n"), 3)
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\r\n- one\r\n- two\r\n"), 3)
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "# Ledger\r- one\r"), 2)
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: "- only"), 1)
+        XCTAssertEqual(ToasttyCoordinatorFile.lastContentLine(of: ""), 1)
+    }
+
     private func replacingPanels(
         in workspaceID: UUID, with panels: [RemoteWorkspacePanel], snapshot: MobileHomeSnapshot
     ) -> MobileHomeSnapshot {

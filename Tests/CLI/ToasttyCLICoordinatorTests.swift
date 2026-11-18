@@ -44,6 +44,32 @@ struct ToasttyCLICoordinatorTests {
     }
 
     @Test
+    func replyNamesTheMessageAndRepliesReadsTheAnswers() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-cli-coordinator-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "I asked Vishal.\nI will reply again.".write(
+            to: directory.appendingPathComponent("reply.md"), atomically: true, encoding: .utf8
+        )
+        let messageID = UUID().uuidString
+
+        #expect(try command(["reply", messageID, "Done."])
+            == .appControlRun(kind: .action, id: "coordinator.reply", args: [
+                "messageID": .string(messageID), "text": .string("Done."),
+            ]))
+        #expect(try command(["reply", messageID, "--text-file", "reply.md"], environment: ["PWD": directory.path])
+            == .appControlRun(kind: .action, id: "coordinator.reply", args: [
+                "messageID": .string(messageID), "text": .string("I asked Vishal.\nI will reply again."),
+            ]))
+        #expect(try command(["replies"]) == .appControlRun(kind: .query, id: "coordinator.replies", args: [:]))
+        #expect(try command(["replies", "--message", messageID, "--since", "cursor-1"])
+            == .appControlRun(kind: .query, id: "coordinator.replies", args: [
+                "messageID": .string(messageID), "since": .string("cursor-1"),
+            ]))
+    }
+
+    @Test
     func wakeSetsTheNextCheckByDurationByTimeOrClearsIt() throws {
         func wake(_ arguments: String...) throws -> CLICommand { try command(["wake"] + arguments) }
         for (duration, seconds) in [("90s", 90), ("20m", 1200), ("2h", 7200), ("1h30m", 5400), ("1d", 86400), ("2H", 7200)] {
@@ -108,6 +134,16 @@ struct ToasttyCLICoordinatorTests {
             ["watch", "--remove"],
             ["wake", "--clear", "--remove"],
             ["status", "--task", UUID().uuidString],
+            ["reply"],
+            ["reply", UUID().uuidString],
+            ["reply", "not-an-id", "Done."],
+            ["reply", UUID().uuidString, "one", "two"],
+            ["reply", UUID().uuidString, "one", "--text", "two"],
+            ["reply", UUID().uuidString, "Done.", "--from", "Grok Bot"],
+            ["replies", "extra"],
+            ["replies", "--message", "not-an-id"],
+            ["send", "hello", "--since", "cursor-1"],
+            ["status", "--message", UUID().uuidString],
         ] {
             #expect(throws: ToasttyCLIError.self, "\(arguments)") { _ = try command(arguments) }
         }

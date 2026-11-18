@@ -266,6 +266,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.open`
 - `coordinator.restart`
 - `coordinator.send`
+- `coordinator.reply`
 - `coordinator.wake`
 - `coordinator.watch`
 - `webhook.add`
@@ -572,7 +573,8 @@ Notable action-specific behavior:
     require `args.name` (lowercase letters, digits, `-` and `_`) and are
     refused for workspace-scoped sessions.
   - `webhook.add` requires `args.url` (`https://`, or `http://` only for
-    127.0.0.1 and localhost) and takes optional `events`, `roots`
+    127.0.0.1 and localhost) and takes optional `events` (task events, and
+    `coordinator_reply` for the coordinator's replies), `roots`
     (repeatable), `externalRefPrefix`, `auth` (`bearer`, `header:<Name>`,
     `hmac`, the default, or `none` for loopback only), `secret` (16 to 4096
     printable ASCII bytes without spaces, kept in the login Keychain and never returned) and
@@ -791,6 +793,7 @@ Common query IDs include:
 - `task.workspace-choices`
 - `task.watches`
 - `coordinator.get`
+- `coordinator.replies`
 - `webhook.list`
 
 `coordinator.get` returns `exists`, and for an open coordinator `windowID`,
@@ -810,7 +813,19 @@ session is in, else the session, else the name in optional `args.from` as
 `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran
 it.`, else "a terminal command". Toastty does not check who `args.from`
 names. It refuses a name that the line would change: it must be one line of
-at most 60 characters, without `"`, `|` or repeated spaces. `coordinator.wake` takes exactly one of
+at most 60 characters, without `"`, `|` or repeated spaces. The result also
+has `messageID`: for a sender outside a task (a named caller, a terminal
+command or an agent session outside a task) a UUID that the first line ends
+with as ` Message ID <uuid>.`, and `null` for a task's session or the
+coordinator's own. `coordinator.reply` requires `args.messageID` and
+`args.text` (at most 16 KB) and fails unless the request's `callerSessionID`
+is the coordinator's agent session and Toastty still keeps that message's
+ID. It returns `replyID`, `messageID`, `repliedAt` and `webhookEvents`, the
+number of `coordinator.reply` events queued. `coordinator.replies` takes
+optional `args.messageID` and `args.since` (a cursor from an earlier answer)
+and returns `replies`, oldest first, each with `id`, `messageID`, `from`,
+`text` and `repliedAt`, then `cursor` and `truncated`; see
+[Coordinator replies](tasks.md#coordinator-replies). `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
 fields. With `args.quiet` it also marks the wake turn that runs now as one

@@ -130,6 +130,10 @@ final class HomeScreenController {
     private(set) var hostSupportsCoordinatorSend: Bool
     /// Whether the connected Mac closes sessions for this device.
     private(set) var hostSupportsConversationClose: Bool
+    /// Whether the connected Mac serves files that a session names. The
+    /// Coordinator tab's … menu lists the coordinator's policy, ledger and
+    /// friction notes only when it does.
+    private(set) var hostSupportsLocalFilePreview: Bool
     /// Whether the connected Mac has the task system, as its capabilities
     /// say. A Mac from before tasks sends no board, and Home asks the user
     /// to update it. True until the Mac's capabilities arrive.
@@ -237,6 +241,7 @@ final class HomeScreenController {
         hostSupportsCoordinatorSend = runtimeMode == .fixture && Self.fixtureSupportsTaskCreate
             && Self.fixtureSupportsCoordinatorSend
         hostSupportsConversationClose = runtimeMode == .fixture
+        hostSupportsLocalFilePreview = runtimeMode == .fixture && Self.fixtureSupportsLocalFilePreview
         hostSupportsTasks = runtimeMode != .fixture || Self.fixtureSupportsTasks
         hostSupportsTaskActions = runtimeMode == .fixture
         hostSupportsProjectRelease = runtimeMode == .fixture
@@ -294,6 +299,7 @@ final class HomeScreenController {
         hostSupportsTaskActions: Bool? = nil,
         hostSupportsProjectRelease: Bool? = nil,
         hostSupportsCoordinatorSend: Bool? = nil,
+        hostSupportsLocalFilePreview: Bool? = nil,
         hostSupportsTasks: Bool? = nil,
         hostSnapshotStamp: Date? = nil
     ) {
@@ -322,6 +328,9 @@ final class HomeScreenController {
         }
         if let hostSupportsProjectRelease {
             self.hostSupportsProjectRelease = hostSupportsProjectRelease
+        }
+        if let hostSupportsLocalFilePreview {
+            self.hostSupportsLocalFilePreview = hostSupportsLocalFilePreview
         }
         if let hostSupportsTasks {
             self.hostSupportsTasks = hostSupportsTasks
@@ -782,6 +791,18 @@ final class HomeScreenController {
 
     func setHostSupportsCoordinatorSend(_ isSupported: Bool) {
         hostSupportsCoordinatorSend = isSupported
+    }
+
+    func setHostSupportsLocalFilePreview(_ isSupported: Bool) {
+        hostSupportsLocalFilePreview = isSupported
+    }
+
+    private static var fixtureSupportsLocalFilePreview: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_FILE_PREVIEW"] != "unsupported"
+#else
+        true
+#endif
     }
 
     func installCoordinatorSend(

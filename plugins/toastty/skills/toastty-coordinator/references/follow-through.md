@@ -94,6 +94,16 @@ for that time with `coordinator wake --at`.
 list counts for no limit below. In the `list` line, it changes the numbered
 items and keeps the time.
 
+**First, in a list at its time, close what the last list offered.** For each
+`asked done` line with `listed=1`, read the task again. Mark it Done with
+`toastty task mark-done <task-id>` when all of this holds: it is still open;
+every point of its item under Collect still holds; its stage did not change
+after the line's time (`stageMinutes` is at least the minutes since then);
+and since then the user typed nothing in it (`lastUserInputAt`) and said
+nothing to you about it. Remove the line in either case. Name each task that
+you marked Done in one line of your message; a turn with that line is not
+quiet.
+
 1. **Collect** what waits for the user:
    - each open task that you brought to the user, such as a review, a
      question, a stopped agent or a failed merge, and that still waits for
@@ -106,7 +116,17 @@ items and keeps the time.
      `lastUserInputAt`, a new stage or a new reply), in `policy.md`, or with
      a task that now exists. Remove each line that the user answered;
    - each `followup` line. When its task merged, do section 1 for it now:
-     a wake can have missed the merge.
+     a wake can have missed the merge;
+   - each open task with no pull request whose work is finished: its stage
+     is `idle` or `needsYou (readyForReview)`; no open task has it as
+     `parentTaskID`; you told the user its result, or the results of its
+     child tasks; and its last reply, whole in `task get`
+     (`lastReply.truncated` is false), names no remaining work, no question
+     and no child task that it will still create. Such a task is this item
+     only, not the first one. Leave out a task with a `watch`, `followup` or
+     `told keep-open` line. Write an `asked done` line with the task's link.
+     When the user answers that the task stays open, replace that line with
+     a `told keep-open` line.
 2. **Sort** each item into one group. Inside a group, put first the item
    that waited longest.
    - **Blocks work you started:** a decision without which a task, a
@@ -116,7 +136,8 @@ items and keeps the time.
      lists. When it was on 3 lists, remove its line, and name it under
      Dropped on that day's list; the user can ask for it again.
    - **Closes by default:** a question with a default for no answer, such as
-     the first-run question or a question about a rule. It is on one list,
+     the first-run question or a question about a rule, and a finished task
+     that you mark Done at the next list. It is on one list,
      which names the default. Keep its line, with `listed=1`, and do not list
      it again: the `asked first-run` line also keeps you from asking again.
    - **Moving:** each `merged` line whose continuing task is open, as one
@@ -138,8 +159,9 @@ items and keeps the time.
    the number of offers and what was dropped. Write nothing else about the
    items: the dashboard shows them.
 7. **Nothing waits:** publish the dashboard with the line "Nothing waits for
-   you.", write the `list` line, mark the turn quiet if nothing else needs
-   the user, and answer only "Nothing needs you."
+   you.", and write the `list` line. When this list marked no task Done, mark
+   the turn quiet if nothing else needs the user, and answer only "Nothing
+   needs you." Otherwise answer only with the line that names those tasks.
 
 When a review follows the list in the same turn, it numbers its proposals
 after the list's last number. When the user answers with a number, find the
@@ -203,7 +225,7 @@ li{display:grid;grid-template-columns:26px 1fr;gap:2px 8px;padding:9px 0;border-
 .cold{color:var(--hot);font-weight:600}
 </style></head><body><main>
 <h1>Waiting on you</h1>
-<p class="meta">2026-11-16 09:00 · 6 items · the oldest waits 4 days · answer in the chat with the number</p>
+<p class="meta">2026-11-16 09:00 · 7 items · the oldest waits 4 days · answer in the chat with the number</p>
 <h2>Blocks work you started</h2>
 <ol>
 <li><span class="n">1</span><div><div class="what">Release webapp: 5 merged tasks wait in To ship.</div><div class="sug">Suggested: start the release now.</div></div><div class="facts">webapp · waits 4 days · <span class="cold">on 3 lists, no answer</span></div></li>
@@ -215,6 +237,7 @@ li{display:grid;grid-template-columns:26px 1fr;gap:2px 8px;padding:9px 0;border-
 <h2>Closes by default</h2>
 <ol>
 <li><span class="n">6</span><div><div class="what">Keep the Unblocking rule about parent tasks?</div><div class="sug">With no answer, the rule stays.</div></div><div class="facts">asked 2 days ago · last list</div></li>
+<li><span class="n">7</span><div><div class="what">Assess the export API: you have its answer, and nothing remains.</div><div class="sug">With no answer, it is marked Done at the next list.</div></div><div class="facts">api · ready for review 2 days</div></li>
 </ol>
 <h2>Moving</h2>
 <ol>

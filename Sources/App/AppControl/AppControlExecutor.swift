@@ -66,7 +66,7 @@ final class AppControlExecutor {
     func listQueryDescriptors() -> [AppControlCommandDescriptor] {
         AppControlQueryID.allCases.compactMap { query in
             if query.isTaskQuery, taskCoordinator == nil { return nil }
-            if query == .coordinatorGet, coordinatorController == nil { return nil }
+            if query == .coordinatorGet || query == .coordinatorReplies, coordinatorController == nil { return nil }
             return query.descriptor
         }
     }
@@ -840,6 +840,9 @@ final class AppControlExecutor {
         case .coordinatorSend:
             return try runCoordinatorSend(args: args)
 
+        case .coordinatorReply:
+            return try runCoordinatorReply(args: args)
+
         case .coordinatorWake:
             return try runCoordinatorWake(args: args)
 
@@ -1099,6 +1102,9 @@ final class AppControlExecutor {
 
         case .coordinatorGet:
             return try coordinatorQuery()
+
+        case .coordinatorReplies:
+            return try coordinatorRepliesQuery(args: args)
 
         case .webhookList:
             return try runWebhookList(args: args)

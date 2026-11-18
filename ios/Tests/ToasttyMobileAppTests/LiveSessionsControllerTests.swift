@@ -702,6 +702,45 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertFalse(home.supportsCoordinatorSend)
     }
 
+    /// The Coordinator tab's menu lists the coordinator's files only for a
+    /// Mac that serves file previews. The capability can arrive after the
+    /// device's scopes, and a reconnect without capabilities keeps what the
+    /// phone knew.
+    func testCoordinatorFilesNeedTheHostsFilePreviews() async {
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(
+            runtime: LiveRuntimeSpy(),
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+        XCTAssertFalse(home.hostSupportsLocalFilePreview)
+        subject.consumeSessionsState(SessionsRuntime.State(
+            connectionGeneration: 7, snapshot: snapshot(titles: ["Alpha"]), phase: .live
+        ))
+        await subject.updateDeviceScopes([.read])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.workspacePanelPreview]
+        ))
+        XCTAssertFalse(home.hostSupportsLocalFilePreview, "An older Mac lists only the panels")
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.workspacePanelPreview, .localFilePreview]
+        ))
+        XCTAssertTrue(home.hostSupportsLocalFilePreview)
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .reconnecting(failureCount: 1, showsBanner: false), capabilities: []
+        ))
+        XCTAssertTrue(home.hostSupportsLocalFilePreview)
+        await subject.updateDeviceScopes([])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.localFilePreview]
+        ))
+        XCTAssertFalse(home.hostSupportsLocalFilePreview, "A device without read access cannot preview")
+    }
+
     /// The coordinator chat's New line needs the Mac's capability and its
     /// read point. Each can change while the chat is open: the capability
     /// comes with a connection state or the device's scopes, the read point

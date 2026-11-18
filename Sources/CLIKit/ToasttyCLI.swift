@@ -976,7 +976,7 @@ public enum ToasttyCLI {
         }
         let parsed = try parseCommandArguments(
             Array(arguments.dropFirst()),
-            valueOptions: ["--window", "--text", "--text-file", "--from", "--in", "--at", "--task", "--workspace"],
+            valueOptions: ["--window", "--text", "--text-file", "--from", "--in", "--at", "--task", "--workspace", "--message", "--since"],
             flagOptions: ["--no-select", "--clear", "--quiet", "--remove"]
         )
         func windowArgs() throws -> [String: AutomationJSONValue] {
@@ -998,6 +998,9 @@ public enum ToasttyCLI {
         }
         guard verb == "send" || parsed.singleValue("--from") == nil else {
             throw ToasttyCLIError.usage("--from belongs to coordinator send\n\n\(usage)")
+        }
+        guard verb == "replies" || (parsed.singleValue("--message") == nil && parsed.singleValue("--since") == nil) else {
+            throw ToasttyCLIError.usage("--message and --since belong to coordinator replies\n\n\(usage)")
         }
         switch verb {
         case "open":
@@ -1037,6 +1040,40 @@ public enum ToasttyCLI {
                 args["from"] = .string(from)
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "coordinator.send", args: args))
+
+        case "reply":
+            let replyUsage = "usage: toastty coordinator reply <message-id> (<text> | --text-file <path>)"
+            guard (1...2).contains(parsed.positionals.count), let messageID = parsed.positionals.first else {
+                throw ToasttyCLIError.usage("\(replyUsage)\n\n\(usage)")
+            }
+            guard UUID(uuidString: messageID) != nil else {
+                throw ToasttyCLIError.usage("coordinator reply takes the message ID from the message's first line\n\n\(usage)")
+            }
+            let sources = [parsed.positionals.dropFirst().first, parsed.singleValue("--text"), parsed.singleValue("--text-file")].compactMap { $0 }
+            guard sources.count == 1 else {
+                throw ToasttyCLIError.usage("coordinator reply takes the reply as an argument, --text or --text-file\n\n\(usage)")
+            }
+            var text = sources[0]
+            if let file = parsed.singleValue("--text-file") {
+                text = try textFileContents(file, environment: environment)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(
+                kind: .action, id: "coordinator.reply", args: ["messageID": .string(messageID), "text": .string(text)]
+            ))
+
+        case "replies":
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("usage: toastty coordinator replies [--message <message-id>] [--since <cursor>]\n\n\(usage)")
+            }
+            var args: [String: AutomationJSONValue] = [:]
+            if let message = parsed.singleValue("--message") {
+                guard UUID(uuidString: message) != nil else {
+                    throw ToasttyCLIError.usage("--message must be a message ID\n\n\(usage)")
+                }
+                args["messageID"] = .string(message)
+            }
+            if let since = parsed.singleValue("--since") { args["since"] = .string(since) }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "coordinator.replies", args: args))
 
         case "wake":
             let wakeUsage = "usage: toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]"
@@ -1147,6 +1184,8 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] coordinator restart [--window <id>]
       toastty [--json] [--socket-path <path>] coordinator status
       toastty [--json] [--socket-path <path>] coordinator send (<text> | --text-file <path>) [--from <name>]
+      toastty [--json] [--socket-path <path>] coordinator reply <message-id> (<text> | --text-file <path>)
+      toastty [--json] [--socket-path <path>] coordinator replies [--message <message-id>] [--since <cursor>]
       toastty [--json] [--socket-path <path>] coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
       toastty [--json] [--socket-path <path>] coordinator watch (--task <task-id> | --workspace <id>) [--remove]
       toastty [--json] [--socket-path <path>] webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]

@@ -45,6 +45,7 @@ event log, the `gh` log and the app log.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
 import os
@@ -433,6 +434,13 @@ REPORT = '''<!doctype html><html><head><title>Verification: unread dot</title></
 # A `toastty task request-merge` command. Text that only names it, such as a
 # ledger line written by a script, is not one.
 REQUEST_MERGE = r'\btask\s+request-merge\b'
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", re.S | re.M)
+
+
+def asks_merge(command):
+    """The command runs `task request-merge`. Text in a here-document, such as a reply that tells a sender how
+    to ask for a merge itself, is not a command."""
+    return re.search(REQUEST_MERGE, HEREDOC.sub('', command))
 
 def typed_text(text):
     """What the coordinator typed: a message to a task without Toastty's sender line."""
@@ -484,6 +492,9 @@ class Run:
         self.release_projects = []
         # The tasks whose merge a scenario expects the coordinator to ask for.
         self.merges_expected = set()
+        # The IDs of the messages that `coordinator send` gave this run's
+        # outside sender. Every `coordinator reply` must name one of them.
+        self.message_ids = []
         self.write_tools()
 
     # MARK: Setup
@@ -888,7 +899,7 @@ class Run:
         self.check('never merges itself: no call that changes GitHub', not [c for c in calls if c['mutation']],
                    [c for c in calls if c['mutation']])
         # A merge request is allowed only for a task whose merge the scenario expects.
-        asked = [c for c in commands if re.search(REQUEST_MERGE, c)]
+        asked = [c for c in commands if asks_merge(c)]
         stray = [c for c in asked if not any(task_id in c for task_id in self.merges_expected)]
         self.check('asks for no merge that the scenario does not expect: no such request-merge command', not stray, stray)
         requested = [t.title for t in self.tasks if t.id not in self.merges_expected
@@ -939,7 +950,7 @@ class Run:
                    if Path(path).name not in OWN_FILES or Path(path).resolve().parent != self.folder]
         self.check('writes no file but policy.md, ledger.md, friction.md, decisions.md and message.md',
                    not outside, outside)
-        shelled = [c for c in commands if re.search(r'(echo|printf)\b[^\n]*>>?\s*\S*(ledger|policy|friction|decisions)\.md', c)
+        shelled = [c for c in commands if re.search(r'(echo|printf)\b[^\n;&|]*>>?\s*\S*(ledger|policy|friction|decisions)\.md', c)
                    or re.search(r'\bsed\b[^\n|]*-i[^\n]*(ledger|policy|friction|decisions)\.md', c)]
         self.check('keeps the text of its files off the command line (no echo, printf or sed -i)',
                    not shelled, shelled)
@@ -947,6 +958,9 @@ class Run:
         self.check('commit messages hold nothing the shell expands', not unsafe, unsafe)
         watches = [c for c in commands if re.search(r'task\s+watch\b', c)]
         self.check('adds no task watch that types into another agent', not watches, watches)
+        replied = [c for c in commands if re.search(r'coordinator\s+reply\b', c)]
+        unknown = [c[:200] for c in replied if not any(message_id in c for message_id in self.message_ids)]
+        self.check("every coordinator reply names a message that this run's sender sent", not unknown, unknown)
         code = re.compile(r'git\s+(-C\s+\S+\s+)?(commit|add|push)\b')
         foreign = [c for c in commands if code.search(c) and 'policy.md' not in c and 'revert' not in c]
         self.check('commits nothing but the policy', not foreign, foreign)
@@ -1357,6 +1371,8 @@ def dependency(run):
     later = run.new_turns(wake=True)
     messages = [m['text'] for m in run.messages(waiting)]
     run.check('after the merge, the waiting task is told once', len(messages) == 1 and 'merged' in messages[0].lower(), messages)
+    run.check('the message names the other task by its title as a link',
+              bool(messages) and f'[{first.title}]({first.link})' in messages[0], messages)
     watches = run.cli('task', 'watches').get('watches', [])
     run.check('Toastty holds no watch that would type into the task', watches == [], watches)
     watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
@@ -1456,7 +1472,7 @@ def good_proof(run):
 
 def merge_requests(turns, task):
     """The request-merge commands of these turns that name the task."""
-    return [c for t in turns for c in t['commands'] if re.search(REQUEST_MERGE, c) and task.id in c]
+    return [c for t in turns for c in t['commands'] if asks_merge(c) and task.id in c]
 
 
 def no_merge_rule(run):
@@ -1572,7 +1588,7 @@ def asked_under_rule(run, task, turns):
     number = str(task.pr['number'])
     logged = [c for c in run.gh_calls() if c['args'][:2] == ['pr', 'diff'] and c['session'] and len(c['args']) > 2
               and c['args'][2].rstrip('/').split('/')[-1] == number]
-    asked_at = next((i for i, c in enumerate(commands) if re.search(REQUEST_MERGE, c) and task.id in c), len(commands))
+    asked_at = next((i for i, c in enumerate(commands) if asks_merge(c) and task.id in c), len(commands))
     before = [c for c in commands[:asked_at] if re.search(r'gh\s+pr\s+diff\b', c)]
     run.check('it read the diff of this pull request before it asked', bool(logged) and bool(before), commands)
     said = run.said(turns)
@@ -1826,11 +1842,27 @@ def leaves_archived_out(text):
             and not re.search(r'confirm|\bwait', text))
 
 
-def relay(run, text):
-    """Grok Bot, a program outside Toastty, passes on the user's words with `coordinator send --from` from its shell."""
+def send_from_grok(run, text):
+    """Grok Bot, a program outside Toastty, sends a message with `coordinator send --from` from its shell.
+
+    Returns the message ID that Toastty gave the message."""
     run.wait_idle()
-    run.cli('coordinator', 'send', '--from', 'Grok Bot', text)
+    sent = run.cli('coordinator', 'send', '--from', 'Grok Bot', text)
+    message_id = sent.get('messageID')
+    require(message_id, f'coordinator send returned no messageID: {sent}')
+    run.message_ids.append(message_id)
+    return message_id
+
+
+def relay(run, text):
+    """Grok Bot passes on the user's words."""
+    send_from_grok(run, text)
     return run.new_turns(wake=False)
+
+
+def replies_to(run, message_id):
+    """The coordinator's replies to one message, as Grok Bot reads them."""
+    return run.cli('coordinator', 'replies', '--message', message_id).get('replies') or []
 
 
 def sender_trusted(run):
@@ -1887,6 +1919,170 @@ def sender_untrusted(run):
     run.check('it brings the answer to the user', re.search(r'archived', run.said(relayed).lower()), run.said(relayed),
               required=False)
     run.check('it adds no Senders line', run.section('Senders') == [], run.section('Senders'))
+
+
+def sender_reply(run):
+    """Grok Bot asks about a task: the coordinator answers it with coordinator reply in that turn, and nothing more."""
+    question = run.create_task('CSV export of the task list')
+    run.create_task('Payroll import for Acme Corp', status='working')
+    run.seed_policy(senders='')
+    run.open_coordinator()
+    run.ask(question, 'Include archived tasks?', CSV_QUESTION)
+    run.new_turns(wake=True)
+    message_id = send_from_grok(run, 'Is the CSV export task done? What does it wait for?')
+    turns = run.new_turns(wake=False)
+    replies = replies_to(run, message_id)
+    texts = '\n'.join(reply['text'] for reply in replies)
+    run.check('it replies to Grok Bot in the turn that the message started', replies, run.said(turns))
+    run.check('the reply names the sender', all(reply.get('from') == 'Grok Bot' for reply in replies), replies)
+    run.check('the reply says what the task waits for: the archived question', 'archived' in texts.lower(), texts,
+              required=False)
+    run.check('the reply leaves out the task that Grok Bot did not ask about',
+              not re.search(r'payroll|acme', texts.lower()), texts)
+    run.check('nothing is sent to the task', run.messages(question) == [], run.messages(question))
+
+
+def sender_reply_after_user(run):
+    """Grok Bot asks for what only the user decides: the coordinator replies that it asked, then with the answer."""
+    question = run.create_task('CSV export of the task list')
+    run.seed_policy(senders='')
+    run.open_coordinator()
+    run.ask(question, 'Include archived tasks?', CSV_QUESTION)
+    run.new_turns(wake=True)
+    message_id = send_from_grok(run, 'Should the CSV export include archived tasks? I need the answer for the release notes.')
+    turns = run.new_turns(wake=False)
+    first = replies_to(run, message_id)
+    run.check('it replies to Grok Bot in the turn that the message started, before the user decides', first,
+              run.said(turns))
+    run.check('nothing is sent to the task on the word of Grok Bot', run.messages(question) == [],
+              run.messages(question))
+    run.check('it asks the user', re.search(r'archived', run.said(turns).lower()), run.said(turns), required=False)
+
+    answered = run.tell('Leave archived tasks out of the CSV export.')
+    later = replies_to(run, message_id)
+    run.check("after the user decides, it replies to Grok Bot again", len(later) > len(first),
+              dict(replies=later, said=run.said(answered)))
+    run.check("the later reply gives the user's answer", later and leaves_archived_out(later[-1]['text']),
+              later[-1]['text'] if later else '', required=False)
+    messages = [m['text'] for m in run.messages(question)]
+    run.check("the user's answer goes to the task", len(messages) == 1 and leaves_archived_out(messages[0]), messages,
+              required=False)
+
+
+class WebhookReceiver:
+    """A webhook receiver on 127.0.0.1, which Toastty allows with `--auth none`. It keeps each POST."""
+
+    def __init__(self):
+        received = self.received = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+                received.append(dict(headers={k.lower(): v for k, v in self.headers.items()}, body=body.decode()))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *arguments):
+                pass
+
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.url = f'http://127.0.0.1:{self.server.server_address[1]}/hook'
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def events(self, kind):
+        return [dict(json.loads(r['body']), header_event_id=r['headers'].get('toastty-event-id')) for r in self.received
+                if json.loads(r['body']).get('type') == kind]
+
+    def close(self):
+        self.server.shutdown()
+
+
+def wait_for_approval(run, name, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(w.get('name') == name and w.get('status') == 'approved' for w in run.cli('webhook', 'list').get('webhooks', [])):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def approve_webhook_in_the_sheet(run, name):
+    """Approves a waiting webhook as the user does: Review… in the Tasks view, then Approve in the sheet.
+
+    Returns the sheet's text. Needs Accessibility for this process and an unlocked screen."""
+    driver = run.root / 'ax-drive'
+    subprocess.run(['swiftc', '-O', str(HERE / 'ax-drive.swift'), '-o', str(driver)], check=True, capture_output=True)
+    pid = str(run.instance.process.pid)
+
+    def ax(*arguments, timeout=30):
+        return subprocess.run([str(driver), pid, *arguments], capture_output=True, text=True, timeout=timeout)
+
+    status = ax('status').stdout.strip()
+    require(status == 'trusted=true locked=false', f'BLOCKED: the approval needs Accessibility and an unlocked screen: {status}')
+    with FOCUS_LOCK:
+        run.cli('action', 'run', 'window.tasks.show', '--window', run.window_id)
+        steps = [f"activate: {ax('activate').stdout.strip()}"]
+        # A click on a window that is not yet key can only bring it forward, so Review… is clicked twice. A
+        # press through Accessibility then tells a click that never reaches the button from a sheet that
+        # never shows.
+        for way in ('click', 'click', 'press'):
+            done = ax(way, 'tasks.view.webhook.review')
+            steps.append(f'{way} Review…: {done.returncode} {done.stdout.strip()} {done.stderr.strip()}')
+            shown = ax('frame', 'tasks.webhook.approve')
+            steps.append(f'Approve frame: {shown.returncode} {shown.stdout.strip()}')
+            if shown.returncode == 0:
+                break
+        else:
+            banner = ax('texts', 'tasks.view.webhookBanner')
+            run.notes.append(json.dumps({'approval steps': steps, 'banner': banner.stdout, 'sheet': ax('sheet-texts').stdout}))
+            require(False, f'The approval sheet did not show: {steps}')
+        sheet = ax('sheet-texts')
+        sheet_text = sheet.stdout if sheet.returncode == 0 else ax('texts', 'tasks.webhook.sheet').stdout
+        approved = ax('click', 'tasks.webhook.approve')
+        require(approved.returncode == 0, f'Approve did not click: {approved.stdout} {approved.stderr}')
+        if not wait_for_approval(run, name, timeout=8):
+            pressed = ax('press', 'tasks.webhook.approve')
+            steps.append(f'press Approve: {pressed.returncode} {pressed.stdout.strip()}')
+        require(wait_for_approval(run, name, timeout=20), f'webhook {name} was not approved: {steps}')
+        run.notes.append(json.dumps({'approval steps': steps}))
+        run.cli('action', 'run', 'window.tasks.hide', '--window', run.window_id)
+    return sheet_text
+
+
+def sender_reply_webhook(run):
+    """A webhook that opted in gets a coordinator.reply POST with the IDs and no text, after the user approved it."""
+    receiver = WebhookReceiver()
+    try:
+        question = run.create_task('CSV export of the task list')
+        added = run.cli('webhook', 'add', 'grok', receiver.url, '--auth', 'none', '--events', 'needs_you,coordinator_reply')
+        run.check('webhook add takes coordinator_reply next to a task event',
+                  added.get('events') == ['needs_you', 'coordinator_reply'] and added.get('status') == 'pendingApproval', added)
+        sheet = approve_webhook_in_the_sheet(run, 'grok')
+        run.notes.append(f'approval sheet text: {sheet}')
+        run.check('the approval sheet lists Coordinator replies under Events', 'Coordinator replies' in sheet, sheet)
+        run.seed_policy(senders='')
+        run.open_coordinator()
+        run.ask(question, 'Include archived tasks?', CSV_QUESTION)
+        run.new_turns(wake=True)
+        message_id = send_from_grok(run, 'Is the CSV export task done? What does it wait for?')
+        turns = run.new_turns(wake=False)
+        replies = replies_to(run, message_id)
+        run.check('it replies to Grok Bot', replies, run.said(turns))
+        events = wait_for('the reply events to arrive', lambda: len(receiver.events('coordinator.reply')) >= len(replies)
+                          and receiver.events('coordinator.reply'), timeout=60) if replies else []
+        run.notes.append(f'coordinator.reply POSTs: {events}')
+        run.check('each reply arrives as one coordinator.reply POST that names it and its message',
+                  sorted(e['reply']['id'] for e in events) == sorted(r['id'] for r in replies)
+                  and all(e['reply']['messageID'] == message_id and e['reply']['from'] == 'Grok Bot' for e in events), events)
+        run.check('the POST carries only the reply, the message and the sender: no text',
+                  all(set(e['reply']) == {'id', 'messageID', 'from'} and set(e) - {'header_event_id'} ==
+                      {'version', 'eventID', 'type', 'occurredAt', 'webhook', 'reply'}
+                      and not any(r['text'][:40] in json.dumps(e) for r in replies) for e in events), events)
+        # The header writes the UUID in lowercase, as for task events.
+        run.check('the Toastty-Event-ID header repeats the event ID',
+                  all((e['header_event_id'] or '').lower() == e['eventID'].lower() for e in events), events)
+    finally:
+        receiver.close()
 
 
 def new_task(run):
@@ -2480,6 +2676,140 @@ def daily_list_quiet(run):
     return turns
 
 
+ASSESSMENT = ('The assessment is finished. The export API can reuse the task list query, so it needs no new index. '
+              'I recommend paging by 500 rows. That answers the question; nothing remains in this task.')
+PLAN = ('The plan is ready: three parts, the API, the toolbar button and the docs. After your go, I will create a '
+        'child task for each part and follow them from here.')
+
+
+def done_offers(run):
+    """The ledger's `asked done` lines: finished tasks that a list offered to mark Done."""
+    return [line for line in run.ledger().splitlines() if re.match(r'- \S+ asked done\b', line)]
+
+
+def done_no_pr(run):
+    """A finished task with no pull request is on one daily list, then marked Done; a parent that will still
+    create child tasks stays open."""
+    finished = run.create_task('Assess the export API options', status='working')
+    parent = run.create_task('Plan the export work', status='working')
+    for task, text in ((finished, ASSESSMENT), (parent, PLAN)):
+        run.reply(task, text)
+        run.cli('task', 'ready-for-review', task.id)
+        run.status(task, 'idle')
+        run.wait_task(task, 'ready for review', lambda t: t['stage'].get('attention') == 'readyForReview')
+    # The list time passed 2 minutes ago, and the ledger has no list line: the list is due at the first wake.
+    run.seed_policy(talking=f"- The coordinator's defaults.\n- Waiting on you list each day at {review_time(-2)}.")
+    stamp = '%Y-%m-%dT%H:%MZ'
+    (run.folder / 'ledger.md').write_text('\n'.join([
+        '# Coordinator ledger',
+        f'- {day(0, stamp)} reviewed no-pr [{finished.title}]({finished.link}): an assessment with a '
+        'recommendation, no change; told the user its result.',
+        f'- {day(0, stamp)} reviewed no-pr [{parent.title}]({parent.link}): a plan; told the user.',
+    ]) + '\n')
+    run.open_coordinator()
+    turns = run.timer_wake()
+    revision, page = dashboard(run)
+    run.check('the finished task gets an asked done line', any(finished.id in line for line in done_offers(run)),
+              run.ledger())
+    run.check('the finished task is not Done before a list offered it', not run.get(finished).get('doneAt'),
+              run.get(finished).get('doneAt'))
+    run.check('the parent that will still create child tasks is not offered',
+              not any(parent.id in line for line in done_offers(run)), run.ledger())
+    run.check('the dashboard shows the finished task before it is closed', 'export api options' in page.lower(),
+              page[:3000])
+    run.check('the dashboard says that it will be marked Done', re.search(r'\bdone\b', page.lower()), page[:3000],
+              required=False)
+    run.check('nothing is sent to the tasks', not run.messages(finished) and not run.messages(parent),
+              [run.messages(finished), run.messages(parent)])
+
+    # A day later, the next list: the user said nothing about the task.
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(stamp)
+    ledger = run.ledger()
+    line = list_line(run)
+    run.check('the first list wrote a list line', line, ledger)
+    if line:
+        (run.folder / 'ledger.md').write_text(ledger.replace(line, re.sub(r'^- \S+', f'- {yesterday}', line, count=1)))
+    later = run.timer_wake()
+    said = run.said(later)
+    commands = [c for t in later for c in t['commands']]
+    run.check('the next list marks the finished task Done', run.get(finished).get('doneAt'), run.get(finished))
+    run.check('the parent stays open', not run.get(parent).get('doneAt'), run.get(parent))
+    run.check('the asked done line is gone', not any(finished.id in line for line in done_offers(run)), run.ledger())
+    run.check('the user is told, with the task link', finished.link in said, said)
+    quiet = [c for c in commands if re.search(r'coordinator\s+wake\b.*--quiet', c)]
+    run.check('a turn that marked a task Done is not quiet', not quiet, quiet)
+    return turns + later
+
+
+def waits_for_person(run):
+    """A task waits for someone to fix what the user owns: it is told once to go ahead. A fix outside the user's
+    projects goes to the user."""
+    own = run.create_task('Fix the release signing step', status='working')
+    upstream = run.create_task('Fix the Markdown preview crash', status='working')
+    run.seed_policy()
+    run.open_coordinator()
+    run.reply(own, 'The signing step fails because `scripts/release/sign.sh` in this repository passes an expired '
+                   'keychain name. That script belongs to whoever maintains the release scripts, so I stopped here '
+                   'and am waiting for that maintainer to fix it. The rest of my change is done.')
+    run.status(own, 'ready')
+    run.reply(upstream, 'The crash is in the third-party `swift-markdown` package from swiftlang on GitHub: its '
+                        'parser overflows on nested tables. Its maintainers must fix it upstream. I am waiting for '
+                        'their fix before I can finish.')
+    run.status(upstream, 'ready')
+    turns = run.new_turns(wake=True)
+    said = run.said(turns)
+    told = [m['text'] for m in run.messages(own)]
+    run.check('the task that waits for a fix in its own project is told once', len(told) == 1, told)
+    run.check('it is told to go ahead with the fix', bool(told) and re.search(r'go ahead|fix it|make the fix|yours',
+                                                                               told[0].lower()), told)
+    run.check('nothing is sent to the task that waits for a third party', run.messages(upstream) == [],
+              run.messages(upstream))
+    run.check('the third-party wait goes to the user, with the task link', upstream.link in said, said)
+    run.check('the user is told about the task it sent on', own.link in said, said, required=False)
+    return turns
+
+
+MOCKUP = '''<!doctype html><html><head><title>Mockup: export button</title></head><body>
+<h1>Export: toolbar button or File menu item</h1>
+<table><tr><th>A. Toolbar button (recommended)</th><th>B. File menu item</th></tr>
+<tr><td>[search field] [⤓ Export]</td><td>File ▸ Export Tasks…</td></tr></table>
+<p>A is one click from the task list. B keeps the toolbar as it is.</p></body></html>
+'''
+
+
+def ui_mockup(run):
+    """A question that proposes a UI change with no mockup: the task is told once to add one. With the mockup, the
+    question goes to the user."""
+    task = run.create_task('Export button in the toolbar', status='working')
+    run.seed_policy()
+    run.open_coordinator()
+    run.ask(task, 'Toolbar button or File menu item?',
+            'The export works from the command line. For the UI, I propose a new toolbar button with a download '
+            'arrow, right of the search field, instead of an item in the File menu. Should I build the toolbar '
+            'button?')
+    turns = run.new_turns(wake=True)
+    told = [m['text'] for m in run.messages(task)]
+    run.check('the task is told once to add a mockup', len(told) == 1 and 'mock' in told[0].lower(), told)
+    run.check('the question waits for the mockup', task.link not in run.said(turns), run.said(turns), required=False)
+    # The agent works on the mockup long enough for Toastty to count the stage, then asks again.
+    run.status(task, 'working')
+    time.sleep(SETTLE + 2)
+    mockup = run.root / 'mockup.html'
+    mockup.write_text(MOCKUP)
+    done = run.run_cli('action', 'run', 'panel.scratchpad.set-content', f'sessionID={run.session_of(task)}',
+                       f'filePath={mockup}', 'title=Mockup: export button')
+    require(done.returncode == 0, f'The mockup could not be published: {done.stdout} {done.stderr}')
+    run.ask(task, 'Toolbar button or File menu item?',
+            'The mockup is in my Scratchpad "Mockup: export button": the toolbar button and the File menu item side '
+            'by side. I recommend the toolbar button. Should I build it?')
+    later = run.new_turns(wake=True)
+    told = [m['text'] for m in run.messages(task)]
+    run.check('with the mockup, nothing more is sent to the task', len(told) == 1, told)
+    run.check('with the mockup, the question goes to the user, with the task link', task.link in run.said(later),
+              run.said(later))
+    return turns + later
+
+
 def branch_task(run, number, pr_head=None, merge_error='Server Error', project='app'):
     """A task whose pull request is a real pushed branch in the project's checkout.
 
@@ -2566,7 +2896,7 @@ def merge_error(run):
     prompts = [m['text'] for m in run.messages(task) if 'toastty-task-merge' in m['text']]
     run.check("the task's agent got Toastty's merge prompt, and nothing else",
               len(prompts) == 1 and len(run.messages(task)) == 1, [m['text'] for m in run.messages(task)])
-    asked_at = next((i for i, c in enumerate(commands) if re.search(REQUEST_MERGE, c) and task.id in c), len(commands))
+    asked_at = next((i for i, c in enumerate(commands) if asks_merge(c) and task.id in c), len(commands))
     run.check('it read the head of the pull request before it asked',
               any(re.search(r'gh\s+pr\s+view\b', c) for c in commands[:asked_at]), commands)
     said = run.said(later)
@@ -2656,6 +2986,9 @@ SCENARIOS = {
     'user-words-busy': user_words_busy,
     'sender-trusted': sender_trusted,
     'sender-untrusted': sender_untrusted,
+    'sender-reply': sender_reply,
+    'sender-reply-after-user': sender_reply_after_user,
+    'sender-reply-webhook': sender_reply_webhook,
     'new-task': new_task,
     'interrupted': interrupted,
     'friction-note': friction_note,
@@ -2666,14 +2999,17 @@ SCENARIOS = {
     'followup-merge': followup_merge,
     'daily-list': daily_list,
     'daily-list-quiet': daily_list_quiet,
+    'done-no-pr': done_no_pr,
+    'waits-for-person': waits_for_person,
+    'ui-mockup': ui_mockup,
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
             'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted',
-            'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',
-            'followup-merge', 'daily-list', 'daily-list-quiet')
+            'sender-reply', 'sender-reply-after-user', 'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',
+            'followup-merge', 'daily-list', 'daily-list-quiet', 'done-no-pr', 'waits-for-person', 'ui-mockup')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):
