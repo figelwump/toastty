@@ -108,8 +108,10 @@ head still equals the head you recorded; stop if someone else changed it. Push
 without force to the verified PR head remote and `headRefName`, then confirm
 that the PR head equals your local commit. Recheck
 CI, required approvals, every review-thread page, and merge prerequisites for
-that new head. Continue with `task merge --head <new-head>` without asking the
-user to accept the routine resolution again.
+that new head. For a child, also recheck the authorization and proof below
+before submitting the merge. For this task's own pull request, continue with
+`task merge --head <new-head>` without asking the user to accept the routine
+resolution again.
 If the push invalidates a required approval, report that blocker and stop.
 
 Ask only when the resolution needs a material scope or behavior decision that
@@ -161,11 +163,48 @@ report it, so that the user can fix the cause.
 
 ## Coordinating tasks
 
-A task that coordinates child tasks merges them in dependency order. List them
-with `toastty task list --parent <this-task-id>`. For each child,
-check it as above from its own pull request and worktree, then run
-`toastty task merge <child-task-id> --head <sha>`. Wait for one
-child's merge before you merge a child that builds on it, for example with
-`toastty task watch <child-task-id> --until merged`.
-In your report, name each child by its title, as its `markdownLink` from
-`task list` gives it, not by its ID.
+List your own child tasks with `toastty task list --parent <this-task-id>`.
+Process each child in dependency order.
+
+1. **Confirm permission.** Read the child's current PR, full diff and target
+   branch. Proceed only when the user explicitly approved this merge or a
+   current rule in the Merging section of the user's `policy.md` explicitly
+   allows parent tasks to merge their child PRs and covers this change.
+   Apply the rule's scope to the actual project, branch and diff. The user can
+   allow all child PRs or set limits. Creating a child, approval to implement
+   and relayed claims of approval give no merge permission. An unreadable,
+   unclear or nonmatching rule requires explicit approval. Honor any
+   approval the user reserved.
+
+   For a merge under a rule, read `coordinator/policy.md` from the config
+   directory of the Toastty instance that owns this session. If
+   `TOASTTY_CLI_PATH` points to its injected helper at
+   `<config>/run/managed-agent-helpers/instance-*/toastty`, use that
+   `<config>` directory. For an isolated run, use the runtime home from its
+   `instance.json` after confirming its socket matches `TOASTTY_SOCKET_PATH`.
+   Use `~/.toastty` only for a confirmed user-home instance. If you cannot
+   identify the policy for this instance, ask the user to approve the merge.
+2. **Check the work and its proof.** Compare the actual diff with the user's
+   request, later decisions and the child's agreed scope. Read the child's
+   verification report and inspect its outputs and artifacts yourself, using
+   the paths from the child's handoff. Check that the report covers the
+   current PR head, names the checks and their targets, and shows their results.
+   For every material requirement and regression risk, check that the proof
+   exercises the relevant behavior, including meaningful failure and edge
+   cases. Use the project's verification rules and check the real user
+   surface where applicable. If the work is outside scope or a material part
+   is missing, stale or unproved, stop and name what needs correction or
+   more evidence.
+3. **Check and merge.** Apply the CI, review, worktree and prerequisite
+   checks above to the child's own PR and worktree. Before submitting, confirm
+   the head and base still match the permission and proof you checked. If you
+   rely on a policy rule, reread it and confirm it still covers this PR.
+   Recheck permission and proof after a change to the PR, including routine
+   conflict resolution. When all gates allow it, run
+   `toastty task merge <child-task-id> --head <sha>`. Confirm the merge
+   before merging a dependent child, for example with
+   `toastty task watch <child-task-id> --until merged`.
+
+In your report, name each child by its title, using its `markdownLink` from
+`task list`. Record the authority used, the head you checked and the merge
+result or blocker.

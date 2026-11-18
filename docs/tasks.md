@@ -1393,9 +1393,10 @@ again and then merges it or reports what blocks it.
 - **You tell it to.** Say "merge it" after the coordinator brought you a
   task, or name the task. That is your acceptance, as the Merge button is.
 - **A rule in the Merging section of your policy covers the change.** The
-  section is empty at first, and an empty section means that the coordinator
-  merges nothing on its own. Tell the coordinator "merge simple changes
-  yourself" and it proposes a rule, or write one in the policy. A rule names
+  section is empty at first. The coordinator needs a rule that covers its
+  role and the change to request a merge on its own. Tell the coordinator
+  "merge simple changes yourself" and it proposes a rule, or write one in the
+  policy. A rule for the coordinator names
   a project, the kinds of change, and a size:
 
   ```markdown
@@ -2486,6 +2487,13 @@ by mistake. **Merge Without
 Checks**, or `merge = "direct"` for the project, skips the agent and merges at
 once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
 checks: a `task merge` from the agent's turn that was checking is then refused.
+
+A parent task needs your approval or a rule in the Merging section of your
+policy that covers its child pull request. You can allow a parent to merge all
+its child pull requests or limit the rule by project, target branch, or kind or
+size of change. The parent reads the diff and checks the child's evidence
+against your request and the current commit. It also checks CI, reviews and
+dependencies before it asks Toastty to merge that commit.
 
 A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
 its task space after the same 24-hour wait, also when the agent was working
