@@ -325,6 +325,7 @@ struct RemotePendingSendCorrelator: Sendable {
         var trimmedText: String
         var displayText: String?
         var deliveryMode: RemoteMessageDeliveryMode
+        var earliestEchoAt: Date
         /// Reported unconfirmed after its deadline. It may still be the next
         /// user message: a provider can hold a delivery in its prompt until
         /// someone submits it on the Mac.
@@ -340,13 +341,15 @@ struct RemotePendingSendCorrelator: Sendable {
     mutating func record(
         _ request: RemoteMessageSendRequest,
         deliveredText: String? = nil,
-        deliveryMode: RemoteMessageDeliveryMode = .prompt
+        deliveryMode: RemoteMessageDeliveryMode = .prompt,
+        earliestEchoAt: Date = .distantPast
     ) {
         let pendingSend = PendingSend(
             clientRequestID: request.clientRequestID,
             trimmedText: (deliveredText ?? request.text).trimmingCharacters(in: .whitespacesAndNewlines),
             displayText: request.attachments.isEmpty ? nil : request.displayText,
-            deliveryMode: deliveryMode
+            deliveryMode: deliveryMode,
+            earliestEchoAt: earliestEchoAt
         )
         var pendingSends = pendingSendsByConversationID[request.conversationID, default: []]
         pendingSends.append(pendingSend)
@@ -385,7 +388,8 @@ struct RemotePendingSendCorrelator: Sendable {
 
     mutating func stamp(
         _ observations: [ProviderTranscriptObservation],
-        for conversationID: RemoteConversationID
+        for conversationID: RemoteConversationID,
+        usesClaudeFileTimestamps: Bool = false
     ) -> [ProviderTranscriptObservation] {
         guard pendingSendsByConversationID[conversationID]?.isEmpty == false else {
             // Keep dictionary membership equivalent to live correlation work.
@@ -399,7 +403,8 @@ struct RemotePendingSendCorrelator: Sendable {
                 return observation
             }
             let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let pending = takeConfirmingSend(text: trimmed, for: conversationID) else {
+            let echoTime = usesClaudeFileTimestamps ? observation.timestamp : .distantFuture
+            guard let pending = takeConfirmingSend(text: trimmed, at: echoTime, for: conversationID) else {
                 return observation
             }
             var stampedPayload = payload
@@ -414,30 +419,32 @@ struct RemotePendingSendCorrelator: Sendable {
     }
 
     /// Delivery and provider logs are ordered, so normally only the oldest
-    /// pending send can confirm against the next user message; a mismatch
+    /// eligible send can confirm against the next user message; a mismatch
     /// expires it rather than misattributing a later identical local message.
     /// An expired send breaks that order: its late echo can arrive at any
     /// point, or never. While one is pending, a user message confirms
     /// whichever pending send has its text and consumes no other send. A user
-    /// message that matches nothing ends every expired send's chance to
+    /// message that matches nothing ends every eligible expired send's chance to
     /// confirm, so a much later identical message cannot claim one.
     private mutating func takeConfirmingSend(
         text: String,
+        at echoTime: Date,
         for conversationID: RemoteConversationID
     ) -> PendingSend? {
         guard var pendingSends = pendingSendsByConversationID[conversationID],
-              pendingSends.isEmpty == false else {
-            pendingSendsByConversationID.removeValue(forKey: conversationID)
+              let firstEligible = pendingSends.firstIndex(where: { $0.earliestEchoAt <= echoTime }) else {
             return nil
         }
         let match: PendingSend?
-        if pendingSends.contains(where: \.isExpired) {
-            match = pendingSends.firstIndex { $0.trimmedText == text }.map { pendingSends.remove(at: $0) }
+        if pendingSends.contains(where: { $0.isExpired && $0.earliestEchoAt <= echoTime }) {
+            match = pendingSends.firstIndex {
+                $0.trimmedText == text && $0.earliestEchoAt <= echoTime
+            }.map { pendingSends.remove(at: $0) }
             if match == nil {
-                pendingSends.removeAll(where: \.isExpired)
+                pendingSends.removeAll { $0.isExpired && $0.earliestEchoAt <= echoTime }
             }
         } else {
-            let oldest = pendingSends.removeFirst()
+            let oldest = pendingSends.remove(at: firstEligible)
             match = oldest.trimmedText == text ? oldest : nil
         }
         store(pendingSends, for: conversationID)
@@ -3408,7 +3415,10 @@ final class RemoteAccessService: ObservableObject {
             // Stamp the confirming user message for any pending remote send
             // before it enters the projection, so the sending device can tell
             // its own send apart from another device's identical text.
-            let stamped = stampPendingSends(observations, for: conversationID)
+            let stamped = stampPendingSends(
+                observations, for: conversationID,
+                usesClaudeFileTimestamps: tailersByConversationID[conversationID]?.provider == .claude
+            )
             let previousProfile = projectionStore.projectorState(for: conversationID)?.executionProfile
             let emitted = projectionStore.ingest(stamped, for: conversationID)
             projectionStore.noteLinkedFileReferences(linkedFileReferences, for: conversationID)
@@ -3811,6 +3821,7 @@ final class RemoteAccessService: ObservableObject {
         case .accept(let turnEpoch):
             recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
             let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
+            let deliveryStartedAt = Date()
             let delivery = terminalRuntimeRegistry.sendRemoteText(
                 typedText,
                 submit: true,
@@ -3822,12 +3833,18 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
                 coordinator.markSteerUncertain(request)
-                recordPendingSend(request, for: conversationID, deliveredText: typedText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(
+                    request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
+                    confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer
+                )
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
                 coordinator.markSteerDelivered(request)
-                recordPendingSend(request, for: conversationID, deliveredText: typedText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(
+                    request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
+                    confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer
+                )
                 ToasttyLog.info(
                     "Remote steer delivered",
                     category: .automation,
@@ -4261,6 +4278,7 @@ final class RemoteAccessService: ObservableObject {
             // Image paths stay text, or Claude Code drops the Return. The
             // conversation then echoes the text as typed.
             let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
+            let deliveryStartedAt = Date()
             let delivery = terminalRuntimeRegistry.sendRemoteText(
                 typedText,
                 submit: true,
@@ -4278,7 +4296,10 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery_uncertain",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID, deliveredText: typedText, deliveryMode: recordedDeliveryMode)
+                recordPendingSend(
+                    request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
+                    deliveryMode: recordedDeliveryMode
+                )
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
@@ -4293,6 +4314,7 @@ final class RemoteAccessService: ObservableObject {
                     request,
                     for: conversationID,
                     deliveredText: typedText,
+                    startedAt: deliveryStartedAt,
                     deliveryMode: recordedDeliveryMode,
                     consumedPromptEpoch: epoch
                 )
@@ -4446,13 +4468,21 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteMessageSendRequest,
         for conversationID: RemoteConversationID,
         deliveredText: String? = nil,
+        startedAt: Date,
         confirmationTimeout: Duration? = nil,
         deliveryMode: RemoteMessageDeliveryMode = .prompt,
         consumedPromptEpoch: RemoteInputEpoch? = nil
     ) {
         precondition(request.conversationID == conversationID)
         let confirmationTimeout = confirmationTimeout ?? sendConfirmationTimeout
-        pendingSendCorrelator.record(request, deliveredText: deliveredText, deliveryMode: deliveryMode)
+        // Claude's file timestamps share the local clock at millisecond
+        // precision. The resumed prompt can open while its file still replays
+        // earlier user messages. Only input recorded after delivery began can
+        // settle this send.
+        pendingSendCorrelator.record(
+            request, deliveredText: deliveredText, deliveryMode: deliveryMode,
+            earliestEchoAt: startedAt.addingTimeInterval(-0.001)
+        )
         let clientRequestID = request.clientRequestID
         let key = PendingSendConfirmationKey(
             conversationID: conversationID,
@@ -4663,7 +4693,8 @@ final class RemoteAccessService: ObservableObject {
     /// reverts to origin=.unknown, which is acceptable runtime enrichment.
     private func stampPendingSends(
         _ observations: [ProviderTranscriptObservation],
-        for conversationID: RemoteConversationID
+        for conversationID: RemoteConversationID,
+        usesClaudeFileTimestamps: Bool = false
     ) -> [ProviderTranscriptObservation] {
         if let sessionID = activeSessionIDByConversationID[conversationID],
            let panelID = panelIDByConversationID[conversationID] {
@@ -4676,7 +4707,9 @@ final class RemoteAccessService: ObservableObject {
         // ends without the send must settle it before a later user message in
         // the same batch can match it.
         for observation in observations {
-            let observation = pendingSendCorrelator.stamp([observation], for: conversationID)[0]
+            let observation = pendingSendCorrelator.stamp(
+                [observation], for: conversationID, usesClaudeFileTimestamps: usesClaudeFileTimestamps
+            )[0]
             stamped.append(observation)
             if case .transcript(.userMessage(let payload)) = observation.payload {
                 var submittedOnMac = true
@@ -5047,6 +5080,13 @@ extension RemoteAccessService: LocalConversationAccess {
         return tailersByConversationID[conversationID]?.isReadingInitialContent ?? false
     }
 
+    fileprivate func awaitsSendConfirmation(clientRequestID: String, subscriptionID: UUID) -> Bool {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return false }
+        return pendingSendConfirmationWork[.init(
+            conversationID: conversationID, clientRequestID: clientRequestID
+        )] != nil
+    }
+
     fileprivate func localSnapshot(subscriptionID: UUID, at date: Date) -> RemoteConversationSnapshot? {
         guard let panelID = localSubscriptions[subscriptionID]?.panelID,
               let summary = localSummary(
@@ -5187,6 +5227,10 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     var isReadingInitialTranscript: Bool {
         service?.isReadingInitialTranscript(subscriptionID: id) ?? false
+    }
+
+    func awaitsSendConfirmation(clientRequestID: String) -> Bool {
+        service?.awaitsSendConfirmation(clientRequestID: clientRequestID, subscriptionID: id) ?? false
     }
 
     func snapshot(at date: Date) -> RemoteConversationSnapshot? {
