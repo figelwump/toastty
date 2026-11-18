@@ -686,7 +686,7 @@ run_local_mode() {
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
 REMOTE_WORKTREE_DIR=$(escape_sh "$remote_worktree_dir")
 REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
-$(declare -f toastty_allocate_remote_run)
+$(declare -f toastty_mkdir_exclusive toastty_allocate_remote_run)
 toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$REMOTE_RUN_ROOT\"
 "
   TOASTTY_METADATA_REMOTE_ALLOCATED=true

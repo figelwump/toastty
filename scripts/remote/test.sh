@@ -940,7 +940,7 @@ run_local_mode() {
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
 REMOTE_WORKTREE_DIR=$(escape_sh "$remote_worktree_dir")
 REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
-$(declare -f toastty_allocate_remote_run)
+$(declare -f toastty_mkdir_exclusive toastty_allocate_remote_run)
 toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$REMOTE_RUN_ROOT\"
 "
   TOASTTY_METADATA_REMOTE_ALLOCATED=true
@@ -1121,8 +1121,7 @@ EOF
   local xcodebuild_log="$remote_run_root/xcodebuild.log"
   local destination_probe_log="$remote_run_root/destination-probe.log"
   local timeout_marker="$remote_run_root/xcodebuild.timeout"
-  local watchdog_timer_record="$remote_run_root/watchdog-timer.pid"
-  local watchdog_reaped_marker="$remote_run_root/watchdog-timer.reaped"
+  local watchdog_stop_pipe="$remote_run_root/watchdog.stop"
   local action=test
   [[ "$BUILD_ONLY" != 1 ]] || action=build
   local xcodebuild_command
@@ -1146,7 +1145,7 @@ EOF
   local remote_finalize_status=1
 
   mkdir -p "$remote_run_root" "$runtime_home"
-  rm -rf "$derived_path" "$result_bundle" "$timeout_marker" "$watchdog_timer_record" "$watchdog_reaped_marker"
+  rm -rf "$derived_path" "$result_bundle" "$timeout_marker"
   rm -f "$destination_probe_log"
   : >"$xcodebuild_log"
   write_remote_run_ownership \
@@ -1157,6 +1156,44 @@ EOF
     "$derived_path" \
     "$runtime_home" \
     "$TEST_PLATFORM"
+
+  start_remote_watchdog() {
+    # Open both ends before forking so even an immediate completion can
+    # signal the watchdog. The timed read owns no sleep process to reap.
+    mkfifo "$watchdog_stop_pipe" || return 1
+    if ! exec 9<>"$watchdog_stop_pipe"; then
+      rm -f "$watchdog_stop_pipe"
+      return 1
+    fi
+    if ! rm -f "$watchdog_stop_pipe"; then
+      exec 9>&-
+      return 1
+    fi
+    (
+      if IFS= read -r -t "$timeout_seconds" <&9; then
+        exit 0
+      fi
+      if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+        printf 'error: remote xcodebuild timed out after %s seconds\n' "$timeout_seconds" >>"$xcodebuild_log"
+        : >"$timeout_marker"
+        kill_process_tree "$xcodebuild_pid" TERM
+        if ! IFS= read -r -t 5 <&9 && kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+          kill_process_tree "$xcodebuild_pid" KILL
+        fi
+      fi
+    ) &
+    watchdog_pid=$!
+  }
+
+  stop_remote_watchdog() {
+    [[ -n "$watchdog_pid" ]] || return 0
+    local failed=0
+    printf '\n' >&9 || failed=1
+    wait "$watchdog_pid" || failed=1
+    exec 9>&-
+    watchdog_pid=""
+    return "$failed"
+  }
 
   finalize_remote_resources() {
     local cleanup_failed=0
@@ -1170,11 +1207,7 @@ EOF
     remote_finalize_status=1
     trap '' HUP INT TERM QUIT PIPE
     toastty_ios_cancel_bounded_simctl
-    if [[ -n "${watchdog_pid:-}" ]]; then
-      kill "$watchdog_pid" >/dev/null 2>&1 || true
-      wait "$watchdog_pid" >/dev/null 2>&1 || true
-      watchdog_pid=""
-    fi
+    stop_remote_watchdog || true
     if [[ -n "${tail_pid:-}" ]]; then
       kill "$tail_pid" >/dev/null 2>&1 || true
       wait "$tail_pid" >/dev/null 2>&1 || true
@@ -1371,7 +1404,7 @@ EOF
       fi
       local result_bundle_args=(-resultBundlePath "$result_bundle")
       [[ "$xcodebuild_phase" != build-for-testing ]] || result_bundle_args=()
-      rm -f "$timeout_marker" "$watchdog_reaped_marker"
+      rm -f "$timeout_marker"
 
     (
       cd "$remote_worktree_dir"
@@ -1400,35 +1433,12 @@ EOF
       caffeinate -disu -t "$display_hold_seconds" >/dev/null 2>&1 &
       caffeinate_pid=$!
 
-      if [[ "$timeout_seconds" != "0" ]]; then
-        (
-          watchdog_sleep_pid=""
-          cleanup_watchdog_timer() {
-            if [[ -n "${watchdog_sleep_pid:-}" ]]; then
-              kill "$watchdog_sleep_pid" >/dev/null 2>&1 || true
-              wait "$watchdog_sleep_pid" >/dev/null 2>&1 || true
-            fi
-            rm -f "$watchdog_timer_record"
-            : >"$watchdog_reaped_marker"
-          }
-          trap cleanup_watchdog_timer EXIT
-          trap 'exit 0' HUP INT TERM
-          sleep "$timeout_seconds" &
-          watchdog_sleep_pid=$!
-          printf '%s\n' "$watchdog_sleep_pid" >"$watchdog_timer_record"
-          wait "$watchdog_sleep_pid" || exit 0
-          watchdog_sleep_pid=""
-        if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
-          printf 'error: remote xcodebuild test timed out after %s seconds\n' "$timeout_seconds" >>"$xcodebuild_log"
-          : >"$timeout_marker"
-          kill_process_tree "$xcodebuild_pid" TERM
-          sleep 5
-          if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
-            kill_process_tree "$xcodebuild_pid" KILL
-          fi
-        fi
-        ) &
-        watchdog_pid=$!
+      if [[ "$timeout_seconds" != "0" ]] && ! start_remote_watchdog; then
+        kill "$caffeinate_pid" >/dev/null 2>&1 || true
+        exit_code=1
+        status="fail"
+        failure_summary="Could not start the remote xcodebuild timeout watchdog"
+        break
       fi
 
     if wait "$xcodebuild_pid"; then
@@ -1440,29 +1450,20 @@ EOF
       kill "$caffeinate_pid" >/dev/null 2>&1 || true
       caffeinate_pid=""
     fi
-    if [[ "$exit_code" == "0" ]]; then
-      :
-    else
+    if ! stop_remote_watchdog; then
+      exit_code=1
       status="fail"
-      if [[ -f "$timeout_marker" ]]; then
-        exit_code=124
-        failure_summary="Remote xcodebuild test timed out after ${timeout_seconds} seconds"
-      else
-        failure_summary="Remote xcodebuild test exited with status ${exit_code}"
-      fi
+      failure_summary="Remote xcodebuild timeout watchdog failed"
+    elif [[ -f "$timeout_marker" ]]; then
+      exit_code=124
+      status="fail"
+      failure_summary="Remote xcodebuild test timed out after ${timeout_seconds} seconds"
+    elif [[ "$exit_code" != "0" ]]; then
+      status="fail"
+      failure_summary="Remote xcodebuild test exited with status ${exit_code}"
     fi
 
     xcodebuild_pid=""
-    if [[ -n "$watchdog_pid" ]]; then
-      kill "$watchdog_pid" >/dev/null 2>&1 || true
-      wait "$watchdog_pid" >/dev/null 2>&1 || true
-      watchdog_pid=""
-      if [[ ! -f "$watchdog_reaped_marker" ]]; then
-        exit_code=1
-        status="fail"
-        failure_summary="Remote timeout watchdog did not confirm that it reaped its timer child"
-      fi
-    fi
     [[ "$exit_code" == "0" ]] || break
     done
     if [[ -n "$tail_pid" ]]; then
