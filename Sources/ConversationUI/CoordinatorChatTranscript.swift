@@ -181,8 +181,8 @@ public enum ToasttyTranscriptRows {
 ///   answers.
 ///
 /// Only the Mac knows which turns are quiet and which messages it sent
-/// itself, and only on the Mac are the attached files at hand. The Mac's
-/// chat passes those through `Messages`.
+/// itself, and the attached files stay on the Mac. Each chat says how it
+/// shows them through `Messages`.
 public enum CoordinatorChatTranscript {
     /// An agent message as a reply names it.
     public struct QuotedMessage: Hashable, Sendable {
@@ -199,11 +199,12 @@ public enum CoordinatorChatTranscript {
     public struct Messages {
         /// How a user's bubble shows the files attached to the message.
         public enum AttachedFiles: Sendable {
-            /// Each file by itself, an image as a thumbnail. The files are
-            /// on this Mac.
+            /// Each file by itself, an image as a thumbnail. The chat's
+            /// `toasttyAttachmentImageSource` reads the images: the Mac's
+            /// chat from the Mac's files, a device's chat from the Mac.
             case apart
-            /// The name of each file, in the text. The files stay on the
-            /// Mac, so this device cannot show them.
+            /// The name of each file, in the text: the chat of a device
+            /// whose Mac does not serve the images.
             case byName
         }
 
@@ -314,9 +315,17 @@ public enum CoordinatorChatTranscript {
         case .apart:
             // The bubble shows each attached file by itself, an image as a
             // thumbnail, rather than its name in the text.
-            let parts = CoordinatorMessageHeader.displayParts(of: payload.text)
-            text = parts.text
-            attachments = parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
+            if let paths = payload.attachmentPaths, paths.isEmpty == false {
+                // A message that a device sent with files: its text ends
+                // with a line naming each file, and the paths stay apart.
+                let typed = RemoteMessageSendRequest.typedText(ofDisplayText: payload.text, fileCount: paths.count)
+                text = CoordinatorMessageHeader.displayParts(of: typed).text
+                attachments = paths.map { URL(fileURLWithPath: $0) }
+            } else {
+                let parts = CoordinatorMessageHeader.displayParts(of: payload.text)
+                text = parts.text
+                attachments = parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
+            }
         case .byName:
             text = CoordinatorMessageHeader.displayText(of: payload.text)
             attachments = []

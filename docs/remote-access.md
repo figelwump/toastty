@@ -998,6 +998,55 @@ read that fails is tried again with the next snapshot. With an older Mac, which
 sends neither, quiet turns show open, and the New line counts their replies.
 An older phone ignores the field.
 
+The phone's coordinator chat shows the images attached to a user message as
+thumbnails in the bubble, in the Mac chat's order and 200 × 120 point box, and
+any other file as its name chip. The files stay on the Mac: a Mac with the
+coordinator advertises `coordinator_attachment_images` and serves each image
+with `POST /api/coordinator.attachment_image.get`. The request names the
+coordinator's `conversationID`, the user message's `eventID`, the file's
+`attachmentIndex` in the message's list of files, and `size`: `thumbnail`
+(at most 600 pixels on the long side) or `full` (at most 4096). It never names
+a path. The Mac finds the path in its own copy of that user message: for a
+message that a device sent with files, in the message's `attachmentPaths`
+(below); for any other, in its text, with the parser its own chat uses
+(`CoordinatorMessageHeader.displayParts(of:)`). It serves the file only when the file is one that Toastty stored as an
+attachment, inside the coordinator's `attachments` folder (where the Mac copies
+the files the user attaches) or the gateway's store of files that devices send,
+has an image's extension, is a regular file at
+that path with no symbolic link in it (the macOS `/tmp`, `/var` and `/etc`
+aliases excepted), is at most 64 MB and 100 million pixels, and decodes as an
+image. The answer is a new JPEG, or a PNG for an image with transparency, made
+from the decoded pixels, with `mimeType`, base64 `data`, `pixelWidth` and
+`pixelHeight`; the file's own bytes and metadata never leave the Mac. A refusal
+answers `error` with the preview error kinds: `denied` (another conversation, a
+message that is not a user message, an index past the message's files, a
+symbolic link, or a device without read access), `missing` (the message or
+the file is gone), `unsupported` (not an image), `tooLarge`, or `busy` (the
+Mac's preview reads are all in use). The route needs read access only, as
+showing the chat does. Because the route reads only Toastty's attachment
+folders, a path that a sender types into a message's list of files cannot reach
+any other file on the Mac, and a message that another sender brought, such as
+`toastty task send`, lists no files.
+
+When the Mac matches a device's send with files to the agent's transcript, it
+shows the message as the device's text with an `[Attachment: name]` line for
+each file, and it keeps the paths of the stored files in the user message's
+`attachmentPaths`, in the same order. A chat that shows the files themselves,
+the Mac's coordinator chat and the phone's with a Mac that serves images, uses
+those paths in place of the lines; an older phone ignores the field and shows
+the lines, as before.
+
+The phone fetches a thumbnail only while its box is on screen, a few at a
+time, keeps the thumbnails in memory, asks once for an image that two views need at
+once, and stops a fetch when no view waits for it any more. A box keeps its size while it loads ("Loading…") and when
+the image cannot be had (its name, as on the Mac): the Mac keeps files sent
+from the phone for 7 days, and a file attached on the Mac can move. A failed
+fetch is tried again when the box shows again. A tap on a thumbnail opens the
+image full screen, with pinch and double-tap to zoom; Done, or a swipe down
+while the image fits the screen, closes it. With an older Mac the phone names
+the files in the bubble's text, as before. Task-session chats name the files
+too.
+
 ### Starting a session
 
 Tap **+** on a workspace screen to start a new agent session. On the Home

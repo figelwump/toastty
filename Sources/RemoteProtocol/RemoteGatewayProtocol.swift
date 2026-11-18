@@ -95,6 +95,12 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// `RemoteCoordinatorQuietDigestsPolicy.path` when it changes. Only a Mac
     /// with the coordinator advertises it.
     case coordinatorQuietDigests = "coordinator_quiet_digests"
+    /// The Mac serves the images attached to the user messages of the
+    /// coordinator's chat, at `RemoteCoordinatorAttachmentImagePolicy.path`,
+    /// so a device's chat shows them as the Mac's chat does. Without it, a
+    /// device shows the files by name. Only a Mac with the coordinator
+    /// advertises it.
+    case coordinatorAttachmentImages = "coordinator_attachment_images"
 }
 
 /// Public compatibility probe used before a client has credentials.

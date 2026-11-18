@@ -299,6 +299,21 @@ private extension RemoteProtocolGoldenTests {
             ),
             try fixture("coordinator-quiet-digests-response.json", quietDigests),
             try fixture(
+                "coordinator-attachment-image-request.json",
+                RemoteCoordinatorAttachmentImageRequest(
+                    conversationID: RemoteConversationID(rawValue: numberedUUID(220)),
+                    eventID: "claude:msg_attach",
+                    attachmentIndex: 1,
+                    size: .thumbnail
+                )
+            ),
+            try fixture(
+                "coordinator-attachment-image-response.json",
+                RemoteCoordinatorAttachmentImageResponse(
+                    mimeType: "image/png", data: Data([0x89, 0x50, 0x4E, 0x47]), pixelWidth: 600, pixelHeight: 338)
+            ),
+            try fixture("coordinator-attachment-image-refusal.json", RemoteCoordinatorAttachmentImageResponse(error: .denied)),
+            try fixture(
                 "task-action-request.json",
                 RemoteTaskActionRequest(
                     taskID: numberedUUID(302),
@@ -702,6 +717,8 @@ private extension RemoteProtocolGoldenTests {
         Read `toastty task list` for details.
         """)])
 
+    static let remoteAttachmentPath = "/Users/example/Library/Application Support/Toastty/remote-access/attachments/A1/photo.jpg"
+
     static func makeEventPage() -> ConversationEventPage {
         var events: [ConversationEvent] = []
 
@@ -715,7 +732,9 @@ private extension RemoteProtocolGoldenTests {
                 payload: .userMessage(ConversationUserMessagePayload(
                     text: "User message from \(origin.rawValue)",
                     origin: origin,
-                    clientRequestID: requestID
+                    clientRequestID: requestID,
+                    // A device's send with a file keeps the stored path apart.
+                    attachmentPaths: origin == .remote ? [Self.remoteAttachmentPath] : nil
                 ))
             )
         }

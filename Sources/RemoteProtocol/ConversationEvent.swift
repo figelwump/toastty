@@ -57,17 +57,26 @@ public struct ConversationUserMessagePayload: Codable, Equatable, Sendable {
     /// mark a message that waited in the Mac-side queue or steered a running
     /// turn. Absent for prompt sends and from older hosts.
     public var deliveryMode: RemoteMessageDeliveryMode?
+    /// The files that a device sent with this message, as the host stored
+    /// them, in the order of the `[Attachment: name]` lines that end `text`
+    /// (`RemoteMessageSendRequest.displayText`). Set when the host
+    /// correlated the message with the device's send; absent otherwise and
+    /// from older hosts. A chat that shows each file by itself uses these
+    /// paths in place of the lines.
+    public var attachmentPaths: [String]?
 
     public init(
         text: String,
         origin: ConversationMessageOrigin = .unknown,
         clientRequestID: String? = nil,
-        deliveryMode: RemoteMessageDeliveryMode? = nil
+        deliveryMode: RemoteMessageDeliveryMode? = nil,
+        attachmentPaths: [String]? = nil
     ) {
         self.text = text
         self.origin = origin
         self.clientRequestID = clientRequestID
         self.deliveryMode = deliveryMode
+        self.attachmentPaths = attachmentPaths
     }
 }
 

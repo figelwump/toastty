@@ -9,6 +9,11 @@ struct ToasttyPreviewService: Sendable {
     var resource: @Sendable (RemoteHTMLResourceRequest) async throws -> RemoteHTMLResourceResponse = { _ in
         throw RemotePreviewError.unsupported
     }
+    /// An image attached to a message in the coordinator's chat, as JPEG
+    /// or PNG data from the Mac.
+    var attachmentImage: @Sendable (RemoteCoordinatorAttachmentImageRequest) async throws -> Data = { _ in
+        throw RemotePreviewError.unsupported
+    }
 }
 
 private struct ToasttyPreviewServiceKey: EnvironmentKey {

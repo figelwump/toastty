@@ -61,6 +61,11 @@ public final class RemoteGatewayRequestHandler {
         /// the main thread, so the transport resolves it with
         /// `resolveCoordinatorSend`.
         case deferredCoordinatorSend(deviceID: UUID, request: RemoteCoordinatorSendRequest)
+        /// A validated request for an image attached to a message in the
+        /// coordinator's chat. Reading and scaling the image runs off the
+        /// main thread, so the transport resolves it with
+        /// `resolveCoordinatorAttachmentImage`.
+        case deferredCoordinatorAttachmentImage(deviceID: UUID, request: RemoteCoordinatorAttachmentImageRequest)
         case upgradeToWebSocket(
             deviceID: UUID,
             authKind: RemoteDeviceAuthKind,
@@ -413,6 +418,84 @@ public final class RemoteGatewayRequestHandler {
     /// Invoked on the main thread, as the chat read handler is.
     public var coordinatorQuietDigestsHandler: (() -> RemoteCoordinatorQuietDigests)?
 
+    /// The events of the coordinator's conversation, as this Mac has them,
+    /// when `conversationID` names it, and `nil` for any other
+    /// conversation. A device's request for an attached image is checked
+    /// against them. Installing it is what advertises
+    /// `RemoteGatewayCapability.coordinatorAttachmentImages`. Invoked on
+    /// the main thread.
+    public var coordinatorConversationEventsHandler: ((RemoteConversationID) -> [ConversationEvent]?)?
+    /// The folders where Toastty stores the files attached to messages: the
+    /// only folders the attachment image route reads from.
+    public var coordinatorAttachmentFolders: [URL] = []
+
+    /// Reads one image attached to a user message of the coordinator's
+    /// chat. The device's read access can change between the request and
+    /// this call, and while the image is read, so it is checked again
+    /// before and after. The path comes from this Mac's own copy of the
+    /// message (`RemoteCoordinatorAttachmentImageReader`).
+    @MainActor
+    public func resolveCoordinatorAttachmentImage(
+        deviceID: UUID,
+        request: RemoteCoordinatorAttachmentImageRequest
+    ) async -> RemoteGatewayHTTPResponse {
+        let body: Data
+        do {
+            body = try await coordinatorAttachmentImage(deviceID: deviceID, request: request)
+        } catch {
+            let reason = (error as? RemotePreviewError) ?? .missing
+            ToasttyLog.info(
+                "Coordinator attachment image refused",
+                category: .automation,
+                metadata: [
+                    "conversation_id": request.conversationID.rawValue.uuidString,
+                    "device_id": deviceID.uuidString,
+                    "size": request.size.rawValue,
+                    "reason": reason.rawValue,
+                ]
+            )
+            body = (try? encoder.encode(RemoteCoordinatorAttachmentImageResponse(error: reason))) ?? Data()
+        }
+        return .json(body: body)
+    }
+
+    /// The answer's JSON, made off the main thread: a full-size image can
+    /// be megabytes of base64.
+    @MainActor
+    private func coordinatorAttachmentImage(
+        deviceID: UUID,
+        request: RemoteCoordinatorAttachmentImageRequest
+    ) async throws -> Data {
+        guard deviceCanRead(deviceID) else { throw RemotePreviewError.denied }
+        guard let events = coordinatorConversationEventsHandler?(request.conversationID) else {
+            // Another conversation, or no coordinator.
+            throw RemotePreviewError.denied
+        }
+        let path = try RemoteCoordinatorAttachmentImageReader.attachmentPath(
+            in: events, eventID: request.eventID, index: request.attachmentIndex)
+        let size = request.size
+        let folders = coordinatorAttachmentFolders
+        let work = Task.detached(priority: .utility) { () throws -> Data in
+            let image = try RemoteCoordinatorAttachmentImageReader.image(
+                atRecordedPath: path, size: size, allowedFolders: folders)
+            try Task.checkCancellation()
+            return try ConversationEventCoding.makeEncoder().encode(image)
+        }
+        let body = try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
+        guard Task.isCancelled == false, deviceCanRead(deviceID) else { throw RemotePreviewError.denied }
+        return body
+    }
+
+    private func deviceCanRead(_ deviceID: UUID) -> Bool {
+        deviceStore.devices.contains {
+            $0.id == deviceID && !$0.isRevoked && $0.authKind == .native && $0.scopes.contains(.read)
+        }
+    }
+
     /// Sends a quick entry message to the coordinator. Installing it is
     /// what advertises `RemoteGatewayCapability.coordinatorSend`. Invoked
     /// only by the main-actor transport, after `resolveCoordinatorSend`
@@ -594,7 +677,7 @@ public final class RemoteGatewayRequestHandler {
     }
 
     private func previewIsAuthorized(_ operation: RemoteGatewayPreviewOperation) -> Bool {
-        deviceStore.devices.contains { $0.id == operation.deviceID && !$0.isRevoked && $0.authKind == .native && $0.scopes.contains(.read) }
+        deviceCanRead(operation.deviceID)
     }
 
     /// Called only after a pairing mutation has durably completed.
@@ -907,6 +990,8 @@ public final class RemoteGatewayRequestHandler {
             // Without a coordinator, no digest is quiet.
             let digests = coordinatorQuietDigestsHandler?() ?? RemoteCoordinatorQuietDigests(keys: [])
             return .respond(.json(body: (try? encoder.encode(digests)) ?? Data()))
+        case .coordinatorAttachmentImage:
+            return handleCoordinatorAttachmentImage(request, device: authenticated)
         case .workspaceDone:
             return handleWorkspaceDone(request, device: authenticated, at: date)
         case .conversationFlag:
@@ -1004,6 +1089,7 @@ public final class RemoteGatewayRequestHandler {
         if coordinatorSendHandler != nil { response.capabilities.append(.coordinatorSend) }
         if coordinatorChatReadHandler != nil { response.capabilities.append(.coordinatorChatRead) }
         if coordinatorQuietDigestsHandler != nil { response.capabilities.append(.coordinatorQuietDigests) }
+        if coordinatorConversationEventsHandler != nil { response.capabilities.append(.coordinatorAttachmentImages) }
         let body = (try? encoder.encode(response)) ?? Data()
         return .respond(.json(body: body))
     }
@@ -1252,6 +1338,34 @@ public final class RemoteGatewayRequestHandler {
         let result = coordinatorChatReadHandler?(readRequest, device) ?? .noCoordinator
         let body = (try? encoder.encode(RemoteCoordinatorChatReadResponse(result: result))) ?? Data()
         return .respond(.json(body: body))
+    }
+
+    private func handleCoordinatorAttachmentImage(
+        _ request: RemoteGatewayHTTPRequest,
+        device: RemoteDeviceRecord
+    ) -> Outcome {
+        guard request.body.count <= RemoteCoordinatorAttachmentImagePolicy.maximumRequestBodyBytes,
+              let imageRequest = try? ConversationEventCoding.makeDecoder().decode(
+                RemoteCoordinatorAttachmentImageRequest.self,
+                from: request.body
+              ),
+              imageRequest.isValid else {
+            return .respond(errorResponse(
+                status: 400,
+                reason: "Bad Request",
+                code: "invalid_body",
+                message: "Expected coordinator attachment image JSON"
+            ))
+        }
+        guard imageRequest.protocolVersion == RemoteGatewayProtocol.version else {
+            return .respond(errorResponse(
+                status: 409,
+                reason: "Conflict",
+                code: "protocol_mismatch",
+                message: "Unsupported protocol version"
+            ))
+        }
+        return .deferredCoordinatorAttachmentImage(deviceID: device.id, request: imageRequest)
     }
 
     private func handleWorkspaceDone(

@@ -780,6 +780,7 @@ final class LiveSessionsController {
             readPoint: homeController.snapshot.coordinatorChatRead
         )
         controller.consumeCoordinatorQuietDigests(quietDigests.keys)
+        controller.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         activeConversationController = controller
         await controller.start()
 
@@ -819,6 +820,7 @@ final class LiveSessionsController {
             isSupported: acceptsCoordinatorChatRead,
             readPoint: homeController.snapshot.coordinatorChatRead
         )
+        activeConversationController?.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         await runtime.updateDeviceScopes(scopes)
     }
 
@@ -856,6 +858,12 @@ final class LiveSessionsController {
     /// only read access.
     private var acceptsCoordinatorQuietDigests: Bool {
         coordinatorState.capabilities.contains(.coordinatorQuietDigests) && deviceScopes.contains(.read)
+    }
+
+    /// The Mac serves the images attached to the coordinator chat's
+    /// messages. Showing the chat needs only read access.
+    private var acceptsCoordinatorAttachmentImages: Bool {
+        coordinatorState.capabilities.contains(.coordinatorAttachmentImages) && deviceScopes.contains(.read)
     }
 
     /// Whether the Mac has the task system, once its capabilities are
@@ -956,6 +964,7 @@ final class LiveSessionsController {
             isSupported: acceptsCoordinatorChatRead,
             readPoint: homeController.snapshot.coordinatorChatRead
         )
+        activeConversationController?.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         updateQuietDigests()
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403
@@ -981,6 +990,7 @@ final class LiveSessionsController {
                 isSupported: acceptsCoordinatorChatRead,
                 readPoint: homeController.snapshot.coordinatorChatRead
             )
+            controller.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         }
         updateQuietDigests()
     }

@@ -57,6 +57,17 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertEqual(user.text, "User message from local")
         XCTAssertEqual(user.origin, .local)
         XCTAssertNil(user.clientRequestID)
+        XCTAssertNil(user.attachmentPaths)
+
+        // A device's send with a file keeps the stored path apart.
+        guard case .userMessage(let remote) = try XCTUnwrap(knownEventsBySequence[2]).payload else {
+            return XCTFail("Sequence 2 must remain a user message")
+        }
+        XCTAssertEqual(remote.clientRequestID, "ios-request-0001")
+        XCTAssertEqual(
+            remote.attachmentPaths,
+            ["/Users/example/Library/Application Support/Toastty/remote-access/attachments/A1/photo.jpg"]
+        )
 
         guard case .statusChanged(let status) = page.events[11] else {
             return XCTFail("Sequence 12 must remain a compatible status change")

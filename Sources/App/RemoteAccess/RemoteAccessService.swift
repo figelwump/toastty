@@ -102,6 +102,18 @@ final class RemoteAccessCoordinatorChatReadBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's check of an attached image's message into the
+/// main-actor-owned conversation projection.
+final class RemoteAccessCoordinatorConversationEventsBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func events(_ conversationID: RemoteConversationID) -> [ConversationEvent]? {
+        MainActor.assumeIsolated {
+            service?.coordinatorConversationEvents(conversationID)
+        }
+    }
+}
+
 /// Bridges the gateway's read of the coordinator's quiet digests into the
 /// main-actor-owned coordinator.
 final class RemoteAccessCoordinatorQuietDigestsBridge: @unchecked Sendable {
@@ -408,7 +420,13 @@ struct RemotePendingSendCorrelator: Sendable {
                 return observation
             }
             var stampedPayload = payload
-            if let displayText = pending.displayText { stampedPayload.text = displayText }
+            if let displayText = pending.displayText {
+                // The text names each file; the paths of the files that the
+                // Mac stored, which the delivered text lists, stay with the
+                // message for a chat that shows the files themselves.
+                stampedPayload.attachmentPaths = CoordinatorMessageHeader.attachedFiles(in: payload.text)?.paths
+                stampedPayload.text = displayText
+            }
             stampedPayload.origin = .remote
             stampedPayload.clientRequestID = pending.clientRequestID
             stampedPayload.deliveryMode = pending.deliveryMode == .prompt ? nil : pending.deliveryMode
@@ -554,6 +572,8 @@ final class RemoteAccessService: ObservableObject {
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
     private let attachmentStore: RemoteMessageAttachmentStore
+    /// Where the gateway stores the files that devices send.
+    let attachmentStoreDirectoryURL: URL
     private let sendBridge = RemoteAccessSendBridge()
     private let questionAnswerBridge = RemoteAccessQuestionAnswerBridge()
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
@@ -587,6 +607,7 @@ final class RemoteAccessService: ObservableObject {
     private var coordinatorChatReadThrough: CoordinatorChatReadThrough?
     private var coordinatorChatReadObserver: AnyCancellable?
     private let coordinatorQuietDigestsBridge = RemoteAccessCoordinatorQuietDigestsBridge()
+    private let coordinatorConversationEventsBridge = RemoteAccessCoordinatorConversationEventsBridge()
     /// The keys of the coordinator's quiet digests. `nil` on a Mac without
     /// the coordinator, which does not advertise them.
     private var coordinatorQuietDigestKeys: (() -> [String])?
@@ -781,7 +802,9 @@ final class RemoteAccessService: ObservableObject {
             RemoteAccessGatewayServer(handler: $0)
         }
     ) {
-        self.attachmentStore = RemoteMessageAttachmentStore(root: runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true))
+        let attachmentStoreDirectoryURL = runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true)
+        self.attachmentStoreDirectoryURL = attachmentStoreDirectoryURL
+        self.attachmentStore = RemoteMessageAttachmentStore(root: attachmentStoreDirectoryURL)
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
         self.annotationStyleStore = annotationStyleStore
@@ -854,6 +877,7 @@ final class RemoteAccessService: ObservableObject {
         readAcknowledgementBridge.service = self
         coordinatorChatReadBridge.service = self
         coordinatorQuietDigestsBridge.service = self
+        coordinatorConversationEventsBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
         conversationCloseBridge.service = self
@@ -969,6 +993,7 @@ final class RemoteAccessService: ObservableObject {
         if let coordinatorController = taskBoard?.coordinator?.coordinatorController {
             installCoordinatorChatRead(coordinatorController.chatReadThrough)
             installCoordinatorQuietDigests(from: coordinatorController)
+            installCoordinatorAttachmentImages(folders: [coordinatorController.attachments.directoryURL, attachmentStoreDirectoryURL])
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -2249,6 +2274,30 @@ final class RemoteAccessService: ObservableObject {
                 guard let self, self.isEnabled else { return }
                 self.scheduleSessionListBroadcast()
             }
+    }
+
+    /// Serves paired devices the images attached to the messages of the
+    /// coordinator's chat, so their chats show them as the Mac's does, from
+    /// `folders` only: where Toastty stores attached files. Installing it
+    /// advertises `coordinatorAttachmentImages`. The app installs it once,
+    /// at launch, with the coordinator.
+    func installCoordinatorAttachmentImages(folders: [URL]) {
+        handler.coordinatorAttachmentFolders = folders
+        handler.coordinatorConversationEventsHandler = { [coordinatorConversationEventsBridge] conversationID in
+            coordinatorConversationEventsBridge.events(conversationID)
+        }
+    }
+
+    /// The events of the coordinator's conversation, by the coordinator's
+    /// panel as the chat read does, or `nil` when `conversationID` is any
+    /// other conversation.
+    func coordinatorConversationEvents(_ conversationID: RemoteConversationID) -> [ConversationEvent]? {
+        guard isReady, isEnabled,
+              let coordinatorPanelID = store.state.coordinator?.panelID,
+              panelIDByConversationID[conversationID] == coordinatorPanelID,
+              let projector = projectionStore.projectorState(for: conversationID)
+        else { return nil }
+        return projector.events
     }
 
     /// The coordinator's quiet digests now, for a device's read.

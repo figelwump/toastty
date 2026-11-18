@@ -582,6 +582,34 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
                     self.sendPreviewResponse(response, connectionID: connectionID)
                 }
+            case .deferredCoordinatorAttachmentImage(let deviceID, let imageRequest):
+                // Images share the previews' limit: both read files off the
+                // main thread.
+                guard activePreviewCount < 8 else {
+                    let body = (try? JSONEncoder().encode(RemoteCoordinatorAttachmentImageResponse(error: .busy))) ?? Data()
+                    sendPreviewResponse(.json(body: body), connectionID: connectionID)
+                    return
+                }
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // A full-size image can take a phone on a slow link longer to
+                // download than the deadline for reading a request: it gets
+                // the time an attachment upload gets.
+                connection.requestTimeoutTask?.cancel()
+                let timeout = attachmentUploadTimeoutNanoseconds
+                connection.requestTimeoutTask = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: timeout) } catch { return }
+                    self?.drop(connectionID)
+                }
+                activePreviewCount += 1
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { self.activePreviewCount -= 1 }
+                    let response = await self.handler.resolveCoordinatorAttachmentImage(
+                        deviceID: deviceID, request: imageRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
             case .upgradeToWebSocket(let deviceID, let authKind, let upgradeResponseData):
                 connection.requestTimeoutTask?.cancel()
                 connection.requestTimeoutTask = nil

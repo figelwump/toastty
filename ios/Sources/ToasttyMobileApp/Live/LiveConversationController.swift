@@ -88,6 +88,9 @@ final class LiveConversationController {
     /// quiet, from the Mac. `nil` with a Mac that does not share them: then
     /// no turn folds.
     private(set) var quietDigestKeys: Set<String>?
+    /// The Mac serves the images attached to the coordinator chat's
+    /// messages: the chat shows them as thumbnails rather than names.
+    private(set) var showsCoordinatorAttachedImages = false
     /// The app is active. The chat is on screen while this controller
     /// exists: it closes when another screen covers it.
     private var isSceneActive = true
@@ -364,6 +367,16 @@ final class LiveConversationController {
     func consumeCoordinatorQuietDigests(_ keys: Set<String>?) {
         guard quietDigestKeys != keys else { return }
         quietDigestKeys = keys
+        guard isCoordinatorChat else { return }
+        change = .append
+        refreshTranscriptPresentation(contentChanged: true)
+    }
+
+    /// Whether the Mac serves the images attached to the coordinator
+    /// chat's messages. The bubbles that have files change in place.
+    func consumeCoordinatorAttachedImages(isSupported: Bool) {
+        guard showsCoordinatorAttachedImages != isSupported else { return }
+        showsCoordinatorAttachedImages = isSupported
         guard isCoordinatorChat else { return }
         change = .append
         refreshTranscriptPresentation(contentChanged: true)
@@ -715,7 +728,8 @@ final class LiveConversationController {
             isLoadingOlder: isLoadingOlder,
             prependAnchorID: prependAnchorID,
             coordinatorMessages: isCoordinatorChat
-                ? ToasttyConversationPresentationAdapter.coordinatorMessages(quietDigestKeys: quietDigestKeys)
+                ? ToasttyConversationPresentationAdapter.coordinatorMessages(
+                    quietDigestKeys: quietDigestKeys, showsAttachedImages: showsCoordinatorAttachedImages)
                 : nil
         )
         updateChatReading()

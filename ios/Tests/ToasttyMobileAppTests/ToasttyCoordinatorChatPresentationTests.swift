@@ -72,6 +72,47 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
         XCTAssertFalse(shown.contains("/Users/me"))
         XCTAssertNil(quote)
         XCTAssertEqual(origin, .remote)
+
+        // A Mac that serves the images: each file shows by itself, in the
+        // message's order, as on the Mac, and the text does not name them.
+        // The bubble asks the Mac for an image by the message's event and
+        // the file's place in this list.
+        let apart = coordinatorRows([.userMessage(.init(text: text, origin: .remote))], showsAttachedImages: true)
+        guard case .userMessage(let apartText, _, _, _, let files) = try XCTUnwrap(apart.first).content else {
+            return XCTFail("Expected the user's message: \(apart)")
+        }
+        XCTAssertEqual(apartText, """
+        Add a CSV export to the Tasks tab.
+
+        project "toastty" · codex, model gpt-6.1-sol, effort high
+        """)
+        XCTAssertEqual(files.map(\.path), ["/Users/me/.toastty/coordinator/attachments/A1/csv-mockup.png", "/tmp/notes.md"])
+        XCTAssertEqual(apart.first?.eventID, "coordinator-1")
+    }
+
+    /// A message sent from a phone with a photo: the Mac's copy names the
+    /// photo in its text and keeps the stored path apart. With a Mac that
+    /// serves images the bubble shows the photo by itself and the typed
+    /// text alone; otherwise it shows the name line, as before.
+    func testAMessageSentWithAPhotoShowsThePhotoApartFromItsText() throws {
+        let stored = "/Users/me/Library/Application Support/Toastty/remote-access/attachments/A1/9B1E4C2A.jpg"
+        let payload = ConversationUserMessagePayload(
+            text: "Is this the crash?\n[Attachment: Photo-3213AEE3.jpg]", origin: .remote,
+            clientRequestID: "phone-1", attachmentPaths: [stored]
+        )
+        let apart = coordinatorRows([.userMessage(payload)], showsAttachedImages: true)
+        guard case .userMessage(let text, _, _, _, let files) = try XCTUnwrap(apart.first).content else {
+            return XCTFail("Expected the user's message: \(apart)")
+        }
+        XCTAssertEqual(text, "Is this the crash?")
+        XCTAssertEqual(files.map(\.path), [stored])
+
+        let byName = coordinatorRows([.userMessage(payload)])
+        guard case .userMessage(let named, _, _, _, let none) = try XCTUnwrap(byName.first).content else {
+            return XCTFail("Expected the user's message: \(byName)")
+        }
+        XCTAssertEqual(named, "Is this the crash?\n[Attachment: Photo-3213AEE3.jpg]")
+        XCTAssertEqual(none, [])
     }
 
     func testAReplyShowsTheLineThatNamesTheMessageItAnswers() throws {
@@ -182,7 +223,10 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func coordinatorRows(_ payloads: [ConversationEventPayload]) -> [ToasttyTranscriptRow] {
+    private func coordinatorRows(
+        _ payloads: [ConversationEventPayload],
+        showsAttachedImages: Bool = false
+    ) -> [ToasttyTranscriptRow] {
         ToasttyConversationPresentationAdapter.makeState(
             events: payloads.enumerated().map { event(UInt64($0.offset + 1), $0.element) },
             projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
@@ -190,7 +234,9 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
             phase: .live,
             revision: .initial,
             historyTruncated: false,
-            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages()
+            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages(
+                showsAttachedImages: showsAttachedImages
+            )
         ).rows
     }
 

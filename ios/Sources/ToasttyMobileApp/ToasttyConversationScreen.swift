@@ -6,7 +6,10 @@ import UIKit
 
 struct ToasttyConversationScreen: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.toasttyPreviewService) private var previewService
     @State private var selectedPreview: ToasttyPreviewSelection?
+    /// The attached image that the full-screen view shows.
+    @State private var openedImage: ToasttyAttachedImage?
     @State private var isComposerFocused = false
     @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
@@ -219,6 +222,13 @@ struct ToasttyConversationScreen: View {
         .sheet(item: $selectedPreview) { selection in
             ToasttyPreviewSheet(selection: selection, detents: previewDetents(for: selection))
         }
+        // The images attached to the coordinator chat's messages come from
+        // the Mac. Other chats show the files by name.
+        .environment(\.toasttyAttachmentImageSource, attachmentImageSource)
+        .environment(\.toasttyOpenAttachedImage, { openedImage = $0 })
+        .fullScreenCover(item: $openedImage) { image in
+            ToasttyAttachmentImageViewer(image: image, source: attachmentImageSource)
+        }
         .background(ToasttyDesignTokens.elevatedSurface)
         .sensoryFeedback(trigger: sendFeedback) { _, new in new?.sensoryFeedback }
         .navigationBarTitleDisplayMode(.inline)
@@ -262,6 +272,21 @@ struct ToasttyConversationScreen: View {
         .toasttyTaskActionPresenter(controller)
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
+        }
+    }
+
+    /// Asks the Mac for an attached image by its message and its place in
+    /// the message's list of files.
+    private var attachmentImageSource: ToasttyAttachmentImageSource {
+        let service = previewService
+        return .remote { image, size in
+            guard let conversationID = image.conversationID, let eventID = image.eventID else { return nil }
+            return try? await service.attachmentImage(RemoteCoordinatorAttachmentImageRequest(
+                conversationID: RemoteConversationID(rawValue: conversationID),
+                eventID: eventID,
+                attachmentIndex: image.index,
+                size: size == .full ? .full : .thumbnail
+            ))
         }
     }
 

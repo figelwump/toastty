@@ -585,18 +585,21 @@ enum ToasttyConversationFixture {
     /// `quietTurns` ends it with two wake turns that the coordinator marked
     /// quiet, as in the user's report, and says whether the fixture Mac
     /// shares the marks.
+    /// `attachedImages` adds a message with images, as in the images
+    /// mock-up, and says whether the fixture Mac serves the images.
     static func coordinatorPresentation(
         for conversationID: UUID,
         sendItems: [ToasttySendPresentationItem] = [],
         hasLongMessage: Bool = false,
         quietTurns: CoordinatorQuietTurns = .none,
+        attachedImages: CoordinatorAttachedImages = .none,
         wakeTurns: Int = 0,
         responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationAdapter.makeState(
             events: coordinatorEvents(
                 for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns,
-                wakeTurns: wakeTurns, responses: responses
+                attachedImages: attachedImages != .none, wakeTurns: wakeTurns, responses: responses
             )
                 .map(CompatibleConversationEvent.known),
             projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
@@ -606,10 +609,46 @@ enum ToasttyConversationFixture {
             historyTruncated: false,
             sendItems: sendItems,
             coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages(
-                quietDigestKeys: quietTurns == .shared ? coordinatorQuietDigestKeys : nil
+                quietDigestKeys: quietTurns == .shared ? coordinatorQuietDigestKeys : nil,
+                showsAttachedImages: attachedImages == .served
             )
         )
     }
+
+    /// The fixture coordinator chat's message with images.
+    enum CoordinatorAttachedImages: Equatable {
+        case none
+        /// The message, and a Mac that serves its images.
+        case served
+        /// The message, and an older Mac that does not serve them.
+        case notServed
+    }
+
+    /// A message with files attached on the Mac, which its text lists: an
+    /// image, one the Mac no longer has, one that loads slowly, and a file
+    /// that is not an image.
+    static let coordinatorImagesMessage = RemoteAttachmentDeliveryText.text(
+        "Here is the crash screen.",
+        paths: [
+            "/Users/me/Desktop/crash-screen.png",
+            "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.goneFileName)",
+            "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.slowFileName)",
+            "/Users/me/Desktop/notes.txt",
+        ]
+    )
+
+    /// Where the Mac stored the photo that the phone sent.
+    static let coordinatorPhonePhotoPath = "/Users/me/Library/Application Support/Toastty/remote-access/attachments/"
+        + "5F0C2D8E-61B4-4F2A-9E57-3C1A0B7D9E21/\(ToasttyAttachmentImageFixture.phonePhotoFileName)"
+
+    /// A message sent from the phone with a photo, as the Mac keeps it: the
+    /// text names the photo, and the stored path stays apart.
+    static let coordinatorPhonePhotoMessage = ConversationUserMessagePayload(
+        text: "And the photo I took of the phone.\n[Attachment: Photo-3213AEE3.jpg]",
+        origin: .remote,
+        clientRequestID: "fixture-phone-photo",
+        attachmentPaths: [coordinatorPhonePhotoPath]
+    )
 
     /// The fixture coordinator chat's quiet wake turns.
     enum CoordinatorQuietTurns: Equatable {
@@ -660,6 +699,7 @@ enum ToasttyConversationFixture {
         for conversationID: UUID,
         hasLongMessage: Bool = false,
         quietTurns: CoordinatorQuietTurns = .none,
+        attachedImages: Bool = false,
         wakeTurns: Int = 0,
         responses: Int = 0
     ) -> [ConversationEvent] {
@@ -719,6 +759,15 @@ enum ToasttyConversationFixture {
             .userMessage(.init(text: quickEntry, origin: .remote)),
             .assistantMessage(.init(text: "I made a task for it in toastty, with Codex.", phase: .final)),
         ]
+        // Before the wake turns, so their event identities stay the same
+        // for the fixture Mac's image service.
+        if attachedImages {
+            payloads.append(.userMessage(.init(text: coordinatorImagesMessage, origin: .remote)))
+            payloads.append(.userMessage(coordinatorPhonePhotoMessage))
+            payloads.append(.assistantMessage(.init(
+                text: "Thanks. The crash is in the export sheet; I added both images to the task.", phase: .final
+            )))
+        }
         // A long chat, as a coordinator's grows: wake turns that each read
         // the tasks and answer, at different lengths.
         for index in 0..<max(0, wakeTurns) {

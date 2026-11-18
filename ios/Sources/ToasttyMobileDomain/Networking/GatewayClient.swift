@@ -130,6 +130,9 @@ public protocol GatewayClientProtocol: Sendable {
         _ request: RemoteCoordinatorChatReadRequest
     ) async throws -> RemoteCoordinatorChatReadResponse
     func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests
+    func coordinatorAttachmentImage(
+        _ request: RemoteCoordinatorAttachmentImageRequest
+    ) async throws -> RemoteCoordinatorAttachmentImageResponse
 }
 
 public extension GatewayClientProtocol {
@@ -246,6 +249,12 @@ public extension GatewayClientProtocol {
     }
 
     func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func coordinatorAttachmentImage(
+        _ request: RemoteCoordinatorAttachmentImageRequest
+    ) async throws -> RemoteCoordinatorAttachmentImageResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -705,6 +714,21 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         return try decodeVersioned(RemoteCoordinatorQuietDigests.self, from: response.body) {
             $0.protocolVersion
         }
+    }
+
+    /// One image attached to a message in the coordinator's chat. Throws
+    /// the Mac's refusal as a `RemotePreviewError`. The caller checks the
+    /// Mac's `coordinatorAttachmentImages` capability first.
+    public func coordinatorAttachmentImage(
+        _ request: RemoteCoordinatorAttachmentImageRequest
+    ) async throws -> RemoteCoordinatorAttachmentImageResponse {
+        let response = try await perform(
+            method: "POST", path: RemoteCoordinatorAttachmentImagePolicy.path, body: try encode(request))
+        let decoded = try decodeVersioned(RemoteCoordinatorAttachmentImageResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+        if let error = decoded.error { throw error }
+        return decoded
     }
 
     public func preview(_ target: RemotePreviewTarget) async throws -> RemotePreviewContent {
