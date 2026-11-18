@@ -1009,7 +1009,10 @@ coordinator's `conversationID`, the user message's `eventID`, the file's
 a path. The Mac finds the path in its own copy of that user message: for a
 message that a device sent with files, in the message's `attachmentPaths`
 (below); for any other, in its text, with the parser its own chat uses
-(`CoordinatorMessageHeader.displayParts(of:)`). It serves the file only when the file has an image's extension, is a regular file at
+(`CoordinatorMessageHeader.displayParts(of:)`). It serves the file only when the file is one that Toastty stored as an
+attachment, inside the coordinator's `attachments` folder (where the Mac copies
+the files the user attaches) or the gateway's store of files that devices send,
+has an image's extension, is a regular file at
 that path with no symbolic link in it (the macOS `/tmp`, `/var` and `/etc`
 aliases excepted), is at most 64 MB and 100 million pixels, and decodes as an
 image. The answer is a new JPEG, or a PNG for an image with transparency, made
@@ -1020,11 +1023,10 @@ message that is not a user message, an index past the message's files, a
 symbolic link, or a device without read access), `missing` (the message or
 the file is gone), `unsupported` (not an image), `tooLarge`, or `busy` (the
 Mac's preview reads are all in use). The route needs read access only, as
-showing the chat does. A device that can send messages can put any path in a
-message, and then read that path through this route if it is an image; send
-access already lets it ask the agent to read any file, so this adds nothing to
-what send access allows, and a read-only device reads only what others
-attached.
+showing the chat does. Because the route reads only Toastty's attachment
+folders, a path that a sender types into a message's list of files cannot reach
+any other file on the Mac, and a message that another sender brought, such as
+`toastty task send`, lists no files.
 
 When the Mac matches a device's send with files to the agent's transcript, it
 shows the message as the device's text with an `[Attachment: name]` line for
