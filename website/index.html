@@ -88,7 +88,7 @@
 
 <section class="shell video" aria-labelledby="video-title">
   <h2 class="sr-only" id="video-title">Example workflow</h2>
-  <p class="sr-only">An animated recreation of Toastty with the coordinator's chat docked beside the sidebar. The user asks the coordinator, Toasty, to build a checkout redesign from a mockup. Toasty makes a task in the lumen project, and the task's Claude Code session moves into its own git worktree. While it works, the user marks up a docs preview in the right panel and sends the comment to a Codex session, which fixes the page. Toasty reports that the checkout redesign is ready for review with PR #128, and why. The user replies "merge it", and the task merges.</p>
+  <p class="sr-only">An animated recreation of Toastty with the coordinator's chat docked beside the sidebar. The user asks the coordinator, Toasty, to build a checkout redesign from a mockup. The sidebar shows only what needs the user. Toasty makes a task in the lumen project, and the user opens it from Toasty's reply to see its Claude Code session move into its own git worktree. When a Codex session in docs-site finishes a turn, it shows in the sidebar; the user opens it, marks up the docs preview in the right panel and sends the comment, and Codex fixes the page. Toasty reports that the checkout redesign is ready for review with PR #128, and why, and the task shows in the sidebar under Ready to review. The user opens it, replies "merge it", and the task merges.</p>
   <div class="stage-wrap" id="wrap" aria-hidden="true">
     <div class="stage" id="stage">
      <div class="viewport" id="viewport">
@@ -100,44 +100,26 @@
           <div class="lights"><i></i><i></i><i></i><span class="tbi"><svg viewBox="0 0 24 24"><use href="#ic-sidebar"/></svg></span><span class="tbi gold"><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg></span></div>
           <div class="side-coord on"><svg viewBox="0 0 16 16"><use href="#toasty-gold"/></svg>Coordinator</div>
           <div class="side-tasks"><svg viewBox="0 0 24 24"><use href="#ic-checklist"/></svg>Tasks<span class="side-plus">+</span></div>
-          <div class="side-seg"><span class="on">All</span><span>Needs you<b class="side-n y">1</b><b class="side-n bl" id="seg-rev">1</b></span></div>
+          <div class="side-seg"><span>All</span><span class="on">Needs you<b class="side-n y" id="seg-y">1</b><b class="side-n bl" id="seg-rev" style="display:none">1</b></span></div>
 
-          <div class="card sel" id="card-lumen">
-            <div class="wsn"><span>lumen</span><span class="side-hc" id="lumen-hc"></span></div>
-            <div class="grow" data-at="4.0">
-              <div class="side-bkt" id="sub-bkt">RUNNING 1</div>
-              <div class="row working" id="row-sub">
-                <span class="ic" id="sub-ic"></span>
-                <div class="t">checkout-redesign</div>
-                <div class="s" id="sub-s">Setting up…</div>
-                <span class="chip pr" id="sub-pr">PR #128</span>
-                <span class="elapsed" id="sub-el">0m 04s</span>
-              </div>
-            </div>
-            <div class="side-bkt">IDLE 2</div>
-            <div class="row"><span class="ic"></span><div class="t">Plan checkout redesign</div><div class="s">Plan agreed · mockup rev 3</div></div>
-            <div class="row"><span class="ic"></span><div class="t">Fix flaky auth test</div><div class="s">Ready for prompt</div></div>
+          <!-- The Needs you list: only rows that wait on the user, under their project. A project
+               with none is left out, as in the app. -->
+          <div class="card" id="card-lumen" style="display:none">
+            <div class="wsn"><span>lumen</span><span class="side-hc"><span class="bl"><i></i>1</span></span></div>
+            <div class="side-bkt bl">READY TO REVIEW 1</div>
+            <div class="row compact has-chip" id="row-sub"><span class="ic"><span class="tmark rev"></span></span><div class="t">checkout-redesign</div><span class="chip pr show">PR #128</span></div>
           </div>
 
-          <div class="card" id="card-docs">
+          <div class="card" id="card-docs" style="display:none">
             <div class="wsn"><span>docs-site</span><span class="side-hc" id="docs-hc"></span></div>
-            <div class="side-bkt" id="docs-bkt">IDLE 1</div>
-            <div class="row" id="row-docs">
-              <span class="ic" id="docs-ic"></span>
-              <div class="t">Update API reference</div>
-              <div class="s" id="docs-s">Ready for prompt</div>
-            </div>
+            <div class="side-bkt y" id="docs-bkt">NEEDS YOU 1</div>
+            <div class="row compact" id="row-docs"><span class="ic" id="docs-ic"></span><div class="t">Update API reference</div></div>
           </div>
 
           <div class="card">
             <div class="wsn"><span>infra</span><span class="side-hc"><span class="y"><i></i>1</span></span></div>
             <div class="side-bkt y">NEEDS YOU 1</div>
-            <div class="row has-chip approval">
-              <span class="ic"><span class="mk dot appr"></span></span>
-              <div class="t">Rotate staging keys</div>
-              <div class="s">Needs approval: apply plan</div>
-              <span class="chip appr">approval</span>
-            </div>
+            <div class="row compact approval"><span class="ic"><span class="mk dot appr"></span></span><div class="t">Rotate staging keys</div></div>
           </div>
         </aside>
 
@@ -181,13 +163,23 @@
 
           <div class="view" id="view-child">
             <div class="lines">
-              <div class="ln always"><span class="b">●</span> <span class="b">Bash</span>(npm test)</div>
-              <div class="ln always">  ⎿ <span class="g">✓ 214 passing</span> <span class="m">(38s)</span></div>
-              <div class="ln always gap"></div>
-              <div class="ln always"><span class="b">●</span> Published verification report: <span class="g">3/3 checks passed</span></div>
-              <div class="ln always gap"></div>
-              <div class="ln always"><span class="b">●</span> Opened PR <span class="a">#128</span> feat/checkout-redesign → main</div>
-              <div class="ln always"><span class="b">●</span> Ready for your review.</div>
+              <div class="ln a" data-until="8.9">› Use the toastty-task-start skill.</div>
+              <div class="ln m" data-until="8.9">  Build the checkout redesign from the mockup in lumen. Check it at 390 and 1280 px.</div>
+              <div class="ln gap" data-at="5.0" data-until="8.9"></div>
+              <div class="ln" data-at="5.0" data-until="8.9"><span class="b">●</span> The change is clear. Moving it into its own worktree.</div>
+              <div class="ln" data-at="5.6" data-until="8.9"><span class="b">●</span> <span class="b">Bash</span>(toastty task start-work --branch-prefix feat)</div>
+              <div class="ln m" data-at="5.9" data-until="6.5">  ⎿ Moving to worktree · fetching base</div>
+              <div class="ln m" data-at="6.5" data-until="8.9">  ⎿ Moving to worktree · feat/checkout-redesign</div>
+              <div class="ln gap" data-at="7.0" data-until="8.9"></div>
+              <div class="ln a" data-at="7.0" data-until="8.9">› You are in the git worktree lumen-checkout-redesign, on branch feat/checkout-redesign.</div>
+              <div class="ln" data-at="7.6" data-until="8.9"><span class="b">●</span> <span class="b">Edit</span> src/checkout/SummaryCard.tsx</div>
+              <div class="ln" data-at="8.9"><span class="b">●</span> <span class="b">Bash</span>(npm test)</div>
+              <div class="ln" data-at="8.9">  ⎿ <span class="g">✓ 214 passing</span> <span class="m">(38s)</span></div>
+              <div class="ln gap" data-at="8.9"></div>
+              <div class="ln" data-at="8.9"><span class="b">●</span> Published verification report: <span class="g">3/3 checks passed</span></div>
+              <div class="ln gap" data-at="8.9"></div>
+              <div class="ln" data-at="8.9"><span class="b">●</span> Opened PR <span class="a">#128</span> feat/checkout-redesign → main</div>
+              <div class="ln" data-at="8.9"><span class="b">●</span> Ready for your review.</div>
               <div class="ln gap" data-at="20.9"></div>
               <div class="ln a" data-at="20.9">› Use the toastty-task-merge skill.</div>
               <div class="ln gap" data-at="21.4"></div>
@@ -220,9 +212,9 @@
         <aside class="rp">
           <div class="rtabs" id="rtabs">
             <span class="rtab" data-tab="mock" data-ws="lumen child">◧ Checkout mockup</span>
-            <span class="rtab" data-tab="verify" data-ws="child">◧ Verification</span>
+            <span class="rtab" data-tab="verify" data-ws="child" data-from="12.6">◧ Verification</span>
             <span class="rtab" data-tab="docsweb" data-ws="docs">◎ localhost:3000</span>
-            <span class="rtab" data-tab="pr" data-ws="child">◎ PR #128</span>
+            <span class="rtab" data-tab="pr" data-ws="child" data-from="14.0">◎ PR #128</span>
           </div>
           <div class="rbody">
 
