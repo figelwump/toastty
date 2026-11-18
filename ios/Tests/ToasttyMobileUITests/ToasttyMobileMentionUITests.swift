@@ -5,6 +5,7 @@ import XCTest
 /// the field as one highlighted word, one Delete removes it, and Send
 /// delivers the task's link, which the chat shows as a chip. The field reads
 /// a mention as "mention, <title>".
+@MainActor
 final class ToasttyMobileMentionUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false

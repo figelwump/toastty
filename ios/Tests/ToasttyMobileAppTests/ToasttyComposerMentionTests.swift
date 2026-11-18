@@ -346,10 +346,11 @@ final class ToasttyComposerMentionTests: XCTestCase {
         XCTAssertEqual(textView.text, "check @Fix login crash on launch and @Fix local file preview")
         XCTAssertEqual(mentionWords(in: textView), ["@Fix login crash on launch", "@Fix local file preview"])
         XCTAssertEqual(model.text, "check \(Self.loginLink) and \(Self.previewLink)")
-        // Plain text pastes as before.
+        // Plain text pastes as before. UIKit's own paste can finish after
+        // several run-loop turns on a slow runner, so wait for the draft.
         UIPasteboard.general.string = " ok"
         textView.paste(nil)
-        await settle()
+        try await waitUntil { model.text.hasSuffix(" ok") }
         XCTAssertEqual(model.text, "check \(Self.loginLink) and \(Self.previewLink) ok")
     }
 
@@ -413,6 +414,19 @@ final class ToasttyComposerMentionTests: XCTestCase {
 
     private func settle() async {
         try? await Task.sleep(for: .milliseconds(30))
+    }
+
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Condition was not met in time", file: file, line: line)
     }
 }
 
