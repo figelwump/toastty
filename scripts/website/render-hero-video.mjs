@@ -103,15 +103,15 @@ try {
 
   writeFileSync(join(outDir, target.poster), await capture(hero.poster, true));
   // The hero poster's sidebar and coordinator dock (in poster pixels) for the social card's
-  // close-up: from the first project card down to the dock's message field, so the ready row
-  // and the coordinator's note about it both show.
+  // close-up: from the sidebar's All | Needs you switch down to the dock's message field, so the
+  // Needs you list with the ready row and the coordinator's note about it all show.
   const sidebarCrop = target !== TARGETS.hero ? null : await page.evaluate(`(() => {
     const sb = document.querySelector('.sb').getBoundingClientRect();
     const dock = document.querySelector('.dock').getBoundingClientRect();
     const win = document.querySelector('.win').getBoundingClientRect();
-    const card = document.getElementById('card-lumen').getBoundingClientRect();
+    const top = document.querySelector('.sb .side-seg').getBoundingClientRect();
     // Stay a few pixels inside the window so its rounded corner and the page background stay out.
-    const x = sb.left - ${clip.x} + 6, y = card.top + window.scrollY - ${clip.y} - 2;
+    const x = sb.left - ${clip.x} + 6, y = top.top + window.scrollY - ${clip.y} - 3;
     return [x, y, dock.right - sb.left - 6, win.bottom + window.scrollY - ${clip.y} - y - 6].map((v) => Math.round(v * ${SCALE}));
   })()`);
   for (const { name, t, selector } of stills) {
