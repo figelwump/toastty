@@ -91,8 +91,12 @@ final class ToasttyAttachmentImageLoadingTests: XCTestCase {
         var log = await fetches.entries
         XCTAssertEqual(Set(log), ["start 0", "start 1", "start 2"])
 
-        views[0].cancel()
+        // The waiting box leaves first, so its load stops before the
+        // running fetch frees a slot: the two leaves run in turn on the
+        // main actor. In the other order, the freed slot can reach the
+        // waiting fetch first, which then starts and stops at once.
         views[3].cancel()
+        views[0].cancel()
         for view in views { _ = await view.value }
         log = await fetches.entries
         XCTAssertTrue(log.contains("cancelled 0"), "\(log)")
