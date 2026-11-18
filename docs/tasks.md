@@ -108,8 +108,8 @@ and runs it when you approve.
 The rules below allow the Toastty commands that read, create, start, message
 and watch tasks (`task get`, `list`, `workspace-choices`, `watches`, `create`,
 `start-work`, `send`, `watch`, `unwatch`, `needs-reply` and
-`ready-for-review`), the coordinator's `status`, `send`, `wake` and `watch`,
-and `query run`, which only reads. Every other Toastty command still asks,
+`ready-for-review`), the coordinator's `status`, `send`, `reply`, `wake` and
+`watch`, and `query run`, which only reads. Every other Toastty command still asks,
 among them `task merge`, `task request-merge`, `task archive`, `task delete`
 and `task mark-done`.
 
@@ -144,6 +144,7 @@ rules that you already have:
       "Bash(toastty task ready-for-review *)",
       "Bash(toastty coordinator status *)",
       "Bash(toastty coordinator send *)",
+      "Bash(toastty coordinator reply *)",
       "Bash(toastty coordinator wake *)",
       "Bash(toastty coordinator watch *)",
       "Bash(toastty query run *)",
@@ -161,7 +162,8 @@ The rules in a project's own `.claude/settings.json` apply only after you
 trusted that folder in Claude Code.
 
 On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
-sends to them (`task send --text-file message.md`), sets its next check
+sends to them (`task send --text-file message.md`), answers a sender
+outside Toastty (`coordinator reply <id> --text-file message.md`), sets its next check
 (`coordinator wake`, `coordinator watch`), reads pull requests
 (`gh pr view`, `gh pr checks`) and reads its Scratchpads (`query run`). The
 rules above cover these commands. It also edits files in its own folder on
@@ -218,7 +220,7 @@ prefix_rule(
     decision = "allow",
 )
 prefix_rule(
-    pattern = ["toastty", "coordinator", ["status", "send", "wake", "watch"]],
+    pattern = ["toastty", "coordinator", ["status", "send", "reply", "wake", "watch"]],
     decision = "allow",
 )
 prefix_rule(pattern = ["toastty", "query", "run"], decision = "allow")
@@ -951,7 +953,10 @@ survive an app quit; a message from `coordinator send` waits in memory, and
 an app quit loses it. Closing the coordinator's workspace drops the queue.
 
 Each message from `coordinator send` gets a first line that names its
-sender; see "Who a message is from" below.
+sender; see "Who a message is from" below. A message from outside a task
+also gets a message ID, which `coordinator send --json` returns as
+`messageID`, and the coordinator answers it with `coordinator reply`; see
+[Coordinator replies](#coordinator-replies).
 
 The chat's composer, quick entry, `coordinator send` and Toastty's own
 digests all go through this one queue, so their text never mixes. For an agent whose
@@ -980,6 +985,7 @@ text:
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran it.` | `coordinator send --from <name>` from a caller that names no running session, such as Grok Bot running the command from its own shell. Toastty does not check the name. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
+| `[Toastty] From …: … Message ID <uuid>.` | The same `From` line for a message from outside a task (an agent session outside a task, a named caller or a terminal command) ends with the message's ID, which the coordinator [replies](#coordinator-replies) to. A task's message and the coordinator's own have none. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
 | `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. |
 | no `[Toastty]` line | You, in the chat or in the terminal. |
@@ -2025,6 +2031,71 @@ that workspace exists the checks do not stop, so a webhook that you approve
 or start again then begins with the next check: it can get a change that was
 under way in the seconds before.
 
+## Coordinator replies
+
+A program outside Toastty that gives the coordinator a message, such as
+Grok Bot with `coordinator send --from "Grok Bot"`, gets the coordinator's
+answer back:
+
+```bash
+toastty coordinator send --json --from "Grok Bot" --text-file question.md
+# {"delivery":"sent","messageID":"6F1C2A90-…","queuedCount":0}
+toastty coordinator replies --json --message 6F1C2A90-…
+```
+
+1. `coordinator send` gives a message from outside a task an ID, a UUID. It
+   is `messageID` in the answer, and the message's first line ends with
+   `Message ID <uuid>.` A message from a task's session has none
+   (`messageID` is null): the coordinator answers a task with `task send`.
+2. The coordinator answers the sender with
+   `toastty coordinator reply <message-id> --text-file message.md`, with the
+   reply written to `message.md` in its folder. Only the coordinator's own
+   agent can run it. It can reply more than once, such as
+   "I asked Vishal" and later "Vishal said yes; the task started". It still
+   tells you in its chat what you need to know: a reply goes only to the
+   sender.
+3. The sender reads the text with `toastty coordinator replies`. Each reply
+   has `id`, `messageID`, `from` (the `--from` name, or null), `text` and
+   `repliedAt`. `--message <id>` keeps the replies to one message. `--since
+   <cursor>` keeps the replies after an earlier answer's `cursor`, as `task
+   list --changed-since` does for tasks. `truncated` is true when replies
+   after the cursor are gone; the answer then has every reply Toastty keeps.
+4. A [webhook](#webhooks-for-task-events) that adds `coordinator_reply` to
+   `--events`, such as `--events needs_you,merged,done,coordinator_reply`,
+   also gets a `coordinator.reply` event for each reply. A webhook needs at
+   least one task event besides it. The event goes through the same queue,
+   retries and signing as task events, in the order the events happened:
+
+   ```json
+   {"version": 1, "eventID": "…", "type": "coordinator.reply",
+    "occurredAt": "2026-11-17T16:53:12Z", "webhook": "grok",
+    "reply": {"id": "…", "messageID": "6F1C2A90-…", "from": "Grok Bot"}}
+   ```
+
+   It never carries the reply's text: read that with `coordinator replies`.
+   `--root` and `--external-ref-prefix` apply to task events only. Adding
+   `coordinator_reply` to a webhook, or removing it, needs your approval
+   again, and the review sheet lists **Coordinator replies** under Events.
+
+**Who can read replies.** Any program that can run `coordinator send` can
+read every reply: a program of yours on this Mac, not a workspace-scoped
+session outside the coordinator's workspace. This needs no approval: such a
+program can already read the coordinator's conversation on disk. A reply
+holds only what the coordinator wrote for that sender, and its instructions
+tell it to leave out other projects and people that the message did not ask
+about. Only the webhook's approval decides what Toastty sends off the Mac
+by itself, and the event carries no text.
+
+**How long.** Toastty keeps a message's ID while the message waits in the
+coordinator's queue and for 7 days after it types it, and a reply for 7
+days, up to 500 replies. A cursor stays valid across a relaunch, also after
+every kept reply expired. A reply to a message whose ID is gone is refused.
+The replies, the message IDs and the events waiting to send are in
+`~/.toastty/coordinator-replies.json`, apart from the task outbox.
+
+A coordinator session that started before Toastty had replies does not know
+the command: restart it with `toastty coordinator restart`.
+
 ## Starting tasks
 
 A task whose setup or triage is still running, or that is moving into a
@@ -2735,6 +2806,10 @@ a task that waits for a workspace, the Tasks view also offers **Retry Triage**.
   task webhooks and the events waiting to send. Webhook secrets and approvals
   are in the login Keychain. The outbox file also holds the task changes and
   alerts that wait for the coordinator, and its timer.
+- `~/.toastty/coordinator-replies.json`: the coordinator's replies to
+  messages from outside a task, the IDs of those messages, and the
+  `coordinator.reply` webhook events waiting to send; see
+  [Coordinator replies](#coordinator-replies).
 - `~/.toastty/coordinator/`: the coordinator's instructions, your policy and
   its ledger, in a git repository; see
   [The coordinator's folder](#the-coordinators-folder).

@@ -1020,6 +1020,8 @@ toastty coordinator open [--window <id>] [--no-select]
 toastty coordinator restart [--window <id>]
 toastty coordinator status
 toastty coordinator send (<text> | --text <text> | --text-file <path>) [--from <name>]
+toastty coordinator reply <message-id> (<text> | --text <text> | --text-file <path>)
+toastty coordinator replies [--message <message-id>] [--since <cursor>]
 toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
 toastty coordinator watch (--task <task-id> | --workspace <id>) [--remove]
 ```
@@ -1066,8 +1068,22 @@ see [The coordinator](tasks.md#the-coordinator). It is not a task.
   `position` and `hold` (`busy`, `userDraft`, `noSession`, `agentStarting`,
   `settling`, `awaitingTurn`, `terminalUnavailable`, `promptNotOpen` or `notSaved`). `sentUnconfirmed`
   means the terminal did not confirm the Return key; Toastty does not type the
-  text again, and holds later messages until a turn runs. It fails when there
-  is no coordinator.
+  text again, and holds later messages until a turn runs. A message from
+  outside a task also returns `messageID`, which its first line ends with
+  (`Message ID <uuid>.`); it is null for a message from a task or from the
+  coordinator itself. It fails when there is no coordinator.
+- `reply` answers a message from outside a task, named by its `messageID`.
+  Only the coordinator's own agent can run it. Toastty keeps the reply for 7
+  days and queues a `coordinator.reply` event for each approved webhook whose
+  events include `coordinator_reply`. It returns `replyID`, `messageID`,
+  `repliedAt` and `webhookEvents`, the number of events queued. It fails for
+  a message with no ID or whose ID is gone, and for an empty text or one
+  over 16 KB. See [Coordinator replies](tasks.md#coordinator-replies).
+- `replies` prints the kept replies, oldest first, each with `id`,
+  `messageID`, `from`, `text` and `repliedAt`, and a `cursor`. `--message`
+  keeps the replies to one message; `--since` keeps the replies after an
+  earlier answer's cursor. `truncated` is true when replies after that
+  cursor are gone.
 - `wake` sets the coordinator's next check: the time when Toastty wakes it if
   no task change or alert does first. `--in` takes a duration with units `s`, `m`, `h` and
   `d`, such as `90s`, `20m`, `2h` or `1h30m`; `--at` takes an ISO 8601 time
@@ -1097,8 +1113,10 @@ A workspace-scoped session can use these commands only when the coordinator's
 workspace is in its scope, and it cannot create the coordinator.
 
 These commands are short forms of
-`action run coordinator.open|coordinator.restart|coordinator.send|coordinator.wake|coordinator.watch`
-and `query run coordinator.get`. `coordinator.wake` takes exactly one of
+`action run coordinator.open|coordinator.restart|coordinator.send|coordinator.reply|coordinator.wake|coordinator.watch`
+and `query run coordinator.get|coordinator.replies`. `coordinator.reply` takes
+`messageID` and `text`; `coordinator.replies` takes optional `messageID` and
+`since`. `coordinator.wake` takes exactly one of
 `inSeconds`, `at` and `clear`, and optional `quiet`. `coordinator.watch`
 takes exactly one of `taskID` and `workspaceID`, and optional `remove`.
 
@@ -1119,8 +1137,9 @@ the Tasks view; no command approves it. `add --wait` exits 0 when it is
 approved, 3 when it is denied, and 4 when `--timeout` (default 600) runs out.
 `test` sends a `task.test` event to an approved webhook and prints the HTTP
 status. Events are `needs_you`, `merged`, `done`, `archived`, `deleted`
-(the default), `running` and `idle`; an empty `--external-ref-prefix` clears
-that filter. The secret only comes from stdin. Without one, the user pastes
+(the default), `running` and `idle`, and `coordinator_reply`, which adds the
+coordinator's [replies](tasks.md#coordinator-replies) to at least one task
+event; an empty `--external-ref-prefix` clears that filter. The secret only comes from stdin. Without one, the user pastes
 it in the approval sheet; `--secret-hint` (one line, up to 300 characters)
 tells them where to find it, and an empty hint clears it.
 

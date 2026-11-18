@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import Foundation
 
@@ -14,6 +15,10 @@ struct TaskWebhookOutboxEntry: Codable, Equatable, Sendable {
     var body: Data
     var attempts: Int = 0
     var nextAttemptAt: Date
+    /// Orders this event among the webhook's coordinator reply events,
+    /// which wait in another file. The saved times keep whole seconds
+    /// only, so they cannot. `nil` in an entry from an earlier build.
+    var sequence: Int?
 }
 
 /// Sends task events to the webhooks the user approved, and to the
@@ -33,6 +38,11 @@ struct TaskWebhookOutboxEntry: Codable, Equatable, Sendable {
 /// The coordinator is one more destination of the same events, inside
 /// Toastty: its changes wait in one digest that is typed at its open
 /// prompt. See `TaskWebhookService+Coordinator.swift`.
+///
+/// The coordinator's replies to messages from outside a task are kept here
+/// too, and their `coordinator.reply` events go through the same queue of
+/// each webhook. They are saved in their own file
+/// (`CoordinatorReplies`). See `TaskWebhookService+CoordinatorReplies.swift`.
 @MainActor
 final class TaskWebhookService: ObservableObject {
     struct Timing: Sendable {
@@ -56,6 +66,7 @@ final class TaskWebhookService: ObservableObject {
 
     private let webhooksFileURL: URL?
     private let outboxFileURL: URL?
+    private let coordinatorRepliesFileURL: URL?
     private let secrets: any TaskWebhookSecretStoring
     private let transport: any TaskWebhookTransport
     let now: () -> Date
@@ -68,6 +79,14 @@ final class TaskWebhookService: ObservableObject {
     private var keychainItems: [UUID: TaskWebhookKeychainItem] = [:]
     var detector: TaskWebhookEventDetector
     private(set) var entries: [TaskWebhookOutboxEntry]
+    /// The coordinator's replies, the IDs of the messages they answer, and
+    /// the `coordinator.reply` events that wait to send.
+    var coordinatorReplies: CoordinatorReplies
+    /// Notes when Toastty types a message that has an ID.
+    var coordinatorTypedObserver: AnyCancellable?
+    /// The last `sequence` given to a waiting event, a task event or a
+    /// coordinator reply event.
+    private var lastEventSequence: Int
     /// The coordinator that gets a digest of the events, once the app has
     /// one. Set with `attach(coordinator:)`.
     weak var coordinator: CoordinatorController?
@@ -103,6 +122,7 @@ final class TaskWebhookService: ObservableObject {
     init(
         webhooksFileURL: URL?,
         outboxFileURL: URL?,
+        coordinatorRepliesFileURL: URL? = nil,
         secrets: any TaskWebhookSecretStoring,
         transport: any TaskWebhookTransport = TaskWebhookClient(),
         now: @escaping () -> Date = Date.init,
@@ -111,6 +131,7 @@ final class TaskWebhookService: ObservableObject {
     ) {
         self.webhooksFileURL = webhooksFileURL
         self.outboxFileURL = outboxFileURL
+        self.coordinatorRepliesFileURL = coordinatorRepliesFileURL
         self.secrets = secrets
         self.transport = transport
         self.now = now
@@ -122,6 +143,8 @@ final class TaskWebhookService: ObservableObject {
         detector = outbox?.detector ?? TaskWebhookEventDetector()
         entries = outbox?.entries ?? []
         coordinatorWake = outbox?.coordinator
+        coordinatorReplies = Self.load(CoordinatorReplies.self, from: coordinatorRepliesFileURL) ?? CoordinatorReplies()
+        lastEventSequence = max(entries.compactMap(\.sequence).max() ?? 0, coordinatorReplies.events.map(\.sequence).max() ?? 0)
         loadKeychainItems()
     }
 
@@ -129,6 +152,7 @@ final class TaskWebhookService: ObservableObject {
         self.init(
             webhooksFileURL: runtimePaths.taskWebhooksFileURL,
             outboxFileURL: runtimePaths.taskWebhookOutboxFileURL,
+            coordinatorRepliesFileURL: runtimePaths.coordinatorRepliesFileURL,
             secrets: KeychainTaskWebhookSecretStore(
                 service: KeychainTaskWebhookSecretStore.service(
                     bundleIdentifier: Bundle.main.bundleIdentifier,
@@ -271,7 +295,8 @@ final class TaskWebhookService: ObservableObject {
             }
         }
         entries.append(TaskWebhookOutboxEntry(
-            eventID: eventID, webhookID: webhook.id, taskID: taskID, type: type, createdAt: at, body: body, nextAttemptAt: at
+            eventID: eventID, webhookID: webhook.id, taskID: taskID, type: type, createdAt: at, body: body, nextAttemptAt: at,
+            sequence: nextEventSequence()
         ))
         ToasttyLog.info("Queued a task webhook event", category: .tasks, metadata: [
             "webhook": webhook.name,
@@ -299,28 +324,84 @@ final class TaskWebhookService: ObservableObject {
         webhooks.first { $0.id == id }
     }
 
-    private func deliverDue(at: Date) {
+    /// The number of events that wait for this webhook: task events and
+    /// coordinator reply events.
+    func queuedEventCount(webhookID: UUID) -> Int {
+        entries.filter { $0.webhookID == webhookID }.count
+            + coordinatorReplies.events.filter { $0.webhookID == webhookID }.count
+    }
+
+    /// The next number that orders a waiting event.
+    func nextEventSequence() -> Int {
+        lastEventSequence += 1
+        return lastEventSequence
+    }
+
+    /// The oldest event that waits for this webhook, a task event or a
+    /// coordinator reply event, so each webhook gets its events in the
+    /// order they happened.
+    private func nextEvent(for webhookID: UUID) -> (eventID: UUID, body: Data, nextAttemptAt: Date)? {
+        let task = entries.first { $0.webhookID == webhookID }
+        let reply = coordinatorReplies.events.first { $0.webhookID == webhookID }
+        guard let reply else { return task.map { ($0.eventID, $0.body, $0.nextAttemptAt) } }
+        // A task event from an earlier build has no sequence: its time
+        // decides.
+        if let task, task.sequence.map({ $0 < reply.sequence }) ?? (task.createdAt <= reply.createdAt) {
+            return (task.eventID, task.body, task.nextAttemptAt)
+        }
+        return (reply.eventID, reply.body, reply.nextAttemptAt)
+    }
+
+    func deliverDue(at: Date) {
         if dropExpiredEntries(at: at) { saveOutbox() }
+        if dropExpiredReplyEvents(at: at) { saveCoordinatorReplies() }
         for webhook in activeWebhooks where inFlight[webhook.id] == nil {
-            guard let entry = entries.first(where: { $0.webhookID == webhook.id }), entry.nextAttemptAt <= at,
+            guard let event = nextEvent(for: webhook.id), event.nextAttemptAt <= at,
                   let url = URL(string: webhook.url) else { continue }
-            inFlight[webhook.id] = entry.eventID
+            inFlight[webhook.id] = event.eventID
             inFlightConfiguration[webhook.id] = configuration(of: webhook)
             let request = TaskWebhookClient.request(
                 url: url,
                 auth: webhook.auth,
                 secret: keychainItems[webhook.id]?.secret,
-                eventID: entry.eventID,
-                body: entry.body,
+                eventID: event.eventID,
+                body: event.body,
                 timestamp: Int(at.timeIntervalSince1970),
                 userAgent: userAgent
             )
             let transport = transport
             Task { [weak self] in
                 let result = await transport.send(request)
-                self?.finishSend(webhookID: webhook.id, eventID: entry.eventID, result: result)
+                self?.finishSend(webhookID: webhook.id, eventID: event.eventID, result: result)
             }
         }
+    }
+
+    private func dropExpiredReplyEvents(at: Date) -> Bool {
+        let expired = coordinatorReplies.events.filter {
+            at.timeIntervalSince($0.createdAt) > TaskWebhookRetryPolicy.maximumAge && inFlight[$0.webhookID] != $0.eventID
+        }
+        guard expired.isEmpty == false else { return false }
+        let ids = Set(expired.map(\.eventID))
+        coordinatorReplies.events.removeAll { ids.contains($0.eventID) }
+        for event in expired {
+            ToasttyLog.warning("Dropped a coordinator reply webhook event after a day of failed sends", category: .tasks, metadata: [
+                "webhook": webhook(id: event.webhookID)?.name ?? "removed",
+                "event_id": event.eventID.uuidString,
+            ])
+        }
+        return true
+    }
+
+    /// Removes the waiting events that match, task events and coordinator
+    /// reply events, and saves the files that changed.
+    private func removeEvents(where shouldRemove: (_ webhookID: UUID, _ eventID: UUID) -> Bool) {
+        let taskCount = entries.count
+        let replyCount = coordinatorReplies.events.count
+        entries.removeAll { shouldRemove($0.webhookID, $0.eventID) }
+        coordinatorReplies.events.removeAll { shouldRemove($0.webhookID, $0.eventID) }
+        if entries.count != taskCount { saveOutbox() }
+        if coordinatorReplies.events.count != replyCount { saveCoordinatorReplies() }
     }
 
     /// What a send depends on: the approved settings and the secret.
@@ -336,8 +417,7 @@ final class TaskWebhookService: ObservableObject {
         }
         let at = now()
         guard let webhookIndex = webhooks.firstIndex(where: { $0.id == webhookID }) else {
-            entries.removeAll { $0.webhookID == webhookID }
-            saveOutbox()
+            removeEvents { webhook, _ in webhook == webhookID }
             return
         }
         let name = webhooks[webhookIndex].name
@@ -354,9 +434,11 @@ final class TaskWebhookService: ObservableObject {
             // refusal says nothing about the new ones, so try again with them.
             outcome = .retry
         }
+        let replyEventsBefore = coordinatorReplies.events
         switch outcome {
         case .delivered:
             entries.removeAll { $0.eventID == eventID }
+            coordinatorReplies.events.removeAll { $0.eventID == eventID }
             ToasttyLog.info("Delivered a task webhook event", category: .tasks, metadata: metadata)
         case .retry:
             if let entry = entries.first(where: { $0.eventID == eventID }), entry.type.isTransient,
@@ -368,21 +450,31 @@ final class TaskWebhookService: ObservableObject {
                 let delay = TaskWebhookRetryPolicy.delay(afterAttempts: entries[index].attempts)
                 entries[index].nextAttemptAt = at.addingTimeInterval(delay)
                 metadata["retry_in_seconds"] = String(Int(delay))
+            } else if let index = coordinatorReplies.events.firstIndex(where: { $0.eventID == eventID }) {
+                // A reply is never replaced by a newer one.
+                coordinatorReplies.events[index].attempts += 1
+                let delay = TaskWebhookRetryPolicy.delay(afterAttempts: coordinatorReplies.events[index].attempts)
+                coordinatorReplies.events[index].nextAttemptAt = at.addingTimeInterval(delay)
+                metadata["retry_in_seconds"] = String(Int(delay))
             }
             ToasttyLog.info("A task webhook send failed; it will retry", category: .tasks, metadata: metadata)
         case .disable(let reason):
             webhooks[webhookIndex].status = .disabled
             webhooks[webhookIndex].disabledReason = reason
             // The receiver refused the webhook, so its queued events go too.
-            // The coordinator catches up with task list --changed-since.
+            // The coordinator catches up with task list --changed-since,
+            // and with coordinator replies --since.
             entries.removeAll { $0.webhookID == webhookID }
+            coordinatorReplies.events.removeAll { $0.webhookID == webhookID }
             ToasttyLog.warning("Stopped a task webhook: the receiver refused it", category: .tasks, metadata: metadata)
         case .drop:
             entries.removeAll { $0.eventID == eventID }
+            coordinatorReplies.events.removeAll { $0.eventID == eventID }
             ToasttyLog.warning("A task webhook receiver refused an event; it was dropped", category: .tasks, metadata: metadata)
         }
         saveWebhooks()
         saveOutbox()
+        if coordinatorReplies.events != replyEventsBefore { saveCoordinatorReplies() }
         deliverDue(at: at)
     }
 
@@ -390,6 +482,9 @@ final class TaskWebhookService: ObservableObject {
         let at = now()
         for index in entries.indices where entries[index].nextAttemptAt > at {
             entries[index].nextAttemptAt = at
+        }
+        for index in coordinatorReplies.events.indices where coordinatorReplies.events[index].nextAttemptAt > at {
+            coordinatorReplies.events[index].nextAttemptAt = at
         }
         deliverDue(at: at)
     }
@@ -399,6 +494,9 @@ final class TaskWebhookService: ObservableObject {
     struct Settings {
         var url: String?
         var events: [TaskWebhookEventType]?
+        /// Whether the webhook gets `coordinator.reply` events. Set with
+        /// `events`: `--events` names the whole list.
+        var coordinatorReplies: Bool?
         var roots: [String]?
         /// `.some(nil)` clears the filter.
         var externalRefPrefix: String??
@@ -465,8 +563,8 @@ final class TaskWebhookService: ObservableObject {
         }
         try writeKeychainItem(item, for: webhook.id)
         if webhook.status != .approved {
-            entries.removeAll { $0.webhookID == webhook.id }
-            saveOutbox()
+            let id = webhook.id
+            removeEvents { webhookID, _ in webhookID == id }
         }
         webhooks[index] = webhook
         startDetectingIfNoneWasActive(wasActive)
@@ -530,9 +628,8 @@ final class TaskWebhookService: ObservableObject {
         keychainItems[id] = nil
         let name = webhook(id: id)?.name ?? ""
         webhooks.removeAll { $0.id == id }
-        entries.removeAll { $0.webhookID == id }
         saveWebhooks()
-        saveOutbox()
+        removeEvents { webhookID, _ in webhookID == id }
         ToasttyLog.info("Removed a task webhook", category: .tasks, metadata: ["webhook": name])
     }
 
@@ -578,8 +675,13 @@ final class TaskWebhookService: ObservableObject {
 
     private func apply(_ settings: Settings, to webhook: inout TaskWebhook) throws {
         if let events = settings.events {
-            guard events.isEmpty == false else { throw TaskWebhookValidationError("A webhook needs at least one event.") }
+            guard events.isEmpty == false else {
+                throw TaskWebhookValidationError(
+                    "A webhook needs at least one task event, such as needs_you. \(TaskWebhook.coordinatorReplyEventName) comes in addition to them."
+                )
+            }
             webhook.events = TaskWebhookEventType.allCases.filter(events.contains)
+            webhook.coordinatorReplies = settings.coordinatorReplies ?? false
         }
         if let roots = settings.roots {
             webhook.roots = Array(Set(roots.map { TasksConfigFile.normalizedPath($0) })).sorted()
@@ -644,6 +746,7 @@ final class TaskWebhookService: ObservableObject {
                 // Events queued under the old settings must not go to the new
                 // ones once approved.
                 entries.removeAll { $0.webhookID == id }
+                coordinatorReplies.events.removeAll { $0.webhookID == id }
                 changed = true
                 ToasttyLog.warning("A task webhook's settings differ from its approval; it waits for approval again", category: .tasks, metadata: [
                     "webhook": webhooks[index].name,
@@ -653,6 +756,7 @@ final class TaskWebhookService: ObservableObject {
         if changed {
             saveWebhooks()
             saveOutbox()
+            saveCoordinatorReplies()
         }
     }
 
@@ -665,6 +769,10 @@ final class TaskWebhookService: ObservableObject {
             TaskWebhookOutboxSnapshot(version: 1, detector: detector, entries: entries, coordinator: coordinatorWake),
             to: outboxFileURL
         )
+    }
+
+    func saveCoordinatorReplies() {
+        Self.save(coordinatorReplies, to: coordinatorRepliesFileURL)
     }
 
     private static func load<Snapshot: Decodable>(_ type: Snapshot.Type, from url: URL?) -> Snapshot? {
