@@ -1,3 +1,4 @@
+import ConversationUI
 import Foundation
 import RemoteProtocol
 import SwiftUI
@@ -876,6 +877,117 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    /// The coordinator's chat lists both of the coordinator's queues as one,
+    /// from a Mac that shares its own queue: the conversation's queue, then
+    /// the coordinator's. One Resume, on the first held row, presents the
+    /// Stop's token; Remove goes to the queue that holds the row. A queue
+    /// for another conversation is not this chat's. Without the capability
+    /// the phone reads nothing and lists the conversation's queue as before,
+    /// and a phone without send access gets no Resume or Remove.
+    func testTheCoordinatorChatListsBothQueuesAndActsOnEach() async throws {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        await subject.updateDeviceScopes([.read, .send])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks, .conversationInputControl]
+        ))
+        var list = snapshot(titles: ["Alpha"])
+        let alphaID = list.conversations[0].conversationID
+        let held = RemoteCoordinatorQueue(
+            revision: "revision-1", conversationID: alphaID, heldSetToken: "stop-1",
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "mac-1", text: "From the Mac", isHeld: true),
+                RemoteCoordinatorQueueEntry(id: "task-1", text: "Ready for review", sender: "task Fix the dot"),
+            ]
+        )
+        let elsewhere = RemoteCoordinatorQueue(
+            revision: "revision-2", conversationID: RemoteConversationID(rawValue: UUID()), entries: [
+                RemoteCoordinatorQueueEntry(id: "other", text: "Not this chat's"),
+            ]
+        )
+        await runtime.scriptCoordinatorQueue([held, elsewhere])
+        func announce(_ revision: String?) {
+            list.conversations[0].inputControl = RemoteConversationInputControl(
+                canQueue: true,
+                queuedMessages: [RemoteQueuedMessage(clientRequestID: "phone-1", text: "From the phone", enqueuedAt: .now)],
+                isQueuePaused: true
+            )
+            list.workspaces = [RemoteWorkspaceSummary(
+                id: try! XCTUnwrap(list.conversations[0].placement.workspaceID), title: "Coordinator", panels: [],
+                isCoordinator: true, coordinatorConversationID: alphaID,
+                coordinatorQueueRevision: revision
+            )]
+            list.tasks = RemoteTaskBoard(doneCount: 0)
+            subject.consumeSessionsState(SessionsRuntime.State(connectionGeneration: 7, snapshot: list, phase: .live))
+        }
+        func queuedRows(_ controller: LiveConversationController) -> [(id: String, queued: ToasttyQueuedSendPresentation)] {
+            controller.transcriptPresentation.sendItems.compactMap { item in
+                guard case .queued(let queued) = item.content else { return nil }
+                return (item.clientRequestID, queued)
+            }
+        }
+        announce(held.revision)
+        await subject.openConversation(alphaID.rawValue)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+
+        // An older Mac: no read, and the conversation's queue as before.
+        try await Task.sleep(for: .milliseconds(100))
+        let readsByAnOlderMac = await runtime.coordinatorQueueReadCount()
+        XCTAssertEqual(readsByAnOlderMac, 0)
+        XCTAssertEqual(queuedRows(controller).map(\.id), ["phone-1"])
+        XCTAssertEqual(queuedRows(controller).first?.queued.resumeTitle, "Send next")
+
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks, .conversationInputControl, .coordinatorQueue]
+        ))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while controller.coordinatorQueue != held, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(controller.coordinatorQueue, held)
+        let rows = queuedRows(controller)
+        XCTAssertEqual(rows.map(\.id), ["phone-1", "mac-1", "task-1"])
+        XCTAssertEqual(rows.map(\.queued.position), [1, 2, 3])
+        XCTAssertEqual(rows.map(\.queued.isPaused), [true, true, false])
+        XCTAssertEqual(rows.map(\.queued.resumeTitle), ["Resume all 2", nil, nil])
+        XCTAssertEqual(rows.map(\.queued.canEdit), [true, false, false])
+        XCTAssertEqual(rows.map(\.queued.canChange), [true, true, true])
+        XCTAssertEqual(
+            controller.transcriptPresentation.sendItems.last?.text,
+            "From task Fix the dot:\nReady for review"
+        )
+
+        _ = await controller.removeQueuedMessage("mac-1")
+        _ = await controller.removeQueuedMessage("phone-1")
+        await controller.resumeQueue()
+        let updates = await runtime.recordedQueueUpdates()
+        XCTAssertEqual(updates.map(\.action), [.coordinatorRemove, .remove, .coordinatorResume])
+        XCTAssertEqual(updates.map(\.clientRequestID), ["mac-1", "phone-1", nil])
+        XCTAssertEqual(updates.last?.heldSetToken, "stop-1")
+        XCTAssertEqual(Set(updates.map(\.conversationID)), [alphaID])
+
+        // Without send access: the rows show, without Resume or Remove.
+        await subject.updateDeviceScopes([.read])
+        let readOnly = queuedRows(controller).filter { $0.id != "phone-1" }
+        XCTAssertEqual(readOnly.map(\.queued.canChange), [false, false])
+        XCTAssertTrue(queuedRows(controller).allSatisfy { $0.queued.resumeTitle == nil })
+
+        // A queue for an earlier agent's conversation is not this chat's.
+        announce(elsewhere.revision)
+        let cleared = ContinuousClock.now.advanced(by: .seconds(3))
+        while controller.coordinatorQueue != nil, ContinuousClock.now < cleared {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNil(controller.coordinatorQueue)
+        XCTAssertEqual(queuedRows(controller).map(\.id), ["phone-1"])
+        subject.stopObserving()
+    }
+
     /// The coordinator's chat shows attached images as thumbnails only with
     /// a Mac that serves them and read access, whichever comes last: the
     /// capability with a connection state, or the scopes, as with a stored
@@ -1456,6 +1568,32 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     }
 
     func quietDigestReadCount() -> Int { quietDigestReads }
+
+    private var coordinatorQueueAnswers: [RemoteCoordinatorQueue] = []
+    private var coordinatorQueueReads = 0
+    private var queueUpdates: [RemoteConversationQueueUpdateRequest] = []
+
+    /// What each read of the coordinator's own queue answers, in turn.
+    func scriptCoordinatorQueue(_ answers: [RemoteCoordinatorQueue]) {
+        coordinatorQueueAnswers = answers
+    }
+
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
+        coordinatorQueueReads += 1
+        guard coordinatorQueueAnswers.isEmpty == false else { throw GatewayFailure.invalidResponse }
+        return coordinatorQueueAnswers.removeFirst()
+    }
+
+    func coordinatorQueueReadCount() -> Int { coordinatorQueueReads }
+
+    func updateQueue(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) async throws -> RemoteConversationQueueUpdateResponse? {
+        queueUpdates.append(request)
+        return RemoteConversationQueueUpdateResponse(result: .updated)
+    }
+
+    func recordedQueueUpdates() -> [RemoteConversationQueueUpdateRequest] { queueUpdates }
 
     func taskAction(
         _ request: RemoteTaskActionRequest

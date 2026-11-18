@@ -39,6 +39,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case coordinatorSendWithAttachments
     case coordinatorChatRead
     case coordinatorQuietDigests
+    case coordinatorQueue
     case coordinatorAttachmentImage
 
     var path: String {
@@ -78,6 +79,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .coordinatorSendWithAttachments: RemoteCoordinatorSendPolicy.sendWithAttachmentsPath
         case .coordinatorChatRead: RemoteCoordinatorChatReadPolicy.readPath
         case .coordinatorQuietDigests: RemoteCoordinatorQuietDigestsPolicy.path
+        case .coordinatorQueue: RemoteCoordinatorQueuePolicy.path
         case .coordinatorAttachmentImage: RemoteCoordinatorAttachmentImagePolicy.path
         }
     }
@@ -176,6 +178,12 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // Which wake turns are quiet changes only how the coordinator's chat
         // folds, so it needs the read scope that showing the chat needs.
         .coordinatorQuietDigests: .init(route: .coordinatorQuietDigests, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        // The coordinator's waiting messages are what the coordinator's
+        // chat shows below its rows, so reading them needs the read scope
+        // that showing the chat needs. Their text is not sent yet, so only a
+        // native device reads it, never a browser. Changing them goes
+        // through `conversationQueueUpdate`, which needs send.
+        .coordinatorQueue: .init(route: .coordinatorQueue, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
         // An image attached to a message in the coordinator's chat is part
         // of what the chat shows, so it needs the read scope that showing
         // the chat needs, as a preview does.

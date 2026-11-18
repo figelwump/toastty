@@ -736,17 +736,75 @@ final class ToasttyComposerDraftStore {
 }
 
 enum ToasttySendPresentationAdapter {
+    /// The coordinator's own queue, from a Mac that shares it, and whether
+    /// this phone may let its messages go and remove them.
+    struct CoordinatorQueue: Equatable {
+        var queue: RemoteCoordinatorQueue
+        var mayChange: Bool
+    }
+
     /// Reconciliation records first, then the Mac's queue in delivery order.
     /// A queued record the host still lists renders from the host's list,
     /// so the two never show the same message twice. In the coordinator's
     /// chat (`readsCoordinatorMessages`) a reply shows as its row will.
+    ///
+    /// With the coordinator's own queue, the chat lists both of the
+    /// coordinator's queues as one, in the order Toastty types them once
+    /// nothing is held: the conversation's queue, which goes first at each
+    /// open prompt, then the coordinator's held messages, then its waiting
+    /// ones. One Resume, on the first held row, lets go all that a Stop
+    /// holds. A message in the coordinator's queue has Remove, not Edit.
     static func makeItems(
         from state: SendReconciliationState,
         inputControl: RemoteConversationInputControl? = nil,
-        readsCoordinatorMessages: Bool = false
+        readsCoordinatorMessages: Bool = false,
+        coordinatorQueue: CoordinatorQueue? = nil
     ) -> [ToasttySendPresentationItem] {
-        let items = recordAndQueueItems(from: state, inputControl: inputControl)
-        return readsCoordinatorMessages ? items.map(coordinatorItem) : items
+        let items = recordAndQueueItems(from: state, inputControl: inputControl, coordinatorQueue: coordinatorQueue)
+        let mapped = readsCoordinatorMessages ? items.map(coordinatorItem) : items
+        guard let coordinatorQueue else { return mapped }
+        let firstPosition = (inputControl?.queuedMessages.count ?? 0) + 1
+        let resumeRowID = firstHeldRowID(inputControl: inputControl, coordinatorQueue: coordinatorQueue)
+        let heldTitle = resumeTitle(inputControl: inputControl, coordinatorQueue: coordinatorQueue)
+        let coordinatorItems = coordinatorQueue.queue.entries.enumerated().map { index, entry in
+            ToasttySendPresentationItem(
+                clientRequestID: entry.id,
+                text: entry.sender.map { "From \($0):\n\(entry.text)" } ?? entry.text,
+                content: .queued(ToasttyQueuedSendPresentation(
+                    position: firstPosition + index,
+                    attachmentCount: entry.fileNames.count,
+                    isPaused: entry.isHeld,
+                    canSteer: false,
+                    canChange: coordinatorQueue.mayChange,
+                    canEdit: false,
+                    resume: entry.id == resumeRowID ? .titled(heldTitle) : .none
+                )),
+                quote: entry.quote.map { ToasttyMessageQuote(text: $0, timeText: entry.quoteTime) }
+            )
+        }
+        return mapped + coordinatorItems
+    }
+
+    /// The row that offers the one Resume: the first held message of the
+    /// list, while this phone may change the queue.
+    private static func firstHeldRowID(
+        inputControl: RemoteConversationInputControl?,
+        coordinatorQueue: CoordinatorQueue
+    ) -> String? {
+        guard coordinatorQueue.mayChange else { return nil }
+        if inputControl?.isQueuePaused == true, let first = inputControl?.queuedMessages.first {
+            return first.clientRequestID
+        }
+        return coordinatorQueue.queue.entries.first(where: \.isHeld)?.id
+    }
+
+    private static func resumeTitle(
+        inputControl: RemoteConversationInputControl?,
+        coordinatorQueue: CoordinatorQueue
+    ) -> String {
+        let conversationHeld = inputControl?.isQueuePaused == true ? inputControl?.queuedMessages.count ?? 0 : 0
+        let held = conversationHeld + coordinatorQueue.queue.heldEntries.count
+        return held > 1 ? "Resume all \(held)" : "Resume"
     }
 
     /// A message for the coordinator as its row in the coordinator's chat
@@ -766,12 +824,23 @@ enum ToasttySendPresentationAdapter {
 
     private static func recordAndQueueItems(
         from state: SendReconciliationState,
-        inputControl: RemoteConversationInputControl?
+        inputControl: RemoteConversationInputControl?,
+        coordinatorQueue: CoordinatorQueue? = nil
     ) -> [ToasttySendPresentationItem] {
         let queued = inputControl?.queuedMessages ?? []
         let queuedIDs = Set(queued.map(\.clientRequestID))
+            .union(coordinatorQueue?.queue.entries.map(\.id) ?? [])
         var items = makeItems(from: state).filter { queuedIDs.contains($0.clientRequestID) == false }
+        let resumeRowID = coordinatorQueue.flatMap { firstHeldRowID(inputControl: inputControl, coordinatorQueue: $0) }
         for (index, message) in queued.enumerated() {
+            let resume: ToasttyQueuedSendPresentation.ResumeOffer = if let coordinatorQueue {
+                // One Resume for both of the coordinator's queues.
+                message.clientRequestID == resumeRowID
+                    ? .titled(resumeTitle(inputControl: inputControl, coordinatorQueue: coordinatorQueue))
+                    : .none
+            } else {
+                .onEachPausedRow
+            }
             items.append(ToasttySendPresentationItem(
                 clientRequestID: message.clientRequestID,
                 text: message.text,
@@ -781,7 +850,8 @@ enum ToasttySendPresentationAdapter {
                     isPaused: inputControl?.isQueuePaused == true,
                     // Attachments stay staged on the Mac; a steer resends only
                     // text, so it is not offered for those entries.
-                    canSteer: inputControl?.canSteer == true && message.attachmentCount == 0
+                    canSteer: inputControl?.canSteer == true && message.attachmentCount == 0,
+                    resume: resume
                 ))
             ))
         }

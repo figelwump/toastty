@@ -1988,12 +1988,12 @@ private struct ToasttySendTailItemView: View {
                     .conversationFont(.caption2, monospaced: true)
                     .foregroundStyle(ConversationDesignTokens.mutedText)
             }
-            if queued.canChange || queued.canSteer {
+            if queued.canChange || queued.canSteer || queued.resumeTitle != nil {
                 HStack(spacing: 16) {
-                    if queued.isPaused, queued.canChange {
-                        queuedAction("Send next", "resume") { queuedMessageAction(.resume) }
+                    if let resumeTitle = queued.resumeTitle {
+                        queuedAction(resumeTitle, "resume") { queuedMessageAction(.resume) }
                     }
-                    if queued.canChange {
+                    if queued.canEdit {
                         queuedAction("Edit", "edit") {
                             queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
                         }

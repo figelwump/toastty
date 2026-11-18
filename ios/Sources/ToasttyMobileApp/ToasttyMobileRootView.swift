@@ -32,6 +32,11 @@ struct ToasttyMobileRootView: View {
     @State private var fixtureQueueSubmissionCount = 0
     @State private var fixtureQueuePaused = false
     @State private var fixtureTurnStopped = false
+    /// The fixture coordinator's own queue
+    /// (`TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE`), and the token of the
+    /// Stop that holds its messages.
+    @State private var fixtureCoordinatorQueueEntries: [RemoteCoordinatorQueueEntry] = []
+    @State private var fixtureCoordinatorHeldSetToken: String?
     @State private var fixtureLocalDraftReleaseAttempts = 0
 #if DEBUG
     @State private var fixtureEntryLoadStep = 0
@@ -121,6 +126,16 @@ struct ToasttyMobileRootView: View {
         _fixtureIncoming = State(initialValue: configuration.fixtureScenario == .home
             && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_INCOMING"] == "1"
             ? ToasttyIncomingFixture() : nil)
+        if configuration.fixtureScenario == .home, Self.fixtureCoordinatorQueueMode != nil {
+            _fixtureQueuedMessages = State(initialValue: ToasttyConversationFixture.coordinatorChatQueue)
+            if Self.fixtureCoordinatorQueueMode == .shared {
+                _fixtureCoordinatorQueueEntries = State(initialValue: ToasttyConversationFixture.coordinatorOwnQueue(
+                    hasLongMessage: ProcessInfo.processInfo.environment[
+                        "TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_LONG"
+                    ] == "1"
+                ))
+            }
+        }
 #endif
         deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
         sharedDraftStore = configuration.sharedDraftStore
@@ -954,7 +969,8 @@ struct ToasttyMobileRootView: View {
                     ? ToasttySendPresentationAdapter.makeItems(
                         from: SendReconciliationState(),
                         inputControl: fixtureInputControl,
-                        readsCoordinatorMessages: true
+                        readsCoordinatorMessages: true,
+                        coordinatorQueue: fixtureCoordinatorQueue
                     ) + fixtureSendItems.map(ToasttySendPresentationAdapter.coordinatorItem)
                     : [],
                 hasLongMessage: ProcessInfo.processInfo.environment[
@@ -1531,6 +1547,46 @@ struct ToasttyMobileRootView: View {
         guard isFixtureWorkingConversation(conversationID) else { return }
         fixtureTurnStopped = true
         fixtureQueuePaused = !fixtureQueuedMessages.isEmpty
+        // As the Mac: the Stop sets the coordinator's waiting messages
+        // aside too, and names what it holds.
+        if conversationID == ToasttyMobileFixture.coordinatorConversationID, Self.fixtureCoordinatorQueueMode == .shared {
+            fixtureCoordinatorQueueEntries = fixtureCoordinatorQueueEntries.map {
+                var entry = $0
+                entry.isHeld = true
+                return entry
+            }
+            fixtureCoordinatorHeldSetToken = fixtureQueuePaused || fixtureCoordinatorQueueEntries.isEmpty == false
+                ? UUID().uuidString : nil
+        }
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE`: `1` is a Mac that shares
+    /// the coordinator's own queue, with messages waiting in both of the
+    /// coordinator's queues; `unsupported` is an older Mac, whose chat lists
+    /// only the conversation's own queue.
+    enum FixtureCoordinatorQueueMode {
+        case shared, unshared
+    }
+
+    static var fixtureCoordinatorQueueMode: FixtureCoordinatorQueueMode? {
+        switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE"] {
+        case "1": .shared
+        case "unsupported": .unshared
+        default: nil
+        }
+    }
+
+    private var fixtureCoordinatorQueue: ToasttySendPresentationAdapter.CoordinatorQueue? {
+        guard Self.fixtureCoordinatorQueueMode == .shared else { return nil }
+        return .init(
+            queue: RemoteCoordinatorQueue(
+                revision: "fixture",
+                conversationID: RemoteConversationID(rawValue: ToasttyMobileFixture.coordinatorConversationID),
+                heldSetToken: fixtureCoordinatorHeldSetToken,
+                entries: fixtureCoordinatorQueueEntries
+            ),
+            mayChange: true
+        )
     }
 
     private func fixtureQueuedMessageAction(_ action: ToasttyQueuedMessageAction, conversationID: UUID) {
@@ -1538,6 +1594,7 @@ struct ToasttyMobileRootView: View {
         switch action {
         case .remove(let clientRequestID):
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
+            fixtureCoordinatorQueueEntries.removeAll { $0.id == clientRequestID }
         case .edit(let clientRequestID, let shown):
             let text = fixtureQueuedMessages.first { $0.clientRequestID == clientRequestID }?.text ?? shown
             let readsReplies = conversationID == coordinatorConversationID
@@ -1554,8 +1611,17 @@ struct ToasttyMobileRootView: View {
             ))
         case .resume:
             fixtureQueuePaused = false
+            // One Resume lets go what the Stop holds in both queues.
+            fixtureCoordinatorQueueEntries = fixtureCoordinatorQueueEntries.map {
+                var entry = $0
+                entry.isHeld = false
+                return entry
+            }
         }
         if fixtureQueuedMessages.isEmpty { fixtureQueuePaused = false }
+        if fixtureQueuePaused == false, fixtureCoordinatorQueueEntries.allSatisfy({ $0.isHeld == false }) {
+            fixtureCoordinatorHeldSetToken = nil
+        }
     }
 #endif
 
@@ -1806,6 +1872,8 @@ struct ToasttyMobileRootView: View {
         fixtureQueuedMessages.removeAll(keepingCapacity: false)
         fixtureQueuePaused = false
         fixtureTurnStopped = false
+        fixtureCoordinatorQueueEntries.removeAll(keepingCapacity: false)
+        fixtureCoordinatorHeldSetToken = nil
         fixtureLocalDraftReleaseAttempts = 0
     }
 

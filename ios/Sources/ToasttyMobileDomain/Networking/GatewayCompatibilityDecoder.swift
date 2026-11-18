@@ -267,7 +267,10 @@ public struct GatewayCompatibilityDecoder: Sendable {
             },
             // Absent from an older Mac, whose quiet wake turns then show
             // open, as before.
-            coordinatorQuietDigestsRevision: object.lossyString("coordinatorQuietDigestsRevision"))
+            coordinatorQuietDigestsRevision: object.lossyString("coordinatorQuietDigestsRevision"),
+            // Absent from an older Mac, whose coordinator chat then lists
+            // only the conversation's own waiting messages, as before.
+            coordinatorQueueRevision: object.lossyString("coordinatorQueueRevision"))
     }
 
     /// Annotations are display-only, so a malformed chip is dropped rather

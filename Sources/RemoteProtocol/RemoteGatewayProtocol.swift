@@ -101,6 +101,14 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     /// device shows the files by name. Only a Mac with the coordinator
     /// advertises it.
     case coordinatorAttachmentImages = "coordinator_attachment_images"
+    /// The Mac shares the coordinator's own queue: the messages for the
+    /// coordinator that wait outside its conversation's send queue. The
+    /// coordinator's workspace carries `coordinatorQueueRevision`, a native
+    /// client reads the queue from `RemoteCoordinatorQueuePolicy.path` when
+    /// it changes, and `RemoteConversationQueueAction.coordinatorResume` and
+    /// `coordinatorRemove` change it. Only a Mac with the coordinator
+    /// advertises it.
+    case coordinatorQueue = "coordinator_queue"
 }
 
 /// Public compatibility probe used before a client has credentials.
