@@ -4,38 +4,9 @@ import CoreState
 import RemoteProtocol
 import SwiftUI
 
-/// A task that the user can mention in a message to the coordinator.
-struct CoordinatorMentionCandidate: Equatable, Identifiable {
-    /// The picker's groups, in the order the Tasks view lists them.
-    enum Group: Int, CaseIterable, Comparable {
-        case needsYou, working, idle, toShip, done, archived
-
-        var title: String {
-            switch self {
-            case .needsYou: "Needs you"
-            case .working: "Working"
-            case .idle: "Idle"
-            case .toShip: "To ship"
-            case .done: "Done"
-            case .archived: "Archived"
-            }
-        }
-
-        static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
-    }
-
-    let taskID: UUID
-    var title: String
-    var projectTitle: String?
-    var pullRequestNumber: Int?
-    var group: Group
-    var markColor: ConversationChipColor
-    /// When a done task finished. The picker lists recent ones before a
-    /// search.
-    var doneAt: Date?
-
-    var id: UUID { taskID }
-
+/// The Mac's tasks to mention. The rules for `@` and the search are shared
+/// with the phone (`CoordinatorMentionRules.swift` in ConversationUI).
+extension CoordinatorMentionCandidate {
     /// The tasks on the board, newest activity first, as the board orders
     /// them. A task space without a task record cannot be mentioned: the
     /// coordinator reads tasks by their ID.
@@ -63,116 +34,6 @@ struct CoordinatorMentionCandidate: Equatable, Identifiable {
         case .done: .done
         case .archived: .archived
         }
-    }
-}
-
-/// Which tasks the picker lists for what the user typed after `@`.
-enum CoordinatorMentionSearch {
-    struct Section: Equatable, Identifiable {
-        let group: CoordinatorMentionCandidate.Group
-        var candidates: [CoordinatorMentionCandidate]
-        var id: CoordinatorMentionCandidate.Group { group }
-    }
-
-    /// Before a search, the picker lists done tasks that finished in this
-    /// time. Older ones, and archived ones, show only for a search.
-    static let recentDoneInterval: TimeInterval = 14 * 24 * 60 * 60
-    static let maximumResults = 50
-
-    static func sections(
-        query: String,
-        candidates: [CoordinatorMentionCandidate],
-        now: Date
-    ) -> [Section] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        let listed: [CoordinatorMentionCandidate]
-        if trimmed.isEmpty {
-            listed = candidates.filter { candidate in
-                switch candidate.group {
-                case .archived: false
-                case .done: candidate.doneAt.map { now.timeIntervalSince($0) <= recentDoneInterval } ?? false
-                default: true
-                }
-            }
-        } else {
-            listed = candidates.filter { matches($0, query: trimmed) }
-        }
-        var sections: [Section] = []
-        var count = 0
-        for group in CoordinatorMentionCandidate.Group.allCases {
-            let inGroup = listed.filter { $0.group == group }.prefix(maximumResults - count)
-            guard inGroup.isEmpty == false else { continue }
-            sections.append(Section(group: group, candidates: Array(inGroup)))
-            count += inGroup.count
-            if count >= maximumResults { break }
-        }
-        return sections
-    }
-
-    /// `#331` matches pull requests whose number starts with 331. Other
-    /// text matches when each of its words is in the title or the project's
-    /// name; digits alone also match a pull request number.
-    static func matches(_ candidate: CoordinatorMentionCandidate, query: String) -> Bool {
-        if query.hasPrefix("#") {
-            let digits = query.dropFirst()
-            guard digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) else { return false }
-            guard let number = candidate.pullRequestNumber else { return false }
-            return String(number).hasPrefix(digits)
-        }
-        if query.allSatisfy({ $0.isASCII && $0.isNumber }),
-           let number = candidate.pullRequestNumber, String(number).hasPrefix(query) {
-            return true
-        }
-        let haystack = [candidate.title, candidate.projectTitle ?? ""].joined(separator: " ")
-        return query.split(whereSeparator: \.isWhitespace).allSatisfy { word in
-            haystack.range(of: word, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-        }
-    }
-}
-
-/// The `@` that starts a mention: at the start of the text, or after a
-/// space or an opening bracket or quote, so that an email address starts
-/// none. The words typed after it, on one line, are the search.
-enum CoordinatorMentionTrigger {
-    struct Match: Equatable {
-        /// The location of the `@`, in UTF-16 units.
-        var anchor: Int
-        var query: String
-    }
-
-    static let maximumQueryLength = 60
-
-    static func match(in text: NSString, caret: Int) -> Match? {
-        guard caret > 0, caret <= text.length else { return nil }
-        var index = caret
-        let lowerBound = max(0, caret - maximumQueryLength - 1)
-        while index > lowerBound {
-            index -= 1
-            let unit = text.character(at: index)
-            if unit == atSign {
-                if index > 0, startsAMention(after: text.character(at: index - 1)) == false { return nil }
-                let query = text.substring(with: NSRange(location: index + 1, length: caret - index - 1))
-                // "@ " is not a mention.
-                if let first = query.unicodeScalars.first, first.properties.isWhitespace { return nil }
-                return Match(anchor: index, query: query)
-            }
-            if isLineBreak(unit) || unit == attachmentCharacter { return nil }
-        }
-        return nil
-    }
-
-    private static let atSign = UInt16(UInt8(ascii: "@"))
-    private static let attachmentCharacter: UInt16 = 0xFFFC
-    private static let openers = Set("([{\"'“‘".utf16)
-
-    static func startsAMention(after unit: UInt16) -> Bool {
-        if openers.contains(unit) || unit == attachmentCharacter { return true }
-        guard let scalar = Unicode.Scalar(unit) else { return false }
-        return scalar.properties.isWhitespace
-    }
-
-    private static func isLineBreak(_ unit: UInt16) -> Bool {
-        unit == 0x0A || unit == 0x0D || unit == 0x2028 || unit == 0x2029
     }
 }
 
@@ -227,8 +88,8 @@ final class CoordinatorMentionPicker: ObservableObject {
         }
         dismissedAnchor = nil
         let next = Session(anchor: match.anchor, caret: selection.location, query: match.query)
-        let matchesNothing = CoordinatorMentionSearch.sections(query: next.query, candidates: candidates, now: now()).isEmpty
-        if matchesNothing, next.query.contains(where: \.isWhitespace) {
+        let sections = CoordinatorMentionSearch.sections(query: next.query, candidates: candidates, now: now())
+        if CoordinatorMentionSearch.endsTheSearch(query: next.query, sections: sections) {
             close(resetDismissal: false)
             return
         }
@@ -295,8 +156,6 @@ final class CoordinatorMentionAttachment: NSTextAttachment {
     /// changed since, so the field and the draft stay the same text.
     let markdown: String
 
-    static let maximumTitleLength = 40
-
     init(
         taskID: UUID,
         title: String,
@@ -334,9 +193,7 @@ final class CoordinatorMentionAttachment: NSTextAttachment {
     }
 
     static func label(title: String) -> String {
-        let oneLine = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard oneLine.isEmpty == false else { return "Untitled task" }
-        return oneLine.count > maximumTitleLength ? oneLine.prefix(maximumTitleLength - 1) + "…" : oneLine
+        CoordinatorMentionCandidate.label(title: title)
     }
 
     /// The chip fits in a line of the font, so a line with a chip is as

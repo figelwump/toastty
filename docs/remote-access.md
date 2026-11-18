@@ -886,6 +886,25 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   **Edit** on a waiting reply brings it back as a reply. A message that
   starts with Toastty's line for another sender cannot become a reply.
   Digests, sender cards and other sessions' chats have neither button.
+- **Mention a task.** As in the Mac's coordinator chat, type `@` at the
+  start of the field, or after a space, an opening bracket or a quote, or
+  choose **Mention a Task** in the paperclip menu, and a list of your tasks
+  opens above the composer. It uses the Mac's rules: the tasks that are not
+  archived, by stage (Needs you, Working, Idle, To ship), then the done tasks
+  of the last 14 days, at most 50. Type to search: words match the title and
+  the project's name, and `#331` or `331` matches the pull request number; a
+  search also finds older done and archived tasks. About four rows show, and
+  the list scrolls. A tap puts the task in the field as one word, `@` and its
+  title in the accent color; one Delete removes the whole word, and the caret
+  does not stop inside it. The list closes when the caret leaves the search,
+  the `@` is deleted, a space ends a search that matches nothing, the field
+  loses the keyboard, or you tap the chat above it. The message holds the
+  task's link, `[title](toastty://task/<task-id>)`, as the Mac sends it, and
+  the chat shows it as a chip. A saved draft, and a waiting message that
+  **Edit** puts back, show their mentions as words again. Copy gives the
+  link, and a pasted link to a task shows as its mention. VoiceOver reads a
+  mention as "mention" and the title. A task space without a task record
+  cannot be mentioned, and other sessions' fields have no mentions.
 - **The New line.** A red-orange **New** line marks the first message from
   the coordinator that you have not read, on the Mac or on the phone, and the
   chat opens at it. While you scroll up, **Jump to latest** reads "N new". It
@@ -905,9 +924,8 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   types before the coordinator's waiting messages. **Stop** holds the
   coordinator's waiting messages too.
 - **Not on the phone yet.** The coordinator's own queue (the Mac chat's
-  Queued and Paused rows with Edit, Remove, Steer now and Send next),
-  thumbnails of attached images, and `@` mentions in the composer stay on the
-  Mac.
+  Queued and Paused rows with Edit, Remove, Steer now and Send next) stays on
+  the Mac.
 - **The tab's icon is Toasty's outline.** While another tab shows, its badge
   says what the coordinator waits for, from its session's status, as the
   Mac's coordinator row marks it: **New** for output you have not read, **!**

@@ -433,7 +433,12 @@ let project = Project(
             bundleId: "com.giantthings.toastty.mobile.app.tests",
             deploymentTargets: deploymentTarget,
             infoPlist: .default,
-            sources: ["Tests/ToasttyMobileAppTests/**"],
+            sources: [
+                "Tests/ToasttyMobileAppTests/**",
+                // Tests of shared ConversationUI rules, also compiled into
+                // the macOS graph's ToasttyAppTests.
+                "../Tests/ConversationUI/**",
+            ],
             dependencies: [
                 .target(name: "ToasttyMobileApp"),
                 .target(name: "ToasttyMobileDomain"),

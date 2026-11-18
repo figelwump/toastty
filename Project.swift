@@ -669,6 +669,9 @@ let project = Project(
             infoPlist: .default,
             sources: [
                 "Tests/App/**",
+                // Tests of shared ConversationUI rules, also compiled into
+                // the iOS graph's ToasttyMobileAppTests.
+                "Tests/ConversationUI/**",
                 // Shared provider fixtures, also compiled into CoreStateTests.
                 "Tests/Core/RemoteAccess/CodexRolloutFixtures.swift",
                 "Tests/Core/RemoteAccess/ClaudeTranscriptFixtures.swift",

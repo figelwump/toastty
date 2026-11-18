@@ -7,8 +7,9 @@ import Testing
 @testable import ToasttyApp
 
 /// Mentions of tasks in a message to the coordinator: which text is a
-/// link, where `@` starts a mention, which tasks the picker lists, and the
-/// keys the picker takes.
+/// link, which board tasks can be mentioned, and the keys the picker takes.
+/// Where `@` starts a mention and which tasks the picker lists are the
+/// shared rules' (`Tests/ConversationUI/CoordinatorMentionRulesTests.swift`).
 @MainActor
 struct CoordinatorMentionTests {
     private static let taskID = UUID(uuidString: "8C2F1D3A-4B5C-4D6E-8F70-1A2B3C4D5E6F")!
@@ -91,39 +92,7 @@ struct CoordinatorMentionTests {
         #expect(String(ConversationLinkDecoration.applyChips(toPlainText: text, presenter: nil).characters) == text)
     }
 
-    // MARK: - Where @ starts a mention
-
-    private func match(_ text: String, caret: Int? = nil) -> CoordinatorMentionTrigger.Match? {
-        let string = text as NSString
-        return CoordinatorMentionTrigger.match(in: string, caret: caret ?? string.length)
-    }
-
-    @Test func anAtSignStartsAMentionAtTheStartAfterASpaceOrAnOpener() {
-        #expect(match("@") == .init(anchor: 0, query: ""))
-        #expect(match("ask @dock") == .init(anchor: 4, query: "dock"))
-        #expect(match("ask (@dock") == .init(anchor: 5, query: "dock"))
-        #expect(match("ask \"@dock") == .init(anchor: 5, query: "dock"))
-        #expect(match("is @fix the dot") == .init(anchor: 3, query: "fix the dot"))
-        #expect(match("\u{FFFC}@dock") == .init(anchor: 1, query: "dock"))
-    }
-
-    @Test func anAtSignInAWordOrBeforeASpaceStartsNone() {
-        #expect(match("mail a@b.com") == nil)
-        #expect(match("meet @ 5") == nil)
-        #expect(match("@one\ntwo") == nil)
-        #expect(match("@a@b") == nil)
-        #expect(match("no at sign") == nil)
-        #expect(match("") == nil)
-        // A search longer than a title's words is ordinary text.
-        #expect(match("@" + String(repeating: "a", count: CoordinatorMentionTrigger.maximumQueryLength + 1)) == nil)
-    }
-
-    @Test func theCaretDecidesTheSearch() {
-        #expect(match("ask @dock please", caret: 9) == .init(anchor: 4, query: "dock"))
-        #expect(match("ask @dock please", caret: 3) == nil)
-    }
-
-    // MARK: - Which tasks the picker lists
+    // MARK: - The picker
 
     private static func candidate(
         _ title: String,
@@ -154,41 +123,6 @@ struct CoordinatorMentionTests {
         candidate("Archived spike", group: .archived),
         candidate("Idle notes", group: .idle),
     ]
-
-    private func titles(_ query: String) -> [[String]] {
-        CoordinatorMentionSearch.sections(query: query, candidates: Self.board, now: Self.now)
-            .map { $0.candidates.map(\.title) }
-    }
-
-    @Test func beforeASearchThePickerListsOpenTasksByStageAndRecentDoneOnes() {
-        let sections = CoordinatorMentionSearch.sections(query: "", candidates: Self.board, now: Self.now)
-        #expect(sections.map(\.group) == [.needsYou, .working, .idle, .toShip, .done])
-        // Within a group, the board's order: newest activity first.
-        #expect(sections[0].candidates.map(\.title) == ["Fix the unread dot", "Add the export API"])
-        #expect(sections.last?.candidates.map(\.title) == ["Show the sidebar as All and Needs you"])
-    }
-
-    @Test func aPullRequestNumberFindsItsTasks() {
-        #expect(titles("#33") == [
-            ["Show the coordinator's chat in a dock"],
-            ["Keep image thumbnails one size"],
-            ["Show the sidebar as All and Needs you", "Old cleanup of the Café menu"],
-        ])
-        #expect(titles("#312") == [["Fix the unread dot"]])
-        // Digits alone match a number too.
-        #expect(titles("331") == [["Show the coordinator's chat in a dock"]])
-        #expect(titles("#dock").isEmpty)
-    }
-
-    @Test func wordsMatchTheTitleAndProjectInAnyOrder() {
-        #expect(titles("dot unread") == [["Fix the unread dot"]])
-        #expect(titles("web export") == [["Add the export API"]])
-        // Case and accents do not matter; an old done task and an archived
-        // one show for a search.
-        #expect(titles("cafe") == [["Old cleanup of the Café menu"]])
-        #expect(titles("SPIKE") == [["Archived spike"]])
-        #expect(titles("nothing like this").isEmpty)
-    }
 
     @Test func aTaskSpaceWithoutARecordCannotBeMentioned() {
         let item = TaskBoardItem(
