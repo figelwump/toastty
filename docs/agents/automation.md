@@ -561,8 +561,8 @@ message to the coordinator's own queue. A Stop from the device holds both
 queues. The check removes the `coordinator send` message from the device,
 resumes with a stale token and then the Stop's token, and proves from Claude's
 transcript that the rest are typed one per turn, the device's chat message
-first. A second Stop races Send next in the Mac's chat against the device's
-Resume, and each message is typed once. A third Stop holds a Mac chat message
+first. After a second Stop, the device's Resume follows Send next in the Mac's
+chat by milliseconds, with the same token, and each message is typed once. A third Stop holds a Mac chat message
 over a relaunch of the app: it waits under a new token and goes on Resume. It
 writes `remote-coordinator-chat-check-waiting-messages.json` and the app log.
 

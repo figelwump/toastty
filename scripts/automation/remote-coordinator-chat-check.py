@@ -67,8 +67,9 @@ start:
   second Remove says it left; a Resume with another Stop's token is stale;
 - one Resume from the device types the rest one per turn, the
   conversation's message first, then the coordinator's in their order;
-- after a second Stop, Send next in the Mac's chat and Resume from the device
-  at nearly the same time type each message once and lose none;
+- after a second Stop, Send next in the Mac's chat and, milliseconds after
+  it acts, Resume from the device with the same token type each message once
+  and lose none;
 - after a third Stop and a relaunch of the Mac app, the Mac chat's held
   message waits under a new token, the token from before the relaunch is
   stale, and Resume from the device types it.
@@ -477,7 +478,8 @@ def run(check):
                         f'The conversation\'s queue is not held: {control}')
             chat = ui.texts()
             for marker in markers + ([phone_marker] if phone_marker else []):
-                require(chat.count(marker) == 1, f'The Mac chat shows {marker} {chat.count(marker)} times: {chat[-800:]}')
+                require(shown_count(chat, marker) == 1,
+                        f'The Mac chat shows {marker} {shown_count(chat, marker)} times: {chat[-800:]}')
             require(workspace_revision() == queue['revision'],
                     f'The workspace names {workspace_revision()}, the queue {queue["revision"]}')
             return queue
@@ -489,6 +491,12 @@ def run(check):
             order = [user_index(marker) for marker in markers]
             require(order == sorted(order), f'Not typed in order: {list(zip(markers, order))}')
             return order
+
+        def shown_count(chat, marker):
+            """How many rows show `marker`. A waiting bubble's accessibility
+            label repeats its text with its state after a comma."""
+            labels = (', Paused in queue', ', Queued, sends after this turn')
+            return sum(1 for line in chat.splitlines() if marker in line and not line.endswith(labels))
 
         def typed_once(marker):
             return sum(1 for entry in transcript() if entry['role'] == 'user' and marker in entry['text'])
@@ -529,14 +537,29 @@ def run(check):
         raced = held_state(['B-MAC'], 'B-PHONE')
         wait_for('the stopped turn to end', at_prompt, timeout=120)
         mac_entry = raced['entries'][0]['id']
-        results = {}
-        thread = threading.Thread(target=lambda: results.update(
-            phone=queue_update('coordinator_resume', heldSetToken=raced['heldSetToken'])))
+        # A click takes longer than a request, so the click starts first and
+        # the device's Resume, with the same token, follows the moment the
+        # Mac's Resume shows in the device's read: both act, milliseconds
+        # apart.
+        clicked = {}
+        thread = threading.Thread(target=lambda: clicked.update(
+            result=ui.run('click', f'toastty-mobile-queued-resume-{mac_entry}', check=False)))
         thread.start()
-        # The device's Resume can win and take the row, and its button, first.
-        mac_click = ui.run('click', f'toastty-mobile-queued-resume-{mac_entry}', check=False)
+        deadline = time.monotonic() + 60
+        while thread.is_alive() or 'result' not in clicked:
+            entries = read_queue()['entries']
+            if not entries or not entries[0].get('isHeld'):
+                break
+            require(time.monotonic() < deadline, 'The Mac\'s Send next did not act')
+            time.sleep(0.05)
+        phone_result = queue_update('coordinator_resume', heldSetToken=raced['heldSetToken'])
         thread.join(timeout=60)
-        require(results.get('phone') in ('updated', 'unchanged'), f'The device\'s Resume: {results}')
+        mac_click = clicked.get('result')
+        require(mac_click and mac_click[0] == 0, f'The Mac\'s Send next was not clicked: {mac_click}')
+        results = dict(phone=phone_result)
+        # The Mac let its own message go; the conversation's queue was still
+        # held, so the device's Resume let that go.
+        require(phone_result == 'updated', f'The device\'s Resume after the Mac\'s: {phone_result}')
         for marker in ('B-PHONE', 'B-MAC'):
             wait_for(f'{marker} typed', lambda: user_index(marker) is not None, timeout=300)
             wait_for('the prompt after it', at_prompt, timeout=180)
@@ -571,7 +594,7 @@ def run(check):
                 'The conversation\'s queue survived the relaunch')
         time.sleep(5)
         require(user_index('C-MAC') is None and user_index('C-PHONE') is None, 'A held message was typed after the relaunch')
-        wait_for('the chat to show the held message once', lambda: ui.texts().count('C-MAC') == 1, timeout=60)
+        wait_for('the chat to show the held message once', lambda: shown_count(ui.texts(), 'C-MAC') == 1, timeout=60)
         capture('held-after-relaunch')
         require(queue_update('coordinator_resume', heldSetToken=relaunch_held['heldSetToken']) == 'stale',
                 'The token from before the relaunch resumed')
