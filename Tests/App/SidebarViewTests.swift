@@ -337,7 +337,7 @@ final class SidebarViewTests: XCTestCase {
     /// The card panel never becomes key, so the first click on a card row or
     /// its copy button must reach the button directly and leave keyboard
     /// focus where it was.
-    func testSubspaceHoverCardRowJumpsAndPathCopiesOnFirstClickWithoutTakingFocus() throws {
+    func testSubspaceHoverCardRowJumpsParentOpensAndPathCopiesOnFirstClickWithoutTakingFocus() throws {
         let presenter = HoverTipPresenter.shared
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 300, height: 200),
@@ -357,6 +357,7 @@ final class SidebarViewTests: XCTestCase {
         let path = NSHomeDirectory() + "/worktrees/hover-card-copy"
         let model = SubspaceHoverTipModel(
             name: "qa-mobile-navigation",
+            stage: .bucket(.readyToReview),
             sessions: [
                 .init(
                     title: "Fix nav drawer focus", panelID: targetPanelID, agentLabel: "claude",
@@ -368,15 +369,21 @@ final class SidebarViewTests: XCTestCase {
             annotations: [],
             path: "~/worktrees/hover-card-copy",
             absolutePath: path,
-            spawnerName: "Test EmptyOS beta experience"
+            spawnerName: "Test EmptyOS beta experience",
+            parentTaskTitle: "iOS parity with the Mac coordinator UI"
         )
         var selectedPanelIDs: [UUID] = []
+        var parentOpenCount = 0
         let screen = try XCTUnwrap(NSScreen.main?.visibleFrame)
         let anchor = CGRect(x: screen.minX + 40, y: screen.midY, width: 240, height: 22)
         func showCard() throws -> NSView {
             presenter.show(
                 id: "subspace-card",
-                content: SubspaceHoverTipCard(model: model) { selectedPanelIDs.append($0) },
+                content: SubspaceHoverTipCard(
+                    model: model,
+                    onSelectSession: { selectedPanelIDs.append($0) },
+                    onSelectParentTask: { parentOpenCount += 1 }
+                ),
                 anchorScreenRect: anchor,
                 placement: .trailing(gap: 6)
             )
@@ -387,6 +394,19 @@ final class SidebarViewTests: XCTestCase {
         }
 
         var cardView = try showCard()
+        // The stage replaces the "task space" tag.
+        XCTAssertNotNil(semanticTextField(in: cardView, prefix: "Stage: Ready to review"))
+        try writeSidebarEvidence(cardView, name: "task-space-card-parent-button")
+        try attachSidebarRender(cardView, name: "task-space-card-parent-button")
+
+        try clickSemanticText(prefix: "Go to parent task iOS parity with the Mac coordinator UI", in: cardView)
+        pumpMainRunLoop(duration: 0.1)
+        XCTAssertEqual(parentOpenCount, 1, "The first click on the Parent button should reach it")
+        XCTAssertTrue(selectedPanelIDs.isEmpty, "Opening the parent must not also jump to a session")
+        XCTAssertFalse(presenter.isVisible(id: "subspace-card"), "Opening the parent closes the card")
+        XCTAssertEqual(window.isKeyWindow, windowWasKey, "Clicking the card must not move keyboard focus")
+
+        cardView = try showCard()
         try clickSemanticText(prefix: "Go to Fix nav drawer focus", in: cardView)
         pumpMainRunLoop(duration: 0.1)
         XCTAssertEqual(selectedPanelIDs, [targetPanelID], "The first click on a card row should reach it")
@@ -404,6 +424,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(presenter.isVisible(id: "subspace-card"))
         XCTAssertEqual(window.isKeyWindow, windowWasKey)
         XCTAssertEqual(selectedPanelIDs, [targetPanelID], "Copying must not also jump")
+        XCTAssertEqual(parentOpenCount, 1)
 
         // The next card starts without the last one's copy check.
         cardView = try showCard()
@@ -2395,6 +2416,173 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(child.hasSuffix("started by Public URL warning"), child)
         try writeSidebarEvidence(root, name: "buckets-5-needs-you-segment")
         try attachSidebarRender(root, name: "buckets-5-needs-you-segment")
+    }
+
+    /// A task space card offers the task that started it. In Needs you the
+    /// parent usually has no row, and the sidebar stays on Needs you: the
+    /// parent's task space opens without a row of its own. A parent whose
+    /// task space closed opens in the Tasks view, and one in another window
+    /// opens there.
+    func testTaskSpaceCardParentButtonOpensTheParentAndKeepsNeedsYou() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        var otherWindowWorkspaces: [WorkspaceState] = []
+        func task(
+            _ title: String, parent: UUID? = nil, pullRequest: Int? = nil, unread: Bool = false,
+            closedAndDone: Bool = false, inOtherWindow: Bool = false
+        ) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, setup: .started,
+                parentTaskID: parent, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            if closedAndDone {
+                // Its task space is gone, so the task has no row to open.
+                record.doneAt = now
+                records.append(record)
+                return taskID
+            }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID, unreadPanelIDs: unread ? [panelID] : [],
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: inOtherWindow ? nil : project.id
+            )
+            workspace.taskID = taskID
+            if inOtherWindow {
+                otherWindowWorkspaces.append(workspace)
+            } else {
+                workspaces.append(workspace)
+            }
+            records.append(record)
+            panelByTitle[title] = (workspaceID, panelID)
+            return taskID
+        }
+        let parentID = task("Public URL warning")
+        _ = task("Private pages stay private", parent: parentID, pullRequest: 322)
+        let closedParentID = task("Hostname options", closedAndDone: true)
+        _ = task("Thumbnail filenames", parent: closedParentID, unread: true)
+        let otherWindowParentID = task("Billing rework", inOtherWindow: true)
+        _ = task("Invoice totals", parent: otherWindowParentID, unread: true)
+        let windowID = UUID(), otherWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+                ),
+                WindowState(
+                    id: otherWindowID, frame: CGRectCodable(x: 400, y: 0, width: 800, height: 600),
+                    workspaceIDs: otherWindowWorkspaces.map(\.id), selectedWorkspaceID: nil
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: (workspaces + otherWindowWorkspaces).map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            harness.window.orderOut(nil)
+        }
+        // Off screen, so the user's real pointer cannot hover a row.
+        harness.window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        for (title, kind) in [
+            ("Public URL warning", SessionStatusKind.idle), ("Private pages stay private", .idle), ("Thumbnail filenames", .ready),
+            ("Billing rework", .idle), ("Invoice totals", .ready),
+        ] {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID,
+                windowID: title == "Billing rework" ? otherWindowID : windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .ready ? "Ready" : "Waiting"),
+                at: now.addingTimeInterval(1)
+            )
+        }
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        let root = harness.hostingView
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        var textValues = renderedTextValues(in: root)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Public URL warning, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Private pages stay private, task space") }, "\(textValues)")
+
+        // SwiftUI hover: one entered event through the hosting view's own
+        // tracking areas, then moves straight to the view.
+        var hasEntered = false
+        func hoverRow(_ title: String) throws -> NSView {
+            HoverTipPresenter.shared.hideAll()
+            let rowFrame = try semanticTextFrame(in: root, prefix: "\(title), task space")
+            let windowPoint = root.convert(CGPoint(x: rowFrame.midX, y: rowFrame.midY), to: nil)
+            let window = try XCTUnwrap(root.window)
+            if hasEntered == false {
+                hasEntered = true
+                for area in root.trackingAreas where area.owner === root {
+                    root.mouseEntered(with: try XCTUnwrap(NSEvent.enterExitEvent(
+                        with: .mouseEntered, location: windowPoint, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil
+                    )))
+                }
+            }
+            root.mouseMoved(with: try XCTUnwrap(NSEvent.mouseEvent(
+                with: .mouseMoved, location: windowPoint, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+            )))
+            pumpMainRunLoop(duration: 0.8)
+            let card = try XCTUnwrap(renderedHoverCardView(), "Hovering \(title) should open its card")
+            card.layoutSubtreeIfNeeded()
+            return card
+        }
+
+        var card = try hoverRow("Private pages stay private")
+        XCTAssertNotNil(semanticTextField(in: card, prefix: "Stage: Ready to review"))
+        try writeSidebarEvidence(card, name: "parent-button-1-card-in-needs-you")
+        try attachSidebarRender(card, name: "parent-button-1-card-in-needs-you")
+        try clickSemanticText(prefix: "Go to parent task Public URL warning", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        let parentSpace = try XCTUnwrap(panelByTitle["Public URL warning"])
+        XCTAssertEqual(harness.store.window(id: windowID)?.selectedWorkspaceID, parentSpace.workspaceID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou, "The jump keeps the segment")
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, false)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Private pages stay private, task space") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "parent-button-2-sidebar-after-jump")
+        try attachSidebarRender(root, name: "parent-button-2-sidebar-after-jump")
+
+        // The other parent's task space closed: the Tasks view shows it.
+        card = try hoverRow("Thumbnail filenames")
+        try clickSemanticText(prefix: "Go to parent task Hostname options", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.taskBoard?.tasksViewSelection(windowID: windowID)?.taskID, closedParentID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
+
+        // A parent in another window opens there, and that window becomes
+        // the selected one: focusing its panel is what raises the window.
+        _ = harness.store.send(.setTasksViewShown(windowID: windowID, shown: false))
+        pumpMainRunLoop(duration: 0.4)
+        root.layoutSubtreeIfNeeded()
+        card = try hoverRow("Invoice totals")
+        try clickSemanticText(prefix: "Go to parent task Billing rework", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        let otherSpace = try XCTUnwrap(panelByTitle["Billing rework"])
+        XCTAssertEqual(harness.store.state.selectedWindowID, otherWindowID)
+        XCTAssertEqual(harness.store.window(id: otherWindowID)?.selectedWorkspaceID, otherSpace.workspaceID)
+        XCTAssertEqual(harness.store.state.workspacesByID[otherSpace.workspaceID]?.focusedPanelID, otherSpace.panelID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
     }
 
     /// The report behind this: merged child tasks whose task spaces
