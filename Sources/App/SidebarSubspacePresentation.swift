@@ -573,9 +573,9 @@ enum SidebarSubspacePresentation {
         )
     }
 
-    /// The card's stage chip: the group the row lists in, or the task's
-    /// own stage once it has left the groups. A subspace that is not a task
-    /// has none.
+    /// The card's stage chip: the row's own group, as the group counts
+    /// count it, or the task's stage once it has left the groups. A
+    /// subspace that is not a task has none.
     static func hoverTipStage(_ row: Row) -> SubspaceHoverTipModel.Stage? {
         guard row.isTask, let stage = row.stage else { return nil }
         switch stage {

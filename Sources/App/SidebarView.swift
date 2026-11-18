@@ -1209,16 +1209,23 @@ struct SidebarView: View {
     private func openParentTask(taskID: UUID) {
         guard let parent = taskBoardSnapshot.allItems.first(where: { $0.taskID == taskID }) else { return }
         cancelWorkspaceRename()
-        if let taskSpaceID = parent.taskSpaceWorkspaceID,
-           store.state.windows.contains(where: { $0.workspaceIDs.contains(taskSpaceID) }) {
-            TaskActions.openTaskSpace(
-                workspaceID: taskSpaceID,
-                fallbackWindowID: windowID,
-                store: store,
-                sessionRuntimeStore: sessionRuntimeStore
-            )
-        } else {
+        guard let taskSpaceID = parent.taskSpaceWorkspaceID,
+              let holderWindowID = store.state.windows.first(where: { $0.workspaceIDs.contains(taskSpaceID) })?.id,
+              let taskSpace = store.state.workspacesByID[taskSpaceID] else {
             openTasksView(selecting: parent.id)
+            return
+        }
+        if holderWindowID == windowID {
+            // As a click on the parent's row would.
+            store.selectWorkspace(
+                windowID: windowID,
+                workspaceID: taskSpaceID,
+                preferringUnreadSessionPanelIn: sessionRuntimeStore
+            )
+        } else if let panelID = sessionRuntimeStore.preferredUnreadStatusPanelID(in: taskSpace) ?? taskSpace.focusedPanelID {
+            // Selecting a workspace does not raise its window; focusing a
+            // panel there does.
+            store.focusExplicitlyNavigatedPanel(windowID: holderWindowID, workspaceID: taskSpaceID, panelID: panelID)
         }
     }
 

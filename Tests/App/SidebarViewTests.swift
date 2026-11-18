@@ -2421,14 +2421,19 @@ final class SidebarViewTests: XCTestCase {
     /// A task space card offers the task that started it. In Needs you the
     /// parent usually has no row, and the sidebar stays on Needs you: the
     /// parent's task space opens without a row of its own. A parent whose
-    /// task space closed opens in the Tasks view.
+    /// task space closed opens in the Tasks view, and one in another window
+    /// opens there.
     func testTaskSpaceCardParentButtonOpensTheParentAndKeepsNeedsYou() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
         var workspaces = [project]
         var records: [TaskRecord] = []
         var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
-        func task(_ title: String, parent: UUID? = nil, pullRequest: Int? = nil, unread: Bool = false, closedAndDone: Bool = false) -> UUID {
+        var otherWindowWorkspaces: [WorkspaceState] = []
+        func task(
+            _ title: String, parent: UUID? = nil, pullRequest: Int? = nil, unread: Bool = false,
+            closedAndDone: Bool = false, inOtherWindow: Bool = false
+        ) -> UUID {
             let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
             var record = TaskRecord(
                 id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
@@ -2448,10 +2453,14 @@ final class SidebarViewTests: XCTestCase {
                 annotations: pullRequest.map {
                     ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
                 } ?? [:],
-                parentWorkspaceID: project.id
+                parentWorkspaceID: inOtherWindow ? nil : project.id
             )
             workspace.taskID = taskID
-            workspaces.append(workspace)
+            if inOtherWindow {
+                otherWindowWorkspaces.append(workspace)
+            } else {
+                workspaces.append(workspace)
+            }
             records.append(record)
             panelByTitle[title] = (workspaceID, panelID)
             return taskID
@@ -2460,13 +2469,21 @@ final class SidebarViewTests: XCTestCase {
         _ = task("Private pages stay private", parent: parentID, pullRequest: 322)
         let closedParentID = task("Hostname options", closedAndDone: true)
         _ = task("Thumbnail filenames", parent: closedParentID, unread: true)
-        let windowID = UUID()
+        let otherWindowParentID = task("Billing rework", inOtherWindow: true)
+        _ = task("Invoice totals", parent: otherWindowParentID, unread: true)
+        let windowID = UUID(), otherWindowID = UUID()
         let state = AppState(
-            windows: [WindowState(
-                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
-                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
-            )],
-            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            windows: [
+                WindowState(
+                    id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+                ),
+                WindowState(
+                    id: otherWindowID, frame: CGRectCodable(x: 400, y: 0, width: 800, height: 600),
+                    workspaceIDs: otherWindowWorkspaces.map(\.id), selectedWorkspaceID: nil
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: (workspaces + otherWindowWorkspaces).map { ($0.id, $0) }),
             selectedWindowID: windowID
         )
         let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
@@ -2479,10 +2496,12 @@ final class SidebarViewTests: XCTestCase {
         harness.sessionRuntimeStore.bind(store: harness.store)
         for (title, kind) in [
             ("Public URL warning", SessionStatusKind.idle), ("Private pages stay private", .idle), ("Thumbnail filenames", .ready),
+            ("Billing rework", .idle), ("Invoice totals", .ready),
         ] {
             let target = try XCTUnwrap(panelByTitle[title])
             harness.sessionRuntimeStore.startSession(
-                sessionID: title, agent: .codex, panelID: target.panelID, windowID: windowID, workspaceID: target.workspaceID,
+                sessionID: title, agent: .codex, panelID: target.panelID,
+                windowID: title == "Billing rework" ? otherWindowID : windowID, workspaceID: target.workspaceID,
                 codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo", at: now
             )
             harness.sessionRuntimeStore.updateStatus(
@@ -2549,6 +2568,20 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop(duration: 0.4)
         XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, true)
         XCTAssertEqual(harness.taskBoard?.tasksViewSelection(windowID: windowID)?.taskID, closedParentID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
+
+        // A parent in another window opens there, and that window becomes
+        // the selected one: focusing its panel is what raises the window.
+        _ = harness.store.send(.setTasksViewShown(windowID: windowID, shown: false))
+        pumpMainRunLoop(duration: 0.4)
+        root.layoutSubtreeIfNeeded()
+        card = try hoverRow("Invoice totals")
+        try clickSemanticText(prefix: "Go to parent task Billing rework", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        let otherSpace = try XCTUnwrap(panelByTitle["Billing rework"])
+        XCTAssertEqual(harness.store.state.selectedWindowID, otherWindowID)
+        XCTAssertEqual(harness.store.window(id: otherWindowID)?.selectedWorkspaceID, otherSpace.workspaceID)
+        XCTAssertEqual(harness.store.state.workspacesByID[otherSpace.workspaceID]?.focusedPanelID, otherSpace.panelID)
         XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
     }
 

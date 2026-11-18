@@ -241,9 +241,9 @@ struct SubspaceHoverTipModel: Hashable {
         let colorToken: AnnotationColorToken
     }
 
-    /// Where the task stands, in place of the "task space" tag. The four
-    /// sidebar groups follow the row's group, so the card agrees with the
-    /// heading the row lists under.
+    /// Where the task stands, in place of the "task space" tag: the task's
+    /// own sidebar group, as the group counts count it. A row that lists
+    /// with its family can sit under a more urgent heading.
     enum Stage: Hashable {
         case bucket(TaskBucket)
         case toShip
