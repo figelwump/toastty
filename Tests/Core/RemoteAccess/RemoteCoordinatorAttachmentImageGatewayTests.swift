@@ -151,6 +151,12 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         let icon = try await fixture.image(index: 1, size: .thumbnail)
         #expect(icon.mimeType == "image/png")
         #expect(icon.pixelWidth == 600)
+
+        // A message sent from the phone: the file by its stored path, which
+        // the message keeps apart from its text.
+        let photo = try await fixture.image(eventID: "phone", index: 0, size: .thumbnail)
+        #expect(photo.pixelWidth == 600)
+        #expect(try await fixture.refusal(eventID: "phone", index: 1) == .denied)
     }
 
     @Test func everyRequestOutsideTheChatsAttachedImagesIsRefused() async throws {
@@ -248,9 +254,16 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
                     conversationID: conversationID, sequence: 1, eventID: eventID, timestamp: Support.now,
                     provider: .claude, payload: payload)
             }
+            // A message that a device sent with a file: the Mac's copy names
+            // the file in its text and keeps the stored path apart.
+            let fromThePhone = ConversationUserMessagePayload(
+                text: "From the phone\n[Attachment: Photo-3213AEE3.jpg]", origin: .remote,
+                clientRequestID: "phone-1", attachmentPaths: [paths[0]]
+            )
             let coordinatorEvents = [
                 event(coordinatorConversationID, "user", .userMessage(.init(text: message, origin: .remote))),
                 event(coordinatorConversationID, "assistant", .assistantMessage(.init(text: message, phase: .final))),
+                event(coordinatorConversationID, "phone", .userMessage(fromThePhone)),
             ]
             let (handler, store, _) = Support.makeHandler()
             // The Mac answers only for the coordinator's conversation; the
@@ -282,8 +295,10 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         }
 
         @MainActor
-        func image(index: Int, size: RemoteCoordinatorAttachmentImageRequest.Size) async throws -> RemoteCoordinatorAttachmentImageResponse {
-            let answer = try await response(index: index, size: size)
+        func image(
+            eventID: String = "user", index: Int, size: RemoteCoordinatorAttachmentImageRequest.Size
+        ) async throws -> RemoteCoordinatorAttachmentImageResponse {
+            let answer = try await response(eventID: eventID, index: index, size: size)
             #expect(answer.error == nil, "file \(index): \(String(describing: answer.error))")
             return answer
         }

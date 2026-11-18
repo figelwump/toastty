@@ -315,9 +315,17 @@ public enum CoordinatorChatTranscript {
         case .apart:
             // The bubble shows each attached file by itself, an image as a
             // thumbnail, rather than its name in the text.
-            let parts = CoordinatorMessageHeader.displayParts(of: payload.text)
-            text = parts.text
-            attachments = parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
+            if let paths = payload.attachmentPaths, paths.isEmpty == false {
+                // A message that a device sent with files: its text ends
+                // with a line naming each file, and the paths stay apart.
+                let typed = RemoteMessageSendRequest.typedText(ofDisplayText: payload.text, fileCount: paths.count)
+                text = CoordinatorMessageHeader.displayParts(of: typed).text
+                attachments = paths.map { URL(fileURLWithPath: $0) }
+            } else {
+                let parts = CoordinatorMessageHeader.displayParts(of: payload.text)
+                text = parts.text
+                attachments = parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
+            }
         case .byName:
             text = CoordinatorMessageHeader.displayText(of: payload.text)
             attachments = []

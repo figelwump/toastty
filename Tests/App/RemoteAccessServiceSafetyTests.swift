@@ -2847,6 +2847,18 @@ struct RemoteAccessServiceSafetyTests {
         correlator.record(request, deliveredText: deliveredText)
         let unmatched = correlator.stamp([Self.userObservation(text: request.displayText, fingerprint: "not-delivered-text")], for: conversationID)
         #expect(Self.userPayload(from: unmatched[0])?.clientRequestID == nil)
+
+        // The text names the files, and the paths that the delivered text
+        // lists stay with the message, so a chat can show the files
+        // themselves and the Mac can serve their images.
+        let stagedPath = "/private/var/remote-access/attachments/A1/9B1E4C2A.jpg"
+        let listed = RemoteAttachmentDeliveryText.text("Look", paths: [stagedPath])
+        correlator.record(request, deliveredText: listed)
+        let withFiles = correlator.stamp([Self.userObservation(text: listed, fingerprint: "listed")], for: conversationID)
+        let filesPayload = try #require(Self.userPayload(from: withFiles[0]))
+        #expect(filesPayload.text == request.displayText)
+        #expect(filesPayload.attachmentPaths == [stagedPath])
+        #expect(payload.attachmentPaths == nil, "A delivered text without Toastty's list keeps no paths")
     }
 
     @MainActor

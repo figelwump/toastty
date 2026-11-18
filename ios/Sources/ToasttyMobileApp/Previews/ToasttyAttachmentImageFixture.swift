@@ -11,6 +11,8 @@ import UIKit
 enum ToasttyAttachmentImageFixture {
     static let goneFileName = "Photo-91C2.jpg"
     static let slowFileName = "slow-capture.png"
+    /// The name the Mac gave the photo that the phone sent.
+    static let phonePhotoFileName = "9B1E4C2A-7D3F-4E21-8C5B-2A6F1D0E9C47.jpg"
 
     static func image(for request: RemoteCoordinatorAttachmentImageRequest) async throws -> Data {
         try Task.checkCancellation()
@@ -21,7 +23,7 @@ enum ToasttyAttachmentImageFixture {
             for: ToasttyMobileFixture.coordinatorConversationID, attachedImages: true)
         guard let event = events.last(where: { $0.eventID == request.eventID }) else { throw RemotePreviewError.missing }
         guard case .userMessage(let payload) = event.payload else { throw RemotePreviewError.denied }
-        let paths = CoordinatorMessageHeader.displayParts(of: payload.text).attachmentPaths
+        let paths = payload.attachmentPaths ?? CoordinatorMessageHeader.displayParts(of: payload.text).attachmentPaths
         guard paths.indices.contains(request.attachmentIndex) else { throw RemotePreviewError.denied }
         let name = URL(fileURLWithPath: paths[request.attachmentIndex]).lastPathComponent
         switch name {

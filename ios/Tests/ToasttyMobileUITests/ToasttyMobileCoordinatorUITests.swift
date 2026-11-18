@@ -781,12 +781,15 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
 
     // MARK: - Attached images
 
+    /// The name the fixture Mac gave the photo that the phone sent.
+    private let phonePhoto = "9B1E4C2A-7D3F-4E21-8C5B-2A6F1D0E9C47.jpg"
+
     /// With a Mac that serves them, a message's images show as thumbnails
-    /// in its bubble, as in the Mac's chat: one attached on the Mac and one
-    /// sent from the phone. Every image has the same 200 × 120 box, loaded,
-    /// still loading, or gone from the Mac (its name in the box), so a
-    /// loading image does not move the chat. A file that is not an image
-    /// keeps its name chip, and the text no longer names the files.
+    /// in its bubble, as in the Mac's chat: images attached on the Mac, and
+    /// a photo sent from the phone. Every image has the same 200 × 120 box,
+    /// loaded, still loading, or gone from the Mac (its name in the box),
+    /// so a loading image does not move the chat. A file that is not an
+    /// image keeps its name chip, and the text no longer names the files.
     func testAttachedImagesShowAsThumbnailsInTheBubble() {
         let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES": "1"])
         app.tabBars.buttons["Coordinator"].tap()
@@ -794,12 +797,16 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         XCTAssertFalse(((text.value as? String) ?? "").contains("crash-screen.png"), "The text no longer names the files")
 
+        let photoText = textView(containing: "And the photo I took of the phone.", in: app)
+        XCTAssertTrue(photoText.waitForExistence(timeout: 5))
+        XCTAssertFalse(((photoText.value as? String) ?? "").contains("[Attachment:"), "The photo shows by itself")
+        XCTAssertTrue(app.buttons["Image \(phonePhoto)"].waitForExistence(timeout: 10))
+
         let slow = attachedImage("slow-capture.png", in: app)
         XCTAssertTrue(slow.waitForExistence(timeout: 5))
         XCTAssertTrue(scrollIntoView(slow, in: app))
         // Loaded thumbnails open the full-size view, so they are buttons.
         XCTAssertTrue(app.buttons["Image crash-screen.png"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Image Photo-3213AEE3.jpg"].waitForExistence(timeout: 10))
         let gone = attachedImage("Photo-91C2.jpg", in: app)
         XCTAssertTrue(waitForValue("Not available", of: gone))
         XCTAssertEqual(slow.value as? String, "Loading")
@@ -809,7 +816,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         // The Mac's chat shows the quick entry message's image too.
         XCTAssertTrue(attachedImage("csv-mockup.png", in: app).exists)
 
-        for name in ["crash-screen.png", "Photo-3213AEE3.jpg", "Photo-91C2.jpg", "slow-capture.png"] {
+        for name in ["crash-screen.png", phonePhoto, "Photo-91C2.jpg", "slow-capture.png"] {
             let frame = attachedImage(name, in: app).frame
             XCTAssertEqual(frame.width, 200, accuracy: 1, name)
             XCTAssertEqual(frame.height, 120, accuracy: 1, name)
@@ -826,10 +833,10 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         XCTAssertTrue(scrollIntoView(text, in: app))
         let shown = (text.value as? String) ?? ""
-        XCTAssertTrue(
-            shown.contains("crash-screen.png, Photo-3213AEE3.jpg, Photo-91C2.jpg, slow-capture.png, notes.txt"), shown
-        )
+        XCTAssertTrue(shown.contains("crash-screen.png, Photo-91C2.jpg, slow-capture.png, notes.txt"), shown)
         XCTAssertFalse(shown.contains("/Users/me"), shown)
+        XCTAssertTrue(textView(containing: "[Attachment: Photo-3213AEE3.jpg]", in: app).exists)
+        XCTAssertFalse(attachedImage(phonePhoto, in: app).exists)
         XCTAssertFalse(attachedImage("crash-screen.png", in: app).exists)
         XCTAssertFalse(attachedImage("csv-mockup.png", in: app).exists)
         attachScreenshot(named: "coordinator-images-older-mac", of: app)
@@ -861,8 +868,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(crash))
 
         // The phone's own photo, and a swipe down to close.
-        let photo = app.buttons["Image Photo-3213AEE3.jpg"]
-        XCTAssertTrue(waitUntilHittable(photo))
+        let photo = app.buttons["Image \(phonePhoto)"]
+        XCTAssertTrue(scrollIntoView(photo, in: app))
         photo.tap()
         XCTAssertTrue(viewer.waitForExistence(timeout: 5))
         XCTAssertTrue(waitForValue("Full size, Fits the screen", of: viewer), "\(viewer.value ?? "")")

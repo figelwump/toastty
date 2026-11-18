@@ -1006,9 +1006,10 @@ with `POST /api/coordinator.attachment_image.get`. The request names the
 coordinator's `conversationID`, the user message's `eventID`, the file's
 `attachmentIndex` in the message's list of files, and `size`: `thumbnail`
 (at most 600 pixels on the long side) or `full` (at most 4096). It never names
-a path. The Mac finds the path in its own copy of that user message, with the
-parser its own chat uses (`CoordinatorMessageHeader.displayParts(of:)`), and
-serves it only when the file has an image's extension, is a regular file at
+a path. The Mac finds the path in its own copy of that user message: for a
+message that a device sent with files, in the message's `attachmentPaths`
+(below); for any other, in its text, with the parser its own chat uses
+(`CoordinatorMessageHeader.displayParts(of:)`). It serves the file only when the file has an image's extension, is a regular file at
 that path with no symbolic link in it (the macOS `/tmp`, `/var` and `/etc`
 aliases excepted), is at most 64 MB and 100 million pixels, and decodes as an
 image. The answer is a new JPEG, or a PNG for an image with transparency, made
@@ -1025,9 +1026,17 @@ access already lets it ask the agent to read any file, so this adds nothing to
 what send access allows, and a read-only device reads only what others
 attached.
 
+When the Mac matches a device's send with files to the agent's transcript, it
+shows the message as the device's text with an `[Attachment: name]` line for
+each file, and it keeps the paths of the stored files in the user message's
+`attachmentPaths`, in the same order. A chat that shows the files themselves,
+the Mac's coordinator chat and the phone's with a Mac that serves images, uses
+those paths in place of the lines; an older phone ignores the field and shows
+the lines, as before.
+
 The phone fetches a thumbnail only while its box is on screen, a few at a
-time, keeps the thumbnails in memory, and asks once for an image that two
-views need at once. A box keeps its size while it loads ("Loading…") and when
+time, keeps the thumbnails in memory, asks once for an image that two views need at
+once, and stops a fetch when no view waits for it any more. A box keeps its size while it loads ("Loading…") and when
 the image cannot be had (its name, as on the Mac): the Mac keeps files sent
 from the phone for 7 days, and a file attached on the Mac can move. A failed
 fetch is tried again when the box shows again. A tap on a thumbnail opens the

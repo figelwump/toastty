@@ -717,6 +717,8 @@ private extension RemoteProtocolGoldenTests {
         Read `toastty task list` for details.
         """)])
 
+    static let remoteAttachmentPath = "/Users/example/Library/Application Support/Toastty/remote-access/attachments/A1/photo.jpg"
+
     static func makeEventPage() -> ConversationEventPage {
         var events: [ConversationEvent] = []
 
@@ -730,7 +732,9 @@ private extension RemoteProtocolGoldenTests {
                 payload: .userMessage(ConversationUserMessagePayload(
                     text: "User message from \(origin.rawValue)",
                     origin: origin,
-                    clientRequestID: requestID
+                    clientRequestID: requestID,
+                    // A device's send with a file keeps the stored path apart.
+                    attachmentPaths: origin == .remote ? [Self.remoteAttachmentPath] : nil
                 ))
             )
         }

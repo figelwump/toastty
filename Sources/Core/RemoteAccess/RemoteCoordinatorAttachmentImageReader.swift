@@ -32,7 +32,9 @@ public enum RemoteCoordinatorAttachmentImageReader {
             throw RemotePreviewError.missing
         }
         guard case .userMessage(let payload) = event.payload else { throw RemotePreviewError.denied }
-        let paths = CoordinatorMessageHeader.displayParts(of: payload.text).attachmentPaths
+        // A message that a device sent with files keeps their paths apart
+        // from its text; any other names them in its text.
+        let paths = payload.attachmentPaths ?? CoordinatorMessageHeader.displayParts(of: payload.text).attachmentPaths
         guard paths.indices.contains(index) else { throw RemotePreviewError.denied }
         return paths[index]
     }

@@ -415,7 +415,13 @@ struct RemotePendingSendCorrelator: Sendable {
                 return observation
             }
             var stampedPayload = payload
-            if let displayText = pending.displayText { stampedPayload.text = displayText }
+            if let displayText = pending.displayText {
+                // The text names each file; the paths of the files that the
+                // Mac stored, which the delivered text lists, stay with the
+                // message for a chat that shows the files themselves.
+                stampedPayload.attachmentPaths = CoordinatorMessageHeader.attachedFiles(in: payload.text)?.paths
+                stampedPayload.text = displayText
+            }
             stampedPayload.origin = .remote
             stampedPayload.clientRequestID = pending.clientRequestID
             stampedPayload.deliveryMode = pending.deliveryMode == .prompt ? nil : pending.deliveryMode

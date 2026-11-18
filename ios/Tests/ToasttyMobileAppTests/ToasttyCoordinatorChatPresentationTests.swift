@@ -90,6 +90,31 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
         XCTAssertEqual(apart.first?.eventID, "coordinator-1")
     }
 
+    /// A message sent from a phone with a photo: the Mac's copy names the
+    /// photo in its text and keeps the stored path apart. With a Mac that
+    /// serves images the bubble shows the photo by itself and the typed
+    /// text alone; otherwise it shows the name line, as before.
+    func testAMessageSentWithAPhotoShowsThePhotoApartFromItsText() throws {
+        let stored = "/Users/me/Library/Application Support/Toastty/remote-access/attachments/A1/9B1E4C2A.jpg"
+        let payload = ConversationUserMessagePayload(
+            text: "Is this the crash?\n[Attachment: Photo-3213AEE3.jpg]", origin: .remote,
+            clientRequestID: "phone-1", attachmentPaths: [stored]
+        )
+        let apart = coordinatorRows([.userMessage(payload)], showsAttachedImages: true)
+        guard case .userMessage(let text, _, _, _, let files) = try XCTUnwrap(apart.first).content else {
+            return XCTFail("Expected the user's message: \(apart)")
+        }
+        XCTAssertEqual(text, "Is this the crash?")
+        XCTAssertEqual(files.map(\.path), [stored])
+
+        let byName = coordinatorRows([.userMessage(payload)])
+        guard case .userMessage(let named, _, _, _, let none) = try XCTUnwrap(byName.first).content else {
+            return XCTFail("Expected the user's message: \(byName)")
+        }
+        XCTAssertEqual(named, "Is this the crash?\n[Attachment: Photo-3213AEE3.jpg]")
+        XCTAssertEqual(none, [])
+    }
+
     func testAReplyShowsTheLineThatNamesTheMessageItAnswers() throws {
         let answer = "I asked it to keep the old API until the next release."
         let reply = CoordinatorMessageHeader.replyMessage(

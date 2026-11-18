@@ -623,19 +623,30 @@ enum ToasttyConversationFixture {
         case notServed
     }
 
-    /// The message with images: one attached on the Mac, one sent from the
-    /// phone, one the Mac no longer has, one that loads slowly, and a file
+    /// A message with files attached on the Mac, which its text lists: an
+    /// image, one the Mac no longer has, one that loads slowly, and a file
     /// that is not an image.
     static let coordinatorImagesMessage = RemoteAttachmentDeliveryText.text(
-        "Here is the crash screen, and the photo I took of the phone.",
+        "Here is the crash screen.",
         paths: [
             "/Users/me/Desktop/crash-screen.png",
-            "/Users/me/Library/Application Support/Toastty/remote-access/attachments/"
-                + "5F0C2D8E-61B4-4F2A-9E57-3C1A0B7D9E21/Photo-3213AEE3.jpg",
             "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.goneFileName)",
             "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.slowFileName)",
             "/Users/me/Desktop/notes.txt",
         ]
+    )
+
+    /// Where the Mac stored the photo that the phone sent.
+    static let coordinatorPhonePhotoPath = "/Users/me/Library/Application Support/Toastty/remote-access/attachments/"
+        + "5F0C2D8E-61B4-4F2A-9E57-3C1A0B7D9E21/\(ToasttyAttachmentImageFixture.phonePhotoFileName)"
+
+    /// A message sent from the phone with a photo, as the Mac keeps it: the
+    /// text names the photo, and the stored path stays apart.
+    static let coordinatorPhonePhotoMessage = ConversationUserMessagePayload(
+        text: "And the photo I took of the phone.\n[Attachment: Photo-3213AEE3.jpg]",
+        origin: .remote,
+        clientRequestID: "fixture-phone-photo",
+        attachmentPaths: [coordinatorPhonePhotoPath]
     )
 
     /// The fixture coordinator chat's quiet wake turns.
@@ -739,6 +750,7 @@ enum ToasttyConversationFixture {
         ]
         if attachedImages {
             payloads.append(.userMessage(.init(text: coordinatorImagesMessage, origin: .remote)))
+            payloads.append(.userMessage(coordinatorPhonePhotoMessage))
             payloads.append(.assistantMessage(.init(
                 text: "Thanks. The crash is in the export sheet; I added both images to the task.", phase: .final
             )))
