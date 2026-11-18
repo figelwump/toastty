@@ -1371,6 +1371,8 @@ def dependency(run):
     later = run.new_turns(wake=True)
     messages = [m['text'] for m in run.messages(waiting)]
     run.check('after the merge, the waiting task is told once', len(messages) == 1 and 'merged' in messages[0].lower(), messages)
+    run.check('the message names the other task by its title as a link',
+              bool(messages) and f'[{first.title}]({first.link})' in messages[0], messages)
     watches = run.cli('task', 'watches').get('watches', [])
     run.check('Toastty holds no watch that would type into the task', watches == [], watches)
     watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
@@ -2674,6 +2676,140 @@ def daily_list_quiet(run):
     return turns
 
 
+ASSESSMENT = ('The assessment is finished. The export API can reuse the task list query, so it needs no new index. '
+              'I recommend paging by 500 rows. That answers the question; nothing remains in this task.')
+PLAN = ('The plan is ready: three parts, the API, the toolbar button and the docs. After your go, I will create a '
+        'child task for each part and follow them from here.')
+
+
+def done_offers(run):
+    """The ledger's `asked done` lines: finished tasks that a list offered to mark Done."""
+    return [line for line in run.ledger().splitlines() if re.match(r'- \S+ asked done\b', line)]
+
+
+def done_no_pr(run):
+    """A finished task with no pull request is on one daily list, then marked Done; a parent that will still
+    create child tasks stays open."""
+    finished = run.create_task('Assess the export API options', status='working')
+    parent = run.create_task('Plan the export work', status='working')
+    for task, text in ((finished, ASSESSMENT), (parent, PLAN)):
+        run.reply(task, text)
+        run.cli('task', 'ready-for-review', task.id)
+        run.status(task, 'idle')
+        run.wait_task(task, 'ready for review', lambda t: t['stage'].get('attention') == 'readyForReview')
+    # The list time passed 2 minutes ago, and the ledger has no list line: the list is due at the first wake.
+    run.seed_policy(talking=f"- The coordinator's defaults.\n- Waiting on you list each day at {review_time(-2)}.")
+    stamp = '%Y-%m-%dT%H:%MZ'
+    (run.folder / 'ledger.md').write_text('\n'.join([
+        '# Coordinator ledger',
+        f'- {day(0, stamp)} reviewed no-pr [{finished.title}]({finished.link}): an assessment with a '
+        'recommendation, no change; told the user its result.',
+        f'- {day(0, stamp)} reviewed no-pr [{parent.title}]({parent.link}): a plan; told the user.',
+    ]) + '\n')
+    run.open_coordinator()
+    turns = run.timer_wake()
+    revision, page = dashboard(run)
+    run.check('the finished task gets an asked done line', any(finished.id in line for line in done_offers(run)),
+              run.ledger())
+    run.check('the finished task is not Done before a list offered it', not run.get(finished).get('doneAt'),
+              run.get(finished).get('doneAt'))
+    run.check('the parent that will still create child tasks is not offered',
+              not any(parent.id in line for line in done_offers(run)), run.ledger())
+    run.check('the dashboard shows the finished task before it is closed', 'export api options' in page.lower(),
+              page[:3000])
+    run.check('the dashboard says that it will be marked Done', re.search(r'\bdone\b', page.lower()), page[:3000],
+              required=False)
+    run.check('nothing is sent to the tasks', not run.messages(finished) and not run.messages(parent),
+              [run.messages(finished), run.messages(parent)])
+
+    # A day later, the next list: the user said nothing about the task.
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(stamp)
+    ledger = run.ledger()
+    line = list_line(run)
+    run.check('the first list wrote a list line', line, ledger)
+    if line:
+        (run.folder / 'ledger.md').write_text(ledger.replace(line, re.sub(r'^- \S+', f'- {yesterday}', line, count=1)))
+    later = run.timer_wake()
+    said = run.said(later)
+    commands = [c for t in later for c in t['commands']]
+    run.check('the next list marks the finished task Done', run.get(finished).get('doneAt'), run.get(finished))
+    run.check('the parent stays open', not run.get(parent).get('doneAt'), run.get(parent))
+    run.check('the asked done line is gone', not any(finished.id in line for line in done_offers(run)), run.ledger())
+    run.check('the user is told, with the task link', finished.link in said, said)
+    quiet = [c for c in commands if re.search(r'coordinator\s+wake\b.*--quiet', c)]
+    run.check('a turn that marked a task Done is not quiet', not quiet, quiet)
+    return turns + later
+
+
+def waits_for_person(run):
+    """A task waits for someone to fix what the user owns: it is told once to go ahead. A fix outside the user's
+    projects goes to the user."""
+    own = run.create_task('Fix the release signing step', status='working')
+    upstream = run.create_task('Fix the Markdown preview crash', status='working')
+    run.seed_policy()
+    run.open_coordinator()
+    run.reply(own, 'The signing step fails because `scripts/release/sign.sh` in this repository passes an expired '
+                   'keychain name. That script belongs to whoever maintains the release scripts, so I stopped here '
+                   'and am waiting for that maintainer to fix it. The rest of my change is done.')
+    run.status(own, 'ready')
+    run.reply(upstream, 'The crash is in the third-party `swift-markdown` package from swiftlang on GitHub: its '
+                        'parser overflows on nested tables. Its maintainers must fix it upstream. I am waiting for '
+                        'their fix before I can finish.')
+    run.status(upstream, 'ready')
+    turns = run.new_turns(wake=True)
+    said = run.said(turns)
+    told = [m['text'] for m in run.messages(own)]
+    run.check('the task that waits for a fix in its own project is told once', len(told) == 1, told)
+    run.check('it is told to go ahead with the fix', bool(told) and re.search(r'go ahead|fix it|make the fix|yours',
+                                                                               told[0].lower()), told)
+    run.check('nothing is sent to the task that waits for a third party', run.messages(upstream) == [],
+              run.messages(upstream))
+    run.check('the third-party wait goes to the user, with the task link', upstream.link in said, said)
+    run.check('the user is told about the task it sent on', own.link in said, said, required=False)
+    return turns
+
+
+MOCKUP = '''<!doctype html><html><head><title>Mockup: export button</title></head><body>
+<h1>Export: toolbar button or File menu item</h1>
+<table><tr><th>A. Toolbar button (recommended)</th><th>B. File menu item</th></tr>
+<tr><td>[search field] [⤓ Export]</td><td>File ▸ Export Tasks…</td></tr></table>
+<p>A is one click from the task list. B keeps the toolbar as it is.</p></body></html>
+'''
+
+
+def ui_mockup(run):
+    """A question that proposes a UI change with no mockup: the task is told once to add one. With the mockup, the
+    question goes to the user."""
+    task = run.create_task('Export button in the toolbar', status='working')
+    run.seed_policy()
+    run.open_coordinator()
+    run.ask(task, 'Toolbar button or File menu item?',
+            'The export works from the command line. For the UI, I propose a new toolbar button with a download '
+            'arrow, right of the search field, instead of an item in the File menu. Should I build the toolbar '
+            'button?')
+    turns = run.new_turns(wake=True)
+    told = [m['text'] for m in run.messages(task)]
+    run.check('the task is told once to add a mockup', len(told) == 1 and 'mock' in told[0].lower(), told)
+    run.check('the question waits for the mockup', task.link not in run.said(turns), run.said(turns), required=False)
+    # The agent works on the mockup long enough for Toastty to count the stage, then asks again.
+    run.status(task, 'working')
+    time.sleep(SETTLE + 2)
+    mockup = run.root / 'mockup.html'
+    mockup.write_text(MOCKUP)
+    done = run.run_cli('action', 'run', 'panel.scratchpad.set-content', f'sessionID={run.session_of(task)}',
+                       f'filePath={mockup}', 'title=Mockup: export button')
+    require(done.returncode == 0, f'The mockup could not be published: {done.stdout} {done.stderr}')
+    run.ask(task, 'Toolbar button or File menu item?',
+            'The mockup is in my Scratchpad "Mockup: export button": the toolbar button and the File menu item side '
+            'by side. I recommend the toolbar button. Should I build it?')
+    later = run.new_turns(wake=True)
+    told = [m['text'] for m in run.messages(task)]
+    run.check('with the mockup, nothing more is sent to the task', len(told) == 1, told)
+    run.check('with the mockup, the question goes to the user, with the task link', task.link in run.said(later),
+              run.said(later))
+    return turns + later
+
+
 def branch_task(run, number, pr_head=None, merge_error='Server Error', project='app'):
     """A task whose pull request is a real pushed branch in the project's checkout.
 
@@ -2863,6 +2999,9 @@ SCENARIOS = {
     'followup-merge': followup_merge,
     'daily-list': daily_list,
     'daily-list-quiet': daily_list_quiet,
+    'done-no-pr': done_no_pr,
+    'waits-for-person': waits_for_person,
+    'ui-mockup': ui_mockup,
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
@@ -2870,7 +3009,7 @@ JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-r
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
             'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted',
             'sender-reply', 'sender-reply-after-user', 'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',
-            'followup-merge', 'daily-list', 'daily-list-quiet')
+            'followup-merge', 'daily-list', 'daily-list-quiet', 'done-no-pr', 'waits-for-person', 'ui-mockup')
 
 
 def run_scenario(name, index, options, artifacts, bundle, claude):
