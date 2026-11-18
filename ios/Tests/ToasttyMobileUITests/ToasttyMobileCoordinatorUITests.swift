@@ -668,11 +668,11 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         let resume = queuedAction("resume", "fixture-chat-1", in: app)
         XCTAssertTrue(resume.waitForExistence(timeout: 5))
         let removeLast = queuedAction("remove", "fixture-own-3", in: app)
-        XCTAssertTrue(scrollIntoUpperTranscript(removeLast, in: app))
+        XCTAssertTrue(scrollIntoUncoveredTranscript(removeLast, in: app))
         attachScreenshot(named: "coordinator-queue-large-text-remove", of: app)
         removeLast.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { queuedRow("fixture-own-3", in: app).exists == false })
-        XCTAssertTrue(scrollIntoUpperTranscript(resume, in: app))
+        XCTAssertTrue(scrollIntoUncoveredTranscript(resume, in: app))
         XCTAssertEqual(resume.label, "Resume all 4")
         attachScreenshot(named: "coordinator-queue-large-text-resume", of: app)
         resume.tap()
@@ -688,28 +688,32 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(row.label.contains("retry budget"))
         XCTAssertTrue(row.label.contains("…"))
         let remove = queuedAction("remove", "fixture-own-1", in: app)
-        XCTAssertTrue(scrollIntoUpperTranscript(remove, in: app))
+        XCTAssertTrue(scrollIntoUncoveredTranscript(remove, in: app))
         attachScreenshot(named: "coordinator-queue-long-message", of: app)
         remove.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { row.exists == false })
         XCTAssertTrue(queuedRow("fixture-own-2", in: app).exists)
     }
 
-    /// Scrolls the chat until `element` shows in the upper part of the
-    /// transcript, clear of the composer and of Jump to latest, with drags
-    /// long enough for the largest text size.
-    private func scrollIntoUpperTranscript(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+    /// Scrolls the chat until `element` shows whole between the header and
+    /// the composer, where Jump to latest does not cover it, with drags long
+    /// enough for the largest text size.
+    private func scrollIntoUncoveredTranscript(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
         let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
         let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.34))
+        let jump = app.buttons["toastty-mobile-transcript-jump-latest"]
         for _ in 0..<40 {
             let navigationBar = app.navigationBars.firstMatch
             let top = navigationBar.exists ? navigationBar.frame.maxY : app.frame.minY
-            let limit = top + (composerTop(in: app) - top) * 0.6
+            let bottom = composerTop(in: app)
             let frame = element.frame
-            if element.exists, frame.minY >= top, frame.maxY <= limit, element.isHittable {
+            let covered = jump.exists && jump.frame.intersects(frame)
+            if element.exists, frame.minY >= top, frame.maxY <= bottom, covered == false, element.isHittable {
                 return true
             }
-            if element.exists, frame.maxY > limit {
+            // Toward the end of the chat while the element is in its lower
+            // part or covered; toward its start otherwise.
+            if element.exists, frame.maxY > top + (bottom - top) / 2 || covered {
                 lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .slow, thenHoldForDuration: 0.3)
             } else {
                 upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.3)
