@@ -51,6 +51,29 @@ that:
 - after Restart Coordinator, the chat follows the new agent, still titled
   "Coordinator".
 
+With '--waiting-messages' the check instead proves the coordinator's
+waiting messages on a paired device (the iPhone's Coordinator tab), through
+the gateway with a seeded native credential, with Remote Access on from the
+start:
+- while the coordinator works, a device's queued chat message waits in the
+  conversation's queue, and the Mac chat's queued message, a device's quick
+  entry and a `coordinator send` message wait in the coordinator's own
+  queue, which the device reads from /api/coordinator.queue under the
+  revision that the coordinator's workspace carries;
+- a Stop from the device holds both queues: nothing is typed when the turn
+  ends, and each message shows once in the Mac's chat and once in the
+  device's read;
+- Remove from the device takes the `coordinator send` message out, and a
+  second Remove says it left; a Resume with another Stop's token is stale;
+- one Resume from the device types the rest one per turn, the
+  conversation's message first, then the coordinator's in their order;
+- after a second Stop, Send next in the Mac's chat and, milliseconds after
+  it acts, Resume from the device with the same token type each message once
+  and lose none;
+- after a third Stop and a relaunch of the Mac app, the Mac chat's held
+  message waits under a new token, the token from before the relaunch is
+  stale, and Resume from the device types it.
+
 Evidence goes to remote-coordinator-chat-check.json, the app log, Claude's
 transcripts and, when the build can capture its window, PNG frames under
 remote-coordinator-chat-check-frames in the artifacts directory.
@@ -66,6 +89,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -301,7 +325,9 @@ def run(check):
     project = steer.claude_project_directory(directory)
     app_log = check.artifacts / f'{check.prefix}-app.log'
     socket_path = environment['TOASTTY_SOCKET_PATH']
-    instance = ChatInstance(check.binary, environment, socket_path, runtime_home, app_log)
+    gateway_port = steer.free_port() if check.waiting_messages else None
+    gateway = steer.Gateway(gateway_port) if gateway_port else None
+    instance = ChatInstance(check.binary, environment, socket_path, runtime_home, app_log, gateway_port=gateway_port)
     step = check.step
     frame_count = 0
 
@@ -369,6 +395,215 @@ def run(check):
 
     def pid():
         return json.loads((runtime_home / 'instance.json').read_text())['pid']
+
+    def check_waiting_messages():
+        """The coordinator's waiting messages on a paired device: see the
+        module's description of '--waiting-messages'."""
+        nonlocal instance, ui
+
+        def reply(marker):
+            return f'Reply with exactly this one word and nothing else: {marker}'
+
+        def coordinator_conversation():
+            _, body = gateway.call('GET', '/api/sessions')
+            return next((c for c in (body or {}).get('snapshot', {}).get('conversations', [])
+                         if c['placement'].get('panelID') == status()['panelID']), None)
+
+        def workspace_revision():
+            _, body = gateway.call('GET', '/api/sessions')
+            return next((w.get('coordinatorQueueRevision') for w in (body or {}).get('snapshot', {}).get('workspaces', [])
+                         if w.get('isCoordinator')), None)
+
+        def read_queue():
+            code, body = gateway.call('GET', '/api/coordinator.queue')
+            require(code == 200 and body.get('protocolVersion') == '1.0', f'The queue read failed: {code} {body}')
+            return body
+
+        def queue_update(action, **fields):
+            current = coordinator_conversation()
+            code, body = gateway.call('POST', '/api/conversation.queue.update', dict(
+                protocolVersion='1.0', conversationID=current['conversationID'], action=action, **fields))
+            require(code == 200, f'The queue update {action} failed: {code} {body}')
+            return body['result']
+
+        def user_index(marker):
+            return index_of('user', marker)
+
+        def fill_queues(tag, controller_markers, phone=True):
+            """A long turn, and while it runs a device's queued chat message
+            and the given messages in the coordinator's own queue."""
+            ui.send(long_turn(30, f'{tag}-TURN'))
+            busy = wait_for('the long turn', lambda: (c := coordinator_conversation())
+                            and (c.get('inputControl') or {}).get('turnEpoch') and c, timeout=90)
+            if phone:
+                code, sent = gateway.call('POST', '/api/conversation.message.send', dict(
+                    conversationID=busy['conversationID'], clientRequestID=f'{tag.lower()}-phone',
+                    deliveryMode='queue', expectedInputEpoch=busy['inputControl']['turnEpoch'],
+                    text=reply(f'{tag}-PHONE')))
+                require(code == 200 and sent.get('status') == 'queued', f'The device did not queue: {code} {sent}')
+            for kind, marker in controller_markers:
+                if kind == 'mac':
+                    ui.queue(reply(marker))
+                elif kind == 'quick':
+                    code, sent = gateway.call('POST', '/api/coordinator.send', dict(
+                        protocolVersion='1.0', clientRequestID=str(uuid.uuid4()), text=reply(marker)))
+                    require(code == 200, f'The device\'s quick entry failed: {code} {sent}')
+                else:
+                    cli('coordinator', 'send', reply(marker))
+                wait_for(f'{marker} to wait', lambda: any(marker in e['text'] for e in read_queue()['entries']),
+                         timeout=30)
+            return busy
+
+        def phone_stop(busy):
+            code, stopped = gateway.call('POST', '/api/conversation.interrupt', dict(
+                protocolVersion='1.0', conversationID=busy['conversationID'],
+                expectedTurnEpoch=busy['inputControl']['turnEpoch']))
+            require(code == 200 and stopped['result'] == dict(status='accepted'), f'Stop failed: {code} {stopped}')
+
+        def held_state(markers, phone_marker):
+            """Both queues hold their messages, each once."""
+            queue = read_queue()
+            entries = queue['entries']
+            texts = [entry['text'] for entry in entries]
+            require(all(entry.get('isHeld') for entry in entries) and queue.get('heldSetToken'),
+                    f'The coordinator\'s queue is not held: {queue}')
+            require([next(i for i, t in enumerate(texts) if m in t) for m in markers] == list(range(len(markers)))
+                    and len(entries) == len(markers), f'The coordinator\'s queue is not {markers}: {texts}')
+            ids = [entry['id'] for entry in entries]
+            control = coordinator_conversation().get('inputControl') or {}
+            conversation_ids = [m['clientRequestID'] for m in control.get('queuedMessages', [])]
+            require(len(set(ids)) == len(ids) and not set(ids) & set(conversation_ids), f'Duplicate rows: {ids} {conversation_ids}')
+            if phone_marker:
+                require(control.get('isQueuePaused') and len(conversation_ids) == 1,
+                        f'The conversation\'s queue is not held: {control}')
+            chat = ui.texts()
+            for marker in markers + ([phone_marker] if phone_marker else []):
+                require(shown_count(chat, marker) == 1,
+                        f'The Mac chat shows {marker} {shown_count(chat, marker)} times: {chat[-800:]}')
+            require(workspace_revision() == queue['revision'],
+                    f'The workspace names {workspace_revision()}, the queue {queue["revision"]}')
+            return queue
+
+        def typed_in_order(markers, timeout=300):
+            for marker in markers:
+                wait_for(f'{marker} typed', lambda: user_index(marker) is not None, timeout=timeout)
+                wait_for('the prompt after it', at_prompt, timeout=180)
+            order = [user_index(marker) for marker in markers]
+            require(order == sorted(order), f'Not typed in order: {list(zip(markers, order))}')
+            return order
+
+        def shown_count(chat, marker):
+            """How many rows show `marker`. A waiting bubble's accessibility
+            label repeats its text with its state after a comma."""
+            labels = (', Paused in queue', ', Queued, sends after this turn')
+            return sum(1 for line in chat.splitlines() if marker in line and not line.endswith(labels))
+
+        def typed_once(marker):
+            return sum(1 for entry in transcript() if entry['role'] == 'user' and marker in entry['text'])
+
+        # A. A Stop holds both queues; Remove; one Resume types the rest in order.
+        busy = fill_queues('A', [('mac', 'A-MAC'), ('quick', 'A-QUICK'), ('cli', 'A-CLI')])
+        before = read_queue()
+        require(before.get('heldSetToken') is None and workspace_revision() == before['revision'],
+                f'Unexpected queue before the Stop: {before}')
+        capture('waiting-both-queues')
+        phone_stop(busy)
+        held = held_state(['A-MAC', 'A-QUICK', 'A-CLI'], 'A-PHONE')
+        wait_for('the stopped turn to end', at_prompt, timeout=120)
+        time.sleep(5)
+        require(all(user_index(m) is None for m in ('A-PHONE', 'A-MAC', 'A-QUICK', 'A-CLI')),
+                f'A held message was typed: {transcript()[-4:]}')
+        capture('held-after-phone-stop')
+        cli_entry = next(e for e in held['entries'] if 'A-CLI' in e['text'])
+        require(cli_entry.get('sender') and str(runtime_home) not in json.dumps(held),
+                f'Unexpected entries: {held["entries"]}')
+        require(queue_update('coordinator_remove', clientRequestID=cli_entry['id']) == 'updated', 'Remove failed')
+        require(queue_update('coordinator_remove', clientRequestID=cli_entry['id']) == 'unchanged',
+                'A second Remove did not say the message left')
+        require(queue_update('coordinator_resume', heldSetToken='an-earlier-stop') == 'stale', 'A wrong token resumed')
+        after_remove = held_state(['A-MAC', 'A-QUICK'], 'A-PHONE')
+        require(queue_update('coordinator_resume', heldSetToken=after_remove['heldSetToken']) == 'updated', 'Resume failed')
+        order = typed_in_order(['A-PHONE', 'A-MAC', 'A-QUICK'])
+        require(user_index('A-CLI') is None, 'The removed message was typed')
+        require(all(typed_once(m) == 1 for m in ('A-PHONE', 'A-MAC', 'A-QUICK')), 'A message was typed twice')
+        require(read_queue()['entries'] == [], f'The queue did not empty: {read_queue()}')
+        capture('resumed-in-order')
+        step('a device\'s Stop held both queues; Remove took one; one Resume typed the rest in order',
+             held=held, order=order)
+
+        # B. Send next on the Mac and Resume on the device at nearly the same time.
+        busy = fill_queues('B', [('mac', 'B-MAC')])
+        phone_stop(busy)
+        raced = held_state(['B-MAC'], 'B-PHONE')
+        wait_for('the stopped turn to end', at_prompt, timeout=120)
+        mac_entry = raced['entries'][0]['id']
+        # A click takes longer than a request, so the click starts first and
+        # the device's Resume, with the same token, follows the moment the
+        # Mac's Resume shows in the device's read: both act, milliseconds
+        # apart.
+        clicked = {}
+        thread = threading.Thread(target=lambda: clicked.update(
+            result=ui.run('click', f'toastty-mobile-queued-resume-{mac_entry}', check=False)))
+        thread.start()
+        deadline = time.monotonic() + 60
+        while thread.is_alive() or 'result' not in clicked:
+            entries = read_queue()['entries']
+            if not entries or not entries[0].get('isHeld'):
+                break
+            require(time.monotonic() < deadline, 'The Mac\'s Send next did not act')
+            time.sleep(0.05)
+        phone_result = queue_update('coordinator_resume', heldSetToken=raced['heldSetToken'])
+        thread.join(timeout=60)
+        mac_click = clicked.get('result')
+        require(mac_click and mac_click[0] == 0, f'The Mac\'s Send next was not clicked: {mac_click}')
+        results = dict(phone=phone_result)
+        # The Mac let its own message go; the conversation's queue was still
+        # held, so the device's Resume let that go.
+        require(phone_result == 'updated', f'The device\'s Resume after the Mac\'s: {phone_result}')
+        for marker in ('B-PHONE', 'B-MAC'):
+            wait_for(f'{marker} typed', lambda: user_index(marker) is not None, timeout=300)
+            wait_for('the prompt after it', at_prompt, timeout=180)
+        time.sleep(5)
+        require(typed_once('B-PHONE') == 1 and typed_once('B-MAC') == 1, 'A racing Resume typed a message twice')
+        require(read_queue()['entries'] == [] and not (coordinator_conversation().get('inputControl') or {})
+                .get('queuedMessages'), 'A message stayed after the racing Resumes')
+        capture('racing-resume')
+        step('Send next on the Mac and Resume on the device typed each message once', phone=results.get('phone'),
+             macClick=mac_click, order=[user_index('B-PHONE'), user_index('B-MAC')])
+
+        # C. Held messages across a relaunch of the Mac app.
+        busy = fill_queues('C', [('mac', 'C-MAC')])
+        phone_stop(busy)
+        relaunch_held = held_state(['C-MAC'], 'C-PHONE')
+        wait_for('the stopped turn to end', at_prompt, timeout=120)
+        coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"')
+        instance.kill()
+        instance = ChatInstance(check.binary, environment, socket_path, runtime_home, app_log, gateway_port=gateway_port)
+        instance.wait_until_ready()
+        ui = UI(check.artifacts, pid())
+        ui.run('activate')
+        wait_for('Claude to be resumed', lambda: status().get('sessionID'), timeout=120)
+        wait_for('the resumed prompt', at_prompt, timeout=180)
+        wait_for('the gateway', lambda: coordinator_conversation() is not None, timeout=120)
+        restored = wait_for('the held message after the relaunch',
+                            lambda: (q := read_queue())['entries'] and q.get('heldSetToken') and q, timeout=60)
+        require([e['id'] for e in restored['entries']] == [relaunch_held['entries'][0]['id']]
+                and all(e.get('isHeld') for e in restored['entries']), f'Not restored as held: {restored}')
+        require(restored['heldSetToken'] != relaunch_held['heldSetToken'], 'The relaunch kept the old token')
+        require(not (coordinator_conversation().get('inputControl') or {}).get('queuedMessages'),
+                'The conversation\'s queue survived the relaunch')
+        time.sleep(5)
+        require(user_index('C-MAC') is None and user_index('C-PHONE') is None, 'A held message was typed after the relaunch')
+        wait_for('the chat to show the held message once', lambda: shown_count(ui.texts(), 'C-MAC') == 1, timeout=60)
+        capture('held-after-relaunch')
+        require(queue_update('coordinator_resume', heldSetToken=relaunch_held['heldSetToken']) == 'stale',
+                'The token from before the relaunch resumed')
+        require(queue_update('coordinator_resume', heldSetToken=restored['heldSetToken']) == 'updated', 'Resume failed')
+        typed_in_order(['C-MAC'])
+        require(typed_once('C-MAC') == 1, 'The held message was typed twice')
+        capture('resumed-after-relaunch')
+        step('a held message waited across a relaunch under a new token and went on Resume',
+             before=relaunch_held, after=restored)
 
     def check_dock_split_keys(task_space):
         """Cmd+] and Cmd+[ move the keyboard between the dock's field and the
@@ -439,6 +674,9 @@ def run(check):
             time.sleep(0.5)
         capture('chat-open')
         step('open shows the chat', opened=opened, version=version)
+        if check.waiting_messages:
+            check_waiting_messages()
+            return
 
         # 2. Return in the composer sends.
         first = 'Reply with exactly this one word and nothing else: CHAT-ONE'
@@ -813,19 +1051,23 @@ def run(check):
 
 
 class Check(coordinator_check.Check):
-    def __init__(self):
+    def __init__(self, waiting_messages=False):
         super().__init__('claude')
-        self.prefix = NAME
+        self.waiting_messages = waiting_messages
+        self.prefix = f'{NAME}-waiting-messages' if waiting_messages else NAME
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--gui-session', action='store_true',
                         help='rerun through Terminal in the GUI session, where the Claude login is readable')
+    parser.add_argument('--waiting-messages', action='store_true',
+                        help='check only the coordinator\'s waiting messages on a paired device')
     options = parser.parse_args()
     if options.gui_session:
-        run_in_gui_session([])
-    check = Check()
+        run_in_gui_session(['--waiting-messages'] if options.waiting_messages else [],
+                           name=f'{NAME}-waiting-messages' if options.waiting_messages else NAME)
+    check = Check(waiting_messages=options.waiting_messages)
     try:
         run(check)
         check.evidence['status'] = 'passed'

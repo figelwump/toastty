@@ -140,7 +140,8 @@ Remote wrappers generate a unique label by default. An explicit `--run-label`
 must use 1–128 letters, numbers, dots, underscores, or hyphens, starting with a
 letter or number. Each label is for one run: the wrappers refuse existing local
 artifact directories and remote run or worktree directories. Choose a new label
-for a retry. A sibling `<worktree>.allocation-lock` directory keeps allocation
+for a retry. The wrappers use `/usr/bin/python3` on both hosts to create
+these directories exclusively. A sibling `<worktree>.allocation-lock` directory keeps allocation
 exclusive while Git creates the worktree, including validation and test runs
 that share the remote worktree root. It is removed when allocation exits. If a
 process is killed before it can remove the reservation, use a new label and
@@ -546,6 +547,25 @@ It writes `remote-coordinator-chat-check.json`, the app log and Claude's
 transcripts under the run's artifacts directory. A build that can capture its
 window outside automation mode also writes PNG frames; a normal build cannot,
 and the check records that and continues.
+
+`--waiting-messages` runs only the coordinator's waiting messages on a paired
+device, with Remote Access on from the start:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-chat-check.py --gui-session --waiting-messages'
+```
+
+While the coordinator works, the device queues a chat message, and the Mac's
+chat, the device's quick entry and `toastty coordinator send` each add a
+message to the coordinator's own queue. A Stop from the device holds both
+queues. The check removes the `coordinator send` message from the device,
+resumes with a stale token and then the Stop's token, and proves from Claude's
+transcript that the rest are typed one per turn, the device's chat message
+first. After a second Stop, the device's Resume follows Send next in the Mac's
+chat by milliseconds, with the same token, and each message is typed once. A third Stop holds a Mac chat message
+over a relaunch of the app: it waits under a new token and goes on Resume. It
+writes `remote-coordinator-chat-check-waiting-messages.json` and the app log.
 
 ### Coordinator composer attachments
 

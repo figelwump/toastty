@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://toastty.dev">
-    <img src="docs/assets/toastty-hero.png" alt="Toastty with a checkout-redesign task space ready for review in the sidebar, its PR #128 chip, and a docs preview in the right panel" width="900">
+    <img src="docs/assets/toastty-hero.png" alt="Toastty with the sidebar on Needs you: the checkout-redesign task under Ready to review with its PR #128 chip, the coordinator's note on why it is ready, and a docs preview in the right panel" width="900">
   </a>
 </p>
 
@@ -43,7 +43,7 @@ Updating from 0.9.x? See [what changes](docs/tasks.md#updating-from-09x). To bui
 <table>
   <tr>
     <td width="33%"><img src="docs/assets/readme/workflow-1.png" alt="The quick entry panel over another app, with a message for the coordinator, an attached screenshot, and its Create and Send buttons"></td>
-    <td width="33%"><img src="docs/assets/readme/workflow-2.png" alt="The sidebar's project card with the checkout-redesign task under Ready to review, its PR #128 chip beside it"></td>
+    <td width="33%"><img src="docs/assets/readme/workflow-2.png" alt="The sidebar's Needs you list with the checkout-redesign task under Ready to review, its PR #128 chip beside it, and the coordinator's note on why it is ready"></td>
     <td width="33%"><img src="docs/assets/readme/workflow-3.png" alt="The checkout-redesign task space open, with the Merge PR #128 button in its top bar, the agent's terminal, and its verification report in the right panel"></td>
   </tr>
   <tr>

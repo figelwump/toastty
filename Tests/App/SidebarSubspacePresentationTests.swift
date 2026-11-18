@@ -346,6 +346,46 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(empty.hiddenSessionCount, 0)
         XCTAssertTrue(empty.annotations.isEmpty)
         XCTAssertNil(empty.path)
+        // A subspace that is not a task keeps the "task space" tag and has
+        // no parent to open.
+        XCTAssertNil(model.stage)
+        XCTAssertNil(model.parentTaskTitle)
+    }
+
+    /// The card names the task's stage in place of the "task space" tag,
+    /// and offers the parent task in every segment, also where the row
+    /// lists under its parent and does not name it.
+    func testTaskSpaceHoverCardShowsTheStageAndTheParentTask() {
+        func card(
+            _ status: SidebarSubspacePresentation.RowStatus,
+            stage: TaskStage,
+            listsApartFromParent: Bool = false
+        ) -> SubspaceHoverTipModel {
+            var row = SidebarSubspacePresentation.Row(
+                id: UUID(), title: "iPhone coordinator waiting messages", status: status,
+                stage: stage, isTask: true, annotations: [:], summary: nil,
+                spawningSessionID: nil, spawnerName: nil, sessions: []
+            )
+            row.parentTask = .init(taskID: UUID(), title: "iOS parity with the Mac coordinator UI")
+            row.listsApartFromParent = listsApartFromParent
+            return SidebarSubspacePresentation.hoverTipModel(row) { _ in .named(.neutral) }
+        }
+        // The chip follows the group the row lists under: an approval in a
+        // running task lists in Needs you.
+        XCTAssertEqual(card(.review, stage: .needsYou(.review)).stage, .bucket(.readyToReview))
+        XCTAssertEqual(card(.needsApproval, stage: .running).stage, .bucket(.needsYou))
+        XCTAssertEqual(card(.working, stage: .starting).stage, .bucket(.running))
+        XCTAssertEqual(card(.idle, stage: .idle).stage, .bucket(.idle))
+        // A merged task held open has left the groups.
+        XCTAssertEqual(card(.toShip, stage: .toShip).stage, .toShip)
+        XCTAssertEqual(card(.done, stage: .done).stage, .done)
+        XCTAssertEqual(SubspaceHoverTipModel.Stage.bucket(.readyToReview).title, "Ready to review")
+
+        XCTAssertEqual(card(.idle, stage: .idle).parentTaskTitle, "iOS parity with the Mac coordinator UI")
+        XCTAssertEqual(
+            card(.review, stage: .needsYou(.review), listsApartFromParent: true).parentTaskTitle,
+            "iOS parity with the Mac coordinator UI"
+        )
     }
 
     func testPathPrefersTheFirstAgentsDirectoryThenTheFirstTerminal() {

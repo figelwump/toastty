@@ -1202,6 +1202,33 @@ struct SidebarView: View {
         }
     }
 
+    /// The Parent button on a task space card: the parent's task space in
+    /// the window that holds it, else the parent in the Tasks view. The
+    /// sidebar keeps its segment, as other ways of opening a task space do,
+    /// so in Needs you the parent opens without a row of its own.
+    private func openParentTask(taskID: UUID) {
+        guard let parent = taskBoardSnapshot.allItems.first(where: { $0.taskID == taskID }) else { return }
+        cancelWorkspaceRename()
+        guard let taskSpaceID = parent.taskSpaceWorkspaceID,
+              let holderWindowID = store.state.windows.first(where: { $0.workspaceIDs.contains(taskSpaceID) })?.id,
+              let taskSpace = store.state.workspacesByID[taskSpaceID] else {
+            openTasksView(selecting: parent.id)
+            return
+        }
+        if holderWindowID == windowID {
+            // As a click on the parent's row would.
+            store.selectWorkspace(
+                windowID: windowID,
+                workspaceID: taskSpaceID,
+                preferringUnreadSessionPanelIn: sessionRuntimeStore
+            )
+        } else if let panelID = sessionRuntimeStore.preferredUnreadStatusPanelID(in: taskSpace) ?? taskSpace.focusedPanelID {
+            // Selecting a workspace does not raise its window; focusing a
+            // panel there does.
+            store.focusExplicitlyNavigatedPanel(windowID: holderWindowID, workspaceID: taskSpaceID, panelID: panelID)
+        }
+    }
+
     private func openTasksView(selecting subject: TaskBoardItem.Subject?, revealing group: TaskStage.Group? = nil) {
         cancelWorkspaceRename()
         taskBoard.showTasksView(
@@ -1225,8 +1252,13 @@ struct SidebarView: View {
 
         let kind: Kind
         /// The task that started this one. The Needs you segment names it on
-        /// a row that lists without that task.
-        var parentTaskTitle: String? = nil
+        /// a row that lists without that task, and the task space card's
+        /// Parent button opens it.
+        var parentTask: SidebarSubspacePresentation.ParentTask? = nil
+    }
+
+    private static func parentTask(_ item: TaskBoardItem) -> SidebarSubspacePresentation.ParentTask? {
+        item.taskID.map { SidebarSubspacePresentation.ParentTask(taskID: $0, title: item.title) }
     }
 
     /// One card's rows for a body pass. The Other tasks card has no
@@ -1342,7 +1374,7 @@ struct SidebarView: View {
                 let parent = parentItem(ofTaskID: item.taskID)
                 return SidebarBucketCandidate(
                     key: rowKey(item), bucket: bucket, parent: parent.map(rowKey),
-                    payload: CardRow(kind: .task(item), parentTaskTitle: parent?.title)
+                    payload: CardRow(kind: .task(item), parentTask: parent.flatMap(Self.parentTask))
                 )
             }
         }
@@ -1441,7 +1473,7 @@ struct SidebarView: View {
                 let parent = parentItem(ofTaskID: store.state.workspacesByID[row.id]?.taskID)
                 return SidebarBucketCandidate(
                     key: .workspace(row.id), bucket: .subspace(row), parent: parent.map(rowKey),
-                    payload: CardRow(kind: .subspace(row), parentTaskTitle: parent?.title)
+                    payload: CardRow(kind: .subspace(row), parentTask: parent.flatMap(Self.parentTask))
                 )
             }
             candidates += recordCandidates(recordItems.filter { $0.projectWorkspaceID == workspaceID })
@@ -1583,13 +1615,11 @@ struct SidebarView: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private static let needsYouMarkColor = Color(hex: 0xF2C46B)
-
     /// Yellow for Needs you, the review mark's blue for Ready to review,
     /// gray for the calm buckets.
     private static func bucketTitleColor(_ bucket: SidebarBucket) -> Color {
         switch bucket {
-        case .needsYou: needsYouMarkColor
+        case .needsYou: ToastyTheme.sidebarNeedsYouMark
         case .readyToReview: ToastyTheme.sidebarTaskReviewMark
         case .running, .idle: ToastyTheme.sidebarChildContextText
         }
@@ -1600,7 +1630,7 @@ struct SidebarView: View {
         HStack(spacing: 3) {
             switch bucket {
             case .needsYou:
-                Circle().fill(needsYouMarkColor).frame(width: 6, height: 6)
+                Circle().fill(ToastyTheme.sidebarNeedsYouMark).frame(width: 6, height: 6)
             case .readyToReview:
                 RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sidebarTaskReviewMark).frame(width: 6, height: 6)
             case .running:
@@ -1659,7 +1689,7 @@ struct SidebarView: View {
                     SidebarTaskRecordRow(
                         item: item,
                         showsProject: card.workspaceID == nil,
-                        parentTaskTitle: entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil,
+                        parentTaskTitle: entry.listsApartFromParent ? entry.payload.parentTask?.title : nil,
                         isCompact: isCompact
                     ) { openTasksView(selecting: item.id) }
                         .padding(.leading, entry.isLinkedChild ? Self.linkedChildIndent : 0)
@@ -1685,7 +1715,8 @@ struct SidebarView: View {
         var row = row
         row.isCompact = isCompact
         row.isLinkedChild = entry.isLinkedChild
-        row.parentTaskTitle = entry.listsApartFromParent ? entry.payload.parentTaskTitle : nil
+        row.parentTask = entry.payload.parentTask
+        row.listsApartFromParent = entry.listsApartFromParent
         if hidesChildProgress {
             // The fold line under the row shows it.
             row.childProgressLabel = nil
@@ -5477,9 +5508,13 @@ struct SidebarView: View {
             refreshID: hoverTipModel,
             placement: .trailing(gap: Self.hoverTipTrailingGap)
         ) {
-            SubspaceHoverTipCard(model: hoverTipModel) { panelID in
-                focusSessionPanel(workspaceID: row.id, panelID: panelID)
-            }
+            SubspaceHoverTipCard(
+                model: hoverTipModel,
+                onSelectSession: { panelID in
+                    focusSessionPanel(workspaceID: row.id, panelID: panelID)
+                },
+                onSelectParentTask: row.parentTask.map { parent in { openParentTask(taskID: parent.taskID) } }
+            )
         }
         .background {
             SidebarSemanticTextBridge(text: accessibilityLabel)

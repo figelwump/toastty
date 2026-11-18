@@ -587,6 +587,51 @@ enum ToasttyConversationFixture {
     /// shares the marks.
     /// `attachedImages` adds a message with images, as in the images
     /// mock-up, and says whether the fixture Mac serves the images.
+    /// Two messages that this phone queued in the coordinator's chat while
+    /// it works (`TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE`).
+    static let coordinatorChatQueue: [RemoteQueuedMessage] = [
+        RemoteQueuedMessage(
+            clientRequestID: "fixture-chat-1",
+            text: "Check the iOS failures first",
+            enqueuedAt: Date(timeIntervalSince1970: 1_790_000_000)
+        ),
+        RemoteQueuedMessage(
+            clientRequestID: "fixture-chat-2",
+            text: "Then summarize the release status",
+            enqueuedAt: Date(timeIntervalSince1970: 1_790_000_060)
+        ),
+    ]
+
+    /// The fixture coordinator's own queue: a quick entry message with
+    /// files, a message from a task, and a reply from the Mac's chat, as
+    /// the Mac shares them. `hasLongMessage` makes the quick entry message
+    /// as long as the Mac sends.
+    static func coordinatorOwnQueue(hasLongMessage: Bool) -> [RemoteCoordinatorQueueEntry] {
+        let long = String(repeating: "Look at the flaky upload test and the retry budget. ", count: 60)
+        let quickEntry: String = hasLongMessage
+            ? String(long.prefix(RemoteCoordinatorQueuePolicy.maximumTextLength - 1)) + "…"
+            : "Plan the notes export\n\nproject \"toastty\"\n\nnotes.txt, sketch.png"
+        return [
+            RemoteCoordinatorQueueEntry(
+                id: "fixture-own-1",
+                text: quickEntry,
+                isTextShortened: hasLongMessage,
+                fileNames: ["notes.txt", "sketch.png"]
+            ),
+            RemoteCoordinatorQueueEntry(
+                id: "fixture-own-2",
+                text: "The test run is ready for review.",
+                sender: "task iOS parity with the Mac coordinator UI"
+            ),
+            RemoteCoordinatorQueueEntry(
+                id: "fixture-own-3",
+                text: "Yes, merge it after the checks pass.",
+                quote: "PR #431 is ready. Merge it?",
+                quoteTime: "9:41 AM"
+            ),
+        ]
+    }
+
     static func coordinatorPresentation(
         for conversationID: UUID,
         sendItems: [ToasttySendPresentationItem] = [],

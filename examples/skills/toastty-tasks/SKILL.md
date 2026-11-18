@@ -118,7 +118,13 @@ never ask for the key in chat, and never pass it on the command line.
    guessing.
    Add `--events needs_you,merged,done,archived,deleted,coordinator_reply`
    to also get the coordinator's replies to your messages (see Pass a
-   message to the coordinator).
+   message to the coordinator). To add it to a webhook you already have, run
+   `toastty webhook set <name> --events
+   needs_you,merged,done,archived,deleted,coordinator_reply` with every
+   event you want, because the list replaces the old one. `set` has no
+   `--wait` and needs no new key: tell the user to click **Review…** in the
+   Tasks view and approve, then run `toastty webhook list --json <name>` and
+   continue at step 4 when it shows `active: true`.
 3. Tell the user to open the Tasks view in Toastty, click **Review…**, paste
    the key and approve. `--wait` exits 0 when they approve, 3 when they deny,
    and 4 after 10 minutes.
@@ -163,9 +169,12 @@ the answer. To catch every reply, also run `toastty coordinator replies
 file as for tasks; on `truncated: true`, treat the answer as the full list.
 If your webhook has `coordinator_reply` in its events, each reply also
 arrives as a `coordinator.reply` POST with the reply's `id` and `messageID`
-and no text: read the text with `coordinator replies` then. Otherwise read
-the replies when the user asks and at each sync. Pass the reply's text to
-the user as the coordinator's answer.
+and no text: read the text with `coordinator replies` then. Without that
+event, read the replies when the user asks and at each sync. `--since` and
+the webhook also bring replies to other senders: pass on only a reply whose
+`messageID` is one you kept from your own `coordinator send`. A reply can
+come back from more than one of these reads: pass the text of each reply
+`id` to the user once, as the coordinator's answer.
 
 ## Merge
 

@@ -84,11 +84,6 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// The cleanup already waited in `.holdingCleanup`, so a retry or a
     /// relaunch after it cleans up without waiting again.
     public var cleanupHoldEnded: Bool?
-    /// The cleanup stopped because the task's worktree is on another branch
-    /// than the pull request, so the script could not match a branch to
-    /// delete. Clean Up then removes the worktree with an archive's checks.
-    public var stoppedOnBranchMismatch: Bool?
-
     public init(
         pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase,
         requiresAbsentWorktree: Bool? = nil

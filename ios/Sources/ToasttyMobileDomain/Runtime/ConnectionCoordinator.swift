@@ -1033,6 +1033,16 @@ public actor ConnectionCoordinator {
         return try await gateway.coordinatorQuietDigests()
     }
 
+    /// Reads the coordinator's own queue, only while live against a host
+    /// that shares it. `nil` means nothing was asked.
+    public func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorQueue) else {
+            return nil
+        }
+        return try await gateway.coordinatorQueue()
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.

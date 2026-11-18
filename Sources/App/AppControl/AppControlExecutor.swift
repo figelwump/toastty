@@ -324,6 +324,20 @@ final class AppControlExecutor {
             if args.boolValue("requireDone") == true, store.state.workspacesByID[workspaceID]?.doneAt == nil {
                 throw AutomationSocketError.invalidPayload("the workspace is no longer marked done")
             }
+            if let url = args.stringValue("requirePullRequest") {
+                guard let workspace = store.state.workspacesByID[workspaceID],
+                      let expected = WorkspacePullRequestLink(annotationURL: url),
+                      let current = TaskBoard.pullRequestLink(workspace),
+                      current.url.lowercased() == expected.url.lowercased() else {
+                    throw AutomationSocketError.invalidPayload("the workspace's pull request link changed")
+                }
+                let documents = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
+                    panelIDs: workspace.allPanelsByID.keys
+                )
+                if documents.dirtyDraftCount + documents.saveInProgressCount > 0 {
+                    throw AutomationSocketError.invalidPayload("the workspace has unsaved document changes")
+                }
+            }
             return .init(
                 didMutateState: store.send(
                     .closeWorkspace(workspaceID: workspaceID),

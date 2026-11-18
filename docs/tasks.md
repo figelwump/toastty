@@ -1395,9 +1395,10 @@ again and then merges it or reports what blocks it.
 - **You tell it to.** Say "merge it" after the coordinator brought you a
   task, or name the task. That is your acceptance, as the Merge button is.
 - **A rule in the Merging section of your policy covers the change.** The
-  section is empty at first, and an empty section means that the coordinator
-  merges nothing on its own. Tell the coordinator "merge simple changes
-  yourself" and it proposes a rule, or write one in the policy. A rule names
+  section is empty at first. The coordinator needs a rule that covers its
+  role and the change to request a merge on its own. Tell the coordinator
+  "merge simple changes yourself" and it proposes a rule, or write one in the
+  policy. A rule for the coordinator names
   a project, the kinds of change, and a size:
 
   ```markdown
@@ -2489,17 +2490,23 @@ Checks**, or `merge = "direct"` for the project, skips the agent and merges at
 once. **Cancel Merge** stops a merge while the agent checks or Toastty waits for
 checks: a `task merge` from the agent's turn that was checking is then refused.
 
+A parent task needs your approval or a rule in the Merging section of your
+policy that covers its child pull request. You can allow a parent to merge all
+its child pull requests or limit the rule by project, target branch, or kind or
+size of change. The parent reads the diff and checks the child's evidence
+against your request and the current commit. It also checks CI, reviews and
+dependencies before it asks Toastty to merge that commit.
+
 A pull request merged on GitHub counts as your acceptance too. Toastty cleans up
 its task space after the same 24-hour wait, also when the agent was working
 when GitHub merged it: the cleanup waits for its turn to end, and a new turn
 or a link to another pull request keeps the task space open. The worktree
 must be clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
-When the task's worktree is on another branch than the pull request, as when
-a task updates an existing pull request, the cleanup cannot match a branch to
-delete and stops with both branch names. **Clean Up** then removes the
-worktree, and its local branch when the remote has every commit, with
-Archive's checks. Both branches stay on GitHub, and the task stays Done.
+When the task's recorded worktree is on another branch than the pull request,
+Toastty can remove that clean checkout after the same wait. It keeps the
+pull request's local branch and both branches on GitHub. It removes the
+local task branch only if it can verify that its commits are on origin.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
 space must have one exact PR link, remain marked done, and have no unsaved

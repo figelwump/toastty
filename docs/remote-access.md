@@ -873,6 +873,20 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   chat is open, for example at the end of the turn, the turn folds or opens
   where it is, without a reload. With an older Mac, which does not share the
   marks, quiet turns show open, as before.
+- **Waiting messages.** The chat lists every message that waits for the
+  coordinator, as one list in the order Toastty types them: first the
+  messages this phone queued in the chat, then the coordinator's own
+  waiting messages from the Mac's chat, quick entry on the Mac or on the
+  phone, and `toastty coordinator send`. A message from another sender
+  shows "From" and the sender, a reply its quote, and files their names and
+  count; the files stay on the Mac. After a Stop, from the phone or the Mac,
+  the messages that it holds show as paused, and one **Resume** on the first
+  of them lets them all go, the phone's first. **Remove** on a row takes that
+  message out of whichever queue holds it, with its files. The coordinator's
+  own messages have no Edit on the phone: remove one and write it again. A
+  phone without send access, or a coordinator session whose remote input is
+  off on the Mac, sees the list without Resume and Remove. With an older Mac,
+  the chat lists only the phone's queued messages, as before.
 - **Copy and Reply.** As in the Mac's coordinator chat, Copy is under your
   messages and the coordinator's, and Reply is under the coordinator's. A
   phone has no pointer, so both always show. Copy shows a check mark for a
@@ -1015,6 +1029,44 @@ them when a snapshot names a revision it does not have, one read at a time; a
 read that fails is tried again with the next snapshot. With an older Mac, which
 sends neither, quiet turns show open, and the New line counts their replies.
 An older phone ignores the field.
+
+The coordinator has two queues. Its conversation's send queue holds what a
+device's chat queued and is part of `inputControl`, at most 5 messages. The
+coordinator's own queue holds every other message for it, at most 50: the
+Mac chat's, quick entry's, `coordinator send`'s and a device's
+`coordinator.send`. That text is not sent yet, and the session list goes to
+browsers too, so a Mac with the coordinator advertises `coordinator_queue`
+and sends only `coordinatorQueueRevision` on the coordinator's workspace: the
+first 16 hex digits of the SHA-256 of the live conversation's ID, the held
+set's token and each entry's ID and hold. A device reads the queue with
+`GET /api/coordinator.queue`, which needs native Bearer authentication and
+read scope, as showing the chat does, and answers `protocolVersion`,
+`revision`, `conversationID`, `heldSetToken` and `entries`: the held
+entries, then the waiting ones, each with `id`, `text` (the Mac chat's
+display text, at most 2,000 characters, `isTextShortened` when cut),
+`sender` for a message that `coordinator send` brought, `quote` and
+`quoteTime` for a reply, `fileNames` and `isHeld`. It never sends a path. The
+phone reads it when a snapshot names a revision it does not have, as for the
+quiet digests, and after a reconnect.
+
+A Stop from any app holds both queues: the conversation's queue pauses and
+the coordinator's waiting entries are set aside. Each Stop, and each relaunch
+that restores set-aside entries, makes a new held-set token. The answer
+carries it while anything is held in either queue. Two new actions on
+`POST /api/conversation.queue.update` change the coordinator's queue, on its
+live conversation only: `coordinator_remove` names an entry by
+`clientRequestID` and discards its files, and `coordinator_resume` presents
+`heldSetToken` and lets go everything held in both queues, the conversation's
+queue first. A token of an earlier Stop answers `stale` and changes nothing,
+so a late Resume never lets a later Stop's messages go; a second Resume for
+the same Stop, or a Remove of a message that left, answers `unchanged`. The
+actions need send scope, and the coordinator's session must take writes from
+devices (`session_writes_disabled` otherwise). An older Mac cannot decode the
+new action values and refuses the request; an older phone ignores the
+revision and keeps its own Resume, which still lets only the conversation's
+queue go. The Mac's chat is unchanged. A relaunch keeps the user's own
+set-aside messages under a new token and drops the conversation's queue and
+`coordinator send` entries, as before.
 
 The phone's coordinator chat shows the images attached to a user message as
 thumbnails in the bubble, in the Mac chat's order and 200 × 120 point box, and

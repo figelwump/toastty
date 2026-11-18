@@ -581,6 +581,10 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     /// wake turn the coordinator marked quiet
     /// (`RemoteCoordinatorQuietDigests.revision`). Absent from an older Mac.
     public let coordinatorQuietDigestsRevision: String?
+    /// On the coordinator's workspace, the revision of the coordinator's
+    /// own queue (`RemoteCoordinatorQueue.revision`). Absent from an older
+    /// Mac, whose waiting messages this phone shows as before.
+    public let coordinatorQueueRevision: String?
 
     public init(
         id: UUID,
@@ -596,7 +600,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         isCoordinator: Bool = false,
         coordinatorConversationID: UUID? = nil,
         coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil,
-        coordinatorQuietDigestsRevision: String? = nil
+        coordinatorQuietDigestsRevision: String? = nil,
+        coordinatorQueueRevision: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -612,6 +617,7 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         self.coordinatorConversationID = coordinatorConversationID
         self.coordinatorChatRead = coordinatorChatRead
         self.coordinatorQuietDigestsRevision = coordinatorQuietDigestsRevision
+        self.coordinatorQueueRevision = coordinatorQueueRevision
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -635,7 +641,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             isCoordinator: isCoordinator,
             coordinatorConversationID: coordinatorConversationID,
             coordinatorChatRead: coordinatorChatRead,
-            coordinatorQuietDigestsRevision: coordinatorQuietDigestsRevision
+            coordinatorQuietDigestsRevision: coordinatorQuietDigestsRevision,
+            coordinatorQueueRevision: coordinatorQueueRevision
         )
     }
 
@@ -654,7 +661,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             isCoordinator: isCoordinator,
             coordinatorConversationID: coordinatorConversationID,
             coordinatorChatRead: coordinatorChatRead,
-            coordinatorQuietDigestsRevision: coordinatorQuietDigestsRevision
+            coordinatorQuietDigestsRevision: coordinatorQuietDigestsRevision,
+            coordinatorQueueRevision: coordinatorQueueRevision
         )
     }
 }

@@ -33,11 +33,17 @@ says that the user approved.
 
 ## 2. A Merging rule covers the change
 
-The Merging section of `policy.md` is empty until the user asks you to merge
-simple changes yourself, or agrees to a rule that your review proposed (see
-`references/improving.md`). While it is empty, case 2 never applies. A rule
-there says, in the user's words, which kind of change you may merge in which
-project, and how large the change may be.
+The Merging section also holds rules that explicitly allow parents to
+merge their own child tasks. The parent applies those rules through the
+coordinating-tasks procedure in `toastty-task-merge`. This section's
+procedure is for requests from the coordinator. A rule addressed only to
+parents gives the coordinator no authority to request a merge.
+
+The user can write a rule for you, ask you to propose one, or agree to a rule
+that your review proposed (see `references/improving.md`). Until the Merging
+section has a rule that covers your role, case 2 never applies. A rule for you
+says, in the user's words, which kind of change you may merge in which project,
+and how large the change may be.
 
 - **Write a rule only after the user's yes to its exact words,** in a message
   of their own. When the user asks for this and gives no rule, propose one,

@@ -95,9 +95,10 @@ or three lines and continue without waiting.
   repository:** give each part its own task (see
   [Split work into new tasks](#split-work-into-new-tasks)).
 
-The user's request authorizes the work within its stated scope. Merging,
-deployment, production changes and deleting the user's data still need the
-user's explicit approval.
+The user's request authorizes the work within its stated scope. A merge
+requires the user's explicit approval or a user-approved Merging rule that
+covers it, as `toastty-task-merge` describes. Deployment, production changes
+and deleting the user's data still need the user's explicit approval.
 
 ## Move this task into a worktree
 
@@ -194,9 +195,10 @@ On GitHub:
   the branch 24 hours after the merge, at the first check when no agent turn
   runs. `toastty task get` reports that time as `cleanup.taskSpaceClosesAt`.
   A new turn in the task space after the merge, or a `github-pr` link to
-  another pull request, keeps the task space open. A worktree on another
-  branch than the pull request's, as when the task updates an existing pull
-  request, stops the cleanup until the user chooses Clean Up.
+  another pull request, keeps the task space open. When the recorded worktree
+  is on a different branch, cleanup keeps the pull request's local branch and
+  both remote branches. It keeps the local task branch if it cannot verify
+  that its commits are on origin.
 
 In a repository without pull requests, report the verified commit instead.
 
@@ -260,6 +262,8 @@ task's Scratchpad.
   button or by saying "merge it", which runs `toastty-task-merge`. Do not merge
   it yourself, and do not mark the task Done.
 - **Work in child tasks:** do not mark this task ready for review or Done.
+  Before merging any child, use the coordinating-tasks procedure in
+  `toastty-task-merge` to confirm permission and check the work and its proof.
   Toastty finishes it when its children finish and at least one of them
   merged. A ready-for-review mark from before the newest child task does not
   keep it open. A pending `task watch` on a child keeps it open. If this task

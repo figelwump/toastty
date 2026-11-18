@@ -126,6 +126,20 @@ final class RemoteAccessCoordinatorQuietDigestsBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's read of the coordinator's own queue into the
+/// main-actor-owned coordinator.
+final class RemoteAccessCoordinatorQueueBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func queue() -> RemoteCoordinatorQueue {
+        MainActor.assumeIsolated {
+            service?.coordinatorQueue() ?? RemoteCoordinatorQueueProjection.queue(
+                held: [], waiting: [], conversationID: nil, heldSetToken: nil
+            )
+        }
+    }
+}
+
 /// Bridges the gateway's authenticated done request into the main-actor-owned
 /// workspace state.
 final class RemoteAccessWorkspaceDoneBridge: @unchecked Sendable {
@@ -612,6 +626,11 @@ final class RemoteAccessService: ObservableObject {
     /// the coordinator, which does not advertise them.
     private var coordinatorQuietDigestKeys: (() -> [String])?
     private var coordinatorQuietDigestsObserver: AnyCancellable?
+    private let coordinatorQueueBridge = RemoteAccessCoordinatorQueueBridge()
+    /// The coordinator whose own queue paired devices read. `nil` on a Mac
+    /// without the coordinator, which does not advertise the queue.
+    private weak var coordinatorQueueController: CoordinatorController?
+    private var coordinatorQueueObserver: AnyCancellable?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -877,6 +896,7 @@ final class RemoteAccessService: ObservableObject {
         readAcknowledgementBridge.service = self
         coordinatorChatReadBridge.service = self
         coordinatorQuietDigestsBridge.service = self
+        coordinatorQueueBridge.service = self
         coordinatorConversationEventsBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
@@ -993,6 +1013,7 @@ final class RemoteAccessService: ObservableObject {
         if let coordinatorController = taskBoard?.coordinator?.coordinatorController {
             installCoordinatorChatRead(coordinatorController.chatReadThrough)
             installCoordinatorQuietDigests(from: coordinatorController)
+            installCoordinatorQueue(from: coordinatorController)
             installCoordinatorAttachmentImages(folders: [coordinatorController.attachments.directoryURL, attachmentStoreDirectoryURL])
         }
         handler.onDevicePaired = { [weak self] device in
@@ -1801,7 +1822,8 @@ final class RemoteAccessService: ObservableObject {
                 coordinatorChatRead: coordinatorChatReadThrough?.point,
                 coordinatorQuietDigestsRevision: coordinatorQuietDigestKeys.map {
                     RemoteCoordinatorQuietDigests.revision(of: $0())
-                }),
+                },
+                coordinatorQueueRevision: coordinatorQueueRevision()),
             tasks: makeTaskBoard()
         )
     }
@@ -1870,7 +1892,8 @@ final class RemoteAccessService: ObservableObject {
         liveConversationIDsByPanelID: [UUID: RemoteConversationID] = [:],
         acceptsDoneMark: (UUID) -> Bool = { _ in true },
         coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil,
-        coordinatorQuietDigestsRevision: String? = nil
+        coordinatorQuietDigestsRevision: String? = nil,
+        coordinatorQueueRevision: String? = nil
     ) -> [RemoteWorkspaceSummary] {
         let parentIDs = state.subspaceParentIDsByWorkspaceID()
         // The coordinator's own session, by its panel, while its agent runs:
@@ -1944,7 +1967,9 @@ final class RemoteAccessService: ObservableObject {
                 coordinatorChatRead: workspace.isCoordinator && coordinator?.workspaceID == id
                     ? coordinatorChatRead : nil,
                 coordinatorQuietDigestsRevision: workspace.isCoordinator && coordinator?.workspaceID == id
-                    ? coordinatorQuietDigestsRevision : nil)
+                    ? coordinatorQuietDigestsRevision : nil,
+                coordinatorQueueRevision: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorQueueRevision : nil)
         }
     }
 
@@ -2274,6 +2299,118 @@ final class RemoteAccessService: ObservableObject {
                 guard let self, self.isEnabled else { return }
                 self.scheduleSessionListBroadcast()
             }
+    }
+
+    /// Shares the coordinator's own queue with paired devices: the messages
+    /// for the coordinator that wait outside its conversation's send queue,
+    /// so a device's chat lists them with the conversation's and can let
+    /// them go or remove them. The coordinator's workspace carries the
+    /// queue's revision, and a native device reads the queue when it
+    /// changes. Installing it advertises `coordinatorQueue`. The app
+    /// installs the coordinator's controller once, at launch.
+    func installCoordinatorQueue(from controller: CoordinatorController) {
+        coordinatorQueueController = controller
+        handler.coordinatorQueueHandler = { [coordinatorQueueBridge] in
+            coordinatorQueueBridge.queue()
+        }
+        // `@Published` sends before the change; the broadcast reads the
+        // settled queue a turn later. It goes also while the Mac's chat is
+        // closed.
+        coordinatorQueueObserver = Publishers.Merge3(
+            controller.$queuedEntries.map { _ in () },
+            controller.$pausedEntries.map { _ in () },
+            controller.$heldSetToken.map { _ in () }
+        )
+        .dropFirst(3)
+        .sink { [weak self] in
+            guard let self, self.isEnabled else { return }
+            self.scheduleSessionListBroadcast()
+        }
+    }
+
+    /// The coordinator's own conversation while its agent runs: the one in
+    /// the coordinator's terminal, bound to a live session.
+    private func coordinatorLiveConversationID() -> RemoteConversationID? {
+        guard let panelID = store.state.coordinator?.panelID,
+              let conversationID = conversationIDByPanelID[panelID],
+              activeSessionIDByConversationID[conversationID] != nil else { return nil }
+        return conversationID
+    }
+
+    /// The coordinator's own queue now, for a device's read. The Stop's
+    /// token goes with it only while that Stop holds messages, in either of
+    /// the coordinator's queues.
+    func coordinatorQueue() -> RemoteCoordinatorQueue {
+        guard let controller = coordinatorQueueController else {
+            return RemoteCoordinatorQueueProjection.queue(held: [], waiting: [], conversationID: nil, heldSetToken: nil)
+        }
+        let conversationID = coordinatorLiveConversationID()
+        return RemoteCoordinatorQueueProjection.queue(
+            held: controller.pausedEntries,
+            waiting: controller.queuedEntries,
+            conversationID: conversationID,
+            heldSetToken: exposedHeldSetToken(controller, conversationID: conversationID)
+        )
+    }
+
+    /// The revision that the coordinator's workspace carries, or `nil` on a
+    /// Mac without the coordinator.
+    private func coordinatorQueueRevision() -> String? {
+        guard let controller = coordinatorQueueController else { return nil }
+        let conversationID = coordinatorLiveConversationID()
+        return RemoteCoordinatorQueueProjection.revision(
+            held: controller.pausedEntries,
+            waiting: controller.queuedEntries,
+            conversationID: conversationID,
+            heldSetToken: exposedHeldSetToken(controller, conversationID: conversationID)
+        )
+    }
+
+    private func exposedHeldSetToken(
+        _ controller: CoordinatorController,
+        conversationID: RemoteConversationID?
+    ) -> String? {
+        let conversationQueueIsHeld = conversationID.map {
+            sendQueue.isPaused(for: $0) && sendQueue.entries(for: $0).isEmpty == false
+        } ?? false
+        let isHeld = controller.pausedEntries.isEmpty == false || conversationQueueIsHeld
+        return isHeld ? controller.heldSetToken : nil
+    }
+
+    /// A paired device's change to the coordinator's own queue. The gateway
+    /// checked the device's send scope. The request names the coordinator's
+    /// live conversation, and the Mac takes writes from devices for it.
+    private func performCoordinatorQueueUpdate(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) -> RemoteConversationQueueUpdateResult {
+        let conversationID = request.conversationID
+        guard let controller = coordinatorQueueController,
+              coordinatorLiveConversationID() == conversationID else {
+            return .conversationNotFound
+        }
+        guard sessionWritePolicy.isEnabled(for: conversationID) else { return .sessionWritesDisabled }
+        switch request.action {
+        case .coordinatorRemove:
+            // As the Mac chat's Remove: the message will not be sent, so its
+            // files go too.
+            guard let id = request.clientRequestID,
+                  controller.removeQueuedEntry(id: id, discardingAttachments: true) != nil else { return .unchanged }
+            return .updated
+        case .coordinatorResume:
+            guard let token = exposedHeldSetToken(controller, conversationID: conversationID) else { return .unchanged }
+            guard request.heldSetToken == token else { return .stale }
+            // The conversation's queue goes first at an open prompt, as it
+            // does at every prompt; the coordinator's set-aside entries
+            // follow, in front of its later ones.
+            if sendQueue.resume(conversationID) {
+                broadcastSessionList()
+                drainSendQueue(for: conversationID)
+            }
+            controller.resumeQueue()
+            return .updated
+        case .remove, .resume:
+            return .unchanged
+        }
     }
 
     /// Serves paired devices the images attached to the messages of the
@@ -3919,6 +4056,8 @@ final class RemoteAccessService: ObservableObject {
         }
         let result: RemoteConversationQueueUpdateResult
         switch request.action {
+        case .coordinatorRemove, .coordinatorResume:
+            result = performCoordinatorQueueUpdate(request)
         case .remove:
             if let clientRequestID = request.clientRequestID,
                let removed = sendQueue.remove(clientRequestID: clientRequestID, for: conversationID) {
@@ -3945,6 +4084,10 @@ final class RemoteAccessService: ObservableObject {
         if result == .updated {
             broadcastSessionList()
             if request.action == .resume { drainSendQueue(for: conversationID) }
+        } else if result == .stale {
+            // The device acted on a queue it no longer has: the revision it
+            // reads next tells it so.
+            broadcastSessionList()
         }
         return result
     }

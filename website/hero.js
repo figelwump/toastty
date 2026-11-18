@@ -5,8 +5,9 @@
     var stage = document.getElementById('stage');
     var wrap = document.getElementById('wrap');
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // The sidebar stays on its Needs you view: a row shows only while it waits on the user.
     // POSTER is the still used for reduced motion, the README, and the social card: Toasty has
-    // just said why checkout-redesign is ready, the row is in Ready to review with its PR chip,
+    // just said why checkout-redesign is ready, its row is in Ready to review with its PR chip,
     // and the docs fix is visible in the right panel.
     var POSTER = 16.4;
     var t = reduce ? POSTER : 0, playing = !reduce, last = null, onScreen = true;
@@ -36,10 +37,9 @@
     var site = $('site'), para = $('para'), codeBlock = $('code-block');
     var wasV2 = false;
     var viewEls = { lumen: $('view-lumen'), child: $('view-child'), docs: $('view-docs') };
-    var cardLumen = $('card-lumen'), cardDocs = $('card-docs'), rowDocs = $('row-docs');
-    var docsS = $('docs-s'), docsIc = $('docs-ic'), docsBkt = $('docs-bkt'), docsHc = $('docs-hc'), lumenHc = $('lumen-hc'), segRev = $('seg-rev');
+    var cardLumen = $('card-lumen'), cardDocs = $('card-docs'), rowDocs = $('row-docs'), rowSub = $('row-sub');
+    var docsIc = $('docs-ic'), docsBkt = $('docs-bkt'), docsHc = $('docs-hc'), segY = $('seg-y'), segRev = $('seg-rev');
     var crChips = Array.prototype.slice.call(stage.querySelectorAll('.tl-cr'));
-    var rowSub = $('row-sub'), subS = $('sub-s'), subIc = $('sub-ic'), subPr = $('sub-pr'), subEl = $('sub-el'), subBkt = $('sub-bkt');
     var wtitle = $('wtitle'), phead = $('phead');
     var dockSt = $('dock-st'), dockWk = $('dock-wk'), dockWkT = $('dock-wk-t'), dockF = $('dock-f'), dockPh = $('dock-ph'), dockTyped = $('dock-typed'), dockSend = $('dock-send');
     var tabs = Array.prototype.slice.call(document.querySelectorAll('#rtabs .rtab'));
@@ -52,7 +52,6 @@
     // Replacing innerHTML every frame restarts the spinner animation; only write on change.
     function setHTML(el, html) { if (el.__html !== html) { el.innerHTML = html; el.__html = html; } }
     function setText(el, s) { if (el.__text !== s) { el.textContent = s; el.__text = s; } }
-    function pick(list) { var v = list[0][1]; for (var i = 0; i < list.length; i++) if (t >= list[i][0]) v = list[i][1]; return v; }
     function inside(a, b) { return t >= a && t < b; }
     function offsetIn(el) {
       var x = 0, y = 0, n = el;
@@ -71,10 +70,9 @@
     // The coordinator's turns: it works while the dock shows its working row.
     var DOCK_TURNS = [[2.9, 3.9], [15.0, 15.4], [19.9, 20.6]];
     var READY = 15.0, MERGING = 20.8, MERGED = 22.5;
-    var SUB_S = [[0, 'Setting up…'], [4.9, 'Reading the task…'], [5.8, 'Moving to worktree · fetching base'], [6.5, 'Moving to worktree · feat/checkout-redesign'],
-      [7.6, 'Editing SummaryCard.tsx'], [9.0, 'Running npm test…'], [11.0, 'Capturing screenshots…'], [12.6, 'Writing verification report…'], [14.0, 'Opening PR…'],
-      [READY, 'Ready for review'], [MERGING, 'Merging…'], [MERGED, 'Done · task space closes in 24 h']];
-    var DOCS_S = [[0, 'Ready for prompt'], [13.3, 'Reading annotation 1…'], [13.7, 'Editing webhooks.md'], [14.4, 'Updated the preview']];
+    // docs-site's Codex session finishes a turn at DOCS_DONE: unread, it needs the user. Opened at
+    // DOCS_OPEN, it stays in place while it is selected, and leaves when Codex works again.
+    var DOCS_DONE = 8.0, DOCS_OPEN = 8.9, DOCS_WORK = 13.3, DOCS_FIXED = 14.4;
     var MERGE_ICON = '<svg viewBox="0 0 24 24"><path d="M12 3v7c0 3-5 5-5 8v3"/><path d="M12 10c0 3 5 5 5 8v3"/><path d="m8.5 6.5 3.5-3.5 3.5 3.5"/></svg>';
 
     function render() {
@@ -84,8 +82,9 @@
         el.classList.toggle('show', t >= a && t < u);
       });
 
-      // which workspace is on screen: lumen, then docs-site, then the task space
-      var ws = t < 8.9 ? 'lumen' : t < 17.6 ? 'docs' : 'child';
+      // which workspace is on screen: lumen; the task space, opened from Toasty's reply; docs-site,
+      // opened from the sidebar; then the task space again, opened from its row
+      var ws = t < 4.6 ? 'lumen' : t < DOCS_OPEN ? 'child' : t < 17.6 ? 'docs' : 'child';
       Object.keys(viewEls).forEach(function (key) { viewEls[key].classList.toggle('show', key === ws); });
 
       // The coordinator's dock: the field types the request and "merge it"; Toasty works between them.
@@ -108,13 +107,8 @@
 
       // The task space under lumen: starting, working, ready to review, merging, done.
       var ready = inside(READY, MERGING), merging = inside(MERGING, MERGED), done = t >= MERGED;
-      var starting = inside(4.0, 4.9) || inside(5.8, 7.6);
+      var starting = inside(4.0, 4.9) || inside(5.8, 7.0);
       var working = !ready && !done;
-      rowSub.classList.toggle('working', working && !starting);
-      rowSub.classList.toggle('has-chip', ready || merging || done);
-      setText(subS, pick(SUB_S));
-      setHTML(subIc, done ? '<span class="tmark done">✓</span>' : ready ? '<span class="tmark rev"></span>' : starting ? '<span class="tmark start"></span>' : '<span class="spin"></span>');
-      subPr.classList.toggle('show', ready || merging || done);
       // Toasty's chips for the task follow it, as the app's do: its stage mark and, once it has one, its PR.
       crChips.forEach(function (c) {
         c.classList.toggle('run', working && !starting && t >= 4.0);
@@ -122,24 +116,20 @@
         c.classList.toggle('done', done);
         c.classList.toggle('has-pr', ready || merging || done);
       });
-      var secs = Math.round(Math.max(0, Math.min(t, READY) - 4.0) * 25 + 4);
-      setText(subEl, Math.floor(secs / 60) + 'm ' + ('0' + (secs % 60)).slice(-2) + 's');
-      subEl.style.display = t < READY ? '' : 'none';
-      // Once merged, the row stays where it is while it is selected, under no bucket title.
-      setText(subBkt, ready ? 'READY TO REVIEW 1' : 'RUNNING 1');
-      subBkt.classList.toggle('bl', ready);
-      subBkt.style.visibility = done ? 'hidden' : '';
-      var running = t >= 4.0 && (working || merging) ? 1 : 0;
-      setHTML(lumenHc, counts(0, ready ? 1 : 0, running && !done ? 1 : 0, 2));
+      // The Needs you list. The task lists in lumen while it waits for review; the merge makes it
+      // Running, so it leaves even while selected, and lumen, with nothing else, leaves with it.
+      cardLumen.style.display = ready ? '' : 'none';
+      // docs-site lists while its finished turn is unread, and stays while it is selected. Read,
+      // the row counts as idle, so its group says 0, as the app draws it.
+      var docsUnread = inside(DOCS_DONE, DOCS_OPEN);
+      cardDocs.style.display = inside(DOCS_DONE, DOCS_WORK) ? '' : 'none';
+      rowDocs.classList.toggle('ready', docsUnread);
+      setHTML(docsIc, docsUnread ? '<span class="mk dot ready"></span>' : '');
+      setText(docsBkt, 'NEEDS YOU ' + (docsUnread ? 1 : 0));
+      setHTML(docsHc, counts(docsUnread ? 1 : 0, 0, 0, 0));
+      setText(segY, String(1 + (docsUnread ? 1 : 0)));
       segRev.style.display = ready ? '' : 'none';
-
-      // docs-site: annotate the preview and send it to the agent
-      var docsWorking = inside(13.3, 14.4);
-      rowDocs.classList.toggle('working', docsWorking);
-      setText(docsS, pick(DOCS_S));
-      setHTML(docsIc, docsWorking ? '<span class="spin"></span>' : '');
-      setText(docsBkt, docsWorking ? 'RUNNING 1' : 'IDLE 1');
-      setHTML(docsHc, counts(0, 0, docsWorking ? 1 : 0, docsWorking ? 0 : 1));
+      var docsWorking = inside(DOCS_WORK, DOCS_FIXED);
 
       var annoMode = inside(9.8, 13.3);
       annoBtn.classList.toggle('on', annoMode);
@@ -174,46 +164,51 @@
       wasV2 = v2;
 
       // selection
-      cardLumen.classList.toggle('sel', ws === 'lumen');
-      cardLumen.classList.toggle('parent-hl', ws === 'child');
+      cardLumen.classList.toggle('sel', ws === 'child');
       rowSub.classList.toggle('sel', ws === 'child');
       cardDocs.classList.toggle('sel', ws === 'docs');
       rowDocs.classList.toggle('sel', ws === 'docs');
       var mergeLabel = done ? '<span class="mergeb done">Done · PR #128</span>'
         : merging ? '<span class="mergeb busy"><span class="spin"></span>Merging PR #128…</span>'
         : '<span class="mergeb"><span>' + MERGE_ICON + 'Merge PR #128</span><span>⌄</span></span>';
-      setHTML(wtitle, ws === 'child' ? '<b>checkout-redesign</b>' + mergeLabel
+      setHTML(wtitle, ws === 'child' ? '<b>checkout-redesign</b>' + (t < READY ? '<span>1 running</span>' : mergeLabel)
         : ws === 'docs' ? '<b>docs-site</b><span>' + (docsWorking ? '1 running' : 'idle') + '</span>'
         : '<b>lumen</b><span>idle</span>');
-      setText(phead, ws === 'child' ? 'Claude Code · lumen-checkout-redesign' : ws === 'docs' ? 'Codex · docs-site' : 'Claude Code · lumen');
+      setText(phead, ws === 'child' ? (t < 7.0 ? 'Claude Code · lumen' : 'Claude Code · lumen-checkout-redesign') : ws === 'docs' ? 'Codex · docs-site' : 'Claude Code · lumen');
 
       // right panel tabs belong to a workspace; each workspace has one active tab
-      var ACTIVE = { lumen: 'mock', docs: 'docsweb', child: 'verify' };
+      // The task space gains its report and PR tabs as its agent makes them.
+      var ACTIVE = { lumen: 'mock', docs: 'docsweb', child: t < 12.6 ? 'mock' : 'verify' };
       tabs.forEach(function (tb) {
         var key = tb.getAttribute('data-tab');
-        tb.classList.toggle('show', tb.getAttribute('data-ws').split(' ').indexOf(ws) >= 0);
+        tb.classList.toggle('show', tb.getAttribute('data-ws').split(' ').indexOf(ws) >= 0 && t >= parseFloat(tb.getAttribute('data-from') || '0'));
         tb.classList.toggle('on', key === ACTIVE[ws]);
       });
       Object.keys(views).forEach(function (key) { views[key].classList.toggle('on', key === ACTIVE[ws]); });
 
-      // camera: zoom into the sidebar and the dock while the task moves into its worktree
-      var zoomAmt = seg(4.6, 5.2) - seg(7.6, 8.2);
-      var focus = offsetIn(cardLumen), Z = 1 + 0.45 * zoomAmt;
-      // anchor below the card's top so the task row and the coordinator's answer both show
-      var fx = focus.x + focus.w / 2, fy = focus.y + 255;
-      var tx = Math.min(0, Math.max(VW - 1200 * Z, 330 - fx * Z)), ty = Math.min(0, Math.max(740 - 740 * Z, 370 - fy * Z));
-      if (VW < 1200 && zoomAmt < 0.001) {
-        // phone crop: for the docs preview, zoom the 380px right panel to fill the crop
-        var right = seg(9.0, 9.6) - seg(14.4, 14.9);
-        Z = 1 + (VW / 380 - 1) * right;
-        tx = -(1200 * Z - VW) * right;
-        ty = -40 * Z * right;
+      // camera: the desktop shows the whole window. The phone crop shows the sidebar and the dock;
+      // it pans to Toasty's reply and the task's terminal while the task moves into its worktree,
+      // and zooms the 380px right panel to fill the crop for the docs preview.
+      var Z = 1, tx = 0, ty = 0;
+      if (VW < 1200) {
+        var toTask = seg(4.6, 5.2) - seg(7.6, 8.2), right = seg(9.0, 9.6) - seg(14.4, 14.9);
+        var dockX = offsetIn(dockF.parentNode).x;
+        if (toTask > 0) {
+          // the dock's left edge to the terminal's right edge (580px) fills the crop
+          Z = 1 + (VW / 580 - 1) * toTask;
+          tx = -dockX * Z * toTask;
+        } else {
+          Z = 1 + (VW / 380 - 1) * right;
+          tx = -(1200 * Z - VW) * right;
+          ty = -40 * Z * right;
+        }
       }
       cam.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + Z + ')';
 
       // cursor path
-      var rest1 = { x: 760, y: 520 }, rest3 = { x: 700, y: 600 };
-      var subBox = offsetIn(rowSub), docsBox = offsetIn(rowDocs), fieldBox = offsetIn(dockF);
+      var rest3 = { x: 700, y: 600 };
+      var subBox = offsetIn(rowSub), docsBox = offsetIn(rowDocs), fieldBox = offsetIn(dockF), chipBox = offsetIn(crChips[0]);
+      var onChip = { x: chipBox.x + chipBox.w / 2, y: chipBox.y + chipBox.h / 2 }, nearChip = { x: onChip.x + 110, y: onChip.y + 60 };
       var btnBox = offsetIn(annoBtn), siteBox = offsetIn(site), addBox = offsetIn(annoAdd), sendBox = offsetIn(abSend), itemBox = offsetIn(annoItem);
       var onSub = { x: subBox.x + 70, y: subBox.y + 14 };
       var onDocs = { x: docsBox.x + 80, y: docsBox.y + 14 };
@@ -221,8 +216,8 @@
       var onBtn = { x: btnBox.x + 10, y: btnBox.y + 8 };
       var dragA = { x: siteBox.x + box.x + 2, y: siteBox.y + box.y + 2 }, dragB = { x: siteBox.x + box.x + box.w, y: siteBox.y + box.y + box.h };
       var onAdd = { x: addBox.x + 16, y: addBox.y + 8 }, onSendBtn = { x: sendBox.x + 40, y: sendBox.y + 12 }, onItem = { x: itemBox.x + 50, y: itemBox.y + 10 };
-      var path = [[0, rest1], [8.0, rest1], [8.7, onDocs], [9.0, onDocs], [9.6, onBtn], [9.8, onBtn], [10.3, dragA], [10.4, dragA], [11.0, dragB], [12.0, dragB], [12.3, onAdd], [12.5, onAdd], [12.8, onSendBtn], [12.95, onSendBtn], [13.15, onItem], [13.35, onItem], [14.0, rest3], [16.6, rest3], [17.3, onSub], [17.8, onSub], [18.7, onField], [D, onField]];
-      var p = rest1;
+      var path = [[0, nearChip], [4.0, nearChip], [4.4, onChip], [8.05, onChip], [8.7, onDocs], [9.0, onDocs], [9.6, onBtn], [9.8, onBtn], [10.3, dragA], [10.4, dragA], [11.0, dragB], [12.0, dragB], [12.3, onAdd], [12.5, onAdd], [12.8, onSendBtn], [12.95, onSendBtn], [13.15, onItem], [13.35, onItem], [14.0, rest3], [16.6, rest3], [17.3, onSub], [17.8, onSub], [18.7, onField], [D, onField]];
+      var p = nearChip;
       for (var i = 0; i < path.length - 1; i++) {
         if (t >= path[i][0] && t < path[i + 1][0]) {
           var f = ease((t - path[i][0]) / (path[i + 1][0] - path[i][0]));
@@ -231,12 +226,14 @@
         }
       }
       cursor.style.transform = 'translate(' + p.x + 'px,' + p.y + 'px)';
-      var clicks = [8.75, 9.7, 12.35, 12.85, 13.2, 17.4, 18.85];
+      var clicks = [4.45, 8.75, 9.7, 12.35, 12.85, 13.2, 17.4, 18.85];
       cursor.classList.toggle('click', clicks.some(function (c) { return t >= c && t < c + 0.4; }));
-      // The pointer shows only while it moves to something or clicks it: from the docs step to its
-      // last click, then from the move to the task row until the user types "merge it" (macOS hides
-      // the pointer while you type). So it never sits idle in a still such as the poster.
-      cursor.style.opacity = t < 7.9 ? 0 : t < 13.6 ? 1 : t < 14.0 ? 1 - seg(13.6, 14.0) : t < 16.5 ? 0 : t < 19.1 ? seg(16.5, 16.7) : 1 - seg(19.1, 19.3);
+      // The pointer shows only while it moves to something or clicks it: to Toasty's chip, from the
+      // docs step to its last click, then from the move to the task row until the user types
+      // "merge it" (macOS hides the pointer while you type). So it never sits idle in a still such
+      // as the poster.
+      cursor.style.opacity = t < 3.95 ? 0 : t < 4.6 ? seg(3.95, 4.1) : t < 4.9 ? 1 - seg(4.6, 4.9) : t < 8.0 ? 0 : t < 13.6 ? seg(8.0, 8.15)
+        : t < 14.0 ? 1 - seg(13.6, 14.0) : t < 16.5 ? 0 : t < 19.1 ? seg(16.5, 16.7) : 1 - seg(19.1, 19.3);
 
       // loop fade
       fade.style.opacity = t > 23.2 ? (t - 23.2) / 0.8 : (t < 0.4 ? 1 - t / 0.4 : 0);
@@ -300,7 +297,9 @@
       poster: POSTER,
       beats: beats.map(function (b) { return parseFloat(b.getAttribute('data-t')); }),
       startRendering: function () { rendering = true; setPlaying(false); fit(); },
-      renderFrame: function (x, settle) { t = x; render(); syncAnimations(!!settle); }
+      // A still renders twice: the pointer and the annotation overlays are placed from the layout,
+      // which is final only once the transitions that this frame started have finished.
+      renderFrame: function (x, settle) { t = x; render(); syncAnimations(!!settle); if (settle) { render(); syncAnimations(true); } }
     };
 
   } catch (e) {

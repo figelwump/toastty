@@ -12,9 +12,23 @@ toastty_validate_run_label() {
   }
 }
 
+toastty_mkdir_exclusive() {
+  # Use mkdir(2) directly. uutils mkdir 0.10 can report success after
+  # another process creates the directory (uutils/coreutils#13970).
+  /usr/bin/python3 -I -c '
+import os
+import sys
+
+try:
+    os.mkdir(sys.argv[1])
+except OSError as error:
+    sys.exit(str(error))
+' "$1"
+}
+
 toastty_allocate_local_artifacts() {
   mkdir -p "$(dirname "$1")" || return 1
-  mkdir "$1" || {
+  toastty_mkdir_exclusive "$1" || {
     printf 'error: artifact directory already exists or cannot be created: %s; choose a new run label\n' "$1" >&2
     return 1
   }
@@ -28,12 +42,12 @@ toastty_allocate_remote_run() (
   mkdir -p "$(dirname "$worktree")" "$(dirname "$run_root")" || return 1
   # Git may remove an empty destination while creating its worktree. Keep
   # ownership outside that directory until allocation has finished.
-  mkdir "$allocation_lock" || {
+  toastty_mkdir_exclusive "$allocation_lock" || {
     printf 'error: remote worktree allocation already exists: %s; choose a new run label or inspect the incomplete allocation\n' "$allocation_lock" >&2
     return 1
   }
   trap 'rmdir "$allocation_lock"' EXIT
-  mkdir "$run_root" || {
+  toastty_mkdir_exclusive "$run_root" || {
     printf 'error: remote run already exists or cannot be created: %s; choose a new run label\n' "$run_root" >&2
     return 1
   }
