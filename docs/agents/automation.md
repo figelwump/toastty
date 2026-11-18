@@ -725,7 +725,10 @@ later one after the user answers in the chat. `sender-reply-webhook`
 registers a webhook on a receiver at `127.0.0.1` with `--auth none` and
 `--events needs_you,coordinator_reply`, approves it with Review… and
 Approve in the real sheet through `ax-drive.swift`, and checks that each
-reply arrives as one `coordinator.reply` POST with the IDs and no text. It
+reply arrives as one `coordinator.reply` POST with the IDs and no text.
+On the mini a synthetic click on Review… in a check instance has not opened
+the sheet; the scenario then uses `ax-drive press`, the button's
+Accessibility press action, and records which one worked. It
 needs Accessibility for the GUI session's Terminal and an unlocked screen,
 and reports BLOCKED without them. Every scenario also checks that each
 `coordinator reply` names a message that the run sent.
