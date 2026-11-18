@@ -108,8 +108,8 @@ and runs it when you approve.
 The rules below allow the Toastty commands that read, create, start, message
 and watch tasks (`task get`, `list`, `workspace-choices`, `watches`, `create`,
 `start-work`, `send`, `watch`, `unwatch`, `needs-reply` and
-`ready-for-review`), the coordinator's `status`, `send`, `wake` and `watch`,
-and `query run`, which only reads. Every other Toastty command still asks,
+`ready-for-review`), the coordinator's `status`, `send`, `reply`, `wake` and
+`watch`, and `query run`, which only reads. Every other Toastty command still asks,
 among them `task merge`, `task request-merge`, `task archive`, `task delete`
 and `task mark-done`.
 
@@ -144,6 +144,7 @@ rules that you already have:
       "Bash(toastty task ready-for-review *)",
       "Bash(toastty coordinator status *)",
       "Bash(toastty coordinator send *)",
+      "Bash(toastty coordinator reply *)",
       "Bash(toastty coordinator wake *)",
       "Bash(toastty coordinator watch *)",
       "Bash(toastty query run *)",
@@ -161,7 +162,8 @@ The rules in a project's own `.claude/settings.json` apply only after you
 trusted that folder in Claude Code.
 
 On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
-sends to them (`task send --text-file message.md`), sets its next check
+sends to them (`task send --text-file message.md`), answers a sender
+outside Toastty (`coordinator reply <id> --text-file message.md`), sets its next check
 (`coordinator wake`, `coordinator watch`), reads pull requests
 (`gh pr view`, `gh pr checks`) and reads its Scratchpads (`query run`). The
 rules above cover these commands. It also edits files in its own folder on
@@ -218,7 +220,7 @@ prefix_rule(
     decision = "allow",
 )
 prefix_rule(
-    pattern = ["toastty", "coordinator", ["status", "send", "wake", "watch"]],
+    pattern = ["toastty", "coordinator", ["status", "send", "reply", "wake", "watch"]],
     decision = "allow",
 )
 prefix_rule(pattern = ["toastty", "query", "run"], decision = "allow")
@@ -2036,9 +2038,9 @@ Grok Bot with `coordinator send --from "Grok Bot"`, gets the coordinator's
 answer back:
 
 ```bash
-toastty --json coordinator send --from "Grok Bot" --text-file question.md
+toastty coordinator send --json --from "Grok Bot" --text-file question.md
 # {"delivery":"sent","messageID":"6F1C2A90-…","queuedCount":0}
-toastty --json coordinator replies --message 6F1C2A90-…
+toastty coordinator replies --json --message 6F1C2A90-…
 ```
 
 1. `coordinator send` gives a message from outside a task an ID, a UUID. It
@@ -2046,8 +2048,9 @@ toastty --json coordinator replies --message 6F1C2A90-…
    `Message ID <uuid>.` A message from a task's session has none
    (`messageID` is null): the coordinator answers a task with `task send`.
 2. The coordinator answers the sender with
-   `toastty coordinator reply <message-id> --text-file <path>`. Only the
-   coordinator's own agent can run it. It can reply more than once, such as
+   `toastty coordinator reply <message-id> --text-file message.md`, with the
+   reply written to `message.md` in its folder. Only the coordinator's own
+   agent can run it. It can reply more than once, such as
    "I asked Vishal" and later "Vishal said yes; the task started". It still
    tells you in its chat what you need to know: a reply goes only to the
    sender.

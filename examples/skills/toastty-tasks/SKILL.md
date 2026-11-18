@@ -156,10 +156,10 @@ deletes on your word: for a merge, follow Merge below.
 
 Run it with `--json` and keep the `messageID` it returns. The coordinator
 answers you with replies to that ID, which you read with
-`toastty --json coordinator replies --message <messageID>`. Each reply has
+`toastty coordinator replies --json --message <messageID>`. Each reply has
 `text`; the first can say only that it asked the user, and a later one gives
-the answer. To catch every reply, also run `toastty --json coordinator
-replies --since <cursor>` with the `cursor` of your last answer, kept in a
+the answer. To catch every reply, also run `toastty coordinator replies
+--json --since <cursor>` with the `cursor` of your last answer, kept in a
 file as for tasks; on `truncated: true`, treat the answer as the full list.
 If your webhook has `coordinator_reply` in its events, each reply also
 arrives as a `coordinator.reply` POST with the reply's `id` and `messageID`
