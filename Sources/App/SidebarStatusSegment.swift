@@ -361,11 +361,17 @@ struct SidebarTaskRecordRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(markColor)
-                .frame(width: 7, height: 7)
-                .frame(width: 12, height: 17)
-                .accessibilityHidden(true)
+            Group {
+                if TaskBoardPresentation.restingWait(item) != nil {
+                    TaskWaitingGlyph()
+                } else {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(markColor)
+                        .frame(width: 7, height: 7)
+                }
+            }
+            .frame(width: 12, height: 17)
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 titleLine
                 if isCompact == false {

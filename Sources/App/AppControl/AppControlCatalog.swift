@@ -89,6 +89,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskCleanUp = "task.clean-up"
     case taskReadyForReview = "task.ready-for-review"
     case taskNeedsReply = "task.needs-reply"
+    case taskWaiting = "task.waiting"
     case taskMarkDone = "task.mark-done"
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
@@ -720,6 +721,19 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 parameters: [
                     .taskID(required: false),
                     .init(name: "question", summary: "The question in a few words; the task's row shows it.", valueType: .string, required: false),
+                ]
+            )
+        case .taskWaiting:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Mark that a task waits on something outside Toastty, such as an email reply or a date, or clear that mark. The task rests in Idle with a clock and the reason, and a task with child tasks does not finish through them while the mark is set. The mark stays across turns until the agent clears or replaces it, or marks the task ready for review. At wakeAt, Toastty sends the task's agent one line to go on, and the mark clears when that turn starts. Without taskID, a task's agent marks its own task.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "on", summary: "What the task waits for, in a few words; the task's row shows it. Required unless clear is true.", valueType: .string, required: false),
+                    .init(name: "wakeAt", summary: "When Toastty sends the agent its wake line, as an ISO 8601 time in the future, such as 2026-12-01T17:00:00Z.", valueType: .string, required: false),
+                    .init(name: "clear", summary: "Remove the mark: the task no longer waits.", valueType: .boolean, required: false),
                 ]
             )
         case .taskMarkDone:

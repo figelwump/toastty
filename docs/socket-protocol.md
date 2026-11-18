@@ -259,6 +259,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.clean-up`
 - `task.ready-for-review`
 - `task.needs-reply`
+- `task.waiting`
 - `task.mark-done`
 - `task.archive`
 - `task.release`
@@ -524,6 +525,16 @@ Notable action-specific behavior:
     optional `taskID` and `question` and sets `replyRequest`: the task waits in
     Needs you with attention `awaitingReply`, even after the user reads the
     turn, until the task's own agent starts its next turn.
+- `task.waiting`
+  - takes optional `taskID`, and either `on`, the text of what the task
+    waits for, with optional `wakeAt`, an ISO 8601 time in the future; or
+    `clear: true` alone. It sets or removes `waiting`
+    (`{on, since, wakeAt, wokenAt}`) and returns the task. Setting it clears
+    `readyForReviewAt`; `task.ready-for-review`, `task.mark-done` and an
+    archive clear it. The task stays Idle with the reason, and a task with
+    child tasks does not finish through them. At `wakeAt`, Toastty gives the
+    task's own agent one line at its open prompt and sets `wokenAt`; the mark
+    clears when that agent's next turn starts.
     `task.mark-done` requires `taskID`, sets `doneAt`, and marks the task space
     done.
 - `task.set-release`

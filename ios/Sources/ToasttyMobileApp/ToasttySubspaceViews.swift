@@ -64,6 +64,7 @@ enum ToasttySubspaceGroupPresentation {
         case .review: "ready for review"
         case .working: "working"
         case .idle: "idle"
+        case .waiting: "waiting outside Toastty"
         case .toShip: "to ship"
         case .done: "done"
         }
@@ -240,7 +241,7 @@ enum ToasttySubspaceStatusStyle {
         case .error: ToasttyDesignTokens.color(for: .error)
         case .review: ToasttyDesignTokens.taskReview
         case .working: ToasttyDesignTokens.color(for: .working)
-        case .idle: ToasttyDesignTokens.mutedText
+        case .idle, .waiting: ToasttyDesignTokens.mutedText
         case .toShip: ToasttyDesignTokens.taskToShip
         }
     }
@@ -252,7 +253,7 @@ enum ToasttySubspaceStatusStyle {
         case .needsApproval: ToasttyDesignTokens.color(for: .needsApproval).opacity(0.13)
         case .error: ToasttyDesignTokens.color(for: .error).opacity(0.13)
         case .review: ToasttyDesignTokens.taskReview.opacity(0.13)
-        case .working, .idle, .toShip, .done: .clear
+        case .working, .idle, .waiting, .toShip, .done: .clear
         }
     }
 }
@@ -285,6 +286,13 @@ struct ToasttySubspaceRailMark: View {
                 }
         case .idle:
             box.strokeBorder(ToasttyDesignTokens.mutedText, lineWidth: 1.4)
+                .frame(width: Self.boxSize, height: Self.boxSize)
+        case .waiting:
+            // A still clock: the task waits on something outside Toastty,
+            // possibly for months, so it does not move like work does.
+            Image(systemName: "clock")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
                 .frame(width: Self.boxSize, height: Self.boxSize)
         case .ready:
             square(color)
@@ -613,7 +621,7 @@ struct ToasttySubspaceRow: View {
     private var titleFont: Font {
         let weight: Font.Weight = switch row.status {
         case .ready, .question, .needsApproval, .error, .review: .bold
-        case .working, .idle: .medium
+        case .working, .idle, .waiting: .medium
         case .toShip, .done: .regular
         }
         let font = Font.subheadline.weight(weight)

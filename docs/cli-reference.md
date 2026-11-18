@@ -885,6 +885,7 @@ toastty task cancel-merge [<task-id>]
 toastty task clean-up <task-id>
 toastty task ready-for-review [<task-id>]
 toastty task needs-reply [<task-id>] [--question <text>]
+toastty task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
 toastty task mark-done <task-id>
 toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
 toastty task release [--workspace <id>]
@@ -989,6 +990,14 @@ would refuse or `null`. `task clean-up` retries a cleanup that stopped.
 question: the task stays in Needs you, showing `--question`, after the user
 reads the turn, until the task's agent starts its next turn. A later
 `task ready-for-review` replaces it.
+`task waiting --on` is what an agent runs before it ends a turn to wait on
+something outside Toastty, such as an email reply or a date: the task rests in
+Idle with a clock and the `--on` text, and a task with child tasks does not
+finish through them. The mark stays across turns. At `--wake`, an ISO 8601
+time in the future such as `2026-12-01T17:00:00Z`, Toastty sends the task's
+agent one `[Toastty wake]` line at its open prompt, and the mark clears when
+that turn starts. `--clear`, a new `--on`, `task ready-for-review`, Done and
+Archive end it. See [Wait outside Toastty](tasks.md#wait-outside-toastty).
 `task ready-for-review` marks work without a pull request ready, and
 `task mark-done` finishes it. `task release` starts a release task for a
 project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
@@ -1003,7 +1012,7 @@ archived task and on a release task. See
 `task list --parent` lists the tasks one task started.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.set-release|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.mark-done|task.archive|task.release`
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.set-release|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.waiting|task.mark-done|task.archive|task.release`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 `window.tasks.hide`, and `window.sidebar.set-segment segment=all|needsYou`

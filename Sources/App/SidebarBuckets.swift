@@ -49,7 +49,7 @@ extension TaskBucket {
         case .ready, .question, .needsApproval, .error: .needsYou
         case .review: .readyToReview
         case .working: .running
-        case .idle, .toShip, .done: .idle
+        case .idle, .toShip, .done, .waiting: .idle
         }
         guard let fromStage = stage.flatMap(Self.init) else { return fromStatus }
         return min(fromStatus, fromStage)

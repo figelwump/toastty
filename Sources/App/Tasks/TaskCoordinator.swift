@@ -318,6 +318,12 @@ final class TaskCoordinator {
     /// `toastty task watch --wait` watches, which only last while the app runs.
     var waitWatches: [UUID: TaskWaitWatch] = [:]
     var watchMonitor: Task<Void, Never>?
+    /// Sends the wakes of `task waiting` marks when their time comes.
+    var wakeMonitor: Task<Void, Never>?
+    /// Tasks whose wake line is being given to their agent now.
+    var wakesInFlight: Set<UUID> = []
+    /// When to try a due wake again after its agent could not take it.
+    var wakeRetryAt: [UUID: Date] = [:]
     /// The change cursor behind `task.list changedSince`.
     let changeFeed = TaskChangeFeed()
     /// Names this app launch in the turn marks `recordStateTimes` saves. A
@@ -1113,6 +1119,9 @@ final class TaskCoordinator {
         // Saved watches keep waiting across a relaunch; old fired ones go.
         evaluateWatches()
         startWatchMonitorIfNeeded()
+        // So do the wakes of waiting tasks, including ones whose time came
+        // while Toastty was not running.
+        startWakeMonitorIfNeeded()
     }
 
     /// Links each open task space to its task again when the layout lost

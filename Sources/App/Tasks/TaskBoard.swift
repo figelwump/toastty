@@ -270,7 +270,8 @@ enum TaskBoard {
     static func taskSpaceStatus(
         _ statuses: [WorkspaceSessionStatus],
         in workspace: WorkspaceState?,
-        stage: TaskStage
+        stage: TaskStage,
+        waitsOutside: Bool = false
     ) -> SidebarSubspacePresentation.RowStatus? {
         guard let workspace else { return nil }
         return SidebarSubspacePresentation.rowStatus(
@@ -278,7 +279,8 @@ enum TaskBoard {
                 (kind: status.status.kind, showsUnreadSessionAccent: isUnread(status, in: workspace))
             }),
             isDone: workspace.doneAt != nil,
-            stage: stage
+            stage: stage,
+            waitsOutside: waitsOutside
         )
     }
 
@@ -402,7 +404,7 @@ enum TaskBoard {
             agent: agent,
             hasUnreadTurn: hasUnreadTurn(statuses, in: taskSpace),
             taskSpaceStatus: taskSpaceID.map(isNested) == true
-                ? taskSpaceStatus(statuses, in: taskSpace, stage: derived.stage) : nil,
+                ? taskSpaceStatus(statuses, in: taskSpace, stage: derived.stage, waitsOutside: record.waiting != nil) : nil,
             waitingOnTitle: waitingOn,
             pullRequest: link,
             pullRequestState: pullRequestState,

@@ -1171,6 +1171,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
       toastty [--json] [--socket-path <path>] task needs-reply [<task-id>] [--question <text>]
+      toastty [--json] [--socket-path <path>] task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>]
@@ -2499,6 +2500,36 @@ public enum ToasttyCLI {
                 args["taskID"] = .string(taskID)
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.set-release", args: args))
+
+        case "waiting":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--on", "--wake"], flagOptions: ["--clear"])
+            guard parsed.positionals.count <= 1 else {
+                throw ToasttyCLIError.usage("task waiting takes at most one task ID\n\n\(usage)")
+            }
+            let reason = parsed.singleValue("--on")
+            let wake = parsed.singleValue("--wake")
+            var args: [String: AutomationJSONValue] = [:]
+            if parsed.hasFlag("--clear") {
+                guard reason == nil, wake == nil else {
+                    throw ToasttyCLIError.usage("task waiting takes --clear alone, or --on with an optional --wake\n\n\(usage)")
+                }
+                args["clear"] = .bool(true)
+            } else {
+                guard let reason else {
+                    throw ToasttyCLIError.usage("task waiting requires --on <what the task waits for>, or --clear\n\n\(usage)")
+                }
+                args["on"] = .string(reason)
+                if let wake {
+                    args["wakeAt"] = .string(wake)
+                }
+            }
+            if let taskID = parsed.positionals.first {
+                guard UUID(uuidString: taskID) != nil else {
+                    throw ToasttyCLIError.usage("task waiting takes a task ID\n\n\(usage)")
+                }
+                args["taskID"] = .string(taskID)
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.waiting", args: args))
 
         case "adopt":
             let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace"])

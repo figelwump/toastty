@@ -77,6 +77,15 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// clears when an agent in the task space starts new work, which is
     /// usually the user's reply.
     public var replyRequest: TaskReplyRequest?
+    /// Set by an agent whose task waits on something outside Toastty, such
+    /// as an email reply or a date (`task.waiting`). The task rests in Idle
+    /// with the reason, and a task with child tasks does not finish through
+    /// them while it is set. Unlike a reply request, it stays across turns.
+    /// It clears when the agent clears or replaces it, when the task is
+    /// marked ready for review, Done or archived, and when the turn that its
+    /// wake started begins. Optional so records saved before it existed
+    /// still load.
+    public var waiting: TaskWaiting?
     /// When the pull request was seen merged, and the commit it made. The
     /// commit is what a release tag must contain for the task to ship.
     public var mergedAt: Date?
@@ -270,6 +279,40 @@ public struct TaskReplyRequest: Codable, Equatable, Sendable {
     public init(askedAt: Date, question: String? = nil) {
         self.askedAt = askedAt
         self.question = question
+    }
+}
+
+/// An agent's mark that its task waits on something outside Toastty
+/// (`task.waiting`).
+public struct TaskWaiting: Codable, Equatable, Sendable {
+    /// What the task waits for, in the agent's words. The task's row shows
+    /// it.
+    public var on: String
+    public var since: Date
+    /// When Toastty sends the agent one line to go on with the work, such
+    /// as the date of dated work. `nil` for a wait with no date.
+    public var wakeAt: Date?
+    /// When Toastty began to give the agent that line. The mark then
+    /// clears when the agent's next turn starts: the turn the line started.
+    public var wokenAt: Date?
+
+    public init(on: String, since: Date, wakeAt: Date? = nil, wokenAt: Date? = nil) {
+        self.on = on
+        self.since = since
+        self.wakeAt = wakeAt
+        self.wokenAt = wokenAt
+    }
+
+    /// Whether the wake is still to come: it has a time, and Toastty has
+    /// not sent its line.
+    public var hasPendingWake: Bool {
+        wakeAt != nil && wokenAt == nil
+    }
+
+    /// Whether the wake's time has come and Toastty has not sent its line.
+    public func wakeIsDue(at date: Date) -> Bool {
+        guard let wakeAt, wokenAt == nil else { return false }
+        return wakeAt <= date
     }
 }
 

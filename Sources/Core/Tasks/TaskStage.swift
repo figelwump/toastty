@@ -145,9 +145,11 @@ public enum TaskStage: Equatable, Sendable {
     /// waits for a release, Done once every child that is not archived is
     /// Done. Only a task that would otherwise be Idle moves this way, so a
     /// task whose agent works, waits for the user, or marked it ready for
-    /// review stays where it is. A ready mark from before the newest child
-    /// task was created is about earlier work, so it does not hold a
-    /// finished parent back. `children` is asked only for such a task.
+    /// review stays where it is. So does a task whose agent marked that it
+    /// waits on something outside Toastty: it still owns work. A ready mark
+    /// from before the newest child task was created is about earlier work,
+    /// so it does not hold a finished parent back. `children` is asked only
+    /// for such a task.
     public static func derivation(
         _ facts: TaskStageFacts,
         live: TaskLiveFacts,
@@ -155,7 +157,8 @@ public enum TaskStage: Equatable, Sendable {
         children: () -> TaskChildrenOutcome? = { nil }
     ) -> (stage: TaskStage, finishedThroughChildren: Bool) {
         let own = ownStage(facts, live: live, releaseTagsConfigured: releaseTagsConfigured)
-        guard facts.hasWorktree == false, live.hasPullRequestLink == false, live.pullRequest == nil else {
+        guard facts.hasWorktree == false, live.hasPullRequestLink == false, live.pullRequest == nil,
+              facts.waitsOutside == false else {
             return (own, false)
         }
         switch own {
@@ -284,6 +287,11 @@ public struct TaskStageFacts: Equatable, Sendable {
     public var readyForReviewAt: Date?
     /// When the agent marked that it waits for the user's reply.
     public var replyRequestedAt: Date?
+    /// Whether the agent marked that the task waits on something outside
+    /// Toastty (`task.waiting`). It does not change the stage: the task
+    /// rests in Idle. It keeps a task with child tasks from finishing
+    /// through them.
+    public var waitsOutside: Bool
     public var mergedAt: Date?
     public var mergeTarget: TaskMergeTarget?
     public var shippedAt: Date?
@@ -302,6 +310,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         hasWorktree: Bool = false,
         readyForReviewAt: Date? = nil,
         replyRequestedAt: Date? = nil,
+        waitsOutside: Bool = false,
         mergedAt: Date? = nil,
         mergeTarget: TaskMergeTarget? = nil,
         shippedAt: Date? = nil,
@@ -316,6 +325,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.hasWorktree = hasWorktree
         self.readyForReviewAt = readyForReviewAt
         self.replyRequestedAt = replyRequestedAt
+        self.waitsOutside = waitsOutside
         self.mergedAt = mergedAt
         self.mergeTarget = mergeTarget
         self.shippedAt = shippedAt
@@ -333,6 +343,7 @@ public struct TaskStageFacts: Equatable, Sendable {
             hasWorktree: record.operation.worktree != nil,
             readyForReviewAt: record.readyForReviewAt,
             replyRequestedAt: record.replyRequest?.askedAt,
+            waitsOutside: record.waiting != nil,
             mergedAt: record.mergedAt,
             mergeTarget: record.mergeTarget,
             shippedAt: record.shippedAt,

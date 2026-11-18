@@ -24,6 +24,9 @@ enum SidebarSubspacePresentation {
         case idle
         case toShip
         case done
+        /// The task rests in Idle while it waits on something outside
+        /// Toastty (`task waiting`): a still clock instead of the quiet box.
+        case waiting
 
         var needsAttention: Bool {
             self == .needsApproval || self == .error
@@ -36,7 +39,7 @@ enum SidebarSubspacePresentation {
             case .error: return 3
             case .ready: return 2
             case .working: return 1
-            case .idle, .question, .review, .toShip, .done: return 0
+            case .idle, .question, .review, .toShip, .done, .waiting: return 0
             }
         }
     }
@@ -176,19 +179,21 @@ enum SidebarSubspacePresentation {
     static func rowStatus(sessionStatus: RowStatus, isDone: Bool) -> RowStatus {
         guard isDone else { return sessionStatus }
         switch sessionStatus {
-        case .idle, .ready, .done, .question, .review, .toShip: return .done
+        case .idle, .ready, .done, .question, .review, .toShip, .waiting: return .done
         case .needsApproval, .error, .working: return sessionStatus
         }
     }
 
     /// The same, with the task's stage: a working agent or one that wants
     /// the user still shows first, since the user may need to act; a quiet
-    /// task space shows where its task stands.
-    static func rowStatus(sessionStatus: RowStatus, isDone: Bool, stage: TaskStage?) -> RowStatus {
+    /// task space shows where its task stands. `waitsOutside` is the task's
+    /// `task waiting` mark: a quiet task space of an Idle task with it
+    /// shows the clock. An unread turn still shows first.
+    static func rowStatus(sessionStatus: RowStatus, isDone: Bool, stage: TaskStage?, waitsOutside: Bool = false) -> RowStatus {
         switch sessionStatus {
         case .needsApproval, .error, .working:
             return sessionStatus
-        case .idle, .ready, .question, .review, .toShip, .done:
+        case .idle, .ready, .question, .review, .toShip, .done, .waiting:
             break
         }
         switch stage {
@@ -207,6 +212,8 @@ enum SidebarSubspacePresentation {
             // Setup or the move into a worktree is under way, often before
             // any agent in the task space reports.
             return .working
+        case .idle? where waitsOutside && sessionStatus == .idle:
+            return .waiting
         case .running?, .idle?, .needsYou?:
             // The stage already counts a done mark that means the work is
             // done; one a merge set as the user's acceptance does not make
@@ -240,7 +247,7 @@ enum SidebarSubspacePresentation {
             return row.sessions.contains { session in
                 session.statusKind == .working || session.statusKind == .needsApproval || session.statusKind == .error
             } == false
-        case .ready, .needsApproval, .error, .question, .review, .working, .idle:
+        case .ready, .needsApproval, .error, .question, .review, .working, .idle, .waiting:
             return false
         }
     }
@@ -345,7 +352,7 @@ enum SidebarSubspacePresentation {
             case .error: tally.error += 1
             case .review: tally.review += 1
             case .question: tally.question += 1
-            case .working, .idle, .toShip, .done: break
+            case .working, .idle, .toShip, .done, .waiting: break
             }
         }
     }
@@ -419,7 +426,7 @@ enum SidebarSubspacePresentation {
     static func showsDoneToggle(_ row: Row) -> Bool {
         guard canToggleDone(row) else { return false }
         switch row.status {
-        case .idle, .ready, .done, .question, .review: return true
+        case .idle, .ready, .done, .question, .review, .waiting: return true
         case .needsApproval, .error, .working, .toShip: return false
         }
     }
@@ -463,6 +470,7 @@ enum SidebarSubspacePresentation {
         case .question: components.append("waiting for your reply")
         case .toShip: components.append("merged, to ship")
         case .done: components.append("done")
+        case .waiting: components.append("waiting outside Toastty")
         case .idle: break
         }
         if row.releasesAfterMerge {

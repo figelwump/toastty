@@ -37,6 +37,12 @@ extension TaskCoordinator {
     /// start-work moves the task, so this follows the record's panes rather
     /// than trusting a saved ID.
     func liveAgentSession(of record: TaskRecord) -> TaskSessionInfo? {
+        liveAgentSession(of: record, ownAgentOnly: false)
+    }
+
+    /// The same. With `ownAgentOnly`, a task whose record names its agent's
+    /// session gets no other agent of its task space when that agent is gone.
+    func liveAgentSession(of record: TaskRecord, ownAgentOnly: Bool) -> TaskSessionInfo? {
         guard let sessions else { return nil }
         func live(sessionID: String?, panelID: UUID?) -> TaskSessionInfo? {
             if let sessionID, let session = sessions.session(sessionID), session.isActive, session.agent != .processWatch {
@@ -63,6 +69,9 @@ extension TaskCoordinator {
         // A task Toastty did not start (rebuilt or adopted), whose saved pane
         // may hold any agent: the agent most recently active in its task
         // space.
+        if ownAgentOnly, record.operation.agentLaunch != nil || record.operation.worktreeSession != nil {
+            return nil
+        }
         guard let workspaceID = record.taskSpaceWorkspaceID else { return nil }
         return sessions.activeSessions(workspaceID: workspaceID)
             .max { ($0.statusUpdatedAt ?? .distantPast) < ($1.statusUpdatedAt ?? .distantPast) }
@@ -416,5 +425,152 @@ extension TaskCoordinator {
 
     private var hasActiveWatches: Bool {
         waitWatches.isEmpty == false || records.records.contains { $0.activeWatches.isEmpty == false }
+    }
+
+    // MARK: - Wakes of waiting tasks
+
+    /// How long a due wake waits before Toastty tries it again, when the
+    /// task's agent was busy, asked something, or could not take the line.
+    static let wakeRetryInterval: TimeInterval = 30
+    /// The longest the wake monitor sleeps, so that a mark set while it
+    /// sleeps is late by at most this.
+    static let wakeCheckMaximumInterval: TimeInterval = 60
+
+    /// Runs while a `task waiting` mark has a wake to come. It sleeps until
+    /// the earliest wake, at most a minute, rather than polling each second
+    /// for a date that can be months away.
+    func startWakeMonitorIfNeeded() {
+        guard wakeMonitor == nil, records.records.contains(where: { $0.waiting?.hasPendingWake == true }) else { return }
+        wakeMonitor = Task { [weak self] in
+            while Task.isCancelled == false {
+                // No strong reference across the sleep.
+                guard let delay = self?.evaluateWakes() else {
+                    self?.wakeMonitor = nil
+                    return
+                }
+                try? await Task.sleep(for: .seconds(delay))
+            }
+        }
+    }
+
+    /// Starts the wake of each waiting task whose time came, and returns
+    /// the seconds until the next check, or `nil` when no wake is to come.
+    @discardableResult
+    func evaluateWakes() -> TimeInterval? {
+        let at = now()
+        var next: TimeInterval?
+        func checkAgain(in seconds: TimeInterval) {
+            let seconds = min(max(seconds, 1), Self.wakeCheckMaximumInterval)
+            next = min(next ?? seconds, seconds)
+        }
+        for record in records.records {
+            guard let waiting = record.waiting, waiting.hasPendingWake, let wakeAt = waiting.wakeAt else { continue }
+            guard waiting.wakeIsDue(at: at) else {
+                checkAgain(in: wakeAt.timeIntervalSince(at))
+                continue
+            }
+            // A finished task waits on nothing: a wake would start new work
+            // in it, which clears a done mark. The sidebar's done box marks
+            // only the task space.
+            let taskSpaceDone = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0]?.doneAt } != nil
+            if record.archivedAt != nil || record.doneAt != nil || record.mergedAt != nil || taskSpaceDone {
+                saveOrDefer(taskID: record.id) { $0.waiting = nil }
+                continue
+            }
+            if wakesInFlight.contains(record.id) {
+                checkAgain(in: 1)
+                continue
+            }
+            if let retryAt = wakeRetryAt[record.id], retryAt > at {
+                checkAgain(in: retryAt.timeIntervalSince(at))
+                continue
+            }
+            guard startWake(record, waiting: waiting, at: at) else {
+                wakeRetryAt[record.id] = at.addingTimeInterval(Self.wakeRetryInterval)
+                checkAgain(in: Self.wakeRetryInterval)
+                continue
+            }
+            checkAgain(in: 1)
+        }
+        return next
+    }
+
+    /// Gives the waiting task's own agent its wake line, under the input
+    /// checks of `task send --steer`, while the agent waits at its prompt
+    /// and no question waits for the user: the agent's next turn would
+    /// clear the question. Returns false when the wake must wait.
+    private func startWake(_ record: TaskRecord, waiting: TaskWaiting, at: Date) -> Bool {
+        guard record.replyRequest == nil,
+              let session = liveAgentSession(of: record, ownAgentOnly: true),
+              TaskAgentState(statusKind: session.status?.kind) == .idle else { return false }
+        let taskID = record.id
+        // Marked before the line goes, so that the turn it starts clears
+        // the mark (`clearMarksForNewWork`), and no second line goes.
+        saveOrDefer(taskID: taskID) { $0.waiting?.wokenAt = at }
+        wakesInFlight.insert(taskID)
+        wakeRetryAt[taskID] = nil
+        let message = Self.wakeMessage(waiting)
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.sessions?.deliverSteering(message, panelID: session.panelID) ?? .failure(.stateUnknown)
+            var metadata = ["task_id": taskID.uuidString, "session_id": session.sessionID]
+            let given: Bool
+            switch result {
+            case .success(let delivery):
+                metadata["delivery"] = delivery.name
+                given = true
+            case .failure(.uncertain):
+                // Typed, maybe without its Return: a second copy would land
+                // in the same prompt.
+                metadata["delivery"] = "uncertain"
+                given = true
+            case .failure(.stateUnknown):
+                // Toastty reads no conversation for this agent, so the
+                // checks of a steered send cannot run.
+                given = self.deliverWakeWithoutConversation(message, taskID: taskID)
+                metadata["delivery"] = given ? "typed" : "held"
+            case .failure(let failure):
+                metadata["failure"] = String(describing: failure)
+                given = false
+            }
+            self.wakesInFlight.remove(taskID)
+            guard given == false else {
+                ToasttyLog.info("Sent a waiting task its wake", category: .tasks, metadata: metadata)
+                return
+            }
+            // Nothing was typed: the wake waits and tries again.
+            ToasttyLog.info("A waiting task's wake must wait", category: .tasks, metadata: metadata)
+            self.saveOrDefer(taskID: taskID) { saved in
+                if saved.waiting?.wokenAt == at { saved.waiting?.wokenAt = nil }
+            }
+            self.wakeRetryAt[taskID] = self.now().addingTimeInterval(Self.wakeRetryInterval)
+            self.startWakeMonitorIfNeeded()
+        }
+        return true
+    }
+
+    /// For an agent whose conversation Toastty does not read: types the wake
+    /// as a watch's line goes, but only while the agent's own reports say it
+    /// waits at its prompt, no question waits for the user, and nobody typed
+    /// in its terminal since its last turn ended, since that text can still
+    /// be in its prompt. Returns whether the line went.
+    private func deliverWakeWithoutConversation(_ message: String, taskID: UUID) -> Bool {
+        guard let record = records.record(id: taskID), record.replyRequest == nil, record.waiting?.wokenAt != nil,
+              let session = liveAgentSession(of: record, ownAgentOnly: true),
+              TaskAgentState(statusKind: session.status?.kind) == .idle else { return false }
+        if let typedAt = sessions?.lastUserInputAt(panelID: session.panelID),
+           typedAt > (session.lastTurnEndedAt ?? .distantPast) {
+            return false
+        }
+        return deliver(message, to: session, taskID: taskID) != .unavailable
+    }
+
+    /// The line a wake sends: one line, so no agent reads part of it as a
+    /// separate message.
+    static func wakeMessage(_ waiting: TaskWaiting) -> String {
+        let time = waiting.wakeAt.map { ISO8601DateFormatter().string(from: $0) } ?? "now"
+        return "[Toastty wake] The time you set with toastty task waiting has come (\(time)). "
+            + "The task waited for: \(waiting.on). Go on with that work. "
+            + "If the task still waits when this turn ends, run toastty task waiting again."
     }
 }

@@ -279,6 +279,20 @@ struct ToasttyCLITaskTests {
                 "question": .string("Pick a hostname option"),
             ]))
         #expect(throws: ToasttyCLIError.self) { try command(["ready-for-review", "--question", "Why?"]) }
+        // A wait outside Toastty, with an optional wake, or its removal.
+        #expect(try command(["waiting", "--on", "email replies"])
+            == .appControlRun(kind: .action, id: "task.waiting", args: ["on": .string("email replies")]))
+        #expect(try command(["waiting", taskID, "--on", "email replies", "--wake", "2026-12-01T17:00:00Z"])
+            == .appControlRun(kind: .action, id: "task.waiting", args: [
+                "taskID": .string(taskID),
+                "on": .string("email replies"),
+                "wakeAt": .string("2026-12-01T17:00:00Z"),
+            ]))
+        #expect(try command(["waiting", "--clear"]) == .appControlRun(kind: .action, id: "task.waiting", args: ["clear": .bool(true)]))
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting"]) }
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting", "--wake", "2026-12-01T17:00:00Z"]) }
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting", "--clear", "--on", "email replies"]) }
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting", "not-a-task", "--on", "email replies"]) }
         // An outside caller asks the task's agent to merge.
         #expect(try command(["request-merge", taskID])
             == .appControlRun(kind: .action, id: "task.request-merge", args: ["taskID": .string(taskID)]))

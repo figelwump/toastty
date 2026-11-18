@@ -10,7 +10,9 @@ in one of three states:
 
 - **Finished:** merged and shipped, Done, or archived by the user.
 - **Moving:** a task's agent works on it, or the task waits for its checks,
-  for another task, or for a release that a rule starts.
+  for another task, or for a release that a rule starts. A task with
+  `waitingOn` also moves: its agent waits on something outside Toastty, and
+  Toastty wakes it at `wakeAt`.
 - **Waiting on the user:** one question or decision, with the answer you
   suggest, in your daily list until the user answers it.
 

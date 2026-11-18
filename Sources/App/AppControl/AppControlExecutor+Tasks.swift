@@ -6,8 +6,8 @@ extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskMarkDone,
-             .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
+             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskWaiting,
+             .taskMarkDone, .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
              .webhookAdd, .webhookSet, .webhookRemove, .webhookTest: true
         default: false
         }
@@ -81,6 +81,30 @@ extension AppControlExecutor {
         case .taskNeedsReply:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
             let updated = try perform { try coordinator.needsReply(taskID: record.id, question: args.taskString("question")) }
+            return .init(didMutateState: true, result: Self.taskSnapshot(updated))
+        case .taskWaiting:
+            let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
+            let reason = args.taskString("on")
+            let wakeText = args.taskString("wakeAt")
+            if try args.taskBool("clear") == true {
+                guard reason == nil, wakeText == nil else {
+                    throw AutomationSocketError.invalidPayload("task.waiting takes clear alone, or on with an optional wakeAt")
+                }
+                let updated = try perform { try coordinator.clearWaiting(taskID: record.id) }
+                return .init(didMutateState: true, result: Self.taskSnapshot(updated))
+            }
+            guard let reason else {
+                throw AutomationSocketError.invalidPayload("task.waiting requires on, the thing the task waits for, or clear")
+            }
+            var wakeAt: Date?
+            if let wakeText {
+                guard let date = (try? Date(wakeText, strategy: .iso8601))
+                    ?? (try? Date(wakeText, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))) else {
+                    throw AutomationSocketError.invalidPayload("wakeAt must be an ISO 8601 time, such as 2026-12-01T17:00:00Z")
+                }
+                wakeAt = date
+            }
+            let updated = try perform { try coordinator.setWaiting(taskID: record.id, reason: reason, wakeAt: wakeAt) }
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskMarkDone:
             let record = try visibleTask(args: args, coordinator: coordinator)
@@ -848,6 +872,9 @@ extension AppControlExecutor {
             "readyForReviewAt": date(record.readyForReviewAt),
             "replyRequest": record.replyRequest.map {
                 .object(["askedAt": date($0.askedAt), "question": optional($0.question)])
+            } ?? .null,
+            "waiting": record.waiting.map {
+                .object(["on": .string($0.on), "since": date($0.since), "wakeAt": date($0.wakeAt), "wokenAt": date($0.wokenAt)])
             } ?? .null,
             "mergeRequestedAt": date(record.mergeRequestedAt),
             "mergeCancelledAt": date(record.mergeCancelledAt),

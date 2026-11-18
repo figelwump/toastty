@@ -1133,7 +1133,7 @@ final class SessionRuntimeStore: ObservableObject {
            let acceptedKind = acceptedRecord.status?.kind,
            Self.statusStartsNewWork(previousKind: previousRecord?.status?.kind, nextKind: acceptedKind) {
             reopenDoneWorkspaceIfNeeded(workspaceID: acceptedRecord.workspaceID, sessionID: sessionID, trigger: "turn_start")
-            taskCoordinator?.clearReplyRequest(taskSpaceWorkspaceID: acceptedRecord.workspaceID, sessionID: sessionID)
+            taskCoordinator?.clearMarksForNewWork(taskSpaceWorkspaceID: acceptedRecord.workspaceID, sessionID: sessionID)
         }
         // Turn boundaries also catch later title changes after the short
         // first-turn polling window has ended.

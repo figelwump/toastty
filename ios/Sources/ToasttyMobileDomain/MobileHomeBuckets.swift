@@ -53,7 +53,7 @@ public enum MobileHomeRow: Equatable, Sendable {
         case .subspace(let row):
             switch row.status {
             case .question, .error: return row.summary
-            case .ready, .needsApproval, .review, .working, .idle, .toShip, .done:
+            case .ready, .needsApproval, .review, .working, .idle, .waiting, .toShip, .done:
                 return row.task.flatMap(Self.needsYouDetail)
             }
         case .task(let task):
@@ -193,7 +193,7 @@ public enum MobileHomeBuckets {
         case .ready, .question, .needsApproval, .error: .needsYou
         case .review: .readyToReview
         case .working: .running
-        case .idle, .toShip, .done: .idle
+        case .idle, .waiting, .toShip, .done: .idle
         }
         guard let fromStage = row.task.flatMap(bucket) else { return fromStatus }
         return min(fromStatus, fromStage)
