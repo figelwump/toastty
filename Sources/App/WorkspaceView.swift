@@ -2334,6 +2334,15 @@ struct WorkspaceView: View {
         guard let terminalPanelID = Self.terminalTitleSourcePanelID(for: tab) else {
             return nil
         }
+        // A tab that shows the coordinator's terminal is named after it,
+        // not after the title its agent writes to the terminal.
+        if terminalPanelID == store.state.coordinator?.panelID {
+            return TerminalLiveTitleDisplayConfiguration(
+                liveTitleModel: terminalLiveTitleStore.model(for: terminalPanelID),
+                fallbackTitle: AppState.coordinatorWorkspaceTitle,
+                displayTitleForLiveTitle: { _ in AppState.coordinatorWorkspaceTitle }
+            )
+        }
 
         return TerminalLiveTitleDisplayConfiguration(
             liveTitleModel: terminalLiveTitleStore.model(for: terminalPanelID),
@@ -2351,9 +2360,11 @@ struct WorkspaceView: View {
     }
 
     private func workspaceTabDisplayTitle(for tab: WorkspaceTabState) -> String {
-        guard let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab),
-              let liveTitle = titleConfiguration.liveTitleModel.title else {
+        guard let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab) else {
             return tab.displayTitle
+        }
+        guard let liveTitle = titleConfiguration.liveTitleModel.title else {
+            return titleConfiguration.fallbackTitle
         }
 
         return titleConfiguration.displayTitleForLiveTitle(liveTitle)

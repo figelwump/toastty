@@ -538,9 +538,9 @@ chip and the task space's way back, clicks a link to no task, switches to the
 terminal and back, kills and relaunches the app, sends from a paired device
 (a seeded credential over loopback HTTP) with Remote Access on, and restarts
 the coordinator. It proves each step from Claude's transcript, the chat's own
-text and the CLI. It also checks that the terminal's header and the session
-title a paired device gets say "Coordinator", not the name Claude generates
-for the conversation.
+text and the CLI. It also checks that the terminal's header, its workspace tab
+and the session title a paired device gets say "Coordinator", not the name
+Claude generates for the conversation.
 
 It writes `remote-coordinator-chat-check.json`, the app log and Claude's
 transcripts under the run's artifacts directory. A build that can capture its

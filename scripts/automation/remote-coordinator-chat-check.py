@@ -41,7 +41,8 @@ that:
   coordinator's row unread, and showing the dock reads it; after the
   relaunch it shows again at its width;
 - the header's switch shows the terminal and the chat again, and the
-  terminal's header says "Coordinator", not the name Claude generated;
+  terminal's header and its workspace tab say "Coordinator", not the name
+  Claude generated;
 - after the app is killed and relaunched, the chat shows the same
   conversation and takes a message;
 - with Remote Access on, the device gets the session titled "Coordinator",
@@ -652,12 +653,17 @@ def run(check):
         header = wait_for('the terminal\'s header', lambda: ui.texts(f'panel.header.title.{panel}'), timeout=30)
         require(COORDINATOR_TITLE in header.splitlines() and not set(generated_names()) & set(header.splitlines()),
                 f'The terminal\'s header is not "{COORDINATOR_TITLE}": {header!r}; Claude\'s names: {generated_names()}')
+        # So is the workspace tab that shows the terminal.
+        tab_id = instance.query('workspace.snapshot', workspaceID=coordinator_id)['selectedTabID']
+        tab = wait_for('the workspace tab', lambda: ui.texts(f'workspace.tab.{tab_id}'), timeout=30)
+        require(COORDINATOR_TITLE in tab.splitlines() and not set(generated_names()) & set(tab.splitlines()),
+                f'The workspace tab is not "{COORDINATOR_TITLE}": {tab!r}; Claude\'s names: {generated_names()}')
         capture('terminal')
         ui.run('click', 'coordinator.panel.mode-toggle')
         wait_for('the chat again', lambda: ui.exists('coordinator.chat') and 'CHAT-ONE' in ui.texts(), timeout=30)
         capture('chat-after-terminal')
         step('the switch showed the terminal and the chat', terminal=((screen.get('result') or {}).get('text') or '')[-600:],
-             header=header, generatedNames=generated_names())
+             header=header, tab=tab, generatedNames=generated_names())
 
         # 13. Kill and relaunch with the chat open, now with Remote Access on.
         before = status()
