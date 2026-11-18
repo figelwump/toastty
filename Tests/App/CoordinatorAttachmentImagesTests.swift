@@ -20,24 +20,33 @@ struct CoordinatorAttachmentImagesTests {
         let conversations = fixture.conversations
         conversations.enableGateway()
         #expect(conversations.gatewayCapabilities().contains(.coordinatorAttachmentImages) == false)
-        conversations.service.installCoordinatorAttachmentImages()
+        conversations.service.installCoordinatorAttachmentImages(
+            folders: [fixture.controller.attachments.directoryURL, conversations.service.attachmentStoreDirectoryURL]
+        )
         #expect(conversations.gatewayCapabilities().contains(.coordinatorAttachmentImages))
         fixture.chat.show(panelID: fixture.panelID)
         try await fixture.waitUntil("the open prompt") {
             fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
         }
 
-        // One image attached on the Mac, from anywhere on it, and one that
-        // a phone sent, in the gateway's own store.
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("coordinator-images-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let onTheMac = folder.appendingPathComponent("crash screen.png")
+        // One image attached on the Mac, which the Mac copied into the
+        // coordinator's attachments folder; one that a phone sent, in the
+        // gateway's store; and one elsewhere on the Mac, which a sender
+        // typed into the message's list.
+        let macFolder = fixture.controller.attachments.directoryURL.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: macFolder, withIntermediateDirectories: true)
+        let onTheMac = macFolder.appendingPathComponent("crash screen.png")
         try Self.png(width: 1_600, height: 900).write(to: onTheMac)
-        let store = RemoteMessageAttachmentStore(
-            root: URL(filePath: conversations.runtimeHome).appendingPathComponent("remote-attachments", isDirectory: true))
+        let store = RemoteMessageAttachmentStore(root: conversations.service.attachmentStoreDirectoryURL)
         let staged = try await store.stage([RemoteMessageAttachment(filename: "Photo.png", data: Self.png(width: 300, height: 500))])
-        let message = RemoteAttachmentDeliveryText.text("Here is the crash screen.", paths: [onTheMac.path] + staged.files.map(\.path))
+        let elsewhere = FileManager.default.temporaryDirectory.appendingPathComponent("coordinator-images-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: elsewhere) }
+        let notAnAttachment = elsewhere.appendingPathComponent("private.png")
+        try Self.png(width: 200, height: 200).write(to: notAnAttachment)
+        let message = RemoteAttachmentDeliveryText.text(
+            "Here is the crash screen.", paths: [onTheMac.path] + staged.files.map(\.path) + [notAnAttachment.path]
+        )
         try fixture.runTurn(1, userText: message)
 
         let conversationID = try #require(conversations.conversationID(ofPanel: fixture.panelID))
@@ -60,6 +69,11 @@ struct CoordinatorAttachmentImagesTests {
         #expect(phoneImage.error == nil)
         #expect(phoneImage.pixelWidth == 300)
         #expect(phoneImage.pixelHeight == 500)
+
+        // A file outside Toastty's attachment folders is refused.
+        let typed = try await Self.image(conversations, conversationID, messageID, index: 2)
+        #expect(typed.error == .denied)
+        #expect(typed.data == nil)
 
         // Any other conversation is refused, also with the same message.
         let other = try await Self.image(conversations, RemoteConversationID(rawValue: UUID()), messageID, index: 0)

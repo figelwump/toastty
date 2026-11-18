@@ -425,6 +425,9 @@ public final class RemoteGatewayRequestHandler {
     /// `RemoteGatewayCapability.coordinatorAttachmentImages`. Invoked on
     /// the main thread.
     public var coordinatorConversationEventsHandler: ((RemoteConversationID) -> [ConversationEvent]?)?
+    /// The folders where Toastty stores the files attached to messages: the
+    /// only folders the attachment image route reads from.
+    public var coordinatorAttachmentFolders: [URL] = []
 
     /// Reads one image attached to a user message of the coordinator's
     /// chat. The device's read access can change between the request and
@@ -471,8 +474,10 @@ public final class RemoteGatewayRequestHandler {
         let path = try RemoteCoordinatorAttachmentImageReader.attachmentPath(
             in: events, eventID: request.eventID, index: request.attachmentIndex)
         let size = request.size
+        let folders = coordinatorAttachmentFolders
         let work = Task.detached(priority: .utility) { () throws -> Data in
-            let image = try RemoteCoordinatorAttachmentImageReader.image(atRecordedPath: path, size: size)
+            let image = try RemoteCoordinatorAttachmentImageReader.image(
+                atRecordedPath: path, size: size, allowedFolders: folders)
             try Task.checkCancellation()
             return try ConversationEventCoding.makeEncoder().encode(image)
         }

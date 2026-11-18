@@ -565,6 +565,8 @@ final class RemoteAccessService: ObservableObject {
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
     private let attachmentStore: RemoteMessageAttachmentStore
+    /// Where the gateway stores the files that devices send.
+    let attachmentStoreDirectoryURL: URL
     private let sendBridge = RemoteAccessSendBridge()
     private let questionAnswerBridge = RemoteAccessQuestionAnswerBridge()
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
@@ -793,7 +795,9 @@ final class RemoteAccessService: ObservableObject {
             RemoteAccessGatewayServer(handler: $0)
         }
     ) {
-        self.attachmentStore = RemoteMessageAttachmentStore(root: runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true))
+        let attachmentStoreDirectoryURL = runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true)
+        self.attachmentStoreDirectoryURL = attachmentStoreDirectoryURL
+        self.attachmentStore = RemoteMessageAttachmentStore(root: attachmentStoreDirectoryURL)
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
         self.annotationStyleStore = annotationStyleStore
@@ -982,7 +986,7 @@ final class RemoteAccessService: ObservableObject {
         if let coordinatorController = taskBoard?.coordinator?.coordinatorController {
             installCoordinatorChatRead(coordinatorController.chatReadThrough)
             installCoordinatorQuietDigests(from: coordinatorController)
-            installCoordinatorAttachmentImages()
+            installCoordinatorAttachmentImages(folders: [coordinatorController.attachments.directoryURL, attachmentStoreDirectoryURL])
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -2266,10 +2270,12 @@ final class RemoteAccessService: ObservableObject {
     }
 
     /// Serves paired devices the images attached to the messages of the
-    /// coordinator's chat, so their chats show them as the Mac's does.
-    /// Installing it advertises `coordinatorAttachmentImages`. The app
-    /// installs it once, at launch, with the coordinator.
-    func installCoordinatorAttachmentImages() {
+    /// coordinator's chat, so their chats show them as the Mac's does, from
+    /// `folders` only: where Toastty stores attached files. Installing it
+    /// advertises `coordinatorAttachmentImages`. The app installs it once,
+    /// at launch, with the coordinator.
+    func installCoordinatorAttachmentImages(folders: [URL]) {
+        handler.coordinatorAttachmentFolders = folders
         handler.coordinatorConversationEventsHandler = { [coordinatorConversationEventsBridge] conversationID in
             coordinatorConversationEventsBridge.events(conversationID)
         }

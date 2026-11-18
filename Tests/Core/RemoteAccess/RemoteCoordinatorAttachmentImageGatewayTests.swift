@@ -133,7 +133,7 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         defer { folder.remove() }
         let wide = try folder.png("wide screenshot.png", width: 3_000, height: 1_000, opaque: true)
         let clear = try folder.png("icon.png", width: 800, height: 800, opaque: false)
-        let fixture = try Fixture(paths: [wide, clear, folder.file("notes.txt", Data("hi".utf8))])
+        let fixture = try Fixture(paths: [wide, clear, folder.file("notes.txt", Data("hi".utf8))], allowedFolders: [folder.root])
 
         let thumbnail = try await fixture.image(index: 0, size: .thumbnail)
         #expect(thumbnail.mimeType == "image/jpeg")
@@ -180,7 +180,7 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         let fixture = try Fixture(paths: [
             image, link.path, linkedFolder.appendingPathComponent("secret.png").path,
             renamedText, text, missing, huge.path,
-        ])
+        ], allowedFolders: [folder.root])
         // The message's own image is served, so each refusal is about the
         // request.
         #expect(try await fixture.image(index: 0, size: .thumbnail).pixelWidth == 40)
@@ -207,6 +207,35 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         // also for the image it could read before.
         #expect(try fixture.store.revokeDevice(fixture.deviceID, at: Support.now))
         #expect(try await fixture.refusal(index: 0) == .denied)
+    }
+
+    /// Only a file that Toastty stored as an attachment can be read: a path
+    /// that a sender typed into a message, or that a message's stored paths
+    /// name, outside Toastty's attachment folders is refused, and a message
+    /// that another sender brought (`toastty task send`) lists no files.
+    @Test func anImageOutsideToasttysAttachmentFoldersIsRefusedWhoeverNamesIt() async throws {
+        let attachments = try Folder()
+        defer { attachments.remove() }
+        let elsewhere = try Folder()
+        defer { elsewhere.remove() }
+        let stored = try attachments.png("stored.png", width: 40, height: 30, opaque: true)
+        let other = try elsewhere.png("Desktop/private.png", width: 40, height: 30, opaque: true)
+        let fromATask = CoordinatorMessageHeader.message(
+            from: .task(id: UUID(), title: "early-session-titles"),
+            text: RemoteAttachmentDeliveryText.text("Look at this", paths: [stored])
+        )
+        let fixture = try Fixture(
+            paths: [stored, other], phonePaths: [other], senderText: fromATask, allowedFolders: [attachments.root]
+        )
+        // The stored file is served, so each refusal is about the path.
+        #expect(try await fixture.image(index: 0, size: .thumbnail).pixelWidth == 40)
+        // Typed into a message's list of files.
+        #expect(try await fixture.refusal(index: 1) == .denied)
+        // Named by a message's stored paths.
+        #expect(try await fixture.refusal(eventID: "phone", index: 0) == .denied)
+        // A message that another sender brought lists no files, even one
+        // that Toastty stored.
+        #expect(try await fixture.refusal(eventID: "sender", index: 0) == .denied)
     }
 
     @Test func anImageThatWouldDecodeToMorePixelsThanTheLimitIsRefused() throws {
@@ -243,7 +272,7 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
         let deviceID: UUID
 
         @MainActor
-        init(paths: [String]) throws {
+        init(paths: [String], phonePaths: [String]? = nil, senderText: String? = nil, allowedFolders: [URL]) throws {
             let message = CoordinatorMessageHeader.quickEntryMessage(
                 .init(project: .init(id: UUID(), title: "toastty"), agent: "claude"),
                 text: "Here is the crash screen.",
@@ -258,12 +287,13 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
             // the file in its text and keeps the stored path apart.
             let fromThePhone = ConversationUserMessagePayload(
                 text: "From the phone\n[Attachment: Photo-3213AEE3.jpg]", origin: .remote,
-                clientRequestID: "phone-1", attachmentPaths: [paths[0]]
+                clientRequestID: "phone-1", attachmentPaths: phonePaths ?? [paths[0]]
             )
             let coordinatorEvents = [
                 event(coordinatorConversationID, "user", .userMessage(.init(text: message, origin: .remote))),
                 event(coordinatorConversationID, "assistant", .assistantMessage(.init(text: message, phase: .final))),
                 event(coordinatorConversationID, "phone", .userMessage(fromThePhone)),
+                event(coordinatorConversationID, "sender", .userMessage(.init(text: senderText ?? message, origin: .remote))),
             ]
             let (handler, store, _) = Support.makeHandler()
             // The Mac answers only for the coordinator's conversation; the
@@ -271,6 +301,7 @@ struct RemoteCoordinatorAttachmentImageGatewayTests {
             handler.coordinatorConversationEventsHandler = { conversationID in
                 conversationID == coordinatorConversationID ? coordinatorEvents : nil
             }
+            handler.coordinatorAttachmentFolders = allowedFolders
             let native = try Support.nativeCredential(
                 handler: handler, store: store, identity: RemoteCoordinatorAttachmentImageGatewayTests.identity)
             #expect(try store.setScopes([.read], forDevice: native.device.id) == true)

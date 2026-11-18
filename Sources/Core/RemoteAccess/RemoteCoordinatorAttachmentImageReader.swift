@@ -12,6 +12,11 @@ import UniformTypeIdentifiers
 ///   comes from this Mac's own copy of that user message, read with the
 ///   parser that the Mac's chat uses, so only a file that a user message of
 ///   the chat lists can be read.
+/// - The file must be one that Toastty stored as an attachment: inside one
+///   of `allowedFolders` (the coordinator's attachments folder, where the
+///   Mac copies the files the user attaches, and the gateway's store of
+///   files that devices send). A path that a sender typed into a message
+///   cannot reach any other file.
 /// - The file must have an image's extension, as the Mac's chat requires
 ///   to draw a thumbnail, and be a regular file at that path: a symbolic
 ///   link anywhere in the path is refused, so the path cannot lead to
@@ -44,7 +49,8 @@ public enum RemoteCoordinatorAttachmentImageReader {
     /// reads the file and decodes it.
     public static func image(
         atRecordedPath recordedPath: String,
-        size: RemoteCoordinatorAttachmentImageRequest.Size
+        size: RemoteCoordinatorAttachmentImageRequest.Size,
+        allowedFolders: [URL]
     ) throws -> RemoteCoordinatorAttachmentImageResponse {
         let fileExtension = URL(fileURLWithPath: recordedPath).pathExtension
         guard UTType(filenameExtension: fileExtension)?.conforms(to: .image) == true else {
@@ -53,6 +59,11 @@ public enum RemoteCoordinatorAttachmentImageReader {
         // The path as written, with no symbolic link in it: the Mac's
         // system aliases (/tmp, /var, /etc) only.
         let path = try RemotePreviewFileReader.authorityPath(recordedPath)
+        let insideAllowedFolder = allowedFolders.contains { folder in
+            guard let root = try? RemotePreviewFileReader.canonicalPath(folder.path(percentEncoded: false)) else { return false }
+            return RemotePreviewFileReader.isWithin(path, root: root)
+        }
+        guard insideAllowedFolder else { throw RemotePreviewError.denied }
         let snapshot = try RemotePreviewFileReader.read(
             path: path, maximumBytes: RemoteCoordinatorAttachmentImagePolicy.maximumSourceBytes)
         try Task.checkCancellation()
