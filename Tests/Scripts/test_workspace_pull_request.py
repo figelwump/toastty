@@ -656,9 +656,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         branch, path = self.task(1)
         result = self.run_script("clean-up", 1, worktree=path, worktree_branch="another-branch")
         self.assertEqual(result["status"], "skipped", result)
-        self.assertEqual(result["refusal"], "branch-mismatch", result)
-        self.assertIn(branch, result["detail"])
-        self.assertIn("another-branch", result["detail"])
+        self.assertIn("recorded branch", result["detail"])
         self.git("checkout", "-q", "-b", "another-branch", cwd=path)
         result = self.run_script("clean-up", 1, worktree=path)
         self.assertEqual(result["status"], "skipped", result)
@@ -666,6 +664,83 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertTrue(self.remote_has(branch))
         self.assertEqual(self.closed(), [])
+
+    def task_on_another_branch(self):
+        pr_branch, path = self.task(1)
+        task_branch = "task-checkout"
+        self.git("branch", "-m", task_branch, cwd=path)
+        self.workspaces[-1]["annotations"] = [{"key": "github-pr", "url": self.prs[-1]["url"]}]
+        return pr_branch, task_branch, path
+
+    def test_cleanup_another_branch_keeps_both_remote_branches_and_the_local_pr_branch(self):
+        pr_branch, task_branch, path = self.task_on_another_branch()
+        head = self.git("rev-parse", "HEAD", cwd=path)
+        self.git("branch", pr_branch, head)
+        # The task and PR tips differ, and the task tip is on origin.
+        task_head = self.commit(path, "pushed from the task")
+        self.git("push", "-q", "origin", task_branch, cwd=path)
+
+        result = self.run_script("clean-up", 1, worktree=path, worktree_branch=task_branch)
+        self.assertEqual(result["status"], "cleaned", result)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("branch", "--list", task_branch), "")
+        self.assertEqual(self.git("rev-parse", pr_branch), head)
+        self.assertTrue(self.git("ls-remote", "--heads", "origin", pr_branch).startswith(head))
+        self.assertTrue(self.git("ls-remote", "--heads", "origin", task_branch).startswith(task_head))
+
+    def test_cleanup_another_branch_keeps_commits_no_longer_on_origin(self):
+        pr_branch, task_branch, path = self.task_on_another_branch()
+        task_head = self.commit(path, "only in the task")
+        self.git("push", "-q", "origin", task_branch, cwd=path)
+        # A stale tracking ref must not count as a remote copy.
+        self.git("--git-dir", str(self.origin), "update-ref", "-d", f"refs/heads/{task_branch}")
+        self.assertEqual(self.git("rev-parse", f"origin/{task_branch}"), task_head)
+
+        result = self.run_script("clean-up", 1, worktree=path, worktree_branch=task_branch)
+        self.assertEqual(result["status"], "cleaned", result)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.git("rev-parse", task_branch), task_head)
+        self.assertTrue(self.remote_has(pr_branch))
+
+    def test_cleanup_another_branch_keeps_a_worktree_switched_at_close(self):
+        pr_branch, task_branch, path = self.task_on_another_branch()
+        # Switching branches at the same commit must invalidate the selection.
+        self.git("branch", pr_branch, "HEAD", cwd=path)
+        self.extra_state["branch_on_close"] = {str(path): pr_branch}
+
+        result = self.run_script("clean-up", 1, worktree=path, worktree_branch=task_branch)
+        self.assertEqual(result["status"], "partial", result)
+        self.assertIn("recorded branch", result["detail"])
+        self.assertTrue(path.exists())
+        self.assertTrue(self.remote_has(pr_branch))
+        self.assertEqual(len(self.closed()), 1)
+
+    def test_cleanup_another_branch_stops_if_documents_or_the_pr_link_change(self):
+        _, task_branch, path = self.task_on_another_branch()
+        workspace = self.workspaces[-1]
+        for changed_workspace, reason in (
+            (dict(workspace, unsavedDocumentCount=1), "unsaved document changes"),
+            (dict(workspace, annotations=[{"key": "github-pr", "url": "https://github.com/test/repo/pull/2"}]),
+             "exact URL"),
+        ):
+            with self.subTest(reason=reason):
+                self.extra_state["later_workspaces"] = [changed_workspace]
+                result = self.run_script("clean-up", 1, worktree=path, worktree_branch=task_branch)
+                self.assertIn(result["status"], ("stopped", "skipped"), result)
+                self.assertIn(reason, result["detail"])
+                self.assertTrue(path.exists())
+                self.assertEqual(self.closed(), [])
+
+    def test_cleanup_another_branch_recovers_absent_worktree_without_touching_branches(self):
+        pr_branch, task_branch, path = self.task_on_another_branch()
+        self.git("worktree", "remove", str(path))
+        self.workspaces[-1]["terminalCwds"] = [str(self.root)]
+
+        result = self.run_script("clean-up", 1, repo=self.repo, worktree=path, worktree_branch=task_branch)
+        self.assertEqual(result["status"], "cleaned", result)
+        self.assertIn("kept all branches", result["detail"])
+        self.assertTrue(self.remote_has(pr_branch))
+        self.assertNotEqual(self.git("branch", "--list", task_branch), "")
 
     def test_cleanup_recorded_path_preserves_detached_cleanup(self):
         for number, at_merge in ((1, False), (2, True)):

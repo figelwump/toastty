@@ -2493,11 +2493,10 @@ when GitHub merged it: the cleanup waits for its turn to end, and a new turn
 or a link to another pull request keeps the task space open. The worktree
 must be clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
-When the task's worktree is on another branch than the pull request, as when
-a task updates an existing pull request, the cleanup cannot match a branch to
-delete and stops with both branch names. **Clean Up** then removes the
-worktree, and its local branch when the remote has every commit, with
-Archive's checks. Both branches stay on GitHub, and the task stays Done.
+When the task's recorded worktree is on another branch than the pull request,
+Toastty can remove that clean checkout after the same wait. It keeps the
+pull request's local branch and both branches on GitHub. It removes the
+local task branch only if it can verify that its commits are on origin.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
 space must have one exact PR link, remain marked done, and have no unsaved

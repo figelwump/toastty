@@ -515,10 +515,9 @@ Notable action-specific behavior:
     merges, after the pull request merged, or when no merge is under way.
 - `task.clean-up`
   - requires `args.taskID`. Retries a cleanup that stopped after a merge, an
-    archive or a release. When the merge's cleanup stopped because the task's
-    worktree is on another branch than the pull request, it removes the
-    worktree and the local branch with an archive's checks instead, and
-    keeps both branches on the remote.
+    archive or a release. When the recorded worktree branch differs from the
+    merged pull request's branch, cleanup keeps both remote branches and
+    removes the local task branch only if it can verify its commits on origin.
 - `task.ready-for-review`, `task.needs-reply`, `task.mark-done`
   - `task.ready-for-review` takes optional `taskID`, sets
     `readyForReviewAt`, and clears a reply request. `task.needs-reply` takes
@@ -1083,6 +1082,9 @@ Supported action IDs:
 - `workspace.rename`
   - requires `args.title`
 - `workspace.close`
+  - `args.requireDone=true` requires the workspace to still be marked done.
+  - Optional `args.requirePullRequest` requires the workspace to still link to
+    that pull request URL and have no unsaved document changes.
 - `workspace.split.horizontal`
 - `workspace.split.vertical`
 - `workspace.split.right`
