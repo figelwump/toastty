@@ -2130,6 +2130,7 @@ struct RemoteAccessServiceSafetyTests {
             Issue.record("Expected confirmed prompt during replay")
             return
         }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
         fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
         let request = RemoteMessageSendRequest(
             conversationID: fixture.conversationID, clientRequestID: "wake-after-resume",

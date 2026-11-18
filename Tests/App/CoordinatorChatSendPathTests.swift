@@ -95,19 +95,18 @@ struct CoordinatorChatSendPathTests {
 
     @MainActor
     @Test func reopeningChatAfterReplayDoesNotWaitForAnExpiredSend() async throws {
-        let fixture = try CoordinatorChatFixture(
-            initialUserMessages: ["Old prompt"], sendConfirmationTimeout: .milliseconds(100)
-        )
+        let fixture = try CoordinatorChatFixture(sendConfirmationTimeout: .milliseconds(100))
         defer { fixture.tearDown() }
         let subscription = fixture.conversations.service.subscribeToConversation(inPanel: fixture.panelID)
         defer { subscription.cancel() }
         fixture.chat.show(panelID: fixture.panelID)
         try await fixture.waitUntil("the open prompt and the end of replay") {
             fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
-                && fixture.chat.presentation.rows.isEmpty == false
+                && fixture.chat.presentation.phase == .live
+                && subscription.isReadingInitialTranscript == false
         }
         let firstReadID = subscription.transcriptReadID
-        try #require(fixture.controller.send(Self.digest, id: "wake").wasTyped)
+        try #require(fixture.controller.send(Self.digest, queueWhenHeld: false, id: "wake").wasTyped)
         #expect(fixture.chat.presentation.sendItems.map(\.clientRequestID) == ["wake"])
         fixture.chat.hide()
         try await fixture.waitUntil("the host's unconfirmed receipt") {
@@ -129,7 +128,11 @@ struct CoordinatorChatSendPathTests {
             }
         }
         fixture.chat.show(panelID: fixture.panelID)
-        #expect(fixture.chat.presentation.rows.last?.content
+        let latestQuestion = fixture.chat.presentation.rows.last {
+            if case .userMessage = $0.content { return true }
+            return false
+        }
+        #expect(latestQuestion?.content
             == .userMessage(text: "New question", origin: .unknown, deliveryMode: nil))
         #expect(fixture.chat.presentation.sendItems.isEmpty)
     }
