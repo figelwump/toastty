@@ -155,6 +155,12 @@ struct ToasttyConversationScreen: View {
                     } : nil,
                     newMessages: newMessages
                 )
+                // The phone has a transcript only while the conversation is
+                // open, and each opening loads it again; another tab, or a
+                // screen pushed over it, closes it. Each load gets a new
+                // transcript view, which opens where a chat opens. The old
+                // view kept the position of the emptied transcript: its top.
+                .id(presentation != nil)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     ToasttyConversationComposerBar(
                         conversation: conversation,

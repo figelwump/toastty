@@ -2111,6 +2111,51 @@ struct RemoteAccessServiceSafetyTests {
         #expect(unaffectedPayload.text == pendingText)
     }
 
+    @MainActor
+    @Test func claudeHistoryCannotConsumeTheFirstSendAfterResume() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        let wake = "[Toastty] Wake: test digest\n- Scheduled check"
+        let path = URL(filePath: fixture.resumeRecord.sessionFilePath)
+        let beforeLaunch = fixture.confirmedAt.addingTimeInterval(-60)
+        var transcript = try Self.claudeUserLine("Old prompt", id: "old-other", at: beforeLaunch)
+        transcript.append(try Self.claudeUserLine(wake, id: "old-identical", at: beforeLaunch))
+        try transcript.write(to: path)
+
+        let subscription = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
+        defer { subscription.cancel() }
+        try #require(fixture.confirmCurrentLaunchBinding())
+        try #require(subscription.isReadingInitialTranscript)
+        guard case .openPrompt(let epoch)? = subscription.snapshot(at: .now)?.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt during replay")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "wake-after-resume",
+            expectedInputEpoch: epoch, text: wake
+        )
+        try #require(subscription.send(request, byUser: false) == .accepted(epoch: epoch))
+        let wrapped = "<pasted_content id=\"abcd\">\n\(wake)\n</pasted_content id=\"abcd\">"
+        let handle = try FileHandle(forWritingTo: path)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Self.claudeUserLine(wrapped, id: "new-wake"))
+
+        try await Self.waitForReceipt(request.clientRequestID, mode: nil, in: fixture)
+        guard case .page(let page) = subscription.events(before: nil, limit: 20) else {
+            Issue.record("Expected replayed Claude transcript")
+            return
+        }
+        let messages = page.events.compactMap { event -> ConversationUserMessagePayload? in
+            guard case .userMessage(let payload) = event.payload else { return nil }
+            return payload
+        }
+        #expect(messages.map(\.text) == ["Old prompt", wake, wake])
+        #expect(messages.map(\.clientRequestID) == [nil, nil, request.clientRequestID])
+    }
+
     @Test func pendingSendCorrelationRemainsFIFOAndExpiresOldestMismatch() throws {
         let conversationID = RemoteConversationID()
         var correlator = RemotePendingSendCorrelator()
@@ -2324,6 +2369,25 @@ struct RemoteAccessServiceSafetyTests {
         ))
 
         #expect(panelLabelTitle != "Build system explanation")
+        #expect(fixture.summary.title == "Build system explanation")
+
+        // The coordinator's session is always "Coordinator", also when its
+        // terminal becomes the coordinator's after the agent started there,
+        // as on a restart into a new terminal.
+        let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
+        fixture.sessionRuntimeStore.bind(store: fixture.store)
+        defer { fixture.sessionRuntimeStore.unbind() }
+        #expect(fixture.summary.title == "Build system explanation")
+        #expect(fixture.store.send(.restoreCoordinatorWorkspace(workspaceID: workspaceID, panelID: fixture.panelID)))
+        #expect(fixture.summary.title == AppState.coordinatorWorkspaceTitle)
+
+        // A terminal moved out of the coordinator's workspace is no longer
+        // the coordinator's, and its session gets its own name back.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "Other", activate: false)))
+        let otherID = try #require(fixture.store.state.windows.first?.workspaceIDs.first { $0 != workspaceID })
+        #expect(fixture.store.send(.movePanelToWorkspace(panelID: fixture.panelID, targetWorkspaceID: otherID, targetSlotID: nil)))
+        #expect(fixture.store.state.coordinator?.panelID != fixture.panelID)
         #expect(fixture.summary.title == "Build system explanation")
     }
 
@@ -4435,11 +4499,11 @@ extension RemoteAccessServiceSafetyTests {
         Data((#"{"timestamp":"\#(timestamp)","type":"event_msg","payload":\#(payload)}"# + "\n").utf8)
     }
 
-    private static func claudeUserLine(_ text: String, id: String) throws -> Data {
+    private static func claudeUserLine(_ text: String, id: String, at timestamp: Date = .now) throws -> Data {
         try claudeLine([
             "type": "user", "uuid": id, "promptId": id,
             "message": ["role": "user", "content": text], "origin": ["kind": "human"],
-        ])
+        ], at: timestamp)
     }
 
     private static func claudeSteerLines(_ text: String, id: String) throws -> Data {
@@ -4459,9 +4523,9 @@ extension RemoteAccessServiceSafetyTests {
         return data
     }
 
-    private static func claudeLine(_ fields: [String: Any]) throws -> Data {
+    private static func claudeLine(_ fields: [String: Any], at timestamp: Date = .now) throws -> Data {
         var record = fields
-        record["timestamp"] = "2026-08-07T10:00:05.000Z"
+        record["timestamp"] = timestamp.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
         var data = try JSONSerialization.data(withJSONObject: record)
         data.append(UInt8(ascii: "\n"))
         return data
