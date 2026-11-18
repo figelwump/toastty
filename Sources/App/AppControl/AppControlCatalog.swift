@@ -258,12 +258,20 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 kind: .action,
                 summary: "Close a workspace. Its task spaces stay open as top-level workspaces.",
                 selectors: [.windowID, .workspaceID],
-                parameters: [.init(
-                    name: "requireDone",
-                    summary: "true to refuse unless the workspace is still marked done: new work since the mark was set clears it.",
-                    valueType: .boolean,
-                    required: false
-                )]
+                parameters: [
+                    .init(
+                        name: "requireDone",
+                        summary: "true to refuse unless the workspace is still marked done: new work since the mark was set clears it.",
+                        valueType: .boolean,
+                        required: false
+                    ),
+                    .init(
+                        name: "requirePullRequest",
+                        summary: "Only close if the workspace still links to this pull request and has no unsaved documents.",
+                        valueType: .string,
+                        required: false
+                    ),
+                ]
             )
         case .workspaceTabCreate:
             return .init(id: rawValue, kind: .action, summary: "Create a terminal tab and return workspaceID, tabID and panelID. Managed callers default to their own workspace.", selectors: [.windowID, .workspaceID], parameters: [.terminalCreationActivation(required: false)], aliases: aliases)

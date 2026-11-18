@@ -439,25 +439,7 @@ extension TaskCoordinator {
         if let taskSpaceID = record.taskSpaceWorkspaceID,
            let request = merges?.request(workspaceID: taskSpaceID),
            case .failed = request.phase {
-            guard request.stoppedOnBranchMismatch == true else {
-                merges?.retryCleanup(workspaceID: taskSpaceID)
-                return
-            }
-            // The script deletes only the pull request's branch, and the
-            // worktree is on another one, so a retry would stop again.
-            // Remove the worktree and its local branch the way closing a
-            // merged task's space does, with an archive's checks. Both
-            // branches stay on the remote, and the task stays merged.
-            guard agentInTurn(workspaceID: taskSpaceID) == false else {
-                throw TaskError("The agent is still working. Clean up once its turn ends.")
-            }
-            merges?.handOverStoppedCleanup(workspaceID: taskSpaceID)
-            try saveMergeState(taskID: taskID) {
-                var cleanup = TaskCleanup(kind: .merge)
-                cleanup.removesWorktreeDirectly = true
-                $0.cleanup = cleanup
-            }
-            startTeardown(taskID: taskID, kind: .merge, options: TaskArchiveOptions())
+            merges?.retryCleanup(workspaceID: taskSpaceID, afterMerge: record.mergedAt != nil)
             return
         }
         guard let cleanup = record.cleanup, cleanup.problem != nil else {

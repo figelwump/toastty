@@ -194,9 +194,10 @@ On GitHub:
   the branch 24 hours after the merge, at the first check when no agent turn
   runs. `toastty task get` reports that time as `cleanup.taskSpaceClosesAt`.
   A new turn in the task space after the merge, or a `github-pr` link to
-  another pull request, keeps the task space open. A worktree on another
-  branch than the pull request's, as when the task updates an existing pull
-  request, stops the cleanup until the user chooses Clean Up.
+  another pull request, keeps the task space open. When the recorded worktree
+  is on a different branch, cleanup keeps the pull request's local branch and
+  both remote branches. It keeps the local task branch if it cannot verify
+  that its commits are on origin.
 
 In a repository without pull requests, report the verified commit instead.
 
