@@ -36,7 +36,7 @@ struct CoordinatorAttachmentImagesTests {
         try Self.png(width: 1_600, height: 900).write(to: onTheMac)
         let store = RemoteMessageAttachmentStore(
             root: URL(filePath: conversations.runtimeHome).appendingPathComponent("remote-attachments", isDirectory: true))
-        let staged = try store.stage([RemoteMessageAttachment(filename: "Photo.png", data: Self.png(width: 300, height: 500))])
+        let staged = try await store.stage([RemoteMessageAttachment(filename: "Photo.png", data: Self.png(width: 300, height: 500))])
         let message = RemoteAttachmentDeliveryText.text("Here is the crash screen.", paths: [onTheMac.path] + staged.files.map(\.path))
         try fixture.runTurn(1, userText: message)
 
