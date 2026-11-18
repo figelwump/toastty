@@ -2062,8 +2062,9 @@ def sender_reply_webhook(run):
                   all(set(e['reply']) == {'id', 'messageID', 'from'} and set(e) - {'header_event_id'} ==
                       {'version', 'eventID', 'type', 'occurredAt', 'webhook', 'reply'}
                       and not any(r['text'][:40] in json.dumps(e) for r in replies) for e in events), events)
+        # The header writes the UUID in lowercase, as for task events.
         run.check('the Toastty-Event-ID header repeats the event ID',
-                  all(e['header_event_id'] == e['eventID'] for e in events), events)
+                  all((e['header_event_id'] or '').lower() == e['eventID'].lower() for e in events), events)
     finally:
         receiver.close()
 
