@@ -458,14 +458,18 @@ struct SidebarGroupTitle: View {
 
 /// "› TO SHIP 3", which expands and collapses a To ship group in place: the
 /// one under each project card. While
-/// collapsed, `summary` shows on the right.
+/// collapsed, `summary` shows on the right. A project card's "› DONE 91"
+/// uses it too, with `group` `.done`.
 struct SidebarToShipGroupToggle: View {
     let count: Int
     @Binding var isExpanded: Bool
     var summary: Text?
-    /// Shows the purple To ship mark before the title. A project card uses
-    /// it because its line has no purple project summary.
+    /// Shows the group's mark before the title: purple To ship, or the
+    /// green Done check. A project card uses it because its line has no
+    /// purple project summary.
     var showsMark = false
+    /// `.toShip` or `.done`.
+    var group: TaskStage.Group = .toShip
     /// What the toggle says; starts with `label(count:isExpanded:)`.
     let accessibilityText: String
 
@@ -482,12 +486,15 @@ struct SidebarToShipGroupToggle: View {
                     .font(.system(size: 8, weight: .bold))
                     .frame(width: 9)
                 if showsMark {
-                    // The same mark as the card's old "To ship N" count.
-                    Image(systemName: "arrow.up.square")
+                    // The same mark as the card's "To ship N" and "Done N"
+                    // counts.
+                    Image(systemName: group == .done ? "checkmark.square" : "arrow.up.square")
                         .font(ToastyTheme.fontWorkspaceSessionChip)
-                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                        .foregroundStyle(
+                            group == .done ? ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85) : ToastyTheme.sidebarTaskToShipMark
+                        )
                 }
-                SidebarGroupTitle(title: "To ship", count: count)
+                SidebarGroupTitle(title: group == .done ? "Done" : "To ship", count: count)
                     .layoutPriority(1)
                 Spacer(minLength: 8)
                 if isExpanded == false, let summary {
@@ -501,7 +508,9 @@ struct SidebarToShipGroupToggle: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(isExpanded ? "Hide the tasks to ship" : "Show the tasks to ship")
+        .help(group == .done
+            ? (isExpanded ? "Hide the done tasks" : "Show the done tasks whose task spaces are still open")
+            : (isExpanded ? "Hide the tasks to ship" : "Show the tasks to ship"))
         .accessibilityLabel(accessibilityText)
         .accessibilityAddTraits(.isHeader)
         .background {
