@@ -140,7 +140,8 @@ Remote wrappers generate a unique label by default. An explicit `--run-label`
 must use 1–128 letters, numbers, dots, underscores, or hyphens, starting with a
 letter or number. Each label is for one run: the wrappers refuse existing local
 artifact directories and remote run or worktree directories. Choose a new label
-for a retry. A sibling `<worktree>.allocation-lock` directory keeps allocation
+for a retry. The wrappers use `/usr/bin/python3` on both hosts to create
+these directories exclusively. A sibling `<worktree>.allocation-lock` directory keeps allocation
 exclusive while Git creates the worktree, including validation and test runs
 that share the remote worktree root. It is removed when allocation exits. If a
 process is killed before it can remove the reservation, use a new label and
