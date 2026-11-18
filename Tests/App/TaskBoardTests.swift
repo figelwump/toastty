@@ -1399,6 +1399,42 @@ struct TaskBoardTests {
         let waiting = try item()
         #expect(waiting.stage == .running)
         #expect(TaskBoardPresentation.statusLine(waiting) == "Codex · waiting for \(other.title)")
+
+        // The Tasks view lists it as the sidebar lists its task space's row:
+        // in Needs you with the ready square while the turn is unread, and
+        // back in Running once it is read. The stage stays Running.
+        #expect(waiting.taskSpaceStatus == .ready)
+        #expect(TaskBoardPresentation.showsUnreadTurnOverStage(waiting))
+        #expect(TaskBoardPresentation.tasksViewStatusLine(waiting) == "Codex finished · waiting for you")
+        let unreadView = TasksViewSections.make(board.items())
+        #expect(unreadView.needsYou.map(\.id) == [.task(task.id)])
+        #expect(unreadView.running.map(\.id).contains(.task(task.id)) == false)
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        let waitingRead = try item()
+        #expect(waitingRead.stage == .running)
+        #expect(TaskBoardPresentation.showsUnreadTurnOverStage(waitingRead) == false)
+        #expect(TaskBoardPresentation.tasksViewStatusLine(waitingRead) == "Codex · waiting for \(other.title)")
+        let readView = TasksViewSections.make(board.items())
+        #expect(readView.needsYou.isEmpty)
+        #expect(readView.running.map(\.id).contains(.task(task.id)))
+
+        // Once its project closes, the task space is a top-level workspace
+        // with no row under a project, and the sidebar lists the task by its
+        // stage alone. So does the Tasks view, even with a new unread turn.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .working, summary: "Working"), at: endedAt.addingTimeInterval(5)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .ready, summary: "Ready"), at: endedAt.addingTimeInterval(6)
+        )
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: "restored-\(session)"))
+        #expect(TasksViewSections.make(board.items()).needsYou.map(\.id) == [.task(task.id)])
+        #expect(fixture.store.send(.closeWorkspace(workspaceID: fixture.workspaceID)))
+        let topLevel = try item()
+        #expect(topLevel.stage == .running)
+        #expect(topLevel.hasUnreadTurn)
+        #expect(topLevel.taskSpaceStatus == nil)
+        #expect(TasksViewSections.make(board.items()).running.map(\.id).contains(.task(task.id)))
     }
 
     @Test func aQuestionWaitsInNeedsYouUntilTheTasksAgentStartsNewWork() async throws {
@@ -1756,6 +1792,55 @@ struct TaskBoardTests {
         #expect(view.readyToReview.map(\.item.title) == ["marked-ready"])
         // Needs you, then Ready to review, in the list and for arrow keys.
         #expect(view.all.map(\.item.title) == ["review-parent", "asking-child", "setup-failed", "marked-ready"])
+    }
+
+    /// A task whose agent ended its turn to wait on another task lists in
+    /// Needs you while that turn is unread, as the sidebar lists its task
+    /// space's row, and its family follows it there. Read, it lists in
+    /// Running again.
+    @Test func tasksViewListsAWaitingTaskWithAnUnreadTurnInNeedsYou() {
+        let parentID = UUID()
+        func waitingParent(unread: Bool) -> TaskBoardItem {
+            var parent = statusItem("waiting-parent", taskID: parentID, stage: .running)
+            parent.waitingOnTitle = "working-child"
+            parent.hasUnreadTurn = unread
+            parent.taskSpaceStatus = unread ? .ready : .idle
+            return parent
+        }
+        var working = statusItem("working-child", parent: parentID, stage: .running)
+        working.agent = .working
+        working.taskSpaceStatus = .working
+        let reviewing = statusItem("review-child", parent: parentID, stage: .needsYou(.review))
+        let other = statusItem("other-running", stage: .running)
+
+        let unread = TasksViewSections.make([waitingParent(unread: true), working, reviewing, other])
+        // The parent's unread turn puts its family in Needs you; the child
+        // that waits for review lists under it, dimmed. A child whose own
+        // row is running stays in Running.
+        #expect(unread.needsYou.map(\.item.title) == ["waiting-parent", "review-child"])
+        #expect(unread.needsYou.map(\.isLinkedChild) == [false, true])
+        #expect(unread.needsYou.map(\.isContext) == [false, true])
+        #expect(unread.readyToReview.isEmpty)
+        #expect(unread.running.map(\.item.title) == ["working-child", "other-running"])
+        #expect(TaskBoardPresentation.tasksViewStatusLine(unread.needsYou[0].item) == "The agent finished · waiting for you")
+        // Arrow keys and the first-row selection follow the new order.
+        #expect(unread.all.first?.item.title == "waiting-parent")
+
+        let read = TasksViewSections.make([waitingParent(unread: false), working, reviewing, other])
+        #expect(read.needsYou.isEmpty)
+        #expect(read.readyToReview.map(\.item.title) == ["review-child"])
+        #expect(read.running.map(\.item.title) == ["waiting-parent", "working-child", "other-running"])
+        #expect(read.running.map(\.isLinkedChild) == [false, true, false])
+        #expect(TaskBoardPresentation.tasksViewStatusLine(read.running[0].item) == "The agent · waiting for working-child")
+
+        // A merge under way keeps its line while its unread turn lists it
+        // in Needs you.
+        var merging = statusItem("merging", stage: .running)
+        merging.merge = .waitingForChecks
+        merging.hasUnreadTurn = true
+        merging.taskSpaceStatus = .ready
+        #expect(TasksViewSections.make([merging]).needsYou.map(\.item.title) == ["merging"])
+        #expect(TaskBoardPresentation.tasksViewStatusLine(merging) == "Waiting for checks")
     }
 
     /// Status lists tasks in the order of the project cards: by project,

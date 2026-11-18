@@ -28,6 +28,16 @@ struct TasksViewSections: Equatable {
     var archived: [SidebarStatusSections.Entry] = []
 
     static func make(_ items: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool = { _ in false }) -> Self {
+        // Needs you, Running and Idle list a task by the bucket the sidebar
+        // lists its task space's row in: the more urgent of its stage and its
+        // sessions. To ship, Done and Archived list by stage.
+        let buckets = Dictionary(
+            items.compactMap { item in SidebarBucket.task(item).map { (item.id, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        func entries(_ isListed: (SidebarBucket) -> Bool) -> [SidebarStatusSections.Entry] {
+            SidebarStatusSections.grouped(items.filter { buckets[$0.id].map(isListed) == true })
+        }
         func entries(_ group: TaskStage.Group) -> [SidebarStatusSections.Entry] {
             SidebarStatusSections.grouped(items.filter { $0.stage.group == group })
         }
@@ -37,23 +47,22 @@ struct TasksViewSections: Equatable {
         var family: [SidebarStatusSections.Entry] = []
         func placeFamily() {
             guard family.isEmpty == false else { return }
-            let buckets = family.compactMap { SidebarBucket($0.item.stage) }
-            let bucket = buckets.min() ?? .needsYou
+            let bucket = family.compactMap { buckets[$0.id] }.min() ?? .needsYou
             let placed = family.map { entry in
                 var entry = entry
-                entry.isContext = SidebarBucket(entry.item.stage) != bucket
+                entry.isContext = buckets[entry.id] != bucket
                 return entry
             }
             if bucket == .readyToReview { sections.readyToReview += placed } else { sections.needsYou += placed }
             family = []
         }
-        for entry in entries(.needsYou) {
+        for entry in entries(\.isListedInNeedsYouSegment) {
             if entry.isLinkedChild == false { placeFamily() }
             family.append(entry)
         }
         placeFamily()
-        sections.running = entries(.running)
-        sections.idle = entries(.idle)
+        sections.running = entries { $0 == .running }
+        sections.idle = entries { $0 == .idle }
         // Lanes first, then families in each lane: a child in another
         // project's lane lists apart from its parent.
         let toShipItems = items.filter { $0.stage.group == .toShip }
@@ -476,7 +485,8 @@ struct TasksView: View {
         RowIdentity(
             subject: entry.id,
             group: entry.item.stage.group,
-            statusLine: TaskBoardPresentation.statusLine(entry.item),
+            bucket: SidebarBucket.task(entry.item),
+            statusLine: TaskBoardPresentation.tasksViewStatusLine(entry.item),
             hasUnreadTurn: entry.item.hasUnreadTurn,
             releasesAfterMerge: TaskBoardPresentation.releaseAfterMergeRequestedAt(entry.item) != nil
         )
@@ -485,6 +495,7 @@ struct TasksView: View {
     private struct RowIdentity: Hashable {
         let subject: TaskBoardItem.Subject
         let group: TaskStage.Group
+        let bucket: SidebarBucket?
         let statusLine: String
         let hasUnreadTurn: Bool
         let releasesAfterMerge: Bool
@@ -535,7 +546,7 @@ private struct TasksViewRow: View {
                             .foregroundStyle(ToastyTheme.sidebarSessionPathText)
                             .lineLimit(1)
                     }
-                    Text(TaskBoardPresentation.statusLine(item))
+                    Text(TaskBoardPresentation.tasksViewStatusLine(item))
                         .font(.system(size: 11.5))
                         .foregroundStyle(ToastyTheme.inactiveText.opacity(0.8))
                         .lineLimit(1)
@@ -598,7 +609,7 @@ private struct TasksViewRow: View {
     private var accessibilityLabel: String {
         let item = entry.item
         return TaskBoardPresentation.addingReleaseAfterMerge(
-            to: "\(item.title), \(item.hasUnreadTurn ? "unread, " : "")\(TaskBoardPresentation.statusLine(item))",
+            to: "\(item.title), \(item.hasUnreadTurn ? "unread, " : "")\(TaskBoardPresentation.tasksViewStatusLine(item))",
             item
         )
     }

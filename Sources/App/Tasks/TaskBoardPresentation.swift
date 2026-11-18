@@ -30,6 +30,29 @@ enum TaskBoardPresentation {
         return "\(line) · \(heldCleanupPhrase(until: until, now: now))"
     }
 
+    /// Whether the task lists in Needs you for its unread finished turn
+    /// while its stage is calmer, as a task whose agent ended its turn to
+    /// wait on another task does. The sidebar draws its task space's row as
+    /// any other unread turn, and the Tasks view draws its row the same way.
+    static func showsUnreadTurnOverStage(_ item: TaskBoardItem) -> Bool {
+        guard item.taskSpaceStatus == .ready else { return false }
+        switch item.stage {
+        case .running, .idle: return true
+        case .starting, .needsYou, .toShip, .done, .archived: return false
+        }
+    }
+
+    /// The Tasks view row's line: the stage's, unless the row lists for an
+    /// unread finished turn; see `showsUnreadTurnOverStage`. A merge under
+    /// way keeps its own line, since the merge goes on without the user.
+    static func tasksViewStatusLine(_ item: TaskBoardItem, now: Date = Date()) -> String {
+        showsUnreadTurnOverStage(item) && item.merge == nil ? finishedTurnLine(item) : statusLine(item, now: now)
+    }
+
+    private static func finishedTurnLine(_ item: TaskBoardItem) -> String {
+        "\(agentName(item)) finished · waiting for you"
+    }
+
     /// When a held task space closes, in whole hours rounded up.
     static func heldCleanupPhrase(until: Date, now: Date) -> String {
         let remaining = until.timeIntervalSince(now)
@@ -60,7 +83,7 @@ enum TaskBoardPresentation {
                 if item.record?.mergeFailure != nil { return "⚠ merge stopped" }
                 if attention == .review, let problem = item.pullRequestLookupProblem { return lookupProblemLine(problem) }
                 return "Ready for your review"
-            case .agentFinished: return "\(agentName(item)) finished · waiting for you"
+            case .agentFinished: return finishedTurnLine(item)
             case .cleanupStopped:
                 switch item.record?.cleanup?.kind {
                 case .archive?: return "⚠ archive stopped"
@@ -548,8 +571,7 @@ struct TaskStageMark: View {
                 case .agentError:
                     RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionErrorText).frame(width: 7, height: 7)
                 case .agentFinished:
-                    // The sidebar's ready square for an unread turn.
-                    RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionReadyText).frame(width: 7, height: 7)
+                    readySquare
                 case .agentNeedsInput, .startWaitsInTerminal, .taskSpaceClosed, .cleanupStopped:
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(ToastyTheme.sessionNeedsApprovalText)
@@ -559,7 +581,9 @@ struct TaskStageMark: View {
                         }
                 }
             case .running, .idle:
-                if item.agent == .working {
+                if TaskBoardPresentation.showsUnreadTurnOverStage(item) {
+                    readySquare
+                } else if item.agent == .working {
                     SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
                 } else {
                     RoundedRectangle(cornerRadius: 1.5)
@@ -588,6 +612,11 @@ struct TaskStageMark: View {
         }
         .frame(width: 12, height: 16)
         .accessibilityHidden(true)
+    }
+
+    /// The sidebar's ready square for an unread turn.
+    private var readySquare: some View {
+        RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionReadyText).frame(width: 7, height: 7)
     }
 
     private func tinted(_ background: Color, @ViewBuilder content: () -> some View) -> some View {

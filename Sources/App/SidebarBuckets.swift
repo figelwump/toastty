@@ -41,14 +41,29 @@ extension TaskBucket {
     /// shows its review over a finished turn that is not read yet, so a
     /// task that just opened its pull request lists in Ready to review.
     static func subspace(_ row: SidebarSubspacePresentation.Row) -> Self {
-        let fromStatus: Self = switch row.status {
+        subspace(status: row.status, stage: row.stage)
+    }
+
+    static func subspace(status: SidebarSubspacePresentation.RowStatus, stage: TaskStage?) -> Self {
+        let fromStatus: Self = switch status {
         case .ready, .question, .needsApproval, .error: .needsYou
         case .review: .readyToReview
         case .working: .running
         case .idle, .toShip, .done: .idle
         }
-        guard let fromStage = row.stage.flatMap(Self.init) else { return fromStatus }
+        guard let fromStage = stage.flatMap(Self.init) else { return fromStatus }
         return min(fromStatus, fromStage)
+    }
+
+    /// A task in the Tasks view: the bucket of its task space's row, as the
+    /// sidebar lists that row, or its stage's alone without an open task
+    /// space. So a task whose agent ended its turn to wait on another task
+    /// lists in Needs you while that turn is unread. `nil` for To ship, Done
+    /// and Archived, which keep their own groups.
+    static func task(_ item: TaskBoardItem) -> Self? {
+        guard let fromStage = Self(item.stage) else { return nil }
+        guard let status = item.taskSpaceStatus else { return fromStage }
+        return subspace(status: status, stage: item.stage)
     }
 }
 
