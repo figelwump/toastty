@@ -9,7 +9,9 @@ import XCTest
 final class ToasttyAttachmentImageLoadingTests: XCTestCase {
     func testTwoViewsAskingAtOnceFetchTheImageOnceAndAShownAgainBoxUsesTheCache() async throws {
         let fetches = FetchLog()
-        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 60, height: 40)).image { context in
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 60, height: 40), format: format).image { context in
             UIColor.systemTeal.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 60, height: 40))
         }.pngData())
