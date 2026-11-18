@@ -1421,6 +1421,12 @@ struct TaskBoardTests {
         // Once its project closes, the task space is a top-level workspace
         // with no row under a project, and the sidebar lists the task by its
         // stage alone. So does the Tasks view, even with a new unread turn.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .working, summary: "Working"), at: endedAt.addingTimeInterval(5)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .ready, summary: "Ready"), at: endedAt.addingTimeInterval(6)
+        )
         _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: "restored-\(session)"))
         #expect(TasksViewSections.make(board.items()).needsYou.map(\.id) == [.task(task.id)])
         #expect(fixture.store.send(.closeWorkspace(workspaceID: fixture.workspaceID)))
