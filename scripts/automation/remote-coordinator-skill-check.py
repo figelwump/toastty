@@ -433,6 +433,13 @@ REPORT = '''<!doctype html><html><head><title>Verification: unread dot</title></
 # A `toastty task request-merge` command. Text that only names it, such as a
 # ledger line written by a script, is not one.
 REQUEST_MERGE = r'\btask\s+request-merge\b'
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", re.S | re.M)
+
+
+def asks_merge(command):
+    """The command runs `task request-merge`. Text in a here-document, such as a reply that tells a sender how
+    to ask for a merge itself, is not a command."""
+    return re.search(REQUEST_MERGE, HEREDOC.sub('', command))
 
 def typed_text(text):
     """What the coordinator typed: a message to a task without Toastty's sender line."""
@@ -889,7 +896,7 @@ class Run:
         self.check('never merges itself: no call that changes GitHub', not [c for c in calls if c['mutation']],
                    [c for c in calls if c['mutation']])
         # A merge request is allowed only for a task whose merge the scenario expects.
-        asked = [c for c in commands if re.search(REQUEST_MERGE, c)]
+        asked = [c for c in commands if asks_merge(c)]
         stray = [c for c in asked if not any(task_id in c for task_id in self.merges_expected)]
         self.check('asks for no merge that the scenario does not expect: no such request-merge command', not stray, stray)
         requested = [t.title for t in self.tasks if t.id not in self.merges_expected
@@ -1451,7 +1458,7 @@ def good_proof(run):
 
 def merge_requests(turns, task):
     """The request-merge commands of these turns that name the task."""
-    return [c for t in turns for c in t['commands'] if re.search(REQUEST_MERGE, c) and task.id in c]
+    return [c for t in turns for c in t['commands'] if asks_merge(c) and task.id in c]
 
 
 def no_merge_rule(run):
@@ -1567,7 +1574,7 @@ def asked_under_rule(run, task, turns):
     number = str(task.pr['number'])
     logged = [c for c in run.gh_calls() if c['args'][:2] == ['pr', 'diff'] and c['session'] and len(c['args']) > 2
               and c['args'][2].rstrip('/').split('/')[-1] == number]
-    asked_at = next((i for i, c in enumerate(commands) if re.search(REQUEST_MERGE, c) and task.id in c), len(commands))
+    asked_at = next((i for i, c in enumerate(commands) if asks_merge(c) and task.id in c), len(commands))
     before = [c for c in commands[:asked_at] if re.search(r'gh\s+pr\s+diff\b', c)]
     run.check('it read the diff of this pull request before it asked', bool(logged) and bool(before), commands)
     said = run.said(turns)
@@ -1989,17 +1996,30 @@ def approve_webhook_in_the_sheet(run, name):
     require(status == 'trusted=true locked=false', f'BLOCKED: the approval needs Accessibility and an unlocked screen: {status}')
     with FOCUS_LOCK:
         run.cli('action', 'run', 'window.tasks.show', '--window', run.window_id)
-        ax('activate')
-        clicked = ax('click', 'tasks.view.webhook.review')
-        require(clicked.returncode == 0, f'Review… did not click: {clicked.stdout} {clicked.stderr}')
-        sheet = wait_for('the approval sheet', lambda: (done := ax('sheet-texts')).returncode == 0 and done.stdout, timeout=20)
+        steps = [f"activate: {ax('activate').stdout.strip()}"]
+        # A click on a window that is not yet key can only bring it forward, so Review… is clicked again until
+        # the sheet's Approve button shows.
+        for _ in range(3):
+            clicked = ax('click', 'tasks.view.webhook.review')
+            steps.append(f'click Review…: {clicked.returncode} {clicked.stdout.strip()} {clicked.stderr.strip()}')
+            shown = ax('frame', 'tasks.webhook.approve')
+            steps.append(f'Approve frame: {shown.returncode} {shown.stdout.strip()}')
+            if shown.returncode == 0:
+                break
+        else:
+            banner = ax('texts', 'tasks.view.webhookBanner')
+            run.notes.append(json.dumps({'approval steps': steps, 'banner': banner.stdout, 'sheet': ax('sheet-texts').stdout}))
+            require(False, f'The approval sheet did not show: {steps}')
+        sheet = ax('sheet-texts')
+        sheet_text = sheet.stdout if sheet.returncode == 0 else ax('texts', 'tasks.webhook.sheet').stdout
+        run.notes.append(json.dumps({'approval steps': steps}))
         approved = ax('click', 'tasks.webhook.approve')
         require(approved.returncode == 0, f'Approve did not click: {approved.stdout} {approved.stderr}')
         wait_for(f'webhook {name} to be approved', lambda: any(
             w.get('name') == name and w.get('status') == 'approved' for w in run.cli('webhook', 'list').get('webhooks', [])),
             timeout=20)
         run.cli('action', 'run', 'window.tasks.hide', '--window', run.window_id)
-    return sheet
+    return sheet_text
 
 
 def sender_reply_webhook(run):
@@ -2714,7 +2734,7 @@ def merge_error(run):
     prompts = [m['text'] for m in run.messages(task) if 'toastty-task-merge' in m['text']]
     run.check("the task's agent got Toastty's merge prompt, and nothing else",
               len(prompts) == 1 and len(run.messages(task)) == 1, [m['text'] for m in run.messages(task)])
-    asked_at = next((i for i, c in enumerate(commands) if re.search(REQUEST_MERGE, c) and task.id in c), len(commands))
+    asked_at = next((i for i, c in enumerate(commands) if asks_merge(c) and task.id in c), len(commands))
     run.check('it read the head of the pull request before it asked',
               any(re.search(r'gh\s+pr\s+view\b', c) for c in commands[:asked_at]), commands)
     said = run.said(later)
