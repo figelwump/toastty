@@ -680,8 +680,11 @@ worktree.
 - Both commands report how long the task has been in its state; see
   [How long a task has been in its state](#how-long-a-task-has-been-in-its-state).
 - Each task in `task get` and `task list` has `markdownLink`, the task as
-  `[title](toastty://task/<task-id>)`. An agent names another task in text
-  with it, and uses the ID only in commands. The shipped task skills say so.
+  `[title](toastty://task/<task-id>)`. An agent names another task with it
+  wherever a person or another agent reads it, including a child task's brief
+  and plan or notes files, and uses the ID only where a command takes a task
+  ID. GitHub drops the link, so a pull request names the task by its title.
+  The shipped task skills say so.
 - `toastty task send <task-id> "<message>"` types the message into the task's
   agent and submits it, whatever the agent does. Its first line names the
   sender as `coordinator send` does, such as
