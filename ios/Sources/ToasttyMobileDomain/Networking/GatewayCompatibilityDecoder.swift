@@ -137,16 +137,13 @@ public struct GatewayCompatibilityDecoder: Sendable {
                 func taskIDs(_ key: String) -> [UUID]? {
                     (try? lane.requiredStringArray(key)).map { $0.compactMap(UUID.init(uuidString:)).filter(known.contains) }
                 }
-                // Older Macs send only the recent tasks and no release
-                // fields. The release task need not be on the board.
+                // Older Macs send only the recent tasks.
                 return RemoteTaskShipLane(
                     id: id,
                     projectTitle: lane.lossyString("projectTitle") ?? "Other",
                     count: count,
                     recentTaskIDs: taskIDs("recentTaskIDs") ?? [],
-                    taskIDs: taskIDs("taskIDs"),
-                    releaseWorkspaceID: (try? lane.optionalUUID("releaseWorkspaceID")) ?? nil,
-                    releaseTaskID: (try? lane.optionalUUID("releaseTaskID")) ?? nil
+                    taskIDs: taskIDs("taskIDs")
                 )
             },
             doneCount: (try? object.requiredInt("doneCount")) ?? 0,

@@ -91,21 +91,6 @@ public struct MobileTaskBoard: Equatable, Sendable {
         lane.taskIDs ?? lane.recentTaskIDs
     }
 
-    /// The release a lane offers: `nil` when its project cannot release
-    /// from Toastty, and from an older Mac.
-    public static func release(_ lane: RemoteTaskShipLane, tasks: [RemoteTaskSummary]) -> MobileProjectRelease? {
-        lane.releaseWorkspaceID.map { workspaceID in
-            MobileProjectRelease(
-                laneID: lane.id,
-                projectTitle: lane.projectTitle,
-                workspaceID: workspaceID,
-                taskCount: lane.count,
-                taskTitles: tasks.map(\.title),
-                releaseTaskID: lane.releaseTaskID
-            )
-        }
-    }
-
     public func entries(_ group: RemoteTaskGroup) -> [RemoteTaskBoardEntry] {
         switch group {
         case .needsYou: needsYou
@@ -127,40 +112,5 @@ public struct MobileTaskBoard: Equatable, Sendable {
 
     public var isEmpty: Bool {
         needsYou.isEmpty && running.isEmpty && idle.isEmpty && toShip.isEmpty && doneCount == 0
-    }
-}
-
-/// A project's Release… as a To ship lane or a project card offers it: the
-/// workspace the Mac starts the release in, what waits to ship, and the
-/// release under way, if any.
-public struct MobileProjectRelease: Equatable, Sendable, Identifiable {
-    public let laneID: String
-    public let projectTitle: String
-    /// The lane's `releaseWorkspaceID`, which the request names.
-    public let workspaceID: UUID
-    /// How many tasks wait to ship, as the lane counts them.
-    public let taskCount: Int
-    /// The titles of the tasks the phone lists, newest merge first.
-    public let taskTitles: [String]
-    /// The release task while it runs; the button then reads Releasing….
-    public let releaseTaskID: UUID?
-
-    public var id: String { laneID }
-    public var isReleasing: Bool { releaseTaskID != nil }
-
-    public init(
-        laneID: String,
-        projectTitle: String,
-        workspaceID: UUID,
-        taskCount: Int,
-        taskTitles: [String] = [],
-        releaseTaskID: UUID? = nil
-    ) {
-        self.laneID = laneID
-        self.projectTitle = projectTitle
-        self.workspaceID = workspaceID
-        self.taskCount = taskCount
-        self.taskTitles = taskTitles
-        self.releaseTaskID = releaseTaskID
     }
 }

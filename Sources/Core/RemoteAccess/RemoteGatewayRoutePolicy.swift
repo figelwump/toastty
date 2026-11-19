@@ -34,7 +34,6 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case nativePushRegistration
     case taskAction
     case taskArchiveCheck
-    case projectRelease
     case coordinatorSend
     case coordinatorSendWithAttachments
     case coordinatorChatRead
@@ -75,7 +74,6 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .nativePushRegistration: RemotePushPolicy.registrationPath
         case .taskAction: RemoteTaskActionPolicy.actionPath
         case .taskArchiveCheck: RemoteTaskActionPolicy.archiveCheckPath
-        case .projectRelease: RemoteProjectReleasePolicy.releasePath
         case .coordinatorSend: RemoteCoordinatorSendPolicy.sendPath
         case .coordinatorSendWithAttachments: RemoteCoordinatorSendPolicy.sendWithAttachmentsPath
         case .coordinatorChatRead: RemoteCoordinatorChatReadPolicy.readPath
@@ -164,10 +162,6 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // same.
         .taskAction: .init(route: .taskAction, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .taskArchiveCheck: .init(route: .taskArchiveCheck, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
-        // A release starts an agent that can publish, so it needs send scope;
-        // the handler also checks the Task actions switch and the start
-        // permission.
-        .projectRelease: .init(route: .projectRelease, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         // A message to the coordinator is a send, and the coordinator makes
         // a task from it, so these follow the task create routes; the
         // handler checks the start permission itself.

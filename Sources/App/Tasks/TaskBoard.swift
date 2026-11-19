@@ -853,16 +853,6 @@ final class TaskBoardStore: ObservableObject {
         return item(taskSpace: workspace, statuses: sessionRuntimeStore?.workspaceStatuses(for: workspaceID) ?? [])?.merge
     }
 
-    /// Whether Release can start a release for the item's project: the
-    /// project is open and tasks.toml gives it a release skill or a
-    /// `release_prompt`.
-    func canRelease(_ item: TaskBoardItem) -> Bool {
-        guard item.projectWorkspaceID != nil,
-              let root = item.record?.projectRoot,
-              let config else { return false }
-        return config.canRelease(projectRoot: root, repositoryRoot: item.record?.operation.worktree?.checkoutRoot ?? repositoryRoots[root])
-    }
-
     func reloadConfig() {
         guard let coordinator else { return }
         configReloadCount &+= 1

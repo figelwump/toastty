@@ -3623,8 +3623,9 @@ final class SidebarViewTests: XCTestCase {
         }
         let cardTextValues = renderedTextValues(in: harness.hostingView)
         try assertRows(cardTextValues, "project card")
-        // The project can release from Toastty, so its To ship line offers it.
-        XCTAssertTrue(cardTextValues.contains(SidebarView.cardReleaseLabel), "\(cardTextValues)")
+        // The project can release from Toastty, but its To ship line offers
+        // no Release: the user asks the coordinator for releases.
+        XCTAssertFalse(cardTextValues.contains { $0.hasPrefix("Release") }, "\(cardTextValues)")
         try writeSidebarEvidence(harness.hostingView, name: "release-mark-sidebar-projects")
         try attachSidebarRender(harness.hostingView, name: "release-mark-sidebar-projects")
 

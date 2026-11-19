@@ -405,12 +405,10 @@ public enum ToasttyMobileFixture {
             ],
             running: [RemoteTaskBoardEntry(taskID: workingSubspaceID), RemoteTaskBoardEntry(taskID: mergingTaskID)],
             idle: [RemoteTaskBoardEntry(taskID: archiveTaskID), RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
-            // The project can release from Toastty, and no release runs.
             toShip: [RemoteTaskShipLane(
                 id: "toastty", projectTitle: "toastty", count: 3,
                 recentTaskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID],
-                taskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID],
-                releaseWorkspaceID: toasttyID
+                taskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID]
             )],
             doneCount: 14,
             finishedByProject: [
@@ -577,8 +575,7 @@ public enum ToasttyMobileFixture {
             running: [RemoteTaskBoardEntry(taskID: longNamesStartingTaskID)],
             toShip: [RemoteTaskShipLane(
                 id: "long-names", projectTitle: project, count: 1,
-                recentTaskIDs: [longNamesShippedTaskID], taskIDs: [longNamesShippedTaskID],
-                releaseWorkspaceID: projectID
+                recentTaskIDs: [longNamesShippedTaskID], taskIDs: [longNamesShippedTaskID]
             )],
             doneCount: 104,
             finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 1, doneCount: 104)]

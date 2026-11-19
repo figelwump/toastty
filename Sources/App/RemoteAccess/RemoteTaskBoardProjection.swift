@@ -8,18 +8,13 @@ import RemoteProtocol
 /// their workspaces.
 @MainActor
 enum RemoteTaskBoardProjection {
-    /// What the Merge control, the action list and the To ship lanes read
-    /// besides the items: the workspace tree, the merge Toastty runs for a
-    /// task space, whether tasks.toml configures triage, which projects can
-    /// release, and the release under way for a project root.
+    /// What the Merge control and the action list read besides the items:
+    /// the workspace tree, the merge Toastty runs for a task space, and
+    /// whether tasks.toml configures triage.
     struct Context {
         var state: AppState
         var mergeRequest: (UUID) -> WorkspaceMergeRequest? = { _ in nil }
         var isTriageConfigured: () -> Bool = { false }
-        /// `TaskBoardStore.canRelease`, as the Mac's Release button reads it.
-        var canRelease: (TaskBoardItem) -> Bool = { _ in false }
-        /// `TaskCoordinator.releaseUnderWay(projectRoot:)`'s task.
-        var releaseUnderWay: (String) -> UUID? = { _ in nil }
     }
 
     static func board(items: [TaskBoardItem], state: AppState) -> RemoteTaskBoard {
@@ -36,7 +31,7 @@ enum RemoteTaskBoardProjection {
             }
         }
         let ordered = SidebarStatusSections.sidebarOrder(items, workspaceIDs: workspaceIDs)
-        let sections = SidebarStatusSections.make(ordered, releasable: context.canRelease)
+        let sections = SidebarStatusSections.make(ordered)
 
         var listed: Set<TaskBoardItem.Subject> = []
         for group in SidebarStatusSections.rowGroups {
@@ -85,16 +80,12 @@ enum RemoteTaskBoardProjection {
             running: entries(.running),
             idle: entries(.idle),
             toShip: sections.toShip.map { lane in
-                // A lane that can release groups by its project root.
-                let releaseWorkspaceID = lane.releaseWorkspaceID
-                return RemoteTaskShipLane(
+                RemoteTaskShipLane(
                     id: lane.id,
                     projectTitle: lane.projectTitle,
                     count: lane.count,
                     recentTaskIDs: lane.recent.shown.map { wireID($0.id) },
-                    taskIDs: (lane.recent.shown + lane.recent.hidden).map { wireID($0.id) },
-                    releaseWorkspaceID: releaseWorkspaceID,
-                    releaseTaskID: releaseWorkspaceID == nil ? nil : context.releaseUnderWay(lane.id)
+                    taskIDs: (lane.recent.shown + lane.recent.hidden).map { wireID($0.id) }
                 )
             },
             doneCount: sections.doneCount,

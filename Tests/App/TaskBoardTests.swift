@@ -866,7 +866,6 @@ struct TaskBoardTests {
         let expected: TaskStage = base == "main" ? .toShip : .done
         let item = try #require(board.items().first { $0.taskID == task.id })
         #expect(item.stage == expected)
-        #expect(board.canRelease(item))
         #expect(fixture.coordinator.toShipTasks(projectRoot: fixture.projectRoot).map(\.id) == (base == "main" ? [task.id] : []))
         // The same board drives task.get, not only the sidebar.
         let executor = TaskAppControlTests().makeExecutor(fixture, coordinator: fixture.coordinator)
@@ -901,7 +900,11 @@ struct TaskBoardTests {
         #expect(board.repositoryRoots[related] == repository.project)
         let item = try #require(board.items().first { $0.taskID == task.id })
         #expect(item.stage == .toShip)
-        #expect(board.canRelease(item))
+        // `task release` finds the project's release settings through the
+        // same repository.
+        fixture.coordinator.board = board
+        #expect(fixture.coordinator.releaseRepositoryRoot(projectRoot: related) == repository.project)
+        #expect(fixture.config.canRelease(projectRoot: related, repositoryRoot: repository.project))
     }
 
     @Test func theRecordKeepsTheDoneMarkAndTheRightPullRequestsMerge() async throws {
@@ -1822,26 +1825,22 @@ struct TaskBoardTests {
         }
     }
 
-    @Test func aParentInToShipCountsInItsLaneButDoesNotOfferARelease() {
+    @Test func aParentInToShipCountsInItsLane() {
         let parentID = UUID()
         var parent = statusItem("act-on-signup-feedback", taskID: parentID, stage: .toShip, project: "emptyos")
         parent.finishedThroughChildren = true
         parent.projectWorkspaceID = UUID()
         var child = statusItem("signup-copy", parent: parentID, stage: .toShip, project: "emptyos")
         child.projectWorkspaceID = UUID()
-        // The family leaves Idle; the parent counts as a task to ship, and
-        // Release comes from the child's merge.
-        let sections = SidebarStatusSections.make([parent, child], releasable: { _ in true })
+        // The family leaves Idle; the parent counts as a task to ship.
+        let sections = SidebarStatusSections.make([parent, child])
         #expect(sections.idle.isEmpty && sections.needsYou.isEmpty)
         #expect(sections.toShip.map(\.count) == [2])
-        #expect(sections.toShip.first?.releaseWorkspaceID == child.projectWorkspaceID)
         #expect(sections.toShipLabel(isExpanded: false) == "To ship, 2 tasks, collapsed, emptyos 2")
-        // With its children in another project, the parent's lane has
-        // nothing to release.
-        let alone = SidebarStatusSections.make([parent], releasable: { _ in true })
+        // With its children in another project, the parent's lane counts
+        // only the parent.
+        let alone = SidebarStatusSections.make([parent])
         #expect(alone.toShip.map(\.count) == [1])
-        #expect(alone.toShip.first?.releaseWorkspaceID == nil)
-        #expect(TasksViewSections.make([parent], releasable: { _ in true }).toShip.first?.releaseWorkspaceID == nil)
         // In the Tasks view, a child lists under its parent in the parent's
         // lane, and apart from it in another project's lane.
         let elsewhere = statusItem("toastty-copy", parent: parentID, stage: .toShip, project: "toastty")

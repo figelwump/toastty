@@ -156,11 +156,11 @@ final class MobileHomeBucketsTests: XCTestCase {
         XCTAssertEqual(cards(subspaces: [working], board: board).count, 1)
     }
 
-    /// The Mac sends every To ship task and where Release starts. Two open
-    /// projects can share a root, so one lane holds both projects' tasks:
-    /// each card lists and counts its own, and releases from its own project.
-    func testCardsAndLanesListEveryToShipTaskAndOfferTheRelease() throws {
-        func board(releaseWorkspaceID: UUID?, releaseTaskID: UUID? = nil, sendsEveryTask: Bool = true) -> RemoteTaskBoard {
+    /// The Mac sends every To ship task. Two open projects can share a root,
+    /// so one lane holds both projects' tasks: each card lists and counts its
+    /// own.
+    func testCardsAndLanesListEveryToShipTask() throws {
+        func board(sendsEveryTask: Bool = true) -> RemoteTaskBoard {
             RemoteTaskBoard(
                 tasks: [
                     task(31, "Newest", .toShip, mark: .toShip),
@@ -170,9 +170,7 @@ final class MobileHomeBucketsTests: XCTestCase {
                 toShip: [RemoteTaskShipLane(
                     id: "/toastty", projectTitle: "toastty", count: 3,
                     recentTaskIDs: [uuid(31)],
-                    taskIDs: sendsEveryTask ? [uuid(31), uuid(32), uuid(33)] : nil,
-                    releaseWorkspaceID: releaseWorkspaceID,
-                    releaseTaskID: releaseTaskID
+                    taskIDs: sendsEveryTask ? [uuid(31), uuid(32), uuid(33)] : nil
                 )],
                 finishedByProject: [
                     RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 2, doneCount: 0),
@@ -194,36 +192,20 @@ final class MobileHomeBucketsTests: XCTestCase {
             try XCTUnwrap(MobileTaskSections.make(MobileTaskBoard(board)).toShip.first)
         }
 
-        var all = cards(board(releaseWorkspaceID: otherProjectID))
+        var all = cards(board())
         XCTAssertEqual(all[0].toShipTasks.map(\.title), ["Newest", "Oldest"])
         XCTAssertEqual(all[0].toShipCount, 2)
         XCTAssertEqual(all[1].toShipTasks.map(\.title), ["Other project's"])
         XCTAssertEqual(all[1].toShipCount, 1)
-        XCTAssertEqual(all[0].release, MobileProjectRelease(
-            laneID: "/toastty", projectTitle: "toastty", workspaceID: projectID, taskCount: 3,
-            taskTitles: ["Newest", "Other project's", "Oldest"]
-        ))
-        XCTAssertEqual(all[1].release?.workspaceID, otherProjectID)
-        // The Tasks tab's lane lists them all and releases where the Mac said.
-        XCTAssertEqual(try lane(board(releaseWorkspaceID: otherProjectID)).tasks.count, 3)
-        XCTAssertEqual(try lane(board(releaseWorkspaceID: otherProjectID)).release?.workspaceID, otherProjectID)
-        XCTAssertEqual(try lane(board(releaseWorkspaceID: otherProjectID)).release?.isReleasing, false)
+        // The Tasks tab's lane lists them all.
+        XCTAssertEqual(try lane(board()).tasks.count, 3)
 
-        // While a release runs, both read Releasing….
-        let releasing = board(releaseWorkspaceID: projectID, releaseTaskID: uuid(40))
-        XCTAssertEqual(cards(releasing)[0].release?.isReleasing, true)
-        XCTAssertEqual(try lane(releasing).release?.releaseTaskID, uuid(40))
-
-        // A project that cannot release offers no Release.
-        XCTAssertNil(cards(board(releaseWorkspaceID: nil))[0].release)
-        XCTAssertNil(try lane(board(releaseWorkspaceID: nil)).release)
-
-        // An older Mac sends only the newest tasks and no release: the card
-        // still counts all of the project's tasks.
-        all = cards(board(releaseWorkspaceID: nil, sendsEveryTask: false))
+        // An older Mac sends only the newest tasks: the card still counts
+        // all of the project's tasks.
+        all = cards(board(sendsEveryTask: false))
         XCTAssertEqual(all[0].toShipTasks.map(\.title), ["Newest"])
         XCTAssertEqual(all[0].toShipCount, 2)
-        XCTAssertEqual(try lane(board(releaseWorkspaceID: nil, sendsEveryTask: false)).tasks.map(\.title), ["Newest"])
+        XCTAssertEqual(try lane(board(sendsEveryTask: false)).tasks.map(\.title), ["Newest"])
     }
 
     func testHiddenRowsLeaveTheBucketsButStillCount() throws {

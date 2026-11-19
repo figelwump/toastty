@@ -147,15 +147,7 @@ final class HomeScreenController {
     var sendTaskAction: (@MainActor (RemoteTaskActionRequest) async -> ToasttyTaskActionSendOutcome)?
     @ObservationIgnored
     var loadTaskArchiveCheck: (@MainActor (RemoteTaskArchiveCheckRequest) async -> ToasttyTaskArchiveCheckOutcome)?
-    /// Whether the connected Mac starts releases for this device. The Mac
-    /// checks the device's Task actions switch and start permission per
-    /// request.
-    var hostSupportsProjectRelease: Bool
-    /// To ship lanes, by ID, with a release request on its way to the Mac.
-    var projectReleasesInFlight: Set<String> = []
-    @ObservationIgnored
-    var sendProjectRelease: (@MainActor (RemoteProjectReleaseRequest) async -> ToasttyProjectReleaseSendOutcome)?
-    /// How long a task action or a release waits before its one retry.
+    /// How long a task action waits before its one retry.
     @ObservationIgnored
     var taskActionRetryDelay: Duration = .seconds(1)
     private(set) var closeConfirmation: ConversationCloseConfirmation?
@@ -248,7 +240,6 @@ final class HomeScreenController {
         hostSupportsLocalFilePreview = runtimeMode == .fixture && Self.fixtureSupportsLocalFilePreview
         hostSupportsTasks = runtimeMode != .fixture || Self.fixtureSupportsTasks
         hostSupportsTaskActions = runtimeMode == .fixture
-        hostSupportsProjectRelease = runtimeMode == .fixture
         finishedTasks = runtimeMode == .fixture ? Self.fixtureFinishedTasks : ToasttyFinishedTasks()
         self.connectionState = connectionState
         self.freshness = freshness ?? Self.freshness(for: connectionState)
@@ -302,7 +293,6 @@ final class HomeScreenController {
         hostSupportsTaskCreate: Bool? = nil,
         hostSupportsConversationClose: Bool? = nil,
         hostSupportsTaskActions: Bool? = nil,
-        hostSupportsProjectRelease: Bool? = nil,
         hostSupportsCoordinatorSend: Bool? = nil,
         hostSupportsLocalFilePreview: Bool? = nil,
         hostSupportsTasks: Bool? = nil,
@@ -330,9 +320,6 @@ final class HomeScreenController {
         }
         if let hostSupportsCoordinatorSend {
             self.hostSupportsCoordinatorSend = hostSupportsCoordinatorSend
-        }
-        if let hostSupportsProjectRelease {
-            self.hostSupportsProjectRelease = hostSupportsProjectRelease
         }
         if let hostSupportsLocalFilePreview {
             self.hostSupportsLocalFilePreview = hostSupportsLocalFilePreview

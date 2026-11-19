@@ -3,12 +3,11 @@ import CoreState
 import Foundation
 
 /// A palette command for tasks: one of the current task's actions, or a
-/// release of a project.
+/// coordinator command.
 enum PaletteTaskCommand: Equatable, Sendable {
     case action(TaskBoardPresentation.DetailAction, subject: TaskBoardItem.Subject)
     case openPullRequest(subject: TaskBoardItem.Subject)
     case openTaskSpace(subject: TaskBoardItem.Subject)
-    case release(workspaceID: UUID)
     case openCoordinator
     case restartCoordinator
     case toggleCoordinatorDock
@@ -23,27 +22,17 @@ struct PaletteCoordinatorOption: Equatable {
     var dockShows: Bool? = nil
 }
 
-/// An open project that can release from Toastty, so the palette can start
-/// a release.
-struct PaletteTaskReleaseOption: Equatable {
-    let workspaceID: UUID
-    let projectTitle: String
-    let projectRoot: String
-    let toShipCount: Int
-}
-
 /// The palette's task commands: "Task: <action>" for the current task, and
-/// "Release <project>…" for each project that can release.
+/// the coordinator's commands.
 @MainActor
 enum CommandPaletteTaskCatalog {
     static let keywords = ["task", "done", "merge", "archive", "ship"]
 
     static func descriptors(
         current: TaskBoardCurrentTask?,
-        releases: [PaletteTaskReleaseOption],
         coordinator: PaletteCoordinatorOption? = nil
     ) -> [PaletteCommandDescriptor] {
-        currentTaskDescriptors(current) + releases.map(releaseDescriptor) + coordinatorDescriptors(coordinator)
+        currentTaskDescriptors(current) + coordinatorDescriptors(coordinator)
     }
 
     /// "Open Coordinator" while the task system is on, "Restart
@@ -128,19 +117,6 @@ enum CommandPaletteTaskCatalog {
         return descriptors
     }
 
-    private static func releaseDescriptor(_ option: PaletteTaskReleaseOption) -> PaletteCommandDescriptor {
-        let count = option.toShipCount
-        return PaletteCommandDescriptor(
-            id: "task.release.\(option.workspaceID.uuidString)",
-            usageKey: "task.release:\(option.projectRoot)",
-            title: "Release \(option.projectTitle)…",
-            subtitle: count == 0 ? "Nothing to ship yet" : "\(count) \(count == 1 ? "task" : "tasks") to ship",
-            keywords: ["release", "ship", "tag", "task", option.projectTitle],
-            shortcut: nil,
-            invocation: .task(.release(workspaceID: option.workspaceID))
-        )
-    }
-
     private static func descriptor(
         key: String,
         title: String,
@@ -173,13 +149,12 @@ enum CommandPaletteTaskCatalog {
     }
 }
 
-/// Finds the current task and the projects that can release, and runs the
-/// palette's task commands through the same code as the Tasks view.
+/// Finds the current task, and runs the palette's task commands through the
+/// same code as the Tasks view.
 @MainActor
 final class CommandPaletteTaskActions {
     private weak var store: AppStore?
     private weak var sessionRuntimeStore: SessionRuntimeStore?
-    private let fileManager: FileManager
     private let openURL: @MainActor (URL) -> Void
     private let presentFailure: @MainActor (String, String) -> Void
     /// Offers an installed agent when the coordinator's is not installed.
@@ -192,7 +167,6 @@ final class CommandPaletteTaskActions {
     init(
         store: AppStore,
         sessionRuntimeStore: SessionRuntimeStore,
-        fileManager: FileManager = .default,
         openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) },
         presentFailure: @escaping @MainActor (String, String) -> Void = { title, message in
             WorkspaceMergeCoordinator.presentAlert(title: title, message: message)
@@ -205,7 +179,6 @@ final class CommandPaletteTaskActions {
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
-        self.fileManager = fileManager
         self.openURL = openURL
         self.presentFailure = presentFailure
         self.offerCoordinatorAgent = offerCoordinatorAgent
@@ -237,65 +210,12 @@ final class CommandPaletteTaskActions {
         return store.send(.setTasksViewShown(windowID: selection.windowID, shown: selection.window.showsTasksView == false))
     }
 
-    // MARK: - Current task and releases
+    // MARK: - Current task
 
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
         guard let board, let sessionRuntimeStore,
               let selection = store?.commandSelection(preferredWindowID: originWindowID) else { return nil }
         return board.currentTask(in: selection) { sessionRuntimeStore.workspaceStatuses(for: $0) }
-    }
-
-    /// One option for each open project with a release skill or a
-    /// `release_prompt` and no release under way, the origin window's
-    /// projects first.
-    func releaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption] {
-        guard let store, let coordinator, let board, let config = board.config else { return [] }
-        let home = coordinator.homeDirectoryPath
-        let releasableRoots = config.workspaces
-            .filter { config.canRelease(projectRoot: $0.path, homeDirectoryPath: home) }
-            .map { TasksConfigFile.normalizedPath($0.path, homeDirectoryPath: home) }
-        // A `[defaults]` release skill makes every project releasable, so
-        // any saved root qualifies.
-        let anyRootReleases = config.defaults.releaseSkill != nil
-        guard releasableRoots.isEmpty == false || anyRootReleases else { return [] }
-        let state = store.state
-        let originID = store.commandSelection(preferredWindowID: originWindowID)?.windowID
-        let windows = state.windows.filter { $0.id == originID } + state.windows.filter { $0.id != originID }
-        var options: [PaletteTaskReleaseOption] = []
-        for window in windows {
-            for workspaceID in state.topLevelWorkspaceIDs(in: window.id) {
-                guard let workspace = state.workspacesByID[workspaceID],
-                      let root = releasableRoot(
-                          of: workspace,
-                          among: releasableRoots,
-                          anyRootReleases: anyRootReleases,
-                          homeDirectoryPath: home
-                      ),
-                      options.contains(where: { $0.projectRoot == root }) == false,
-                      coordinator.releaseUnderWay(projectRoot: root) == nil else { continue }
-                options.append(PaletteTaskReleaseOption(
-                    workspaceID: workspaceID,
-                    projectTitle: workspace.title,
-                    projectRoot: root,
-                    toShipCount: 0
-                ))
-            }
-        }
-        guard options.isEmpty == false else { return [] }
-        // The tasks Release would list, counted from one board snapshot.
-        var toShipCounts: [String: Int] = [:]
-        for item in board.items() where item.stage == .toShip && item.finishedThroughChildren == false {
-            guard let record = item.record, record.release == nil, let projectRoot = record.projectRoot else { continue }
-            toShipCounts[TasksConfigFile.normalizedPath(projectRoot, homeDirectoryPath: home), default: 0] += 1
-        }
-        return options.map { option in
-            PaletteTaskReleaseOption(
-                workspaceID: option.workspaceID,
-                projectTitle: option.projectTitle,
-                projectRoot: option.projectRoot,
-                toShipCount: toShipCounts[option.projectRoot] ?? 0
-            )
-        }
     }
 
     /// `nil` when this Toastty has no coordinator to open.
@@ -312,28 +232,6 @@ final class CommandPaletteTaskActions {
             isOpen: controller.location != nil,
             dockShows: offersDock ? originWindowID.map(controller.dockShows(in:)) : nil
         )
-    }
-
-    /// The releasable project that the workspace is: its saved root, or
-    /// else the configured project holding its first terminal's directory.
-    /// Release resolves a workspace without a saved root through git, which
-    /// the palette cannot run on every keystroke. With `anyRootReleases`,
-    /// every saved root is releasable.
-    private func releasableRoot(
-        of workspace: WorkspaceState,
-        among roots: [String],
-        anyRootReleases: Bool,
-        homeDirectoryPath: String
-    ) -> String? {
-        if let saved = workspace.rootDirectory {
-            let normalized = TasksConfigFile.normalizedPath(saved, homeDirectoryPath: homeDirectoryPath)
-            return anyRootReleases || roots.contains(normalized) ? normalized : nil
-        }
-        guard let directory = TaskCoordinator.firstTerminalDirectory(in: workspace, fileManager: fileManager) else { return nil }
-        let normalized = TasksConfigFile.normalizedPath(directory, homeDirectoryPath: homeDirectoryPath)
-        return roots
-            .filter { normalized == $0 || normalized.hasPrefix($0 + "/") }
-            .max { $0.count < $1.count }
     }
 
     // MARK: - Running commands
@@ -390,19 +288,6 @@ final class CommandPaletteTaskActions {
                 store: store,
                 sessionRuntimeStore: sessionRuntimeStore
             )
-            return true
-
-        case .release(let workspaceID):
-            guard store.state.workspacesByID[workspaceID] != nil else { return false }
-            afterPaletteCloses { [presentFailure] in
-                // As the Tasks view's Release… button does; release refuses
-                // a second release of the same project.
-                do {
-                    _ = try coordinator.release(workspaceID: workspaceID, caller: .unmanaged)
-                } catch {
-                    presentFailure("Unable to Start the Release", error.localizedDescription)
-                }
-            }
             return true
         }
     }

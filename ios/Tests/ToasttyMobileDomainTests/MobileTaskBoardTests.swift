@@ -116,11 +116,12 @@ final class MobileTaskBoardTests: XCTestCase {
         }
     }
 
-    /// A lane's full task list and release fields are optional: an older
-    /// Mac omits them, and a value this phone cannot read reads as none
-    /// without losing the lane.
-    func testALanesReleaseFieldsAreOptional() throws {
-        let newest = UUID(), oldest = UUID(), project = UUID(), release = UUID()
+    /// A lane's full task list is optional: an older Mac omits it, and a
+    /// value this phone cannot read reads as none without losing the lane.
+    /// The release fields a Mac sent for the removed Release button are
+    /// ignored.
+    func testALanesTaskListIsOptional() throws {
+        let newest = UUID(), oldest = UUID(), project = UUID()
         func task(_ id: UUID) -> [String: Any] {
             [
                 "id": id.uuidString, "hasRecord": true, "title": "Task", "group": "to_ship", "mark": "to_ship",
@@ -134,8 +135,7 @@ final class MobileTaskBoardTests: XCTestCase {
                 // A task this phone was not sent is left out of the list.
                 "taskIDs": [newest.uuidString, UUID().uuidString, oldest.uuidString],
                 "releaseWorkspaceID": project.uuidString,
-                // The release task need not be on the board.
-                "releaseTaskID": release.uuidString,
+                "releaseTaskID": UUID().uuidString,
             ],
             ["id": "/repo/b", "projectTitle": "b", "count": 1, "recentTaskIDs": [oldest.uuidString]],
             [
@@ -153,12 +153,8 @@ final class MobileTaskBoardTests: XCTestCase {
         let board = try XCTUnwrap(GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation().taskBoard)
         XCTAssertEqual(board.toShip.map(\.id), ["/repo/a", "/repo/b", "/repo/c"])
         XCTAssertEqual(board.toShip[0].taskIDs, [newest, oldest])
-        XCTAssertEqual(board.toShip[0].releaseWorkspaceID, project)
-        XCTAssertEqual(board.toShip[0].releaseTaskID, release)
         for lane in board.toShip.dropFirst() {
             XCTAssertNil(lane.taskIDs)
-            XCTAssertNil(lane.releaseWorkspaceID)
-            XCTAssertNil(lane.releaseTaskID)
         }
         XCTAssertFalse(board.listsEveryToShipTask)
         // Each lane lists what the Mac sent: all, or the newest few.

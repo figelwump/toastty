@@ -135,8 +135,6 @@ public struct MobileHomeCard: Identifiable {
     /// To ship tasks, which can be more than the rows the board sends.
     public let toShipCount: Int
     public let doneCount: Int
-    /// Release… on the To ship line, when the project can release.
-    public let release: MobileProjectRelease?
 
     public var id: UUID { workspace?.id ?? MobileHomeBuckets.otherTasksCardID }
     public var isOtherTasks: Bool { workspace == nil }
@@ -261,26 +259,6 @@ public enum MobileHomeBuckets {
         func toShipLineCount(rows: [RemoteTaskSummary], tally: Int) -> Int {
             board.listsEveryToShipTask && rows.isEmpty == false ? rows.count : tally
         }
-        // The release of the lane that holds the project's To ship tasks.
-        // A lane groups by root, so it can hold another open project with
-        // the same root; the card starts the release in its own project,
-        // as the Mac's card does, and the Mac resolves the same root.
-        func release(projectID: UUID) -> MobileProjectRelease? {
-            board.toShip.lazy.compactMap { lane -> MobileProjectRelease? in
-                let tasks = MobileTaskBoard.taskIDs(lane).compactMap(board.task(id:))
-                guard tasks.contains(where: { $0.projectWorkspaceID == projectID }),
-                      let release = MobileTaskBoard.release(lane, tasks: tasks) else { return nil }
-                return MobileProjectRelease(
-                    laneID: release.laneID,
-                    projectTitle: release.projectTitle,
-                    workspaceID: projectID,
-                    taskCount: release.taskCount,
-                    taskTitles: release.taskTitles,
-                    releaseTaskID: release.releaseTaskID
-                )
-            }.first
-        }
-
         var cards: [MobileHomeCard] = []
         var openToShip = 0
         var openDone = 0
@@ -308,8 +286,7 @@ public enum MobileHomeBuckets {
                 needsYou: TaskBuckets.needsYou(candidates, pin: nil),
                 toShipTasks: toShipRows,
                 toShipCount: toShipLineCount(rows: toShipRows, tally: tally?.toShipCount ?? 0),
-                doneCount: tally?.doneCount ?? 0,
-                release: release(projectID: workspace.id)
+                doneCount: tally?.doneCount ?? 0
             ))
         }
 
@@ -327,9 +304,7 @@ public enum MobileHomeBuckets {
                 needsYou: TaskBuckets.needsYou(otherCandidates, pin: nil),
                 toShipTasks: board.toShipTasks.filter { $0.projectWorkspaceID.map(topLevelIDs.contains) != true },
                 toShipCount: otherToShip,
-                doneCount: otherDone,
-                // A project that is not open cannot release.
-                release: nil
+                doneCount: otherDone
             ))
         }
         return cards
