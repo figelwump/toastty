@@ -427,8 +427,8 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         XCTAssertEqual(childTasks.open.map(\.stage), [
             .bucket(.needsYou), .bucket(.needsYou), .bucket(.readyToReview), .bucket(.running), .bucket(.running), .bucket(.idle),
         ])
-        XCTAssertEqual(childTasks.merged.map(\.title), ["Token store", "Log redaction"])
-        XCTAssertEqual(childTasks.merged.map(\.stage), [.done, .toShip])
+        XCTAssertEqual(childTasks.finished.map(\.title), ["Token store", "Log redaction"])
+        XCTAssertEqual(childTasks.finished.map(\.stage), [.done, .toShip])
         // Only the child in another project names its project.
         XCTAssertEqual(childTasks.open.compactMap(\.projectTitle), ["toastty-ios"])
         XCTAssertEqual(childTasks.open.map(\.taskID), [4, 7, 1, 3, 8, 0].map { index in
@@ -562,7 +562,7 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         child.linkedParentID = parent.id
         grandchild.linkedParentID = child.id
         orphan.linkedParentID = UUID()
-        parent.childProgressLabel = SidebarSubspacePresentation.childProgressLabel(merged: 0, total: 2)
+        parent.childProgressLabel = TaskBoard.ChildProgress(total: 2).label
 
         let grouped = SidebarSubspacePresentation.groupingLinkedChildren([child, other, grandchild, parent, orphan])
         // A grandchild and a child whose parent is not listed keep their places.

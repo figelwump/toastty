@@ -208,9 +208,24 @@ enum TaskBoard {
         }
     }
 
-    /// Children first appear under the task that started them, so a parent
-    /// can show how many of them have merged.
-    static func childProgress(of taskID: UUID, items: [TaskBoardItem]) -> (merged: Int, total: Int)? {
+    struct ChildProgress: Hashable {
+        var total = 0
+        var finished = 0
+        var merged = 0
+
+        var outcomeLabel: String { finished == merged ? "merged" : "finished" }
+        var label: String { "\(finished)/\(total) \(outcomeLabel)" }
+
+        mutating func count(_ child: TaskBoardItem) {
+            total += 1
+            if child.stage == .toShip || child.stage == .done {
+                finished += 1
+                if child.hasMerged { merged += 1 }
+            }
+        }
+    }
+
+    static func childProgress(of taskID: UUID, items: [TaskBoardItem]) -> ChildProgress? {
         childProgressByParentTaskID(items.lazy.filter { $0.parentTaskID == taskID })[taskID]
     }
 
@@ -218,13 +233,11 @@ enum TaskBoard {
     /// the items.
     static func childProgressByParentTaskID(
         _ items: some Sequence<TaskBoardItem>
-    ) -> [UUID: (merged: Int, total: Int)] {
-        var progress: [UUID: (merged: Int, total: Int)] = [:]
+    ) -> [UUID: ChildProgress] {
+        var progress: [UUID: ChildProgress] = [:]
         for item in items where item.stage != .archived {
             guard let parentTaskID = item.parentTaskID else { continue }
-            let merged = item.stage == .toShip || item.stage == .done
-            progress[parentTaskID, default: (0, 0)].total += 1
-            if merged { progress[parentTaskID]?.merged += 1 }
+            progress[parentTaskID, default: ChildProgress()].count(item)
         }
         return progress
     }

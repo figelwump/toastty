@@ -283,7 +283,7 @@ struct SubspaceHoverTipModel: Hashable {
         let taskID: UUID
         /// The task, for its status mark.
         let item: TaskBoardItem
-        /// Its sidebar group, or To ship or Done once it merged.
+        /// Its sidebar group, or To ship or Done once its work finished.
         let stage: Stage
         /// The child's project, when it is not this task's project.
         let projectTitle: String?
@@ -302,10 +302,11 @@ struct SubspaceHoverTipModel: Hashable {
         }
     }
 
-    /// Child tasks that have not merged, most urgent first.
+    /// Open child tasks, most urgent first.
     var openChildTasks: [ChildTask] = []
-    /// Child tasks that merged, To ship or Done, newest merge first.
-    var mergedChildTasks: [ChildTask] = []
+    /// To ship and Done children, newest first.
+    var finishedChildTasks: [ChildTask] = []
+    var childProgress: TaskBoard.ChildProgress?
 }
 
 struct SubspaceHoverTipCard: View {
@@ -323,7 +324,7 @@ struct SubspaceHoverTipCard: View {
     @State private var hoveredSessionPanelID: UUID?
     @State private var hoveredChildTaskID: UUID?
     @State private var showsMoreOpenChildTasks = false
-    @State private var showsMergedChildTasks = false
+    @State private var showsFinishedChildTasks = false
 
     /// Open child tasks the card lists before "N more open".
     static let childTaskLimit = 5
@@ -403,8 +404,8 @@ struct SubspaceHoverTipCard: View {
                 .padding(.bottom, 8)
             }
 
-            if model.openChildTasks.isEmpty == false || model.mergedChildTasks.isEmpty == false {
-                childTasksSection
+            if let progress = model.childProgress {
+                childTasksSection(progress)
                     .padding(.bottom, 8)
             }
 
@@ -444,32 +445,30 @@ struct SubspaceHoverTipCard: View {
     }
 
     /// The tasks this one started: the open ones, most urgent first, then
-    /// one line for the merged ones. The heading counts them as the row's
-    /// "N/M merged" tag does.
-    private var childTasksSection: some View {
+    /// one line for finished children. The heading repeats the row's progress.
+    private func childTasksSection(_ progress: TaskBoard.ChildProgress) -> some View {
         let open = model.openChildTasks
-        let merged = model.mergedChildTasks
+        let finished = model.finishedChildTasks
         return VStack(alignment: .leading, spacing: 1) {
-            let progress = SidebarSubspacePresentation.childProgressLabel(merged: merged.count, total: open.count + merged.count)
             HStack(spacing: 6) {
                 Text("Child tasks")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(ToastyTheme.hoverTipMutedText)
                 Spacer(minLength: 6)
-                Text(progress)
+                Text(progress.label)
                     .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(ToastyTheme.sidebarChildContextText)
             }
             .padding(.bottom, 2)
             .accessibilityElement(children: .combine)
             .background {
-                SidebarSemanticTextBridge(text: "Child tasks: \(progress)")
+                SidebarSemanticTextBridge(text: "Child tasks: \(progress.label)")
                     .frame(width: 0, height: 0)
                     .allowsHitTesting(false)
             }
 
             ForEach(open.prefix(Self.childTaskLimit), id: \.taskID) { child in
-                selectableChildTaskRow(child, isMerged: false)
+                selectableChildTaskRow(child, isFinished: false)
             }
             if open.count > Self.childTaskLimit {
                 childTaskFold(
@@ -478,17 +477,17 @@ struct SubspaceHoverTipCard: View {
                     noun: "open child",
                     isExpanded: $showsMoreOpenChildTasks,
                     limit: Self.expandedChildTaskLimit - Self.childTaskLimit,
-                    isMerged: false
+                    isFinished: false
                 )
             }
-            if merged.isEmpty == false {
+            if finished.isEmpty == false {
                 childTaskFold(
-                    merged,
-                    title: "\(merged.count) merged",
-                    noun: "merged child",
-                    isExpanded: $showsMergedChildTasks,
+                    finished,
+                    title: "\(finished.count) \(progress.outcomeLabel)",
+                    noun: "\(progress.outcomeLabel) child",
+                    isExpanded: $showsFinishedChildTasks,
                     limit: Self.expandedChildTaskLimit,
-                    isMerged: true
+                    isFinished: true
                 )
             }
         }
@@ -503,13 +502,13 @@ struct SubspaceHoverTipCard: View {
         noun: String,
         isExpanded: Binding<Bool>,
         limit: Int,
-        isMerged: Bool
+        isFinished: Bool
     ) -> some View {
         let plural = tasks.count == 1 ? "task" : "tasks"
         HoverTipChildTaskFoldButton(
             title: title,
             isExpanded: isExpanded.wrappedValue,
-            showsCheckmark: isMerged,
+            showsCheckmark: isFinished,
             accessibilityText: "\(isExpanded.wrappedValue ? "Hide" : "Show") \(tasks.count) \(noun) \(plural)",
             markWidth: Self.railWidth,
             markGap: Self.railGap
@@ -518,7 +517,7 @@ struct SubspaceHoverTipCard: View {
         }
         if isExpanded.wrappedValue {
             ForEach(tasks.prefix(limit), id: \.taskID) { child in
-                selectableChildTaskRow(child, isMerged: isMerged)
+                selectableChildTaskRow(child, isFinished: isFinished)
             }
             let remaining = tasks.count - limit
             if remaining > 0, let onShowTaskInTasksView {
@@ -539,7 +538,7 @@ struct SubspaceHoverTipCard: View {
     }
 
     @ViewBuilder
-    private func selectableChildTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isMerged: Bool) -> some View {
+    private func selectableChildTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isFinished: Bool) -> some View {
         if let onSelectChildTask {
             let project = child.projectTitle.map { " in \($0)" } ?? ""
             let accessibilityText = "Go to child task \(child.title)\(project), \(child.stage.title)"
@@ -548,7 +547,7 @@ struct SubspaceHoverTipCard: View {
                 onSelectChildTask(child.taskID)
                 HoverTipPresenter.shared.hide(generation: generation)
             } label: {
-                childTaskRow(child, isMerged: isMerged)
+                childTaskRow(child, isFinished: isFinished)
                     .padding(.horizontal, Self.rowInset)
                     .background(
                         hoveredChildTaskID == child.taskID ? ToastyTheme.hoverTipTagBackground : Color.clear,
@@ -572,11 +571,11 @@ struct SubspaceHoverTipCard: View {
                     .allowsHitTesting(false)
             }
         } else {
-            childTaskRow(child, isMerged: isMerged)
+            childTaskRow(child, isFinished: isFinished)
         }
     }
 
-    private func childTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isMerged: Bool) -> some View {
+    private func childTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isFinished: Bool) -> some View {
         HStack(spacing: Self.railGap) {
             TaskStageMark(item: child.item)
             Text(child.title)
@@ -592,7 +591,7 @@ struct SubspaceHoverTipCard: View {
         }
         .frame(minHeight: 19)
         // Merged work steps back, as the sidebar dims a calmer row.
-        .opacity(isMerged ? 0.62 : 1)
+        .opacity(isFinished ? 0.62 : 1)
     }
 
     @ViewBuilder
