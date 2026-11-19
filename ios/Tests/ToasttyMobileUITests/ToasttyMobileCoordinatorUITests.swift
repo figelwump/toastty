@@ -612,6 +612,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-edited-message-queued", of: app)
 
         input.tap()
+        input.typeText("A new message")
         XCTAssertTrue(waitForLabel("Steer selected", of: mode), "A new draft still defaults to Steer")
     }
 
