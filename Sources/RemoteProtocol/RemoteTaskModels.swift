@@ -80,32 +80,19 @@ public struct RemoteTaskShipLane: Codable, Equatable, Sendable, Identifiable {
     /// lists each of them. Absent from older hosts, which send only
     /// `recentTaskIDs`.
     public var taskIDs: [UUID]?
-    /// The project workspace that a release of this lane starts in, as the
-    /// Mac's Release button uses it. A client sends it in
-    /// `RemoteProjectReleaseRequest`. Absent when the project cannot release
-    /// from Toastty or is not open, and from older hosts.
-    public var releaseWorkspaceID: UUID?
-    /// The project's release task while it runs: from its start until it
-    /// ships, is done, or is archived. The Mac starts no second release of
-    /// the project meanwhile. Absent otherwise, and from older hosts.
-    public var releaseTaskID: UUID?
 
     public init(
         id: String,
         projectTitle: String,
         count: Int,
         recentTaskIDs: [UUID] = [],
-        taskIDs: [UUID]? = nil,
-        releaseWorkspaceID: UUID? = nil,
-        releaseTaskID: UUID? = nil
+        taskIDs: [UUID]? = nil
     ) {
         self.id = id
         self.projectTitle = projectTitle
         self.count = count
         self.recentTaskIDs = recentTaskIDs
         self.taskIDs = taskIDs
-        self.releaseWorkspaceID = releaseWorkspaceID
-        self.releaseTaskID = releaseTaskID
     }
 }
 

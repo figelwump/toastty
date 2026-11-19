@@ -2309,8 +2309,7 @@ review. The choice is saved for each window.
   the Done line. A selected row keeps its place until you select another
   row, as when it merges while you look at it.
   After the buckets, a To ship line with
-  the purple To ship mark lists the project's other To ship tasks, with
-  **Release** when the project can release (see [Release](#release)) and the
+  the purple To ship mark lists the project's other To ship tasks, with the
   Done count on its right. It starts collapsed; click it to expand it in
   place, and the choice resets when the sidebar hides or the app quits.
   Expanded, the 3 most recently merged To ship tasks show as rows, then
@@ -2366,10 +2365,7 @@ Archived collapsed, and a detail pane with the task's text, stage, pull
 request, branch, agent and history, and its actions: open its task space or
 pull request, Merge or Merge Without Checks, Cancel Merge, Mark Done, Archive…,
 Close Task Space while a merged task's task space waits for its cleanup, and
-Clean Up or Keep As Is after a cleanup stopped. A To ship project has a
-**Release…** button when its project can release (see
-[Release](#release)); the project card's To ship line in the sidebar has
-one too. A task that is starting, or whose setup or
+Clean Up or Keep As Is after a cleanup stopped. A task that is starting, or whose setup or
 move failed, shows its setup controls there. An error in `tasks.toml` shows as a banner at the top.
 `Cmd+Shift+T`, or **View > Show Tasks**, shows the Tasks view; pressed again,
 it hides the view and returns to the workspace it covered. Up and Down Arrow
@@ -2389,10 +2385,6 @@ Merge**, **Task: Mark Done**, **Task: Archive…**, **Task: Clean Up** and
 Open Task Space**. Each row names the task and its stage. The actions run as
 the detail pane's buttons do, with the same confirmations. **Task: Merge**
 shows `Option+Shift+M` when it acts on the selected task space.
-
-**Release <project>…** starts a release for each open project with a
-`release_skill` or a `release_prompt`, as the To ship line's **Release…**
-does, even when nothing waits to ship. It is hidden while a release of that project is under way.
 
 **Open Coordinator** and, once its workspace is open, **Restart Coordinator**
 are described in [The coordinator](#the-coordinator). The **Agent** menu has
@@ -2618,19 +2610,19 @@ A release includes eligible merges from related project directories, and only
 one release of that repository can be under way at a time.
 
 A project can release from Toastty when
-`tasks.toml` gives it a `release_skill` or a `release_prompt`. **Release…** on
-its To ship line makes a release task: Toastty fetches the remote's default
+`tasks.toml` gives it a `release_skill` or a `release_prompt`. To start a
+release, ask the coordinator, which runs `toastty task release`. That command
+makes a release task: Toastty fetches the remote's default
 branch, and starts the release agent in a new worktree on no branch at exactly
 that commit, never in your project checkout. The fetch must succeed. The
 agent's first message starts with `Use the <release_skill> skill.` when a
 release skill is set, then `release_prompt` if one is set, then the list of
 tasks waiting to ship. A parent that is To ship only through its child tasks
-has no merge of its own, so the list names its children, not the parent. A
-To ship line that holds only such a parent offers no **Release…**. `toastty task release` does the
-same from the CLI, and **Release <project>…** in the command palette does it
-for an open project even when its To ship list is empty. The release agent is
-the `[defaults]` agent, model and effort. `toastty task release` can choose
-others with `--agent`, `--model` and `--effort`, as `task create` does.
+has no merge of its own, so the list names its children, not the parent.
+`toastty task release` starts a release for an open project even when its To
+ship list is empty. The release agent is the `[defaults]` agent, model and
+effort. `toastty task release` can choose others with `--agent`, `--model` and
+`--effort`, as `task create` does.
 
 Toastty looks for release tags every 15 minutes and when the Tasks view opens:
 it fetches tags and counts only a tag the remote has at the same commit. A
@@ -2682,7 +2674,7 @@ adds, such as the task text or the pull request.
 | Task starts (first message) | Create Task | `start_skill` | `toastty-task-start` (shipped) |
 | Move into a worktree | the agent, when you ask it to implement the work | none: part of the shipped `toastty-task-start` | |
 | Merge | the Merge button or the palette | `merge_skill` | `toastty-task-merge` (shipped) |
-| Release | **Release…**, the palette or `toastty task release` | `release_skill` | none |
+| Release | the coordinator, or `toastty task release` | `release_skill` | none |
 | Archive, clean up, done | Toastty itself | none | |
 
 ```toml

@@ -105,7 +105,7 @@ struct CommandPaletteTaskCommandsTests {
             )
         }
 
-        /// The "Task: …" and "Release …" rows, as title and subtitle.
+        /// The task commands' rows, as title and subtitle.
         func taskRows() -> [String] {
             commands()
                 .filter { if case .task = $0.invocation { true } else { false } }
@@ -205,55 +205,5 @@ struct CommandPaletteTaskCommandsTests {
         // A done task has no actions left, and the stale row does nothing.
         #expect(harness.taskRows().isEmpty)
         #expect(harness.actions.execute(markDone.invocation, originWindowID: harness.windowID) == false)
-    }
-
-    @Test func releaseIsListedWithNothingToShipAndHiddenWhileItRuns() async throws {
-        let harness = try Harness()
-        let fixture = harness.fixture
-        _ = try fixture.repository.pushToRemote("released")
-        fixture.config.defaults = TasksConfig.Defaults(agent: "claude")
-        let project = try #require(fixture.store.state.workspacesByID[fixture.workspaceID]?.title)
-        // The project has no saved root, and its terminal is below the
-        // repository root: the configured project still matches.
-        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
-        let sources = URL(filePath: fixture.repository.project).appending(path: "Sources").path
-        try FileManager.default.createDirectory(atPath: sources, withIntermediateDirectories: true)
-        #expect(workspace.rootDirectory == nil)
-        _ = fixture.store.send(.updateTerminalPanelMetadata(
-            panelID: try #require(workspace.focusedPanelID),
-            title: nil,
-            cwd: sources
-        ))
-        // Without release_skill or release_prompt there is nothing to release.
-        harness.board.reloadConfig()
-        #expect(harness.taskRows().isEmpty)
-
-        // A release skill alone is enough.
-        fixture.config.workspaces = [TasksConfig.Workspace(path: fixture.repository.project, releaseSkill: "toastty-release")]
-        harness.board.reloadConfig()
-        #expect(harness.taskRows() == ["Release \(project)… — Nothing to ship yet"])
-
-        #expect(try harness.run("Release \(project)…"))
-        #expect(harness.failures.isEmpty)
-        let release = try #require(fixture.coordinator.records.records.first { $0.release != nil })
-        #expect(release.release?.childTaskIDs == [])
-        #expect(release.projectRoot == fixture.repository.project)
-        await fixture.waitUntil("setup ends") { fixture.record(release.id)?.setup != .settingUp }
-        #expect(fixture.record(release.id)?.setup == .started)
-        // One release of a project at a time.
-        #expect(harness.taskRows().contains { $0.hasPrefix("Release") } == false)
-    }
-
-    @Test func aDefaultReleaseSkillListsAProjectWithNoTableOfItsOwn() throws {
-        let harness = try Harness()
-        let fixture = harness.fixture
-        let project = try #require(fixture.store.state.workspacesByID[fixture.workspaceID]?.title)
-        fixture.config.defaults = TasksConfig.Defaults(agent: "claude", releaseSkill: "toastty-release")
-        harness.board.reloadConfig()
-        // The palette cannot ask git for the root, so it needs a saved one.
-        #expect(harness.taskRows().isEmpty)
-
-        _ = fixture.store.send(.setWorkspaceRootDirectory(workspaceID: fixture.workspaceID, rootDirectory: fixture.repository.project))
-        #expect(harness.taskRows() == ["Release \(project)… — Nothing to ship yet"])
     }
 }

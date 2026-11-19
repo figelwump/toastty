@@ -12,9 +12,6 @@ struct TasksViewSections: Equatable {
         let id: String
         let projectTitle: String
         let entries: [SidebarStatusSections.Entry]
-        /// Where Release starts a release; `nil` when the project cannot
-        /// release from Toastty.
-        var releaseWorkspaceID: UUID? = nil
     }
 
     var needsYou: [SidebarStatusSections.Entry] = []
@@ -27,7 +24,7 @@ struct TasksViewSections: Equatable {
     var done: [SidebarStatusSections.Entry] = []
     var archived: [SidebarStatusSections.Entry] = []
 
-    static func make(_ items: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool = { _ in false }) -> Self {
+    static func make(_ items: [TaskBoardItem]) -> Self {
         // Needs you, Running and Idle list a task by the bucket the sidebar
         // lists its task space's row in: the more urgent of its stage and its
         // sessions. To ship, Done and Archived list by stage.
@@ -72,8 +69,7 @@ struct TasksViewSections: Equatable {
                 return Lane(
                     id: key,
                     projectTitle: entries.first?.item.projectTitle ?? "Other",
-                    entries: entries,
-                    releaseWorkspaceID: SidebarStatusSections.releaseWorkspaceID(entries.map(\.item), releasable: releasable)
+                    entries: entries
                 )
             }
             .sorted { $0.projectTitle.localizedStandardCompare($1.projectTitle) == .orderedAscending }
@@ -145,7 +141,7 @@ struct TasksView: View {
 
     var body: some View {
         let items = board.items()
-        let sections = TasksViewSections.make(items, releasable: board.canRelease)
+        let sections = TasksViewSections.make(items)
         let selected = board.tasksViewSelection(windowID: windowID, items: items)
         // A group the view was asked to reveal counts as expanded before the
         // view applies the request. Otherwise a selected task in that group
@@ -342,12 +338,6 @@ struct TasksView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
                     Spacer(minLength: 0)
-                    if let workspaceID = lane.releaseWorkspaceID, let coordinator = board.coordinator {
-                        TaskReleaseButton(title: "Release…") {
-                            TaskActions.release(workspaceID: workspaceID, coordinator: coordinator)
-                        }
-                        .accessibilityIdentifier("tasks.view.toShip.\(lane.projectTitle).release")
-                    }
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 6)

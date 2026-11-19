@@ -169,12 +169,6 @@ enum TaskActions {
         )
     }
 
-    static func release(workspaceID: UUID, coordinator: TaskCoordinator) {
-        perform("Unable to Start the Release") {
-            _ = try coordinator.release(workspaceID: workspaceID, caller: .unmanaged)
-        }
-    }
-
     static func perform(_ failureTitle: String, _ body: () throws -> Void) {
         do {
             try body()

@@ -72,7 +72,13 @@ struct ToasttyComposerTextView: UIViewRepresentable {
         context: Context
     ) {
         context.coordinator.parent = self
+        let candidatesChanged = textView.mentionCandidates != mentionCandidates
         configureMentions(textView)
+        // New tasks to mention, such as the Mac's finished tasks arriving,
+        // reach an open list without waiting for the next key.
+        if candidatesChanged, mentionPicker?.isOpen == true {
+            context.coordinator.scheduleMentionPickerUpdate(for: textView)
+        }
         synchronize(textView)
         #if DEBUG
         textView.traceTyping(.synchronized, editRevision: context.coordinator.traceEditRevision)
@@ -427,7 +433,7 @@ struct ToasttyComposerTextView: UIViewRepresentable {
             picker.update(text: textView.mentionTriggerText, selection: textView.selectedRange)
         }
 
-        private func scheduleMentionPickerUpdate(for textView: ToasttyComposerUIKitTextView) {
+        func scheduleMentionPickerUpdate(for textView: ToasttyComposerUIKitTextView) {
             guard let picker = parent.mentionPicker else { return }
             DispatchQueue.main.async { [weak self, weak textView] in
                 guard let self, self.isActive, let textView, textView.isFirstResponder else {

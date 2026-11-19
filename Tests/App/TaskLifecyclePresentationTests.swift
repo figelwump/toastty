@@ -264,12 +264,10 @@ struct TaskLifecyclePresentationTests {
         }
         let first = UUID(), second = UUID()
         let items = [shipped(root: "/a/app", workspaceID: first), shipped(root: "/b/app", workspaceID: second)]
-        let sidebar = SidebarStatusSections.make(items, releasable: { _ in true })
-        #expect(sidebar.toShip.count == 2)
-        #expect(Set(sidebar.toShip.compactMap(\.releaseWorkspaceID)) == [first, second])
-        let view = TasksViewSections.make(items, releasable: { _ in true })
-        #expect(view.toShip.count == 2)
-        #expect(Set(view.toShip.compactMap(\.releaseWorkspaceID)) == [first, second])
+        let sidebar = SidebarStatusSections.make(items)
+        #expect(Set(sidebar.toShip.map(\.id)) == ["/a/app", "/b/app"])
+        let view = TasksViewSections.make(items)
+        #expect(Set(view.toShip.map(\.id)) == ["/a/app", "/b/app"])
     }
 
     @Test

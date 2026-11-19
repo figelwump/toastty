@@ -12,29 +12,36 @@ import UIKit
 
 extension CoordinatorMentionCandidate {
     /// The tasks on the phone's task board that can be mentioned, newest
-    /// activity first, as the Mac orders its board. A task space without a
-    /// task record cannot be mentioned: the coordinator reads tasks by
-    /// their ID.
+    /// activity first, as the Mac orders its board, then the Mac's recent
+    /// Done and archived tasks that the board does not list, in the Mac's
+    /// order. A task on both shows once, as the board lists it. A task space
+    /// without a task record cannot be mentioned: the coordinator reads
+    /// tasks by their ID.
     @MainActor
-    static func candidates(from board: MobileTaskBoard?) -> [CoordinatorMentionCandidate] {
-        (board?.tasks ?? [])
+    static func candidates(
+        from board: MobileTaskBoard?,
+        finished: ToasttyFinishedTasks = ToasttyFinishedTasks()
+    ) -> [CoordinatorMentionCandidate] {
+        let listed = (board?.tasks ?? [])
             .filter(\.hasRecord)
             .sorted { lhs, rhs in
                 lhs.activityAt != rhs.activityAt ? lhs.activityAt > rhs.activityAt : lhs.title < rhs.title
             }
-            .map { task in
-                CoordinatorMentionCandidate(
-                    taskID: task.id,
-                    title: task.title,
-                    projectTitle: task.projectTitle,
-                    pullRequestNumber: task.pullRequest?.number,
-                    group: group(for: task.group),
-                    markColor: ToasttyTaskLinkChips.chipColor(ToasttyTaskDetailSheet.stageColor(task)),
-                    // The board does not say when a task finished; its
-                    // latest change is the Mac's fallback too.
-                    doneAt: task.activityAt
-                )
-            }
+        let onBoard = Set(listed.map(\.id))
+        return listed.map { task in
+            CoordinatorMentionCandidate(
+                taskID: task.id,
+                title: task.title,
+                projectTitle: task.projectTitle,
+                pullRequestNumber: task.pullRequest?.number,
+                group: group(for: task.group),
+                markColor: ToasttyTaskLinkChips.chipColor(ToasttyTaskDetailSheet.stageColor(task)),
+                // The board does not say when a task finished. The finished
+                // tasks do, from a Mac that sends it; else the latest change
+                // is the Mac's fallback too.
+                doneAt: finished.doneAt(id: task.id) ?? task.activityAt
+            )
+        } + finished.mentionCandidates.filter { onBoard.contains($0.taskID) == false }
     }
 
     static func group(for group: RemoteTaskGroup) -> Group {

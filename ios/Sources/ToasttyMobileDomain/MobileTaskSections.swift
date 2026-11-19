@@ -38,8 +38,6 @@ public struct MobileTaskSections: Equatable, Sendable {
         /// The lane's tasks, newest merge first: all of them, or only the
         /// newest few from an older Mac.
         public let tasks: [RemoteTaskSummary]
-        /// Release… on the lane's line, when its project can release.
-        public let release: MobileProjectRelease?
     }
 
     public var toShip: [Lane] = []
@@ -72,8 +70,7 @@ public struct MobileTaskSections: Equatable, Sendable {
                 id: lane.id,
                 projectTitle: lane.projectTitle,
                 count: lane.count,
-                tasks: tasks,
-                release: MobileTaskBoard.release(lane, tasks: tasks)
+                tasks: tasks
             )
         }
         // To ship, Done and Archived tasks keep their lanes and the Done

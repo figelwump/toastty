@@ -56,7 +56,6 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var tasksViewTitleValue = ToasttyBuiltInCommand.toggleTasksView.title
     var toggledTasksViewWindowIDs: [UUID] = []
     var currentTaskValue: TaskBoardCurrentTask?
-    var taskReleaseOptionsValue: [PaletteTaskReleaseOption] = []
     var coordinatorOptionValue: PaletteCoordinatorOption?
     var executedTaskCommands: [PaletteTaskCommand] = []
 
@@ -298,11 +297,6 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
         _ = originWindowID
         return currentTaskValue
-    }
-
-    func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption] {
-        _ = originWindowID
-        return taskReleaseOptionsValue
     }
 
     func coordinatorOption(originWindowID: UUID) -> PaletteCoordinatorOption? {

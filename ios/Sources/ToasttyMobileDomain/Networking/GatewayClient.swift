@@ -114,9 +114,6 @@ public protocol GatewayClientProtocol: Sendable {
     func taskArchiveCheck(
         _ request: RemoteTaskArchiveCheckRequest
     ) async throws -> RemoteTaskArchiveCheckResponse
-    func releaseProject(
-        _ request: RemoteProjectReleaseRequest
-    ) async throws -> RemoteProjectReleaseResponse
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse
@@ -221,11 +218,6 @@ public extension GatewayClientProtocol {
         throw GatewayFailure.invalidResponse
     }
 
-    func releaseProject(
-        _ request: RemoteProjectReleaseRequest
-    ) async throws -> RemoteProjectReleaseResponse {
-        throw GatewayFailure.invalidResponse
-    }
     func taskCreateOptions(
         _ request: RemoteTaskCreateOptionsRequest
     ) async throws -> RemoteTaskCreateOptionsResponse {
@@ -654,18 +646,6 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         }
     }
 
-    public func releaseProject(
-        _ request: RemoteProjectReleaseRequest
-    ) async throws -> RemoteProjectReleaseResponse {
-        let response = try await perform(
-            method: "POST",
-            path: RemoteProjectReleasePolicy.releasePath,
-            body: try encode(request)
-        )
-        return try decodeVersioned(RemoteProjectReleaseResponse.self, from: response.body) {
-            $0.protocolVersion
-        }
-    }
     /// Uses the upload route when files are attached, as a session start
     /// does, so the Mac authorizes the headers before it reads the body.
     public func createTask(

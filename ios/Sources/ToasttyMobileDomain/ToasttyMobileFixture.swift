@@ -254,25 +254,43 @@ public enum ToasttyMobileFixture {
     public static let finishedDoneTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000030")!
     public static let finishedArchivedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000031")!
 
+    public static let finishedOlderDoneTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000032")!
+
     /// The fixture Mac's recent finished tasks, which leave its task board:
-    /// a Done task whose task space closed, with its merged pull request,
-    /// and an archived one. The fixture chats link both.
-    public static let finishedTasks = RemoteFinishedTasks(
-        revision: "f1n15hed0000c0de",
-        tasks: [
-            RemoteFinishedTask(
-                id: finishedDoneTaskID, title: "signup-feedback-form", group: .done, stageTitle: "Done",
-                stageReason: "merged", statusLine: "Done", projectTitle: "toastty",
-                pullRequest: RemoteTaskPullRequest(
-                    number: 212, url: URL(string: "https://github.com/example/toastty/pull/212")!, state: .merged
-                )
-            ),
-            RemoteFinishedTask(
-                id: finishedArchivedTaskID, title: "csv-export-spike", group: .archived, stageTitle: "Archived",
-                stageReason: "closed without finishing", statusLine: "Archived", projectTitle: "toastty"
-            ),
-        ]
-    )
+    /// a Done task whose task space closed two days ago, with its merged
+    /// pull request; an archived one, which finished yesterday; and a Done
+    /// task that finished a month ago. The fixture chats link the first two.
+    /// The mention list shows only the first before a search.
+    public static let finishedTasks: RemoteFinishedTasks = {
+        let day: TimeInterval = 24 * 60 * 60
+        let now = Date()
+        return RemoteFinishedTasks(
+            revision: "f1n15hed0000c0de",
+            tasks: [
+                RemoteFinishedTask(
+                    id: finishedArchivedTaskID, title: "csv-export-spike", group: .archived, stageTitle: "Archived",
+                    stageReason: "closed without finishing", statusLine: "Archived", projectTitle: "toastty",
+                    doneAt: now.addingTimeInterval(-day)
+                ),
+                RemoteFinishedTask(
+                    id: finishedDoneTaskID, title: "signup-feedback-form", group: .done, stageTitle: "Done",
+                    stageReason: "merged", statusLine: "Done", projectTitle: "toastty",
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 212, url: URL(string: "https://github.com/example/toastty/pull/212")!, state: .merged
+                    ),
+                    doneAt: now.addingTimeInterval(-2 * day)
+                ),
+                RemoteFinishedTask(
+                    id: finishedOlderDoneTaskID, title: "onboarding-copy-pass", group: .done, stageTitle: "Done",
+                    stageReason: "merged", statusLine: "Done", projectTitle: "toastty",
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 158, url: URL(string: "https://github.com/example/toastty/pull/158")!, state: .merged
+                    ),
+                    doneAt: now.addingTimeInterval(-30 * day)
+                ),
+            ]
+        )
+    }()
 
     /// `home` from a Mac with the task system on. Its task spaces are
     /// tasks: compact-session-rows waits for approval, early-session-titles
@@ -387,12 +405,10 @@ public enum ToasttyMobileFixture {
             ],
             running: [RemoteTaskBoardEntry(taskID: workingSubspaceID), RemoteTaskBoardEntry(taskID: mergingTaskID)],
             idle: [RemoteTaskBoardEntry(taskID: archiveTaskID), RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
-            // The project can release from Toastty, and no release runs.
             toShip: [RemoteTaskShipLane(
                 id: "toastty", projectTitle: "toastty", count: 3,
                 recentTaskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID],
-                taskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID],
-                releaseWorkspaceID: toasttyID
+                taskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID]
             )],
             doneCount: 14,
             finishedByProject: [
@@ -559,8 +575,7 @@ public enum ToasttyMobileFixture {
             running: [RemoteTaskBoardEntry(taskID: longNamesStartingTaskID)],
             toShip: [RemoteTaskShipLane(
                 id: "long-names", projectTitle: project, count: 1,
-                recentTaskIDs: [longNamesShippedTaskID], taskIDs: [longNamesShippedTaskID],
-                releaseWorkspaceID: projectID
+                recentTaskIDs: [longNamesShippedTaskID], taskIDs: [longNamesShippedTaskID]
             )],
             doneCount: 104,
             finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 1, doneCount: 104)]

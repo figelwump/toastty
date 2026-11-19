@@ -216,21 +216,10 @@ struct TaskCreatePreparation {
 }
 
 struct TaskError: LocalizedError, Equatable {
-    /// What a caller that answers with a code, such as a paired device,
-    /// needs to tell apart. Most errors have none: the message says it all.
-    enum Reason: Equatable {
-        case workspaceNotFound
-        /// The project has no release skill or release prompt.
-        case releaseNotConfigured
-        case releaseUnderWay
-    }
-
     let message: String
-    var reason: Reason?
 
-    init(_ message: String, reason: Reason? = nil) {
+    init(_ message: String) {
         self.message = message
-        self.reason = reason
     }
 
     var errorDescription: String? { message }

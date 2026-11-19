@@ -131,7 +131,9 @@ struct ToasttyConversationScreen: View {
         // The coordinator's chat mentions tasks, as the Mac's does. A task's
         // session keeps its plain field.
         let mentionCandidates = isCoordinatorRoot
-            ? CoordinatorMentionCandidate.candidates(from: controller.snapshot.taskBoard) : []
+            ? CoordinatorMentionCandidate.candidates(
+                from: controller.snapshot.taskBoard, finished: controller.finishedTasks
+            ) : []
         Group {
             if let conversation = controller.conversation(id: conversationID) {
                 ToasttyTranscriptView(

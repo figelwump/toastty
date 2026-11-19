@@ -125,9 +125,8 @@ struct RemoteTaskBoardTests {
     }
 
     /// Every To ship task travels, so a phone can list what a release
-    /// ships, and each lane says where Release starts and which release
-    /// runs, as the Mac's Release button reads them.
-    @Test func aLaneCarriesEveryToShipTaskAndItsRelease() throws {
+    /// ships.
+    @Test func aLaneCarriesEveryToShipTask() throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         fixture.config = TasksConfig(workspaces: [
             TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*", releasePrompt: "Echo the release plan."),
@@ -148,39 +147,14 @@ struct RemoteTaskBoardTests {
             try fixture.coordinator.records.insert(record)
             merged.append(record)
         }
-        func lane() throws -> (lane: RemoteTaskShipLane, board: RemoteTaskBoard) {
-            let board = try #require(harness.service.facadeSessionList(at: .now).tasks)
-            return (try #require(board.toShip.first), board)
-        }
-
-        var current = try lane()
+        let board = try #require(harness.service.facadeSessionList(at: .now).tasks)
+        let lane = try #require(board.toShip.first)
         let newestFirst = merged.reversed().map(\.id)
-        #expect(current.lane.count == 5)
+        #expect(lane.count == 5)
         // An older phone still reads the newest few.
-        #expect(current.lane.recentTaskIDs == Array(newestFirst.prefix(3)))
-        #expect(current.lane.taskIDs == newestFirst)
-        #expect(Set(current.board.tasks.map(\.id)).isSuperset(of: newestFirst))
-        #expect(current.lane.releaseWorkspaceID == fixture.workspaceID)
-        #expect(current.lane.releaseTaskID == nil)
-
-        // While a release of the project runs, the lane names it.
-        var release = TaskRecord(
-            createdAt: Date(), text: "Release toastty", title: "Release toastty", slug: "release", source: .cli,
-            workspaceID: fixture.workspaceID, projectRoot: fixture.projectRoot, setup: .started
-        )
-        release.release = TaskRelease(childTaskIDs: merged.map(\.id))
-        try fixture.coordinator.records.insert(release)
-        current = try lane()
-        #expect(current.lane.releaseTaskID == release.id)
-
-        // Without a release setting the lane offers no Release, and names
-        // no release.
-        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
-        harness.board.reloadConfig()
-        current = try lane()
-        #expect(current.lane.releaseWorkspaceID == nil)
-        #expect(current.lane.releaseTaskID == nil)
-        #expect(current.lane.taskIDs?.count == 5)
+        #expect(lane.recentTaskIDs == Array(newestFirst.prefix(3)))
+        #expect(lane.taskIDs == newestFirst)
+        #expect(Set(board.tasks.map(\.id)).isSuperset(of: newestFirst))
     }
 
     @Test func aChangeOnlyTheBoardSeesSendsANewSnapshot() async throws {
@@ -276,15 +250,23 @@ struct RemoteTaskBoardTests {
         #expect(finished.tasks.map(\.id) == [doneWithSpace.id, archived.id, merged.id])
         #expect(finished.tasks.contains { [running.id, toShip.id, watched].contains($0.id) } == false)
         try #require(finished.tasks.count == 3)
+        // When each finished, as the Mac's mention list reads it: the
+        // record's done time, else its latest change, here its archiving.
+        let stored = try #require(fixture.coordinator.records.record(id: merged.id)?.doneAt)
+        let archivedAt = try #require(fixture.coordinator.records.record(id: archived.id)?.archivedAt)
+        #expect(finished.tasks[2].doneAt == stored)
+        #expect(finished.tasks[1].doneAt == archivedAt)
         #expect(finished.tasks[2] == RemoteFinishedTask(
             id: merged.id, title: "Signup feedback", group: .done, stageTitle: "Done", stageReason: "merged",
             statusLine: "Done", projectTitle: "toastty",
-            pullRequest: RemoteTaskPullRequest(number: 301, url: URL(string: "https://github.com/example/toastty/pull/301")!)
+            pullRequest: RemoteTaskPullRequest(number: 301, url: URL(string: "https://github.com/example/toastty/pull/301")!),
+            doneAt: stored
         ))
         #expect(finished.tasks[1] == RemoteFinishedTask(
             id: archived.id, title: "Old export spike", group: .archived, stageTitle: "Archived",
             stageReason: "closed without finishing", statusLine: "Archived", projectTitle: "toastty",
-            pullRequest: RemoteTaskPullRequest(number: 302, url: URL(string: "https://github.com/example/toastty/pull/302")!)
+            pullRequest: RemoteTaskPullRequest(number: 302, url: URL(string: "https://github.com/example/toastty/pull/302")!),
+            doneAt: archivedAt
         ))
         // The gateway reads the same list through the handler the service
         // installs.

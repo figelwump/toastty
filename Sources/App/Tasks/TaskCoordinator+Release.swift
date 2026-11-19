@@ -15,29 +15,17 @@ extension TaskCoordinator {
     /// from the agent, so a release made outside Toastty counts too.
     /// `agent`, `model` and `effort` choose the release's agent, as for a
     /// create; `[defaults]` fills what they leave out.
-    ///
-    /// With a `clientRequestID`, a repeat of the caller's request returns
-    /// the release it started, whatever changed since, and starts nothing.
     @discardableResult
     func release(
         workspaceID requestedWorkspaceID: UUID,
         caller: TaskCaller,
         agent: String? = nil,
         model: String? = nil,
-        effort: String? = nil,
-        clientRequestID: String? = nil
+        effort: String? = nil
     ) throws -> TaskRecord {
         let projectID = store.state.subspaceParentIDsByWorkspaceID()[requestedWorkspaceID] ?? requestedWorkspaceID
-        let clientRequestID = try validatedClientRequestID(clientRequestID)
-        // Request IDs belong to their caller, as for a create.
-        if let clientRequestID, let existing = records.record(clientRequestID: clientRequestID, source: caller.source) {
-            guard existing.release != nil, existing.workspaceID == projectID else {
-                throw TaskError("Request ID \(clientRequestID) was already used for another request.")
-            }
-            return existing
-        }
         guard let project = store.state.workspacesByID[projectID] else {
-            throw TaskError("No open workspace has ID \(requestedWorkspaceID.uuidString).", reason: .workspaceNotFound)
+            throw TaskError("No open workspace has ID \(requestedWorkspaceID.uuidString).")
         }
         let root = try resolvedProjectRoot(workspaceID: projectID).path
         let config: TasksConfig
@@ -47,15 +35,12 @@ extension TaskCoordinator {
             throw TaskError(error.localizedDescription)
         }
         guard config.canRelease(projectRoot: root, repositoryRoot: releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath) else {
-            throw TaskError(
-                "Set release_skill or release_prompt for \(root) in ~/.toastty/tasks.toml to release from Toastty.",
-                reason: .releaseNotConfigured
-            )
+            throw TaskError("Set release_skill or release_prompt for \(root) in ~/.toastty/tasks.toml to release from Toastty.")
         }
         let releaseSkill = config.releaseSkill(forProjectRoot: root, repositoryRoot: releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath)
         let releasePrompt = config.releaseWorkspace(forProjectRoot: root, repositoryRoot: releaseRepositoryRoot(projectRoot: root), homeDirectoryPath: homeDirectoryPath)?.releasePrompt
         if let running = releaseUnderWay(projectRoot: root) {
-            throw TaskError("A release of \(project.title) is already under way: \(running.title).", reason: .releaseUnderWay)
+            throw TaskError("A release of \(project.title) is already under way: \(running.title).")
         }
         let children = toShipTasks(projectRoot: root)
         let pinned = TaskFields(
@@ -87,7 +72,6 @@ extension TaskCoordinator {
             }
         }
         var record = TaskRecord(
-            clientRequestID: clientRequestID,
             createdAt: now(),
             text: lines.joined(separator: "\n"),
             title: "Release \(project.title)",

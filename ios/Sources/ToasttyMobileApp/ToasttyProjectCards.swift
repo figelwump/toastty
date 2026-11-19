@@ -149,9 +149,8 @@ struct ToasttyProjectCards: View {
     static let shownToShipTasks = 3
 
     /// "› To ship 2" and "Done 14 ›" under the buckets. The chevron shows
-    /// the project's newest To ship tasks in place, with Release… when the
-    /// project can release; the count and Done switch to the Tasks tab at
-    /// their group.
+    /// the project's newest To ship tasks in place; the count and Done
+    /// switch to the Tasks tab at their group.
     @ViewBuilder
     private func toShipLine(_ card: MobileHomeCard) -> some View {
         let isExpanded = expandedToShipCardIDs.contains(card.id)
@@ -193,17 +192,6 @@ struct ToasttyProjectCards: View {
                     .accessibilityLabel("To ship \(card.toShipCount)")
                     .accessibilityHint("Shows the tasks to ship in Tasks")
                     .accessibilityIdentifier("toastty-card-to-ship-\(card.id.uuidString)")
-                }
-                // On the expanded line only, so a tap meant for the count
-                // or the chevron does not land on it. A line with nothing
-                // to expand shows it at once.
-                if card.toShipCount > 0, let release = card.release, isExpanded || card.toShipTasks.isEmpty {
-                    ToasttyReleaseButton(
-                        release: release,
-                        controller: controller,
-                        accessibilityIdentifier: "toastty-card-release-\(card.id.uuidString)"
-                    )
-                    .padding(.leading, 4)
                 }
                 Spacer(minLength: 8)
                 if card.doneCount > 0 {
