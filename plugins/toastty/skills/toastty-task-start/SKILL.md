@@ -210,13 +210,21 @@ In a repository without pull requests, report the verified commit instead.
 For implementation work, publish one verification report in this task
 workspace's Scratchpad, as `toastty-scratchpad` describes.
 
-- Start with a short summary that makes sense without the conversation: the
-  problem or the requested feature, the cause when it is known, what changed,
-  and the result.
-- Then give each check: the command or user steps, the commit, the result, and
-  its proof, such as terminal output, or screenshots or video for a visual
-  change. Size the proof to the change. Link each material change and risk
-  to the check that covers it, or list it as not covered.
+- Lead with the result in plain language. In a short summary that stands on
+  its own, include the problem or requested feature, the cause when known,
+  and what changed. Keep material failures, coverage gaps, and decisions
+  visible near the top.
+- Show screenshots or video for visual changes. Put the key verification
+  screenshots and videos directly below the summary and any material
+  failures, gaps, or decisions. Caption each capture with what it proves.
+  Point to each key capture from the checks it supports. Keep supporting
+  captures with their checks.
+- Group checks by behavior in a short list or table with the outcome and test
+  target. Give the checked commit for each check, stating it once when checks
+  share it. Keep commands or user steps and inspectable proof with each check.
+  Put long output in an expandable section. Size the proof to the change.
+  Link each material change and risk to the check that covers it, or mark it
+  as not covered.
 - Look at the screenshots and video yourself, and confirm that they show in
   the report.
 - After later changes, refresh the same report so it names the current commit.
