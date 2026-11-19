@@ -1262,9 +1262,10 @@ struct ToasttyMobileRootView: View {
                     _ = await controller.removeQueuedMessage(clientRequestID)
                 case .edit(let clientRequestID, let shown):
                     let text = controller.queuedMessageText(clientRequestID) ?? shown
+                    let turnEpoch = controller.inputControl?.turnEpoch
                     guard queuedEditIsAllowed(text, readsReplies: readsReplies, for: conversationID),
                           await controller.removeQueuedMessage(clientRequestID) else { return }
-                    restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID)
+                    restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID, queueForTurn: turnEpoch)
                 case .steer(let clientRequestID, let shown):
                     let text = controller.queuedMessageText(clientRequestID) ?? shown
                     guard await controller.removeQueuedMessage(clientRequestID) else { return }
@@ -1292,11 +1293,17 @@ struct ToasttyMobileRootView: View {
 
     /// A waiting message back in the draft. In the coordinator's chat a
     /// reply comes back as a reply.
-    private func restoreQueuedMessage(_ text: String, readsReplies: Bool, for conversationID: UUID) {
-        if readsReplies {
-            composerDrafts.update { $0.restoreQueuedReply(text, for: conversationID) }
-        } else {
-            composerDrafts.update { $0.restoreDraft(text, for: conversationID) }
+    private func restoreQueuedMessage(
+        _ text: String, readsReplies: Bool, for conversationID: UUID, queueForTurn: RemoteInputEpoch? = nil
+    ) {
+        composerDrafts.update { draft in
+            guard !draft.isSubmitting(conversationID) else { return }
+            if readsReplies {
+                draft.restoreQueuedReply(text, for: conversationID)
+            } else {
+                draft.restoreDraft(text, for: conversationID)
+            }
+            if let queueForTurn { draft.queuedTurnEpochs[conversationID] = queueForTurn }
         }
     }
 
@@ -1619,7 +1626,9 @@ struct ToasttyMobileRootView: View {
             let readsReplies = conversationID == coordinatorConversationID
             guard queuedEditIsAllowed(text, readsReplies: readsReplies, for: conversationID) else { return }
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
-            restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID)
+            restoreQueuedMessage(
+                text, readsReplies: readsReplies, for: conversationID, queueForTurn: fixtureInputControl.turnEpoch
+            )
         case .steer(let clientRequestID, let shown):
             let text = fixtureQueuedMessages.first { $0.clientRequestID == clientRequestID }?.text ?? shown
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }

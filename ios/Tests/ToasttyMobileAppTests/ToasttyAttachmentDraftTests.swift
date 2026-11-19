@@ -9,6 +9,24 @@ final class ToasttyAttachmentDraftTests: XCTestCase {
         .init(filename: "note.txt", data: Data(repeating: 65, count: bytes))
     }
 
+    func testQueueSelectionLastsUntilTheWholeDraftClears() throws {
+        let conversation = UUID()
+        let turn = RemoteInputEpoch(bindingID: UUID(), counter: 1)
+        let file = attachment()
+        var state = ToasttyComposerDraftState()
+        state.updateDraft("Send later", for: conversation)
+        XCTAssertNil(state.addAttachments([file], for: conversation))
+        state.queuedTurnEpochs[conversation] = turn
+
+        state.updateDraft("", for: conversation)
+        XCTAssertEqual(state.queuedTurnEpochs[conversation], turn, "The attachment still belongs to this draft")
+        let submission = try XCTUnwrap(state.beginSubmission(for: conversation))
+        state.finishSubmission(submission, outcome: .notEnqueued(.staleComposerAuthority))
+        XCTAssertEqual(state.queuedTurnEpochs[conversation], turn, "Retry with the same mode")
+        state.removeAttachment(file.id, for: conversation)
+        XCTAssertNil(state.queuedTurnEpochs[conversation])
+    }
+
     func testAttachmentOnlySubmissionAndLocalFailurePreserveConversationOwnership() throws {
         let conversation = UUID()
         let other = UUID()

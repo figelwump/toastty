@@ -628,11 +628,6 @@ struct ToasttyConversationScreen: View {
 private struct ToasttyConversationComposerBar: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var isLoadingAttachments = false
-    /// Queue is a per-draft choice for one running turn: Steer is the
-    /// default while the agent works. The choice clears when the draft is
-    /// sent (the draft empties) and does not apply to a later turn. A failed
-    /// send or a brief connection check keeps it.
-    @State private var queueSelection: QueueSelection?
     /// The draft epoch shown when Release was tapped; confirming releases
     /// exactly that draft.
     @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
@@ -770,9 +765,6 @@ private struct ToasttyConversationComposerBar: View {
                 }
             }
             .layoutPriority(usesCompactAttachmentComposer ? 1 : 0)
-            .onChange(of: draft.isEmpty && attachments.isEmpty) { _, isEmpty in
-                if isEmpty { queueSelection = nil }
-            }
 
             if presentation.canReleaseLocalDraft {
                 localDraftReleaseStatus(presentation)
@@ -987,15 +979,8 @@ private struct ToasttyConversationComposerBar: View {
     /// picked Queue or the host does not allow steer right now.
     private func effectiveDeliveryMode(_ presentation: ToasttyComposerPresentation) -> RemoteMessageDeliveryMode {
         guard let sendMode = presentation.gate.sendMode, sendMode != .prompt else { return .queue }
-        return sendMode.deliveryMode(queueSelected: queueSelected(presentation))
-    }
-
-    private struct QueueSelection: Equatable {
-        let turnEpoch: RemoteInputEpoch?
-    }
-
-    private func queueSelected(_ presentation: ToasttyComposerPresentation) -> Bool {
-        queueSelection == QueueSelection(turnEpoch: presentation.runningTurnEpoch)
+        let selected = drafts.state.queuedTurnEpochs[conversationID]
+        return sendMode.deliveryMode(queueSelected: selected != nil && selected == presentation.runningTurnEpoch)
     }
 
     /// Steer is the default; the chip takes the accent only in Queue, so
@@ -1005,7 +990,7 @@ private struct ToasttyConversationComposerBar: View {
         let isSteer = effectiveDeliveryMode(presentation) == .steer
         return Menu {
             Button {
-                queueSelection = nil
+                drafts.update { $0.queuedTurnEpochs[conversationID] = nil }
             } label: {
                 Label("Steer", systemImage: "arrow.triangle.merge")
                 Text("Adds to the running turn")
@@ -1013,7 +998,7 @@ private struct ToasttyConversationComposerBar: View {
             .disabled(!canSteer)
             .accessibilityIdentifier("toastty-mobile-composer-mode-steer")
             Button {
-                queueSelection = QueueSelection(turnEpoch: presentation.runningTurnEpoch)
+                drafts.update { $0.queuedTurnEpochs[conversationID] = presentation.runningTurnEpoch }
             } label: {
                 Label("Queue", systemImage: "text.append")
                 Text("Sends after this turn")

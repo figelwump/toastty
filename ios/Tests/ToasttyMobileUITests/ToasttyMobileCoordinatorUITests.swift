@@ -593,8 +593,26 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(waitForLabel("Queue selected", of: mode))
         XCTAssertEqual(send.label, "Queue message")
         send.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-2"]
-            .waitForExistence(timeout: 5))
+        let queued = queuedRow("fixture-queued-2", in: app)
+        XCTAssertTrue(queued.waitForExistence(timeout: 5))
+
+        let edit = queuedAction("edit", "fixture-queued-2", in: app)
+        XCTAssertTrue(scrollIntoView(edit, in: app))
+        edit.tap()
+        XCTAssertTrue(queued.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "Then summarize")
+        XCTAssertTrue(waitForLabel("Queue selected", of: mode))
+        XCTAssertEqual(send.label, "Queue message")
+        input.typeText(" the results")
+        attachScreenshot(named: "coordinator-edited-message-queue-selected", of: app)
+        send.tap()
+        let edited = queuedRow("fixture-queued-3", in: app)
+        XCTAssertTrue(edited.waitForExistence(timeout: 5))
+        XCTAssertTrue(edited.label.contains("Then summarize the results"), edited.label)
+        attachScreenshot(named: "coordinator-edited-message-queued", of: app)
+
+        input.tap()
+        XCTAssertTrue(waitForLabel("Steer selected", of: mode), "A new draft still defaults to Steer")
     }
 
     // MARK: - The coordinator's waiting messages
@@ -1214,6 +1232,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(excerpt.label.hasPrefix("I made a task for it in toastty"), excerpt.label)
         XCTAssertEqual(input.value as? String, "Then summarize")
         XCTAssertTrue(queued.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(waitForLabel("Queue message", of: send))
         attachScreenshot(named: "coordinator-reply-edit", of: app)
     }
 
