@@ -43,6 +43,13 @@ public struct MobileTaskBoard: Equatable, Sendable {
         tasksByID[id]
     }
 
+    /// Names the Mac's list of recent Done and archived tasks, which the
+    /// phone reads apart for the chips of links to them. `nil` from an older
+    /// Mac.
+    public var finishedTasksRevision: String? {
+        source.finishedTasksRevision
+    }
+
     /// The task whose task space this workspace is.
     public func task(taskSpaceID: UUID) -> RemoteTaskSummary? {
         taskIDsByTaskSpaceID[taskSpaceID].flatMap { tasksByID[$0] }

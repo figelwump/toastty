@@ -91,6 +91,7 @@ protocol LiveConnectionRuntime: Sendable {
     ) async throws -> RemoteCoordinatorChatReadResponse?
     func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests?
     func coordinatorQueue() async throws -> RemoteCoordinatorQueue?
+    func finishedTasks() async throws -> RemoteFinishedTasks?
 }
 
 extension LiveConnectionRuntime {
@@ -188,6 +189,10 @@ extension LiveConnectionRuntime {
     }
 
     func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
+        nil
+    }
+
+    func finishedTasks() async throws -> RemoteFinishedTasks? {
         nil
     }
 
@@ -400,6 +405,10 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
         try await coordinator.coordinatorQueue()
     }
+
+    func finishedTasks() async throws -> RemoteFinishedTasks? {
+        try await coordinator.finishedTasks()
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -458,6 +467,10 @@ final class LiveSessionsController {
     /// lists it with the conversation's queue.
     private var coordinatorQueueReads = ToasttyMacRevisionedRead<RemoteCoordinatorQueue>()
     private var coordinatorQueueReadTask: Task<Void, Never>?
+    /// The Mac's recent Done and archived tasks, as it last answered. Every
+    /// chat draws chips for links to them.
+    private var finishedTaskReads = ToasttyMacRevisionedRead<RemoteFinishedTasks>()
+    private var finishedTasksReadTask: Task<Void, Never>?
 
     init(
         runtime: any LiveConnectionRuntime,
@@ -945,6 +958,11 @@ final class LiveSessionsController {
         coordinatorQueueReadTask?.cancel()
         coordinatorQueueReadTask = nil
         coordinatorQueueReads = ToasttyMacRevisionedRead()
+        // An unpaired phone, or one paired again, keeps no finished task.
+        finishedTasksReadTask?.cancel()
+        finishedTasksReadTask = nil
+        finishedTaskReads = ToasttyMacRevisionedRead()
+        publishFinishedTasks()
         if let activeConversationID {
             conversationRuntimeOwners[RemoteConversationID(rawValue: activeConversationID)] = nil
         }
@@ -996,6 +1014,7 @@ final class LiveSessionsController {
         activeConversationController?.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
         updateQuietDigests()
         updateCoordinatorQueue()
+        updateFinishedTasks()
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403
         // must not overwrite the paired authorization-denied explanation.
@@ -1024,6 +1043,37 @@ final class LiveSessionsController {
         }
         updateQuietDigests()
         updateCoordinatorQueue()
+        updateFinishedTasks()
+    }
+
+    /// Reads the Mac's finished tasks when its task board names a revision
+    /// this phone does not have. A board without one, from an older Mac or
+    /// a Mac without tasks, clears them. A reconnect keeps the last answer
+    /// until the Mac answers again.
+    private func updateFinishedTasks() {
+        if finishedTaskReads.consume(revision: homeController.snapshot.taskBoard?.finishedTasksRevision) {
+            readFinishedTasks()
+        }
+        publishFinishedTasks()
+    }
+
+    private func readFinishedTasks() {
+        finishedTaskReads.willRead()
+        finishedTasksReadTask = Task { @MainActor [weak self, runtime] in
+            let answer = try? await runtime.finishedTasks()
+            guard let self, Task.isCancelled == false else { return }
+            finishedTasksReadTask = nil
+            let readsAgain = finishedTaskReads.didRead(answer)
+            publishFinishedTasks()
+            if readsAgain { readFinishedTasks() }
+        }
+    }
+
+    /// Gives the chats the answer, only when it changed.
+    private func publishFinishedTasks() {
+        let answer = finishedTaskReads.answer
+        guard homeController.finishedTasks.revision != answer?.revision else { return }
+        homeController.finishedTasks = ToasttyFinishedTasks(answer)
     }
 
     /// Reads the coordinator's own queue when the snapshot names a revision

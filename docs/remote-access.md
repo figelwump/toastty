@@ -842,13 +842,22 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   screen, because Back has nowhere to go. A task chip opens over the chat
   (see **Task chips** below). **Next** opens another session over the chat,
   which hides the bar as every session screen does. Back returns to the chat.
-- **Task chips.** A link `[title](toastty://task/<id>)` in a chat shows as a
-  chip with the task's stage color, its current title and its pull request
-  number. A tap opens the task's space as its row in Task Spaces opens it:
+- **Task chips.** A link `[title](toastty://task/<id>)` in a chat, the
+  user's message or the agent's, shows as a chip with the task's stage color,
+  its current title and its pull request number. This works for the tasks on
+  the Mac's task board and for its 200 most recently active Done and archived
+  tasks, which the phone reads apart (see the finished tasks below). A Done
+  task's chip is green; an archived task's is gray, as the Mac marks it
+  quiet. A tap opens the task's space as its row in Task Spaces opens it:
   a task space with exactly one session and no task spaces of its own opens
   that session's transcript; any other task space opens its screen. A task
-  whose space the phone does not list, such as a done or archived one, opens
-  its detail sheet. A link to a task that the Mac does not list stays text.
+  whose space the phone does not list, such as a Done or archived one, opens
+  its detail sheet, which shows its stage and pull request; a finished task
+  has no actions there. A link to a task that the Mac does not have, or to a
+  finished task older than the 200, stays text, and so does a bare task ID.
+  With a Mac from before this change, a link to a Done task whose task space
+  closed, or to an archived task, stays text. The finished tasks never show
+  in Home, the Tasks tab, the mention list or the badges.
   In the coordinator's chat the session or task space opens over the chat,
   and Back returns to the chat with the tab bar. In another session's chat
   it opens in place of that conversation, so Back goes to the screen under
@@ -1028,6 +1037,31 @@ them when a snapshot names a revision it does not have, one read at a time; a
 read that fails is tried again with the next snapshot. With an older Mac, which
 sends neither, quiet turns show open, and the New line counts their replies.
 An older phone ignores the field.
+
+A link to a task in any chat shows as a chip while the phone knows the task
+(**Task chips** above). The task board lists only the tasks that are not
+finished and the finished tasks whose task space is open, so the Mac also
+shares its 200 most recently active Done and archived tasks. Months of
+finished tasks are too large for every session snapshot, so the board carries
+only `finishedTasksRevision`: the first 16 hex digits of the SHA-256 of the
+list as the wire encodes it. The same tasks give the same revision, also after
+a Mac relaunch; a new title, stage or pull request state gives a new one, and
+the Mac sends a new session list at once. A device reads the list with
+`GET /api/task.finished`, which needs native Bearer authentication and read
+scope, as the board does, and answers `protocolVersion`, `revision` and
+`tasks`, the most recently active first. Each task has `id`, `title`, `group`
+(`done` or `archived`), `stageTitle`, `stageReason`, `statusLine`,
+`projectTitle` (the project workspace's title while it is open, else the
+project folder's name, as the board sends it), and `pullRequest` with its
+number, URL and state. It has no path, no message text and no action. A task whose
+task space is still open is in the list and on the board; the phone uses the
+board's. The phone reads the list when a snapshot names a revision it does not
+have, one read at a time, as for the quiet digests; a read that fails is tried
+again with the next snapshot. It reads a task it cannot read, such as one in a
+later group, as absent, and a pull request it cannot read as none. No
+capability advertises the route: the revision on the board says the Mac
+serves it. An older Mac sends no revision, and the phone draws no chip for a
+finished task. An older phone ignores the field.
 
 The coordinator has two queues. Its conversation's send queue holds what a
 device's chat queued and is part of `inputControl`, at most 5 messages. The

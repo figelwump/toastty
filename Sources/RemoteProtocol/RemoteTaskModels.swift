@@ -19,6 +19,11 @@ public struct RemoteTaskBoard: Codable, Equatable, Sendable {
     public var doneCount: Int
     /// The finished tasks of each open project, which leave its card.
     public var finishedByProject: [RemoteTaskProjectTally]
+    /// Names the Mac's list of recent Done and archived tasks
+    /// (`RemoteFinishedTasks`), which a device reads from
+    /// `RemoteFinishedTasksPolicy.path` when the revision is new, for the
+    /// chips of links to them. Absent from older hosts.
+    public var finishedTasksRevision: String?
 
     public init(
         tasks: [RemoteTaskSummary] = [],
@@ -27,7 +32,8 @@ public struct RemoteTaskBoard: Codable, Equatable, Sendable {
         idle: [RemoteTaskBoardEntry] = [],
         toShip: [RemoteTaskShipLane] = [],
         doneCount: Int = 0,
-        finishedByProject: [RemoteTaskProjectTally] = []
+        finishedByProject: [RemoteTaskProjectTally] = [],
+        finishedTasksRevision: String? = nil
     ) {
         self.tasks = tasks
         self.needsYou = needsYou
@@ -36,6 +42,7 @@ public struct RemoteTaskBoard: Codable, Equatable, Sendable {
         self.toShip = toShip
         self.doneCount = doneCount
         self.finishedByProject = finishedByProject
+        self.finishedTasksRevision = finishedTasksRevision
     }
 }
 

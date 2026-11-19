@@ -461,8 +461,14 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(textView(containing: "[Toastty] Wake", in: app).waitForExistence(timeout: 5))
         attachScreenshot(named: "coordinator-chat-digest-open", of: app)
 
-        // Back at the bottom, the reply's line scrolls to the answer.
+        // Back at the bottom, the reply's line scrolls to the answer. At the
+        // chat's end the line can sit under the navigation bar: a short drag
+        // down shows it.
         for _ in 0..<4 { app.swipeUp() }
+        if quote.isHittable == false {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 200)))
+        }
         XCTAssertTrue(waitUntilHittable(quote))
         quote.tap()
         XCTAssertTrue(waitUntilHittable(textView(containing: "I asked it to keep the old API", in: app)))
@@ -527,6 +533,31 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(app.tabBars.buttons["Home"]))
         XCTAssertFalse(app.navigationBars.firstMatch.buttons["Back"].exists)
         attachScreenshot(named: "coordinator-chip-back-to-chat", of: app)
+    }
+
+    /// A chip for one of the Mac's Done tasks, which leave its task board,
+    /// opens the task's detail over the chat, as a chip for a task with no
+    /// task space does. The Coordinator tab stays selected.
+    func testAFinishedTaskChipInTheCoordinatorsChatOpensItsDetail() {
+        let app = openCoordinatorChat()
+        let done = link(containing: "signup-feedback-form", in: app)
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        let label = done.label.replacingOccurrences(of: "\u{2060}", with: "").replacingOccurrences(of: "\u{00A0}", with: " ")
+        XCTAssertTrue(label.contains("#212"), done.label)
+        // The chat opens at its newest message; the chip is above it.
+        for _ in 0..<4 where done.isHittable == false { app.swipeDown() }
+        XCTAssertTrue(waitUntilHittable(done))
+        attachScreenshot(named: "coordinator-finished-task-chip", of: app)
+        done.tap()
+        let detailTitle = app.staticTexts["toastty-task-detail-title"]
+        XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(detailTitle.label, "signup-feedback-form")
+        XCTAssertFalse(app.buttons["toastty-task-detail-open-task-space"].exists)
+        attachScreenshot(named: "coordinator-finished-task-chip-opens-detail", of: app)
+        app.navigationBars["Task"].buttons["Done"].tap()
+        XCTAssertTrue(detailTitle.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["Coordinator"].isSelected)
+        XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].exists)
     }
 
     /// While the coordinator works, Send steers into its turn by default, as

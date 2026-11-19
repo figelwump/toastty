@@ -15,6 +15,7 @@ protocol ToasttyMacRevisioned: Equatable {
 
 extension RemoteCoordinatorQuietDigests: ToasttyMacRevisioned {}
 extension RemoteCoordinatorQueue: ToasttyMacRevisioned {}
+extension RemoteFinishedTasks: ToasttyMacRevisioned {}
 
 struct ToasttyMacRevisionedRead<Answer: ToasttyMacRevisioned>: Equatable {
     /// The Mac's last answer. `nil` with a Mac that does not share it, or

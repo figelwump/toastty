@@ -157,7 +157,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
                     toShipCount: (try? tally.requiredInt("toShipCount")) ?? 0,
                     doneCount: (try? tally.requiredInt("doneCount")) ?? 0
                 )
-            }
+            },
+            // Absent from older Macs, which share no finished tasks.
+            finishedTasksRevision: object.lossyString("finishedTasksRevision")
         )
     }
 

@@ -41,6 +41,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case coordinatorQuietDigests
     case coordinatorQueue
     case coordinatorAttachmentImage
+    case finishedTasks
 
     var path: String {
         switch self {
@@ -81,6 +82,7 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .coordinatorQuietDigests: RemoteCoordinatorQuietDigestsPolicy.path
         case .coordinatorQueue: RemoteCoordinatorQueuePolicy.path
         case .coordinatorAttachmentImage: RemoteCoordinatorAttachmentImagePolicy.path
+        case .finishedTasks: RemoteFinishedTasksPolicy.path
         }
     }
 }
@@ -188,6 +190,10 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         // of what the chat shows, so it needs the read scope that showing
         // the chat needs, as a preview does.
         .coordinatorAttachmentImage: .init(route: .coordinatorAttachmentImage, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        // The titles of finished tasks are what a chat's chips show, as the
+        // task board's titles are, so reading them needs the read scope
+        // that the board needs. Only the native app draws chips from them.
+        .finishedTasks: .init(route: .finishedTasks, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

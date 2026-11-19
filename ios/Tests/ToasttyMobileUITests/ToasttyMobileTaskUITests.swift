@@ -638,6 +638,103 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(session))
     }
 
+    /// A link to one of the Mac's Done or archived tasks, which leave its
+    /// task board, is a chip as an open task's is: in the agent's message
+    /// and in the user's. A tap opens the task's detail, with its stage, why
+    /// and pull request, and no task space or action. Home and the Tasks
+    /// tab still do not list them.
+    func testFinishedTaskLinksDrawAsChipsThatOpenTheirDetail() {
+        let app = launchTaskFixture(taskLinks: true)
+        select(.all, in: app)
+        let workspace = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        workspace.tap()
+        let session = app.buttons["toastty-mobile-workspace-session-\(workingSessionID)"]
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        session.tap()
+        XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+        let answer = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Removed task")).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+
+        // The Done task's chip, in the agent's message, shows its current
+        // title and merged pull request; the archived task's, in the user's
+        // message, has no pull request. An open task's chip is beside them.
+        let done = link(containing: "signup-feedback-form", in: app)
+        XCTAssertTrue(done.exists)
+        XCTAssertTrue(Self.words(done.label).contains("#212"), done.label)
+        XCTAssertFalse(link(containing: "Signup feedback", in: app).exists)
+        let archived = link(containing: "csv-export-spike", in: app)
+        XCTAssertTrue(archived.exists)
+        XCTAssertFalse(link(containing: "CSV export", in: app).exists)
+        XCTAssertTrue(link(containing: "compact-session-rows", in: app).exists)
+        // A task the Mac does not have stays text.
+        XCTAssertFalse(link(containing: "Removed task", in: app).exists)
+        attachScreenshot(named: "finished-task-link-chips", of: app)
+
+        // The Done task's detail: no task space to open and no action.
+        XCTAssertTrue(waitUntilHittable(done))
+        done.tap()
+        let title = app.staticTexts["toastty-task-detail-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "signup-feedback-form")
+        let stage = app.descendants(matching: .any)["toastty-task-detail-stage"]
+        XCTAssertTrue(stage.label.contains("Done") && stage.label.contains("merged"), stage.label)
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-task-detail-pull-request"].exists)
+        XCTAssertFalse(app.buttons["toastty-task-detail-open-task-space"].exists)
+        XCTAssertFalse(app.buttons["Archive Task…"].exists)
+        XCTAssertFalse(app.buttons["Delete Task"].exists)
+        attachScreenshot(named: "finished-task-chip-opens-detail", of: app)
+        app.navigationBars["Task"].buttons["Done"].tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+
+        XCTAssertTrue(waitUntilHittable(archived))
+        archived.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "csv-export-spike")
+        XCTAssertTrue(stage.label.contains("Archived"), stage.label)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-task-detail-pull-request"].exists)
+        attachScreenshot(named: "archived-task-chip-opens-detail", of: app)
+        app.navigationBars["Task"].buttons["Done"].tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+
+        // Home and the Tasks tab list neither.
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(waitUntilHittable(session))
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["toastty-mobile-home-segment-all"].waitForExistence(timeout: 5))
+        func finishedTitles() -> Int {
+            app.descendants(matching: .any).matching(NSPredicate(
+                format: "label CONTAINS %@ OR label CONTAINS %@", "signup-feedback-form", "csv-export-spike"
+            )).count
+        }
+        XCTAssertEqual(finishedTitles(), 0)
+        app.tabBars.buttons["Tasks"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-tasks"].waitForExistence(timeout: 5))
+        XCTAssertEqual(finishedTitles(), 0)
+    }
+
+    /// An older Mac shares no finished tasks: a link to one stays text, as
+    /// before, and the open tasks keep their chips.
+    func testFinishedTaskLinksStayTextFromAnOlderMac() {
+        let app = launchTaskFixture(taskLinks: true, environment: ["TOASTTY_MOBILE_FIXTURE_FINISHED_TASKS": "none"])
+        select(.all, in: app)
+        let workspace = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        workspace.tap()
+        let session = app.buttons["toastty-mobile-workspace-session-\(workingSessionID)"]
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        session.tap()
+        let answer = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Removed task")).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        // The link's own text, in the answer's first paragraph.
+        XCTAssertTrue(app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Signup feedback")).firstMatch.exists)
+        for text in ["signup-feedback-form", "Signup feedback", "csv-export-spike", "CSV export"] {
+            XCTAssertFalse(link(containing: text, in: app).exists, text)
+        }
+        XCTAssertTrue(link(containing: "compact-session-rows", in: app).exists)
+        attachScreenshot(named: "finished-task-links-from-an-older-mac", of: app)
+    }
+
     /// The Tasks tab shows Home's +. It opens the same New Task sheet, and
     /// the tab says that the Mac saved the task. For a Mac that takes no new
     /// tasks from this phone it starts a session, as Home's does.

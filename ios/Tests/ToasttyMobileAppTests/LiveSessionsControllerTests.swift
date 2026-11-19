@@ -877,6 +877,103 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    /// Every chat draws chips for the Mac's Done and archived tasks, which
+    /// the phone reads apart when the task board names a revision it does
+    /// not have, also after a failed read. An older Mac names none: the
+    /// phone reads nothing, and a link to a finished task stays text. The
+    /// finished tasks never reach the board, so no list or count shows
+    /// them, and an unpaired phone keeps none.
+    func testTheFinishedTasksAreReadWhenTheBoardNamesANewRevision() async throws {
+        let runtime = LiveRuntimeSpy()
+        let doneID = UUID(), archivedID = UUID()
+        let done = RemoteFinishedTask(
+            id: doneID, title: "Signup feedback", group: .done, stageTitle: "Done", stageReason: "merged",
+            statusLine: "Done", projectTitle: "toastty",
+            pullRequest: RemoteTaskPullRequest(number: 301, url: URL(string: "https://example.com/pull/301")!, state: .merged)
+        )
+        let archived = RemoteFinishedTask(
+            id: archivedID, title: "Export spike", group: .archived, stageTitle: "Archived",
+            stageReason: "closed without finishing", statusLine: "Archived"
+        )
+        let first = RemoteFinishedTasks(revision: "finished-1", tasks: [done])
+        let second = RemoteFinishedTasks(revision: "finished-2", tasks: [archived, done])
+        await runtime.scriptFinishedTasks([
+            .success(first), .failure(.network(reason: .timedOut)), .success(second), .success(second),
+        ])
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        await subject.updateDeviceScopes([.read])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live, capabilities: [.tasks]
+        ))
+        func announce(_ revision: String?) {
+            var list = snapshot(titles: ["Alpha"])
+            list.tasks = RemoteTaskBoard(doneCount: 2, finishedTasksRevision: revision)
+            subject.consumeSessionsState(SessionsRuntime.State(connectionGeneration: 7, snapshot: list, phase: .live))
+        }
+        func waitForRevision(_ revision: String?) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while home.finishedTasks.revision != revision, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertEqual(home.finishedTasks.revision, revision)
+        }
+        func chips() -> ToasttyTaskLinkChips {
+            ToasttyTaskLinkChips(board: home.snapshot.taskBoard, finished: home.finishedTasks)
+        }
+
+        // An older Mac: no read, and the link stays text.
+        announce(nil)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsByAnOlderMac = await runtime.finishedTaskReadCount()
+        XCTAssertEqual(readsByAnOlderMac, 0)
+        XCTAssertNil(chips().taskID(for: CoordinatorTaskLink.url(taskID: doneID)))
+
+        // The board names a revision: one read, and the chip shows the
+        // task's title and pull request. The board does not list it.
+        announce(first.revision)
+        try await waitForRevision(first.revision)
+        XCTAssertEqual(chips().chips[doneID]?.title, ConversationLinkChip.taskTitle("Signup feedback"))
+        XCTAssertEqual(chips().chips[doneID]?.detail, "#301")
+        XCTAssertEqual(chips().taskID(for: CoordinatorTaskLink.url(taskID: doneID)), doneID)
+        XCTAssertNil(chips().taskID(for: CoordinatorTaskLink.url(taskID: archivedID)))
+        XCTAssertEqual(home.snapshot.taskBoard?.tasks, [])
+        XCTAssertNil(home.snapshot.taskBoard?.task(id: doneID))
+        // The same revision again reads nothing.
+        announce(first.revision)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsForTheFirstRevision = await runtime.finishedTaskReadCount()
+        XCTAssertEqual(readsForTheFirstRevision, 1)
+
+        // A task is archived: a new revision. The read fails, and the chips
+        // stay as they were; the next snapshot tries again.
+        announce(second.revision)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsAfterTheFailure = await runtime.finishedTaskReadCount()
+        XCTAssertEqual(readsAfterTheFailure, 2)
+        XCTAssertEqual(home.finishedTasks.revision, first.revision)
+        announce(second.revision)
+        try await waitForRevision(second.revision)
+        XCTAssertEqual(chips().taskID(for: CoordinatorTaskLink.url(taskID: archivedID)), archivedID)
+
+        // A board without a revision, as from a Mac whose task system
+        // stopped, leaves no chip.
+        announce(nil)
+        XCTAssertNil(home.finishedTasks.revision)
+        XCTAssertTrue(home.finishedTasks.chips.isEmpty)
+
+        // Unpairing keeps none either.
+        announce(second.revision)
+        try await waitForRevision(second.revision)
+        subject.stopObserving()
+        XCTAssertNil(home.finishedTasks.revision)
+        XCTAssertNil(chips().taskID(for: CoordinatorTaskLink.url(taskID: doneID)))
+    }
+
     /// The coordinator's chat lists both of the coordinator's queues as one,
     /// from a Mac that shares its own queue: the conversation's queue, then
     /// the coordinator's. One Resume, on the first held row, presents the
@@ -1568,6 +1665,22 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     }
 
     func quietDigestReadCount() -> Int { quietDigestReads }
+
+    private var finishedTaskAnswers: [Result<RemoteFinishedTasks, GatewayFailure>] = []
+    private var finishedTaskReads = 0
+
+    /// What each read of the finished tasks answers, in turn.
+    func scriptFinishedTasks(_ answers: [Result<RemoteFinishedTasks, GatewayFailure>]) {
+        finishedTaskAnswers = answers
+    }
+
+    func finishedTasks() async throws -> RemoteFinishedTasks? {
+        finishedTaskReads += 1
+        guard finishedTaskAnswers.isEmpty == false else { throw GatewayFailure.invalidResponse }
+        return try finishedTaskAnswers.removeFirst().get()
+    }
+
+    func finishedTaskReadCount() -> Int { finishedTaskReads }
 
     private var coordinatorQueueAnswers: [RemoteCoordinatorQueue] = []
     private var coordinatorQueueReads = 0

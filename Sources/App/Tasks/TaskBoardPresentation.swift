@@ -60,7 +60,9 @@ enum TaskBoardPresentation {
         return "task space closes in \(Int((remaining / 3_600).rounded(.up))) h"
     }
 
-    private static func stageStatusLine(_ item: TaskBoardItem, now: Date) -> String {
+    /// `statusLine` without the held task space's countdown, which changes
+    /// each hour.
+    static func stageStatusLine(_ item: TaskBoardItem, now: Date = Date()) -> String {
         switch item.stage {
         case .starting:
             switch item.record?.setup {
@@ -210,7 +212,9 @@ enum TaskBoardPresentation {
         return (description.stage, "\(description.why), \(heldCleanupPhrase(until: until, now: now))")
     }
 
-    private static func stageDescriptionWithoutHold(_ item: TaskBoardItem, now: Date) -> (stage: String, why: String) {
+    /// `stageDescription` without the held task space's countdown, which
+    /// changes each hour.
+    static func stageDescriptionWithoutHold(_ item: TaskBoardItem, now: Date = Date()) -> (stage: String, why: String) {
         switch item.stage {
         case .starting: return ("Starting", statusLine(item))
         case .needsYou(let attention):

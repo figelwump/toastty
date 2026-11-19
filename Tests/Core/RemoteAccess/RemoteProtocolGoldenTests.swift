@@ -298,6 +298,7 @@ private extension RemoteProtocolGoldenTests {
                 RemoteGatewaySessionListResponse(snapshot: makeTaskSessionSnapshot())
             ),
             try fixture("coordinator-quiet-digests-response.json", quietDigests),
+            try fixture("finished-tasks-response.json", finishedTasks),
             try fixture(
                 "coordinator-attachment-image-request.json",
                 RemoteCoordinatorAttachmentImageRequest(
@@ -695,7 +696,9 @@ private extension RemoteProtocolGoldenTests {
                 RemoteTaskShipLane(id: "/Users/example/toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [shipped]),
             ],
             doneCount: 12,
-            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)]
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)],
+            // The finished tasks travel apart; the board names their revision.
+            finishedTasksRevision: finishedTasks.revision
         )
         // The coordinator's workspace: only it carries the mark, the read
         // point of the coordinator's chat, and the revision of its quiet
@@ -716,6 +719,22 @@ private extension RemoteProtocolGoldenTests {
         - [Fix the login redirect](toastty://task/00000000-0000-0000-0000-000000000302): needsYou (agentFinished) at 2026-08-08T14:39:00Z
         Read `toastty task list` for details.
         """)])
+
+    /// A Done task whose task space closed, and an archived one: the chips
+    /// of links to them.
+    static let finishedTasks = RemoteFinishedTasks(tasks: [
+        RemoteFinishedTask(
+            id: numberedUUID(399), title: "Mobile release prep", group: .done, stageTitle: "Done",
+            stageReason: "shipped in v0.9.2", statusLine: "Shipped", projectTitle: "toastty",
+            pullRequest: RemoteTaskPullRequest(
+                number: 251, url: URL(string: "https://github.com/example/toastty/pull/251")!, state: .merged
+            )
+        ),
+        RemoteFinishedTask(
+            id: numberedUUID(398), title: "Old export spike", group: .archived, stageTitle: "Archived",
+            stageReason: "closed without finishing", statusLine: "Archived"
+        ),
+    ])
 
     static let remoteAttachmentPath = "/Users/example/Library/Application Support/Toastty/remote-access/attachments/A1/photo.jpg"
 

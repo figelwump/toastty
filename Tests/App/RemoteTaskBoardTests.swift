@@ -214,6 +214,97 @@ struct RemoteTaskBoardTests {
         #expect(harness.server.sessionListSnapshots.isEmpty)
     }
 
+    /// Done and archived tasks leave the board, so a device reads them
+    /// apart, for the chips of links to them: each with its title, stage
+    /// and pull request. The board names their revision, which changes
+    /// with what a chip shows and sends a new snapshot.
+    @Test func finishedTasksTravelApartWithTheRevisionTheBoardNames() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        // Release tags, so a merged task waits to ship rather than being Done.
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        let harness = try Harness(fixture)
+        defer { harness.removeRuntimeFiles() }
+        func insert(_ title: String, change: (inout TaskRecord) -> Void = { _ in }) throws -> TaskRecord {
+            var record = TaskRecord(
+                createdAt: Date(timeIntervalSinceNow: -3_600), text: title, title: title, slug: title, source: .cli,
+                resolved: TaskFields(agent: "codex"), workspaceID: fixture.workspaceID,
+                projectRoot: fixture.projectRoot, setup: .started
+            )
+            change(&record)
+            try fixture.coordinator.records.insert(record)
+            return record
+        }
+        let merged = try insert("Signup feedback") {
+            $0.pullRequestURL = "https://github.com/example/toastty/pull/301"
+            $0.mergedAt = Date(timeIntervalSinceNow: -120)
+            $0.mergeCommit = "abc301"
+            $0.doneAt = Date(timeIntervalSinceNow: -60)
+        }
+        let archived = try insert("Old export spike") {
+            $0.pullRequestURL = "https://github.com/example/toastty/pull/302"
+            $0.archivedAt = Date(timeIntervalSinceNow: -30)
+        }
+        let running = try insert("Billing UI")
+        let toShip = try insert("Billing API") {
+            $0.pullRequestURL = "https://github.com/example/toastty/pull/303"
+            $0.mergedAt = Date(timeIntervalSinceNow: -90)
+            $0.mergeCommit = "abc303"
+        }
+        // A Done task whose task space is still open lists on the board too.
+        let openSpace = try harness.makeUntrackedTaskSpace(title: "Copy fixes")
+        let doneWithSpace = try insert("Copy fixes") {
+            $0.doneAt = Date(timeIntervalSinceNow: -10)
+            $0.operation.taskSpace = .init(workspaceID: openSpace, panelID: UUID())
+        }
+        _ = fixture.store.send(.setWorkspaceTaskID(workspaceID: openSpace, taskID: doneWithSpace.id))
+        // While the task space is open, its own done mark is the live one.
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: openSpace, doneAt: Date(timeIntervalSinceNow: -10)))
+        // A watched task space marked done has no task record: not a task.
+        let watched = try harness.makeUntrackedTaskSpace(title: "Website hero")
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: watched, doneAt: Date()))
+
+        let board = try #require(harness.service.facadeSessionList(at: .now).tasks)
+        let finished = harness.service.currentFinishedTasks()
+        #expect(board.finishedTasksRevision == finished.revision)
+        #expect(finished.revision == RemoteFinishedTasks(tasks: finished.tasks).revision)
+        // The board leaves out the finished tasks whose task space closed,
+        // as before.
+        #expect(board.tasks.contains { $0.id == merged.id || $0.id == archived.id } == false)
+        #expect(board.tasks.contains { $0.id == doneWithSpace.id })
+        // The newest activity first; open tasks and the watched task space
+        // are not finished tasks.
+        #expect(finished.tasks.map(\.id) == [doneWithSpace.id, archived.id, merged.id])
+        #expect(finished.tasks.contains { [running.id, toShip.id, watched].contains($0.id) } == false)
+        try #require(finished.tasks.count == 3)
+        #expect(finished.tasks[2] == RemoteFinishedTask(
+            id: merged.id, title: "Signup feedback", group: .done, stageTitle: "Done", stageReason: "merged",
+            statusLine: "Done", projectTitle: "toastty",
+            pullRequest: RemoteTaskPullRequest(number: 301, url: URL(string: "https://github.com/example/toastty/pull/301")!)
+        ))
+        #expect(finished.tasks[1] == RemoteFinishedTask(
+            id: archived.id, title: "Old export spike", group: .archived, stageTitle: "Archived",
+            stageReason: "closed without finishing", statusLine: "Archived", projectTitle: "toastty",
+            pullRequest: RemoteTaskPullRequest(number: 302, url: URL(string: "https://github.com/example/toastty/pull/302")!)
+        ))
+        // The gateway reads the same list through the handler the service
+        // installs.
+        #expect(harness.handler?.finishedTasksHandler?() == finished)
+
+        // The most recent ones, when there are more than the limit.
+        let items = harness.board.items()
+        #expect(RemoteTaskBoardProjection.finishedTasks(items, limit: 2).map(\.id) == [doneWithSpace.id, archived.id])
+
+        // A change that a chip shows, such as a new title, gives a new
+        // revision, and the Mac sends the board again.
+        try await harness.waitForSnapshot { $0.tasks?.finishedTasksRevision == finished.revision }
+        try fixture.coordinator.records.save(id: merged.id) { $0.title = "Signup feedback form" }
+        let snapshot = try await harness.waitForSnapshot { snapshot in
+            snapshot.tasks.map { $0.finishedTasksRevision != finished.revision } == true
+        }
+        #expect(snapshot.tasks?.finishedTasksRevision == harness.service.currentFinishedTasks().revision)
+        #expect(harness.service.currentFinishedTasks().tasks.first { $0.id == merged.id }?.title == "Signup feedback form")
+    }
+
     @Test func aMacWithoutTheTaskSystemSendsNoBoard() throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let harness = try Harness(fixture, board: .disabled)
@@ -228,6 +319,8 @@ private final class Harness {
     let board: TaskBoardStore
     let server = TaskBoardGatewayServerSpy()
     let service: RemoteAccessService
+    /// The gateway's request handler, as the service set it up.
+    private(set) var handler: RemoteGatewayRequestHandler?
     private let runtimeHome = "/tmp/toastty-remote-tasks-\(UUID().uuidString)"
 
     init(_ fixture: TaskCoordinatorTests.Fixture, board: TaskBoardStore? = nil) throws {
@@ -245,6 +338,7 @@ private final class Harness {
             environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
         )
         let server = server
+        var handler: RemoteGatewayRequestHandler?
         service = RemoteAccessService(
             store: fixture.store,
             annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
@@ -255,8 +349,12 @@ private final class Harness {
             port: 42_996,
             initiallyEnabled: false,
             pushConfiguration: nil,
-            gatewayServerFactory: { _ in server }
+            gatewayServerFactory: { created in
+                handler = created
+                return server
+            }
         )
+        self.handler = handler
         service.setEnabled(true, persist: false)
         server.onListenerReady?(42_996)
     }

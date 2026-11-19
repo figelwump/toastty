@@ -251,6 +251,28 @@ public enum ToasttyMobileFixture {
     public static let otherProjectTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000012")!
     public static let shareSheetTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000016")!
     public static let steerChipTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000017")!
+    public static let finishedDoneTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000030")!
+    public static let finishedArchivedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000031")!
+
+    /// The fixture Mac's recent finished tasks, which leave its task board:
+    /// a Done task whose task space closed, with its merged pull request,
+    /// and an archived one. The fixture chats link both.
+    public static let finishedTasks = RemoteFinishedTasks(
+        revision: "f1n15hed0000c0de",
+        tasks: [
+            RemoteFinishedTask(
+                id: finishedDoneTaskID, title: "signup-feedback-form", group: .done, stageTitle: "Done",
+                stageReason: "merged", statusLine: "Done", projectTitle: "toastty",
+                pullRequest: RemoteTaskPullRequest(
+                    number: 212, url: URL(string: "https://github.com/example/toastty/pull/212")!, state: .merged
+                )
+            ),
+            RemoteFinishedTask(
+                id: finishedArchivedTaskID, title: "csv-export-spike", group: .archived, stageTitle: "Archived",
+                stageReason: "closed without finishing", statusLine: "Archived", projectTitle: "toastty"
+            ),
+        ]
+    )
 
     /// `home` from a Mac with the task system on. Its task spaces are
     /// tasks: compact-session-rows waits for approval, early-session-titles

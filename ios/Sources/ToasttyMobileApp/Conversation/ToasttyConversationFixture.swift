@@ -541,9 +541,11 @@ enum ToasttyConversationFixture {
     }
 
     /// The coordinator's answer with task links, for the task fixture's
-    /// board: three tasks it lists, a task it does not list, a task space
-    /// with no task record, and another Toastty link. Link text is the title
-    /// at the time of writing; a chip shows the task's current title.
+    /// board: three tasks it lists, the Mac's Done task that left the board,
+    /// a task it does not have, a task space with no task record, and
+    /// another Toastty link. The user's question links the Mac's archived
+    /// task. Link text is the title at the time of writing; a chip shows the
+    /// task's current title.
     static func taskLinkPresentation(
         for conversationID: UUID
     ) -> ToasttyConversationPresentationState {
@@ -554,7 +556,8 @@ enum ToasttyConversationFixture {
         let markdown = """
         Yes, it waits for \(link("Should the badge count tasks?", ToasttyMobileFixture.questionTaskID)). \
         \(link("Compact session rows", ToasttyMobileFixture.reviewTaskID)) has its pull request open, \
-        and \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)) merged.
+        and \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)) merged. \
+        \(link("Signup feedback", ToasttyMobileFixture.finishedDoneTaskID)) is done.
 
         These stay text: \(link("Removed task", UUID(uuidString: "99999999-9999-4999-8999-999999999999")!)), \
         \(link("Watched space", ToasttyMobileFixture.workingSubspaceID)) and \
@@ -562,7 +565,10 @@ enum ToasttyConversationFixture {
         """
         return ToasttyConversationPresentationState(
             rows: [
-                row(conversationID, 1, timestamp, .userMessage(text: "Is the badge task blocked?", origin: .remote)),
+                row(conversationID, 1, timestamp, .userMessage(
+                    text: "Is the badge task blocked, as \(link("CSV export", ToasttyMobileFixture.finishedArchivedTaskID)) was?",
+                    origin: .remote
+                )),
                 row(conversationID, 2, timestamp, .assistantMessage(text: markdown, phase: .final)),
             ],
             phase: .live,
@@ -571,7 +577,8 @@ enum ToasttyConversationFixture {
         )
     }
 
-    /// A task the Mac's board does not list, so its link stays text.
+    /// A task the Mac does not have, on its board or among its finished
+    /// tasks, so its link stays text.
     static let unlistedTaskID = UUID(uuidString: "99999999-9999-4999-8999-999999999999")!
 
     /// The coordinator's chat, as in the proposal's mockup A, from the
@@ -798,7 +805,8 @@ enum ToasttyConversationFixture {
             .assistantMessage(.init(
                 text: "Noted. I will start the release right after it merges. "
                     + "\(link("Early titles", ToasttyMobileFixture.questionTaskID)) keeps the old API for now. "
-                    + "\(link("Old export spike", unlistedTaskID)) was archived, so it stays out.",
+                    + "\(link("Old export spike", unlistedTaskID)) is gone from the Mac, so it stays text. "
+                    + "\(link("Signup feedback", ToasttyMobileFixture.finishedDoneTaskID)) is done.",
                 phase: .final
             )),
             .userMessage(.init(text: quickEntry, origin: .remote)),
