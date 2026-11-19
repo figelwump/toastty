@@ -48,9 +48,9 @@ replies, task messages, a child task's brief, and plan or notes files.
 Toastty's chats on the Mac and the iPhone draw that link as a chip with the
 task's current title and stage; a bare ID stays plain text that the user must
 look up. GitHub drops the link, so in a pull request write the title, and link
-the task's pull request when it has one. Use the ID only inside commands.
-Before you send a reply or a brief, replace each task ID outside a command
-with the task's link.
+the task's pull request when it has one. Use the ID only where a command
+takes a task ID, not in the text of a message. Before you send a reply, a
+message or a brief, replace every other task ID with the task's link.
 
 ## Show suggested UI changes as mockups
 
