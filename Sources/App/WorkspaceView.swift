@@ -107,6 +107,9 @@ struct WorkspaceView: View {
     /// Opens a pull request that is not ready to merge, from the button
     /// that replaces Merge. `nil` routes it like any other link.
     var openPullRequestURL: (@MainActor (URL) -> Void)? = nil
+    /// The task board, for the top bar's title. Not observed here: the
+    /// title's own view observes it, so a task's rename redraws only that.
+    var taskBoard: TaskBoardStore = .disabled
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var seenUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -716,14 +719,31 @@ struct WorkspaceView: View {
     }
 
     private var workspaceTitleLabel: some View {
-        HStack(spacing: 6) {
-            Text(selectedWorkspace?.title ?? "")
-                .font(ToastyTheme.fontTitle)
-                .foregroundStyle(ToastyTheme.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityIdentifier("topbar.workspace.title")
-        }
+        WorkspaceHeaderTitleText(
+            workspace: selectedWorkspace,
+            taskBoard: taskBoard,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+    }
+
+    /// The top bar's title, as the workspace's sidebar row shows it. A task
+    /// space shows its task's title, not the workspace's name, which is the
+    /// task's branch-like slug; so does a task space whose project closed,
+    /// which the sidebar still lists by its task. Another subspace shows its
+    /// agent session's name, as its row does. A top-level workspace shows
+    /// its name.
+    static func workspaceHeaderTitle(
+        for workspace: WorkspaceState,
+        taskBoard: TaskBoardStore,
+        registry: SessionRegistry
+    ) -> String {
+        guard workspace.parentWorkspaceID != nil || workspace.taskID != nil,
+              let coordinator = taskBoard.coordinator else { return workspace.title }
+        // Read the record and sessions directly: a board item depends on the
+        // whole app state, so building one would rebuild the board on every
+        // layout change.
+        let record = workspace.taskID.flatMap(coordinator.records.record(id:))
+        return TaskBoard.title(record: record, taskSpace: workspace, registry: registry)
     }
 
     @ViewBuilder
@@ -3536,6 +3556,33 @@ private struct FocusModeViewportChrome: View {
                     .strokeBorder(color.opacity(0.6), lineWidth: 1)
             }
             .accessibilityHidden(true)
+    }
+}
+
+/// Observes the task board, so that a task's new title, from its agent
+/// session's name, redraws the top bar's title.
+private struct WorkspaceHeaderTitleText: View {
+    let workspace: WorkspaceState?
+    @ObservedObject var taskBoard: TaskBoardStore
+    let sessionRuntimeStore: SessionRuntimeStore
+
+    var body: some View {
+        let title = workspace.map { workspace in
+            WorkspaceView.workspaceHeaderTitle(
+                for: workspace,
+                taskBoard: taskBoard,
+                registry: sessionRuntimeStore.sessionRegistry
+            )
+        } ?? ""
+        Text(title)
+            .font(ToastyTheme.fontTitle)
+            .foregroundStyle(ToastyTheme.primaryText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            // The title column stops at `workspaceTitleMaxWidth`; a long
+            // task title shows in full on hover.
+            .help(title)
+            .accessibilityIdentifier("topbar.workspace.title")
     }
 }
 
