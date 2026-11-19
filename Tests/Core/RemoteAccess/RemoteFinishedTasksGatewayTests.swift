@@ -56,6 +56,74 @@ struct RemoteFinishedTasksGatewayTests {
         #expect(String(decoding: try Self.encode(RemoteTaskBoard()), as: UTF8.self).contains("finishedTasks") == false)
     }
 
+    /// When a task finished, for a device's mention list. A Mac from before
+    /// the field sends none, and a device reads none; a done time this
+    /// client cannot read reads as none and keeps the task. A phone from
+    /// before the field reads the tasks without it.
+    @Test func doneAtIsOptionalBothWays() throws {
+        let doneAt = Date(timeIntervalSince1970: 1_786_200_000.125)
+        var dated = Self.merged
+        dated.doneAt = doneAt
+        let finished = RemoteFinishedTasks(tasks: [dated, Self.archived])
+        let decoder = ConversationEventCoding.makeDecoder()
+        let decoded = try decoder.decode(RemoteFinishedTasks.self, from: Self.encode(finished))
+        #expect(decoded == finished)
+        #expect(decoded.tasks[0].doneAt == doneAt)
+        #expect(decoded.tasks[1].doneAt == nil)
+        // A task without the field sends no key, as an older Mac's.
+        var object = try #require(try JSONSerialization.jsonObject(with: Self.encode(finished)) as? [String: Any])
+        var tasks = try #require(object["tasks"] as? [[String: Any]])
+        #expect(tasks[0]["doneAt"] as? String == "2026-08-08T14:40:00.125Z")
+        #expect(tasks[1].keys.contains("doneAt") == false)
+
+        tasks[0]["doneAt"] = "last Tuesday"
+        object["tasks"] = tasks
+        let unreadable = try decoder.decode(RemoteFinishedTasks.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(unreadable.tasks.map(\.id) == [Self.merged.id, Self.archived.id])
+        #expect(unreadable.tasks[0].doneAt == nil)
+
+        // The decoder from before the field, as an older phone has it.
+        let older = try decoder.decode(FinishedTasksBeforeDoneAt.self, from: Self.encode(finished))
+        #expect(older.revision == finished.revision)
+        #expect(older.tasks.map(\.id) == [Self.merged.id, Self.archived.id])
+        #expect(older.tasks.map(\.title) == ["Signup feedback", "Old export spike"])
+    }
+
+    /// `RemoteFinishedTasks` and `RemoteFinishedTask` as the phone decoded
+    /// them before `doneAt`.
+    private struct FinishedTasksBeforeDoneAt: Decodable {
+        struct Entry: Decodable {
+            enum CodingKeys: String, CodingKey {
+                case id, title, group, stageTitle, stageReason, statusLine, projectTitle, pullRequest
+            }
+
+            let id: UUID
+            let title: String
+            let group: RemoteTaskGroup
+            let stageTitle: String
+            let stageReason: String
+            let statusLine: String
+            let projectTitle: String?
+            let pullRequest: RemoteTaskPullRequest?
+
+            init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                id = try container.decode(UUID.self, forKey: .id)
+                title = try container.decode(String.self, forKey: .title)
+                group = try container.decode(RemoteTaskGroup.self, forKey: .group)
+                stageTitle = try container.decode(String.self, forKey: .stageTitle)
+                stageReason = try container.decode(String.self, forKey: .stageReason)
+                statusLine = try container.decode(String.self, forKey: .statusLine)
+                projectTitle = try container.decodeIfPresent(String.self, forKey: .projectTitle)
+                pullRequest = (try? container.decodeIfPresent(RemoteTaskPullRequest.self, forKey: .pullRequest)) ?? nil
+            }
+        }
+
+        let protocolVersion: String
+        let revision: String
+        let tasks: [Entry]
+    }
+
     /// A task this client cannot read is left out, and a pull request it
     /// cannot read reads as none; the other tasks stay.
     @Test func aClientReadsTheTasksLeniently() throws {

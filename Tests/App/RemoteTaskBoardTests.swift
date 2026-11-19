@@ -276,15 +276,23 @@ struct RemoteTaskBoardTests {
         #expect(finished.tasks.map(\.id) == [doneWithSpace.id, archived.id, merged.id])
         #expect(finished.tasks.contains { [running.id, toShip.id, watched].contains($0.id) } == false)
         try #require(finished.tasks.count == 3)
+        // When each finished, as the Mac's mention list reads it: the
+        // record's done time, else its latest change, here its archiving.
+        let stored = try #require(fixture.coordinator.records.record(id: merged.id)?.doneAt)
+        let archivedAt = try #require(fixture.coordinator.records.record(id: archived.id)?.archivedAt)
+        #expect(finished.tasks[2].doneAt == stored)
+        #expect(finished.tasks[1].doneAt == archivedAt)
         #expect(finished.tasks[2] == RemoteFinishedTask(
             id: merged.id, title: "Signup feedback", group: .done, stageTitle: "Done", stageReason: "merged",
             statusLine: "Done", projectTitle: "toastty",
-            pullRequest: RemoteTaskPullRequest(number: 301, url: URL(string: "https://github.com/example/toastty/pull/301")!)
+            pullRequest: RemoteTaskPullRequest(number: 301, url: URL(string: "https://github.com/example/toastty/pull/301")!),
+            doneAt: stored
         ))
         #expect(finished.tasks[1] == RemoteFinishedTask(
             id: archived.id, title: "Old export spike", group: .archived, stageTitle: "Archived",
             stageReason: "closed without finishing", statusLine: "Archived", projectTitle: "toastty",
-            pullRequest: RemoteTaskPullRequest(number: 302, url: URL(string: "https://github.com/example/toastty/pull/302")!)
+            pullRequest: RemoteTaskPullRequest(number: 302, url: URL(string: "https://github.com/example/toastty/pull/302")!),
+            doneAt: archivedAt
         ))
         // The gateway reads the same list through the handler the service
         // installs.

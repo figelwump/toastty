@@ -721,18 +721,21 @@ private extension RemoteProtocolGoldenTests {
         """)])
 
     /// A Done task whose task space closed, and an archived one: the chips
-    /// of links to them.
+    /// of links to them, and the mention list's tasks, with when each
+    /// finished.
     static let finishedTasks = RemoteFinishedTasks(tasks: [
         RemoteFinishedTask(
             id: numberedUUID(399), title: "Mobile release prep", group: .done, stageTitle: "Done",
             stageReason: "shipped in v0.9.2", statusLine: "Shipped", projectTitle: "toastty",
             pullRequest: RemoteTaskPullRequest(
                 number: 251, url: URL(string: "https://github.com/example/toastty/pull/251")!, state: .merged
-            )
+            ),
+            doneAt: timestamp
         ),
         RemoteFinishedTask(
             id: numberedUUID(398), title: "Old export spike", group: .archived, stageTitle: "Archived",
-            stageReason: "closed without finishing", statusLine: "Archived"
+            stageReason: "closed without finishing", statusLine: "Archived",
+            doneAt: timestamp.addingTimeInterval(-3_600)
         ),
     ])
 

@@ -65,6 +65,88 @@ final class ToasttyMobileMentionUITests: XCTestCase {
         attachScreenshot(named: "mention-sent-chip", of: app)
     }
 
+    /// The Mac's Done and archived tasks join the list with the Mac's
+    /// rules. Before a search it shows the Done task that finished two days
+    /// ago, but not the archived task or the Done task from a month ago. A
+    /// search finds the archived task, and a tap puts in its link, which the
+    /// chat shows as its chip.
+    func testDoneAndArchivedTasksJoinTheList() {
+        let app = openCoordinator("working")
+        let input = composer(in: app)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText("@")
+        let list = mentionList(in: app)
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        let recent = row("signup-feedback-form", in: app)
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        XCTAssertTrue(recent.label.hasPrefix("signup-feedback-form, Done, toastty, pull request 212"), recent.label)
+        XCTAssertFalse(row("csv-export-spike", in: app).exists)
+        XCTAssertFalse(row("onboarding-copy-pass", in: app).exists)
+        // The Done section is the list's last.
+        list.swipeUp()
+        XCTAssertTrue(waitUntilHittable(recent))
+        attachScreenshot(named: "mention-list-finished-before-search", of: app)
+
+        input.typeText("csv")
+        let archived = row("csv-export-spike", in: app)
+        XCTAssertTrue(waitUntilHittable(archived))
+        XCTAssertTrue(archived.label.hasPrefix("csv-export-spike, Archived, toastty"), archived.label)
+        attachScreenshot(named: "mention-list-archived-search", of: app)
+        archived.tap()
+        XCTAssertTrue(list.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(waitForValue("mention, csv-export-spike ", of: input, allowsPrediction: true))
+        input.typeText("was archived.")
+        XCTAssertTrue(waitForValue("mention, csv-export-spike was archived.", of: input))
+
+        // The coordinator's chat links no archived task before the send.
+        XCTAssertFalse(chip(containing: "csv-export-spike", in: app).exists)
+        let send = app.buttons["toastty-mobile-composer-send"]
+        XCTAssertTrue(waitForLabel("Steer message", of: send))
+        send.tap()
+        let sent = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-1"]
+        XCTAssertTrue(sent.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            sent.label.hasPrefix("[csv-export-spike](toastty://task/D1000000-0000-0000-0000-000000000031) was archived."),
+            sent.label
+        )
+        XCTAssertTrue(waitUntil { self.chip(containing: "csv-export-spike", in: app).exists })
+        attachScreenshot(named: "mention-archived-sent-chip", of: app)
+
+        // The Done task from a month ago shows for a search too.
+        input.tap()
+        input.typeText("@onboarding")
+        XCTAssertTrue(waitUntilHittable(row("onboarding-copy-pass", in: app)))
+    }
+
+    /// A Mac from before `doneAt` shares its finished tasks without it: they
+    /// show only for a search. A Mac that shares none gives the list as
+    /// before.
+    func testFinishedTasksFromAnOlderMacShowOnlyForASearch() {
+        for mode in ["undated", "none"] {
+            let app = openCoordinator("quiet", environment: ["TOASTTY_MOBILE_FIXTURE_FINISHED_TASKS": mode])
+            let input = composer(in: app)
+            input.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            input.typeText("@")
+            XCTAssertTrue(mentionList(in: app).waitForExistence(timeout: 5))
+            XCTAssertTrue(row("early-session-titles", in: app).waitForExistence(timeout: 5), mode)
+            for title in ["signup-feedback-form", "csv-export-spike", "onboarding-copy-pass"] {
+                XCTAssertFalse(row(title, in: app).exists, "\(mode): \(title)")
+            }
+            attachScreenshot(named: "mention-list-older-mac-\(mode)", of: app)
+            input.typeText("signup")
+            let done = row("signup-feedback-form", in: app)
+            if mode == "undated" {
+                XCTAssertTrue(waitUntilHittable(done))
+            } else {
+                XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-mention-empty"].waitForExistence(timeout: 5))
+                XCTAssertFalse(done.exists)
+            }
+            app.terminate()
+        }
+    }
+
     func testThePaperclipMentionsATask() {
         let app = openCoordinator("quiet")
         let input = composer(in: app)

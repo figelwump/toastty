@@ -17,7 +17,7 @@ final class MobileTaskBoardTests: XCTestCase {
         XCTAssertEqual(snapshot.presentation().coordinatorQuietDigestsRevision, "6ca155390421e7e6")
         // The revision of the Mac's finished tasks, which it serves apart
         // (`finished-tasks-response.json`); they are not on the board.
-        XCTAssertEqual(board.finishedTasksRevision, "3c0691729111055c")
+        XCTAssertEqual(board.finishedTasksRevision, "2f500e226d440323")
 
         XCTAssertEqual(board.tasks.count, 7)
         let question = try XCTUnwrap(board.task(taskSpaceID: uuid(201)))

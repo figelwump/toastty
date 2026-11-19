@@ -2,7 +2,8 @@ import Foundation
 
 /// The Mac's most recent Done and archived tasks, as it shares them with a
 /// paired device, so that a chat's link to one of them shows the task's
-/// chip as the Mac's chat does.
+/// chip as the Mac's chat does, and the coordinator chat's mention list
+/// offers them as the Mac's does.
 ///
 /// The task board lists only the tasks that are not finished, and finished
 /// tasks whose task space is still open. Finished tasks build up over months,
@@ -11,8 +12,8 @@ import Foundation
 /// changes, and a device reads the list from `RemoteFinishedTasksPolicy.path`
 /// when the revision is new.
 ///
-/// Each task carries only what its chip and its detail show: no path, no
-/// message text, and no action.
+/// Each task carries only what its chip, its detail and the mention list
+/// show: no path, no message text, and no action.
 public struct RemoteFinishedTasks: Codable, Equatable, Sendable {
     public var protocolVersion: String
     /// Names the list. The Mac makes it from `tasks`, so the same tasks give
@@ -69,6 +70,12 @@ public struct RemoteFinishedTask: Codable, Equatable, Sendable, Identifiable {
     /// whole path.
     public var projectTitle: String?
     public var pullRequest: RemoteTaskPullRequest?
+    /// When the task finished, as the Mac's mention list reads it: the
+    /// record's done time, else its latest change. A device's mention list
+    /// shows the Done tasks of the last 14 days before a search. `nil` from
+    /// a Mac from before the field: its finished tasks show only for a
+    /// search.
+    public var doneAt: Date?
 
     public init(
         id: UUID,
@@ -78,7 +85,8 @@ public struct RemoteFinishedTask: Codable, Equatable, Sendable, Identifiable {
         stageReason: String,
         statusLine: String,
         projectTitle: String? = nil,
-        pullRequest: RemoteTaskPullRequest? = nil
+        pullRequest: RemoteTaskPullRequest? = nil,
+        doneAt: Date? = nil
     ) {
         self.id = id
         self.title = RemoteTaskSummary.bounded(title)
@@ -88,14 +96,16 @@ public struct RemoteFinishedTask: Codable, Equatable, Sendable, Identifiable {
         self.statusLine = RemoteTaskSummary.bounded(statusLine)
         self.projectTitle = projectTitle.map(RemoteTaskSummary.bounded)
         self.pullRequest = pullRequest
+        self.doneAt = doneAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, group, stageTitle, stageReason, statusLine, projectTitle, pullRequest
+        case id, title, group, stageTitle, stageReason, statusLine, projectTitle, pullRequest, doneAt
     }
 
     /// A pull request this client cannot read, such as one in a state added
-    /// later, reads as none and keeps the task.
+    /// later, reads as none and keeps the task; so does a done time it
+    /// cannot read.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -106,6 +116,7 @@ public struct RemoteFinishedTask: Codable, Equatable, Sendable, Identifiable {
         statusLine = try container.decode(String.self, forKey: .statusLine)
         projectTitle = try container.decodeIfPresent(String.self, forKey: .projectTitle)
         pullRequest = (try? container.decodeIfPresent(RemoteTaskPullRequest.self, forKey: .pullRequest)) ?? nil
+        doneAt = (try? container.decodeIfPresent(Date.self, forKey: .doneAt)) ?? nil
     }
 }
 
