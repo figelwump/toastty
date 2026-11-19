@@ -53,13 +53,26 @@ struct CoordinatorQueueSnapshot: Codable, Equatable {
     }
 
     /// The messages are the user's words, so the file is the user's only.
+    /// The new content is written whole, with the user's permissions, beside
+    /// the file and then takes its place in one step: a save that throws
+    /// leaves the file as it was. Remove relies on that.
     func save(to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(self)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let folder = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let temporary = folder.appending(path: ".\(url.lastPathComponent).\(UUID().uuidString)", directoryHint: .notDirectory)
+        do {
+            try data.write(to: temporary, options: [.withoutOverwriting])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+            guard rename(temporary.path, url.path) == 0 else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
     }
 
     /// Removes the file. A file that is not there is removed already.

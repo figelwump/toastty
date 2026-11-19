@@ -714,6 +714,18 @@ extension ToasttyComposerPresentationTests {
         // The interrupted row keeps the one Resume and its Remove.
         XCTAssertEqual(queued.map(\.resumeTitle), ["Resume all 2", nil, nil])
         XCTAssertTrue(queued.allSatisfy(\.canChange))
+
+        // A phone that cannot change the queue has neither: the warning
+        // points to the Mac's chat.
+        let readOnly = ToasttySendPresentationAdapter.makeItems(
+            from: SendReconciliationState(), readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: false)
+        ).compactMap { item -> ToasttyQueuedSendPresentation? in
+            guard case .queued(let queued) = item.content else { return nil }
+            return queued
+        }
+        XCTAssertEqual(readOnly.first?.warning, ToasttySendPresentationAdapter.typingInterruptedWarningForTheMac)
+        XCTAssertTrue(readOnly.allSatisfy { $0.canChange == false && $0.resumeTitle == nil })
     }
 
     func testQueueRejectionReceiptsExplainTheQueue() {

@@ -905,9 +905,14 @@ final class CoordinatorChatModel: ObservableObject {
                 break
             }
             // Its files must fit next to the composer's: a message has at
-            // most 10. Otherwise the message keeps waiting as it is.
+            // most 10. Otherwise the message keeps waiting as it is. Files
+            // that would not come back, such as a list pasted from another
+            // message, stay text and need no room.
             let room = TaskRecord.maximumAttachmentCount - attachmentDraft.attachments.count - attachmentDraft.pendingCount
-            if let count = CoordinatorMessageHeader.attachedFiles(in: entry.text)?.paths.count, count > room {
+            if let files = Self.editParts(
+                of: entry.text, attachments: controller.attachments, owned: entry.attachmentFolders, room: .max
+            )?.files, files.count > room {
+                let count = files.count
                 transientNotice = .failure(
                     "This message has \(count) files, and a message can have at most \(TaskRecord.maximumAttachmentCount). "
                         + "Remove files from the message you are writing first."

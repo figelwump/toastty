@@ -526,8 +526,9 @@ struct CoordinatorSavedQueueTests {
     }
 
     /// Edit takes files back into the field only from folders that the
-    /// message owns. A list pasted from another message stays text, and
-    /// the message sent from the field does not own that folder.
+    /// message owns. A list pasted from another message stays text, so it
+    /// needs no room next to a field that holds 10 files already, and the
+    /// message sent from the field does not own that folder.
     @MainActor
     @Test func editTakesBackOnlyFilesFromFoldersThatTheMessageOwns() async throws {
         let fixture = try CoordinatorChatFixture(savesQueue: true)
@@ -539,10 +540,22 @@ struct CoordinatorSavedQueueTests {
         #expect(try fixture.controller.sendUserText(
             Self.listing("Pasted", [earlier.file]), steering: false, id: "pasted"
         ).isQueued)
+        for index in 1 ... TaskRecord.maximumAttachmentCount {
+            fixture.chat.attachmentDraft.attachText("draft \(index)", named: "draft-\(index).txt")
+        }
+        #expect(fixture.chat.attachmentDraft.attachments.count == TaskRecord.maximumAttachmentCount)
 
         fixture.chat.perform(.edit(clientRequestID: "pasted", text: ""))
-        #expect(fixture.chat.attachmentDraft.attachments.isEmpty)
+        if case .failure(let refusal)? = fixture.chat.notice {
+            Issue.record("Edit refused: \(refusal)")
+        }
+        #expect(fixture.controller.queuedEntries.isEmpty)
+        #expect(fixture.chat.attachmentDraft.attachments.count == TaskRecord.maximumAttachmentCount)
         #expect(fixture.chat.draft.contains(earlier.file.path(percentEncoded: false)))
+        // Send only the edited text.
+        for attachment in fixture.chat.attachmentDraft.attachments {
+            fixture.chat.attachmentDraft.remove(id: attachment.id)
+        }
         // Command-Return: while a turn runs, Return would steer it.
         fixture.chat.send(queueing: true)
         let resent = try await fixture.waitFor("the message waits again") { fixture.controller.queuedEntries.first }
