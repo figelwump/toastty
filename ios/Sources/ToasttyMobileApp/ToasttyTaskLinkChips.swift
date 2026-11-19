@@ -50,25 +50,55 @@ struct ToasttyTaskLinkChips {
 }
 
 /// The Mac's recent Done and archived tasks, as it last answered: the chips
-/// of links to them, and each task as its detail shows it. They are not on
-/// the task board, so Home, the Tasks tab, the mention list and the badges
-/// never see them. Empty with an older Mac, which shares none, and before
-/// the Mac's first answer.
+/// of links to them, each task as its detail shows it, and the tasks the
+/// coordinator chat's mention list offers. They are not on the task board,
+/// so Home, the Tasks tab and the badges never see them. Empty with an older
+/// Mac, which shares none, and before the Mac's first answer.
 struct ToasttyFinishedTasks: Equatable {
     /// The revision of the Mac's answer, `nil` without one.
     let revision: String?
     let chips: [UUID: ConversationLinkChip]
+    /// The tasks to mention, the most recently active first, as the Mac
+    /// orders them.
+    let mentionCandidates: [CoordinatorMentionCandidate]
     private let summaries: [UUID: RemoteTaskSummary]
+    private let doneAts: [UUID: Date]
 
     init(_ answer: RemoteFinishedTasks? = nil) {
         revision = answer?.revision
         var summaries: [UUID: RemoteTaskSummary] = [:]
+        var doneAts: [UUID: Date] = [:]
+        var ordered: [RemoteFinishedTask] = []
         for task in answer?.tasks ?? [] where summaries[task.id] == nil {
             summaries[task.id] = Self.summary(task)
+            doneAts[task.id] = task.doneAt
+            ordered.append(task)
         }
         self.summaries = summaries
+        self.doneAts = doneAts
         // Made once for each answer, not for each drawing of a chat.
-        chips = summaries.mapValues(ToasttyTaskLinkChips.chip)
+        let chips = summaries.mapValues(ToasttyTaskLinkChips.chip)
+        self.chips = chips
+        // Each task's mark is its chip's.
+        mentionCandidates = ordered.compactMap { task in
+            chips[task.id].map { chip in
+                CoordinatorMentionCandidate(
+                    taskID: task.id,
+                    title: task.title,
+                    projectTitle: task.projectTitle,
+                    pullRequestNumber: task.pullRequest?.number,
+                    group: task.group == .archived ? .archived : .done,
+                    markColor: chip.markColor,
+                    doneAt: task.doneAt
+                )
+            }
+        }
+    }
+
+    /// When the task finished, as the Mac shares it: `nil` for a task it
+    /// did not share, and from a Mac from before the field.
+    func doneAt(id: UUID) -> Date? {
+        doneAts[id]
     }
 
     /// The task as its detail sheet shows it, `nil` for a task the Mac did

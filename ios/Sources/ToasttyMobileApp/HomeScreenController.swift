@@ -802,12 +802,20 @@ final class HomeScreenController {
         hostSupportsLocalFilePreview = isSupported
     }
 
-    /// The fixture Mac's finished tasks; `none` plays an older Mac, which
-    /// shares none.
+    /// The fixture Mac's finished tasks; `none` plays a Mac that shares
+    /// none, and `undated` one that shares them without `doneAt`.
     private static var fixtureFinishedTasks: ToasttyFinishedTasks {
 #if DEBUG
-        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_FINISHED_TASKS"] == "none"
-            ? ToasttyFinishedTasks() : ToasttyFinishedTasks(ToasttyMobileFixture.finishedTasks)
+        switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_FINISHED_TASKS"] {
+        case "none":
+            return ToasttyFinishedTasks()
+        case "undated":
+            var finished = ToasttyMobileFixture.finishedTasks
+            for index in finished.tasks.indices { finished.tasks[index].doneAt = nil }
+            return ToasttyFinishedTasks(finished)
+        default:
+            return ToasttyFinishedTasks(ToasttyMobileFixture.finishedTasks)
+        }
 #else
         ToasttyFinishedTasks()
 #endif

@@ -1,6 +1,7 @@
 import ConversationUI
 import RemoteProtocol
 import SwiftUI
+import ToasttyMobileDomain
 import UIKit
 import XCTest
 @testable import ToasttyMobileApp
@@ -85,11 +86,96 @@ final class ToasttyComposerMentionTests: XCTestCase {
         XCTAssertFalse(model.picker.isOpen)
     }
 
+    /// Tasks that arrive while the list is open, such as the Mac's finished
+    /// tasks after its first answer, show without another key.
+    func testTheOpenListShowsTasksThatArrive() async throws {
+        let (window, model, textView) = try await makeComposer(candidates: [Self.candidates[0]])
+        defer { close(window) }
+        type("@prev", into: textView)
+        XCTAssertTrue(model.picker.isOpen)
+        XCTAssertTrue(model.picker.sections.isEmpty)
+        model.candidates = Self.candidates
+        try await waitUntil { model.picker.sections.flatMap(\.candidates).map(\.taskID) == [Self.previewID] }
+        XCTAssertEqual(model.picker.session?.query, "prev")
+    }
+
     func testAnEmailAddressOpensNoList() async throws {
         let (window, model, textView) = try await makeComposer()
         defer { close(window) }
         type("mail me at me@example.com", into: textView)
         XCTAssertFalse(model.picker.isOpen)
+    }
+
+    // MARK: - Done and archived tasks
+
+    /// The Mac's finished tasks join the list with the Mac's rules, through
+    /// the fixture Mac's board and finished tasks: before a search, the
+    /// Done task that finished two days ago, but not the archived one or the
+    /// Done one from a month ago; a search finds those.
+    ///
+    /// Failure modes covered: finished tasks missing from the list, or
+    /// archived and older Done ones showing before a search; a search not
+    /// finding them; a task on the board and in the finished list showing
+    /// twice, or as the finished list has it; an older Mac's finished tasks,
+    /// without `doneAt`, showing before a search; a choice not giving the
+    /// task's link.
+    func testFinishedTasksJoinTheListWithTheMacsRules() throws {
+        let board = try XCTUnwrap(ToasttyMobileFixture.taskHome.taskBoard)
+        let finished = ToasttyFinishedTasks(ToasttyMobileFixture.finishedTasks)
+        let candidates = CoordinatorMentionCandidate.candidates(from: board, finished: finished)
+        let now = Date()
+        func titles(_ query: String, in candidates: [CoordinatorMentionCandidate]) -> [CoordinatorMentionCandidate.Group: [String]] {
+            Dictionary(uniqueKeysWithValues: CoordinatorMentionSearch.sections(query: query, candidates: candidates, now: now)
+                .map { ($0.group, $0.candidates.map(\.title)) })
+        }
+
+        // The board's Done tasks come first, then the finished one.
+        let boardOnly = CoordinatorMentionCandidate.candidates(from: board)
+        let boardDone = titles("", in: boardOnly)[.done] ?? []
+        XCTAssertFalse(boardDone.isEmpty, "The fixture board lists Done tasks whose task space is open")
+        let before = titles("", in: candidates)
+        XCTAssertEqual(before[.done], boardDone + ["signup-feedback-form"])
+        XCTAssertNil(before[.archived])
+        // The board's tasks are as before.
+        for group in [CoordinatorMentionCandidate.Group.needsYou, .working, .idle, .toShip] {
+            XCTAssertEqual(before[group], titles("", in: boardOnly)[group], group.title)
+        }
+        XCTAssertEqual(titles("csv", in: candidates)[.archived], ["csv-export-spike"])
+        XCTAssertEqual(titles("onboarding", in: candidates)[.done], ["onboarding-copy-pass"])
+        XCTAssertEqual(titles("#158", in: candidates)[.done], ["onboarding-copy-pass"])
+        let archived = try XCTUnwrap(candidates.first { $0.taskID == ToasttyMobileFixture.finishedArchivedTaskID })
+        XCTAssertEqual(archived.group, .archived)
+        XCTAssertEqual(archived.projectTitle, "toastty")
+        XCTAssertEqual(archived.markColor, finished.chips[archived.taskID]?.markColor)
+        XCTAssertEqual(
+            ToasttyMentionToken(candidate: archived).markdown,
+            "[csv-export-spike](toastty://task/\(ToasttyMobileFixture.finishedArchivedTaskID.uuidString))"
+        )
+
+        // A Done task whose task space is open is on the board and in the
+        // finished list: once, as the board lists it, finished when the Mac
+        // says, although its latest change is older than 14 days.
+        let open = RemoteTaskSummary(
+            id: ToasttyMobileFixture.finishedDoneTaskID, title: "signup-feedback-form (open)", group: .done,
+            mark: .done, statusLine: "Done", stageTitle: "Done", stageReason: "marked done",
+            projectTitle: "toastty", taskSpaceWorkspaceID: UUID(), activityAt: now.addingTimeInterval(-40 * 86_400)
+        )
+        let withOpen = CoordinatorMentionCandidate.candidates(
+            from: MobileTaskBoard(RemoteTaskBoard(tasks: board.tasks + [open])), finished: finished
+        )
+        XCTAssertEqual(withOpen.filter { $0.taskID == open.id }.map(\.title), ["signup-feedback-form (open)"])
+        XCTAssertEqual(titles("", in: withOpen)[.done], boardDone + ["signup-feedback-form (open)"])
+        XCTAssertEqual(withOpen.count, candidates.count)
+
+        // An older Mac sends no done times: its finished tasks show only for
+        // a search. One that shares none gives the board's list.
+        var undatedAnswer = ToasttyMobileFixture.finishedTasks
+        for index in undatedAnswer.tasks.indices { undatedAnswer.tasks[index].doneAt = nil }
+        let undated = CoordinatorMentionCandidate.candidates(from: board, finished: ToasttyFinishedTasks(undatedAnswer))
+        XCTAssertEqual(titles("", in: undated), titles("", in: boardOnly))
+        XCTAssertEqual(titles("signup", in: undated)[.done], ["signup-feedback-form"])
+        XCTAssertEqual(titles("csv", in: undated)[.archived], ["csv-export-spike"])
+        XCTAssertEqual(CoordinatorMentionCandidate.candidates(from: board, finished: ToasttyFinishedTasks()), boardOnly)
     }
 
     // MARK: - A mention in the field
@@ -379,9 +465,10 @@ final class ToasttyComposerMentionTests: XCTestCase {
 
     private func makeComposer(
         text: String = "",
-        mentions: Bool = true
+        mentions: Bool = true,
+        candidates: [CoordinatorMentionCandidate] = ToasttyComposerMentionTests.candidates
     ) async throws -> (UIWindow, MentionModel, ToasttyComposerUIKitTextView) {
-        let model = MentionModel(text: text, candidates: Self.candidates)
+        let model = MentionModel(text: text, candidates: candidates)
         let host = UIHostingController(rootView: MentionHarness(model: model, usesMentions: mentions))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -437,7 +524,7 @@ private final class MentionModel: ObservableObject {
     @Published var replacement: ToasttyComposerReplacement?
     var editRevision: UInt64 = 0
     let picker = ToasttyMentionPicker()
-    let candidates: [CoordinatorMentionCandidate]
+    @Published var candidates: [CoordinatorMentionCandidate]
 
     init(text: String, candidates: [CoordinatorMentionCandidate]) {
         self.text = text

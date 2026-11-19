@@ -860,7 +860,8 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   finished task older than the 200, stays text, and so does a bare task ID.
   With a Mac from before this change, a link to a Done task whose task space
   closed, or to an archived task, stays text. The finished tasks never show
-  in Home, the Tasks tab, the mention list or the badges.
+  in Home, the Tasks tab or the badges; the coordinator's mention list
+  offers them (**Mention a task** below).
   In the coordinator's chat the session or task space opens over the chat,
   and Back returns to the chat with the tab bar. In another session's chat
   it opens in place of that conversation, so Back goes to the screen under
@@ -923,10 +924,16 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   archived, by stage (Needs you, Working, Idle, To ship), then the done tasks
   of the last 14 days, at most 50. Type to search: words match the title and
   the project's name, and `#331` or `331` matches the pull request number; a
-  search also finds older done and archived tasks. About four rows show, and
-  the list scrolls. A tap puts the task in the field as one word, `@` and its
-  title in the accent color; one Delete removes the whole word, and the caret
-  does not stop inside it. The list closes when the caret leaves the search,
+  search also finds older done and archived tasks. The done and archived
+  tasks are those on the Mac's task board and its 200 most recently active
+  Done and archived tasks (see the finished tasks below); a task in both
+  shows once, as the board lists it. A search for a finished task older than
+  the 200 finds nothing on the phone unless the board lists it, although the
+  Mac's search finds it.
+  With a Mac from before `doneAt`, its finished tasks show only for a
+  search. About four rows show, and the list scrolls. A tap puts the task in
+  the field as one word, `@` and its title in the accent color; one Delete
+  removes the whole word, and the caret does not stop inside it. The list closes when the caret leaves the search,
   the `@` is deleted, a space ends a search that matches nothing, the field
   loses the keyboard, or you tap the chat above it. The message holds the
   task's link, `[title](toastty://task/<task-id>)`, as the Mac sends it, and
@@ -1059,16 +1066,23 @@ scope, as the board does, and answers `protocolVersion`, `revision` and
 `tasks`, the most recently active first. Each task has `id`, `title`, `group`
 (`done` or `archived`), `stageTitle`, `stageReason`, `statusLine`,
 `projectTitle` (the project workspace's title while it is open, else the
-project folder's name, as the board sends it), and `pullRequest` with its
-number, URL and state. It has no path, no message text and no action. A task whose
-task space is still open is in the list and on the board; the phone uses the
-board's. The phone reads the list when a snapshot names a revision it does not
+project folder's name, as the board sends it), `pullRequest` with its
+number, URL and state, and `doneAt`: when the task finished, as the Mac's
+mention list reads it, which is the record's done time, else the task's latest
+change. The phone's mention list shows a Done task before a search when its
+`doneAt` is in the last 14 days. It has no path, no message text and no
+action. A task whose task space is still open is in the list and on the
+board; the phone uses the board's. The phone reads the list when a snapshot names a revision it does not
 have, one read at a time, as for the quiet digests; a read that fails is tried
 again with the next snapshot. It reads a task it cannot read, such as one in a
 later group, as absent, and a pull request it cannot read as none. No
 capability advertises the route: the revision on the board says the Mac
 serves it. An older Mac sends no revision, and the phone draws no chip for a
-finished task. An older phone ignores the field.
+finished task. An older phone ignores the field, and `doneAt` too. A Mac from
+before `doneAt` omits it, and the phone shows that Mac's finished tasks in the
+mention list only for a search; a `doneAt` the phone cannot read reads as
+none and keeps the task. When a Mac first sends `doneAt`, the revision changes
+once, so each phone reads the list once more.
 
 The coordinator has two queues. Its conversation's send queue holds what a
 device's chat queued and is part of `inputControl`, at most 5 messages. The

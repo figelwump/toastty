@@ -103,8 +103,8 @@ enum RemoteTaskBoardProjection {
     }
 
     /// The most recently active Done and archived tasks, at most `limit`,
-    /// for the chips of links to them: a task the board does not list has
-    /// no chip on a device without them. A task with an open task space is
+    /// for the chips of links to them and the mention list: a task the
+    /// board does not list has no chip on a device without them. A task with an open task space is
     /// here as well as on the board, so its chip stays when its task space
     /// closes. A task space with no task record is not a task.
     static func finishedTasks(
@@ -134,7 +134,10 @@ enum RemoteTaskBoardProjection {
                 stageReason: stage.why,
                 statusLine: TaskBoardPresentation.stageStatusLine(item),
                 projectTitle: item.projectTitle,
-                pullRequest: pullRequest(item)
+                pullRequest: pullRequest(item),
+                // As the Mac's own mention list reads it
+                // (`CoordinatorMentionCandidate.candidates(from:)`).
+                doneAt: item.record?.doneAt ?? item.activityAt
             )
         }
     }
