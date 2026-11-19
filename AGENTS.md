@@ -30,7 +30,7 @@
 - `./scripts/automation/check.sh` is the full gate for an explicitly requested local run (generate, artifact self-tests, web-panel tests, build, smoke, and app tests; Ghostty-backed unless fallback is explicitly requested).
 - After any code, project, dependency, or merge-related change, ensure the generated Xcode project is current and the app builds cleanly on toastty-mini before handoff. This includes branch merges and branch switches that may leave generated project state stale.
 - Avoid deriving `ARCH` from `uname -m` in translated shells or inside `sv exec`; it may report `x86_64` on arm64 hosts. Set `ARCH=arm64` explicitly for agent/remote runs unless intentionally validating Rosetta. Prefer invocation-scoped overrides such as `ARCHS` and `ONLY_ACTIVE_ARCH=YES` over mutating project settings.
-- Agent-driven focused iOS simulator tests run on the remote toastty-mini path: `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree -- -only-testing:...`. The full iOS suite runs on hosted CI (`Toastty CI` dispatch); see the CI Coverage part of the verify skill. Do not boot or drive a local simulator unless the user explicitly requests local validation.
+- Agent-driven focused iOS simulator tests run on the remote toastty-mini path: `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree -- -only-testing:...`. Selected iOS PRs run hosted unit tests and four Debug smoke tests. The full suite runs in nightly, release, and high-risk validation. See CI Coverage in the verify skill. Do not boot or drive a local simulator unless the user explicitly requests local validation.
 
 ## Validation
 

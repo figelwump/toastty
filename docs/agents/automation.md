@@ -4,23 +4,24 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 
 ## GitHub CI
 
-`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR and manual dispatch. It does not run on pushes to `main`. A newer PR commit cancels that PR's older run; manual runs have separate groups and are not cancelled.
+`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, on manual dispatch, and on the nightly schedule. A newer PR commit cancels that PR's older run. Full dispatches have separate groups so they can retain evidence for their own source.
 
-PRs run short checks on disposable Linux runners. `.github/ci-paths.yml` selects:
+`.github/ci-paths.yml` selects checks for each PR:
 
 - **Script tests** for iOS, script, remote runner fixture, and CI configuration changes. These run portable dispatcher, release-evidence, and remote runner contracts with fake tools. They do not build or launch either app.
 - **Web panel tests** for web-panel sources, generated bundles, and shared CI configuration. Each package's `npm test` also checks generated bundle synchronization.
-- Documentation-only and native macOS source changes skip these jobs. CI selection and gate tests still run on every PR.
+- **iOS tests** for client code, shared Swift code and fixtures, bundled web panels, and iOS toolchain or CI changes. Debug runs the unit suites and four smoke UI tests. Release runs the unit suites.
+- Documentation-only and Mac-only changes can skip all three. CI selection and gate tests still run on every PR.
 
 The separate `.github/workflows/push-worker.yml` runs the existing checks and bundle dry runs for affected push-worker PRs, or by manual dispatch. It does not run again after merge. The `iOS TestFlight` archive/upload workflow is also manual-only.
 
-Branch protection on `main` still requires the **CI gate** check. For PRs, it requires selection and the selected Linux checks to pass. For manual runs, it requires all jobs, including both native platforms. Failed, cancelled, or missing selected jobs block the gate. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` checks selection and runs the gate's shell logic locally without launching an app.
+Branch protection on `main` requires the **CI gate** check. For PRs, it requires selection and all selected checks to pass. For full dispatches, it requires all jobs, including both native platforms. Failed, cancelled, or missing selected jobs block the gate. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` checks selection and runs the gate's shell logic locally without launching an app.
 
 Use **Run workflow** to request full validation on a branch or the exact `main` release commit. Mac-only release-script and device-plist fixtures use `sips` and Apple plist tools, so they stay in the manual macOS job. The workflow tests check that every script fixture is assigned to Linux or manual macOS coverage.
 
 A manual run includes the Linux checks, macOS Debug tests and an unsigned Release build, and iOS Debug and Release simulator tests. Debug includes the full UI suite; both iOS configurations include the provisional performance budget. Before TestFlight, run full `Toastty CI` on `main`, wait for success, and confirm its source SHA matches the release. A green PR gate does not qualify as release evidence. See [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
 
-Native implementation checks still follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. A green lightweight PR gate does not establish native build or runtime coverage. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
+Native implementation checks still follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. Check which jobs the PR gate selected and add focused verification for the changed behavior. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
 
 GitHub jobs use disposable runners and no production host. Manual macOS jobs build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
 
@@ -965,7 +966,7 @@ node ios/scripts/toastty-ios.mjs generate
 node ios/scripts/toastty-ios.mjs test
 ```
 
-Each dispatcher command accepts `--dry-run`. For agent-driven focused testing (`-only-testing`), keep simulator work on toastty-mini. Run the full iOS suite through a `Toastty CI` dispatch instead; see CI Coverage in `.agents/skills/toastty-verify/SKILL.md` for the rule and its exceptions.
+Each dispatcher command accepts `--dry-run`. For agent-driven focused testing (`-only-testing`), keep simulator work on toastty-mini. See CI Coverage in `.agents/skills/toastty-verify/SKILL.md` for when to run the full hosted suite.
 
 ```bash
 sv exec -- scripts/remote/test.sh \
@@ -977,7 +978,9 @@ sv exec -- scripts/remote/test.sh \
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-`Toastty CI` runs native simulator tests only on manual dispatch. Its Debug job includes the full UI suite; Debug and Release both include the provisional 5,000-event numeric budget and the separate event/cursor correctness test. Debug has a 150-minute limit because the full UI suite and its artifact upload can take close to 120 minutes on slow hosted runners; Release keeps its 45-minute limit.
+On iOS-related PRs, `Toastty CI` runs the app and domain unit suites in Debug and Release. Debug also runs the four tests selected by `--ui-tests smoke`. Both PR jobs use `--skip-performance-budgets` and keep the separate 5,000-event correctness check. Each PR job has a 45-minute limit.
+
+The full manual `Toastty CI` dispatch runs all Debug UI tests and both unit configurations with the performance budgets. Full Debug has a 150-minute limit, and Release has 45 minutes. At 2:17 a.m. Pacific the GitHub schedule checks the shared branch for changes to iOS inputs and dispatches the same full workflow when needed. The schedule starts on `main` and prefers `feat/task-system-coordinator` while that branch exists. The dispatch runs tests on disposable hosted runners and creates CI artifacts. The release task separately requires green full evidence for the exact TestFlight commit on `main`.
 
 Each hosted simulator invocation passes `--retry-tests-on-failure`, which maps to `xcodebuild -retry-tests-on-failure -test-iterations 2`. The uploaded xcresult records both attempts. Investigate tests that need a retry. Local dispatcher runs and the remote wrapper keep single attempts so flaky and deterministic failures remain distinguishable.
 
