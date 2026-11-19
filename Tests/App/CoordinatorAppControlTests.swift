@@ -453,7 +453,7 @@ struct CoordinatorAppControlTests {
         )
         let windowID = try #require(fixture.store.state.selectedWindowID)
         func titles() -> [String] {
-            CommandPaletteTaskCatalog.descriptors(current: nil, releases: [], coordinator: palette.coordinatorOption()).map(\.title)
+            CommandPaletteTaskCatalog.descriptors(current: nil, coordinator: palette.coordinatorOption()).map(\.title)
         }
 
         #expect(titles() == ["Open Coordinator"])
@@ -488,6 +488,6 @@ struct CoordinatorAppControlTests {
         let tasks = try TaskCoordinatorTests.Fixture()
         let palette = CommandPaletteTaskActions(store: tasks.store, sessionRuntimeStore: tasks.sessionRuntimeStore)
         #expect(palette.coordinatorOption() == nil)
-        #expect(CommandPaletteTaskCatalog.descriptors(current: nil, releases: [], coordinator: nil).isEmpty)
+        #expect(CommandPaletteTaskCatalog.descriptors(current: nil, coordinator: nil).isEmpty)
     }
 }

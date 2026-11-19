@@ -76,7 +76,7 @@ struct CoordinatorDockTests {
 
     @Test func thePaletteOffersTheDockWithItsShortcut() throws {
         func dockCommand(_ option: PaletteCoordinatorOption) -> PaletteCommandDescriptor? {
-            CommandPaletteTaskCatalog.descriptors(current: nil, releases: [], coordinator: option)
+            CommandPaletteTaskCatalog.descriptors(current: nil, coordinator: option)
                 .first { $0.id == "coordinator.dock.toggle" }
         }
         #expect(dockCommand(PaletteCoordinatorOption(isOpen: true)) == nil)
