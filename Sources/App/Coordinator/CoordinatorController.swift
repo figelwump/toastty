@@ -226,6 +226,30 @@ final class CoordinatorController: ObservableObject {
         /// have it already. It waits with the paused entries until the
         /// user sends it again or removes it.
         var typingWasInterrupted = false
+        /// The folders of attached files that the message owns, by name
+        /// (`CoordinatorAttachments`): its own, and the folders of the
+        /// copies that it carried over from an Edit. Remove deletes these
+        /// and no other. Its text never adds a folder: a list of files in
+        /// it can name the folder of another message.
+        let attachmentFolders: [String]
+
+        init(
+            id: String,
+            text: String,
+            byUser: Bool,
+            typingWasInterrupted: Bool = false,
+            attachmentFolders: [String]? = nil
+        ) {
+            self.id = id
+            self.text = text
+            self.byUser = byUser
+            self.typingWasInterrupted = typingWasInterrupted
+            var folders = [id]
+            for folder in attachmentFolders ?? [] where folders.contains(folder) == false {
+                folders.append(folder)
+            }
+            self.attachmentFolders = folders
+        }
 
         /// "Steer now" may type it into a running turn: a message that the
         /// user wrote in the chat, also a reply. A quick entry message
@@ -455,11 +479,14 @@ final class CoordinatorController: ObservableObject {
             Task { @MainActor [weak self] in self?.drain() }
         }
         restoreQueue()
-        // A waiting message keeps the folders it names: after an edit in
-        // the chat, its files are under the ID of the message it was.
+        // A waiting message keeps the folders it owns: after an edit in
+        // the chat, its files are under the ID of the message it was. It
+        // also keeps each folder its text names, so the files are there
+        // when it is typed; a name in a text only keeps a folder, and never
+        // removes one.
         self.attachments.removeExpired(
             waitingMessageIDs: (queuedEntries + pausedEntries).reduce(into: Set<String>()) { ids, entry in
-                ids.insert(entry.id)
+                ids.formUnion(entry.attachmentFolders)
                 ids.formUnion(self.attachments.messageIDs(namedIn: entry.text))
             },
             now: now()
@@ -1296,12 +1323,16 @@ final class CoordinatorController: ObservableObject {
     /// caller that keeps its own durable copy uses this, so its text can
     /// change while it waits and is typed at most once. Such text never
     /// goes in front of entries that wait in the queue.
+    ///
+    /// `attachmentFolders` names folders of attached files that the message
+    /// owns besides its own (`QueuedEntry.attachmentFolders`).
     @discardableResult
     func send(
         _ text: String,
         queueWhenHeld: Bool = true,
         byUser: Bool = false,
-        id: String = UUID().uuidString
+        id: String = UUID().uuidString,
+        attachmentFolders: [String] = []
     ) throws -> SendResult {
         // The entry keeps the text as it is typed, which is also how the
         // agent's conversation echoes it.
@@ -1313,7 +1344,7 @@ final class CoordinatorController: ObservableObject {
         guard let location else {
             throw CoordinatorError("There is no coordinator. Open it first.")
         }
-        let entry = QueuedEntry(id: id, text: text, byUser: byUser)
+        let entry = QueuedEntry(id: id, text: text, byUser: byUser, attachmentFolders: attachmentFolders)
         guard queueWhenHeld else {
             guard queuedEntries.isEmpty else { return .held(hold ?? .awaitingTurn) }
             switch typeAtOpenPrompt(entry, location: location, moment: now(), isSendersOwnCall: true) {
@@ -1392,17 +1423,18 @@ final class CoordinatorController: ObservableObject {
     func sendUserText(
         _ text: String,
         steering: Bool,
-        id: String = UUID().uuidString
+        id: String = UUID().uuidString,
+        attachmentFolders: [String] = []
     ) throws -> SendResult {
         let text = AgentPasteText.keepingImagePathsAsText(text.trimmingCharacters(in: .whitespacesAndNewlines))
         if steering, text.isEmpty == false {
-            switch steer(QueuedEntry(id: id, text: text, byUser: true)) {
+            switch steer(QueuedEntry(id: id, text: text, byUser: true, attachmentFolders: attachmentFolders)) {
             case .delivered?: return .steered
             case .uncertain?: return .steeredUnconfirmed
             case .unavailable?, nil: break
             }
         }
-        return try send(text, byUser: true, id: id)
+        return try send(text, byUser: true, id: id, attachmentFolders: attachmentFolders)
     }
 
     /// Types a waiting message of the user's into the running turn, for
@@ -1528,20 +1560,35 @@ final class CoordinatorController: ObservableObject {
 
     /// Takes a waiting entry out of the queue. Returns it, or `nil` when it
     /// was typed or removed already. With `discardingAttachments`, the
-    /// files attached to it go too: the message will not be sent. Without
+    /// folders that it owns go too: the message will not be sent. Without
     /// it they stay, for a caller that sends the entry's text again.
+    ///
+    /// The saved file changes first. When it cannot be saved without the
+    /// entry, nothing changes and this throws: a relaunch would bring the
+    /// entry back, and type it without its files. An entry that the file
+    /// never held goes also then, since no relaunch knows of it.
     @discardableResult
-    func removeQueuedEntry(id: String, discardingAttachments: Bool = false) -> QueuedEntry? {
+    func removeQueuedEntry(id: String, discardingAttachments: Bool = false) throws -> QueuedEntry? {
+        var queued = queuedEntries
+        var paused = pausedEntries
         let removed: QueuedEntry
-        if let index = queuedEntries.firstIndex(where: { $0.id == id }) {
-            removed = queuedEntries.remove(at: index)
-        } else if let index = pausedEntries.firstIndex(where: { $0.id == id }) {
-            removed = pausedEntries.remove(at: index)
+        if let index = queued.firstIndex(where: { $0.id == id }) {
+            removed = queued.remove(at: index)
+        } else if let index = paused.firstIndex(where: { $0.id == id }) {
+            removed = paused.remove(at: index)
         } else {
             return nil
         }
+        guard saveQueue(queueSnapshot(queued: queued, paused: paused)) || savedQueueLists(id) == false else {
+            ToasttyLog.warning("Kept a waiting message for the coordinator: the queue could not be saved without it", category: .tasks)
+            throw CoordinatorError(
+                "Toastty could not save the waiting messages, so the message still waits. Try Remove again."
+            )
+        }
+        queuedEntries = queued
+        pausedEntries = paused
         if discardingAttachments {
-            attachments.discard(messageID: removed.id, text: removed.text)
+            attachments.discard(folders: removed.attachmentFolders)
         }
         drain()
         return removed
@@ -1972,7 +2019,7 @@ final class CoordinatorController: ObservableObject {
         // Their coordinator is gone, and with it the reason to keep the
         // files of the messages that waited for it.
         for entry in queuedEntries + pausedEntries {
-            attachments.discard(messageID: entry.id, text: entry.text)
+            attachments.discard(folders: entry.attachmentFolders)
         }
         queuedEntries.removeAll()
         pausedEntries.removeAll()
@@ -1991,7 +2038,7 @@ final class CoordinatorController: ObservableObject {
         guard let queueFileURL, let snapshot = CoordinatorQueueSnapshot.load(from: queueFileURL) else { return }
         guard let workspaceID = location?.workspaceID, snapshot.workspaceID == workspaceID else {
             for entry in snapshot.queued + snapshot.paused {
-                attachments.discard(messageID: entry.id, text: entry.text)
+                attachments.discard(folders: entry.ownedAttachmentFolders)
             }
             try? CoordinatorQueueSnapshot.remove(at: queueFileURL)
             ToasttyLog.info("Dropped saved messages of a coordinator that is gone", category: .tasks, metadata: [
@@ -1999,9 +2046,17 @@ final class CoordinatorController: ObservableObject {
             ])
             return
         }
-        var queued = snapshot.queued.map { QueuedEntry(id: $0.id, text: $0.text, byUser: true) }
+        var queued = snapshot.queued.map {
+            QueuedEntry(id: $0.id, text: $0.text, byUser: true, attachmentFolders: $0.ownedAttachmentFolders)
+        }
         var paused = snapshot.paused.map {
-            QueuedEntry(id: $0.id, text: $0.text, byUser: true, typingWasInterrupted: $0.typingWasInterrupted ?? false)
+            QueuedEntry(
+                id: $0.id,
+                text: $0.text,
+                byUser: true,
+                typingWasInterrupted: $0.typingWasInterrupted ?? false,
+                attachmentFolders: $0.ownedAttachmentFolders
+            )
         }
         // Toastty quit after it started to type this entry and before it
         // saved that the entry was typed. Whether the coordinator has it is
@@ -2038,8 +2093,13 @@ final class CoordinatorController: ObservableObject {
     /// that Toastty can quit. Returns whether the file now holds the queue.
     @discardableResult
     private func saveQueue() -> Bool {
+        saveQueue(queueSnapshot())
+    }
+
+    /// Writes `snapshot` when the file holds another queue. Returns whether
+    /// the file now holds `snapshot`.
+    private func saveQueue(_ snapshot: CoordinatorQueueSnapshot?) -> Bool {
         guard let queueFileURL else { return true }
-        let snapshot = queueSnapshot()
         guard snapshot != savedQueue else { return true }
         do {
             if let snapshot {
@@ -2058,19 +2118,35 @@ final class CoordinatorController: ObservableObject {
         }
     }
 
-    private func queueSnapshot() -> CoordinatorQueueSnapshot? {
+    /// The file's content for the queue, or for `queued` and `paused` in
+    /// its place: a change that is saved before it is made.
+    private func queueSnapshot(
+        queued: [QueuedEntry]? = nil,
+        paused: [QueuedEntry]? = nil
+    ) -> CoordinatorQueueSnapshot? {
         guard let workspaceID = queueWorkspaceID else { return nil }
-        let queued = queuedEntries.filter(\.byUser)
-        let paused = pausedEntries.filter(\.byUser)
+        let queued = (queued ?? queuedEntries).filter(\.byUser)
+        let paused = (paused ?? pausedEntries).filter(\.byUser)
         guard queued.isEmpty == false || paused.isEmpty == false else { return nil }
         return CoordinatorQueueSnapshot(
             workspaceID: workspaceID,
-            queued: queued.map { .init(id: $0.id, text: $0.text) },
+            queued: queued.map { .init(id: $0.id, text: $0.text, attachmentFolders: $0.attachmentFolders) },
             paused: paused.map {
-                .init(id: $0.id, text: $0.text, typingWasInterrupted: $0.typingWasInterrupted ? true : nil)
+                .init(
+                    id: $0.id,
+                    text: $0.text,
+                    typingWasInterrupted: $0.typingWasInterrupted ? true : nil,
+                    attachmentFolders: $0.attachmentFolders
+                )
             },
             typingEntryID: typingEntryID
         )
+    }
+
+    /// Whether the saved file lists the entry `id`, so a relaunch would
+    /// bring it back.
+    private func savedQueueLists(_ id: String) -> Bool {
+        ((savedQueue?.queued ?? []) + (savedQueue?.paused ?? [])).contains { $0.id == id }
     }
 
     /// Saves that a saved entry is being typed, before its text goes to
@@ -2085,8 +2161,7 @@ final class CoordinatorController: ObservableObject {
         typingEntryID = entry.id
         if saveQueue() { return true }
         typingEntryID = nil
-        let savedIDs = (savedQueue?.queued ?? []) + (savedQueue?.paused ?? [])
-        return savedIDs.contains { $0.id == entry.id } == false
+        return savedQueueLists(entry.id) == false
     }
 
     /// The terminal did not take the text: the entry waits as before.

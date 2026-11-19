@@ -9,7 +9,8 @@ import RemoteProtocol
 /// directory, so the agent can read the files with no extra permission.
 /// A copy stays after its message was typed: the coordinator reads it then,
 /// and passes it on to the task it creates. Toastty removes a copy when the
-/// user removes the waiting message, and otherwise after `retention`.
+/// user removes the waiting message that owns its folder, and otherwise
+/// after `retention`.
 struct CoordinatorAttachments: Sendable {
     static let directoryName = "attachments"
     static let retention: TimeInterval = 7 * 24 * 60 * 60
@@ -71,17 +72,23 @@ struct CoordinatorAttachments: Sendable {
         }
     }
 
-    /// Removes the copies of one message: its own folder, and each folder
-    /// that its list of attached files names. A message that the user took
-    /// back into the chat's field and sent again has a new ID, and its files
-    /// are still under the ID it had. Only that list counts: a path in the
-    /// text, such as one in a reply's quote of the coordinator's message,
-    /// belongs to another message. A message with no copies removes nothing.
-    func discard(messageID: String, text: String = "") {
-        let attached = CoordinatorMessageHeader.attachedFiles(in: text)?.paths.joined(separator: "\n") ?? ""
-        for id in messageIDs(namedIn: attached).union([messageID]) where UUID(uuidString: id) != nil {
-            try? FileManager.default.removeItem(at: folderURL(messageID: id))
+    /// Removes the folders that a message owns, by name
+    /// (`CoordinatorController.QueuedEntry.attachmentFolders`). The text of a
+    /// message never decides what goes: a list of files in it can name the
+    /// folder of another message. Only a name that is a message's ID
+    /// counts, so nothing outside `directoryURL` can go. A folder that is
+    /// not there is removed already.
+    func discard(folders: some Sequence<String>) {
+        for name in Set(folders) where UUID(uuidString: name) != nil {
+            try? FileManager.default.removeItem(at: folderURL(messageID: name))
         }
+    }
+
+    /// The name of the message folder that holds `url`, a copy that
+    /// `isStagedCopy` accepts, or `nil` for any other file.
+    func folderName(of url: URL) -> String? {
+        guard isStagedCopy(url) else { return nil }
+        return url.standardizedFileURL.deletingLastPathComponent().lastPathComponent
     }
 
     /// Whether message `messageID` has copies here. A refused message keeps
@@ -128,8 +135,9 @@ struct CoordinatorAttachments: Sendable {
         return path.hasSuffix("/") ? path : path + "/"
     }
 
-    /// Removes the folders older than `retention`, except those of the
-    /// messages in `waitingMessageIDs`, which were not typed yet.
+    /// Removes the folders older than `retention`, except those in
+    /// `waitingMessageIDs`: the folders that waiting messages own or name,
+    /// which were not typed yet.
     func removeExpired(waitingMessageIDs: Set<String>, now: Date = Date()) {
         let fileManager = FileManager.default
         guard let folders = try? fileManager.contentsOfDirectory(

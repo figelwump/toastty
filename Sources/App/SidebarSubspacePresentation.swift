@@ -573,6 +573,48 @@ enum SidebarSubspacePresentation {
         )
     }
 
+    /// The task space card's child tasks. Open ones list by the sidebar
+    /// group their rows list in, most urgent first, and keep `children`'s
+    /// order inside a group. Merged ones, To ship or Done, list newest merge
+    /// first. Archived ones are left out, as the "N/M merged" tag leaves
+    /// them out. A child in another project names that project.
+    static func hoverTipChildTasks(
+        of parent: TaskBoardItem,
+        children: [TaskBoardItem]
+    ) -> (open: [SubspaceHoverTipModel.ChildTask], merged: [SubspaceHoverTipModel.ChildTask]) {
+        func childTask(_ item: TaskBoardItem, stage: SubspaceHoverTipModel.Stage) -> SubspaceHoverTipModel.ChildTask? {
+            guard case .task(let taskID) = item.id else { return nil }
+            let otherProject = item.projectWorkspaceID != parent.projectWorkspaceID || item.projectTitle != parent.projectTitle
+            return SubspaceHoverTipModel.ChildTask(
+                taskID: taskID, item: item, stage: stage, projectTitle: otherProject ? item.projectTitle : nil
+            )
+        }
+        var open: [(bucket: SidebarBucket, child: SubspaceHoverTipModel.ChildTask)] = []
+        var merged: [(mergedAt: Date, child: SubspaceHoverTipModel.ChildTask)] = []
+        for item in children {
+            switch item.stage {
+            case .archived:
+                continue
+            case .toShip:
+                if let child = childTask(item, stage: .toShip) { merged.append((SidebarRecentToShip.mergedAt(item), child)) }
+            case .done:
+                if let child = childTask(item, stage: .done) { merged.append((SidebarRecentToShip.mergedAt(item), child)) }
+            case .starting, .needsYou, .running, .idle:
+                if let bucket = SidebarBucket.task(item), let child = childTask(item, stage: .bucket(bucket)) {
+                    open.append((bucket, child))
+                }
+            }
+        }
+        return (
+            open.enumerated()
+                .sorted { ($0.element.bucket, $0.offset) < ($1.element.bucket, $1.offset) }
+                .map(\.element.child),
+            merged.enumerated()
+                .sorted { $0.element.mergedAt != $1.element.mergedAt ? $0.element.mergedAt > $1.element.mergedAt : $0.offset < $1.offset }
+                .map(\.element.child)
+        )
+    }
+
     /// The card's stage chip: the row's own group, as the group counts
     /// count it, or the task's stage once it has left the groups. A
     /// subspace that is not a task has none.

@@ -2432,11 +2432,15 @@ final class RemoteAccessService: ObservableObject {
         guard sessionWritePolicy.isEnabled(for: conversationID) else { return .sessionWritesDisabled }
         switch request.action {
         case .coordinatorRemove:
-            // As the Mac chat's Remove: the message will not be sent, so its
-            // files go too.
-            guard let id = request.clientRequestID,
-                  controller.removeQueuedEntry(id: id, discardingAttachments: true) != nil else { return .unchanged }
-            return .updated
+            // As the Mac chat's Remove: the message will not be sent, so the
+            // folders that it owns go too. When the queue cannot be saved
+            // without it, it stays with its files, and the device is told.
+            guard let id = request.clientRequestID else { return .unchanged }
+            do {
+                return try controller.removeQueuedEntry(id: id, discardingAttachments: true) != nil ? .updated : .unchanged
+            } catch {
+                return .failed
+            }
         case .coordinatorResume:
             guard let token = exposedHeldSetToken(controller, conversationID: conversationID) else { return .unchanged }
             guard request.heldSetToken == token else { return .stale }

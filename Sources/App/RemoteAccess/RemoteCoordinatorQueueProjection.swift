@@ -56,7 +56,8 @@ enum RemoteCoordinatorQueueProjection {
             quote: quote.map { shortened($0, to: RemoteCoordinatorQueuePolicy.maximumQuoteLength).text },
             quoteTime: quoteTime,
             fileNames: fileNames(of: entry.text),
-            isHeld: isHeld
+            isHeld: isHeld,
+            typingWasInterrupted: entry.typingWasInterrupted
         )
     }
 
@@ -69,17 +70,20 @@ enum RemoteCoordinatorQueueProjection {
     }
 
     /// The first 16 hex digits of the SHA-256 of what a device shows and
-    /// acts on: the conversation, the Stop's token, and each entry's ID and
-    /// hold. An entry's text never changes under its ID.
-    /// Each session list carries it, so it reads only IDs.
+    /// acts on: the conversation, the Stop's token, and each entry's ID,
+    /// hold and interrupted mark. An entry's text never changes under its
+    /// ID. Each session list carries it, so it reads only IDs and marks.
     static func revision(
         held: [CoordinatorController.QueuedEntry],
         waiting: [CoordinatorController.QueuedEntry],
         conversationID: RemoteConversationID?,
         heldSetToken: String?
     ) -> String {
+        func line(_ state: String, _ entry: CoordinatorController.QueuedEntry) -> String {
+            entry.typingWasInterrupted ? "\(state) \(entry.id) interrupted" : "\(state) \(entry.id)"
+        }
         var lines = [conversationID?.rawValue.uuidString ?? "-", heldSetToken ?? "-"]
-        lines += held.map { "held " + $0.id } + waiting.map { "waiting " + $0.id }
+        lines += held.map { line("held", $0) } + waiting.map { line("waiting", $0) }
         let digest = SHA256.hash(data: Data(lines.joined(separator: "\n").utf8))
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }

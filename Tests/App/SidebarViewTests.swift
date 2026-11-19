@@ -440,6 +440,35 @@ final class SidebarViewTests: XCTestCase {
             .contentView
     }
 
+    /// Hovers a task space row in a hosted sidebar and returns its open
+    /// card. SwiftUI hover: one entered event through the hosting view's own
+    /// tracking areas, then moves straight to the row.
+    private func hoverTaskSpaceRow(_ title: String, in root: NSView, hasEntered: inout Bool) throws -> NSView {
+        HoverTipPresenter.shared.hideAll()
+        let rowFrame = try semanticTextFrame(in: root, prefix: "\(title), task space")
+        let windowPoint = root.convert(CGPoint(x: rowFrame.midX, y: rowFrame.midY), to: nil)
+        let window = try XCTUnwrap(root.window)
+        if hasEntered == false {
+            hasEntered = true
+            for area in root.trackingAreas where area.owner === root {
+                root.mouseEntered(with: try XCTUnwrap(NSEvent.enterExitEvent(
+                    with: .mouseEntered, location: windowPoint, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil
+                )))
+            }
+        }
+        root.mouseMoved(with: try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved, location: windowPoint, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        )))
+        pumpMainRunLoop(duration: 0.8)
+        let card = try XCTUnwrap(renderedHoverCardView(), "Hovering \(title) should open its card")
+        card.layoutSubtreeIfNeeded()
+        return card
+    }
+
     func testSessionHoverRecoversAfterTrackingUpdateWithoutMouseExit() throws {
         let window = SidebarHoverTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
@@ -2517,33 +2546,9 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Public URL warning, task space") }, "\(textValues)")
         XCTAssertTrue(textValues.contains { $0.hasPrefix("Private pages stay private, task space") }, "\(textValues)")
 
-        // SwiftUI hover: one entered event through the hosting view's own
-        // tracking areas, then moves straight to the view.
         var hasEntered = false
         func hoverRow(_ title: String) throws -> NSView {
-            HoverTipPresenter.shared.hideAll()
-            let rowFrame = try semanticTextFrame(in: root, prefix: "\(title), task space")
-            let windowPoint = root.convert(CGPoint(x: rowFrame.midX, y: rowFrame.midY), to: nil)
-            let window = try XCTUnwrap(root.window)
-            if hasEntered == false {
-                hasEntered = true
-                for area in root.trackingAreas where area.owner === root {
-                    root.mouseEntered(with: try XCTUnwrap(NSEvent.enterExitEvent(
-                        with: .mouseEntered, location: windowPoint, modifierFlags: [],
-                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                        context: nil, eventNumber: 0, trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil
-                    )))
-                }
-            }
-            root.mouseMoved(with: try XCTUnwrap(NSEvent.mouseEvent(
-                with: .mouseMoved, location: windowPoint, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 0, clickCount: 0, pressure: 0
-            )))
-            pumpMainRunLoop(duration: 0.8)
-            let card = try XCTUnwrap(renderedHoverCardView(), "Hovering \(title) should open its card")
-            card.layoutSubtreeIfNeeded()
-            return card
+            try hoverTaskSpaceRow(title, in: root, hasEntered: &hasEntered)
         }
 
         var card = try hoverRow("Private pages stay private")
@@ -2583,6 +2588,233 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(harness.store.window(id: otherWindowID)?.selectedWorkspaceID, otherSpace.workspaceID)
         XCTAssertEqual(harness.store.state.workspacesByID[otherSpace.workspaceID]?.focusedPanelID, otherSpace.panelID)
         XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
+    }
+
+    /// A task space card lists the tasks this one started, so a parent
+    /// reads as one in Needs you, where most of its children have no row.
+    /// Open children list most urgent first, five at most until the user
+    /// shows the rest; merged ones fold into one line; archived ones stay
+    /// out. A click on a child opens it and keeps the segment, as the
+    /// Parent button does; a child whose task space closed opens in the
+    /// Tasks view. The card grows downward when it shows more rows.
+    func testTaskSpaceCardListsChildTasksAndOpensThem() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "toastty")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        var sessionKinds: [(title: String, kind: SessionStatusKind)] = []
+        func task(
+            _ title: String, parent: UUID? = nil, pullRequest: Int? = nil, question: String? = nil,
+            session: SessionStatusKind = .idle, closedAndDone: Bool = false, mergedMinutesAgo: Double = 0,
+            archived: Bool = false
+        ) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, setup: .started,
+                parentTaskID: parent, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            if closedAndDone || archived {
+                // Its task space is gone, so the task has no row to open.
+                if closedAndDone {
+                    record.mergedAt = now.addingTimeInterval(-mergedMinutesAgo * 60)
+                    record.doneAt = now
+                } else {
+                    record.archivedAt = now
+                }
+                records.append(record)
+                return taskID
+            }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID,
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: project.id
+            )
+            workspace.taskID = taskID
+            workspaces.append(workspace)
+            records.append(record)
+            panelByTitle[title] = (workspaceID, panelID)
+            sessionKinds.append((title, session))
+            return taskID
+        }
+        // The card's task is both a child and a parent.
+        let grandparentID = task("Remote access v2")
+        let parentID = task("Rework remote pairing", parent: grandparentID, pullRequest: 448)
+        _ = task("QR code expiry", parent: parentID, question: "Keep the 10-minute expiry?")
+        _ = task("Relay retry", parent: parentID, pullRequest: 451)
+        _ = task("Onboarding copy", parent: parentID, session: .working)
+        // Thirteen open children: five show, "8 more open" shows seven more,
+        // and the last opens in the Tasks view.
+        for index in 1...10 {
+            _ = task("Idle child \(index)", parent: parentID)
+        }
+        // Thirteen merged children in all, newest first: the card lists
+        // twelve and sends the oldest to the Tasks view, so it stays on
+        // screen.
+        let closedChildID = task("Log redaction", parent: parentID, closedAndDone: true)
+        _ = task("Token store", parent: parentID, closedAndDone: true, mergedMinutesAgo: 1)
+        for index in 1...11 {
+            _ = task("Done child \(index)", parent: parentID, closedAndDone: true, mergedMinutesAgo: Double(index + 1))
+        }
+        _ = task("Bluetooth spike", parent: parentID, archived: true)
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            harness.window.orderOut(nil)
+        }
+        // Off screen, so the user's real pointer cannot hover a row.
+        harness.window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        for (title, kind) in sessionKinds {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID, windowID: windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .working ? "Writing" : "Waiting"),
+                at: now.addingTimeInterval(1)
+            )
+        }
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        let root = harness.hostingView
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        let textValues = renderedTextValues(in: root)
+        // Needs you has no row for the running and idle children.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Rework remote pairing, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Onboarding copy, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Idle child 1, task space") }, "\(textValues)")
+
+        var hasEntered = false
+        var card = try hoverTaskSpaceRow("Rework remote pairing", in: root, hasEntered: &hasEntered)
+        var cardText = renderedTextValues(in: card)
+        XCTAssertTrue(cardText.contains("Stage: Ready to review"), "\(cardText)")
+        XCTAssertTrue(cardText.contains("Go to parent task Remote access v2"), "\(cardText)")
+        XCTAssertTrue(cardText.contains("Child tasks: 13/26 merged"), "\(cardText)")
+        let shownChildren = [
+            "QR code expiry, Needs you", "Relay retry, Ready to review", "Onboarding copy, Running",
+            "Idle child 1, Idle", "Idle child 2, Idle",
+        ]
+        let rowCenters = try shownChildren.map { try semanticTextFrame(in: card, prefix: "Go to child task \($0)").midY }
+        XCTAssertEqual(rowCenters, rowCenters.sorted(), "Most urgent first: \(rowCenters)")
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Idle child 3") }, "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.contains("Bluetooth spike") }, "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Log redaction") }, "\(cardText)")
+        try writeSidebarEvidence(card, name: "child-tasks-1-card")
+        try attachSidebarRender(card, name: "child-tasks-1-card")
+
+        // Show the rest: the card grows downward and keeps its top edge.
+        // The sidebar is off screen, so first put the card where a real one
+        // opens, near the top of the screen; otherwise the screen's bottom
+        // edge would move it up.
+        let cardWindow = try XCTUnwrap(card.window)
+        let screenFrame = try XCTUnwrap(NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame)
+        cardWindow.setFrameTopLeftPoint(NSPoint(x: screenFrame.minX + 40, y: screenFrame.maxY - 40))
+        let collapsedFrame = cardWindow.frame
+        try clickSemanticText(prefix: "Show 8 open child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        let openExpandedFrame = cardWindow.frame
+        XCTAssertGreaterThan(openExpandedFrame.height, collapsedFrame.height + 60, "\(collapsedFrame) -> \(openExpandedFrame)")
+        XCTAssertEqual(openExpandedFrame.maxY, collapsedFrame.maxY, accuracy: 1)
+        cardText = renderedTextValues(in: card)
+        for child in ["Idle child 3, Idle", "Idle child 9, Idle"] {
+            let frame = try semanticTextFrame(in: card, prefix: "Go to child task \(child)")
+            XCTAssertLessThanOrEqual(frame.maxY, card.bounds.maxY, "\(child) fits in the card: \(frame) \(card.bounds)")
+        }
+        // Twelve open rows at most.
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Idle child 10") }, "\(cardText)")
+        XCTAssertTrue(cardText.contains("Show 1 more open child task in the Tasks view"), "\(cardText)")
+        try writeSidebarEvidence(card, name: "child-tasks-2-more-open")
+        try attachSidebarRender(card, name: "child-tasks-2-more-open")
+
+        // Hiding them shrinks the card back.
+        try clickSemanticText(prefix: "Hide 8 open child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        XCTAssertEqual(cardWindow.frame.height, collapsedFrame.height, accuracy: 1)
+        XCTAssertEqual(cardWindow.frame.maxY, collapsedFrame.maxY, accuracy: 1)
+
+        try clickSemanticText(prefix: "Show 13 merged child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(cardWindow.frame.height, collapsedFrame.height + 60, "\(collapsedFrame) -> \(cardWindow.frame)")
+        XCTAssertEqual(cardWindow.frame.maxY, collapsedFrame.maxY, accuracy: 1)
+        cardText = renderedTextValues(in: card)
+        for child in ["Log redaction, Done", "Token store, Done", "Done child 10, Done"] {
+            let frame = try semanticTextFrame(in: card, prefix: "Go to child task \(child)")
+            XCTAssertLessThanOrEqual(frame.maxY, card.bounds.maxY, "\(child) fits in the card: \(frame) \(card.bounds)")
+        }
+        XCTAssertTrue(cardText.contains("Hide 13 merged child tasks"), "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Done child 11") }, "\(cardText)")
+        XCTAssertTrue(cardText.contains("Show 1 more merged child task in the Tasks view"), "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.contains("Bluetooth spike") }, "\(cardText)")
+        try writeSidebarEvidence(card, name: "child-tasks-3-merged")
+        try attachSidebarRender(card, name: "child-tasks-3-merged")
+
+        // A child opens like the Parent button: its task space, and the
+        // sidebar stays on Needs you.
+        try clickSemanticText(prefix: "Go to child task Onboarding copy", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertNil(renderedHoverCardView(), "The card closes after the jump")
+        XCTAssertEqual(harness.store.window(id: windowID)?.selectedWorkspaceID, panelByTitle["Onboarding copy"]?.workspaceID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou, "The jump keeps the segment")
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, false)
+        root.layoutSubtreeIfNeeded()
+        try writeSidebarEvidence(root, name: "child-tasks-4-sidebar-after-jump")
+        try attachSidebarRender(root, name: "child-tasks-4-sidebar-after-jump")
+
+        // A reopened card starts folded. A merged child whose task space
+        // closed opens in the Tasks view. The test's clicks reach the card
+        // without the pointer leaving the row, so leave it through another
+        // row first, as a real pointer does.
+        func hoverParentRowAgain() throws -> NSView {
+            _ = try hoverTaskSpaceRow("QR code expiry", in: root, hasEntered: &hasEntered)
+            return try hoverTaskSpaceRow("Rework remote pairing", in: root, hasEntered: &hasEntered)
+        }
+        card = try hoverParentRowAgain()
+        XCTAssertNil(semanticTextField(in: card, prefix: "Go to child task Log redaction"))
+        try clickSemanticText(prefix: "Show 13 merged child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "Go to child task Log redaction", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.taskBoard?.tasksViewSelection(windowID: windowID)?.taskID, closedChildID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
+
+        // Past twelve, the rest open in the Tasks view with this task
+        // selected.
+        _ = harness.store.send(.setTasksViewShown(windowID: windowID, shown: false))
+        pumpMainRunLoop(duration: 0.4)
+        root.layoutSubtreeIfNeeded()
+        card = try hoverParentRowAgain()
+        try clickSemanticText(prefix: "Show 13 merged child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "Show 1 more merged child task in the Tasks view", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertNil(renderedHoverCardView(), "The card closes")
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.taskBoard?.tasksViewSelection(windowID: windowID)?.taskID, parentID)
     }
 
     /// The report behind this: merged child tasks whose task spaces

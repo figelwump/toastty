@@ -564,7 +564,11 @@ resumes with a stale token and then the Stop's token, and proves from Claude's
 transcript that the rest are typed one per turn, the device's chat message
 first. After a second Stop, the device's Resume follows Send next in the Mac's
 chat by milliseconds, with the same token, and each message is typed once. A third Stop holds a Mac chat message
-over a relaunch of the app: it waits under a new token and goes on Resume. It
+over a relaunch of the app: it waits under a new token and goes on Resume. Before
+that relaunch the check writes the message's ID as `typingEntryID` into the saved
+`coordinator-queue.json`, as a quit during its typing leaves it, so the device
+reads it marked `typingWasInterrupted` and the Mac chat shows its notice until
+the Resume. It
 writes `remote-coordinator-chat-check-waiting-messages.json` and the app log.
 
 ### Coordinator composer attachments

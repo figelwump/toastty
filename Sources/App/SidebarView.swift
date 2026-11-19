@@ -575,6 +575,9 @@ private final class SidebarTaskBoardSnapshot {
     /// Each parent task's child progress, worked out at the first request
     /// after the items changed.
     private var childProgressByParentTaskID: [UUID: (merged: Int, total: Int)]?
+    /// Each task and each task's child tasks, in `allItems` order, worked
+    /// out at the first request after the items changed.
+    private var family: (itemsByTaskID: [UUID: TaskBoardItem], childrenByParentTaskID: [UUID: [TaskBoardItem]])?
 
     /// Takes the board's items for a pass. While the items and the windows
     /// stay equal, the window's items and the child progress labels of the
@@ -586,6 +589,7 @@ private final class SidebarTaskBoardSnapshot {
         windows = state.windows
         windowItems = TaskBoard.items(allItems, in: windowID, state: state)
         childProgressByParentTaskID = nil
+        family = nil
     }
 
     func clear() {
@@ -594,6 +598,7 @@ private final class SidebarTaskBoardSnapshot {
         windowID = nil
         windows = []
         childProgressByParentTaskID = nil
+        family = nil
     }
 
     /// As `TaskBoard.childProgress(of:items:)` for `allItems`. Every task
@@ -603,6 +608,25 @@ private final class SidebarTaskBoardSnapshot {
             childProgressByParentTaskID = TaskBoard.childProgressByParentTaskID(allItems)
         }
         return childProgressByParentTaskID?[taskID]
+    }
+
+    /// A task and the tasks it started, for its task space card. Every task
+    /// space row asks, so one pass over the items answers them all.
+    func family(of taskID: UUID) -> (item: TaskBoardItem, children: [TaskBoardItem])? {
+        if family == nil {
+            var itemsByTaskID: [UUID: TaskBoardItem] = [:]
+            var childrenByParentTaskID: [UUID: [TaskBoardItem]] = [:]
+            for item in allItems {
+                guard let id = item.taskID else { continue }
+                itemsByTaskID[id] = itemsByTaskID[id] ?? item
+                if let parentTaskID = item.parentTaskID {
+                    childrenByParentTaskID[parentTaskID, default: []].append(item)
+                }
+            }
+            family = (itemsByTaskID, childrenByParentTaskID)
+        }
+        guard let item = family?.itemsByTaskID[taskID] else { return nil }
+        return (item, family?.childrenByParentTaskID[taskID] ?? [])
     }
 }
 
@@ -1202,21 +1226,22 @@ struct SidebarView: View {
         }
     }
 
-    /// The Parent button on a task space card: the parent's task space in
-    /// the window that holds it, else the parent in the Tasks view. The
-    /// sidebar keeps its segment, as other ways of opening a task space do,
-    /// so in Needs you the parent opens without a row of its own.
-    private func openParentTask(taskID: UUID) {
-        guard let parent = taskBoardSnapshot.allItems.first(where: { $0.taskID == taskID }) else { return }
+    /// The Parent button and the child tasks on a task space card: the
+    /// task's task space in the window that holds it, else the task in the
+    /// Tasks view. The sidebar keeps its segment, as other ways of opening a
+    /// task space do, so in Needs you the task can open without a row of its
+    /// own.
+    private func openTask(taskID: UUID) {
+        guard let task = taskBoardSnapshot.family(of: taskID)?.item else { return }
         cancelWorkspaceRename()
-        guard let taskSpaceID = parent.taskSpaceWorkspaceID,
+        guard let taskSpaceID = task.taskSpaceWorkspaceID,
               let holderWindowID = store.state.windows.first(where: { $0.workspaceIDs.contains(taskSpaceID) })?.id,
               let taskSpace = store.state.workspacesByID[taskSpaceID] else {
-            openTasksView(selecting: parent.id)
+            openTasksView(selecting: task.id)
             return
         }
         if holderWindowID == windowID {
-            // As a click on the parent's row would.
+            // As a click on the task's row would.
             store.selectWorkspace(
                 windowID: windowID,
                 workspaceID: taskSpaceID,
@@ -5385,10 +5410,22 @@ struct SidebarView: View {
         let borderColor = isHovered || (isSpawnerHighlighted && attentionKind != nil && isSelected == false)
             ? ToastyTheme.sidebarSessionHoverBorder
             : Color.clear
-        let hoverTipModel = SidebarSubspacePresentation.hoverTipModel(
+        var hoverTipModel = SidebarSubspacePresentation.hoverTipModel(
             row,
             annotationColorToken: annotationStyleStore.effectiveColorToken(forKey:)
         )
+        let taskID = store.state.workspacesByID[row.id]?.taskID
+        if taskCoordinator != nil, let taskID, let family = taskBoardSnapshot.family(of: taskID) {
+            let childTasks = SidebarSubspacePresentation.hoverTipChildTasks(
+                of: family.item,
+                children: SidebarStatusSections.sidebarOrder(
+                    family.children,
+                    workspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
+                )
+            )
+            hoverTipModel.openChildTasks = childTasks.open
+            hoverTipModel.mergedChildTasks = childTasks.merged
+        }
         let accessibilityLabel = SidebarSubspacePresentation.rowAccessibilityLabel(
             row,
             showsSpawnerTag: showsSpawnerTag
@@ -5513,7 +5550,9 @@ struct SidebarView: View {
                 onSelectSession: { panelID in
                     focusSessionPanel(workspaceID: row.id, panelID: panelID)
                 },
-                onSelectParentTask: row.parentTask.map { parent in { openParentTask(taskID: parent.taskID) } }
+                onSelectParentTask: row.parentTask.map { parent in { openTask(taskID: parent.taskID) } },
+                onSelectChildTask: { childTaskID in openTask(taskID: childTaskID) },
+                onShowTaskInTasksView: taskID.map { taskID in { openTasksView(selecting: .task(taskID)) } }
             )
         }
         .background {
