@@ -20,8 +20,6 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private let shippedTaskID = "D1000000-0000-0000-0000-000000000005"
     private let otherProjectTaskID = "D1000000-0000-0000-0000-000000000012"
     private let shareSheetTaskID = "D1000000-0000-0000-0000-000000000016"
-    /// The release task the fixture starts.
-    private let releaseTaskID = "D1000000-0000-0000-0000-000000000015"
     /// A working session in the toastty workspace.
     private let workingSessionID = "B1000000-0000-0000-0000-000000000002"
     /// The board whose project and tasks have long names.
@@ -394,64 +392,6 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(question))
     }
 
-    /// Release… on a card's expanded To ship line and on the Tasks tab's
-    /// lane: the phone asks first, Cancel sends nothing, and once the Mac
-    /// starts the release both read Releasing… and are off.
-    func testReleaseAsksFirstThenTheProjectReadsReleasing() {
-        let app = launchTaskFixture()
-        select(.all, in: app)
-        let toggle = app.buttons["toastty-card-to-ship-toggle-\(toasttyWorkspaceID)"]
-        XCTAssertTrue(scrollTo(toggle, in: app))
-        let cardRelease = app.buttons["toastty-card-release-\(toasttyWorkspaceID)"]
-        // Only the expanded line offers it.
-        XCTAssertFalse(cardRelease.exists)
-        toggle.tap()
-        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(shareSheetTaskID)"], in: app))
-        XCTAssertTrue(scrollTo(cardRelease, in: app))
-        XCTAssertEqual(cardRelease.label, "Release toastty")
-        XCTAssertTrue(cardRelease.isEnabled)
-        attachScreenshot(named: "release-card-to-ship-line", of: app)
-
-        // The phone asks first, naming the project and what ships.
-        cardRelease.tap()
-        let alert = app.alerts["Release \u{201C}toastty\u{201D}?"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "3 merged tasks")).firstMatch.exists)
-        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Share sheet links")).firstMatch.exists)
-        attachScreenshot(named: "release-confirmation", of: app)
-        alert.buttons["Cancel"].tap()
-        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
-        XCTAssertEqual(cardRelease.label, "Release toastty")
-
-        // The Tasks tab's lane offers the same release.
-        app.tabBars.buttons["Tasks"].tap()
-        let laneRelease = app.buttons["toastty-tasks-lane-release-toastty"]
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-tasks-group-needsYou"].waitForExistence(timeout: 5))
-        XCTAssertTrue(scrollTo(laneRelease, in: app, list: "toastty-mobile-tasks"))
-        XCTAssertEqual(laneRelease.label, "Release toastty")
-        attachScreenshot(named: "release-tasks-lane", of: app)
-        laneRelease.tap()
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        alert.buttons["Release"].tap()
-        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
-        // The Tasks tab says what started, as Home does.
-        let notice = app.staticTexts["toastty-subspace-done-notice"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 5))
-        XCTAssertEqual(notice.label, "Starting a release of \u{201C}toastty\u{201D} on your Mac.")
-        XCTAssertTrue(waitForLabel(laneRelease, "Releasing toastty"))
-        XCTAssertFalse(laneRelease.isEnabled)
-        attachScreenshot(named: "release-tasks-lane-releasing", of: app)
-        // The release task lists like any other task.
-        XCTAssertTrue(scrollTo(app.buttons["toastty-task-row-\(releaseTaskID)"], in: app, list: "toastty-mobile-tasks"))
-
-        // Home's card reads Releasing… too.
-        app.tabBars.buttons["Home"].tap()
-        XCTAssertTrue(scrollTo(cardRelease, in: app))
-        XCTAssertTrue(waitForLabel(cardRelease, "Releasing toastty"))
-        XCTAssertFalse(cardRelease.isEnabled)
-        attachScreenshot(named: "release-card-releasing", of: app)
-    }
-
     /// At a large text size the groups above To ship are taller than the
     /// screen, so the tab has to scroll to put the lane's line in view.
     func testACardsToShipAndDoneCountsOpenTheTasksTabAtTheirGroup() {
@@ -781,7 +721,7 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     }
 
     /// While the connection is not live, the Tasks tab says that its list
-    /// may be out of date, as Home does, and offers no release.
+    /// may be out of date, as Home does.
     func testTheTasksTabSaysWhenTheConnectionIsNotLive() {
         let app = launchTaskFixture(environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "reconnecting"])
         app.tabBars.buttons["Tasks"].tap()
@@ -791,7 +731,6 @@ final class ToasttyMobileTaskUITests: XCTestCase {
         XCTAssertTrue(app.buttons["toastty-mobile-connection-retry"].exists)
         let lane = app.descendants(matching: .any)["toastty-tasks-lane-toastty"]
         XCTAssertTrue(scrollTo(lane, in: app, list: "toastty-mobile-tasks"))
-        XCTAssertFalse(app.buttons["toastty-tasks-lane-release-toastty"].exists)
         attachScreenshot(named: "tasks-tab-reconnecting", of: app)
     }
 
@@ -982,13 +921,6 @@ final class ToasttyMobileTaskUITests: XCTestCase {
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element
-        )
-        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
-    }
-
-    private func waitForLabel(_ element: XCUIElement, _ label: String, timeout: TimeInterval = 5) -> Bool {
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND label == %@", label), object: element
         )
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }

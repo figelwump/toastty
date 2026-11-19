@@ -16,9 +16,10 @@ Through the real UI and CLI it checks that:
   agent, which runs `task merge` mid-turn; Toastty merges at the checked
   commit, and once the agent's turn ends closes the task space, removes the
   worktree and deletes both branches; the task is To ship;
-- Release… on the To ship lane starts a release task in a worktree on no
-  branch at origin's main; a tag pushed to origin ships the task and the
-  release, and the release's task space and worktree are cleaned up;
+- neither the project card nor the Tasks view's To ship lane offers Release;
+  `task release` starts a release task in a worktree on no branch at
+  origin's main; a tag pushed to origin ships the task and the release, and
+  the release's task space and worktree are cleaned up;
 - `task archive` refuses uncommitted changes, then with --discard-changes
   removes the worktree and keeps a branch with unpushed commits;
 - Merge Without Checks waits for a pending check, and Cancel Merge ends the
@@ -349,17 +350,20 @@ def main():
         require(git('branch', '--list', a_branch) == '', 'A\'s local branch is still there')
         require(git('ls-remote', '--heads', 'origin', a_branch) == '', 'A\'s remote branch is still there')
         step('A merged and cleaned up', cleanup=merged['cleanup'])
-        # Both places offer Release for the lane: the project card's To ship
-        # line in the sidebar's All segment, where the sidebar opens, and the
-        # Tasks view.
+        # Neither the project card's To ship line in the sidebar's All
+        # segment, where the sidebar opens, nor the Tasks view offers
+        # Release: the user asks the coordinator, which runs `task release`.
         open_tasks_view()
-        wait_for('the project card\'s Release button',
-                 lambda: run_tool(helper, 'exists', pid, f'sidebar.workspace.finishedTasks.release.{workspace_id}', check=False).returncode == 0,
+        wait_for('the project card\'s To ship line',
+                 lambda: any(run_tool(helper, 'exists', pid, f'sidebar.workspace.finishedTasks.{name}.{workspace_id}',
+                                      check=False).returncode == 0 for name in ('toShipToggle', 'toShip')),
                  timeout=10, interval=0.5)
+        for removed in (f'sidebar.workspace.finishedTasks.release.{workspace_id}', f'tasks.view.toShip.{project_title}.release'):
+            require(run_tool(helper, 'exists', pid, removed, check=False).returncode != 0, f'{removed} is on screen')
         capture('2-to-ship')
 
-        # 2. Release from the To ship lane; a pushed tag ships both.
-        press(f'tasks.view.toShip.{project_title}.release')
+        # 2. Release from the CLI; a pushed tag ships both.
+        cli_result('task', 'release', '--workspace', workspace_id)
         release = wait_for('the release task', lambda: next((t for t in cli_result('task', 'list')['tasks']
                                                            if t.get('release')), None), timeout=60, interval=1)
         release = wait_for('the release starts', lambda: (lambda r: r if r['setup']['state'] == 'started' else None)(task(release['taskID'])),

@@ -15,7 +15,6 @@ enum CommandPaletteCatalog {
         staticCommandDescriptors(originWindowID: originWindowID, actions: actions) +
             CommandPaletteTaskCatalog.descriptors(
                 current: actions.currentTask(originWindowID: originWindowID),
-                releases: actions.taskReleaseOptions(originWindowID: originWindowID),
                 coordinator: actions.coordinatorOption(originWindowID: originWindowID)
             ) +
             workspaceSwitchDescriptors(originWindowID: originWindowID, actions: actions) +

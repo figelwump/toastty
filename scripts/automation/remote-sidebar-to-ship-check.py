@@ -14,7 +14,8 @@ so their merge times differ, and closes every task space but the newest
 task's, whose agent is quiet. Through the UI and the CLI it checks that:
 - the project card's To ship line starts collapsed, with no rows; expanded,
   it shows the three newest merges as rows, newest first, then "Show 2 more",
-  including the task whose quiet task space left the card, and Release;
+  including the task whose quiet task space left the card, and no Release:
+  releases start from the coordinator;
 - "Show 2 more" opens the Tasks view with the newest task the sidebar did not
   show selected;
 - the Needs you segment lists none of the To ship tasks;
@@ -250,7 +251,8 @@ def main():
         rows = sidebar_rows()
         step('projects rows', rows=rows)
         require(rows == [*newest[:3], 'Show 2 more tasks to ship in the Tasks view'], f'Unexpected card rows: {rows}')
-        require('Release' in labels(), 'The To ship line should offer Release')
+        require(not any(label.startswith('Release') for label in labels()),
+                f'The To ship line should offer no Release: {labels()}')
         capture('projects-five-to-ship')
 
         open_from_sidebar('Show 2 more', newest[3], 'projects-show-more')

@@ -613,9 +613,8 @@ in Home, except one for the coordinator, which opens its tab.
   the chevron to collapse the card to its name line; the phone saves the
   choice for each project. Under the buckets, a To ship line counts the
   project's To ship and Done tasks. Its chevron shows the three newest To ship
-  tasks in place, with **Show N more** for the rest and **Release…** when the
-  project can release (see [Releasing from the phone](#releasing-from-the-phone));
-  **To ship N** and **Done N** open the Tasks tab at that group. A
+  tasks in place, with **Show N more** for the rest; **To ship N** and
+  **Done N** open the Tasks tab at that group. A
   finished task leaves the card unless an agent in its task space is still
   busy. Tasks whose project is not open on the Mac list in an **Other tasks**
   card at the end. The question and approval pills, the ⑂ filter, swipe
@@ -650,13 +649,11 @@ in Home, except one for the coordinator, which opens its tab.
   a chip or tag that does not fit beside the others takes a line of its own.
   The switcher does not grow past the largest standard size, and a session's
   task bar stops growing at the first accessibility size, as system bars do.
-  The task bar drops its pull request chip before it shortens the stage. In the Tasks tab, a lane's **Release…** moves
-  under the project's name when the line has no room for both.
+  The task bar drops its pull request chip before it shortens the stage.
 - The **Tasks** tab lists every task by where it stands, as the Mac's Tasks
   view does, in the same order: **Needs you**, **Ready to review**,
   **Running** and **Idle**, then **To ship**, one lane per project with all
-  of its merged tasks and **Release…** when the project can release, then
-  the **Done** count, with a line that says done tasks are listed in the
+  of its merged tasks, then the **Done** count, with a line that says done tasks are listed in the
   Mac's Tasks view: the Mac sends the count, not the tasks. A family in Needs you whose members only wait for a
   review lists under Ready to review. A task with an open task space shows
   that task space's row. Any other task, such as one whose setup failed, opens
@@ -664,8 +661,8 @@ in Home, except one for the coordinator, which opens its tab.
   project. A task that waits for its workspace says to pick it on the Mac, in
   the Tasks view: no action on the phone picks one. The Mac sends that step
   as the task's `macStep`. As in Home, the tab says above its list when the connection is not
-  live, with **Retry** while it reconnects, and shows what a release or a task
-  action started. Its navigation bar has the same **+** as Home: it opens
+  live, with **Retry** while it reconnects, and shows what a task action
+  started. Its navigation bar has the same **+** as Home: it opens
   [New Task](#creating-a-task), or the new-session sheet with an older Mac.
 
 The Mac computes every stage, group and line, so both apps show the same
@@ -746,39 +743,6 @@ on an old state. A repeat of a request with the same `clientRequestID` within
 ten minutes returns the first answer and runs nothing again. The Mac
 advertises these routes with the `task_actions` capability. An older Mac
 omits it, and the phone keeps the read-only detail.
-
-#### Releasing from the phone
-
-**Release…** starts a release of a project's merged tasks, as the Mac's
-Release button does. It shows on a project card's expanded To ship line, and
-on each project's lane in the Tasks tab, when the project can release from
-Toastty: `tasks.toml` gives it a `release_skill` or `release_prompt`, and the
-project is open on the Mac. Unlike the Mac, the phone asks first. The question
-names the project, how many tasks wait to ship, and the newest of them. The
-Mac then makes the same release task as its own button: its agent starts in
-a new worktree at the remote default branch's latest commit. The task shows
-in Home and Tasks like any other task, so you can answer its questions from
-the phone. While the request is on its way to the Mac, the button shows a
-spinner and is off. While a release of the project runs, the button reads
-**Releasing…** and is off. A release task's agent can publish, so a release
-needs a native paired device with send access and both its **Task actions**
-and **Start sessions** switches on. Without them, the Mac refuses each request
-with a message that names both switches.
-
-Protocol: each To ship lane carries `releaseWorkspaceID`, the project
-workspace a release starts in, and `releaseTaskID` while a release of the
-project runs. `POST /api/project.release` takes `RemoteProjectReleaseRequest`
-(`workspaceID`, `clientRequestID`) and returns `started` with the release
-task's `taskID`, or a rejection reason: `permission_denied`,
-`project_not_found`, `not_releasable`, `release_under_way` (the message names
-the release), `failed`, `invalid_request` or `tasks_unavailable`. The Mac
-reads the device's switches when the request arrives and again when it runs,
-and starts one release of a project at a time. The request ID is saved on the
-release task, so a repeat with the same `clientRequestID` returns that task
-and starts nothing, also after the Mac restarts. The Mac advertises the route
-with the `project_release` capability while its task system can start
-releases. An older Mac omits the capability and the lane fields, and the
-phone shows no Release….
 
 #### Task alerts
 
@@ -1492,7 +1456,6 @@ tasks; an older Mac means Toastty 0.9.x.
 | Coordinator tab | The phone lists the coordinator's workspace as an ordinary one | No Coordinator tab |
 | **+** on Home and Share to Toastty | Start a session | Start a session; shared content opens the new-session sheet ([Creating a task](#creating-a-task)) |
 | Task actions: Merge, Archive…, Mark Done, Delete | Not offered | The task's detail stays read-only ([Acting on tasks](#acting-on-tasks)) |
-| Release… from the phone | Not offered | Not offered |
 | Done checkbox on a task's space while its pull request is open | The Mac refuses the mark, and the phone says it could not update it. A task space without a task record keeps its checkbox | As before |
 | Task alerts | The alert text shows; a tap only opens the app, and no banner shows while the app is open ([Task alerts](#task-alerts)) | Session alerts only |
 
@@ -1547,13 +1510,6 @@ older one refuses them, and the Mac sends the session's Ready alert instead.
   runs and refuses any action its current list for that task does not offer.
   Discarding uncommitted changes, deleting unpushed commits, and Merge
   Without Checks are not available remotely. Each action and refusal is
-  recorded in the audit log with the device.
-- Starting a release needs a native paired device with send access and both
-  the **Task actions** and **Start sessions** switches on, because the
-  release task's agent can publish. The device sends only a project
-  workspace ID and a request ID; the Mac reads the release settings from
-  `tasks.toml` and builds the release task's prompt itself. It reads both
-  switches again when the request runs. Started and refused releases are
   recorded in the audit log with the device.
 - Creating a task has the same requirements as starting a session. The device
   chooses only an open top-level workspace, an agent profile, a model, an

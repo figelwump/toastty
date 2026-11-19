@@ -42,9 +42,6 @@ struct SidebarStatusSections: Equatable {
         let count: Int
         /// When the oldest task in the lane merged.
         let oldestMergedAt: Date?
-        /// The project workspace Release starts a release in; `nil` when
-        /// the project cannot release from Toastty or is not open.
-        var releaseWorkspaceID: UUID? = nil
         /// The lane's latest tasks, drawn under its line.
         var recent = SidebarRecentToShip()
     }
@@ -125,7 +122,6 @@ struct SidebarStatusSections: Equatable {
     /// changes its group.
     static func make(
         _ items: [TaskBoardItem],
-        releasable: (TaskBoardItem) -> Bool = { _ in false },
         pin: Pin? = nil
     ) -> Self {
         var sections = Self()
@@ -166,20 +162,12 @@ struct SidebarStatusSections: Equatable {
                 projectTitle: lane.first?.projectTitle ?? "Other",
                 count: lane.count,
                 oldestMergedAt: lane.compactMap { $0.record?.mergedAt }.min(),
-                releaseWorkspaceID: releaseWorkspaceID(lane, releasable: releasable),
                 recent: SidebarRecentToShip.make(lane)
             )
         }
         .sorted { $0.projectTitle.localizedStandardCompare($1.projectTitle) == .orderedAscending }
         sections.doneCount = items.filter { $0.stage == .done }.count
         return sections
-    }
-
-    /// The project workspace a lane's Release starts in. Only a task with a
-    /// merge of its own offers it: a task that is To ship through its child
-    /// tasks, which may be in other projects, has nothing to release.
-    static func releaseWorkspaceID(_ lane: [TaskBoardItem], releasable: (TaskBoardItem) -> Bool) -> UUID? {
-        lane.first { $0.finishedThroughChildren == false && releasable($0) }?.projectWorkspaceID
     }
 
     private static func locate(
@@ -603,32 +591,5 @@ struct SidebarShowMoreToShipButton: View {
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
         }
-    }
-}
-
-/// The violet Release pill on a To ship project, as in the mockups.
-struct TaskReleaseButton: View {
-    let title: String
-    let action: () -> Void
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
-                .padding(.horizontal, 7)
-                .frame(height: 17)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(ToastyTheme.sidebarTaskToShipMarkBackground)
-                        .brightness(isHovered ? 0.06 : 0)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .help("Start a release task for this project's merged tasks")
-        .accessibilityLabel(title)
     }
 }

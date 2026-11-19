@@ -193,24 +193,11 @@ struct ToasttyTasksTabView: View {
         .accessibilityIdentifier("toastty-tasks-group-to-ship")
     }
 
-    /// A project's line in To ship: its name and count, and Release… when
-    /// the project can release from Toastty. Release… sits beside the name
-    /// when the line has room, else under it, so a long name or a large
-    /// text size does not cut the name to a few letters.
+    /// A project's line in To ship: its name and count.
     private func laneHeader(_ lane: MobileTaskSections.Lane) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
-                laneTitle(lane)
-                Spacer(minLength: 0)
-                laneRelease(lane)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                laneTitle(lane)
-                laneRelease(lane)
-            }
-        }
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+        laneTitle(lane)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
     }
 
     private func laneTitle(_ lane: MobileTaskSections.Lane) -> some View {
@@ -227,16 +214,5 @@ struct ToasttyTasksTabView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("toastty-tasks-lane-\(lane.id)")
-    }
-
-    @ViewBuilder
-    private func laneRelease(_ lane: MobileTaskSections.Lane) -> some View {
-        if let release = lane.release {
-            ToasttyReleaseButton(
-                release: release,
-                controller: controller,
-                accessibilityIdentifier: "toastty-tasks-lane-release-\(lane.id)"
-            )
-        }
     }
 }

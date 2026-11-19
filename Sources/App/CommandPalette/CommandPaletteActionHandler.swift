@@ -39,7 +39,6 @@ protocol CommandPaletteActionHandling: AnyObject {
     func tasksViewTitle(originWindowID: UUID) -> String
     /// The task "Task: <action>" commands act on, if any.
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask?
-    func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption]
     /// `nil` when this Toastty has no coordinator to open.
     func coordinatorOption(originWindowID: UUID) -> PaletteCoordinatorOption?
     func canToggleSidebar(originWindowID: UUID) -> Bool
@@ -382,10 +381,6 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
 
     func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
         taskActions.currentTask(originWindowID: originWindowID)
-    }
-
-    func taskReleaseOptions(originWindowID: UUID) -> [PaletteTaskReleaseOption] {
-        taskActions.releaseOptions(originWindowID: originWindowID)
     }
 
     func coordinatorOption(originWindowID: UUID) -> PaletteCoordinatorOption? {

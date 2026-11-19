@@ -29,8 +29,7 @@ public enum RemoteTaskActionPolicy {
 }
 
 /// A task action a client may ask the Mac to run. Merge Without Checks and
-/// deleting unpushed commits are not here: they stay on the Mac. Release acts
-/// on a project, not a task: see `RemoteProjectReleaseRequest`.
+/// deleting unpushed commits are not here: they stay on the Mac.
 public enum RemoteTaskAction: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
     /// Merge the task's pull request the way the Mac's Merge button does.
     case merge

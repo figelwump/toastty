@@ -2147,8 +2147,7 @@ struct SidebarView: View {
 
     /// Under a project card: the tasks that left it because they finished.
     /// The To ship tasks list under "› TO SHIP N", which starts collapsed,
-    /// with Release when the project can release and the Done count on the
-    /// same line. Expanded, the latest To ship tasks show as rows, then
+    /// with the Done count on the same line. Expanded, the latest To ship tasks show as rows, then
     /// "Show N more". When every To ship task shows as a task space row, the
     /// line counts them instead. While Toastty keeps merged Done tasks'
     /// task spaces open, the Done count expands the same way to list them
@@ -2166,10 +2165,6 @@ struct SidebarView: View {
             let listed = recent.shown.count + recent.hidden.count
             let toShip = listed == 0 ? items.filter { $0.stage == .toShip }.count : 0
             let done = items.filter { $0.stage == .done }.count
-            let releaseWorkspaceID = SidebarStatusSections.releaseWorkspaceID(
-                items.filter { $0.stage == .toShip },
-                releasable: taskBoard.canRelease
-            )
             let openDone = (card?.finished ?? []).filter { entry in
                 guard case .subspace(let row) = entry.payload.kind else { return false }
                 return row.stage != .toShip
@@ -2193,9 +2188,9 @@ struct SidebarView: View {
             if listed > 0 || toShip > 0 || done > 0 {
                 VStack(alignment: .leading, spacing: 3) {
                     if listed > 0 || toShip > 0 || doneCountOnLine {
-                        // A To ship toggle takes the width the Release button
-                        // and the Done count leave. Each count opens the
-                        // Tasks view at its own group.
+                        // A To ship toggle takes the width the Done count
+                        // leaves. Each count opens the Tasks view at its own
+                        // group.
                         HStack(spacing: 12) {
                             if listed > 0 {
                                 cardToShipToggle(count: listed, projectWorkspaceID: projectWorkspaceID)
@@ -2204,9 +2199,6 @@ struct SidebarView: View {
                                     Label("To ship \(toShip)", systemImage: "arrow.up.square")
                                         .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
                                 }
-                            }
-                            if let releaseWorkspaceID {
-                                cardReleaseButton(releaseWorkspaceID, projectWorkspaceID: projectWorkspaceID)
                             }
                             if doneCountOnLine {
                                 finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
@@ -2274,26 +2266,6 @@ struct SidebarView: View {
             }
         }
     }
-
-    /// Starts a release task for the project's merged tasks, on the card's
-    /// To ship line. It shows when a To ship task merged on its own and
-    /// the project can release from Toastty.
-    private func cardReleaseButton(_ releaseWorkspaceID: UUID, projectWorkspaceID: UUID) -> some View {
-        TaskReleaseButton(title: "Release") {
-            if let coordinator = taskBoard.coordinator {
-                TaskActions.release(workspaceID: releaseWorkspaceID, coordinator: coordinator)
-            }
-        }
-        .fixedSize()
-        .accessibilityIdentifier("sidebar.workspace.finishedTasks.release.\(projectWorkspaceID.uuidString)")
-        .background {
-            SidebarSemanticTextBridge(text: Self.cardReleaseLabel)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-        }
-    }
-
-    static let cardReleaseLabel = "Release the merged tasks"
 
     /// "› TO SHIP N" under a project card, lined up with the card's
     /// "TASK SPACES" toggle.

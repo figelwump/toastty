@@ -273,25 +273,6 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(taskRows(makeCommands(actions: actions)), [])
     }
 
-    func testReleaseCommandsListEachProjectEvenWithNothingToShip() throws {
-        let actions = CommandPaletteActionSpy()
-        let toastty = UUID()
-        let emptyOS = UUID()
-        actions.taskReleaseOptionsValue = [
-            PaletteTaskReleaseOption(workspaceID: toastty, projectTitle: "toastty", projectRoot: "/src/toastty", toShipCount: 3),
-            PaletteTaskReleaseOption(workspaceID: emptyOS, projectTitle: "emptyOS", projectRoot: "/src/emptyos", toShipCount: 0),
-        ]
-        let commands = makeCommands(actions: actions)
-        XCTAssertEqual(taskRows(commands), [
-            "Release toastty… — 3 tasks to ship",
-            "Release emptyOS… — Nothing to ship yet",
-        ])
-        let release = try XCTUnwrap(commands.first { $0.title == "Release emptyOS…" })
-        XCTAssertEqual(release.usageKey, "task.release:/src/emptyos")
-        XCTAssertTrue(actions.execute(release.invocation, originWindowID: UUID()))
-        XCTAssertEqual(actions.executedTaskCommands, [.release(workspaceID: emptyOS)])
-    }
-
     func testCatalogFiltersUnavailableCommands() {
         let actions = CommandPaletteActionSpy()
         actions.canEqualizeSplitsValue = false
