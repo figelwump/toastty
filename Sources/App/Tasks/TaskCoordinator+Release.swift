@@ -58,7 +58,14 @@ extension TaskCoordinator {
             throw TaskError("A release of \(project.title) is already under way: \(running.title).", reason: .releaseUnderWay)
         }
         let children = toShipTasks(projectRoot: root)
-        let pinned = TaskFields(workspaceID: projectID, agent: agent, model: model, effort: effort, prompt: releasePrompt, skill: releaseSkill)
+        let pinned = TaskFields(
+            workspaceID: projectID,
+            agent: agent.flatMap(taskNonEmpty),
+            model: model.flatMap(taskNonEmpty),
+            effort: effort.flatMap(taskNonEmpty),
+            prompt: releasePrompt,
+            skill: releaseSkill
+        )
         let resolved = try resolvedFields(
             pinned: pinned,
             workspaceID: projectID,

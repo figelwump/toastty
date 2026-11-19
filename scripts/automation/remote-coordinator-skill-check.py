@@ -2189,7 +2189,7 @@ def first_run_improving(run):
     run.create_task('Fix the unread dot in the sidebar', done=True)
     run.seed_policy(text=POLICY.replace('## Improving\n{improving}\n', '').format(
         talking=NO_DAILY_LIST + '\n', reviewing="- The coordinator's defaults.\n", merging='', unblocking='',
-        releases=''))
+        releases='', agents=''))
     run.open_coordinator()
     before, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
     said = run.said(run.tell('Hi.'))
