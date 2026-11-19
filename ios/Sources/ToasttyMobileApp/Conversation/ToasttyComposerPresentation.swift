@@ -390,6 +390,8 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
     private(set) var attachmentRecoveryMessages: [UUID: String] = [:]
     private(set) var attachmentDrafts: [UUID: [RemoteMessageAttachment]] = [:]
     private(set) var drafts: [UUID: String] = [:]
+    /// Queue is a choice for one draft and one running turn.
+    var queuedTurnEpochs: [UUID: RemoteInputEpoch] = [:]
     private(set) var submissions: [UUID: ToasttyComposerSubmission] = [:]
     private(set) var editRevisions: [UUID: UInt64] = [:]
     private(set) var replacements: [UUID: ToasttyComposerReplacement] = [:]
@@ -433,8 +435,15 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
 
     mutating func removeAttachment(_ attachmentID: UUID, for conversationID: UUID) {
         guard isSubmitting(conversationID) == false else { return }
-        attachmentDrafts[conversationID]?.removeAll { $0.id == attachmentID }
-        if attachmentDrafts[conversationID]?.isEmpty == true { attachmentDrafts.removeValue(forKey: conversationID) }
+        removeAttachments(for: conversationID) { $0.id == attachmentID }
+    }
+
+    private mutating func removeAttachments(for conversationID: UUID, where matches: (RemoteMessageAttachment) -> Bool) {
+        attachmentDrafts[conversationID]?.removeAll(where: matches)
+        if attachmentDrafts[conversationID]?.isEmpty == true {
+            attachmentDrafts.removeValue(forKey: conversationID)
+            if drafts[conversationID] == nil { queuedTurnEpochs.removeValue(forKey: conversationID) }
+        }
     }
 
     func isSubmitting(_ conversationID: UUID) -> Bool {
@@ -453,7 +462,9 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
 
     private mutating func storeDraft(_ text: String, for conversationID: UUID) {
         if text.isEmpty {
-            drafts.removeValue(forKey: conversationID)
+            if drafts.removeValue(forKey: conversationID) != nil, attachments(for: conversationID).isEmpty {
+                queuedTurnEpochs.removeValue(forKey: conversationID)
+            }
         } else {
             drafts[conversationID] = text
         }
@@ -567,10 +578,7 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
                 replies.removeValue(forKey: conversationID)
             }
             let restoredIDs = Set(recovery.submission.attachments.map(\.id))
-            attachmentDrafts[conversationID]?.removeAll { restoredIDs.contains($0.id) }
-            if attachmentDrafts[conversationID]?.isEmpty == true {
-                attachmentDrafts.removeValue(forKey: conversationID)
-            }
+            removeAttachments(for: conversationID) { restoredIDs.contains($0.id) }
             guard !recovery.wasDismissed else { return }
             attachmentRecoveries[recovery.requestID] = recovery.submission
             attachmentRecoveryMessages[conversationID] = "A rejected attachment draft is saved. Clear this draft to restore it, or dismiss the rejected send to discard its attachments."
@@ -617,10 +625,7 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
             replies.removeValue(forKey: submission.conversationID)
         }
         let submittedIDs = Set(submission.attachments.map(\.id))
-        attachmentDrafts[submission.conversationID]?.removeAll { submittedIDs.contains($0.id) }
-        if attachmentDrafts[submission.conversationID]?.isEmpty == true {
-            attachmentDrafts.removeValue(forKey: submission.conversationID)
-        }
+        removeAttachments(for: submission.conversationID) { submittedIDs.contains($0.id) }
     }
 
     mutating func reconcileAttachments(_ state: SendReconciliationState, for conversationID: UUID) {
@@ -678,6 +683,7 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         attachmentRecoveryMessages = attachmentRecoveryMessages.filter { conversationIDs.contains($0.key) }
         attachmentDrafts = attachmentDrafts.filter { conversationIDs.contains($0.key) }
         drafts = drafts.filter { conversationIDs.contains($0.key) }
+        queuedTurnEpochs = queuedTurnEpochs.filter { conversationIDs.contains($0.key) }
         submissions = submissions.filter { conversationIDs.contains($0.key) }
         editRevisions = editRevisions.filter { conversationIDs.contains($0.key) }
         replacements = replacements.filter { conversationIDs.contains($0.key) }
@@ -692,6 +698,7 @@ struct ToasttyComposerDraftState: Equatable, Sendable {
         attachmentRecoveryMessages.removeAll(keepingCapacity: false)
         attachmentDrafts.removeAll(keepingCapacity: false)
         drafts.removeAll(keepingCapacity: false)
+        queuedTurnEpochs.removeAll(keepingCapacity: false)
         submissions.removeAll(keepingCapacity: false)
         editRevisions.removeAll(keepingCapacity: false)
         replacements.removeAll(keepingCapacity: false)

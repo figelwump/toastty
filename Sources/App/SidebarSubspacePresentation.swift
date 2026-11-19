@@ -345,10 +345,6 @@ enum SidebarSubspacePresentation {
         return result
     }
 
-    static func childProgressLabel(merged: Int, total: Int) -> String {
-        "\(merged)/\(total) merged"
-    }
-
     static func filteredRows(_ rows: [Row], spawningSessionID: String?) -> [Row] {
         guard let spawningSessionID else { return rows }
         return rows.filter { $0.spawningSessionID == spawningSessionID }
@@ -575,13 +571,13 @@ enum SidebarSubspacePresentation {
 
     /// The task space card's child tasks. Open ones list by the sidebar
     /// group their rows list in, most urgent first, and keep `children`'s
-    /// order inside a group. Merged ones, To ship or Done, list newest merge
-    /// first. Archived ones are left out, as the "N/M merged" tag leaves
-    /// them out. A child in another project names that project.
+    /// order inside a group. Finished ones (To ship or Done) list newest
+    /// first. Archived ones are left out. A child in another project names
+    /// that project.
     static func hoverTipChildTasks(
         of parent: TaskBoardItem,
         children: [TaskBoardItem]
-    ) -> (open: [SubspaceHoverTipModel.ChildTask], merged: [SubspaceHoverTipModel.ChildTask]) {
+    ) -> (open: [SubspaceHoverTipModel.ChildTask], finished: [SubspaceHoverTipModel.ChildTask]) {
         func childTask(_ item: TaskBoardItem, stage: SubspaceHoverTipModel.Stage) -> SubspaceHoverTipModel.ChildTask? {
             guard case .task(let taskID) = item.id else { return nil }
             let otherProject = item.projectWorkspaceID != parent.projectWorkspaceID || item.projectTitle != parent.projectTitle
@@ -590,15 +586,15 @@ enum SidebarSubspacePresentation {
             )
         }
         var open: [(bucket: SidebarBucket, child: SubspaceHoverTipModel.ChildTask)] = []
-        var merged: [(mergedAt: Date, child: SubspaceHoverTipModel.ChildTask)] = []
+        var finished: [(date: Date, child: SubspaceHoverTipModel.ChildTask)] = []
         for item in children {
             switch item.stage {
             case .archived:
                 continue
             case .toShip:
-                if let child = childTask(item, stage: .toShip) { merged.append((SidebarRecentToShip.mergedAt(item), child)) }
+                if let child = childTask(item, stage: .toShip) { finished.append((SidebarRecentToShip.mergedAt(item), child)) }
             case .done:
-                if let child = childTask(item, stage: .done) { merged.append((SidebarRecentToShip.mergedAt(item), child)) }
+                if let child = childTask(item, stage: .done) { finished.append((SidebarRecentToShip.mergedAt(item), child)) }
             case .starting, .needsYou, .running, .idle:
                 if let bucket = SidebarBucket.task(item), let child = childTask(item, stage: .bucket(bucket)) {
                     open.append((bucket, child))
@@ -609,8 +605,8 @@ enum SidebarSubspacePresentation {
             open.enumerated()
                 .sorted { ($0.element.bucket, $0.offset) < ($1.element.bucket, $1.offset) }
                 .map(\.element.child),
-            merged.enumerated()
-                .sorted { $0.element.mergedAt != $1.element.mergedAt ? $0.element.mergedAt > $1.element.mergedAt : $0.offset < $1.offset }
+            finished.enumerated()
+                .sorted { $0.element.date != $1.element.date ? $0.element.date > $1.element.date : $0.offset < $1.offset }
                 .map(\.element.child)
         )
     }

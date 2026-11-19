@@ -2646,7 +2646,13 @@ final class SidebarViewTests: XCTestCase {
         // The card's task is both a child and a parent.
         let grandparentID = task("Remote access v2")
         let parentID = task("Rework remote pairing", parent: grandparentID, pullRequest: 448)
-        _ = task("QR code expiry", parent: parentID, question: "Keep the 10-minute expiry?")
+        let expiryID = task("QR code expiry", parent: parentID, question: "Keep the 10-minute expiry?")
+        var investigation = TaskRecord(
+            createdAt: now, text: "Check the expiry", title: "Check the expiry", slug: "check-expiry",
+            source: .cli, workspaceID: project.id, setup: .started, parentTaskID: expiryID
+        )
+        investigation.doneAt = now
+        records.append(investigation)
         _ = task("Relay retry", parent: parentID, pullRequest: 451)
         _ = task("Onboarding copy", parent: parentID, session: .working)
         // Thirteen open children: five show, "8 more open" shows seven more,
@@ -2704,6 +2710,12 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains { $0.hasPrefix("Idle child 1, task space") }, "\(textValues)")
 
         var hasEntered = false
+        let expiryCard = try hoverTaskSpaceRow("QR code expiry", in: root, hasEntered: &hasEntered)
+        let expiryText = renderedTextValues(in: expiryCard)
+        XCTAssertTrue(expiryText.contains("Child tasks: 1/1 finished"), "\(expiryText)")
+        XCTAssertTrue(expiryText.contains("Show 1 finished child task"), "\(expiryText)")
+        try writeSidebarEvidence(expiryCard, name: "child-done-without-pr")
+        try attachSidebarRender(expiryCard, name: "child-done-without-pr")
         var card = try hoverTaskSpaceRow("Rework remote pairing", in: root, hasEntered: &hasEntered)
         var cardText = renderedTextValues(in: card)
         XCTAssertTrue(cardText.contains("Stage: Ready to review"), "\(cardText)")

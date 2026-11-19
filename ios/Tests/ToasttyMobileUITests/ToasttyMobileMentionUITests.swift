@@ -305,10 +305,6 @@ final class ToasttyMobileMentionUITests: XCTestCase {
 
         // Edit while the field has the keyboard and text: the waiting
         // message goes in after that text, with its mention.
-        XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        mode.tap()
-        XCTAssertTrue(queueChoice.waitForExistence(timeout: 5))
-        queueChoice.tap()
         XCTAssertTrue(waitForLabel("Queue message", of: send))
         send.tap()
         let secondEdit = app.buttons["toastty-mobile-queued-edit-fixture-queued-2"]

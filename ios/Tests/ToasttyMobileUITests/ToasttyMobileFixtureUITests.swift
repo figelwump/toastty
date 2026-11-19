@@ -2165,7 +2165,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Then run the suite")
         // Edit opens the keyboard again so the text can change right away.
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        chooseQueue()
+        XCTAssertTrue(waitForLabel("Queue selected", of: mode))
         send.tap()
         let third = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-4"]
         XCTAssertTrue(third.waitForExistence(timeout: 5))
