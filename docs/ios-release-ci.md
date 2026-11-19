@@ -218,9 +218,10 @@ and upload.
 
 Full manual CI retains app/domain correctness tests in both iOS configurations,
 the complete Debug UI suite, and the provisional performance budget. Release
-excludes the Debug-only UI bundle. PRs run only the selected Linux checks; they
-do not establish native coverage. TestFlight does not repeat simulator tests or
-download CI build artifacts.
+excludes the Debug-only UI bundle. Selected iOS PRs run the app/domain tests
+and four Debug smoke UI tests. The release task checks for existing green full
+evidence on the exact main SHA before dispatching another run. TestFlight
+does not repeat simulator tests or download CI build artifacts.
 
 Run full validation explicitly before signed validation or upload:
 
