@@ -1166,7 +1166,9 @@ relaunch resumes does not show it.
   `[title](toastty://task/<task-id>)`, so the coordinator reads the task by
   its ID. Copy gives the link, and a pasted link to a task shows as its
   chip. In the chat, your message shows the task as a chip, as the
-  coordinator's text does.
+  coordinator's text does. The coordinator's chat on a paired iPhone
+  mentions tasks with the same rules, from the field or its paperclip menu
+  (see [The Coordinator tab](remote-access.md#the-coordinator-tab)).
 - **Stop.** While a turn runs and the field is empty, the button stops the
   turn, as Escape in the terminal does. Messages that waited are
   then **Paused**, so none starts a new turn right after the stop. **Send

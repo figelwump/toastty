@@ -113,6 +113,24 @@ final class ToasttyMobileComposerTypingUITests: XCTestCase {
         XCTAssertTrue((input.value as? String)?.lowercased().hasPrefix("ship it today") == true)
         XCTAssertLessThanOrEqual(after - before, 2, "\(keys.count) keys ran the transcript's body \(after - before) times")
 
+        // Keys that change the search while the list of tasks to mention
+        // shows update the list, not the transcript.
+        app.typeText(" @")
+        let mentions = app.descendants(matching: .any)["toastty-mobile-mention-list"]
+        XCTAssertTrue(mentions.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        let listOpen = try XCTUnwrap(Int(count.value as? String ?? ""))
+        for key in "spl" {
+            app.typeText(String(key))
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(mentions.exists)
+        let listKeys = try XCTUnwrap(Int(count.value as? String ?? ""))
+        XCTAssertLessThanOrEqual(listKeys - listOpen, 1, "3 keys with the list open ran the transcript's body \(listKeys - listOpen) times")
+        for _ in 0..<4 { app.typeText(XCUIKeyboardKey.delete.rawValue) }
+        XCTAssertTrue(mentions.waitForNonExistence(timeout: 5))
+
         // The app keeps the draft, not the composer: it is still there after
         // another tab shows. A slow drag down the transcript drops the
         // keyboard, which covers the tab bar.

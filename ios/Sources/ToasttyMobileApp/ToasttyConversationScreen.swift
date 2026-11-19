@@ -17,6 +17,10 @@ struct ToasttyConversationScreen: View {
     /// The task detail that ⓘ opened, for a session in a task space, or that
     /// a task chip opened for a task with no task space to open.
     @State private var taskDetail: ToasttyTaskDetailSelection?
+    /// The coordinator chat's list of tasks to mention. Only the list and
+    /// the message field read it, so a key that changes the search does not
+    /// update this screen.
+    @State private var mentionPicker = ToasttyMentionPicker()
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -124,6 +128,10 @@ struct ToasttyConversationScreen: View {
 
     var body: some View {
         let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard)
+        // The coordinator's chat mentions tasks, as the Mac's does. A task's
+        // session keeps its plain field.
+        let mentionCandidates = isCoordinatorRoot
+            ? CoordinatorMentionCandidate.candidates(from: controller.snapshot.taskBoard) : []
         Group {
             if let conversation = controller.conversation(id: conversationID) {
                 ToasttyTranscriptView(
@@ -161,6 +169,14 @@ struct ToasttyConversationScreen: View {
                 // transcript view, which opens where a chat opens. The old
                 // view kept the position of the emptied transcript: its top.
                 .id(presentation != nil)
+                // The tasks to mention, above the composer and over the
+                // chat. In the chat's safe area, so the list ends at the
+                // composer and does not move the chat.
+                .overlay(alignment: .bottom) {
+                    if isCoordinatorRoot {
+                        ToasttyMentionListOverlay(picker: mentionPicker)
+                    }
+                }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     ToasttyConversationComposerBar(
                         conversation: conversation,
@@ -178,7 +194,9 @@ struct ToasttyConversationScreen: View {
                         isCoordinatorRoot: isCoordinatorRoot,
                         cancelReply: cancelReply,
                         isComposerFocused: $isComposerFocused,
-                        jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest
+                        jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
+                        mentionPicker: isCoordinatorRoot ? mentionPicker : nil,
+                        mentionCandidates: mentionCandidates
                     )
                 }
                 // The task bar, like the Mac's top bar, for a session in a
@@ -633,6 +651,9 @@ private struct ToasttyConversationComposerBar: View {
     let cancelReply: () -> Void
     @Binding var isComposerFocused: Bool
     @Binding var jumpToLiveEdgeRequest: UInt64
+    /// The coordinator chat's @ mentions; `nil` in a task's session.
+    let mentionPicker: ToasttyMentionPicker?
+    let mentionCandidates: [CoordinatorMentionCandidate]
 
     var body: some View {
         composerBar(conversation)
@@ -869,7 +890,9 @@ private struct ToasttyConversationComposerBar: View {
             accessibilityHint: presentation.gate.allowsInput
                 ? "Enter a message, then use the Send button"
                 : disabledAccessibilityHint(presentation),
-            maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5
+            maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5,
+            mentionPicker: mentionPicker,
+            mentionCandidates: mentionCandidates
         )
             .id(drafts.generation)
             .id(conversationID)
@@ -912,13 +935,21 @@ private struct ToasttyConversationComposerBar: View {
             .disabled(fieldTakesText(presentation) == false)
     }
 
+    /// The paperclip's Mention a Task, in the coordinator's chat.
+    private var mentionTask: (@MainActor @Sendable () -> Void)? {
+        guard let mentionPicker else { return nil }
+        return { mentionPicker.beginMention() }
+    }
+
     private func attachmentPicker(_ presentation: ToasttyComposerPresentation) -> some View {
         ToasttyAttachmentPicker(
             attachments: attachments,
             supportsAttachments: supportsAttachments,
             allowsInput: presentation.gate.allowsInput && !isSubmitting,
             isLoading: $isLoadingAttachments,
-            addAttachments: addAttachments
+            addAttachments: addAttachments,
+            mentionTask: mentionTask,
+            allowsMention: fieldTakesText(presentation) && !isSubmitting
         )
         .id(conversationID)
     }
