@@ -888,7 +888,7 @@ toastty task needs-reply [<task-id>] [--question <text>]
 toastty task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
 toastty task mark-done <task-id>
 toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
-toastty task release [--workspace <id>]
+toastty task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
 ```
 
 `task create` returns once the task is saved; `--wait` polls `task.get` until
@@ -1000,7 +1000,9 @@ that turn starts. `--clear`, a new `--on`, `task ready-for-review`, Done and
 Archive end it. See [Wait outside Toastty](tasks.md#wait-outside-toastty).
 `task ready-for-review` marks work without a pull request ready, and
 `task mark-done` finishes it. `task release` starts a release task for a
-project with `release_skill` or `release_prompt`. See [Merge a task](tasks.md#merge-a-task),
+project with `release_skill` or `release_prompt`. `--agent`, `--model` and
+`--effort` choose its agent as for `task create`; `[defaults]` fills what
+they leave out. See [Merge a task](tasks.md#merge-a-task),
 [Archive a task](tasks.md#archive-a-task) and [Release](tasks.md#release).
 `task set-release --after-merge` saves the user's request to release one task
 right after it merges; `--clear` removes it. Without a task ID, it applies to

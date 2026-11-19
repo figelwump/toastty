@@ -298,7 +298,7 @@ POLICY = '''# Coordinator policy
 
 ## Agents
 - App bug with a clear repro: claude, claude-opus-5-5, high; start work at once.
-
+{agents}
 ## Talking
 {talking}
 ## Reviewing
@@ -699,9 +699,9 @@ class Run:
     # MARK: The coordinator
 
     def seed_policy(self, reviewing='', unblocking='', releases='', merging='', improving=REVIEW_ON_REQUEST, text=None,
-                    talking=NO_DAILY_LIST, senders=None):
+                    talking=NO_DAILY_LIST, senders=None, agents=''):
         policy = text if text is not None else POLICY.format(
-            talking=talking + '\n',
+            agents=agents + ('\n' if agents else ''), talking=talking + '\n',
             reviewing=(reviewing or "- The coordinator's defaults.") + '\n', merging=merging + ('\n' if merging else ''),
             improving=improving + ('\n' if improving else ''),
             unblocking=unblocking + ('\n' if unblocking else ''), releases=releases + ('\n' if releases else ''))
@@ -1155,7 +1155,7 @@ def first_run_upgrade(run):
     run.create_task('Fix the unread dot in the sidebar', done=True)
     run.seed_policy(text=POLICY.replace('## Talking\n{talking}\n', '')
                     .replace('## Merging\n{merging}\n', '').format(
-        reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n', unblocking='', releases=''))
+        reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n', unblocking='', releases='', agents=''))
     run.open_coordinator()
     said = run.said(run.tell('Hi.'))
     lower = said.lower()
@@ -1531,7 +1531,7 @@ def merge_rule_setup(run):
     # A policy from before the Merging section, as every policy is at first.
     run.seed_policy(text=POLICY.replace('## Merging\n{merging}\n', '').format(
         talking=NO_DAILY_LIST + '\n', reviewing="- The coordinator's defaults.\n", improving=REVIEW_ON_REQUEST + '\n',
-        unblocking='', releases=''))
+        unblocking='', releases='', agents=''))
     run.open_coordinator()
     before, commits = run.policy(), int(run.git('rev-list', '--count', 'HEAD') or 0)
     asked = run.tell('From now on, merge simple changes in the app project yourself, and tell me afterwards.')
@@ -1723,12 +1723,15 @@ merge_release.prepare = lambda run: run.project('app', release=True)  # noqa: E7
 
 
 def release(run):
-    """A merged task with release-after-merge gets a release, and the user hears what else ships."""
+    """A merged task with release-after-merge gets a release with the policy's agent, and the user hears what else ships."""
     other = run.create_task('Add the export API')
     urgent = run.create_task('Fix the login redirect')
     run.set_pr(other, 31, body='Adds the export API.')
     run.set_pr(urgent, 32, body='Fixes the redirect after login.')
-    run.seed_policy(releases='- app: batch; propose a release on Friday afternoon.')
+    # Toastty's default agent has no model or effort, so only the coordinator
+    # can give the release these.
+    run.seed_policy(releases='- app: batch; propose a release on Friday afternoon.',
+                    agents='- Operational tasks such as releases, in all projects: claude, claude-sonnet-5-5, low.')
     run.refresh_prs()
     run.update_pr(other, state='MERGED', mergedAt='2026-11-09T10:00:00Z')
     run.wait_task(other, 'waits for a release', lambda t: t['stage']['group'] == 'toShip')
@@ -1744,6 +1747,10 @@ def release(run):
     commands = [c for t in run.turns() for c in t['commands']]
     run.check('it starts the release with task release', any(re.search(r'task\s+release\b', c) for c in commands), commands)
     run.check('a release task exists', len(release_tasks()) == 1, [t['title'] for t in release_tasks()])
+    run.check("the release task has the policy's agent, model and effort for releases",
+              [(t.get('agent'), t.get('model'), t.get('effort')) for t in release_tasks()]
+              == [('claude', 'claude-sonnet-5-5', 'low')],
+              [{key: t.get(key) for key in ('title', 'agent', 'model', 'effort')} for t in release_tasks()])
     said = run.said(run.turns())
     run.check('it says which other merged task ships with it', other.link in said or other.title.lower() in said.lower(), said)
     run.check('it starts one release only', len([c for c in commands if re.search(r'task\s+release\b', c)]) == 1, commands,

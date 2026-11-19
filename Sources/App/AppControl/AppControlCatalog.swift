@@ -770,8 +770,13 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Start a release task for a project that tasks.toml gives a release_skill or a release_prompt. Toastty fetches the remote's default branch (the fetch must succeed) and starts the default agent in a new worktree on no branch at that commit. Its first message names release_skill, then release_prompt, then the project's To ship tasks. Release tags matching release_tags mark tasks shipped. Uses the given workspace's project, or the calling agent's.",
-                selectors: [.windowID, .workspaceID]
+                summary: "Start a release task for a project that tasks.toml gives a release_skill or a release_prompt. Toastty fetches the remote's default branch (the fetch must succeed) and starts the agent in a new worktree on no branch at that commit. [defaults] in ~/.toastty/tasks.toml fills an agent, model or effort the request leaves out. Its first message names release_skill, then release_prompt, then the project's To ship tasks. Release tags matching release_tags mark tasks shipped. Uses the given workspace's project, or the calling agent's.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [
+                    .taskAgent(required: false),
+                    .taskModel(required: false),
+                    .taskEffort(required: false),
+                ]
             )
         case .taskAdopt:
             return .init(

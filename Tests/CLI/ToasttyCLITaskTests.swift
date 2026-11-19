@@ -327,13 +327,20 @@ struct ToasttyCLITaskTests {
         #expect(try command(["release"]) == .appControlRun(kind: .action, id: "task.release", args: [:]))
         #expect(try command(["release", "--workspace", workspaceID])
             == .appControlRun(kind: .action, id: "task.release", args: ["workspaceID": .string(workspaceID)]))
+        #expect(try command(["release", "--workspace", workspaceID, "--agent", "codex", "--model", "gpt-6.2-sol", "--effort", "high"])
+            == .appControlRun(kind: .action, id: "task.release", args: [
+                "workspaceID": .string(workspaceID),
+                "agent": .string("codex"),
+                "model": .string("gpt-6.2-sol"),
+                "effort": .string("high"),
+            ]))
         #expect(try command(["list", "--parent", taskID])
             == .appControlRun(kind: .query, id: "task.list", args: ["parent": .string(taskID)]))
 
         for arguments in [
             ["mark-done"], ["clean-up"], ["archive"], ["archive", "not-an-id"], ["merge", "a", "b"],
             ["request-merge"], ["request-merge", "not-an-id"], ["request-merge", taskID, "--head", "abc1234"],
-            ["merge", "--head"], ["release", "extra"], ["list", "--parent", "nope"],
+            ["merge", "--head"], ["release", "extra"], ["release", "--agent"], ["list", "--parent", "nope"],
             ["set-release", taskID], ["set-release", taskID, "--after-merge", "--clear"],
             ["set-release", "not-an-id", "--after-merge"], ["set-release", taskID, taskID, "--clear"],
         ] {

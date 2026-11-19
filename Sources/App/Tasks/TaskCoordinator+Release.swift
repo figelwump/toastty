@@ -13,11 +13,20 @@ extension TaskCoordinator {
     /// dirty or on another branch. The agent gets `release_skill`,
     /// `release_prompt` and the project's To ship tasks. Shipping is detected from release tags, not
     /// from the agent, so a release made outside Toastty counts too.
+    /// `agent`, `model` and `effort` choose the release's agent, as for a
+    /// create; `[defaults]` fills what they leave out.
     ///
     /// With a `clientRequestID`, a repeat of the caller's request returns
     /// the release it started, whatever changed since, and starts nothing.
     @discardableResult
-    func release(workspaceID requestedWorkspaceID: UUID, caller: TaskCaller, clientRequestID: String? = nil) throws -> TaskRecord {
+    func release(
+        workspaceID requestedWorkspaceID: UUID,
+        caller: TaskCaller,
+        agent: String? = nil,
+        model: String? = nil,
+        effort: String? = nil,
+        clientRequestID: String? = nil
+    ) throws -> TaskRecord {
         let projectID = store.state.subspaceParentIDsByWorkspaceID()[requestedWorkspaceID] ?? requestedWorkspaceID
         let clientRequestID = try validatedClientRequestID(clientRequestID)
         // Request IDs belong to their caller, as for a create.
@@ -49,8 +58,9 @@ extension TaskCoordinator {
             throw TaskError("A release of \(project.title) is already under way: \(running.title).", reason: .releaseUnderWay)
         }
         let children = toShipTasks(projectRoot: root)
+        let pinned = TaskFields(workspaceID: projectID, agent: agent, model: model, effort: effort, prompt: releasePrompt, skill: releaseSkill)
         let resolved = try resolvedFields(
-            pinned: TaskFields(prompt: releasePrompt, skill: releaseSkill),
+            pinned: pinned,
             workspaceID: projectID,
             defaults: config.defaults
         )
@@ -77,7 +87,7 @@ extension TaskCoordinator {
             slug: slug,
             titleSetByUser: true,
             source: caller.source,
-            pinned: TaskFields(workspaceID: projectID, prompt: releasePrompt, skill: releaseSkill),
+            pinned: pinned,
             resolved: resolved,
             workspaceID: projectID,
             projectRoot: root,

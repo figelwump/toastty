@@ -2628,7 +2628,9 @@ tasks waiting to ship. A parent that is To ship only through its child tasks
 has no merge of its own, so the list names its children, not the parent. A
 To ship line that holds only such a parent offers no **Release…**. `toastty task release` does the
 same from the CLI, and **Release <project>…** in the command palette does it
-for an open project even when its To ship list is empty.
+for an open project even when its To ship list is empty. The release agent is
+the `[defaults]` agent, model and effort. `toastty task release` can choose
+others with `--agent`, `--model` and `--effort`, as `task create` does.
 
 Toastty looks for release tags every 15 minutes and when the Tasks view opens:
 it fetches tags and counts only a tag the remote has at the same commit. A
