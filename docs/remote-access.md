@@ -562,7 +562,7 @@ checkbox. Tap it, swipe the row right, or choose **Mark as Done** from the
 row's menu, to mark the task space done without opening it; **Undo** appears for a few seconds. The
 change applies on the Mac through the same rule as the sidebar checkbox and
 reaches every connected device. When an agent in the task space starts new work,
-the Mac clears the mark. The Mac also refuses to mark a task space done while
+the Mac clears the mark, except while a merge waits for checks. The Mac also refuses to mark a task space done while
 one of its sessions is working, waiting on approval, or failed, so a request
 delayed past the start of new work cannot restore the mark. The checkbox is
 read-only while the phone is disconnected.

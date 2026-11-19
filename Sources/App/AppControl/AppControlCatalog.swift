@@ -243,7 +243,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Mark a task space's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected, and so is a task with an open pull request or a merge under way, which finishes through Merge or Archive. An agent in the workspace starting new work clears the mark.",
+                summary: "Mark a task space's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected, and so is a task with an open pull request or a merge under way, which finishes through Merge or Archive. An agent in the workspace starting new work clears the mark, except while a merge waits for checks.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClearDone:

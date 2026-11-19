@@ -16,7 +16,9 @@ ACTION is one of:
             Without --head, the accepted commit is the clicked checkout's HEAD,
             read first; the checkout must be the PR's worktree, clean at that
             commit, and the PR head must be that commit. With --head, the PR head
-            must still be that commit, its base must match --base, and the workspace must still be marked
+            must still be that commit, its base must match --base, the worktree on
+            the PR's branch, if any, must still be at that commit (uncommitted
+            changes do not count), and the workspace must still be marked
             done, which is how the user cancels a waiting merge. --expect-head,
             without --head, also requires the checkout's HEAD to be that commit:
             the version a merge skill checked. It merges into the PR's current
@@ -322,6 +324,11 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
         return "merged", f"PR #{number} has merged", accepted
     if pr["state"] != "OPEN":
         raise Refusal(f"PR #{number} is closed")
+    if ctx.clicked_head is None and ctx.worktree is not None and ctx.worktree.head != accepted:
+        # A waiting merge: Toastty keeps it through new agent work, so a
+        # commit that is not pushed yet must still end the acceptance.
+        raise Refusal(f"the worktree moved after the merge was accepted: its HEAD is {ctx.worktree.head[:8]}, "
+                      f"not {accepted[:8]}")
     if pr.get("autoMergeRequest"):
         raise Refusal(f"auto-merge is on for PR #{number}, so GitHub would also merge commits pushed later; "
                       "turn it off on GitHub, then merge again")

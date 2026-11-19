@@ -517,7 +517,7 @@ final class WorkspaceMergeCoordinator {
         case .pullRequestChanged:
             "The workspace's github-pr annotation no longer links to \(number), so Toastty did not merge it."
         case .doneMarkCleared:
-            "New work started in the workspace, or its done mark was cleared, after the merge was accepted, so Toastty did not merge \(number). Merge again to accept the current version."
+            "The workspace's done mark was cleared after the merge was accepted, so Toastty did not merge \(number). Merge again to accept the current version."
         }
         report(workspaceID, .mergeFailed(reason: detail, cause: .acceptanceEnded, head: head, base: base))
         notify("\(number) was not merged", detail)
@@ -631,8 +631,10 @@ final class WorkspaceMergeCoordinator {
             }
             return .merged
         }
-        // The done mark records that the user accepted this version. New work
-        // in the workspace clears it, and with it a pending merge or cleanup.
+        // The done mark records that the user accepted this version. Clearing
+        // it by hand ends a waiting merge. New work clears it only after the
+        // merge, which ends a pending cleanup; while the merge waits, the
+        // script checks the accepted commit instead.
         store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
         var next = request
         if isWaiting {

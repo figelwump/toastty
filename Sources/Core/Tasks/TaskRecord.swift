@@ -190,8 +190,9 @@ public struct TaskMergeFailure: Codable, Equatable, Sendable {
         /// the failure came after a commit was accepted, Toastty ran the
         /// merge again a few times before it stopped.
         case error
-        /// The user's acceptance ended while the merge waited: new work,
-        /// a closed workspace, or another pull request in the workspace.
+        /// The user's acceptance ended while the merge waited: a cleared
+        /// done mark, a closed workspace, or another pull request in the
+        /// workspace.
         case acceptanceEnded
     }
 

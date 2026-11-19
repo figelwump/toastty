@@ -374,11 +374,11 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.savedRequests == nil)
     }
 
-    /// New work that starts while the failed runs repeat ends the user's
-    /// acceptance. The merge then stops for that reason: recorded as an
-    /// error, it would read as a merge to ask for again.
+    /// Clearing the done mark by hand while the failed runs repeat ends the
+    /// user's acceptance. The merge then stops for that reason: recorded as
+    /// an error, it would read as a merge to ask for again.
     @Test
-    func newWorkWhileAFailedMergeRunsAgainStopsItAsAnEndedAcceptance() async throws {
+    func clearingTheDoneMarkWhileAFailedMergeRunsAgainStopsItAsAnEndedAcceptance() async throws {
         let fixture = try MergeFixture()
         let failure = MergeFixture.mergeReport("failed", "GitHub did not merge PR #59: Server Error")
         fixture.runner.scriptResults["merge"] = failure
@@ -391,7 +391,7 @@ struct WorkspaceMergeCoordinatorTests {
 
         #expect(fixture.runner.scriptCalls.count == WorkspaceMergeCoordinator.maximumPollFailures)
         #expect(fixture.mergeFailures.count == 1)
-        #expect(fixture.mergeFailures.first?.hasPrefix("New work started in the workspace") == true)
+        #expect(fixture.mergeFailures.first?.hasPrefix("The workspace's done mark was cleared") == true)
         #expect(fixture.lastMergeFailure?.cause == .acceptanceEnded)
     }
 

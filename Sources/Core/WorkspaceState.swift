@@ -259,7 +259,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     /// workspace that `canHoldDoneMark` holds one: the sidebar shows it as a
     /// check on the subspace row, the reducer drops it when the workspace
     /// can no longer hold it, and the session runtime clears it when an
-    /// agent in the workspace starts new work.
+    /// agent in the workspace starts new work, except while a merge waits
+    /// for checks.
     public var doneAt: Date?
     /// A subspace, or a task space. A task space stays one when it is top
     /// level, as after its project's workspace closed: the mark records the
