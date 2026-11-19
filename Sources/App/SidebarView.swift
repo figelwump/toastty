@@ -574,7 +574,7 @@ private final class SidebarTaskBoardSnapshot {
     private var windows: [WindowState] = []
     /// Each parent task's child progress, worked out at the first request
     /// after the items changed.
-    private var childProgressByParentTaskID: [UUID: (merged: Int, total: Int)]?
+    private var childProgressByParentTaskID: [UUID: TaskBoard.ChildProgress]?
     /// Each task and each task's child tasks, in `allItems` order, worked
     /// out at the first request after the items changed.
     private var family: (itemsByTaskID: [UUID: TaskBoardItem], childrenByParentTaskID: [UUID: [TaskBoardItem]])?
@@ -603,7 +603,7 @@ private final class SidebarTaskBoardSnapshot {
 
     /// As `TaskBoard.childProgress(of:items:)` for `allItems`. Every task
     /// space row asks, so one pass over the items answers them all.
-    func childProgress(of taskID: UUID) -> (merged: Int, total: Int)? {
+    func childProgress(of taskID: UUID) -> TaskBoard.ChildProgress? {
         if childProgressByParentTaskID == nil {
             childProgressByParentTaskID = TaskBoard.childProgressByParentTaskID(allItems)
         }
@@ -1586,7 +1586,7 @@ struct SidebarView: View {
                                 let family = parentIndex.map { Array(entries[($0 + 1)...].prefix(while: \.isLinkedChild)) } ?? rows
                                 finishedChildrenFold(
                                     parent: parentIndex.map { entries[$0] }, parentKey: parent, rows: rows,
-                                    listedMergedCount: family.filter(Self.isMerged).count,
+                                    listedFinishedCount: family.filter(Self.isFinishedChild).count,
                                     card: card, workspace: workspace
                                 )
                             }
@@ -1749,16 +1749,16 @@ struct SidebarView: View {
         return row
     }
 
-    /// A parent task's merged children, folded into one "N/M merged" line
+    /// A parent task's finished children, folded into one progress line
     /// after its open children. Expanded, the children show as rows, then
-    /// "Show N more" for merged children whose task spaces closed. A fold
+    /// "Show N more" for finished children whose task spaces closed. A fold
     /// that holds the selected row shows it.
     @ViewBuilder
     private func finishedChildrenFold(
         parent: SidebarBucketEntry<CardRow>?,
         parentKey: SidebarRowKey,
         rows: [SidebarBucketEntry<CardRow>],
-        listedMergedCount: Int,
+        listedFinishedCount: Int,
         card: BucketedCard,
         workspace: WorkspaceState?
     ) -> some View {
@@ -1779,10 +1779,8 @@ struct SidebarView: View {
         let progress = parentTaskID.flatMap { taskID in
             taskCoordinator == nil ? nil : taskBoardSnapshot.childProgress(of: taskID)
         }
-        let title = progress.map { SidebarSubspacePresentation.childProgressLabel(merged: $0.merged, total: $0.total) }
-            ?? "\(rows.count) merged"
-        // Merged children that no longer list: their task spaces closed.
-        let closedCount = max(0, (progress?.merged ?? 0) - listedMergedCount)
+        let title = progress?.label ?? "\(rows.count) finished"
+        let closedCount = max(0, (progress?.finished ?? 0) - listedFinishedCount)
         VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
             SidebarFinishedChildrenToggle(title: title, rowCount: rows.count, isExpanded: isExpanded)
                 .padding(.leading, Self.linkedChildIndent)
@@ -1791,11 +1789,11 @@ struct SidebarView: View {
                 ForEach(rows) { entry in
                     bucketRow(entry, card: card, workspace: workspace)
                 }
-                if closedCount > 0, let parentTaskID {
+                if closedCount > 0, let progress, let parentTaskID {
                     SidebarShowMoreToShipButton(
                         count: closedCount,
-                        help: "Show the other merged tasks in the Tasks view",
-                        accessibilityText: "Show \(closedCount) more merged \(closedCount == 1 ? "task" : "tasks") in the Tasks view"
+                        help: "Show the other \(progress.outcomeLabel) tasks in the Tasks view",
+                        accessibilityText: "Show \(closedCount) more \(progress.outcomeLabel) \(closedCount == 1 ? "task" : "tasks") in the Tasks view"
                     ) {
                         openTasksView(selecting: .task(parentTaskID))
                     }
@@ -1806,9 +1804,8 @@ struct SidebarView: View {
         }
     }
 
-    /// Whether a row's task counts as merged in its parent's "N/M merged":
-    /// To ship or Done, as `TaskBoard.childProgressByParentTaskID` counts.
-    private static func isMerged(_ entry: SidebarBucketEntry<CardRow>) -> Bool {
+    /// Whether the row counts toward its parent's finished children.
+    private static func isFinishedChild(_ entry: SidebarBucketEntry<CardRow>) -> Bool {
         let stage: TaskStage? = switch entry.payload.kind {
         case .subspace(let row): row.stage
         case .task(let item): item.stage
@@ -5008,7 +5005,7 @@ struct SidebarView: View {
         // Each record has an item, so a task without child records has no
         // child items and no label.
         guard taskCoordinator != nil, let progress = taskBoardSnapshot.childProgress(of: taskID) else { return nil }
-        return SidebarSubspacePresentation.childProgressLabel(merged: progress.merged, total: progress.total)
+        return progress.label
     }
 
     @ViewBuilder
@@ -5424,7 +5421,8 @@ struct SidebarView: View {
                 )
             )
             hoverTipModel.openChildTasks = childTasks.open
-            hoverTipModel.mergedChildTasks = childTasks.merged
+            hoverTipModel.finishedChildTasks = childTasks.finished
+            hoverTipModel.childProgress = taskBoardSnapshot.childProgress(of: taskID)
         }
         let accessibilityLabel = SidebarSubspacePresentation.rowAccessibilityLabel(
             row,

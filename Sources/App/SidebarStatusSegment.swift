@@ -563,7 +563,7 @@ struct SidebarFinishedChildrenToggle: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(isExpanded ? "Hide the merged tasks" : "Show the merged tasks")
+        .help(isExpanded ? "Hide the finished tasks" : "Show the finished tasks")
         .accessibilityLabel(accessibilityText)
         .background {
             SidebarSemanticTextBridge(text: accessibilityText)

@@ -1866,7 +1866,8 @@ struct TaskBoardTests {
         let parent = item("task-inbox", taskID: parentID, stage: .running)
         let firstChild = item("hotkey-capture", taskID: UUID(), parent: parentID, stage: .running)
         let secondChild = item("ios-outbox", taskID: UUID(), parent: parentID, stage: .running)
-        let mergedChild = item("store-sidebar", taskID: UUID(), parent: parentID, stage: .toShip)
+        var mergedChild = item("store-sidebar", taskID: UUID(), parent: parentID, stage: .toShip)
+        mergedChild.record?.mergedAt = Date()
         let other = item("pricing-page", taskID: UUID(), stage: .running)
         let quiet = item("coordinator-brainstorm", taskID: UUID(), stage: .idle)
         let idleChild = item("composer-blank-line", taskID: UUID(), parent: parentID, stage: .idle)
@@ -1891,6 +1892,25 @@ struct TaskBoardTests {
         let progress = TaskBoard.childProgress(of: parentID, items: [parent, firstChild, secondChild, mergedChild, other])
         #expect(progress?.merged == 1)
         #expect(progress?.total == 3)
+    }
+
+    @Test func aDoneMarkIsNotAMergeInChildProgress() {
+        let parent = UUID()
+        var done = statusItem("Investigate", parent: parent, stage: .done)
+        done.record?.doneAt = Date()
+        var merged = statusItem("Fix", parent: parent, stage: .toShip)
+        merged.pullRequestState = TaskPullRequestState(state: .merged)
+        let open = statusItem("Review", parent: parent, stage: .running)
+        let archived = statusItem("Dropped", parent: parent, stage: .archived)
+
+        func progress(_ children: [TaskBoardItem]) -> TaskBoard.ChildProgress? {
+            TaskBoard.childProgress(of: parent, items: children)
+        }
+        #expect(progress([done])?.label == "1/1 finished")
+        #expect(progress([done])?.merged == 0)
+        #expect(progress([merged, archived])?.label == "1/1 merged")
+        #expect(progress([done, merged, open, archived])?.label == "2/3 finished")
+        #expect(progress([archived]) == nil)
     }
 
     private func statusItem(

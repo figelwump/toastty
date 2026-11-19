@@ -166,7 +166,8 @@ enum RemoteTaskBoardProjection {
         func childProgress(of item: TaskBoardItem) -> RemoteTaskChildProgress? {
             guard let taskID = item.taskID,
                   let progress = TaskBoard.childProgress(of: taskID, items: childrenByParentID[taskID] ?? []) else { return nil }
-            return RemoteTaskChildProgress(merged: progress.merged, total: progress.total)
+            // The existing wire field counts To ship and Done children.
+            return RemoteTaskChildProgress(merged: progress.finished, total: progress.total)
         }
     }
 
