@@ -245,7 +245,8 @@ struct AppWindowView: View {
                     leftColumnVisible: sidebarVisible || dockShows,
                     titlebarButtonCount: titlebarButtonCount,
                     requestWorkspaceMerge: requestWorkspaceMerge,
-                    requestWorkspaceClose: requestWorkspaceClose
+                    requestWorkspaceClose: requestWorkspaceClose,
+                    taskBoard: taskBoard
                 )
                 // The Tasks view covers the workspace instead of replacing
                 // it, so terminals stay attached while it shows. The dock

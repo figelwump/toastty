@@ -292,6 +292,14 @@ enum TaskBoard {
         return records.first { $0.id == watch.targetTaskID }?.title ?? "another task"
     }
 
+    /// The title of a task, or of an open task space without a record: its
+    /// agent session's name (see `sessionTitle`), then the task's title,
+    /// then the workspace's name. The sidebar's rows and the top bar show it.
+    static func title(record: TaskRecord?, taskSpace: WorkspaceState?, registry: SessionRegistry) -> String {
+        sessionTitle(record: record, workspaceID: taskSpace?.id, registry: registry)
+            ?? record?.title ?? taskSpace?.title ?? ""
+    }
+
     /// Uses the task's own pane, including a session restored there under a
     /// new ID. Stopped entries keep the name if a session exits before the
     /// board copies it. Other agents in a recorded task cannot rename it.
@@ -395,7 +403,7 @@ enum TaskBoard {
         return TaskBoardItem(
             id: .task(record.id),
             record: record,
-            title: sessionTitle(record: record, workspaceID: taskSpaceID, registry: inputs.sessionRegistry) ?? record.title,
+            title: title(record: record, taskSpace: taskSpace, registry: inputs.sessionRegistry),
             taskSpaceWorkspaceID: taskSpaceID,
             projectWorkspaceID: project?.id,
             projectTitle: project?.title ?? root.map { ($0 as NSString).lastPathComponent },
@@ -483,7 +491,7 @@ enum TaskBoard {
         return TaskBoardItem(
             id: .taskSpace(workspace.id),
             record: nil,
-            title: sessionTitle(record: nil, workspaceID: workspace.id, registry: inputs.sessionRegistry) ?? workspace.title,
+            title: title(record: nil, taskSpace: workspace, registry: inputs.sessionRegistry),
             taskSpaceWorkspaceID: workspace.id,
             projectWorkspaceID: parentID,
             projectTitle: project?.title,

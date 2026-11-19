@@ -676,6 +676,18 @@ struct TaskBoardTests {
         let launched = try #require(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[launchedID])
         #expect(launched.displayTitleOverride == nil, "Task launch must not mask provider names")
         #expect(board.items().first { $0.taskID == task.id }?.title == task.title)
+        // The top bar shows the task's title, not the task space's slug,
+        // and the project's own name for the project.
+        func headerTitle(_ id: UUID) throws -> String {
+            WorkspaceView.workspaceHeaderTitle(
+                for: try #require(fixture.store.state.workspacesByID[id]), taskBoard: board,
+                registry: fixture.sessionRuntimeStore.sessionRegistry
+            )
+        }
+        #expect(task.title != task.slug)
+        #expect(try headerTitle(workspaceID) == task.title)
+        let projectID = try #require(fixture.store.state.workspacesByID[workspaceID]?.parentWorkspaceID)
+        #expect(try headerTitle(projectID) == fixture.store.state.workspacesByID[projectID]?.title)
         try startNamedSession(fixture, workspaceID: workspaceID, panelID: panelID, sessionID: "restored-owner")
         #expect(reportTitle("Unread dot repair", sessionID: "restored-owner", fixture: fixture))
         await waitUntil { fixture.record(task.id)?.title == "Unread dot repair" }
@@ -689,6 +701,7 @@ struct TaskBoardTests {
         )
         let workspace = try #require(fixture.store.state.workspacesByID[workspaceID])
         #expect(sidebar.subspaceRowModel(workspace: workspace, spawner: nil).title == "Unread dot repair")
+        #expect(try headerTitle(workspaceID) == "Unread dot repair")
         #expect(workspace.title == task.slug)
         #expect(fixture.record(task.id)?.slug == task.slug)
 
@@ -738,6 +751,16 @@ struct TaskBoardTests {
         let other = try await startTask(fixture, text: "Other task")
         await waitUntil { fixture.record(other.id)?.setup == .started }
         #expect(fixture.record(task.id)?.title == "My title")
+
+        // Closing the project keeps the task space open as a top-level
+        // workspace, which the sidebar still lists by its task: the top bar
+        // keeps the task's title too.
+        _ = fixture.store.send(.closeWorkspace(workspaceID: fixture.workspaceID))
+        let topLevel = try #require(fixture.store.state.workspacesByID[workspaceID])
+        #expect(topLevel.parentWorkspaceID == nil)
+        #expect(WorkspaceView.workspaceHeaderTitle(
+            for: topLevel, taskBoard: board, registry: fixture.sessionRuntimeStore.sessionRegistry
+        ) == "My title")
     }
 
     @Test func olderTaskSpacesUseTheFirstNamedAgentAcrossStopsAndRestores() async throws {
@@ -748,12 +771,21 @@ struct TaskBoardTests {
         // Construct the board after the sessions, as happens on startup.
         let board = makeBoard(fixture, gitHub: FakeGitHub())
         func title() -> String? { board.items().first { $0.id == .taskSpace(workspaceID) }?.title }
+        func headerTitle() throws -> String {
+            WorkspaceView.workspaceHeaderTitle(
+                for: try #require(fixture.store.state.workspacesByID[workspaceID]), taskBoard: board,
+                registry: fixture.sessionRuntimeStore.sessionRegistry
+            )
+        }
         #expect(title() == "temporary-task-name")
+        // A task space without a task record shows the same title in the top bar.
+        #expect(try headerTitle() == "temporary-task-name")
         _ = fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil))
         let secondPanel = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
         try startNamedSession(fixture, workspaceID: workspaceID, panelID: secondPanel, sessionID: "second")
         #expect(reportTitle("Second task", sessionID: "second", fixture: fixture))
         #expect(title() == "Second task", "An unnamed first session must not hide an available title")
+        #expect(try headerTitle() == "Second task")
         #expect(reportTitle("Older task repair", sessionID: "first", fixture: fixture))
         #expect(title() == "Older task repair")
         fixture.sessionRuntimeStore.stopSession(sessionID: "first", at: Date())
