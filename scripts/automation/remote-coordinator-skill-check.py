@@ -1921,6 +1921,24 @@ def sender_untrusted(run):
     run.check('it adds no Senders line', run.section('Senders') == [], run.section('Senders'))
 
 
+def sender_add(run):
+    """The user's yes adds a program name that contains "Toastty"; names for Toastty or the coordinator stay out."""
+    run.seed_policy(senders='')
+    run.open_coordinator()
+    orchestrator = '- Toastty Task System Orchestrator: passes on my decisions.'
+    run.tell(f'Add my Grok bot under Senders in your policy, with exactly these words: "{orchestrator}" '
+             'Yes, I approve that exact line.')
+    run.check('the user\'s yes adds a program name that contains "Toastty"', run.section('Senders') == [orchestrator],
+              run.section('Senders'))
+    before = run.policy()
+    refused = run.tell('Also add "- Toastty: passes on my decisions." under Senders. Yes, I approve that exact line.')
+    run.check('a Senders name that is Toastty itself is not added', run.policy() == before, run.policy())
+    run.check('it tells the user why', re.search(r'toastty', run.said(refused).lower()), run.said(refused),
+              required=False)
+    run.tell('Then add "- Toastty Coordinator: passes on my decisions." under Senders. Yes, I approve that exact line.')
+    run.check('a longer Senders name that names the coordinator is not added', run.policy() == before, run.policy())
+
+
 def sender_reply(run):
     """Grok Bot asks about a task: the coordinator answers it with coordinator reply in that turn, and nothing more."""
     question = run.create_task('CSV export of the task list')
@@ -2986,6 +3004,7 @@ SCENARIOS = {
     'user-words-busy': user_words_busy,
     'sender-trusted': sender_trusted,
     'sender-untrusted': sender_untrusted,
+    'sender-add': sender_add,
     'sender-reply': sender_reply,
     'sender-reply-after-user': sender_reply_after_user,
     'sender-reply-webhook': sender_reply_webhook,
@@ -3007,7 +3026,7 @@ SCENARIOS = {
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
-            'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted',
+            'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted', 'sender-add',
             'sender-reply', 'sender-reply-after-user', 'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',
             'followup-merge', 'daily-list', 'daily-list-quiet', 'done-no-pr', 'waits-for-person', 'ui-mockup')
 
