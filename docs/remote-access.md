@@ -352,15 +352,18 @@ transcript, not under the field.
 - The chip returns to Steer after a send empties the field and when a new turn
   starts. A send that fails keeps the user's choice with the draft.
 - **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
-  A stop names that turn, so a late tap cannot stop a later one. After a stop
-  the queue pauses until the user taps **Send next** on a queued message,
-  removes the last queued message, or queues a new one. The prompt reopens a
-  short moment after the provider reports the aborted turn, unless local input
-  or another provider transition happens first. In the coordinator's chat, a
-  Stop also holds the coordinator's own waiting messages (the Mac chat's
-  messages, quick entry, `coordinator send` and digests that wait), as the
-  Mac chat's Stop does: the Mac chat shows them as **Paused** until **Send
-  next** there. The phone does not list them.
+  A stop names that turn, so a late tap cannot stop a later one. It pauses the
+  queue. The prompt reopens a short moment after the provider reports the
+  aborted turn, unless local input or another provider transition happens first.
+  In [the coordinator's chat](#the-coordinator-tab), Stop holds both queues.
+  When the Mac shares the coordinator's queue, the phone lists messages queued
+  in the conversation first, then the coordinator's. The first paused row
+  resumes both queues: tap **Resume** for one message or **Resume all N** for
+  several.
+  In other chats, or with an older Mac that does not share the coordinator's
+  queue, the phone lists only the conversation's queued messages. That queue
+  stays paused until you tap **Send next**, remove its last message or queue
+  a new one.
 
 Typing on the Mac still wins. Local keyboard input during a turn blocks steer
 for that turn and, unless the provider logs the Mac user's own message, opens
@@ -699,7 +702,7 @@ menus:
 | **Merge PR #N** | The pull request is open and GitHub reports no blocker | Asks, then merges | Archive Task… |
 | **Open PR #N** | GitHub reports a blocker, such as failing checks | Opens the pull request | Merge PR #N, Archive Task… |
 | **Merging PR #N…** | The agent checks, or Toastty waits for checks, merges, or cleans up | Nothing | Cancel Merge, while the agent checks or Toastty waits |
-| **Complete Task** | No pull request, and the agent marked the work ready | Asks, then marks the task done | None |
+| **Complete Task** | No pull request, and the agent marked the work ready | Asks, then marks the task done and closes its task space | None |
 | **Cleanup Stopped · PR #N** | The cleanup after the merge stopped | Opens the menu | Clean Up, Keep As Is |
 | **Done · PR #N** or **Done** | The task finished and its task space is still open | Opens the menu | Archive Task… |
 | **Archive Task…** | Any other stage without a pull request | Opens the archive sheet | None |
@@ -892,10 +895,11 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   phone, and `toastty coordinator send`. A message from another sender
   shows "From" and the sender, a reply its quote, and files their names and
   count; the files stay on the Mac. After a Stop, from the phone or the Mac,
-  the messages that it holds show as paused, and one **Resume** on the first
-  of them lets them all go, the phone's first. **Remove** on a row takes that
-  message out of whichever queue holds it, with its files. The coordinator's
-  own messages have no Edit on the phone: remove one and write it again. A
+  the messages that it holds show as paused. **Resume** (or **Resume all N**
+  for several messages) on the first paused row lets them all go, the phone's
+  first. **Remove** takes a message out of whichever queue holds it, with
+  its files. The coordinator's own messages have no Edit on the phone:
+  remove one and write it again. A
   phone without send access, or a coordinator session whose remote input is
   off on the Mac, sees the list without Resume and Remove. With an older Mac,
   the chat lists only the phone's queued messages, as before.

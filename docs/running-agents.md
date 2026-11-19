@@ -543,9 +543,11 @@ the arrow menu offers **Merge Without Checks** and **Archive Task…** instead o
 the modes below. See [Tasks](tasks.md#merge-a-task).
 
 Without a pull request, a task that is Ready for review offers a green
-**Complete Task** button. It marks the task Done and keeps its conversation,
-workspace, and worktree. Active work or a reply request takes priority over
-an earlier ready mark. At other stages, the header offers **Archive Task…**.
+**Complete Task** button. After you confirm, Toastty marks the task Done,
+closes its task space and ends the agent sessions there. Any worktree stays.
+See [Finish without a pull request](tasks.md#finish-without-a-pull-request).
+Active work or a reply request takes priority over an earlier ready mark.
+At other stages, the header offers **Archive Task…**.
 Archive remains available in the task menu. Archiving asks for confirmation
 and keeps the existing checks for unsaved work.
 
