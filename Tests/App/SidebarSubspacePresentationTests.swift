@@ -388,6 +388,55 @@ final class SidebarSubspacePresentationTests: XCTestCase {
         )
     }
 
+    /// The card lists a task's children by the group their rows list in,
+    /// most urgent first, so a parent shows at a glance which child needs
+    /// the user. Merged children list apart, newest first; archived ones
+    /// are left out, as the row's "N/M merged" tag leaves them out.
+    func testTaskSpaceCardListsChildTasksMostUrgentFirstAndMergedApart() {
+        let projectID = UUID()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func item(
+            _ title: String, stage: TaskStage, taskSpaceStatus: SidebarSubspacePresentation.RowStatus? = nil,
+            projectID: UUID? = projectID, projectTitle: String = "toastty", minutesAgo: Double = 0
+        ) -> TaskBoardItem {
+            TaskBoardItem(
+                id: .task(UUID()), title: title, projectWorkspaceID: projectID, projectTitle: projectTitle,
+                stage: stage, agent: .idle, taskSpaceStatus: taskSpaceStatus,
+                activityAt: now.addingTimeInterval(-minutesAgo * 60)
+            )
+        }
+        let parent = item("Rework remote pairing", stage: .needsYou(.review))
+        let children = [
+            item("Onboarding copy", stage: .idle),
+            item("Relay retry", stage: .needsYou(.review)),
+            item("Log redaction", stage: .toShip, minutesAgo: 30),
+            item("Webhook retries", stage: .running),
+            item("QR code expiry", stage: .needsYou(.awaitingReply)),
+            item("Bluetooth spike", stage: .archived),
+            item("Token store", stage: .done, minutesAgo: 5),
+            // A running task whose agent asks for approval lists in Needs
+            // you, as its sidebar row does.
+            item("Approval wait", stage: .running, taskSpaceStatus: .needsApproval),
+            item("iPhone queue view", stage: .starting, projectID: UUID(), projectTitle: "toastty-ios"),
+        ]
+        let childTasks = SidebarSubspacePresentation.hoverTipChildTasks(of: parent, children: children)
+
+        XCTAssertEqual(childTasks.open.map(\.title), [
+            "QR code expiry", "Approval wait", "Relay retry", "Webhook retries", "iPhone queue view", "Onboarding copy",
+        ])
+        XCTAssertEqual(childTasks.open.map(\.stage), [
+            .bucket(.needsYou), .bucket(.needsYou), .bucket(.readyToReview), .bucket(.running), .bucket(.running), .bucket(.idle),
+        ])
+        XCTAssertEqual(childTasks.merged.map(\.title), ["Token store", "Log redaction"])
+        XCTAssertEqual(childTasks.merged.map(\.stage), [.done, .toShip])
+        // Only the child in another project names its project.
+        XCTAssertEqual(childTasks.open.compactMap(\.projectTitle), ["toastty-ios"])
+        XCTAssertEqual(childTasks.open.map(\.taskID), [4, 7, 1, 3, 8, 0].map { index in
+            guard case .task(let id) = children[index].id else { return UUID() }
+            return id
+        })
+    }
+
     func testPathPrefersTheFirstAgentsDirectoryThenTheFirstTerminal() {
         let panelID = UUID()
         let workspace = WorkspaceState(

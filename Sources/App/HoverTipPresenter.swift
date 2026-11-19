@@ -277,6 +277,35 @@ struct SubspaceHoverTipModel: Hashable {
     /// The task that started this one, which the card's Parent button
     /// opens.
     var parentTaskTitle: String? = nil
+
+    /// A task that this one started, as the card lists it.
+    struct ChildTask: Hashable {
+        let taskID: UUID
+        /// The task, for its status mark.
+        let item: TaskBoardItem
+        /// Its sidebar group, or To ship or Done once it merged.
+        let stage: Stage
+        /// The child's project, when it is not this task's project.
+        let projectTitle: String?
+
+        var title: String { item.title }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.taskID == rhs.taskID && lhs.item == rhs.item && lhs.stage == rhs.stage
+                && lhs.projectTitle == rhs.projectTitle
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(taskID)
+            hasher.combine(stage)
+            hasher.combine(projectTitle)
+        }
+    }
+
+    /// Child tasks that have not merged, most urgent first.
+    var openChildTasks: [ChildTask] = []
+    /// Child tasks that merged, To ship or Done, newest merge first.
+    var mergedChildTasks: [ChildTask] = []
 }
 
 struct SubspaceHoverTipCard: View {
@@ -285,8 +314,23 @@ struct SubspaceHoverTipCard: View {
     var onSelectSession: ((UUID) -> Void)? = nil
     /// Opens the parent task; the card closes afterwards.
     var onSelectParentTask: (() -> Void)? = nil
+    /// Opens a child task; the card closes afterwards.
+    var onSelectChildTask: ((UUID) -> Void)? = nil
+    /// Opens this task in the Tasks view, for child tasks past what the
+    /// card lists; the card closes afterwards.
+    var onShowTaskInTasksView: (() -> Void)? = nil
 
     @State private var hoveredSessionPanelID: UUID?
+    @State private var hoveredChildTaskID: UUID?
+    @State private var showsMoreOpenChildTasks = false
+    @State private var showsMergedChildTasks = false
+
+    /// Open child tasks the card lists before "N more open".
+    static let childTaskLimit = 5
+    /// The most rows each list of child tasks shows when opened; the open
+    /// ones count the rows shown before "N more open". Past this the rest
+    /// open in the Tasks view, so the card stays on screen.
+    static let expandedChildTaskLimit = 12
 
     private static let railWidth: CGFloat = 12
     private static let railGap: CGFloat = 6
@@ -359,6 +403,11 @@ struct SubspaceHoverTipCard: View {
                 .padding(.bottom, 8)
             }
 
+            if model.openChildTasks.isEmpty == false || model.mergedChildTasks.isEmpty == false {
+                childTasksSection
+                    .padding(.bottom, 8)
+            }
+
             if model.path != nil || model.spawnerName != nil {
                 Rectangle()
                     .fill(ToastyTheme.hoverTipDivider)
@@ -387,6 +436,163 @@ struct SubspaceHoverTipCard: View {
             }
         }
         .hoverTipCardChrome()
+        // "N more open" and "N merged" change the card's height after it
+        // opened; the card's window follows.
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
+            DispatchQueue.main.async { HoverTipPresenter.shared.fitToContent() }
+        }
+    }
+
+    /// The tasks this one started: the open ones, most urgent first, then
+    /// one line for the merged ones. The heading counts them as the row's
+    /// "N/M merged" tag does.
+    private var childTasksSection: some View {
+        let open = model.openChildTasks
+        let merged = model.mergedChildTasks
+        return VStack(alignment: .leading, spacing: 1) {
+            let progress = SidebarSubspacePresentation.childProgressLabel(merged: merged.count, total: open.count + merged.count)
+            HStack(spacing: 6) {
+                Text("Child tasks")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                Spacer(minLength: 6)
+                Text(progress)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
+            }
+            .padding(.bottom, 2)
+            .accessibilityElement(children: .combine)
+            .background {
+                SidebarSemanticTextBridge(text: "Child tasks: \(progress)")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+
+            ForEach(open.prefix(Self.childTaskLimit), id: \.taskID) { child in
+                selectableChildTaskRow(child, isMerged: false)
+            }
+            if open.count > Self.childTaskLimit {
+                childTaskFold(
+                    Array(open.dropFirst(Self.childTaskLimit)),
+                    title: "\(open.count - Self.childTaskLimit) more open",
+                    noun: "open child",
+                    isExpanded: $showsMoreOpenChildTasks,
+                    limit: Self.expandedChildTaskLimit - Self.childTaskLimit,
+                    isMerged: false
+                )
+            }
+            if merged.isEmpty == false {
+                childTaskFold(
+                    merged,
+                    title: "\(merged.count) merged",
+                    noun: "merged child",
+                    isExpanded: $showsMergedChildTasks,
+                    limit: Self.expandedChildTaskLimit,
+                    isMerged: true
+                )
+            }
+        }
+    }
+
+    /// A line that shows or hides more child tasks under it, at most
+    /// `limit` of them.
+    @ViewBuilder
+    private func childTaskFold(
+        _ tasks: [SubspaceHoverTipModel.ChildTask],
+        title: String,
+        noun: String,
+        isExpanded: Binding<Bool>,
+        limit: Int,
+        isMerged: Bool
+    ) -> some View {
+        let plural = tasks.count == 1 ? "task" : "tasks"
+        HoverTipChildTaskFoldButton(
+            title: title,
+            isExpanded: isExpanded.wrappedValue,
+            showsCheckmark: isMerged,
+            accessibilityText: "\(isExpanded.wrappedValue ? "Hide" : "Show") \(tasks.count) \(noun) \(plural)",
+            markWidth: Self.railWidth,
+            markGap: Self.railGap
+        ) {
+            isExpanded.wrappedValue.toggle()
+        }
+        if isExpanded.wrappedValue {
+            ForEach(tasks.prefix(limit), id: \.taskID) { child in
+                selectableChildTaskRow(child, isMerged: isMerged)
+            }
+            let remaining = tasks.count - limit
+            if remaining > 0, let onShowTaskInTasksView {
+                HoverTipChildTaskFoldButton(
+                    title: "\(remaining) more in the Tasks view",
+                    isExpanded: nil,
+                    showsCheckmark: false,
+                    accessibilityText: "Show \(remaining) more \(noun) \(remaining == 1 ? "task" : "tasks") in the Tasks view",
+                    markWidth: Self.railWidth,
+                    markGap: Self.railGap
+                ) {
+                    let generation = HoverTipPresenter.shared.currentGeneration
+                    onShowTaskInTasksView()
+                    HoverTipPresenter.shared.hide(generation: generation)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func selectableChildTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isMerged: Bool) -> some View {
+        if let onSelectChildTask {
+            let project = child.projectTitle.map { " in \($0)" } ?? ""
+            let accessibilityText = "Go to child task \(child.title)\(project), \(child.stage.title)"
+            Button {
+                let generation = HoverTipPresenter.shared.currentGeneration
+                onSelectChildTask(child.taskID)
+                HoverTipPresenter.shared.hide(generation: generation)
+            } label: {
+                childTaskRow(child, isMerged: isMerged)
+                    .padding(.horizontal, Self.rowInset)
+                    .background(
+                        hoveredChildTaskID == child.taskID ? ToastyTheme.hoverTipTagBackground : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -Self.rowInset)
+            .onHover { isHovering in
+                if isHovering {
+                    hoveredChildTaskID = child.taskID
+                } else if hoveredChildTaskID == child.taskID {
+                    hoveredChildTaskID = nil
+                }
+            }
+            .accessibilityLabel(accessibilityText)
+            .background {
+                SidebarSemanticTextBridge(text: accessibilityText)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+        } else {
+            childTaskRow(child, isMerged: isMerged)
+        }
+    }
+
+    private func childTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isMerged: Bool) -> some View {
+        HStack(spacing: Self.railGap) {
+            TaskStageMark(item: child.item)
+            Text(child.title)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 6)
+            if let projectTitle = child.projectTitle {
+                SidebarView.sidebarTaskTag(projectTitle, maximumWidth: 80)
+            }
+            HoverTipStageChip(stage: child.stage, bridgesText: false)
+        }
+        .frame(minHeight: 19)
+        // Merged work steps back, as the sidebar dims a calmer row.
+        .opacity(isMerged ? 0.62 : 1)
     }
 
     @ViewBuilder
@@ -537,6 +743,8 @@ private struct HoverTipHeader: View {
 /// blue for Ready to review, gray for the rest.
 private struct HoverTipStageChip: View {
     let stage: SubspaceHoverTipModel.Stage
+    /// Off where the row around the chip already says the stage.
+    var bridgesText = true
 
     var body: some View {
         let (foreground, background): (Color, Color) = switch stage {
@@ -568,9 +776,11 @@ private struct HoverTipStageChip: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(stage.title)
         .background {
-            SidebarSemanticTextBridge(text: "Stage: \(stage.title)")
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
+            if bridgesText {
+                SidebarSemanticTextBridge(text: "Stage: \(stage.title)")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
         }
     }
 }
@@ -736,6 +946,67 @@ private struct HoverTipParentTaskButton: View {
         .accessibilityLabel("Go to parent task \(title)")
         .background {
             SidebarSemanticTextBridge(text: "Go to parent task \(title)")
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// A line in a task space card's child tasks that shows or hides the rows
+/// under it, or, without `isExpanded`, opens the rest elsewhere.
+private struct HoverTipChildTaskFoldButton: View {
+    let title: String
+    let isExpanded: Bool?
+    let showsCheckmark: Bool
+    let accessibilityText: String
+    /// The child rows' mark column and the gap after it, so the title
+    /// lines up with theirs.
+    let markWidth: CGFloat
+    let markGap: CGFloat
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: markGap) {
+                Group {
+                    if showsCheckmark {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                    }
+                }
+                .frame(width: markWidth)
+                Text(title)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ToastyTheme.sidebarSummaryText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                HStack(spacing: 3) {
+                    if let isExpanded {
+                        Text(isExpanded ? "Hide" : "Show")
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 7, weight: .bold))
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 7, weight: .bold))
+                    }
+                }
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(isHovered ? ToastyTheme.hoverTipBodyText : ToastyTheme.sidebarChildContextText)
+            }
+            .frame(minHeight: 19)
+            .padding(.horizontal, 4)
+            .background(isHovered ? ToastyTheme.hoverTipTagBackground : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, -4)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(accessibilityText)
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityText)
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
         }
@@ -934,6 +1205,24 @@ final class HoverTipPresenter {
             ))
             currentAnchor = anchorScreenRect
         }
+    }
+
+    /// Sizes the open card to its content again after the card changed
+    /// itself, such as when it shows more rows. The top edge stays where it
+    /// is, so the line under the pointer does not move.
+    func fitToContent() {
+        guard let panel, panel.isVisible, let hostingView else { return }
+        hostingView.layoutSubtreeIfNeeded()
+        let tipSize = hostingView.fittingSize
+        guard tipSize.width > 0, tipSize.height > 0, tipSize != panel.frame.size else { return }
+        let previousFrame = panel.frame
+        panel.setContentSize(tipSize)
+        hostingView.frame = CGRect(origin: .zero, size: tipSize)
+        let visibleFrame = Self.visibleFrame(for: currentAnchor ?? previousFrame)
+        panel.setFrameOrigin(CGPoint(
+            x: previousFrame.minX,
+            y: max(visibleFrame.minY, previousFrame.maxY - tipSize.height)
+        ))
     }
 
     func hide(id: AnyHashable) {
