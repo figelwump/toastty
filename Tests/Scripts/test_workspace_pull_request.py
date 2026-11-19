@@ -358,19 +358,20 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(self.run_script("merge", 1, head=accepted)["status"], "refused")
         self.assertEqual(self.actions(), [])
 
-    def test_waiting_merge_refuses_a_commit_made_in_the_worktree_after_the_click(self):
+    def test_waiting_merge_refuses_a_commit_made_in_the_checkout_after_the_click(self):
         _, path = self.task(1, state="OPEN")
         accepted = self.prs[0]["headRefOid"]
         self.prs[0]["mergeStateStatus"] = "BLOCKED"
         self.assertEqual(self.run_script("merge", 1)["status"], "waiting")
 
         # New agent work keeps the waiting merge, so a commit that is not
-        # pushed yet must stop it.
+        # pushed yet must stop it, also on another branch of the checkout.
+        self.git("checkout", "-q", "-b", "scratch", cwd=path)
         local = self.commit(path, "not pushed yet")
         self.prs[0]["mergeStateStatus"] = "CLEAN"
         result = self.run_script("merge", 1, head=accepted)
         self.assertEqual(result["status"], "refused", result)
-        self.assertIn(f"its HEAD is {local[:8]}, not {accepted[:8]}", result["detail"])
+        self.assertIn(f"it is at {local[:8]}, not {accepted[:8]}", result["detail"])
         self.assertEqual(self.actions(), [])
         # A run that merged before the commit still reports the merge.
         self.prs[0]["state"] = "MERGED"

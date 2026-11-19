@@ -474,8 +474,12 @@ extension TaskCoordinator {
             }
             // A finished task waits on nothing: a wake would start new work
             // in it, which clears a done mark. The sidebar's done box marks
-            // only the task space.
-            let taskSpaceDone = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0]?.doneAt } != nil
+            // only the task space. A mark that records a merge's acceptance
+            // is not finished work: new work keeps it while the merge waits.
+            let taskSpaceDone = record.taskSpaceWorkspaceID.flatMap { id in
+                TaskBoard.isInMergeFlow(record, request: merges?.request(workspaceID: id))
+                    ? nil : store.state.workspacesByID[id]?.doneAt
+            } != nil
             if record.archivedAt != nil || record.doneAt != nil || record.shippedAt != nil || record.mergedAt != nil
                 || taskSpaceDone {
                 saveOrDefer(taskID: record.id) { $0.waiting = nil }

@@ -745,8 +745,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     }
 
     /// A commit in the worktree after the acceptance is a new version, also
-    /// before it is pushed: the waiting merge stops, the task says why and
-    /// offers Merge again, and passing checks merge nothing.
+    /// before it is pushed: when the checks pass, the merge stops instead of
+    /// merging, the task says why and offers Merge again.
     @Test
     func aCommitInTheWorktreeStopsAWaitingMerge() async throws {
         try await withScenario(checksPending: true) { scenario in
@@ -758,25 +758,22 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             // The user asks for more work, and the agent commits it.
             scenario.reportAgent(.working)
             let newHead = try commit("third", in: scenario.worktree)
+            scenario.reportAgent(.ready)
+            scenario.passChecks()
             await scenario.waitUntil("the waiting merge stops") { scenario.record?.mergeFailure != nil }
             let failure = try #require(scenario.record?.mergeFailure)
             #expect(failure.cause == .refused)
-            #expect(failure.reason.contains("its HEAD is \(newHead.prefix(8))"), "\(failure.reason)")
+            #expect(failure.reason.contains("it is at \(newHead.prefix(8))"), "\(failure.reason)")
             #expect(failure.head == scenario.head)
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
             #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
             #expect(scenario.record?.mergeRequestedAt == nil)
             #expect(scenario.notifications == ["PR #7 was not merged: \(failure.reason)"])
-            scenario.reportAgent(.ready)
             let item = try #require(scenario.boardItem)
             #expect(item.merge == nil)
             #expect(TaskBoardPresentation.statusLine(item) == "⚠ merge stopped")
             #expect(TaskBoardPresentation.detailActions(item).contains(.merge))
-
-            // Passing checks no longer merge the version accepted earlier.
-            scenario.passChecks()
-            try await Task.sleep(for: .milliseconds(700))
-            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
             #expect(FileManager.default.fileExists(atPath: scenario.worktree))
         }
     }

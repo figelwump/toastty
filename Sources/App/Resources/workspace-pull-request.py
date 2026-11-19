@@ -16,9 +16,9 @@ ACTION is one of:
             Without --head, the accepted commit is the clicked checkout's HEAD,
             read first; the checkout must be the PR's worktree, clean at that
             commit, and the PR head must be that commit. With --head, the PR head
-            must still be that commit, its base must match --base, the worktree on
-            the PR's branch, if any, must still be at that commit (uncommitted
-            changes do not count), and the workspace must still be marked
+            must still be that commit, its base must match --base, the clicked
+            checkout must still be at that commit (uncommitted changes do not
+            count), and the workspace must still be marked
             done, which is how the user cancels a waiting merge. --expect-head,
             without --head, also requires the checkout's HEAD to be that commit:
             the version a merge skill checked. It merges into the PR's current
@@ -324,11 +324,6 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
         return "merged", f"PR #{number} has merged", accepted
     if pr["state"] != "OPEN":
         raise Refusal(f"PR #{number} is closed")
-    if ctx.clicked_head is None and ctx.worktree is not None and ctx.worktree.head != accepted:
-        # A waiting merge: Toastty keeps it through new agent work, so a
-        # commit that is not pushed yet must still end the acceptance.
-        raise Refusal(f"the worktree moved after the merge was accepted: its HEAD is {ctx.worktree.head[:8]}, "
-                      f"not {accepted[:8]}")
     if pr.get("autoMergeRequest"):
         raise Refusal(f"auto-merge is on for PR #{number}, so GitHub would also merge commits pushed later; "
                       "turn it off on GitHub, then merge again")
@@ -360,16 +355,25 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
         # that has not reported. UNKNOWN: GitHub is still computing.
         state = (pr.get("mergeStateStatus") or "unknown").lower()
         return "waiting", f"waiting for GitHub to allow the merge (merge state {state})", accepted
-    if ctx.clicked_head is None:
-        # A waiting merge: the user may have cancelled it by clearing the done
-        # mark since Toastty started this run.
-        workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
-        if workspace is None or not workspace.get("done"):
-            raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
     # Recheck after the other calls. The API locks the head SHA, but has no
     # equivalent target-branch condition, so the final request still has a race.
     current = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", "baseRefName"), cwd=ctx.repo))
     check_target_branch(current.get("baseRefName"), accepted_base)
+    if ctx.clicked_head is None:
+        # A waiting merge, checked last before the merge call: the user may
+        # have cancelled it by clearing the done mark since Toastty started
+        # this run. Toastty keeps the mark through new agent work, so a commit
+        # in the clicked checkout that is not pushed yet also ends the
+        # acceptance.
+        workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
+        if workspace is None or not workspace.get("done"):
+            raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
+        ok, head = succeeds(["git", "rev-parse", "HEAD"], cwd=ctx.checkout)
+        if not ok:
+            raise Refusal(f"could not read the commit in this workspace's checkout: {head}")
+        if head != accepted:
+            raise Refusal(f"the checkout moved after the merge was accepted: it is at {head[:8]}, "
+                          f"not {accepted[:8]}")
     # GitHub's merge API merges now or fails; unlike `gh pr merge`, it never
     # turns on auto-merge or adds the PR to a merge queue. `sha` makes GitHub
     # refuse if the head is no longer the accepted commit.
