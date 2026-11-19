@@ -710,11 +710,12 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
-    /// New work in the task space after the acceptance cancels a waiting
-    /// merge, in a subspace and in a top-level task space. The task says
-    /// why and offers Merge again, instead of showing a merge under way.
+    /// New agent work in the task space after the acceptance, with no new
+    /// commit, is not a new version, so the merge keeps waiting and merges
+    /// the accepted commit; in a subspace and in a top-level task space.
+    /// Such work is, for example, a test run that a parent task asks for.
     @Test(arguments: [false, true])
-    func newWorkCancelsAWaitingMergeAndTheTaskSaysWhy(topLevel: Bool) async throws {
+    func newWorkWithoutACommitKeepsAWaitingMerge(topLevel: Bool) async throws {
         try await withScenario(checksPending: true) { scenario in
             if topLevel {
                 scenario.closeProjectWorkspace()
@@ -724,25 +725,55 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             await scenario.waitUntil("the merge waits for checks") { scenario.isWaitingForChecks }
             scenario.reportAgent(.ready)
 
-            // The user asks for more work.
+            // The agent starts more work and leaves files uncommitted.
             scenario.reportAgent(.working)
+            try Data("test output".utf8).write(to: URL(filePath: scenario.worktree).appending(path: "test-output.log"))
+            // Several waiting runs pass.
+            try await Task.sleep(for: .milliseconds(700))
+            #expect(scenario.isWaitingForChecks)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt != nil)
+            #expect(scenario.record?.mergeRequestedAt != nil)
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+            #expect(scenario.boardItem?.merge == .waitingForChecks)
+
+            scenario.passChecks()
+            await scenario.waitUntil("the accepted commit merges") { scenario.record?.mergedAt != nil }
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker))
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+            #expect(scenario.notifications.contains { $0.contains("not merged") } == false, "\(scenario.notifications)")
+        }
+    }
+
+    /// A commit in the worktree after the acceptance is a new version, also
+    /// before it is pushed: when the checks pass, the merge stops instead of
+    /// merging, the task says why and offers Merge again.
+    @Test
+    func aCommitInTheWorktreeStopsAWaitingMerge() async throws {
+        try await withScenario(checksPending: true) { scenario in
+            scenario.reportAgent(.working)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            await scenario.waitUntil("the merge waits for checks") { scenario.isWaitingForChecks }
+            scenario.reportAgent(.ready)
+
+            // The user asks for more work, and the agent commits it.
+            scenario.reportAgent(.working)
+            let newHead = try commit("third", in: scenario.worktree)
+            scenario.reportAgent(.ready)
+            scenario.passChecks()
             await scenario.waitUntil("the waiting merge stops") { scenario.record?.mergeFailure != nil }
-            let reason = try #require(scenario.record?.mergeFailure?.reason)
-            #expect(reason.contains("New work"), "\(reason)")
+            let failure = try #require(scenario.record?.mergeFailure)
+            #expect(failure.cause == .refused)
+            #expect(failure.reason.contains("it is at \(newHead.prefix(8))"), "\(failure.reason)")
+            #expect(failure.head == scenario.head)
+            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
             #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
             #expect(scenario.record?.mergeRequestedAt == nil)
-            #expect(scenario.notifications == ["PR #7 was not merged: \(reason)"])
-            scenario.reportAgent(.ready)
+            #expect(scenario.notifications == ["PR #7 was not merged: \(failure.reason)"])
             let item = try #require(scenario.boardItem)
             #expect(item.merge == nil)
             #expect(TaskBoardPresentation.statusLine(item) == "⚠ merge stopped")
             #expect(TaskBoardPresentation.detailActions(item).contains(.merge))
-
-            // Passing checks no longer merge the version accepted earlier.
-            scenario.passChecks()
-            try await Task.sleep(for: .milliseconds(700))
-            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker) == false)
             #expect(FileManager.default.fileExists(atPath: scenario.worktree))
         }
     }

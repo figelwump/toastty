@@ -294,6 +294,19 @@ struct TaskCoordinationTests {
         _ = try coordinator.setWaiting(taskID: task.id, reason: "email replies", wakeAt: nil)
         _ = try coordinator.markDone(taskID: task.id)
         #expect(fixture.record(task.id)?.waiting == nil)
+
+        // A done mark that records the acceptance of a merge under way is
+        // not finished work: a wake set while the merge waits still goes.
+        try coordinator.records.save(id: task.id) {
+            $0.doneAt = nil
+            $0.mergeRequestedAt = Date()
+        }
+        _ = try coordinator.setWaiting(taskID: task.id, reason: "test runs", wakeAt: Date().addingTimeInterval(3600))
+        try coordinator.records.save(id: task.id) { $0.waiting?.wakeAt = Date().addingTimeInterval(-1) }
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt != nil)
+        #expect(coordinator.evaluateWakes() == nil)
+        #expect(fixture.sessions.delivered.isEmpty == false)
+        #expect(fixture.record(task.id)?.waiting?.wokenAt != nil)
     }
 
     // MARK: - Watch

@@ -607,10 +607,12 @@ record the target requires a new merge acceptance. Toastty marks the workspace d
 - A waiting merge needs Toastty to be running. It is kept across launches and
   resumes after a relaunch.
 - To cancel a waiting merge, clear the workspace's done mark in the sidebar.
-  New agent work in the workspace clears it too. A notification says that the
-  pull request was not merged, and why.
+  A notification says that the pull request was not merged, and why. New
+  agent work in the workspace keeps the mark while the merge waits, because
+  the merge is of the commit you accepted.
 - If the merge can no longer happen, for example because new commits were
-  pushed, a check failed, or `gh` failed three times in a row, Toastty stops
+  pushed or made in the worktree, a check failed, or `gh` failed three times
+  in a row, Toastty stops
   waiting, clears the done mark so the Merge button comes back, and a
   notification gives the reason. A refusal at the click shows an alert and
   changes nothing.

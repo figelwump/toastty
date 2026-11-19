@@ -352,7 +352,8 @@ idle box and keeps its place; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn
 that set the mark, including its end, keeps it, and restored sessions and
-process watches do not count. `workspace.list` and `workspace.snapshot` report
+process watches do not count. While a merge waits for checks, new work keeps
+the mark, because the merge is of the commit that was accepted. `workspace.list` and `workspace.snapshot` report
 it as `done`.
 
 ```bash

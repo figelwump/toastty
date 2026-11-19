@@ -334,7 +334,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertIn("slow", result["detail"])
         self.assertEqual(self.actions(), [])
 
-        # Later checks need no worktree: the commit was accepted at the click.
+        # Uncommitted edits after the click are not a new version.
         (path / "notes.txt").write_text("edited after the click\n")
         self.prs[0]["statusCheckRollup"][-1] = {"name": "slow", "status": "COMPLETED", "conclusion": "SUCCESS"}
         self.prs[0]["mergeStateStatus"] = "CLEAN"
@@ -357,6 +357,25 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.prs[0]["state"] = "MERGED"
         self.assertEqual(self.run_script("merge", 1, head=accepted)["status"], "refused")
         self.assertEqual(self.actions(), [])
+
+    def test_waiting_merge_refuses_a_commit_made_in_the_checkout_after_the_click(self):
+        _, path = self.task(1, state="OPEN")
+        accepted = self.prs[0]["headRefOid"]
+        self.prs[0]["mergeStateStatus"] = "BLOCKED"
+        self.assertEqual(self.run_script("merge", 1)["status"], "waiting")
+
+        # New agent work keeps the waiting merge, so a commit that is not
+        # pushed yet must stop it, also on another branch of the checkout.
+        self.git("checkout", "-q", "-b", "scratch", cwd=path)
+        local = self.commit(path, "not pushed yet")
+        self.prs[0]["mergeStateStatus"] = "CLEAN"
+        result = self.run_script("merge", 1, head=accepted)
+        self.assertEqual(result["status"], "refused", result)
+        self.assertIn(f"it is at {local[:8]}, not {accepted[:8]}", result["detail"])
+        self.assertEqual(self.actions(), [])
+        # A run that merged before the commit still reports the merge.
+        self.prs[0]["state"] = "MERGED"
+        self.assertEqual(self.run_script("merge", 1, head=accepted)["status"], "merged")
 
     def test_waiting_merge_refuses_a_retarget_after_acceptance(self):
         parent, _ = self.task(1, state="OPEN")

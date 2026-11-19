@@ -143,7 +143,11 @@ It waits a few seconds for Toastty's first answer, then reports it:
   merged. Report the reason and end your turn; do not say that Toastty
   accepted the merge.
 - **`merge` is `waitingForChecks`:** Toastty merges when the checks that
-  still run pass.
+  still run pass. The wait goes on through later turns in this task space,
+  such as test runs that a parent task asks for. A new commit, also one that
+  is not pushed, a changed target branch or a failing check stops it. If the
+  user asks for changes before it merges, run `toastty task cancel-merge`
+  first, then do the work.
 - **`merge` is `cleaningUp`, or `mergedAt` is set:** the pull request merged.
 - **`merge` is `merging`:** Toastty has not answered yet. Read the task again
   with `toastty task get --json` before you report.

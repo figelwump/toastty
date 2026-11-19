@@ -5792,8 +5792,23 @@ final class SessionRuntimeStore: ObservableObject {
 
     /// A workspace marked done reopens when an agent in it starts new work,
     /// so a merged task that picks up more work stops reading as finished.
+    /// While a merge waits for checks, the mark is the user's acceptance of
+    /// one commit, and the merge script checks that commit and its target
+    /// branch on each run. A turn alone changes neither, so the mark stays.
     private func reopenDoneWorkspaceIfNeeded(workspaceID: UUID, sessionID: String, trigger: String) {
         guard let store, store.state.workspacesByID[workspaceID]?.doneAt != nil else { return }
+        if case .awaitingChecks? = workspaceMergeRequests[workspaceID]?.phase {
+            ToasttyLog.info(
+                "Kept workspace done mark for a merge waiting for checks",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "session_id": sessionID,
+                    "trigger": trigger,
+                ]
+            )
+            return
+        }
         guard store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil)) else { return }
         ToasttyLog.info(
             "Cleared workspace done mark for new work",

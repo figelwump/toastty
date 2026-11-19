@@ -2443,9 +2443,11 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    request is retargeted. Older saved waits with no target require you to
    accept the merge again. The wait continues after the agent's turn ends,
    also in a task space that is no longer nested under its project, for
-   example after the project's workspace closed. New work in the task space
-   ends the wait, because the merge is then no longer the version you
-   accepted.
+   example after the project's workspace closed. New agent work in the task
+   space, such as a test run, does not end the wait: what merges is the
+   commit you accepted. A new commit ends it, also one that is only in the
+   worktree and not pushed yet, and so do **Cancel Merge** and clearing the
+   task space's done mark.
 
    GitHub can also fail the merge call itself, for example with "Server
    Error", or the network can fail. Toastty then keeps the merge and runs it
@@ -2454,8 +2456,8 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 
    If the merge stops without merging, for example because the checkout is
    no longer at the `--head` commit the skill checked, a waiting merge is
-   refused, GitHub kept failing, or new work or a closed task space ended the
-   wait, nothing changes on GitHub. Toastty shows no alert that you must
+   refused, GitHub kept failing, or a cleared done mark or a closed task space
+   ended the wait, nothing changes on GitHub. Toastty shows no alert that you must
    dismiss, since an agent or a shell may have started the merge. Instead it
    sends a desktop notification and records the reason on the task: the
    task's row shows **⚠ merge stopped**, the Tasks view gives the reason, and

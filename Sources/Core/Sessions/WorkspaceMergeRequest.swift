@@ -51,8 +51,9 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         case merging(thenCleanUp: Bool)
         /// The workspace is done, and Toastty is waiting for checks or a
         /// required review before it merges `acceptedHead`, the pull request
-        /// head when the user clicked. New commits on the pull request end
-        /// the wait without merging.
+        /// head when the user clicked. New commits on the pull request or in
+        /// its worktree end the wait without merging. New agent work in the
+        /// workspace does not: it keeps the done mark during this phase.
         case awaitingChecks(acceptedHead: String, thenCleanUp: Bool)
         /// The workspace is done; the pull request has merged or is about to,
         /// and the cleanup waits for it.
@@ -99,9 +100,9 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         case workspaceClosed
         /// The workspace's `github-pr` annotation links elsewhere, or nowhere.
         case pullRequestChanged
-        /// New work in the workspace cleared its done mark, and with it the
-        /// user's acceptance of the version that was to merge; or someone
-        /// cleared the mark by hand.
+        /// The workspace's done mark was cleared. Someone cleared it by hand,
+        /// which cancels a waiting merge; or, after a merge, new work in the
+        /// workspace cleared it, which ends the cleanup.
         case doneMarkCleared
     }
 
