@@ -279,7 +279,7 @@ struct CoordinatorChatSteerTests {
         #expect(fixture.delivered.texts.isEmpty)
 
         // A send that empties the draft ends the choice. The message waits.
-        fixture.controller.removeQueuedEntry(id: waiting[0])
+        try fixture.controller.removeQueuedEntry(id: waiting[0])
         fixture.chat.send()
         #expect(fixture.chat.draft.isEmpty)
         #expect(fixture.chat.queueSelected == false)

@@ -861,10 +861,13 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   line, such as "Toastty · 2 updates · 14:05", that opens to the digest. A
   message that `coordinator send` brought shows its sender and body in a
   card. A quick entry message shows your text without Toastty's first line,
-  then your choices and the names of its files. A reply shows a line with the
+  then your choices and its files. A reply shows a line with the
   time and opening of the coordinator's message it answers; a tap shows that
-  message. The files stay on the Mac, so the phone shows their names, not
-  thumbnails. Other sessions' chats show every message as it was typed.
+  message. The files stay on the Mac. When the Mac serves the images
+  (`coordinator_attachment_images`, described below), an attached image shows
+  as a thumbnail, and a tap opens it full screen; any other file shows by its
+  name. With an older Mac, or without read access, the phone shows the names
+  of all the files. Other sessions' chats show every message as it was typed.
 - **Quiet wake turns fold.** A wake turn that the coordinator marked quiet
   on the Mac (see [Quiet turns](tasks.md#quiet-turns)) folds whole under
   Toastty's line for its digest, as in the Mac's chat: no work strip and no
@@ -1037,16 +1040,21 @@ Mac chat's, quick entry's, `coordinator send`'s and a device's
 browsers too, so a Mac with the coordinator advertises `coordinator_queue`
 and sends only `coordinatorQueueRevision` on the coordinator's workspace: the
 first 16 hex digits of the SHA-256 of the live conversation's ID, the held
-set's token and each entry's ID and hold. A device reads the queue with
+set's token and each entry's ID, hold and interrupted mark. A device reads the queue with
 `GET /api/coordinator.queue`, which needs native Bearer authentication and
 read scope, as showing the chat does, and answers `protocolVersion`,
 `revision`, `conversationID`, `heldSetToken` and `entries`: the held
 entries, then the waiting ones, each with `id`, `text` (the Mac chat's
 display text, at most 2,000 characters, `isTextShortened` when cut),
 `sender` for a message that `coordinator send` brought, `quote` and
-`quoteTime` for a reply, `fileNames` and `isHeld`. It never sends a path. The
+`quoteTime` for a reply, `fileNames`, `isHeld`, and `typingWasInterrupted`
+(sent only when true) for the held message that Toastty was typing when it
+quit. It never sends a path. The
 phone reads it when a snapshot names a revision it does not have, as for the
-quiet digests, and after a reconnect.
+quiet digests, and after a reconnect. The phone shows a warning on the
+interrupted message's row, as the Mac chat does above its composer: the
+coordinator may have the message already. An older Mac sends no mark, and
+an older phone ignores it.
 
 A Stop from any app holds both queues: the conversation's queue pauses and
 the coordinator's waiting entries are set aside. Each Stop, and each relaunch
@@ -1054,7 +1062,13 @@ that restores set-aside entries, makes a new held-set token. The answer
 carries it while anything is held in either queue. Two new actions on
 `POST /api/conversation.queue.update` change the coordinator's queue, on its
 live conversation only: `coordinator_remove` names an entry by
-`clientRequestID` and discards its files, and `coordinator_resume` presents
+`clientRequestID` and deletes the attachment folders that the entry owns:
+its own, and those of the copies it carried over from an Edit, never a
+folder that its text names. The Mac saves its queue without the entry
+first; when that fails, the entry and its files stay and the answer is
+`failed`, which the phone shows on the row. An older phone cannot decode
+`failed`, so it treats the request as failed and keeps the row, which the
+Mac still lists. `coordinator_resume` presents
 `heldSetToken` and lets go everything held in both queues, the conversation's
 queue first. A token of an earlier Stop answers `stale` and changes nothing,
 so a late Resume never lets a later Stop's messages go; a second Resume for

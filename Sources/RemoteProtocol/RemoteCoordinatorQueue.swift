@@ -19,8 +19,8 @@ import Foundation
 public struct RemoteCoordinatorQueue: Codable, Equatable, Sendable {
     public var protocolVersion: String
     /// Names this queue: the Mac makes it from `conversationID`,
-    /// `heldSetToken` and each entry's ID and hold. The coordinator's
-    /// workspace carries the same value.
+    /// `heldSetToken` and each entry's ID, hold and interrupted mark. The
+    /// coordinator's workspace carries the same value.
     public var revision: String
     /// The coordinator's live conversation, which the actions name. `nil`
     /// while no agent of the coordinator runs: the messages then wait for
@@ -75,6 +75,10 @@ public struct RemoteCoordinatorQueueEntry: Codable, Equatable, Sendable {
     public var fileNames: [String]
     /// A Stop holds it until Resume.
     public var isHeld: Bool
+    /// Toastty on the Mac quit while it typed this message, so the
+    /// coordinator may have it already. It waits, held, until the user
+    /// sends it again or removes it. An older Mac never sets it.
+    public var typingWasInterrupted: Bool
 
     public init(
         id: String,
@@ -84,7 +88,8 @@ public struct RemoteCoordinatorQueueEntry: Codable, Equatable, Sendable {
         quote: String? = nil,
         quoteTime: String? = nil,
         fileNames: [String] = [],
-        isHeld: Bool = false
+        isHeld: Bool = false,
+        typingWasInterrupted: Bool = false
     ) {
         self.id = id
         self.text = text
@@ -94,10 +99,11 @@ public struct RemoteCoordinatorQueueEntry: Codable, Equatable, Sendable {
         self.quoteTime = quoteTime
         self.fileNames = fileNames
         self.isHeld = isHeld
+        self.typingWasInterrupted = typingWasInterrupted
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, isTextShortened, sender, quote, quoteTime, fileNames, isHeld
+        case id, text, isTextShortened, sender, quote, quoteTime, fileNames, isHeld, typingWasInterrupted
     }
 
     public init(from decoder: any Decoder) throws {
@@ -110,6 +116,7 @@ public struct RemoteCoordinatorQueueEntry: Codable, Equatable, Sendable {
         quoteTime = try container.decodeIfPresent(String.self, forKey: .quoteTime)
         fileNames = try container.decodeIfPresent([String].self, forKey: .fileNames) ?? []
         isHeld = try container.decodeIfPresent(Bool.self, forKey: .isHeld) ?? false
+        typingWasInterrupted = try container.decodeIfPresent(Bool.self, forKey: .typingWasInterrupted) ?? false
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -122,6 +129,7 @@ public struct RemoteCoordinatorQueueEntry: Codable, Equatable, Sendable {
         try container.encodeIfPresent(quoteTime, forKey: .quoteTime)
         if fileNames.isEmpty == false { try container.encode(fileNames, forKey: .fileNames) }
         if isHeld { try container.encode(true, forKey: .isHeld) }
+        if typingWasInterrupted { try container.encode(true, forKey: .typingWasInterrupted) }
     }
 }
 

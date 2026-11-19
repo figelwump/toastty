@@ -98,6 +98,9 @@ final class LiveConversationController {
     /// This phone may let the coordinator's waiting messages go or remove
     /// them: it has send access.
     private var mayChangeCoordinatorQueue = false
+    /// The entries of the coordinator's own queue whose last Remove the
+    /// Mac answered `failed`: their rows say that they still wait.
+    private(set) var coordinatorRemoveFailures: Set<String> = []
     /// The app is active. The chat is on screen while this controller
     /// exists: it closes when another screen covers it.
     private var isSceneActive = true
@@ -274,7 +277,8 @@ final class LiveConversationController {
     /// Asks the Mac to drop one queued message, from whichever of the
     /// coordinator's queues holds it. True only when the Mac confirmed it
     /// was still queued; a message already typed or gone returns false so
-    /// the caller does not act on stale text.
+    /// the caller does not act on stale text. When the Mac could not remove
+    /// a message of the coordinator's own queue, its row stays and says so.
     func removeQueuedMessage(_ clientRequestID: String) async -> Bool {
         let inCoordinatorQueue = coordinatorQueue?.entries.contains { $0.id == clientRequestID } == true
         let request = RemoteConversationQueueUpdateRequest(
@@ -282,8 +286,27 @@ final class LiveConversationController {
             action: inCoordinatorQueue ? .coordinatorRemove : .remove,
             clientRequestID: clientRequestID
         )
-        guard let response = try? await updateQueueAction(request) else { return false }
-        return response.result == .updated
+        let result = try? await updateQueueAction(request)?.result
+        if inCoordinatorQueue {
+            noteCoordinatorRemove(clientRequestID, failed: result == .failed)
+        }
+        return result == .updated
+    }
+
+    private func noteCoordinatorRemove(_ clientRequestID: String, failed: Bool) {
+        var failures = coordinatorRemoveFailures
+        if failed {
+            // Only a row that still shows can say so.
+            guard coordinatorQueue?.entries.contains(where: { $0.id == clientRequestID }) == true else { return }
+            failures.insert(clientRequestID)
+        } else {
+            failures.remove(clientRequestID)
+        }
+        guard failures != coordinatorRemoveFailures else { return }
+        coordinatorRemoveFailures = failures
+        guard isCoordinatorChat else { return }
+        change = .metadataOnly
+        refreshTranscriptPresentation()
     }
 
     /// A message that waits in the Mac's queue, as this phone sent it. Its
@@ -400,6 +423,9 @@ final class LiveConversationController {
         guard coordinatorQueue != queue || mayChangeCoordinatorQueue != mayChange else { return }
         coordinatorQueue = queue
         mayChangeCoordinatorQueue = mayChange
+        // A failed Remove is said on its row while the row shows.
+        let shown = Set(queue?.entries.map(\.id) ?? [])
+        coordinatorRemoveFailures.formIntersection(shown)
         guard isCoordinatorChat else { return }
         change = .metadataOnly
         refreshTranscriptPresentation()
@@ -739,7 +765,11 @@ final class LiveConversationController {
             inputControl: inputControl,
             readsCoordinatorMessages: isCoordinatorChat,
             coordinatorQueue: shownQueue.map {
-                .init(queue: $0, mayChange: mayChangeCoordinatorQueue && inputControl?.canQueue == true)
+                .init(
+                    queue: $0,
+                    mayChange: mayChangeCoordinatorQueue && inputControl?.canQueue == true,
+                    removeFailures: coordinatorRemoveFailures
+                )
             }
         )
     }

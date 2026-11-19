@@ -72,7 +72,11 @@ start:
   and lose none;
 - after a third Stop and a relaunch of the Mac app, the Mac chat's held
   message waits under a new token, the token from before the relaunch is
-  stale, and Resume from the device types it.
+  stale, and Resume from the device types it once. The saved queue lists the
+  folders that the message owns, and before the relaunch the check marks the
+  message as the one Toastty was typing when it quit: the device reads it
+  marked `typingWasInterrupted`, the Mac chat shows its notice, and the mark
+  goes with the Resume.
 
 Evidence goes to remote-coordinator-chat-check.json, the app log, Claude's
 transcripts and, when the build can capture its window, PNG frames under
@@ -571,13 +575,24 @@ def run(check):
         step('Send next on the Mac and Resume on the device typed each message once', phone=results.get('phone'),
              macClick=mac_click, order=[user_index('B-PHONE'), user_index('B-MAC')])
 
-        # C. Held messages across a relaunch of the Mac app.
+        # C. Held messages across a relaunch of the Mac app. The saved queue
+        # then names the held message as the one being typed, as a quit
+        # between "typing starts" and "typed" leaves it.
         busy = fill_queues('C', [('mac', 'C-MAC')])
         phone_stop(busy)
         relaunch_held = held_state(['C-MAC'], 'C-PHONE')
         wait_for('the stopped turn to end', at_prompt, timeout=120)
         coordinator_check.wait_for_layout(runtime_home, '"isCoordinator"', '"resumeRecord"')
         instance.kill()
+        interrupted_id = relaunch_held['entries'][0]['id']
+        queue_file = runtime_home / 'coordinator-queue.json'
+        saved_queue = json.loads(queue_file.read_text())
+        saved_paused = saved_queue.get('paused') or []
+        require([e['id'] for e in saved_paused] == [interrupted_id]
+                and saved_paused[0].get('attachmentFolders') == [interrupted_id],
+                f'Unexpected saved queue: {saved_queue}')
+        saved_queue['typingEntryID'] = interrupted_id
+        queue_file.write_text(json.dumps(saved_queue))
         instance = ChatInstance(check.binary, environment, socket_path, runtime_home, app_log, gateway_port=gateway_port)
         instance.wait_until_ready()
         ui = UI(check.artifacts, pid())
@@ -587,9 +602,12 @@ def run(check):
         wait_for('the gateway', lambda: coordinator_conversation() is not None, timeout=120)
         restored = wait_for('the held message after the relaunch',
                             lambda: (q := read_queue())['entries'] and q.get('heldSetToken') and q, timeout=60)
-        require([e['id'] for e in restored['entries']] == [relaunch_held['entries'][0]['id']]
+        require([e['id'] for e in restored['entries']] == [interrupted_id]
                 and all(e.get('isHeld') for e in restored['entries']), f'Not restored as held: {restored}')
+        require(restored['entries'][0].get('typingWasInterrupted') is True,
+                f'The interrupted message is not marked: {restored}')
         require(restored['heldSetToken'] != relaunch_held['heldSetToken'], 'The relaunch kept the old token')
+        wait_for('the Mac chat\'s notice', lambda: 'Toastty quit while it typed a message' in ui.texts(), timeout=60)
         require(not (coordinator_conversation().get('inputControl') or {}).get('queuedMessages'),
                 'The conversation\'s queue survived the relaunch')
         time.sleep(5)
@@ -599,11 +617,16 @@ def run(check):
         require(queue_update('coordinator_resume', heldSetToken=relaunch_held['heldSetToken']) == 'stale',
                 'The token from before the relaunch resumed')
         require(queue_update('coordinator_resume', heldSetToken=restored['heldSetToken']) == 'updated', 'Resume failed')
+        resumed = read_queue()
+        require(all(not e.get('typingWasInterrupted') for e in resumed['entries']),
+                f'The mark stayed after Resume: {resumed}')
         typed_in_order(['C-MAC'])
         require(typed_once('C-MAC') == 1, 'The held message was typed twice')
+        wait_for('the notice to go', lambda: 'Toastty quit while it typed a message' not in ui.texts(), timeout=60)
         capture('resumed-after-relaunch')
-        step('a held message waited across a relaunch under a new token and went on Resume',
-             before=relaunch_held, after=restored)
+        step('a held message whose typing a quit interrupted waited across a relaunch under a new token, '
+             'marked on the device and in the Mac chat, and went once on Resume',
+             before=relaunch_held, after=restored, saved=saved_queue)
 
     def check_dock_split_keys(task_space):
         """Cmd+] and Cmd+[ move the keyboard between the dock's field and the

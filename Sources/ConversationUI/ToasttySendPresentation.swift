@@ -90,6 +90,12 @@ public struct ToasttyQueuedSendPresentation: Equatable, Sendable {
     /// The title of the row's button that lets the paused queue go, or
     /// `nil` for none (`ResumeOffer`).
     public let resumeTitle: String?
+    /// Says what the user should check before acting on the message, such
+    /// as that the coordinator may have it already.
+    public let warning: String?
+    /// Says that the last action on the message failed and the message
+    /// still waits.
+    public let actionFailure: String?
 
     /// Which rows offer the button that lets a paused queue go.
     public enum ResumeOffer: Equatable, Sendable {
@@ -110,7 +116,9 @@ public struct ToasttyQueuedSendPresentation: Equatable, Sendable {
         canChange: Bool = true,
         waitingCaption: String? = nil,
         canEdit: Bool? = nil,
-        resume: ResumeOffer = .onEachPausedRow
+        resume: ResumeOffer = .onEachPausedRow,
+        warning: String? = nil,
+        actionFailure: String? = nil
     ) {
         self.position = position
         self.attachmentCount = attachmentCount
@@ -119,6 +127,8 @@ public struct ToasttyQueuedSendPresentation: Equatable, Sendable {
         self.canChange = canChange
         self.waitingCaption = waitingCaption
         self.canEdit = canEdit ?? canChange
+        self.warning = warning
+        self.actionFailure = actionFailure
         switch resume {
         case .onEachPausedRow: resumeTitle = isPaused && canChange ? "Send next" : nil
         case .titled(let title): resumeTitle = title

@@ -1998,6 +1998,12 @@ private struct ToasttySendTailItemView: View {
                     .conversationFont(.caption2, monospaced: true)
                     .foregroundStyle(ConversationDesignTokens.mutedText)
             }
+            if let warning = queued.warning {
+                queuedNote(warning, systemImage: "exclamationmark.triangle", key: "warning")
+            }
+            if let failure = queued.actionFailure {
+                queuedNote(failure, systemImage: "exclamationmark.circle", key: "failure")
+            }
             if queued.canChange || queued.canSteer || queued.resumeTitle != nil {
                 queuedActionsLayout {
                     if let resumeTitle = queued.resumeTitle {
@@ -2034,6 +2040,19 @@ private struct ToasttySendTailItemView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(item.text), \(queued.isPaused ? "Paused in queue" : "Queued, sends after this turn")")
         .accessibilityIdentifier("toastty-mobile-send-queued-\(item.clientRequestID)")
+    }
+
+    /// A line above a waiting message's actions that the user should read
+    /// before choosing one.
+    private func queuedNote(_ text: String, systemImage: String, key: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .conversationFont(.caption)
+            .foregroundStyle(ConversationDesignTokens.amberText)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
+            .accessibilityIdentifier("toastty-mobile-queued-\(key)-\(item.clientRequestID)")
     }
 
     private func queuedAction(_ title: String, _ key: String, action: @escaping () -> Void) -> some View {
