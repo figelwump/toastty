@@ -42,12 +42,15 @@ gives the defaults and Toastty's own rules.
 
 ## Name other tasks by title
 
-When you name another task, in a reply, a report, a pull request or a
-message, use its title, not its ID. `task get` and `task list` give each
-task's `markdownLink`, `[title](toastty://task/<id>)`: write that where
-Markdown shows, such as your replies and task messages. GitHub drops that
-link, so in a pull request write the title, and link the task's pull request
-when it has one. Use the ID only in commands.
+Name another task by its `markdownLink`, `[title](toastty://task/<id>)`, from
+`task get` or `task list`, wherever a person or another agent reads it: your
+replies, task messages, a child task's brief, and plan or notes files.
+Toastty's chats on the Mac and the iPhone draw that link as a chip with the
+task's current title and stage; a bare ID stays plain text that the user must
+look up. GitHub drops the link, so in a pull request write the title, and link
+the task's pull request when it has one. Use the ID only inside commands.
+Before you send a reply or a brief, replace each task ID outside a command
+with the task's link.
 
 ## Show suggested UI changes as mockups
 
@@ -292,7 +295,8 @@ toastty task create "<one-line summary>" --start-work \
   does not need to choose them.
 - Put everything the new agent needs in the prompt file: the goal, decisions
   already made, where to start, what done means, and the authorization the user
-  gave, such as publishing a pull request.
+  gave, such as publishing a pull request. In the brief, name tasks by their
+  `markdownLink`, so the new agent names them the same way.
 - Use `--base` with a branch on the remote for work that builds on another
   part's branch.
 - Each call returns a task ID while setup continues. Check one with
