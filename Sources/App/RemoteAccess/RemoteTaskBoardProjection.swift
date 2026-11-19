@@ -102,6 +102,43 @@ enum RemoteTaskBoardProjection {
         )
     }
 
+    /// The most recently active Done and archived tasks, at most `limit`,
+    /// for the chips of links to them: a task the board does not list has
+    /// no chip on a device without them. A task with an open task space is
+    /// here as well as on the board, so its chip stays when its task space
+    /// closes. A task space with no task record is not a task.
+    static func finishedTasks(
+        _ items: [TaskBoardItem], limit: Int = RemoteFinishedTasksPolicy.limit
+    ) -> [RemoteFinishedTask] {
+        let finished = items.filter { item in
+            guard case .task = item.id else { return false }
+            switch item.stage {
+            case .done, .archived: return true
+            default: return false
+            }
+        }
+        // The same tasks keep the same order, so the revision holds.
+        let recent = finished.sorted { lhs, rhs in
+            if lhs.activityAt != rhs.activityAt { return lhs.activityAt > rhs.activityAt }
+            return wireID(lhs.id).uuidString < wireID(rhs.id).uuidString
+        }.prefix(limit)
+        return recent.map { item in
+            // Without the held task space's countdown, so the revision does
+            // not change each hour.
+            let stage = TaskBoardPresentation.stageDescriptionWithoutHold(item)
+            return RemoteFinishedTask(
+                id: wireID(item.id),
+                title: item.title,
+                group: group(item.stage.group),
+                stageTitle: stage.stage,
+                stageReason: stage.why,
+                statusLine: TaskBoardPresentation.stageStatusLine(item),
+                projectTitle: item.projectTitle,
+                pullRequest: pullRequest(item)
+            )
+        }
+    }
+
     /// Each task's parent and children among all the Mac's tasks, Done and
     /// archived ones included, which the board itself leaves out.
     @MainActor

@@ -127,7 +127,7 @@ struct ToasttyConversationScreen: View {
     static let coordinatorTranscriptOptions = ToasttyTranscriptOptions(showsMessageCopyButton: true)
 
     var body: some View {
-        let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard)
+        let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard, finished: controller.finishedTasks)
         // The coordinator's chat mentions tasks, as the Mac's does. A task's
         // session keeps its plain field.
         let mentionCandidates = isCoordinatorRoot
@@ -221,13 +221,15 @@ struct ToasttyConversationScreen: View {
                 // The text is an agent's: only a task chip opens anything. It
                 // opens the task's space as its row does (its one session, or
                 // its screen), or the task's detail when the phone has no
-                // task space to open.
+                // task space to open, as for a Done or archived task.
                 guard let taskID = taskChips.taskID(for: url) else { return .discarded }
-                if let task = controller.snapshot.taskBoard?.task(id: taskID),
-                   let taskSpaceID = controller.snapshot.openableTaskSpaceID(of: task) {
+                let task = controller.snapshot.taskBoard?.task(id: taskID)
+                if let task, let taskSpaceID = controller.snapshot.openableTaskSpaceID(of: task) {
                     openTaskSpace(taskSpaceID)
                 } else {
-                    taskDetail = ToasttyTaskDetailSelection(id: taskID)
+                    taskDetail = ToasttyTaskDetailSelection(
+                        id: taskID, fallback: task ?? controller.finishedTasks.summary(id: taskID)
+                    )
                 }
                 return .handled
             }
@@ -278,7 +280,10 @@ struct ToasttyConversationScreen: View {
             }
         }
         .sheet(item: $taskDetail) { selection in
-            if let task = controller.snapshot.taskBoard?.task(id: selection.id) {
+            // The task as the Mac lists it now: on the board, or among its
+            // finished tasks; else as it was when the sheet opened.
+            if let task = controller.snapshot.taskBoard?.task(id: selection.id)
+                ?? controller.finishedTasks.summary(id: selection.id) ?? selection.fallback {
                 ToasttyTaskDetailSheet(
                     task: task,
                     canOpenTaskSpace: false,

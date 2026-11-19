@@ -221,6 +221,66 @@ final class ToasttyCoordinatorChatPresentationTests: XCTestCase {
         XCTAssertTrue(ToasttyTaskLinkChips(board: nil).chips.isEmpty)
     }
 
+    /// A link to one of the Mac's Done or archived tasks is a chip in the
+    /// stage's color, with the task's title and pull request, and opens the
+    /// task's detail: no task space and no action. A task the board also
+    /// lists, while its task space is open, keeps the board's chip.
+    func testAFinishedTaskLinkIsAChipThatOpensItsDetail() throws {
+        let doneID = UUID(), archivedID = UUID()
+        let mergedPullRequest = RemoteTaskPullRequest(
+            number: 301, url: URL(string: "https://example.com/pull/301")!, state: .merged
+        )
+        let finished = ToasttyFinishedTasks(RemoteFinishedTasks(revision: "finished-1", tasks: [
+            RemoteFinishedTask(
+                id: doneID, title: "Signup feedback", group: .done, stageTitle: "Done", stageReason: "merged",
+                statusLine: "Done", projectTitle: "toastty", pullRequest: mergedPullRequest
+            ),
+            RemoteFinishedTask(
+                id: archivedID, title: "Export spike", group: .archived, stageTitle: "Archived",
+                stageReason: "closed without finishing", statusLine: "Archived"
+            ),
+            RemoteFinishedTask(
+                id: taskID, title: "compact-session-rows (old title)", group: .done, stageTitle: "Done",
+                stageReason: "marked done", statusLine: "Done"
+            ),
+        ]))
+        let listed = RemoteTaskSummary(
+            id: taskID, title: "compact-session-rows", group: .done, mark: .done,
+            statusLine: "Done", stageTitle: "Done", stageReason: "marked done",
+            projectWorkspaceID: UUID(), taskSpaceWorkspaceID: UUID(), activityAt: start
+        )
+        let chips = ToasttyTaskLinkChips(board: MobileTaskBoard(RemoteTaskBoard(tasks: [listed])), finished: finished)
+
+        let done = try XCTUnwrap(chips.chips[doneID])
+        XCTAssertEqual(done.title, ConversationLinkChip.taskTitle("Signup feedback"))
+        XCTAssertEqual(done.detail, "#301")
+        XCTAssertEqual(done.markColor, ToasttyTaskLinkChips.chipColor(ToasttyDesignTokens.green))
+        // The Mac marks an archived task quiet, not done.
+        let archived = try XCTUnwrap(chips.chips[archivedID])
+        XCTAssertNil(archived.detail)
+        XCTAssertEqual(archived.markColor, ToasttyTaskLinkChips.chipColor(ToasttyDesignTokens.mutedText))
+        XCTAssertEqual(chips.taskID(for: CoordinatorTaskLink.url(taskID: archivedID)), archivedID)
+        // The board's task keeps its own chip.
+        XCTAssertEqual(chips.chips[taskID]?.title, ConversationLinkChip.taskTitle("compact-session-rows"))
+
+        // The detail shows the task's stage, why and pull request, with no
+        // task space to open and no action.
+        let detail = try XCTUnwrap(finished.summary(id: doneID))
+        XCTAssertEqual(detail.title, "Signup feedback")
+        XCTAssertEqual(detail.group, .done)
+        XCTAssertEqual(detail.stageTitle, "Done")
+        XCTAssertEqual(detail.stageReason, "merged")
+        XCTAssertEqual(detail.projectTitle, "toastty")
+        XCTAssertEqual(detail.pullRequest, mergedPullRequest)
+        XCTAssertNil(detail.taskSpaceWorkspaceID)
+        XCTAssertTrue(detail.actions.isEmpty)
+        XCTAssertNil(detail.mergeControl)
+        XCTAssertEqual(finished.summary(id: archivedID)?.group, .archived)
+        XCTAssertNil(finished.summary(id: UUID()))
+        // Without the Mac's answer there is no such chip.
+        XCTAssertNil(ToasttyTaskLinkChips(board: nil, finished: ToasttyFinishedTasks()).chips[doneID])
+    }
+
     // MARK: - Helpers
 
     private func coordinatorRows(

@@ -165,6 +165,10 @@ final class HomeScreenController {
     private(set) var latestTransportFailure: NativeTransportFailure?
     private(set) var selectedConversationID: UUID?
     private(set) var removedSelectionMessage: String?
+    /// The Mac's recent Done and archived tasks, for the chips of links to
+    /// them in a chat. Kept apart from the snapshot's task board, so no list
+    /// or count shows them.
+    var finishedTasks: ToasttyFinishedTasks
     /// A task whose detail Home should show, as a tapped task alert asks.
     /// Home clears it once the detail is open.
     var requestedTaskDetailID: UUID?
@@ -245,6 +249,7 @@ final class HomeScreenController {
         hostSupportsTasks = runtimeMode != .fixture || Self.fixtureSupportsTasks
         hostSupportsTaskActions = runtimeMode == .fixture
         hostSupportsProjectRelease = runtimeMode == .fixture
+        finishedTasks = runtimeMode == .fixture ? Self.fixtureFinishedTasks : ToasttyFinishedTasks()
         self.connectionState = connectionState
         self.freshness = freshness ?? Self.freshness(for: connectionState)
         self.latestTransportFailure = latestTransportFailure
@@ -795,6 +800,17 @@ final class HomeScreenController {
 
     func setHostSupportsLocalFilePreview(_ isSupported: Bool) {
         hostSupportsLocalFilePreview = isSupported
+    }
+
+    /// The fixture Mac's finished tasks; `none` plays an older Mac, which
+    /// shares none.
+    private static var fixtureFinishedTasks: ToasttyFinishedTasks {
+#if DEBUG
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_FINISHED_TASKS"] == "none"
+            ? ToasttyFinishedTasks() : ToasttyFinishedTasks(ToasttyMobileFixture.finishedTasks)
+#else
+        ToasttyFinishedTasks()
+#endif
     }
 
     private static var fixtureSupportsLocalFilePreview: Bool {

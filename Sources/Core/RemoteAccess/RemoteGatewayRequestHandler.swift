@@ -423,6 +423,12 @@ public final class RemoteGatewayRequestHandler {
     /// thread, as the chat read handler is.
     public var coordinatorQueueHandler: (() -> RemoteCoordinatorQueue)?
 
+    /// The Mac's recent Done and archived tasks now, for the chips of links
+    /// to them. The task board names their revision, so no capability
+    /// advertises it. Invoked on the main thread, as the chat read handler
+    /// is.
+    public var finishedTasksHandler: (() -> RemoteFinishedTasks)?
+
     /// The events of the coordinator's conversation, as this Mac has them,
     /// when `conversationID` names it, and `nil` for any other
     /// conversation. A device's request for an attached image is checked
@@ -995,6 +1001,10 @@ public final class RemoteGatewayRequestHandler {
             // Without a coordinator, no digest is quiet.
             let digests = coordinatorQuietDigestsHandler?() ?? RemoteCoordinatorQuietDigests(keys: [])
             return .respond(.json(body: (try? encoder.encode(digests)) ?? Data()))
+        case .finishedTasks:
+            // Without the task system, no task is finished.
+            let finished = finishedTasksHandler?() ?? RemoteFinishedTasks(tasks: [])
+            return .respond(.json(body: (try? encoder.encode(finished)) ?? Data()))
         case .coordinatorQueue:
             guard let coordinatorQueueHandler else {
                 return .respond(errorResponse(

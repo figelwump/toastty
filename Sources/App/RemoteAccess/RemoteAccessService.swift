@@ -140,6 +140,18 @@ final class RemoteAccessCoordinatorQueueBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges the gateway's read of the finished tasks into the main-actor-owned
+/// task board.
+final class RemoteAccessFinishedTasksBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func finishedTasks() -> RemoteFinishedTasks {
+        MainActor.assumeIsolated {
+            service?.currentFinishedTasks() ?? RemoteFinishedTasks(tasks: [])
+        }
+    }
+}
+
 /// Bridges the gateway's authenticated done request into the main-actor-owned
 /// workspace state.
 final class RemoteAccessWorkspaceDoneBridge: @unchecked Sendable {
@@ -627,6 +639,10 @@ final class RemoteAccessService: ObservableObject {
     private var coordinatorQuietDigestKeys: (() -> [String])?
     private var coordinatorQuietDigestsObserver: AnyCancellable?
     private let coordinatorQueueBridge = RemoteAccessCoordinatorQueueBridge()
+    private let finishedTasksBridge = RemoteAccessFinishedTasksBridge()
+    /// The finished tasks that the board's revision last named, so a board
+    /// built for each change hashes them only when they change.
+    private var lastFinishedTasks: RemoteFinishedTasks?
     /// The coordinator whose own queue paired devices read. `nil` on a Mac
     /// without the coordinator, which does not advertise the queue.
     private weak var coordinatorQueueController: CoordinatorController?
@@ -897,6 +913,7 @@ final class RemoteAccessService: ObservableObject {
         coordinatorChatReadBridge.service = self
         coordinatorQuietDigestsBridge.service = self
         coordinatorQueueBridge.service = self
+        finishedTasksBridge.service = self
         coordinatorConversationEventsBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
@@ -945,6 +962,11 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .tasksUnavailable, message: nil)
             }
             return await runner.perform(request, device: device)
+        }
+        // The board names the finished tasks' revision; a device reads them
+        // here for the chips of links to them.
+        handler.finishedTasksHandler = { [finishedTasksBridge] in
+            finishedTasksBridge.finishedTasks()
         }
         handler.taskArchiveCheckHandler = { [weak self] request, _ in
             guard let self, self.isEnabled, let runner = self.taskActionRunner else {
@@ -1838,7 +1860,26 @@ final class RemoteAccessService: ObservableObject {
 
     private func makeTaskBoard() -> RemoteTaskBoard? {
         guard let taskBoard, taskBoard.isEnabled else { return nil }
-        return RemoteTaskBoardProjection.board(items: taskBoard.items(), context: taskProjectionContext(taskBoard))
+        let items = taskBoard.items()
+        var board = RemoteTaskBoardProjection.board(items: items, context: taskProjectionContext(taskBoard))
+        board.finishedTasksRevision = finishedTasks(items: items).revision
+        return board
+    }
+
+    /// The recent Done and archived tasks that a device reads for the chips
+    /// of links to them, as the board's revision names them. Without the
+    /// task system there are none.
+    func currentFinishedTasks() -> RemoteFinishedTasks {
+        guard let taskBoard, taskBoard.isEnabled else { return RemoteFinishedTasks(tasks: []) }
+        return finishedTasks(items: taskBoard.items())
+    }
+
+    private func finishedTasks(items: [TaskBoardItem]) -> RemoteFinishedTasks {
+        let tasks = RemoteTaskBoardProjection.finishedTasks(items)
+        if let lastFinishedTasks, lastFinishedTasks.tasks == tasks { return lastFinishedTasks }
+        let finished = RemoteFinishedTasks(tasks: tasks)
+        lastFinishedTasks = finished
+        return finished
     }
 
     private func taskProjectionContext(_ taskBoard: TaskBoardStore) -> RemoteTaskBoardProjection.Context {

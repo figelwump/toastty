@@ -131,6 +131,7 @@ public protocol GatewayClientProtocol: Sendable {
     ) async throws -> RemoteCoordinatorChatReadResponse
     func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests
     func coordinatorQueue() async throws -> RemoteCoordinatorQueue
+    func finishedTasks() async throws -> RemoteFinishedTasks
     func coordinatorAttachmentImage(
         _ request: RemoteCoordinatorAttachmentImageRequest
     ) async throws -> RemoteCoordinatorAttachmentImageResponse
@@ -254,6 +255,10 @@ public extension GatewayClientProtocol {
     }
 
     func coordinatorQueue() async throws -> RemoteCoordinatorQueue {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func finishedTasks() async throws -> RemoteFinishedTasks {
         throw GatewayFailure.invalidResponse
     }
 
@@ -724,6 +729,16 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
     public func coordinatorQueue() async throws -> RemoteCoordinatorQueue {
         let response = try await perform(method: "GET", path: RemoteCoordinatorQueuePolicy.path)
         return try decodeVersioned(RemoteCoordinatorQueue.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    /// The Mac's recent Done and archived tasks, for the chips of links to
+    /// them. The caller reads them only when the task board names a
+    /// revision.
+    public func finishedTasks() async throws -> RemoteFinishedTasks {
+        let response = try await perform(method: "GET", path: RemoteFinishedTasksPolicy.path)
+        return try decodeVersioned(RemoteFinishedTasks.self, from: response.body) {
             $0.protocolVersion
         }
     }

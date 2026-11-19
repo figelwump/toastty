@@ -658,6 +658,8 @@ struct ToasttyTaskDetailSheet: View {
     }
 
     static func stageColor(_ task: RemoteTaskSummary) -> Color {
+        // The Mac marks an archived task quiet, not done.
+        if task.group == .archived { return ToasttyDesignTokens.mutedText }
         switch task.mark {
         case .question?: return ToasttyDesignTokens.taskQuestion
         case .review?: return ToasttyDesignTokens.taskReview
