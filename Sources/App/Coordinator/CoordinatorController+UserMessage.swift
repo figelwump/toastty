@@ -17,6 +17,7 @@ struct CoordinatorUserMessage: Equatable {
     var fileNames: [String]?
     /// Copies that a waiting message made, which the user took back into
     /// the chat's field with Edit. They stay where they are and come first.
+    /// The new message owns their folders, as the edited message did.
     var stagedFiles: [URL] = []
     /// The choices the user made in the quick entry panel, and the project
     /// that was selected in Toastty when the panel opened. `nil` for a
@@ -53,6 +54,7 @@ extension CoordinatorController {
         }
         let attachments = attachments
         try attachments.checkStaged(message.stagedFiles)
+        let carriedFolders = message.stagedFiles.compactMap(attachments.folderName(of:))
         let files = message.files
         let names = message.fileNames
         let id = message.id
@@ -74,11 +76,16 @@ extension CoordinatorController {
             } else {
                 RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: paths)
             }
-            return try sendUserText(delivered, steering: steering && message.quickEntry == nil, id: id.uuidString)
+            return try sendUserText(
+                delivered,
+                steering: steering && message.quickEntry == nil,
+                id: id.uuidString,
+                attachmentFolders: carriedFolders
+            )
         } catch {
             // Not taken: the copies have no message. The staged files stay
             // with the folder of the message they came from.
-            attachments.discard(messageID: id.uuidString)
+            attachments.discard(folders: [id.uuidString])
             throw error
         }
     }

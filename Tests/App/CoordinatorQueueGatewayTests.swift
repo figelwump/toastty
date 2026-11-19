@@ -386,7 +386,8 @@ struct CoordinatorQueueGatewayTests {
     // MARK: - Remove
 
     /// Remove takes a held or waiting entry out with its files, as the Mac
-    /// chat's Remove does. A message that left already is unchanged.
+    /// chat's Remove does. A message whose text names another message's
+    /// files leaves them. A message that left already is unchanged.
     @MainActor
     @Test func removeTakesAnEntryWithItsFilesAndAMessageThatLeftIsUnchanged() async throws {
         let fixture = try CoordinatorChatFixture(pairsNativeDevice: true)
@@ -404,12 +405,19 @@ struct CoordinatorQueueGatewayTests {
         #expect(try fixture.controller.send("Stays", byUser: true, id: "stays").isQueued)
         let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(withFile.id)")
         #expect(FileManager.default.fileExists(atPath: folder.path))
+        // `coordinator send` brings a list of files that names the copy.
+        let copy = folder.appendingPathComponent("terminal-log.txt").path(percentEncoded: false)
+        #expect(try fixture.controller.send(CoordinatorMessageHeader.message(
+            from: .unknown, text: RemoteMessageAttachmentStore.Staged.deliveryText(text: "Look", paths: [copy])
+        ), id: "names-the-copy").isQueued)
 
         func remove(_ id: String) throws -> RemoteConversationQueueUpdateResult? {
             try conversations.gatewayQueueUpdate(RemoteConversationQueueUpdateRequest(
                 conversationID: conversationID, action: .coordinatorRemove, clientRequestID: id
             ), credential: conversations.nativeCredential).result
         }
+        #expect(try remove("names-the-copy") == .updated)
+        #expect(FileManager.default.fileExists(atPath: copy))
         #expect(try remove(withFile.id) == .updated)
         #expect(FileManager.default.fileExists(atPath: folder.path) == false)
         #expect(fixture.controller.queuedEntries.map(\.id) == ["stays"])
@@ -426,6 +434,124 @@ struct CoordinatorQueueGatewayTests {
         try fixture.endTurn(1)
         try await fixture.waitUntil("the message") { fixture.delivered.texts == ["Stays"] }
         #expect(try remove("stays") == .unchanged)
+    }
+
+    /// When the Mac cannot save its queue without the message, a device's
+    /// Remove answers `failed`: the message waits where it was, with its
+    /// files, and the revision does not change. The Mac chat's Remove says
+    /// so too. Once the file can be written, the device's Remove works.
+    @MainActor
+    @Test func aRemoveThatTheMacCannotSaveFailsAndKeepsTheMessage() async throws {
+        let fixture = try CoordinatorChatFixture(pairsNativeDevice: true, savesQueue: true)
+        defer { fixture.tearDown() }
+        let conversations = fixture.conversations
+        conversations.enableGateway()
+        conversations.service.installCoordinatorQueue(from: fixture.controller)
+        fixture.chat.show(panelID: fixture.panelID)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        let conversationID = try #require(fixture.chat.summary?.conversationID)
+        fixture.chat.attachmentDraft.attachText("error: socket closed", named: "terminal log.txt")
+        fixture.chat.send(queueing: true)
+        let withFile = try await fixture.waitFor("the message with a file") { fixture.controller.queuedEntries.first }
+        #expect(try fixture.controller.send("Stays", byUser: true, id: "stays").isQueued)
+        let folder = fixture.coordinatorDirectory.appendingPathComponent("attachments/\(withFile.id)")
+        let file = try #require(fixture.queueFileURL)
+        let saved = try #require(CoordinatorQueueSnapshot.load(from: file))
+        let before = try #require(try conversations.gatewayCoordinatorQueue(credential: conversations.nativeCredential).queue)
+
+        let savedFolder = file.deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: savedFolder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: savedFolder.path) }
+        let remove = RemoteConversationQueueUpdateRequest(
+            conversationID: conversationID, action: .coordinatorRemove, clientRequestID: withFile.id
+        )
+        #expect(try conversations.gatewayQueueUpdate(remove, credential: conversations.nativeCredential).result == .failed)
+        #expect(fixture.controller.queuedEntries.map(\.id) == [withFile.id, "stays"])
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+        #expect(CoordinatorQueueSnapshot.load(from: file) == saved)
+        let after = try #require(try conversations.gatewayCoordinatorQueue(credential: conversations.nativeCredential).queue)
+        #expect(after == before)
+
+        // The Mac chat's Remove fails the same way and says so.
+        fixture.chat.perform(.remove(clientRequestID: withFile.id))
+        guard case .failure? = fixture.chat.notice else {
+            Issue.record("The Mac chat did not say that Remove failed")
+            return
+        }
+        #expect(fixture.controller.queuedEntries.map(\.id) == [withFile.id, "stays"])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: savedFolder.path)
+        #expect(try conversations.gatewayQueueUpdate(remove, credential: conversations.nativeCredential).result == .updated)
+        #expect(fixture.controller.queuedEntries.map(\.id) == ["stays"])
+        #expect(FileManager.default.fileExists(atPath: folder.path) == false)
+        #expect(CoordinatorQueueSnapshot.load(from: file)?.queued.map(\.id) == ["stays"])
+    }
+
+    // MARK: - A message whose typing a quit interrupted
+
+    /// After a relaunch, the message that Toastty was typing when it quit
+    /// waits, held and marked, and the device reads the mark on it alone.
+    /// The mark is part of the revision. Resume sends it again: it is typed
+    /// once, and the mark goes.
+    @MainActor
+    @Test func anInterruptedMessageIsMarkedForTheDeviceAndInTheRevision() async throws {
+        let fixture = try CoordinatorChatFixture(pairsNativeDevice: true, savesQueue: true)
+        defer { fixture.tearDown() }
+        let conversations = fixture.conversations
+        let file = try #require(fixture.queueFileURL)
+        let workspaceID = try #require(fixture.store.state.coordinatorWorkspaceID)
+        // The file as a quit leaves it between "typing starts" and "typed".
+        try CoordinatorQueueSnapshot(
+            workspaceID: workspaceID,
+            queued: [.init(id: "interrupted", text: "Create the export task"), .init(id: "later", text: "And a second one")],
+            paused: [.init(id: "held", text: "Held before the quit")],
+            typingEntryID: "interrupted"
+        ).save(to: file)
+        try fixture.startTurn(1, userText: "Check the tasks")
+        fixture.relaunch()
+        conversations.enableGateway()
+        conversations.service.installCoordinatorQueue(from: fixture.controller)
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+
+        let read = try conversations.gatewayCoordinatorQueue(credential: conversations.nativeCredential)
+        let queue = try #require(read.queue)
+        #expect(queue.entries.map(\.id) == ["interrupted", "held", "later"])
+        #expect(queue.entries.map(\.isHeld) == [true, true, false])
+        #expect(queue.entries.map(\.typingWasInterrupted) == [true, false, false])
+        let body = String(decoding: read.body, as: UTF8.self)
+        #expect(body.components(separatedBy: "typingWasInterrupted").count == 2)
+        #expect(conversations.service.facadeSessionList(at: .now).workspaces.first(where: \.isCoordinator)?
+            .coordinatorQueueRevision == queue.revision)
+        try await fixture.waitUntil("the Mac chat's notice") { fixture.chat.notice == .typingInterrupted }
+
+        // The revision reads the mark: the same queue without it is another.
+        let held = fixture.controller.pausedEntries
+        let unmarked = held.map {
+            CoordinatorController.QueuedEntry(id: $0.id, text: $0.text, byUser: $0.byUser, attachmentFolders: $0.attachmentFolders)
+        }
+        let revision = { (held: [CoordinatorController.QueuedEntry]) in
+            RemoteCoordinatorQueueProjection.revision(
+                held: held, waiting: fixture.controller.queuedEntries,
+                conversationID: queue.conversationID, heldSetToken: queue.heldSetToken
+            )
+        }
+        #expect(revision(held) == queue.revision)
+        #expect(revision(unmarked) != queue.revision)
+
+        // Resume: the user sends it again.
+        let resume = try conversations.gatewayQueueUpdate(RemoteConversationQueueUpdateRequest(
+            conversationID: try #require(queue.conversationID), action: .coordinatorResume,
+            heldSetToken: try #require(queue.heldSetToken)
+        ), credential: conversations.nativeCredential)
+        #expect(resume.result == .updated)
+        let resumed = try #require(try conversations.gatewayCoordinatorQueue(credential: conversations.nativeCredential).queue)
+        #expect(resumed.entries.allSatisfy { $0.typingWasInterrupted == false && $0.isHeld == false })
+        #expect(resumed.revision != queue.revision)
+        try fixture.endTurn(1)
+        try await fixture.waitUntil("the interrupted message") { fixture.delivered.texts.count == 1 }
+        #expect(fixture.delivered.texts == ["Create the export task"])
     }
 
     // MARK: - Authorization and compatibility
@@ -514,6 +640,34 @@ struct CoordinatorQueueGatewayTests {
         ))
         #expect(try ConversationEventCoding.makeDecoder().decode(OlderRequest.self, from: generic).action == .resume)
         #expect(String(decoding: generic, as: UTF8.self).contains("heldSetToken") == false)
+    }
+
+    /// An older phone reads an entry without the mark, and a Mac that sets
+    /// no mark sends the entry as before. An older phone cannot decode a
+    /// `failed` Remove: it treats the request as failed and keeps the row,
+    /// which the Mac's queue still lists.
+    @Test func olderDevicesAndMacsReadTheNewValuesSafely() throws {
+        let decoder = ConversationEventCoding.makeDecoder()
+        let encoder = ConversationEventCoding.makeEncoder()
+        let fromAnOlderMac = Data(#"{"id":"a","text":"Held","isHeld":true}"#.utf8)
+        let entry = try decoder.decode(RemoteCoordinatorQueueEntry.self, from: fromAnOlderMac)
+        #expect(entry.isHeld)
+        #expect(entry.typingWasInterrupted == false)
+        #expect(String(decoding: try encoder.encode(entry), as: UTF8.self).contains("typingWasInterrupted") == false)
+        var marked = entry
+        marked.typingWasInterrupted = true
+        let markedBody = try encoder.encode(marked)
+        #expect(try decoder.decode(RemoteCoordinatorQueueEntry.self, from: markedBody) == marked)
+        struct OlderEntry: Decodable { var id: String; var isHeld: Bool }
+        #expect(try decoder.decode(OlderEntry.self, from: markedBody).id == "a")
+
+        let failed = try encoder.encode(RemoteConversationQueueUpdateResponse(result: .failed))
+        #expect(try decoder.decode(RemoteConversationQueueUpdateResponse.self, from: failed).result == .failed)
+        struct OlderResponse: Decodable {
+            enum Result: String, Decodable { case updated, unchanged, stale }
+            var result: Result
+        }
+        #expect(throws: DecodingError.self) { try decoder.decode(OlderResponse.self, from: failed) }
     }
 
     private static func queued(_ item: ToasttySendPresentationItem) -> ToasttyQueuedSendPresentation? {

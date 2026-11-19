@@ -685,6 +685,37 @@ extension ToasttyComposerPresentationTests {
         XCTAssertTrue(alone.canEdit)
     }
 
+    /// A row of the coordinator's own queue warns when Toastty on the Mac
+    /// quit while it typed the message, and says when the Mac could not
+    /// remove it. An entry from a Mac that sets no mark has neither.
+    func testACoordinatorRowWarnsAboutInterruptedTypingAndAFailedRemove() {
+        let queue = RemoteCoordinatorQueue(
+            revision: "r", conversationID: RemoteConversationID(rawValue: UUID()), heldSetToken: "relaunch",
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "interrupted", text: "Create the task", isHeld: true, typingWasInterrupted: true),
+                RemoteCoordinatorQueueEntry(id: "held", text: "Held", isHeld: true),
+                RemoteCoordinatorQueueEntry(id: "kept", text: "Later"),
+            ]
+        )
+
+        let items = ToasttySendPresentationAdapter.makeItems(
+            from: SendReconciliationState(), readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: true, removeFailures: ["kept", "gone"])
+        )
+
+        let queued = items.compactMap { item -> ToasttyQueuedSendPresentation? in
+            guard case .queued(let queued) = item.content else { return nil }
+            return queued
+        }
+        XCTAssertEqual(items.map(\.id), ["interrupted", "held", "kept"])
+        XCTAssertEqual(queued.map(\.warning), [ToasttySendPresentationAdapter.typingInterruptedWarning, nil, nil])
+        XCTAssertEqual(queued.map(\.actionFailure), [nil, nil, ToasttySendPresentationAdapter.removeFailedNotice])
+        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarning.contains("choose Resume or Remove"))
+        // The interrupted row keeps the one Resume and its Remove.
+        XCTAssertEqual(queued.map(\.resumeTitle), ["Resume all 2", nil, nil])
+        XCTAssertTrue(queued.allSatisfy(\.canChange))
+    }
+
     func testQueueRejectionReceiptsExplainTheQueue() {
         for reason in [RemoteMessageRejectionReason.queueFull, .notWorking, .turnMismatch, .steerUnavailable] {
             let receipt = ToasttySendReceiptPresentation(kind: .rejected(reason))

@@ -605,8 +605,13 @@ enum ToasttyConversationFixture {
     /// The fixture coordinator's own queue: a quick entry message with
     /// files, a message from a task, and a reply from the Mac's chat, as
     /// the Mac shares them. `hasLongMessage` makes the quick entry message
-    /// as long as the Mac sends.
-    static func coordinatorOwnQueue(hasLongMessage: Bool) -> [RemoteCoordinatorQueueEntry] {
+    /// as long as the Mac sends. With `hasInterruptedMessage`, Toastty on
+    /// the Mac quit while it typed the quick entry message: after the
+    /// relaunch it waits, held and marked, and the others wait behind it.
+    static func coordinatorOwnQueue(
+        hasLongMessage: Bool,
+        hasInterruptedMessage: Bool = false
+    ) -> [RemoteCoordinatorQueueEntry] {
         let long = String(repeating: "Look at the flaky upload test and the retry budget. ", count: 60)
         let quickEntry: String = hasLongMessage
             ? String(long.prefix(RemoteCoordinatorQueuePolicy.maximumTextLength - 1)) + "…"
@@ -616,7 +621,9 @@ enum ToasttyConversationFixture {
                 id: "fixture-own-1",
                 text: quickEntry,
                 isTextShortened: hasLongMessage,
-                fileNames: ["notes.txt", "sketch.png"]
+                fileNames: ["notes.txt", "sketch.png"],
+                isHeld: hasInterruptedMessage,
+                typingWasInterrupted: hasInterruptedMessage
             ),
             RemoteCoordinatorQueueEntry(
                 id: "fixture-own-2",

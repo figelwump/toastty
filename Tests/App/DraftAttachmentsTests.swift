@@ -255,36 +255,40 @@ struct DraftAttachmentsTests {
     @Test func editTakesAWaitingMessagesFilesBackWhenEachIsStillACopy() throws {
         defer { cleanUp() }
         let coordinator = CoordinatorAttachments(coordinatorDirectoryURL: root.appendingPathComponent("coordinator"))
-        let copies = try coordinator.stage([try file("shot.png"), try file("log.txt")], messageID: UUID())
+        let messageID = UUID()
+        let copies = try coordinator.stage([try file("shot.png"), try file("log.txt")], messageID: messageID)
         let paths = copies.map { $0.path(percentEncoded: false) }
+        let owned = [messageID.uuidString]
 
         // From the chat: the text and the files.
         let chat = RemoteMessageAttachmentStore.Staged.deliveryText(text: "Look at these", paths: paths)
-        let parts = try #require(CoordinatorChatModel.editParts(of: chat, attachments: coordinator, room: 10))
+        let parts = try #require(CoordinatorChatModel.editParts(of: chat, attachments: coordinator, owned: owned, room: 10))
         #expect(parts.text == "Look at these")
         #expect(parts.files.map { $0.path(percentEncoded: false) } == paths)
 
         // From quick entry: the text keeps Toastty's first line.
         let quickEntry = CoordinatorMessageHeader.quickEntryMessage(.init(), text: "Look", attachmentPaths: paths)
-        #expect(CoordinatorChatModel.editParts(of: quickEntry, attachments: coordinator, room: 10)?.text
+        #expect(CoordinatorChatModel.editParts(of: quickEntry, attachments: coordinator, owned: owned, room: 10)?.text
             == "[Toastty] Quick entry from the user\nLook")
 
         // The text keeps its paths when a file cannot come back: there is
         // no room for all of them, one is not a copy in the coordinator's
-        // folder, or one is gone.
-        #expect(CoordinatorChatModel.editParts(of: chat, attachments: coordinator, room: 1) == nil)
+        // folder, one is gone, or the message does not own its folder, as
+        // a list pasted from another message does not.
+        #expect(CoordinatorChatModel.editParts(of: chat, attachments: coordinator, owned: owned, room: 1) == nil)
+        #expect(CoordinatorChatModel.editParts(of: chat, attachments: coordinator, owned: [UUID().uuidString], room: 10) == nil)
         let elsewhere = RemoteMessageAttachmentStore.Staged.deliveryText(
             text: "Look", paths: [paths[0], try file("outside.txt").path(percentEncoded: false)]
         )
-        #expect(CoordinatorChatModel.editParts(of: elsewhere, attachments: coordinator, room: 10) == nil)
+        #expect(CoordinatorChatModel.editParts(of: elsewhere, attachments: coordinator, owned: owned, room: 10) == nil)
         let dotted = RemoteMessageAttachmentStore.Staged.deliveryText(
             text: "Look", paths: [copies[0].deletingLastPathComponent().path + "/../../../sources/outside.txt"]
         )
-        #expect(CoordinatorChatModel.editParts(of: dotted, attachments: coordinator, room: 10) == nil)
+        #expect(CoordinatorChatModel.editParts(of: dotted, attachments: coordinator, owned: owned, room: 10) == nil)
         try FileManager.default.removeItem(at: copies[1])
-        #expect(CoordinatorChatModel.editParts(of: chat, attachments: coordinator, room: 10) == nil)
+        #expect(CoordinatorChatModel.editParts(of: chat, attachments: coordinator, owned: owned, room: 10) == nil)
         // A message without files has nothing to take back.
-        #expect(CoordinatorChatModel.editParts(of: "Just text", attachments: coordinator, room: 10) == nil)
+        #expect(CoordinatorChatModel.editParts(of: "Just text", attachments: coordinator, owned: owned, room: 10) == nil)
     }
 }
 

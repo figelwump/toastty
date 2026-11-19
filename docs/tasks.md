@@ -1039,7 +1039,11 @@ you when it is not sure, and creates the task.
   with the paths. The coordinator passes them to the task it creates
   (`task create --file`), which copies them again. Toastty removes a
   message's copies when you remove the waiting message, and otherwise 7 days
-  after it made them. A copy's name keeps only letters, digits, `.`, `_`
+  after it made them, once no waiting message owns or names them. Remove
+  deletes only the folders that the message owns: its own, and the folder
+  of each file that it kept from an Edit. A list of files that you paste or
+  that `coordinator send` brings never makes Remove delete another
+  message's copies. A copy's name keeps only letters, digits, `.`, `_`
   and `-`.
 - **Nothing is lost.** Toastty saves your message in
   `~/.toastty/coordinator-queue.json` until the coordinator's prompt takes
@@ -1053,12 +1057,17 @@ you when it is not sure, and creates the task.
   **Queued** with **Edit** and **Remove**. Remove also deletes the copies of
   its files. Edit puts the text into the chat's field as Toastty would type
   it, with its first line, and its files go back above the field as
-  attachments.
+  attachments; a list of another message's files stays text. When Toastty
+  cannot write `coordinator-queue.json` without the message, Remove and
+  Edit leave it where it waits, with its files, and the chat says so: a
+  relaunch would otherwise bring it back.
 - **Typed once.** Toastty saves that it starts to type a message before the
   text goes to the terminal. If Toastty quits in that moment, the message is
   not typed again after the relaunch: it shows as **Paused**, and the chat
   asks you to check the conversation and to choose **Send next** or
-  **Remove**. The same holds for a message that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
+  **Remove**. A paired iPhone shows the same warning on the message's row,
+  where you choose **Resume** or **Remove**. The same holds for a message
+  that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
   not type a message that the file lists as waiting, because a relaunch
   could then type it a second time: the message waits, the chat says that
   Toastty could not save it, and Toastty tries again every 5 seconds.

@@ -741,7 +741,16 @@ enum ToasttySendPresentationAdapter {
     struct CoordinatorQueue: Equatable {
         var queue: RemoteCoordinatorQueue
         var mayChange: Bool
+        /// The entries whose last Remove the Mac answered `failed`.
+        var removeFailures: Set<String> = []
     }
+
+    /// On a row whose typing a quit of Toastty on the Mac interrupted, as
+    /// the Mac chat says it above its composer.
+    static let typingInterruptedWarning = "Toastty on the Mac quit while it typed this message, so the coordinator "
+        + "may have it already. Check the conversation, then choose Resume or Remove."
+    /// On a row that the Mac could not remove.
+    static let removeFailedNotice = "The Mac could not remove this message. It still waits."
 
     /// Reconciliation records first, then the Mac's queue in delivery order.
     /// A queued record the host still lists renders from the host's list,
@@ -777,7 +786,9 @@ enum ToasttySendPresentationAdapter {
                     canSteer: false,
                     canChange: coordinatorQueue.mayChange,
                     canEdit: false,
-                    resume: entry.id == resumeRowID ? .titled(heldTitle) : .none
+                    resume: entry.id == resumeRowID ? .titled(heldTitle) : .none,
+                    warning: entry.typingWasInterrupted ? typingInterruptedWarning : nil,
+                    actionFailure: coordinatorQueue.removeFailures.contains(entry.id) ? removeFailedNotice : nil
                 )),
                 quote: entry.quote.map { ToasttyMessageQuote(text: $0, timeText: entry.quoteTime) }
             )

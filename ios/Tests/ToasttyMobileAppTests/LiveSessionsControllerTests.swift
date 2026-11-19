@@ -988,6 +988,98 @@ final class LiveSessionsControllerTests: XCTestCase {
         subject.stopObserving()
     }
 
+    /// A row of the coordinator's own queue warns while the Mac marks its
+    /// typing as interrupted. When the Mac answers a Remove with `failed`,
+    /// the row stays and says so, until a later Remove works or the row
+    /// leaves the queue. A Remove whose answer this phone cannot read, as
+    /// an older phone cannot read `failed`, keeps the row and says nothing.
+    func testACoordinatorRowWarnsAndKeepsAFailedRemove() async throws {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .live(gatewayURL: URL(string: "https://toastty.test.ts.net")!),
+            snapshot: MobileHomeSnapshot(hostName: "toastty.test.ts.net", workspaces: []),
+            connectionState: .offline
+        )
+        let subject = LiveSessionsController(runtime: runtime, hostName: "toastty.test.ts.net", homeController: home)
+        await subject.updateDeviceScopes([.read, .send])
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            connectionGeneration: 7, phase: .live,
+            capabilities: [.tasks, .conversationInputControl, .coordinatorQueue]
+        ))
+        var list = snapshot(titles: ["Alpha"])
+        let alphaID = list.conversations[0].conversationID
+        let restored = RemoteCoordinatorQueue(
+            revision: "revision-1", conversationID: alphaID, heldSetToken: "relaunch",
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "mac-1", text: "Create the task", isHeld: true, typingWasInterrupted: true),
+                RemoteCoordinatorQueueEntry(id: "task-1", text: "Ready for review", sender: "task Fix the dot"),
+            ]
+        )
+        var withoutTask = restored
+        withoutTask.revision = "revision-2"
+        withoutTask.entries.removeLast()
+        await runtime.scriptCoordinatorQueue([restored, withoutTask])
+        func announce(_ revision: String) {
+            list.conversations[0].inputControl = RemoteConversationInputControl(canQueue: true)
+            list.workspaces = [RemoteWorkspaceSummary(
+                id: try! XCTUnwrap(list.conversations[0].placement.workspaceID), title: "Coordinator", panels: [],
+                isCoordinator: true, coordinatorConversationID: alphaID,
+                coordinatorQueueRevision: revision
+            )]
+            list.tasks = RemoteTaskBoard(doneCount: 0)
+            subject.consumeSessionsState(SessionsRuntime.State(connectionGeneration: 7, snapshot: list, phase: .live))
+        }
+        func rows(_ controller: LiveConversationController) -> [String: ToasttyQueuedSendPresentation] {
+            controller.transcriptPresentation.sendItems.reduce(into: [:]) { rows, item in
+                guard case .queued(let queued) = item.content else { return }
+                rows[item.clientRequestID] = queued
+            }
+        }
+        func waitFor(_ queue: RemoteCoordinatorQueue, in controller: LiveConversationController) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while controller.coordinatorQueue != queue, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertEqual(controller.coordinatorQueue, queue)
+        }
+        announce(restored.revision)
+        await subject.openConversation(alphaID.rawValue)
+        let controller = try XCTUnwrap(subject.activeConversationController)
+        try await waitFor(restored, in: controller)
+
+        XCTAssertEqual(rows(controller)["mac-1"]?.warning, ToasttySendPresentationAdapter.typingInterruptedWarning)
+        XCTAssertNil(rows(controller)["task-1"]?.warning)
+        XCTAssertTrue(rows(controller).values.allSatisfy { $0.actionFailure == nil })
+
+        // The Mac could not save its queue: the row stays and says so.
+        await runtime.scriptQueueUpdates([.failed, nil, .failed])
+        let failed = await controller.removeQueuedMessage("task-1")
+        XCTAssertFalse(failed)
+        XCTAssertEqual(rows(controller)["task-1"]?.actionFailure, ToasttySendPresentationAdapter.removeFailedNotice)
+        XCTAssertNil(rows(controller)["mac-1"]?.actionFailure)
+        XCTAssertEqual(controller.coordinatorQueue, restored)
+
+        // An answer this phone cannot read: the row stays, and the note
+        // of the earlier failure goes with the new attempt.
+        let unreadable = await controller.removeQueuedMessage("task-1")
+        XCTAssertFalse(unreadable)
+        XCTAssertNotNil(rows(controller)["task-1"])
+        XCTAssertNil(rows(controller)["task-1"]?.actionFailure)
+
+        // Failed again, then the row leaves the Mac's queue: the note goes
+        // with it.
+        _ = await controller.removeQueuedMessage("task-1")
+        XCTAssertEqual(rows(controller)["task-1"]?.actionFailure, ToasttySendPresentationAdapter.removeFailedNotice)
+        announce(withoutTask.revision)
+        try await waitFor(withoutTask, in: controller)
+        XCTAssertNil(rows(controller)["task-1"])
+        XCTAssertTrue(controller.coordinatorRemoveFailures.isEmpty)
+
+        let updates = await runtime.recordedQueueUpdates()
+        XCTAssertEqual(updates.map(\.action), [.coordinatorRemove, .coordinatorRemove, .coordinatorRemove])
+        subject.stopObserving()
+    }
+
     /// The coordinator's chat shows attached images as thumbnails only with
     /// a Mac that serves them and read access, whichever comes last: the
     /// capability with a connection state, or the scopes, as with a stored
@@ -1586,11 +1678,22 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
 
     func coordinatorQueueReadCount() -> Int { coordinatorQueueReads }
 
+    /// What each queue update answers, in turn: `nil` throws, as a
+    /// response that this phone cannot decode does. `updated` once these
+    /// run out.
+    private var queueUpdateAnswers: [RemoteConversationQueueUpdateResult?] = []
+
+    func scriptQueueUpdates(_ answers: [RemoteConversationQueueUpdateResult?]) {
+        queueUpdateAnswers = answers
+    }
+
     func updateQueue(
         _ request: RemoteConversationQueueUpdateRequest
     ) async throws -> RemoteConversationQueueUpdateResponse? {
         queueUpdates.append(request)
-        return RemoteConversationQueueUpdateResponse(result: .updated)
+        let answer = queueUpdateAnswers.isEmpty ? .updated : queueUpdateAnswers.removeFirst()
+        guard let answer else { throw GatewayFailure.invalidResponse }
+        return RemoteConversationQueueUpdateResponse(result: answer)
     }
 
     func recordedQueueUpdates() -> [RemoteConversationQueueUpdateRequest] { queueUpdates }

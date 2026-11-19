@@ -37,6 +37,9 @@ struct ToasttyMobileRootView: View {
     /// Stop that holds its messages.
     @State private var fixtureCoordinatorQueueEntries: [RemoteCoordinatorQueueEntry] = []
     @State private var fixtureCoordinatorHeldSetToken: String?
+    /// The fixture's entries whose Remove the Mac refused
+    /// (`TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_REMOVE_FAILS`).
+    @State private var fixtureCoordinatorRemoveFailures: Set<String> = []
     @State private var fixtureLocalDraftReleaseAttempts = 0
 #if DEBUG
     @State private var fixtureEntryLoadStep = 0
@@ -129,11 +132,15 @@ struct ToasttyMobileRootView: View {
         if configuration.fixtureScenario == .home, Self.fixtureCoordinatorQueueMode != nil {
             _fixtureQueuedMessages = State(initialValue: ToasttyConversationFixture.coordinatorChatQueue)
             if Self.fixtureCoordinatorQueueMode == .shared {
+                let environment = ProcessInfo.processInfo.environment
+                let isInterrupted = environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_INTERRUPTED"] == "1"
                 _fixtureCoordinatorQueueEntries = State(initialValue: ToasttyConversationFixture.coordinatorOwnQueue(
-                    hasLongMessage: ProcessInfo.processInfo.environment[
-                        "TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_LONG"
-                    ] == "1"
+                    hasLongMessage: environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_LONG"] == "1",
+                    hasInterruptedMessage: isInterrupted
                 ))
+                // As after a relaunch of the Mac: the interrupted message
+                // waits, held, under a new token.
+                _fixtureCoordinatorHeldSetToken = State(initialValue: isInterrupted ? UUID().uuidString : nil)
             }
         }
 #endif
@@ -1585,8 +1592,16 @@ struct ToasttyMobileRootView: View {
                 heldSetToken: fixtureCoordinatorHeldSetToken,
                 entries: fixtureCoordinatorQueueEntries
             ),
-            mayChange: true
+            mayChange: true,
+            removeFailures: fixtureCoordinatorRemoveFailures
         )
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_REMOVE_FAILS=1`: the Mac
+    /// cannot save its queue, so it answers each Remove of the
+    /// coordinator's own messages with `failed`.
+    private static var fixtureCoordinatorRemoveFails: Bool {
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_REMOVE_FAILS"] == "1"
     }
 
     private func fixtureQueuedMessageAction(_ action: ToasttyQueuedMessageAction, conversationID: UUID) {
@@ -1594,7 +1609,11 @@ struct ToasttyMobileRootView: View {
         switch action {
         case .remove(let clientRequestID):
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
-            fixtureCoordinatorQueueEntries.removeAll { $0.id == clientRequestID }
+            if Self.fixtureCoordinatorRemoveFails, fixtureCoordinatorQueueEntries.contains(where: { $0.id == clientRequestID }) {
+                fixtureCoordinatorRemoveFailures.insert(clientRequestID)
+            } else {
+                fixtureCoordinatorQueueEntries.removeAll { $0.id == clientRequestID }
+            }
         case .edit(let clientRequestID, let shown):
             let text = fixtureQueuedMessages.first { $0.clientRequestID == clientRequestID }?.text ?? shown
             let readsReplies = conversationID == coordinatorConversationID
@@ -1611,10 +1630,13 @@ struct ToasttyMobileRootView: View {
             ))
         case .resume:
             fixtureQueuePaused = false
-            // One Resume lets go what the Stop holds in both queues.
+            // One Resume lets go what the Stop holds in both queues. The
+            // user sends an interrupted message again: it is typed as any
+            // other.
             fixtureCoordinatorQueueEntries = fixtureCoordinatorQueueEntries.map {
                 var entry = $0
                 entry.isHeld = false
+                entry.typingWasInterrupted = false
                 return entry
             }
         }
@@ -1874,6 +1896,7 @@ struct ToasttyMobileRootView: View {
         fixtureTurnStopped = false
         fixtureCoordinatorQueueEntries.removeAll(keepingCapacity: false)
         fixtureCoordinatorHeldSetToken = nil
+        fixtureCoordinatorRemoveFailures.removeAll()
         fixtureLocalDraftReleaseAttempts = 0
     }
 

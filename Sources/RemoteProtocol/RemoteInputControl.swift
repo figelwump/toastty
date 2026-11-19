@@ -182,6 +182,11 @@ public enum RemoteConversationQueueUpdateResult: String, Codable, Equatable, Sen
     /// For a coordinator action: the Mac takes no writes from devices for
     /// the coordinator's session, or its agent is not bound.
     case sessionWritesDisabled = "session_writes_disabled"
+    /// For `coordinatorRemove`: the Mac could not save its queue without
+    /// the message, so nothing changed. The message and its files stay.
+    /// An older phone cannot decode this value; it then treats the request
+    /// as failed and keeps the row, which the Mac's queue still lists.
+    case failed
 }
 
 public struct RemoteConversationQueueUpdateResponse: Codable, Equatable, Sendable {

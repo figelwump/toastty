@@ -882,8 +882,8 @@ final class CoordinatorChatModel: ObservableObject {
             // Back into the composer, in front of what is there. It is the
             // text as it would be typed, so a quick entry message keeps
             // Toastty's first line. Its files come back as attachments and
-            // stay in their folder; when one cannot, the text keeps every
-            // path instead.
+            // stay in their folder, which the sent message then owns; when
+            // one cannot, the text keeps every path instead.
             guard isSendingFiles == false, let controller,
                   let entry = (controller.queuedEntries + controller.pausedEntries).first(where: { $0.id == id }) else { return }
             // A reply comes back as a reply. The composer answers one
@@ -914,10 +914,19 @@ final class CoordinatorChatModel: ObservableObject {
                 )
                 break
             }
-            guard let removed = controller.removeQueuedEntry(id: id) else { return }
+            let removed: CoordinatorController.QueuedEntry
+            do {
+                guard let entry = try controller.removeQueuedEntry(id: id) else { return }
+                removed = entry
+            } catch {
+                transientNotice = .failure(error.localizedDescription)
+                break
+            }
             let body = CoordinatorMessageHeader.replyParts(of: removed.text)?.body ?? removed.text
             var text = body
-            if let parts = Self.editParts(of: body, attachments: controller.attachments, room: room) {
+            if let parts = Self.editParts(
+                of: body, attachments: controller.attachments, owned: removed.attachmentFolders, room: room
+            ) {
                 text = parts.text
                 attachmentDraft.restore(parts.files)
             }
@@ -927,7 +936,11 @@ final class CoordinatorChatModel: ObservableObject {
             draft = draft.isEmpty ? text : (text.isEmpty ? draft : text + "\n" + draft)
             composerFocusRequest += 1
         case .remove(let id):
-            controller?.removeQueuedEntry(id: id, discardingAttachments: true)
+            do {
+                try controller?.removeQueuedEntry(id: id, discardingAttachments: true)
+            } catch {
+                transientNotice = .failure(error.localizedDescription)
+            }
         case .resume:
             controller?.resumeQueue()
         case .steer(let id, _):
@@ -984,18 +997,20 @@ final class CoordinatorChatModel: ObservableObject {
 
     /// A waiting message's text without its list of files, and the files,
     /// for Edit. `nil` when the files cannot come back as attachments: a
-    /// file that is not a copy in the coordinator's folder anymore, or more
-    /// files than `room`. The text then keeps its paths.
+    /// file that is not a copy in a folder that the message owns (`owned`),
+    /// such as a list pasted from another message, or more files than
+    /// `room`. The text then keeps its paths.
     static func editParts(
         of text: String,
         attachments: CoordinatorAttachments,
+        owned: [String],
         room: Int
     ) -> (text: String, files: [URL])? {
         guard let (rest, paths) = CoordinatorMessageHeader.attachedFiles(in: text), paths.count <= room else {
             return nil
         }
         let files = paths.map { URL(filePath: $0) }
-        guard files.allSatisfy(attachments.isStagedCopy) else { return nil }
+        guard files.allSatisfy({ attachments.folderName(of: $0).map(owned.contains) == true }) else { return nil }
         return (rest, files)
     }
 

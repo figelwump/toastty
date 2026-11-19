@@ -607,6 +607,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertEqual(app.descendants(matching: .any).matching(identifierPrefix: "toastty-mobile-queued-resume-").count, 1)
         for id in Self.waitingRows {
             XCTAssertTrue(queuedRow(id, in: app).label.hasSuffix("Paused in queue"), id)
+            // A Stop is no interrupted typing, and a Mac that marks none
+            // gets no warning either.
+            XCTAssertFalse(queuedNote("warning", id, in: app).exists, id)
         }
         attachScreenshot(named: "coordinator-queue-held", of: app)
 
@@ -699,6 +702,55 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(queuedRow("fixture-own-2", in: app).exists)
     }
 
+    /// After Toastty on the Mac quit while it typed a message, that message
+    /// waits, held, and its row alone warns that the coordinator may have
+    /// it already, above its Resume and Remove. Resume sends it again, and
+    /// the warning goes.
+    func testAnInterruptedMessageWarnsOnItsRowUntilResume() {
+        let app = openWaitingMessages(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_INTERRUPTED": "1"])
+        let row = queuedRow("fixture-own-1", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.hasSuffix("Paused in queue"))
+        let warning = queuedNote("warning", "fixture-own-1", in: app)
+        XCTAssertTrue(warning.exists)
+        XCTAssertTrue(warning.label.contains("Toastty on the Mac quit while it typed this message"), warning.label)
+        XCTAssertTrue(warning.label.contains("choose Resume or Remove"), warning.label)
+        for id in ["fixture-chat-1", "fixture-chat-2", "fixture-own-2", "fixture-own-3"] {
+            XCTAssertFalse(queuedNote("warning", id, in: app).exists, id)
+        }
+        let resume = queuedAction("resume", "fixture-own-1", in: app)
+        XCTAssertEqual(resume.label, "Resume")
+        XCTAssertTrue(queuedAction("remove", "fixture-own-1", in: app).exists)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(resume, in: app))
+        XCTAssertGreaterThanOrEqual(resume.frame.minY, warning.frame.maxY - 1)
+        attachScreenshot(named: "coordinator-queue-interrupted-warning", of: app)
+
+        resume.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { warning.exists == false })
+        XCTAssertTrue(row.label.hasSuffix("Queued, sends after this turn"))
+        attachScreenshot(named: "coordinator-queue-interrupted-resumed", of: app)
+    }
+
+    /// When the Mac cannot remove a message, its row stays and says so.
+    func testAFailedRemoveLeavesTheRowAndSaysSo() {
+        let app = openWaitingMessages(environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_REMOVE_FAILS": "1"])
+        let row = queuedRow("fixture-own-2", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        let remove = queuedAction("remove", "fixture-own-2", in: app)
+        XCTAssertTrue(scrollIntoUncoveredTranscript(remove, in: app))
+        remove.tap()
+        let failure = queuedNote("failure", "fixture-own-2", in: app)
+        XCTAssertTrue(failure.waitForExistence(timeout: 5))
+        XCTAssertEqual(failure.label, "The Mac could not remove this message. It still waits.")
+        XCTAssertTrue(row.exists)
+        XCTAssertTrue(remove.exists)
+        for id in ["fixture-own-1", "fixture-own-3"] {
+            XCTAssertFalse(queuedNote("failure", id, in: app).exists, id)
+        }
+        XCTAssertTrue(scrollIntoUncoveredTranscript(failure, in: app))
+        attachScreenshot(named: "coordinator-queue-remove-failed", of: app)
+    }
+
     /// Scrolls the chat until `element` shows whole between the header and
     /// the composer, where Jump to latest does not cover it, with drags long
     /// enough for the largest text size.
@@ -749,6 +801,11 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
 
     private func queuedAction(_ key: String, _ id: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons["toastty-mobile-queued-\(key)-\(id)"]
+    }
+
+    /// A line on a waiting message's row: `warning` or `failure`.
+    private func queuedNote(_ key: String, _ id: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["toastty-mobile-queued-\(key)-\(id)"]
     }
 
     // MARK: - The New line

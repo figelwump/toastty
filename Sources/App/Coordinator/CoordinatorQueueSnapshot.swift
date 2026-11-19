@@ -16,6 +16,16 @@ struct CoordinatorQueueSnapshot: Codable, Equatable {
         var text: String
         /// Set on a paused entry whose typing a quit interrupted.
         var typingWasInterrupted: Bool?
+        /// The folders of attached files that the entry owns, by name
+        /// (`CoordinatorController.QueuedEntry.attachmentFolders`). `nil` in
+        /// a file of a build before the list.
+        var attachmentFolders: [String]?
+
+        /// What the entry owns: an entry from an older file owns only its
+        /// own folder. Its text never adds one.
+        var ownedAttachmentFolders: [String] {
+            attachmentFolders ?? [id]
+        }
     }
 
     var version = 1
