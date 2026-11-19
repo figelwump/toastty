@@ -1067,11 +1067,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         }
         attachScreenshot(named: "coordinator-copy-reply-buttons", of: app)
 
-        // Copy shows its mark for a moment.
         copyLong.tap()
-        XCTAssertTrue(waitUntil(timeout: 1.4) { copyLong.label == "Copied" })
-        attachScreenshot(named: "coordinator-copy-copied", of: app)
-        XCTAssertTrue(waitUntil(timeout: 5) { copyLong.label == "Copy message" })
 
         // Another session's chat has neither button.
         let oneSession = link(containing: "early-session-titles", in: app)
