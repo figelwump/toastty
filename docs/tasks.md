@@ -2565,19 +2565,20 @@ close its task space; see
 ## Finish without a pull request
 
 For work that has no pull request, the agent runs `toastty task
-ready-for-review`, and the task waits in Needs you. **Mark Done**, or
-`toastty task mark-done`, finishes it.
+ready-for-review`, and the task waits in Needs you. When its stage is Ready
+for review, choose **Complete Task** in the task space header or **Mark Done**
+in the task detail. After you confirm, Toastty marks the task Done, closes
+its task space and ends any agent sessions there. It keeps the worktree if
+the task has one. To mark the task Done without closing its space, use
+`toastty task mark-done`.
 
-A task that split its work into child tasks needs neither: it finishes when
-its children finish. See [Split work into new tasks](#split-work-into-new-tasks).
+A task that split its work into child tasks finishes when its children
+finish. See [Split work into new tasks](#split-work-into-new-tasks).
 
-The header of a task space without a pull request offers a green **Complete
-Task** button when its current stage is Ready for review. It marks the task
-Done and keeps its conversation, workspace, and worktree. Active work or a
-reply request takes priority over an earlier ready mark.
-
-At other stages, including Done, the header offers **Archive Task…**. It opens
-the archive confirmation and uses the same checks as
+Active work or a reply request takes priority over an earlier ready mark.
+At stages other than Ready for review, the header offers **Archive Task…**
+(in the **Done** menu if the task is already done). It uses the same
+confirmation and checks as
 [Archive a task](#archive-a-task). Archive also stays available in the task menu.
 
 A task that has no worktree and no pull request often answers in place. When
