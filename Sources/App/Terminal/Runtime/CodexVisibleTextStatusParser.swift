@@ -11,15 +11,15 @@ enum CodexVisibleTextStatusParser {
         guard lines.last == footer,
               let heading = lines.lastIndex(of: "Field 1/1") else { return false }
         let body = lines[lines.index(after: heading)..<lines.index(before: lines.endIndex)]
-        guard let question = body.first,
-              question.hasPrefix(questionPrefix),
-              question.hasSuffix("\"?") else { return false }
+        guard body.first?.hasPrefix(questionPrefix) == true else { return false }
+        let question = body.prefix { !$0.hasPrefix("App: ") && !$0.hasPrefix("1. ") && !$0.hasPrefix("› 1. ") }
+        guard question.last?.hasSuffix("\"?") == true else { return false }
 
         // Codex adds › to the selected option and may wrap option descriptions.
         // Look for the option labels in order within the current bottom pane.
         let choices = ["1. Allow", "2. Allow for this session", "3. Always allow", "4. Cancel"]
         var nextChoice = choices.startIndex
-        for row in body.dropFirst() {
+        for row in body.dropFirst(question.count) {
             let line = row.hasPrefix("› ") ? String(row.dropFirst(2)) : row
             let choice = choices[nextChoice]
             if line == choice || line.hasPrefix(choice + " ") {

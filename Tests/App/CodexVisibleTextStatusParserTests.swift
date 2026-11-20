@@ -11,7 +11,8 @@ struct CodexVisibleTextStatusParserTests {
         • Using computer · 1 action
 
           Field 1/1
-          Allow Computer Use to use "Calculator"?
+          Allow Computer Use to use "A Calculator With a
+          Long Display Name"?
 
           App: Calculator
 

@@ -6209,12 +6209,6 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
-        // Escape cancels the elicitation's menu. Codex can continue the
-        // same turn once the menu disappears.
-        if kind == .escape, codexStatusBeforeComputerUseApprovalBySessionID[record.sessionID] != nil {
-            return false
-        }
-
         if record.agent == .codex,
            codexSessionUsesFixedStatusAuthority(sessionID: record.sessionID) {
             endInitialPromptTurnWait(sessionID: record.sessionID)
