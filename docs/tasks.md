@@ -1070,7 +1070,7 @@ you when it is not sure, and creates the task.
   asks you to check the conversation. If the message is there, choose
   **Remove**. If it is not, choose **Send next** to send it. A paired iPhone
   shows the same warning on the message's row, where **Resume** sends the
-  message. A phone without send access tells you to choose in the Mac's
+  message (**Resume all** when several messages are paused). A phone without send access tells you to choose in the Mac's
   chat. The same holds for a message
   that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
   not type a message that the file lists as waiting, because a relaunch
