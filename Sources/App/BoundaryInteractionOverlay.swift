@@ -107,9 +107,11 @@ struct BoundaryInteractionDescriptor {
     let accessibilityLabel: String?
     let accessibilityIdentifier: String?
     let metadata: [String: String]
+    let coalescesDragUpdates: Bool
     let onBegan: (BoundaryInteractionValue) -> Void
     let onChanged: (BoundaryInteractionValue) -> Void
     let onEnded: (BoundaryInteractionValue) -> Void
+    let onCancelled: (BoundaryInteractionValue) -> Void
     let onHoverChanged: (Bool) -> Void
 
     init(
@@ -121,9 +123,11 @@ struct BoundaryInteractionDescriptor {
         accessibilityLabel: String? = nil,
         accessibilityIdentifier: String? = nil,
         metadata: [String: String] = [:],
+        coalescesDragUpdates: Bool = false,
         onBegan: @escaping (BoundaryInteractionValue) -> Void = { _ in },
         onChanged: @escaping (BoundaryInteractionValue) -> Void = { _ in },
         onEnded: @escaping (BoundaryInteractionValue) -> Void = { _ in },
+        onCancelled: ((BoundaryInteractionValue) -> Void)? = nil,
         onHoverChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.id = id
@@ -134,9 +138,11 @@ struct BoundaryInteractionDescriptor {
         self.accessibilityLabel = accessibilityLabel
         self.accessibilityIdentifier = accessibilityIdentifier
         self.metadata = metadata
+        self.coalescesDragUpdates = coalescesDragUpdates
         self.onBegan = onBegan
         self.onChanged = onChanged
         self.onEnded = onEnded
+        self.onCancelled = onCancelled ?? onEnded
         self.onHoverChanged = onHoverChanged
     }
 }
@@ -197,6 +203,8 @@ final class BoundaryInteractionOverlayView: NSView {
     private var hoveredDescriptor: BoundaryInteractionDescriptor?
     private var activeDescriptorID: String?
     private var capturedDescriptor: BoundaryInteractionDescriptor?
+    private var dragDisplayLink: CADisplayLink?
+    private var pendingDragValue: BoundaryInteractionValue?
     private var startLocation: CGPoint?
     private var startWindowLocation: CGPoint?
     private var lastInteractionValue: BoundaryInteractionValue?
@@ -584,6 +592,11 @@ final class BoundaryInteractionOverlayView: NSView {
         if let lastInteractionValue {
             descriptor.onBegan(lastInteractionValue)
         }
+        if descriptor.coalescesDragUpdates {
+            let link = displayLink(target: self, selector: #selector(displayLinkDidFire(_:)))
+            link.add(to: .main, forMode: .common)
+            dragDisplayLink = link
+        }
     }
 
     private func handleBoundaryDragged(with event: NSEvent) {
@@ -614,7 +627,21 @@ final class BoundaryInteractionOverlayView: NSView {
             event: event,
             value: value
         )
-        descriptor.onChanged(value)
+        if dragDisplayLink != nil {
+            pendingDragValue = value
+        } else {
+            descriptor.onChanged(value)
+        }
+    }
+
+    @objc private func displayLinkDidFire(_: CADisplayLink) {
+        presentPendingDrag()
+    }
+
+    func presentPendingDrag() {
+        guard let value = pendingDragValue else { return }
+        pendingDragValue = nil
+        descriptorsByID[value.descriptorID]?.onChanged(value)
     }
 
     private func finishBoundarySequence(with event: NSEvent) {
@@ -727,12 +754,15 @@ final class BoundaryInteractionOverlayView: NSView {
            let descriptor,
            let value {
             deliverCallback(immediately: deliversCallbacksImmediately) {
-                descriptor.onEnded(value)
+                descriptor.onCancelled(value)
             }
         }
     }
 
     private func clearBoundarySequenceState() {
+        dragDisplayLink?.invalidate()
+        dragDisplayLink = nil
+        pendingDragValue = nil
         activeDescriptorID = nil
         capturedDescriptor = nil
         startLocation = nil

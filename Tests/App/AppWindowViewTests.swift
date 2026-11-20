@@ -4,6 +4,62 @@ import XCTest
 
 @MainActor
 final class AppWindowViewTests: XCTestCase {
+    func testColumnResizeTracksLocalPreviewAndCommitsOnlyMouseUpWidth() {
+        let resize = LiveColumnResize()
+        resize.begin(.sidebar, width: 260, holdingWorkspaceAt: 800)
+        resize.update(.sidebar, translation: 10, availableWidth: 1061)
+        resize.update(.sidebar, translation: 20, availableWidth: 1061)
+        XCTAssertEqual(resize.width(for: .sidebar), 280)
+        XCTAssertNil(resize.width(for: .dock))
+        XCTAssertEqual(resize.heldWorkspaceWidth, 800)
+        XCTAssertEqual(resize.finish(.sidebar, translation: 25, availableWidth: 1061), 285)
+        XCTAssertNil(resize.width(for: .sidebar))
+        XCTAssertNil(resize.heldWorkspaceWidth)
+        XCTAssertNil(resize.finish(.sidebar, translation: 30, availableWidth: 1061))
+    }
+
+    func testRightPanelPreviewIsTabScopedAndCancellationPreservesDefault() {
+        let resize = LiveColumnResize()
+        let workspaceID = UUID()
+        let column = ResizingColumn.rightPanel(workspaceID: workspaceID, tabID: UUID())
+        resize.begin(column, width: 400)
+        resize.update(column, translation: -60, availableWidth: 1000)
+        XCTAssertEqual(resize.width(for: column), 460)
+        XCTAssertNil(resize.width(for: .rightPanel(workspaceID: workspaceID, tabID: UUID())))
+        XCTAssertNil(resize.heldWorkspaceWidth)
+        resize.cancel(column)
+        XCTAssertNil(resize.finish(column, translation: -60, availableWidth: 1000))
+        resize.begin(column, width: 400)
+        XCTAssertNil(resize.finish(column, translation: 0, availableWidth: 1000))
+    }
+
+    func testWindowColumnWidthsCommitAtTheirVisibleLimits() {
+        let available: CGFloat = 1000
+        let cases: [(ResizingColumn, CGFloat, CGFloat, CGFloat)] = [
+            (.sidebar, 240, -1000, WindowState.minSidebarWidth),
+            (.dock, 300, 1000, WindowState.maxCoordinatorDockWidth(windowWidth: available)),
+        ]
+        for (column, start, delta, expected) in cases {
+            let resize = LiveColumnResize()
+            resize.begin(column, width: start)
+            resize.update(column, translation: delta, availableWidth: available)
+            XCTAssertEqual(resize.width(for: column), expected)
+            XCTAssertEqual(resize.finish(column, translation: delta, availableWidth: available), expected)
+        }
+    }
+
+    func testRightPanelPreviewFitsViewportAndItsSavedWidthSurvivesWidening() throws {
+        let resize = LiveColumnResize()
+        let column = ResizingColumn.rightPanel(workspaceID: UUID(), tabID: UUID())
+        resize.begin(column, width: 400)
+        resize.update(column, translation: -600, availableWidth: 900)
+        XCTAssertEqual(resize.width(for: column), 720)
+        let saved = try XCTUnwrap(resize.finish(column, translation: -600, availableWidth: 900))
+        let panel = RightAuxPanelState(width: saved, hasCustomWidth: true)
+        XCTAssertEqual(panel.effectiveWidth(for: 900), 720)
+        XCTAssertEqual(panel.effectiveWidth(for: 1600), 1000)
+    }
+
     func testNavigationControlsFitMinimumSidebarAndReserveHiddenSidebarHeaderSpace() {
         let controlsTrailingEdge = ToastyTheme.titlebarSidebarToggleLeadingPadding +
             (3 * ToastyTheme.titlebarSidebarToggleButtonSize) + (2 * ToastyTheme.titlebarControlSpacing)

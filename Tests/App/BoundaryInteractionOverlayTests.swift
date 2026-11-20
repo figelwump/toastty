@@ -151,6 +151,49 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testPacedDragPresentsLatestEventPerTickAndEndsAtMouseUp() throws {
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+        overlay.usesEventTrackingLoop = false
+        var previews: [CGFloat] = []
+        var commits: [CGFloat] = []
+        var cancellations = 0
+        let edge = BoundaryInteractionDescriptor(
+            id: "column", hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100), axis: .vertical,
+            coalescesDragUpdates: true,
+            onChanged: { previews.append($0.translation.width) },
+            onEnded: { commits.append($0.translation.width) },
+            onCancelled: { _ in cancellations += 1 }
+        )
+        func event(_ type: NSEvent.EventType, _ x: CGFloat) throws -> NSEvent {
+            try mouseEvent(type: type, location: NSPoint(x: x, y: 50), window: window)
+        }
+        overlay.updateDescriptors([edge])
+        overlay.mouseDown(with: try event(.leftMouseDown, 100))
+        overlay.mouseDragged(with: try event(.leftMouseDragged, 105))
+        overlay.mouseDragged(with: try event(.leftMouseDragged, 110))
+        XCTAssertTrue(previews.isEmpty)
+        overlay.presentPendingDrag()
+        overlay.presentPendingDrag()
+        XCTAssertEqual(previews, [10])
+        XCTAssertTrue(commits.isEmpty)
+        overlay.mouseDragged(with: try event(.leftMouseDragged, 115))
+        overlay.mouseUp(with: try event(.leftMouseUp, 122))
+        overlay.presentPendingDrag()
+        XCTAssertEqual(previews, [10])
+        XCTAssertEqual(commits, [22])
+
+        overlay.mouseDown(with: try event(.leftMouseDown, 100))
+        overlay.mouseDragged(with: try event(.leftMouseDragged, 90))
+        overlay.updateDescriptors([])
+        overlay.presentPendingDrag()
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(previews, [10])
+        XCTAssertEqual(commits, [22])
+        XCTAssertTrue(window.isMovable)
+    }
+
+    @MainActor
     func testDragReportsOverlayLocalTranslationAndRestoresWindowMovement() throws {
         defer { WindowMovementSuppression.resetForTesting() }
         let (window, overlay) = makeWindowWithOverlay()
