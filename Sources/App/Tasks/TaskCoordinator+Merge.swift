@@ -446,12 +446,20 @@ extension TaskCoordinator {
                 cleanup.problem = reason
                 $0.cleanup = cleanup
             }
-        case .dropped:
+        case .dropped(let canceledPullRequest):
             // The user kept the task space (Don't Clean Up), or new work
             // started there after the merge. Either way the cleanup is over,
             // so a later answer from GitHub does not start it again; Archive
             // still closes the task.
-            guard var cleanup = record.cleanup, cleanup.kind == .merge, cleanup.finishedAt == nil else { return }
+            guard var cleanup = record.cleanup else {
+                if let canceledPullRequest {
+                    saveOrDefer(taskID: record.id) {
+                        $0.droppedMergeCleanupPullRequestURL = canceledPullRequest.url.lowercased()
+                    }
+                }
+                return
+            }
+            guard cleanup.kind == .merge, cleanup.finishedAt == nil else { return }
             cleanup.stepsDone.append("left the task space open")
             cleanup.problem = nil
             cleanup.finishedAt = now()
@@ -482,7 +490,8 @@ extension TaskCoordinator {
                   let taskSpaceID = record.taskSpaceWorkspaceID,
                   store.state.workspacesByID[taskSpaceID] != nil,
                   merges.request(workspaceID: taskSpaceID) == nil,
-                  let target = try? mergeTarget(record, afterMerge: true) else { continue }
+                  let target = try? mergeTarget(record, afterMerge: true),
+                  record.droppedMergeCleanupPullRequestURL != target.pullRequest.url.lowercased() else { continue }
             records.update(id: taskID) { $0.cleanup = TaskCleanup(kind: .merge) }
             merges.cleanUpAfterMerge(
                 workspaceID: taskSpaceID, pullRequest: target.pullRequest, repoPath: target.repoPath,
