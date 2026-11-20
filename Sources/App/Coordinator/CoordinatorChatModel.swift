@@ -495,7 +495,7 @@ final class CoordinatorChatModel: ObservableObject {
 
     /// How the chat shows a time, such as a digest line's.
     private static func timeText(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
+        CoordinatorChatTranscript.timeText(date)
     }
 
     /// The tail of the chat: messages typed but not shown yet, then the

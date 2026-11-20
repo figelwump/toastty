@@ -325,6 +325,169 @@ final class ConversationUIRenderTests: XCTestCase {
         try keep(try Self.snapshot(hostingView), name: "coordinator-quiet-wake-open")
     }
 
+    /// Quiet wake turns in a row show as one line, "Toastty · 3 quiet
+    /// checks · …", that opens into each turn's own line. Each line still
+    /// opens its own turn, and keeps that state while the row closes and
+    /// opens again. The user's message ends the row: the quiet turn after
+    /// it keeps its own line.
+    func testQuietWakeTurnsInARowShowAsOneLine() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let start = Calendar.current.date(bySettingHour: 10, minute: 39, second: 0, of: Date()) ?? Date()
+        func minutes(_ count: Double) -> Date { start.addingTimeInterval(count * 60) }
+        func quiet(_ sequence: UInt64, at time: Date) throws -> ToasttyTranscriptRow {
+            let digest = "[Toastty] Wake: this message is from Toastty, not from the user.\n"
+                + "- [Check \(sequence)](toastty://task/\(sequence)): running at 2026-11-19T18:00:00Z"
+            var message = try XCTUnwrap(CoordinatorChatTranscript.hostMessage(
+                digest, timeText: CoordinatorChatTranscript.timeText(time)
+            ))
+            message.foldsTurn = true
+            return Self.row(sequence, .hostMessage(message), at: time)
+        }
+        let rows = try [
+            quiet(1, at: minutes(0)),
+            Self.row(2, .toolStarted(callID: "q1", name: "Bash", detail: "toastty task list"), at: minutes(0.1)),
+            Self.row(3, .toolFinished(callID: "q1", name: "Bash", outcome: .succeeded, detail: nil), at: minutes(0.2)),
+            Self.row(4, .assistantMessage(text: "Nothing needs you (1).", phase: .final), at: minutes(0.3)),
+            quiet(5, at: minutes(13)),
+            Self.row(6, .assistantMessage(text: "Nothing needs you (2).", phase: .final), at: minutes(13.3)),
+            quiet(7, at: minutes(26)),
+            Self.row(8, .assistantMessage(text: "Nothing needs you (3).", phase: .final), at: minutes(26.3)),
+            Self.row(9, .userMessage(text: "Is the export task started?", origin: .local), at: minutes(30)),
+            Self.row(10, .assistantMessage(text: "Yes, it runs with Codex.", phase: .final), at: minutes(30.3)),
+            quiet(11, at: minutes(41)),
+            Self.row(12, .assistantMessage(text: "Nothing needs you (4).", phase: .final), at: minutes(41.3)),
+        ]
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+        XCTAssertEqual(state.quietCheckRuns(runningTurnID: nil).map { $0.turnIDs.map(\.sequence) }, [[1, 5, 7]])
+
+        let size = CGSize(width: 560, height: 520)
+        let transcript = ToasttyTranscriptView(
+            state: state,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false,
+            options: ToasttyTranscriptOptions(foldsRunningWork: true)
+        )
+        let (hostingView, window) = Self.host(transcript, size: size)
+        defer { window.close() }
+        // A click reaches SwiftUI only in a window that is on screen. Off the
+        // visible screen, so the real pointer never moves over it.
+        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        let scale = hostingView.window?.backingScaleFactor ?? 2
+        func shownTexts() -> [String] {
+            Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).map(\.string)
+        }
+        func shownAnswers() -> [Int] {
+            (1...4).filter { index in shownTexts().contains { $0.contains("Nothing needs you (\(index)).") } }
+        }
+        func settle() throws -> [ClosedRange<CGFloat>] {
+            // Let the animation end before the image.
+            RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+            hostingView.layoutSubtreeIfNeeded()
+            return Self.drawnRows(in: try Self.snapshot(hostingView), scale: scale)
+        }
+        func clickRow(_ band: ClosedRange<CGFloat>) throws {
+            try click(CGPoint(x: size.width / 2, y: (band.lowerBound + band.upperBound) / 2), in: hostingView, window: window, size: size)
+        }
+
+        // Closed: the row's line, the user's message, the answer, and the
+        // quiet turn after the message on its own line.
+        let closed = try settle()
+        XCTAssertEqual(shownAnswers(), [], "A quiet answer shows while its row is closed")
+        XCTAssertTrue(shownTexts().contains { $0.contains("Is the export task started?") })
+        XCTAssertTrue(shownTexts().contains { $0.contains("Yes, it runs with Codex.") })
+        XCTAssertEqual(closed.count, 4, "The row's line, the message, the answer and one quiet line: \(closed)")
+        try keep(try Self.snapshot(hostingView), name: "coordinator-quiet-checks-closed")
+
+        // A click opens the row into the three checks' own lines, closed.
+        try clickRow(closed[0])
+        let open = try settle()
+        XCTAssertEqual(open.count, closed.count + 3, "The open row shows each check's line: \(open)")
+        XCTAssertEqual(shownAnswers(), [], "Opening the row opens no check")
+        try keep(try Self.snapshot(hostingView), name: "coordinator-quiet-checks-open")
+
+        // The second check's line opens that check only.
+        try clickRow(open[2])
+        _ = try settle()
+        XCTAssertEqual(shownAnswers(), [2])
+        XCTAssertTrue(shownTexts().contains { $0.contains("[Check 5]") }, "The open check shows its digest")
+        try keep(try Self.snapshot(hostingView), name: "coordinator-quiet-checks-one-open")
+
+        // The row's line closes all of it, and opens it again as it was.
+        try clickRow(open[0])
+        let closedAgain = try settle()
+        XCTAssertEqual(shownAnswers(), [])
+        XCTAssertEqual(closedAgain.count, closed.count)
+        try clickRow(closedAgain[0])
+        _ = try settle()
+        XCTAssertEqual(shownAnswers(), [2], "The check that was open opens with its row")
+    }
+
+    /// A quiet check that runs keeps its own line, which shows that the
+    /// agent works, beside the row of the checks before it. Once its answer
+    /// comes it joins the row, also while the agent still works, as when
+    /// another device sees the next digest typed before its row comes: the
+    /// working row at the end shows that the agent works.
+    func testARunningQuietCheckKeepsItsOwnLineUntilItsAnswer() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        func quiet(_ sequence: UInt64) throws -> ToasttyTranscriptRow {
+            var message = try XCTUnwrap(CoordinatorChatTranscript.hostMessage(
+                "[Toastty] Wake: this message is from Toastty, not from the user.\n- Scheduled check.",
+                timeText: "10:\(30 + sequence) AM"
+            ))
+            message.foldsTurn = true
+            return Self.row(sequence, .hostMessage(message))
+        }
+        let earlier = try [
+            quiet(1), Self.row(2, .assistantMessage(text: "Nothing needs you.", phase: .final)),
+            quiet(3), Self.row(4, .assistantMessage(text: "Nothing needs you.", phase: .final)),
+            quiet(5), Self.row(6, .toolStarted(callID: "q3", name: "Bash", detail: "./quiet-wake.sh 8")),
+        ]
+        let answered = earlier + [Self.row(7, .assistantMessage(text: "Nothing needs you.", phase: .final))]
+        for (rows, name, runs) in [
+            (earlier, "coordinator-quiet-checks-running", [[1, 3]]),
+            (answered, "coordinator-quiet-checks-answered-while-working", [[1, 3, 5]]),
+        ] as [([ToasttyTranscriptRow], String, [[UInt64]])] {
+            let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+            let size = CGSize(width: 560, height: 360)
+            let transcript = ToasttyTranscriptView(
+                state: state,
+                isSubmitting: false,
+                readAcknowledgementEpoch: .working,
+                workingIndicator: ToasttyTranscriptWorkingIndicator(turnElapsed: .init(
+                    secondsAtReceipt: 6, receivedAtMonotonicTime: ProcessInfo.processInfo.systemUptime
+                )),
+                jumpToLiveEdgeRequest: .constant(0),
+                canAcknowledgeRead: false,
+                options: ToasttyTranscriptOptions(foldsRunningWork: true)
+            )
+            let (hostingView, window) = Self.host(transcript, size: size)
+            defer { window.close() }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+            let bitmap = try Self.snapshot(hostingView)
+            try keep(bitmap, name: name)
+            // Running: the row of two and the running check's line with its
+            // spinner. Answered: the row of three and the working row. A
+            // running check inside a closed row would leave one line and no
+            // spinner; an answered one outside it, three lines.
+            let drawn = Self.drawnRows(in: bitmap, scale: hostingView.window?.backingScaleFactor ?? 2)
+            XCTAssertEqual(drawn.count, 2, "\(name): \(drawn)")
+            XCTAssertTrue(Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+                .allSatisfy { $0.string.contains("Nothing needs you.") == false }, "\(name): a quiet answer shows")
+            let runningTurnID = rows.count == earlier.count ? earlier[4].id : nil
+            XCTAssertEqual(
+                state.quietCheckRuns(runningTurnID: runningTurnID).map { $0.turnIDs.map(\.sequence) }, runs, name
+            )
+        }
+    }
+
     /// In the coordinator's chat a wake turn is one line from its start to
     /// its end. The typed digest shows as its line before its row comes, not
     /// as Toastty's text. While the turn runs, that line is the only thing
@@ -575,17 +738,37 @@ final class ConversationUIRenderTests: XCTestCase {
     /// The top of the first pixel row, in points, that differs from the
     /// top-left pixel's color.
     private static func firstDrawnRow(in bitmap: NSBitmapImageRep, scale: CGFloat) -> CGFloat? {
-        guard let background = bitmap.colorAt(x: 0, y: 0) else { return nil }
-        for y in 0 ..< bitmap.pixelsHigh {
+        drawnRows(in: bitmap, scale: scale).first?.lowerBound
+    }
+
+    /// The bands of drawn pixel rows, top first, in points: each line or
+    /// card of the transcript, with background between them.
+    private static func drawnRows(in bitmap: NSBitmapImageRep, scale: CGFloat) -> [ClosedRange<CGFloat>] {
+        guard let background = bitmap.colorAt(x: 0, y: 0) else { return [] }
+        func isDrawn(_ y: Int) -> Bool {
             for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
                 guard let color = bitmap.colorAt(x: x, y: y) else { continue }
                 let difference = abs(color.redComponent - background.redComponent)
                     + abs(color.greenComponent - background.greenComponent)
                     + abs(color.blueComponent - background.blueComponent)
-                if difference > 0.08 { return CGFloat(y) / scale }
+                if difference > 0.08 { return true }
+            }
+            return false
+        }
+        var bands: [ClosedRange<CGFloat>] = []
+        var start: Int?
+        for y in 0 ..< bitmap.pixelsHigh {
+            if isDrawn(y) {
+                if start == nil { start = y }
+            } else if let first = start {
+                bands.append(CGFloat(first) / scale ... CGFloat(y - 1) / scale)
+                start = nil
             }
         }
-        return nil
+        if let first = start {
+            bands.append(CGFloat(first) / scale ... CGFloat(bitmap.pixelsHigh - 1) / scale)
+        }
+        return bands
     }
 
     /// A response's paragraphs, list items and quote share one text view, so
@@ -701,7 +884,11 @@ final class ConversationUIRenderTests: XCTestCase {
     private static let projectionRunID = UUID()
     private static let conversationID = UUID()
 
-    private static func row(_ sequence: UInt64, _ content: ToasttyTranscriptRow.Content) -> ToasttyTranscriptRow {
+    private static func row(
+        _ sequence: UInt64,
+        _ content: ToasttyTranscriptRow.Content,
+        at timestamp: Date = Date()
+    ) -> ToasttyTranscriptRow {
         ToasttyTranscriptRow(
             id: ToasttyTranscriptRowID(
                 projectionRunID: projectionRunID,
@@ -709,7 +896,7 @@ final class ConversationUIRenderTests: XCTestCase {
                 conversationID: conversationID,
                 sequence: sequence
             ),
-            timestamp: Date(),
+            timestamp: timestamp,
             provider: .claude,
             content: content
         )

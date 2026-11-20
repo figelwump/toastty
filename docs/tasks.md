@@ -1238,6 +1238,13 @@ relaunch resumes does not show it.
   Toastty's line for that wake: a click opens the digest, the coordinator's
   work and its answer. The end of a quiet turn marks nothing unread and
   sends no notification to the Mac or the phone.
+- **Quiet checks in a row.** Two or more quiet wakes in a row show as one
+  line, such as "Toastty · 3 quiet checks · 1:40 – 2:01 PM": the times of
+  the first and the last digest. A click opens it into each wake's own
+  line. A row holds only quiet wakes that nothing shows between: your
+  message, an answer that is not quiet, a message from an agent or a
+  question card ends it. A wake that runs keeps its own line, which shows
+  that the coordinator works, and joins the row above when it ends quiet.
 - **Messages from agents.** A message that `coordinator send` brought shows
   in a neutral card with its sender, time and message text. A long message
   shows its opening text and **Show full message**; **Show less** returns to
@@ -1959,7 +1966,9 @@ toastty coordinator wake --clear --quiet
   a quiet turn, a later call without `--quiet` cannot remove the mark.
 - The chat folds a quiet turn under Toastty's line for its digest. A click
   on the line opens the digest, the coordinator's work and its answer. A
-  question or an approval prompt in the turn stays visible. The
+  question or an approval prompt in the turn stays visible. Quiet turns in
+  a row, with nothing shown between them, show as one line that opens into
+  their own lines (see [The coordinator's chat](#the-coordinators-chat)). The
   coordinator's chat on a paired iPhone folds it the same way, and its New
   line does not count it (see
   [The Coordinator tab](remote-access.md#the-coordinator-tab)).

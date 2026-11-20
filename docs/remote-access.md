@@ -859,8 +859,11 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   tap on the line opens the digest, the coordinator's work and its
   answer, and a second tap closes them. When a mark comes or goes while the
   chat is open, for example at the end of the turn, the turn folds or opens
-  where it is, without a reload. With an older Mac, which does not share the
-  marks, the answers of quiet turns show, as before.
+  where it is, without a reload. Quiet turns in a row show as one line,
+  such as "Toastty · 3 quiet checks · 1:40 – 2:01 PM", that a tap opens
+  into their own lines, as in the Mac's chat. With an older Mac, which does
+  not share the marks, the answers of quiet turns show, as before, and no
+  turns join.
 - **Waiting messages.** The chat lists every message that waits for the
   coordinator, as one list in the order Toastty types them: first the
   messages this phone queued in the chat, then the coordinator's own

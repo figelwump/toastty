@@ -1,3 +1,4 @@
+import RemoteProtocol
 import SwiftUI
 
 /// Disclosure state for per-turn work sections. Settled turns fold by
@@ -77,6 +78,114 @@ struct ToasttyTurnFoldState: Equatable {
         expandedIDs.formIntersection(currentIDs)
         explicitlyToggledIDs.formIntersection(currentIDs)
         knownIDs = currentIDs
+    }
+}
+
+/// Which rows of quiet checks (`ToasttyQuietCheckRun`) the reader opened.
+/// Rows start closed. A row is open while any of its turns is in
+/// `openTurnIDs`, so it stays open when a check joins it: at its end when a
+/// turn ends quiet, or in front when older history loads. Each reconcile
+/// records every turn of an open row, so the row also stays open when its
+/// first turns leave it, such as when Toastty forgets their quiet marks.
+struct ToasttyQuietCheckFoldState: Equatable {
+    private(set) var openTurnIDs: Set<ToasttyTranscriptRowID> = []
+    /// The turns in a row at the last reconcile.
+    private var memberIDs: Set<ToasttyTranscriptRowID> = []
+
+    func isOpen(_ run: ToasttyQuietCheckRun) -> Bool {
+        run.turnIDs.contains(where: openTurnIDs.contains)
+    }
+
+    mutating func toggle(_ run: ToasttyQuietCheckRun) {
+        if isOpen(run) {
+            openTurnIDs.subtract(run.turnIDs)
+        } else {
+            open(run)
+        }
+    }
+
+    mutating func open(_ run: ToasttyQuietCheckRun) {
+        openTurnIDs.formUnion(run.turnIDs)
+    }
+
+    /// A new or rebuilt transcript closes every row, as it closes the turns
+    /// that the reader opened (`ToasttyTurnFoldState`).
+    ///
+    /// - Parameter expandedTurnIDs: the turns whose line is open
+    ///   (`ToasttyTurnFoldState.expandedIDs`). A turn that joins a closed row
+    ///   while its line is open opens the row, so that what the reader sees
+    ///   does not vanish: a running check that the reader opened and that
+    ///   then ends quiet, or a turn that stays open because older history
+    ///   loaded around what the reader saw.
+    mutating func reconcile(
+        runs: [ToasttyQuietCheckRun],
+        revision: ToasttyTranscriptRevision,
+        expandedTurnIDs: Set<ToasttyTranscriptRowID>
+    ) {
+        let currentMemberIDs = Set(runs.flatMap(\.turnIDs))
+        switch revision {
+        case .initial, .rebuilt:
+            openTurnIDs.removeAll()
+        case .appended, .prepended, .metadataOnly:
+            openTurnIDs.formIntersection(currentMemberIDs)
+        }
+        for run in runs where isOpen(run) || run.turnIDs.contains(where: { turnID in
+            memberIDs.contains(turnID) == false && expandedTurnIDs.contains(turnID)
+        }) {
+            open(run)
+        }
+        memberIDs = currentMemberIDs
+    }
+}
+
+/// The look of a line that opens and closes: a digest's line and a row of
+/// quiet checks. With `showsSpinner`, the line shows that the agent works
+/// and has no chevron.
+struct ToasttyDisclosureLineLabel: View {
+    let text: String
+    let isExpanded: Bool
+    var showsSpinner = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if showsSpinner {
+                ToasttySpinner(size: 9)
+            }
+            Text(text)
+                .monospacedDigit()
+            if showsSpinner == false {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .conversationFont(.caption2, weight: .semibold)
+            }
+        }
+        .conversationFont(.caption)
+        .foregroundStyle(ConversationDesignTokens.mutedText)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+    }
+}
+
+/// The one line of a row of quiet checks. Open, each check's own line shows
+/// under it.
+struct ToasttyQuietChecksLine: View {
+    let run: ToasttyQuietCheckRun
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            ToasttyDisclosureLineLabel(text: summary, isExpanded: isExpanded)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(summary)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(isExpanded ? "Hides the checks" : "Shows each check")
+        .accessibilityIdentifier("toastty-mobile-transcript-quiet-checks-\(run.id.accessibilitySuffix)")
+    }
+
+    private var summary: String {
+        CoordinatorDigestFold.quietChecksSummary(count: run.checks.count, timeRange: run.timeRangeText())
     }
 }
 

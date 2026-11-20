@@ -340,6 +340,129 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
     }
 }
 
+/// Quiet wake turns in a row, which the coordinator's chat shows as one
+/// line, "Toastty · 3 quiet checks · 1:40 – 2:01 PM", that opens into each
+/// turn's own line.
+///
+/// A quiet turn folds whole under its digest's line
+/// (`ToasttyTranscriptTurn.foldsWholeTurn`). Such turns join when nothing
+/// shows between their lines: a message of the user, an answer that is not
+/// quiet, a sender's card or a question card ends the row, so the chat
+/// stays in time order and a closed row hides only what a closed line
+/// hides. A quiet turn that shows a question card keeps its own line. The
+/// turn that runs keeps its own line too, which shows that the agent works
+/// (`excludingRunningTurn(_:)`).
+public struct ToasttyQuietCheckRun: Equatable, Sendable {
+    /// One quiet turn: its ID and when Toastty typed its digest.
+    public struct Check: Equatable, Sendable {
+        public let turnID: ToasttyTranscriptRowID
+        public let time: Date
+    }
+
+    /// The turns, oldest first. At least two.
+    public let checks: [Check]
+
+    public var turnIDs: [ToasttyTranscriptRowID] { checks.map(\.turnID) }
+    /// The first turn's ID, which names the row while no check joins it in
+    /// front.
+    public var id: ToasttyTranscriptRowID { checks[0].turnID }
+    public var firstTime: Date { checks[0].time }
+    public var lastTime: Date { checks[checks.count - 1].time }
+
+    func contains(turnID: ToasttyTranscriptRowID) -> Bool {
+        checks.contains { $0.turnID == turnID }
+    }
+
+    /// The rows in `blocks`, oldest first, without regard to which turn
+    /// runs.
+    static func runs(
+        in blocks: [ToasttyTranscriptBlock],
+        turns: [ToasttyTranscriptTurn]
+    ) -> [ToasttyQuietCheckRun] {
+        let quietTurns = Dictionary(
+            turns.filter { $0.foldsWholeTurn && $0.anchorIsLine }.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let turnIDs = Set(turns.map(\.id))
+        var runs: [ToasttyQuietCheckRun] = []
+        // The row so far.
+        var members: [Check] = []
+        // The work of the row's last turn, which its line hides.
+        var hiddenWork: Set<ToasttyTranscriptBlockID> = []
+
+        func endRun() {
+            if members.count >= 2 {
+                runs.append(ToasttyQuietCheckRun(checks: members))
+            }
+            members.removeAll(keepingCapacity: true)
+            hiddenWork.removeAll(keepingCapacity: true)
+        }
+
+        for block in blocks {
+            // A turn's first block is its message's row.
+            if case .row(let row) = block.content, turnIDs.contains(row.id) {
+                guard let turn = quietTurns[row.id] else {
+                    endRun()
+                    continue
+                }
+                members.append(Check(turnID: row.id, time: row.timestamp))
+                hiddenWork = Set(turn.workBlockIDs)
+                continue
+            }
+            guard members.isEmpty == false, hiddenWork.contains(block.id) == false else { continue }
+            // Something of the row's last turn shows besides its line, such
+            // as a question card: the turn keeps its own line, after the row.
+            members.removeLast()
+            endRun()
+        }
+        endRun()
+        return runs
+    }
+
+    /// `runs` with the turn that runs left out: the last turn, while it
+    /// runs. It can end only the last row; a row that it leaves with one
+    /// turn is no row.
+    static func excludingRunningTurn(
+        _ runningTurnID: ToasttyTranscriptRowID?,
+        from runs: [ToasttyQuietCheckRun]
+    ) -> [ToasttyQuietCheckRun] {
+        guard let runningTurnID, let last = runs.last, last.checks.last?.turnID == runningTurnID else { return runs }
+        var result = Array(runs.dropLast())
+        let remaining = Array(last.checks.dropLast())
+        if remaining.count >= 2 {
+            result.append(ToasttyQuietCheckRun(checks: remaining))
+        }
+        return result
+    }
+
+    /// The row's times as the coordinator's chat shows them: "1:40 – 2:01 PM",
+    /// in the format of a digest's line (`CoordinatorChatTranscript.timeText`).
+    /// Checks on two days show only the two times, "11:40 PM – 7:05 AM", as
+    /// each check's own line does.
+    public func timeRangeText(
+        locale: Locale = .autoupdatingCurrent,
+        calendar: Calendar = .autoupdatingCurrent,
+        timeZone: TimeZone = .autoupdatingCurrent
+    ) -> String {
+        var calendar = calendar
+        calendar.timeZone = timeZone
+        // Times out of order, such as after a clock change, still make a
+        // range.
+        let start = min(firstTime, lastTime)
+        let end = max(firstTime, lastTime)
+        if calendar.isDate(start, inSameDayAs: end) {
+            let style = Date.IntervalFormatStyle(
+                date: .omitted, time: .shortened, locale: locale, calendar: calendar, timeZone: timeZone
+            )
+            return (start..<end).formatted(style)
+        }
+        let style = Date.FormatStyle(
+            date: .omitted, time: .shortened, locale: locale, calendar: calendar, timeZone: timeZone
+        )
+        return "\(start.formatted(style)) – \(end.formatted(style))"
+    }
+}
+
 public enum ToasttyConversationPresentationPhase: Equatable, Sendable {
     case loading
     case live
@@ -364,12 +487,16 @@ public final class ToasttyPreparedTranscript: Equatable, Sendable {
     /// Each tool batch's calls, for a transcript that lists them
     /// (`ToasttyToolCallList`).
     let toolCallsByBlock: [ToasttyTranscriptBlockID: [ToasttyToolCall]]
+    /// The rows of quiet checks, before the running turn is left out
+    /// (`ToasttyConversationPresentationState.quietCheckRuns`).
+    let quietCheckRuns: [ToasttyQuietCheckRun]
 
     public init(rows: [ToasttyTranscriptRow]) {
         self.rows = rows
         blocks = ToasttyTranscriptBlock.group(rows)
         turns = ToasttyTranscriptTurn.turns(for: blocks)
         toolCallsByBlock = ToasttyToolCall.callsByBlock(blocks)
+        quietCheckRuns = ToasttyQuietCheckRun.runs(in: blocks, turns: turns)
     }
 
     public static func == (lhs: ToasttyPreparedTranscript, rhs: ToasttyPreparedTranscript) -> Bool {
@@ -423,6 +550,12 @@ public struct ToasttyConversationPresentationState: Equatable, Sendable {
             settled.remove(last.id)
         }
         return settled
+    }
+
+    /// The rows of quiet checks that the chat shows as one line each. The
+    /// turn that runs keeps its own line until it ends.
+    public func quietCheckRuns(runningTurnID: ToasttyTranscriptRowID?) -> [ToasttyQuietCheckRun] {
+        ToasttyQuietCheckRun.excludingRunningTurn(runningTurnID, from: preparedTranscript.quietCheckRuns)
     }
 
     public func updatingMetadata(
