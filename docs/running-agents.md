@@ -332,6 +332,10 @@ When the profile ID is `codex`, Toastty:
 8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
 9. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the durable per-launch artifacts directory.
 
+Computer Use requests app access through MCP elicitation. When Codex shows its
+app approval menu in the terminal, Toastty uses that menu to show the task in
+**Needs you**. Use the Codex menu to answer the request.
+
 To remove Toastty's Codex state by hand (for example after deleting the app),
 delete the plugin cache subtrees under `$CODEX_HOME/plugins/cache/toastty/` and
 `$CODEX_HOME/plugins/cache/toastty-user/`, the `toastty-managed.config.toml`
