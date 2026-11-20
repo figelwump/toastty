@@ -1253,8 +1253,10 @@ struct WorkspaceView: View {
                 )
                 // Keep background terminals attached, but don't resize their
                 // PTYs or web panels for intermediate window column widths.
-                .frame(width: isSelected && isSelectedTab && store.window(id: windowID)?.showsTasksView != true
-                    ? nil : columnResize.heldWorkspaceWidth, alignment: .topLeading)
+                .modifier(MountedTabViewport(heldWidth:
+                    isSelected && isSelectedTab && store.window(id: windowID)?.showsTasksView != true
+                        ? nil : columnResize.heldWorkspaceWidth
+                ))
                 .opacity(Self.mountedContentOpacity(isVisible: isSelectedTab))
                 .allowsHitTesting(isSelected && isSelectedTab)
                 .accessibilityHidden(!(isSelected && isSelectedTab))

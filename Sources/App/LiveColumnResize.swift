@@ -73,3 +73,15 @@ struct ResizableColumnFrame: ViewModifier {
         content.frame(width: resize.width(for: column) ?? savedWidth)
     }
 }
+
+struct MountedTabViewport: ViewModifier {
+    let heldWidth: CGFloat?
+
+    func body(content: Content) -> some View {
+        // Report the current viewport size to the stack, not a background
+        // tab's wider, held size. Otherwise it can push visible panels offscreen.
+        GeometryReader { viewport in
+            content.frame(width: heldWidth ?? viewport.size.width, height: viewport.size.height)
+        }
+    }
+}

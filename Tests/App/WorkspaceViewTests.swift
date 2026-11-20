@@ -7,6 +7,27 @@ import XCTest
 
 final class WorkspaceViewTests: XCTestCase {
     @MainActor
+    func testHeldTabSizeDoesNotWidenVisibleTab() {
+        struct Probe: NSViewRepresentable {
+            let view: NSView
+            func makeNSView(context: Context) -> NSView { view }
+            func updateNSView(_ nsView: NSView, context: Context) {}
+        }
+        let visible = NSView()
+        let background = NSView()
+        let host = NSHostingView(rootView: ZStack(alignment: .topLeading) {
+            Probe(view: visible).modifier(MountedTabViewport(heldWidth: nil))
+            Probe(view: background).modifier(MountedTabViewport(heldWidth: 800))
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 300),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(visible.frame.width, 640)
+        XCTAssertEqual(background.frame.width, 800)
+    }
+
+    @MainActor
     private struct WorkspaceHarness {
         let windowID: UUID
         let workspaceID: UUID
