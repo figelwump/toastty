@@ -254,7 +254,7 @@ struct CoordinatorChatView: View {
         case .deliveryNotConfirmed:
             "Toastty typed your message, but the conversation did not show it. Check the terminal before you send it again."
         case .typingInterrupted:
-            "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation, then choose Send next or Remove on the paused message."
+            "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation. If the message is there, choose Remove on the paused message. If it is not, choose Send next to send it."
         case .instructionsMayBeCut:
             "Codex may read only the first 32 KiB of the coordinator's instructions: Toastty cannot add project_doc_max_bytes to the arguments of your codex profile. "
                 + "Use a codex profile in ~/.toastty/agents.toml that runs codex itself, or set project_doc_max_bytes = \(CoordinatorFolder.codexProjectDocMaxBytes) in Codex's config.toml, then restart the coordinator."

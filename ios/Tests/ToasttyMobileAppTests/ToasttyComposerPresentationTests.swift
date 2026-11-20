@@ -710,7 +710,8 @@ extension ToasttyComposerPresentationTests {
         XCTAssertEqual(items.map(\.id), ["interrupted", "held", "kept"])
         XCTAssertEqual(queued.map(\.warning), [ToasttySendPresentationAdapter.typingInterruptedWarning, nil, nil])
         XCTAssertEqual(queued.map(\.actionFailure), [nil, nil, ToasttySendPresentationAdapter.removeFailedNotice])
-        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarning.contains("choose Resume or Remove"))
+        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarning.contains("If the message is there, choose Remove"))
+        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarning.contains("If it is not, choose Resume to send it"))
         // The interrupted row keeps the one Resume and its Remove.
         XCTAssertEqual(queued.map(\.resumeTitle), ["Resume all 2", nil, nil])
         XCTAssertTrue(queued.allSatisfy(\.canChange))
@@ -725,6 +726,9 @@ extension ToasttyComposerPresentationTests {
             return queued
         }
         XCTAssertEqual(readOnly.first?.warning, ToasttySendPresentationAdapter.typingInterruptedWarningForTheMac)
+        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarningForTheMac.contains(
+            "in the Mac's chat, choose Remove if the message is there, or Send next if it is not"
+        ))
         XCTAssertTrue(readOnly.allSatisfy { $0.canChange == false && $0.resumeTitle == nil })
     }
 
