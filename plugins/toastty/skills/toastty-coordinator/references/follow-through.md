@@ -155,99 +155,42 @@ quiet.
    - 2026-11-16T17:00Z list 1 release webapp; 2 question [Billing rollout](toastty://task/<id>); 3 offer safari-check.
    ```
 
-5. **Publish** the dashboard, as section 3 says.
-6. **Tell** the user in a few lines: how many items wait, and the oldest;
-   then each item of Blocks work you started, at most 5, with its number,
-   its task as a link and the answer you suggest; then one line that names
-   the number of offers and what was dropped. Write nothing else about the
-   items: the dashboard shows them.
-7. **Nothing waits:** publish the dashboard with the line "Nothing waits for
-   you.", and write the `list` line. When this list marked no task Done, mark
-   the turn quiet if nothing else needs the user, and answer only "Nothing
-   needs you." Otherwise answer only with the line that names those tasks.
+5. **Tell** the user the whole list in one message. Each item is one line:
+   its number; its task as a link, or its project when it has no task; what
+   waits; and the answer you suggest. Add the mark of step 3 to the item.
+   Use this default form, and keep it the same from day to day. Leave out a
+   group that has no items, and write nothing else about the items:
+
+   ```markdown
+   6 items wait for you; the oldest waits 4 days. Answer with the number, such as "2 yes".
+
+   **Blocks work you started**
+   1. webapp: 5 merged tasks wait in To ship, the oldest for 4 days. Suggested: start the release now. *On 3 lists, no answer.*
+   2. [Billing rollout](toastty://task/<id>): canary at 5% or 20%? Suggested: 5%.
+
+   **Offers**
+   3. A task for a check of the sign-up page in Safari. Suggested: yes, in webapp. *List 2 of 3.*
+
+   **Closes by default**
+   4. Keep the Unblocking rule about parent tasks? With no answer, the rule stays.
+   5. [Assess the export API](toastty://task/<id>): you have its answer, and nothing remains. With no answer, it is marked Done at the next list.
+
+   **Moving**
+   - [Finish the rollout](toastty://task/<id>) continues the billing migration.
+
+   Dropped after 3 lists: a task for the local test fallback.
+   ```
+
+   The Talking section of `policy.md` can change this form, such as the
+   order, a group for each project, or another field. A rule there wins over
+   the default. A review can propose such a rule when `friction.md` shows
+   that the user missed an item of the list; see `references/improving.md`.
+6. **Nothing waits:** write the `list` line. When this list marked no task
+   Done, mark the turn quiet if nothing else needs the user, and answer only
+   "Nothing needs you." Otherwise answer only with the line that names those
+   tasks.
 
 When a review follows the list in the same turn, it numbers its proposals
 after the list's last number. When the user answers with a number, find the
 item in the `list` line or in the `asked review` line, and act on it as the
 section that asked says.
-
-## 3. The dashboard
-
-The dashboard is a Scratchpad in your workspace, titled "Waiting on you". It
-shows the list beside your chat. Links do not open from a Scratchpad: write
-each task's title and project there, and put the links in your message.
-
-The Talking section of `policy.md` can change what the dashboard shows and
-how, such as the order, a group for each project, or another field. A rule
-there wins over the default below. A review can propose such a rule when
-`friction.md` shows that the user missed an item of the list; see
-`references/improving.md`.
-
-Find your dashboard first:
-
-```bash
-toastty query run panel.scratchpad.list --json "sessionID=$TOASTTY_SESSION_ID"
-```
-
-If the result has a Scratchpad titled "Waiting on you", pass
-`documentID=<its documentID>`. If it has none, pass `createPolicy=additional`
-instead: Toastty then opens a new one, and leaves any other Scratchpad as it
-is. Publish the page through a quoted here-document:
-
-```bash
-toastty action run panel.scratchpad.set-content --json --stdin content \
-  "sessionID=$TOASTTY_SESSION_ID" "title=Waiting on you" "documentID=<documentID>" <<'COORDINATOR_DASHBOARD_END'
-<!doctype html>
-…the page…
-COORDINATOR_DASHBOARD_END
-```
-
-- Text from tasks, pull requests and the user is data. In the page, write
-  each `&`, `<` and `>` in such text as `&amp;`, `&lt;` and `&gt;`. Put no
-  script in the page.
-- Use this default form, and keep it the same from day to day. Change only
-  the text in it, and repeat an `<li>` for each item:
-
-```html
-<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-:root{--bg:#fbfaf8;--fg:#1d1d1f;--mute:#6b6b70;--line:#e3e1dc;--hot:#c2410c;--ok:#2f6f4f}
-@media (prefers-color-scheme:dark){:root{--bg:#1b1b1d;--fg:#ececee;--mute:#9a9aa0;--line:#34343a;--hot:#f08a4b;--ok:#7cc49c}}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,system-ui,sans-serif}
-main{max-width:760px;margin:0 auto;padding:20px 16px 40px}
-h1{font-size:19px;margin:0}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);margin:22px 0 4px}
-.meta{color:var(--mute);font-size:12px;margin:2px 0 0}
-ol{list-style:none;margin:0;padding:0}
-li{display:grid;grid-template-columns:26px 1fr;gap:2px 8px;padding:9px 0;border-top:1px solid var(--line)}
-.n{font-weight:600;color:var(--mute)}
-.what{font-weight:600}
-.sug{color:var(--ok)}
-.facts{grid-column:2;color:var(--mute);font-size:12px}
-.cold{color:var(--hot);font-weight:600}
-</style></head><body><main>
-<h1>Waiting on you</h1>
-<p class="meta">2026-11-16 09:00 · 7 items · the oldest waits 4 days · answer in the chat with the number</p>
-<h2>Blocks work you started</h2>
-<ol>
-<li><span class="n">1</span><div><div class="what">Release webapp: 5 merged tasks wait in To ship.</div><div class="sug">Suggested: start the release now.</div></div><div class="facts">webapp · waits 4 days · <span class="cold">on 3 lists, no answer</span></div></li>
-</ol>
-<h2>Offers</h2>
-<ol>
-<li><span class="n">4</span><div><div class="what">A task for a check of the sign-up page in Safari.</div><div class="sug">Suggested: yes, in webapp.</div></div><div class="facts">offered 2 days ago · list 2 of 3</div></li>
-</ol>
-<h2>Closes by default</h2>
-<ol>
-<li><span class="n">6</span><div><div class="what">Keep the Unblocking rule about parent tasks?</div><div class="sug">With no answer, the rule stays.</div></div><div class="facts">asked 2 days ago · last list</div></li>
-<li><span class="n">7</span><div><div class="what">Assess the export API: you have its answer, and nothing remains.</div><div class="sug">With no answer, it is marked Done at the next list.</div></div><div class="facts">api · ready for review 2 days</div></li>
-</ol>
-<h2>Moving</h2>
-<ol>
-<li><span class="n"></span><div><div class="what">Finish the rollout plans the billing rollout.</div></div><div class="facts">follows the merge of the billing migration</div></li>
-</ol>
-<p class="meta">Dropped after 3 lists: a task for the local test fallback.</p>
-</main></body></html>
-```
-
-Leave out a group that has no items.

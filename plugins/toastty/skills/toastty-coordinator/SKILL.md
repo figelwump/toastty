@@ -615,8 +615,7 @@ and when the user asks what waits for them, read
 
 - **After a merge,** you create the task for work that remains.
 - **Each day,** at 09:00 unless Talking says otherwise, you bring one list
-  of what waits for the user: a short message, and your Scratchpad "Waiting
-  on you".
+  of what waits for the user, as one message in your chat.
 - **Finished work with no pull request,** such as an answer, an
   investigation or a parent whose child tasks ended, goes once on that list.
   At the next list, you mark it Done when the user said nothing about it. A

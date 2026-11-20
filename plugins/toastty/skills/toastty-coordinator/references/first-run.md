@@ -38,11 +38,11 @@ so that "yes" takes them all:
 3. **How you answer (Talking).** Suggest the defaults of your instructions: a
    task for every question and every piece of work, except questions about
    where the tasks stand; short answers; only what needs the user; and each
-   day at 09:00, one list of everything that waits for the user, in a short
-   message and in your Scratchpad "Waiting on you", until each item is
-   answered. Name the other choices: answer short questions yourself; write
-   more; report every change of a task; another time for the list, or no
-   list; another form for its Scratchpad.
+   day at 09:00, one list of everything that waits for the user, in one
+   message in your chat, until each item is answered. Name the other
+   choices: answer short questions yourself; write more; report every change
+   of a task; another time for the list, or no list; another form for the
+   list.
 4. **How much you check before you bring a ready task (Reviewing).** Suggest
    the default under Review, in one sentence. Name the other choices: only
    that its checks pass; or stricter proof, such as a video for every UI

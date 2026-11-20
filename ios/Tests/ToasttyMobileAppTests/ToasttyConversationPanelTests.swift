@@ -113,10 +113,10 @@ final class ToasttyConversationPanelTests: XCTestCase {
         let snapshot = ToasttyMobileFixture.withCoordinator(ToasttyMobileFixture.home, status: .idle)
         let all = ToasttyConversationPanels.sections(in: snapshot, for: ToasttyMobileFixture.coordinatorConversationID)
         XCTAssertEqual(Set(all.flatMap(\.panels).map(\.id)),
-                       [ToasttyMobileFixture.coordinatorWaitingPanelID, ToasttyMobileFixture.coordinatorPolicyPanelID])
+                       [ToasttyMobileFixture.coordinatorScratchpadPanelID, ToasttyMobileFixture.coordinatorPolicyPanelID])
         for folder in ["~/.toastty/coordinator", "~/.toastty/coordinator/"] {
             XCTAssertEqual(ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: folder)
-                .flatMap(\.panels).map(\.id), [ToasttyMobileFixture.coordinatorWaitingPanelID], folder)
+                .flatMap(\.panels).map(\.id), [ToasttyMobileFixture.coordinatorScratchpadPanelID], folder)
         }
         XCTAssertEqual(ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: "~/elsewhere")
             .flatMap(\.panels).count, 2)

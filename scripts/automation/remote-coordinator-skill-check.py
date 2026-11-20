@@ -2566,20 +2566,11 @@ def followup_merge(run):
     return first + later
 
 
-def dashboard(run):
-    """The coordinator's Scratchpad "Waiting on you": its revision and its HTML, or (None, '')."""
+def coordinator_scratchpads(run):
+    """The titles of the coordinator's Scratchpads. The daily list is a chat message only."""
     session = run.coordinator().get('sessionID')
     listed = run.cli('query', 'run', 'panel.scratchpad.list', f'sessionID={session}')
-    pads = [s for s in listed.get('scratchpads') or [] if 'waiting on you' in (s.get('title') or '').lower()]
-    if not pads:
-        return None, ''
-    exported = run.cli('action', 'run', 'panel.scratchpad.export', f'sessionID={session}',
-                       f"documentID={pads[0]['documentID']}")
-    path = Path(exported.get('filePath') or '/nonexistent')
-    page = path.read_text() if path.is_file() else ''
-    # The page as the coordinator wrote it, for the run's evidence.
-    (run.artifacts / f"dashboard-r{exported.get('revision')}.html").write_text(page)
-    return exported.get('revision'), page
+    return [s.get('title') or '' for s in listed.get('scratchpads') or []]
 
 
 def asked_line(run, word):
@@ -2594,7 +2585,7 @@ def list_line(run):
 
 
 def daily_list(run):
-    """The list is due: one dashboard and one message; offers expire, answered lines go, counts rise; numbers work."""
+    """The list is due: one message with every item; offers expire, answered lines go, counts rise; numbers work."""
     question = run.create_task('Pick the export format', status='working')
     run.ask(question, 'CSV or JSON for the export?', 'Which format should the export use, CSV or JSON? I suggest CSV.')
     merged = run.create_task('Move links to the new domain', done=True)
@@ -2619,14 +2610,13 @@ def daily_list(run):
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     turns = run.timer_wake()
     said = run.said(turns)
-    revision, page = dashboard(run)
-    lower = page.lower()
-    run.check('it publishes its Scratchpad "Waiting on you"', revision is not None and page, page[:300])
-    run.check('the dashboard lists the open question and the open offer',
-              'export format' in lower and re.search(r'export command|docs/export|document the export', lower), page[:3000])
-    run.check('the dashboard holds no script', '<script' not in lower, page[:300])
-    run.check('the dashboard shows the follow-up that moves', re.search(r'roll ?out', lower), page[:3000], required=False)
-    run.check('the dashboard names the dropped offer', 'screen sharing' in lower, page[:3000], required=False)
+    lower = said.lower()
+    pads = coordinator_scratchpads(run)
+    run.check('it publishes no Scratchpad for the list', not pads, pads)
+    run.check('the message lists the open question and the open offer',
+              'export format' in lower and re.search(r'export command|docs/export|document the export', lower), said)
+    run.check('the message shows the follow-up that moves', re.search(r'roll ?out', lower), said, required=False)
+    run.check('the message names the dropped offer', 'screen sharing' in lower, said, required=False)
     ledger = run.ledger()
     # The list line may name what it dropped or closed; only the asked lines count.
     run.check('the offer that was on 3 lists is dropped from the ledger', not asked_line(run, 'screen-sharing-check'), ledger)
@@ -2649,14 +2639,14 @@ def daily_list(run):
     # The user asks: the list again, with no count and no new list line.
     counted = [line for line in run.ledger().splitlines() if 'listed=' in line]
     asked = run.tell('What waits for me?')
-    again, _ = dashboard(run)
     run.check('a list that the user asked for changes no count', counted == [line for line in run.ledger().splitlines()
                                                                            if 'listed=' in line], run.ledger())
     run.check('a list that the user asked for keeps the time of the list line',
               list_line(run).split()[1:2] == numbered.split()[1:2], run.ledger())
-    run.check('it shows the list again in the dashboard', again is not None and revision is not None and again > revision,
-              [revision, again], required=False)
     run.check('it answers with the question that waits', question.link in run.said(asked), run.said(asked), required=False)
+    run.check('it answers with the offer that waits',
+              re.search(r'export command|docs/export|document the export', run.said(asked).lower()), run.said(asked),
+              required=False)
 
     # The user answers with the number of the offer.
     # The list that the user asked for numbered the items again: answer by its numbers.
@@ -2675,7 +2665,7 @@ def daily_list(run):
 
 
 def daily_list_quiet(run):
-    """The list is due and nothing waits for the user: the dashboard says so, and the turn is quiet."""
+    """The list is due and nothing waits for the user: the turn is quiet."""
     task = waits_for_ci(run)
     run.seed_policy(talking=f"- The coordinator's defaults.\n- Waiting on you list each day at {review_time(-3)}.")
     run.open_coordinator()
@@ -2684,9 +2674,8 @@ def daily_list_quiet(run):
     quiet = [c for t in turns for c in t['commands'] if re.search(r'coordinator\s+wake\b.*--quiet', c)]
     run.check('with nothing on the list, the turn is quiet', quiet, [c for t in turns for c in t['commands']])
     run.check('the ledger has a list line', list_line(run), run.ledger())
-    revision, page = dashboard(run)
-    run.check('the dashboard says that nothing waits', revision is not None and 'nothing waits' in page.lower(),
-              page[:500], required=False)
+    pads = coordinator_scratchpads(run)
+    run.check('it publishes no Scratchpad for the list', not pads, pads)
     run.check('nothing is sent to the task that waits for CI', run.messages(task) == [], run.messages(task))
     wake = run.coordinator()['wake']
     hours = (parse_time(wake['nextWakeAt']) - time.time()) / 3600 if wake.get('nextWakeAt') else None
@@ -2726,16 +2715,15 @@ def done_no_pr(run):
     ]) + '\n')
     run.open_coordinator()
     turns = run.timer_wake()
-    revision, page = dashboard(run)
+    said = run.said(turns)
     run.check('the finished task gets an asked done line', any(finished.id in line for line in done_offers(run)),
               run.ledger())
     run.check('the finished task is not Done before a list offered it', not run.get(finished).get('doneAt'),
               run.get(finished).get('doneAt'))
     run.check('the parent that will still create child tasks is not offered',
               not any(parent.id in line for line in done_offers(run)), run.ledger())
-    run.check('the dashboard shows the finished task before it is closed', 'export api options' in page.lower(),
-              page[:3000])
-    run.check('the dashboard says that it will be marked Done', re.search(r'\bdone\b', page.lower()), page[:3000],
+    run.check('the message links the finished task before it is closed', finished.link in said, said)
+    run.check('the message says that it will be marked Done', re.search(r'\bdone\b', said.lower()), said,
               required=False)
     run.check('nothing is sent to the tasks', not run.messages(finished) and not run.messages(parent),
               [run.messages(finished), run.messages(parent)])

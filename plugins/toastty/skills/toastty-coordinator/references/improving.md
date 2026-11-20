@@ -182,9 +182,9 @@ Steps:
    a line that you proposed in the last 7 days, unless its count rose since.
 3. **A fix for each.** Suggest the smallest one that fits:
    - a rule in `policy.md`, such as a line that you give to each new task;
-   - a line in Talking that changes your daily list or its Scratchpad, when
-     the friction is an item that waited there for days, or a kind of item
-     that the user overlooked;
+   - a line in Talking that changes your daily list, when the friction is
+     an item that waited there for days, or a kind of item that the user
+     overlooked;
    - a task, in the project that owns the cause.
 
    When the cause is in Toastty itself and `policy.md` names no project for
