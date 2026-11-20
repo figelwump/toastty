@@ -44,7 +44,14 @@ final class LiveColumnResize {
 
     func finish(_ column: ResizingColumn, translation: CGFloat, availableWidth: CGFloat) -> CGFloat? {
         guard self.column == column else { return nil }
-        let width = column.width(from: startWidth, translation: translation, availableWidth: availableWidth)
+        let width: CGFloat
+        if case .rightPanel = column {
+            // Remember the requested width, even if today's viewport can only
+            // show part of it. The panel can grow into it in a wider window.
+            width = RightAuxPanelState.clampedWidth(startWidth - translation)
+        } else {
+            width = column.width(from: startWidth, translation: translation, availableWidth: availableWidth)
+        }
         cancel(column)
         return translation != 0 && width != startWidth ? width : nil
     }

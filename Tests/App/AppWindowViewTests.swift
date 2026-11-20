@@ -33,13 +33,11 @@ final class AppWindowViewTests: XCTestCase {
         XCTAssertNil(resize.finish(column, translation: 0, availableWidth: 1000))
     }
 
-    func testPreviewAndCommitUseTheSameColumnLimits() {
+    func testWindowColumnWidthsCommitAtTheirVisibleLimits() {
         let available: CGFloat = 1000
         let cases: [(ResizingColumn, CGFloat, CGFloat, CGFloat)] = [
             (.sidebar, 240, -1000, WindowState.minSidebarWidth),
             (.dock, 300, 1000, WindowState.maxCoordinatorDockWidth(windowWidth: available)),
-            (.rightPanel(workspaceID: UUID(), tabID: UUID()), 400, -1000,
-             RightAuxPanelState.clampedWidth(1400, for: available)),
         ]
         for (column, start, delta, expected) in cases {
             let resize = LiveColumnResize()
@@ -48,6 +46,18 @@ final class AppWindowViewTests: XCTestCase {
             XCTAssertEqual(resize.width(for: column), expected)
             XCTAssertEqual(resize.finish(column, translation: delta, availableWidth: available), expected)
         }
+    }
+
+    func testRightPanelPreviewFitsViewportAndItsSavedWidthSurvivesWidening() throws {
+        let resize = LiveColumnResize()
+        let column = ResizingColumn.rightPanel(workspaceID: UUID(), tabID: UUID())
+        resize.begin(column, width: 400)
+        resize.update(column, translation: -600, availableWidth: 900)
+        XCTAssertEqual(resize.width(for: column), 720)
+        let saved = try XCTUnwrap(resize.finish(column, translation: -600, availableWidth: 900))
+        let panel = RightAuxPanelState(width: saved, hasCustomWidth: true)
+        XCTAssertEqual(panel.effectiveWidth(for: 900), 720)
+        XCTAssertEqual(panel.effectiveWidth(for: 1600), 1000)
     }
 
     func testNavigationControlsFitMinimumSidebarAndReserveHiddenSidebarHeaderSpace() {
