@@ -764,7 +764,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         let warning = queuedNote("warning", "fixture-own-1", in: app)
         XCTAssertTrue(warning.exists)
         XCTAssertTrue(warning.label.contains("Toastty on the Mac quit while it typed this message"), warning.label)
-        XCTAssertTrue(warning.label.contains("choose Resume or Remove"), warning.label)
+        XCTAssertTrue(warning.label.contains("If the message is there, choose Remove"), warning.label)
+        XCTAssertTrue(warning.label.contains("If it is not, choose Resume to send it"), warning.label)
         for id in ["fixture-chat-1", "fixture-chat-2", "fixture-own-2", "fixture-own-3"] {
             XCTAssertFalse(queuedNote("warning", id, in: app).exists, id)
         }

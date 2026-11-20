@@ -1066,10 +1066,12 @@ you when it is not sure, and creates the task.
 - **Typed once.** Toastty saves that it starts to type a message before the
   text goes to the terminal. If Toastty quits in that moment, the message is
   not typed again after the relaunch: it shows as **Paused**, and the chat
-  asks you to check the conversation and to choose **Send next** or
-  **Remove**. A paired iPhone shows the same warning on the message's row,
-  where you choose **Resume** or **Remove**. The same holds for a message
-  that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
+  asks you to check the conversation. If the message is there, choose
+  **Remove**. If it is not, choose **Send next** to send it. A paired iPhone
+  shows the same warning on the message's row, where **Resume** sends the
+  message (**Resume all** when several messages are paused). A phone
+  without send access tells you to choose in the Mac's chat. The same holds
+  for a message that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
   not type a message that the file lists as waiting, because a relaunch
   could then type it a second time: the message waits, the chat says that
   Toastty could not save it, and Toastty tries again every 5 seconds.
