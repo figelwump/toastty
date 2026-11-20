@@ -803,10 +803,36 @@ enum ToasttySendPresentationAdapter {
                         : nil,
                     actionFailure: coordinatorQueue.removeFailures.contains(entry.id) ? removeFailedNotice : nil
                 )),
-                quote: entry.quote.map { ToasttyMessageQuote(text: $0, timeText: entry.quoteTime) }
+                quote: entry.quote.map { ToasttyMessageQuote(text: $0, timeText: entry.quoteTime) },
+                hostMessage: hostMessage(of: entry)
             )
         }
         return mapped + coordinatorItems
+    }
+
+    /// A digest or a message from `coordinator send` that waits in the
+    /// coordinator's queue, as its row will show it: the digest's line, or
+    /// the sender's card. The Mac sends a sender's message without
+    /// Toastty's first line and names the sender apart; a digest comes as
+    /// Toastty typed it.
+    static func hostMessage(of entry: RemoteCoordinatorQueueEntry) -> ToasttyHostMessagePresentation? {
+        let waiting = "waiting"
+        if let sender = entry.sender {
+            return ToasttyHostMessagePresentation(
+                summary: "From \(sender) · \(waiting)",
+                text: entry.text,
+                style: .sender(name: sender, timeText: waiting)
+            )
+        }
+        guard var digest = CoordinatorChatTranscript.hostMessage(entry.text, timeText: waiting),
+              digest.isLine else { return nil }
+        // A shortened digest lost some of its lines, so its count is not
+        // the digest's.
+        if entry.isTextShortened {
+            digest.title = "Toastty"
+            digest.summary = "Toastty · \(waiting)"
+        }
+        return digest
     }
 
     /// The row that offers the one Resume: the first held message of the
@@ -844,7 +870,8 @@ enum ToasttySendPresentationAdapter {
             content: item.content,
             sentCaption: item.sentCaption,
             quote: quote,
-            attachments: item.attachments
+            attachments: item.attachments,
+            hostMessage: item.hostMessage
         )
     }
 

@@ -20,7 +20,13 @@ public enum CoordinatorDigestFold {
 
     /// The one line the chat shows for a digest: "Toastty · 2 updates · 14:05".
     public static func summary(updateCount: Int, time: String) -> String {
-        let updates = updateCount == 1 ? "1 update" : "\(updateCount) updates"
-        return "Toastty · \(updates) · \(time)"
+        "\(title(updateCount: updateCount)) · \(time)"
+    }
+
+    /// The line without its time: "Toastty · 2 updates". While the turn
+    /// that the digest started runs, the line shows the turn's running
+    /// time in place of the time.
+    public static func title(updateCount: Int) -> String {
+        updateCount == 1 ? "Toastty · 1 update" : "Toastty · \(updateCount) updates"
     }
 }

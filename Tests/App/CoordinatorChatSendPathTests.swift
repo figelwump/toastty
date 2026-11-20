@@ -108,6 +108,9 @@ struct CoordinatorChatSendPathTests {
         let firstReadID = subscription.transcriptReadID
         try #require(fixture.controller.send(Self.digest, queueWhenHeld: false, id: "wake").wasTyped)
         #expect(fixture.chat.presentation.sendItems.map(\.clientRequestID) == ["wake"])
+        // Until its row comes, the typed digest shows as its line, not as
+        // Toastty's text.
+        #expect(fixture.chat.presentation.sendItems.first?.hostMessage?.title == "Toastty · 1 update")
         fixture.chat.hide()
         try await fixture.waitUntil("the host's unconfirmed receipt") {
             guard case .page(let page) = subscription.events(before: nil, limit: 20) else { return false }

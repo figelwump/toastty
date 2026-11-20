@@ -483,7 +483,8 @@ public struct ToasttyTranscriptView: View {
                         turns: new.turns,
                         settledIDs: new.settledIDs,
                         revision: new.revision,
-                        previousBoundarySequence: old.firstSequence
+                        previousBoundarySequence: old.firstSequence,
+                        opensRunningTurns: options.foldsRunningWork == false
                     )
                 }
                 // Animate only live transitions; initial, rebuilt, and
@@ -507,7 +508,8 @@ public struct ToasttyTranscriptView: View {
     private var transcriptStackContent: some View {
         olderHistoryControl
 
-        let items = displayItems
+        let workingLine = self.workingLine
+        let items = displayItems(workingLine: workingLine)
         let entryContext = scrollTaskKey.responseContext
         let newMessagesItemID = newMessages?.itemID(in: items)
         ForEach(items) { item in
@@ -516,7 +518,7 @@ public struct ToasttyTranscriptView: View {
                     ToasttyNewMessagesDivider()
                         .padding(.bottom, Self.transcriptStackSpacing)
                 }
-                displayItemView(item)
+                displayItemView(item, workingLine: workingLine)
             }
             .background(alignment: .bottom) {
                 if let entryContext, entryContext.markerHostID == item.id {
@@ -542,18 +544,18 @@ public struct ToasttyTranscriptView: View {
 
         // The working row sits between what reached the agent and what waits
         // for the next prompt, so queued messages read as coming after it.
-        sendTailItems(state.sendItems.filter { $0.isQueued == false })
+        sendTailItems(state.sendItems.filter { $0.isQueued == false }, workingLine: workingLine)
 
-        let showsWorkingRow = workingIndicator != nil && state.phase == .live
+        let showsWorkingRow = workingLine == .row
         if let workingIndicator, showsWorkingRow {
-            ToasttyTranscriptWorkingRow(indicator: workingIndicator)
+            ToasttyTranscriptWorkingRow(indicator: workingIndicator, looksLikeStrip: options.foldsRunningWork)
         }
 
-        sendTailItems(state.sendItems.filter(\.isQueued))
+        sendTailItems(state.sendItems.filter(\.isQueued), workingLine: workingLine)
 
         // A session started from the phone has no rows yet; its working row
         // already says what is happening.
-        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading, showsWorkingRow == false {
+        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading, workingLine == .none {
             ContentUnavailableView(
                 "No transcript yet",
                 systemImage: "text.bubble",
@@ -604,20 +606,39 @@ public struct ToasttyTranscriptView: View {
         )
     }
 
-    private func sendTailItems(_ items: [ToasttySendPresentationItem]) -> some View {
+    private func sendTailItems(
+        _ items: [ToasttySendPresentationItem],
+        workingLine: ToasttyTranscriptWorkingLine
+    ) -> some View {
         ForEach(items) { item in
             ToasttySendTailItemView(
                 item: item,
                 dismiss: { dismissSendReceipt(item.clientRequestID) },
-                queuedMessageAction: queuedMessageAction
+                queuedMessageAction: queuedMessageAction,
+                lineWorkingIndicator: workingLine == .send(item.clientRequestID) ? workingIndicator : nil
             )
             .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
         }
     }
 
+    private var workingLine: ToasttyTranscriptWorkingLine {
+        let liveTurnID = self.liveTurnID
+        return .place(
+            isWorking: workingIndicator != nil && state.phase == .live,
+            foldsRunningWork: options.foldsRunningWork,
+            sendItems: state.sendItems,
+            liveTurn: liveTurnID == nil ? nil : state.turns.last,
+            isLiveTurnExpanded: liveTurnID.map(turnFold.isExpanded) ?? false
+        )
+    }
+
     /// Blocks interleaved with per-turn work strips; a folded turn's work
     /// blocks are omitted and its strip stands in for them.
     private var displayItems: [ToasttyTranscriptDisplayItem] {
+        displayItems(workingLine: workingLine)
+    }
+
+    private func displayItems(workingLine: ToasttyTranscriptWorkingLine) -> [ToasttyTranscriptDisplayItem] {
         guard state.turns.isEmpty == false else {
             return state.blocks.map { .block($0, isWork: false) }
         }
@@ -631,13 +652,21 @@ public struct ToasttyTranscriptView: View {
                 turnForWorkBlock[blockID] = turn.id
             }
         }
+        // The running turn's strip shows that the agent works from the
+        // turn's start, under its message, before any work comes.
+        var stripAfterAnchor: ToasttyTranscriptTurn?
+        if case .turn(let turnID) = workingLine,
+           let turn = state.turns.last, turn.id == turnID, turn.workBlockIDs.isEmpty,
+           turn.opensFromAnchorLine(foldsRunningWork: options.foldsRunningWork) == false {
+            stripAfterAnchor = turn
+        }
 
         var items: [ToasttyTranscriptDisplayItem] = []
         items.reserveCapacity(state.blocks.count + state.turns.count)
         for block in state.blocks {
-            // A turn that folds whole has no strip: its host message's own
-            // line opens it.
-            if let turn = turnAtFirstWorkBlock[block.id], turn.foldsWholeTurn == false {
+            // A turn whose host message's line opens it has no strip.
+            if let turn = turnAtFirstWorkBlock[block.id],
+               turn.opensFromAnchorLine(foldsRunningWork: options.foldsRunningWork) == false {
                 items.append(.workStrip(turn))
             }
             if let turnID = turnForWorkBlock[block.id] {
@@ -647,18 +676,25 @@ public struct ToasttyTranscriptView: View {
             } else {
                 items.append(.block(block, isWork: false))
             }
+            if let turn = stripAfterAnchor, block.id.rowID == turn.id {
+                items.append(.workStrip(turn))
+            }
         }
         return items
     }
 
     @ViewBuilder
-    private func displayItemView(_ item: ToasttyTranscriptDisplayItem) -> some View {
+    private func displayItemView(
+        _ item: ToasttyTranscriptDisplayItem,
+        workingLine: ToasttyTranscriptWorkingLine
+    ) -> some View {
         switch item {
         case .workStrip(let turn):
             ToasttyTurnWorkStrip(
                 turn: turn,
                 isExpanded: turnFold.isExpanded(turn.id),
                 isLive: turn.id == liveTurnID,
+                workingIndicator: workingLine == .turn(turn.id) ? workingIndicator : nil,
                 toggle: {
                     withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
                         turnFold.toggle(turn.id)
@@ -667,7 +703,7 @@ public struct ToasttyTranscriptView: View {
             )
         case .block(let block, let isWork):
             if isWork {
-                blockView(block, demoted: true)
+                blockView(block, demoted: true, workingLine: workingLine)
                     .padding(.leading, 14)
                     .overlay(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 1)
@@ -675,7 +711,7 @@ public struct ToasttyTranscriptView: View {
                             .frame(width: 2)
                     }
             } else {
-                blockView(block)
+                blockView(block, workingLine: workingLine)
             }
         }
     }
@@ -776,26 +812,31 @@ public struct ToasttyTranscriptView: View {
         }
     }
 
-    /// The row is a host message whose line folds its whole turn. Its
-    /// disclosure is the turn's fold, so one line opens the message, the
-    /// work and the answer.
-    private func foldsTurn(_ row: ToasttyTranscriptRow) -> Bool {
-        if case .hostMessage(let message) = row.content { return message.foldsTurn }
-        return false
+    /// The row is a host message whose line opens its turn: a line that
+    /// folds the whole turn, or any host's line where the running work
+    /// folds. Its disclosure is the turn's fold, so one line opens the
+    /// message and the work, and the answer of a turn that folds whole.
+    private func opensTurn(_ row: ToasttyTranscriptRow) -> Bool {
+        guard case .hostMessage(let message) = row.content else { return false }
+        return message.foldsTurn || (options.foldsRunningWork && message.isLine)
     }
 
     @ViewBuilder
-    private func blockView(_ block: ToasttyTranscriptBlock, demoted: Bool = false) -> some View {
+    private func blockView(
+        _ block: ToasttyTranscriptBlock,
+        demoted: Bool = false,
+        workingLine: ToasttyTranscriptWorkingLine
+    ) -> some View {
         switch block.content {
         case .row(let row):
             ToasttyTranscriptRowView(
                 row: row,
                 isDemoted: demoted,
-                subagentIsExpanded: foldsTurn(row)
+                subagentIsExpanded: opensTurn(row)
                     ? turnFold.isExpanded(row.id)
                     : expandedSubagentIDs.contains(row.id),
                 toggleSubagentExpansion: {
-                    if foldsTurn(row) {
+                    if opensTurn(row) {
                         withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
                             turnFold.toggle(row.id)
                         }
@@ -803,6 +844,7 @@ public struct ToasttyTranscriptView: View {
                         toggle(row.id, in: &expandedSubagentIDs)
                     }
                 },
+                lineWorkingIndicator: workingLine == .turn(row.id) ? workingIndicator : nil,
                 interactionAnswerStates: interactionAnswerStates,
                 editInteractionAnswer: editInteractionAnswer,
                 submitInteractionAnswer: submitInteractionAnswer,
@@ -821,14 +863,21 @@ public struct ToasttyTranscriptView: View {
                 interactionAnswerFeedback: interactionAnswerFeedback
             )
         case .toolBatch(let rows):
-            ToasttyToolBatchCard(
-                blockID: block.id,
-                rows: rows,
-                isExpanded: toolBatchDisclosure.isExpanded(block.id),
-                toggleDetails: {
-                    toolBatchDisclosure.toggle(block.id)
-                }
-            )
+            if options.foldsRunningWork {
+                ToasttyToolCallList(
+                    blockID: block.id,
+                    calls: state.preparedTranscript.toolCallsByBlock[block.id] ?? ToasttyToolCall.calls(in: rows)
+                )
+            } else {
+                ToasttyToolBatchCard(
+                    blockID: block.id,
+                    rows: rows,
+                    isExpanded: toolBatchDisclosure.isExpanded(block.id),
+                    toggleDetails: {
+                        toolBatchDisclosure.toggle(block.id)
+                    }
+                )
+            }
         }
     }
 
@@ -851,7 +900,8 @@ public struct ToasttyTranscriptView: View {
         items: [ToasttyTranscriptDisplayItem]
     ) -> TranscriptResponseEntryContext {
         TranscriptResponseEntryContext(
-            responseID: blockID, items: items, expandedToolBatchIDs: toolBatchDisclosure.expandedIDs
+            responseID: blockID, items: items, expandedToolBatchIDs: toolBatchDisclosure.expandedIDs,
+            toolBatchesAreCards: options.foldsRunningWork == false
         )
     }
 
@@ -1771,10 +1821,14 @@ struct TranscriptResponseEntryContext: Equatable {
     let target: ToasttyConversationScrollTarget
     let markerHostID: ToasttyConversationScrollTarget?
 
+    /// - Parameter toolBatchesAreCards: a tool batch is a card that shows
+    ///   its calls only when it is open. Where running work folds, a batch
+    ///   is its list of calls, as tall as an open card.
     init(
         responseID: ToasttyTranscriptBlockID,
         items: [ToasttyTranscriptDisplayItem],
-        expandedToolBatchIDs: Set<ToasttyTranscriptBlockID> = []
+        expandedToolBatchIDs: Set<ToasttyTranscriptBlockID> = [],
+        toolBatchesAreCards: Bool = true
     ) {
         guard let index = items.firstIndex(where: { $0.id == .transcript(responseID) }),
               index > items.startIndex
@@ -1792,7 +1846,7 @@ struct TranscriptResponseEntryContext: Equatable {
             if case .toolBatch = block.content {
                 // Expanded tool output can fill the viewport. Keep the answer
                 // visible instead of opening at the top of those details.
-                isCard = !expandedToolBatchIDs.contains(block.id)
+                isCard = toolBatchesAreCards && !expandedToolBatchIDs.contains(block.id)
             } else {
                 isCard = false
             }
@@ -1952,8 +2006,12 @@ private struct ToasttySendTailItemView: View {
     let item: ToasttySendPresentationItem
     let dismiss: () -> Void
     var queuedMessageAction: (ToasttyQueuedMessageAction) -> Void = { _ in }
+    /// Set when the line of this host's message shows that the agent works:
+    /// the message was typed and its row has not come yet.
+    var lineWorkingIndicator: ToasttyTranscriptWorkingIndicator?
     @Environment(\.toasttyTranscriptOptions) private var options
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var hostMessageIsExpanded = false
 
     /// A waiting message's actions stand in a row. At an accessibility
     /// text size a row breaks their titles in the middle of a word, so
@@ -1968,11 +2026,21 @@ private struct ToasttySendTailItemView: View {
     var body: some View {
         switch item.content {
         case .optimistic:
-            optimisticBubble
+            if let hostMessage = item.hostMessage {
+                hostMessageView(hostMessage, workingIndicator: lineWorkingIndicator)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
+            } else {
+                optimisticBubble
+            }
         case .receipt(let receipt):
             receiptCard(receipt)
         case .queued(let queued):
-            queuedBubble(queued)
+            if let hostMessage = item.hostMessage {
+                queuedHostMessage(queued, hostMessage)
+            } else {
+                queuedBubble(queued)
+            }
         }
     }
 
@@ -1980,12 +2048,7 @@ private struct ToasttySendTailItemView: View {
     /// agent yet; the actions change the queue, not the transcript.
     private func queuedBubble(_ queued: ToasttyQueuedSendPresentation) -> some View {
         VStack(alignment: .trailing, spacing: 7) {
-            Text(queued.isPaused
-                ? "Paused · queued \(queued.position)"
-                : queued.waitingCaption ?? "Queued \(queued.position) · sends after this turn")
-                .conversationFont(.caption2, weight: .semibold, monospaced: true)
-                .foregroundStyle(ConversationDesignTokens.amberText)
-                .textCase(.uppercase)
+            queuedCaption(queued)
             if let quote = item.quote {
                 ToasttyMessageQuoteStrip(quote: quote)
             }
@@ -1998,35 +2061,7 @@ private struct ToasttySendTailItemView: View {
                     .conversationFont(.caption2, monospaced: true)
                     .foregroundStyle(ConversationDesignTokens.mutedText)
             }
-            if let warning = queued.warning {
-                queuedNote(warning, systemImage: "exclamationmark.triangle", key: "warning")
-            }
-            if let failure = queued.actionFailure {
-                queuedNote(failure, systemImage: "exclamationmark.circle", key: "failure")
-            }
-            if queued.canChange || queued.canSteer || queued.resumeTitle != nil {
-                queuedActionsLayout {
-                    if let resumeTitle = queued.resumeTitle {
-                        queuedAction(resumeTitle, "resume") { queuedMessageAction(.resume) }
-                    }
-                    if queued.canEdit {
-                        queuedAction("Edit", "edit") {
-                            queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
-                        }
-                    }
-                    if queued.canSteer {
-                        queuedAction("Steer now", "steer") {
-                            queuedMessageAction(.steer(clientRequestID: item.clientRequestID, text: item.text))
-                        }
-                    }
-                    if queued.canChange {
-                        queuedAction("Remove", "remove") {
-                            queuedMessageAction(.remove(clientRequestID: item.clientRequestID))
-                        }
-                    }
-                }
-                .padding(.top, 2)
-            }
+            queuedNotesAndActions(queued)
         }
         .padding(12)
         .overlay {
@@ -2038,8 +2073,102 @@ private struct ToasttySendTailItemView: View {
         .padding(.leading, 48)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(item.text), \(queued.isPaused ? "Paused in queue" : "Queued, sends after this turn")")
+        .accessibilityLabel("\(item.text), \(queuedAccessibilityState(queued))")
         .accessibilityIdentifier("toastty-mobile-send-queued-\(item.clientRequestID)")
+    }
+
+    /// A host's message waiting on the Mac, such as a digest or a message
+    /// that `coordinator send` brought: the line or card that its row will
+    /// show, under the queue's caption and over the queue's actions.
+    private func queuedHostMessage(
+        _ queued: ToasttyQueuedSendPresentation,
+        _ message: ToasttyHostMessagePresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            queuedCaption(queued)
+            hostMessageView(message, workingIndicator: nil)
+            queuedNotesAndActions(queued)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(hostMessageAccessibilityText(message)), \(queuedAccessibilityState(queued))")
+        .accessibilityIdentifier("toastty-mobile-send-queued-\(item.clientRequestID)")
+    }
+
+    @ViewBuilder
+    private func hostMessageView(
+        _ message: ToasttyHostMessagePresentation,
+        workingIndicator: ToasttyTranscriptWorkingIndicator?
+    ) -> some View {
+        switch message.style {
+        case .disclosure:
+            ToasttyHostMessageLine(
+                message: message,
+                isExpanded: hostMessageIsExpanded,
+                workingIndicator: workingIndicator,
+                toggle: { hostMessageIsExpanded.toggle() },
+                accessibilitySuffix: "send-\(item.clientRequestID)"
+            )
+        case .sender(let sender, let timeText):
+            ToasttySenderMessageCard(
+                sender: sender, timeText: timeText, text: message.text,
+                isExpanded: hostMessageIsExpanded, toggleExpansion: { hostMessageIsExpanded.toggle() },
+                accessibilitySuffix: "send-\(item.clientRequestID)"
+            )
+        }
+    }
+
+    private func hostMessageAccessibilityText(_ message: ToasttyHostMessagePresentation) -> String {
+        switch message.style {
+        case .disclosure: message.summary
+        case .sender(let sender, _): "From \(sender): \(message.text)"
+        }
+    }
+
+    private func queuedAccessibilityState(_ queued: ToasttyQueuedSendPresentation) -> String {
+        queued.isPaused ? "Paused in queue" : "Queued, sends after this turn"
+    }
+
+    private func queuedCaption(_ queued: ToasttyQueuedSendPresentation) -> some View {
+        Text(queued.isPaused
+            ? "Paused · queued \(queued.position)"
+            : queued.waitingCaption ?? "Queued \(queued.position) · sends after this turn")
+            .conversationFont(.caption2, weight: .semibold, monospaced: true)
+            .foregroundStyle(ConversationDesignTokens.amberText)
+            .textCase(.uppercase)
+    }
+
+    @ViewBuilder
+    private func queuedNotesAndActions(_ queued: ToasttyQueuedSendPresentation) -> some View {
+        if let warning = queued.warning {
+            queuedNote(warning, systemImage: "exclamationmark.triangle", key: "warning")
+        }
+        if let failure = queued.actionFailure {
+            queuedNote(failure, systemImage: "exclamationmark.circle", key: "failure")
+        }
+        if queued.canChange || queued.canSteer || queued.resumeTitle != nil {
+            queuedActionsLayout {
+                if let resumeTitle = queued.resumeTitle {
+                    queuedAction(resumeTitle, "resume") { queuedMessageAction(.resume) }
+                }
+                if queued.canEdit {
+                    queuedAction("Edit", "edit") {
+                        queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
+                    }
+                }
+                if queued.canSteer {
+                    queuedAction("Steer now", "steer") {
+                        queuedMessageAction(.steer(clientRequestID: item.clientRequestID, text: item.text))
+                    }
+                }
+                if queued.canChange {
+                    queuedAction("Remove", "remove") {
+                        queuedMessageAction(.remove(clientRequestID: item.clientRequestID))
+                    }
+                }
+            }
+            .padding(.top, 2)
+        }
     }
 
     /// A line above a waiting message's actions that the user should read
@@ -2193,6 +2322,72 @@ private struct ToasttyMessageQuoteStrip: View {
     }
 }
 
+/// The one muted, centered line of a host's message, such as a digest, that
+/// opens to the text the host typed. While the turn that the message
+/// started runs with its work folded, the line shows that the agent works,
+/// with the turn's running time: "Toastty · 1 update · working 16s".
+private struct ToasttyHostMessageLine: View {
+    let message: ToasttyHostMessagePresentation
+    let isExpanded: Bool
+    var workingIndicator: ToasttyTranscriptWorkingIndicator?
+    let toggle: () -> Void
+    let accessibilitySuffix: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: toggle) {
+                if let workingIndicator {
+                    ToasttyWorkingTime(indicator: workingIndicator) { elapsed in
+                        line(text: workingText(elapsed: elapsed))
+                    }
+                } else {
+                    line(text: message.summary)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(workingIndicator == nil ? message.summary : workingText(elapsed: nil))
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("toastty-mobile-transcript-host-message-\(accessibilitySuffix)")
+
+            if isExpanded {
+                ToasttySelectableText(AttributedString(message.text), monospaced: true,
+                                      textColor: ConversationDesignTokens.secondaryText, lineSpacing: 3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ConversationDesignTokens.raisedSurface)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: ConversationDesignTokens.controlCornerRadius,
+                        style: .continuous
+                    ))
+            }
+        }
+    }
+
+    private func line(text: String) -> some View {
+        HStack(spacing: 6) {
+            if workingIndicator != nil {
+                ToasttySpinner(size: 9)
+            }
+            Text(text)
+                .monospacedDigit()
+            if workingIndicator == nil {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .conversationFont(.caption2, weight: .semibold)
+            }
+        }
+        .conversationFont(.caption)
+        .foregroundStyle(ConversationDesignTokens.mutedText)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+    }
+
+    private func workingText(elapsed: String?) -> String {
+        ["\(message.title ?? message.summary) · working", elapsed].compactMap { $0 }.joined(separator: " ")
+    }
+}
+
 /// The message row under the pointer. A long message is drawn as several
 /// rows, and its copy button, under the last row, shows while the pointer is
 /// over any of them.
@@ -2207,6 +2402,9 @@ private struct ToasttyTranscriptRowView: View {
     var isDemoted = false
     let subagentIsExpanded: Bool
     let toggleSubagentExpansion: () -> Void
+    /// Set when the line of this host's message shows that the agent works
+    /// on the turn the message started.
+    var lineWorkingIndicator: ToasttyTranscriptWorkingIndicator?
     let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
     let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
@@ -2272,7 +2470,13 @@ private struct ToasttyTranscriptRowView: View {
         case .hostMessage(let message):
             switch message.style {
             case .disclosure:
-                hostMessage(message)
+                ToasttyHostMessageLine(
+                    message: message,
+                    isExpanded: subagentIsExpanded,
+                    workingIndicator: lineWorkingIndicator,
+                    toggle: toggleSubagentExpansion,
+                    accessibilitySuffix: row.id.accessibilitySuffix
+                )
             case .sender(let sender, let timeText):
                 ToasttySenderMessageCard(
                     sender: sender, timeText: timeText, text: message.text,
@@ -2463,42 +2667,6 @@ private struct ToasttyTranscriptRowView: View {
             try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }
             messageCopyCount = 0
-        }
-    }
-
-    /// One muted, centered line that opens to the text the host typed. The
-    /// row's disclosure state is the one a subagent row uses.
-    private func hostMessage(_ message: ToasttyHostMessagePresentation) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: toggleSubagentExpansion) {
-                HStack(spacing: 6) {
-                    Text(message.summary)
-                    Image(systemName: subagentIsExpanded ? "chevron.down" : "chevron.right")
-                        .conversationFont(.caption2, weight: .semibold)
-                }
-                .conversationFont(.caption)
-                .foregroundStyle(ConversationDesignTokens.mutedText)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 3)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(message.summary)
-            .accessibilityValue(subagentIsExpanded ? "Expanded" : "Collapsed")
-            .accessibilityIdentifier("toastty-mobile-transcript-host-message-\(row.id.accessibilitySuffix)")
-
-            if subagentIsExpanded {
-                ToasttySelectableText(AttributedString(message.text), monospaced: true,
-                                      textColor: ConversationDesignTokens.secondaryText, lineSpacing: 3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ConversationDesignTokens.raisedSurface)
-                    .clipShape(RoundedRectangle(
-                        cornerRadius: ConversationDesignTokens.controlCornerRadius,
-                        style: .continuous
-                    ))
-            }
         }
     }
 

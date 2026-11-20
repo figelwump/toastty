@@ -47,6 +47,10 @@ public struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
     public let quote: ToasttyMessageQuote?
     /// The local files sent with the message, as its row will show them.
     public let attachments: [URL]
+    /// A message that the host typed, such as a digest, as its row will
+    /// show it: the tail shows this line or card in place of a bubble with
+    /// `text`. The queue's actions still act on `text`.
+    public let hostMessage: ToasttyHostMessagePresentation?
 
     public init(
         clientRequestID: String,
@@ -54,7 +58,8 @@ public struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
         content: Content,
         sentCaption: String? = nil,
         quote: ToasttyMessageQuote? = nil,
-        attachments: [URL] = []
+        attachments: [URL] = [],
+        hostMessage: ToasttyHostMessagePresentation? = nil
     ) {
         self.clientRequestID = clientRequestID
         self.text = text
@@ -62,6 +67,7 @@ public struct ToasttySendPresentationItem: Identifiable, Equatable, Sendable {
         self.sentCaption = sentCaption
         self.quote = quote
         self.attachments = attachments
+        self.hostMessage = hostMessage
     }
 
     public var isQueued: Bool {

@@ -253,6 +253,168 @@ final class ToasttyTurnPresentationTests: XCTestCase {
         )
     }
 
+    /// Where the host folds running work, as the coordinator's chats do, a
+    /// running turn stays folded from its start to its end. The reader can
+    /// still open it, and work that was on screen before a prepend still
+    /// does not vanish.
+    func testFoldStateKeepsRunningWorkFoldedWhereTheHostFoldsIt() {
+        let settled = turnStub(id: 2, workSequences: [3, 4], hasResponse: true)
+        let live = turnStub(id: 8, workSequences: [9], hasResponse: false)
+        var fold = ToasttyTurnFoldState()
+
+        for revision in [ToasttyTranscriptRevision.initial, .appended, .metadataOnly, .rebuilt] {
+            fold.reconcile(
+                turns: [settled, live], settledIDs: [settled.id], revision: revision,
+                previousBoundarySequence: nil, opensRunningTurns: false
+            )
+            XCTAssertFalse(fold.isExpanded(live.id), "\(revision)")
+            XCTAssertFalse(fold.isExpanded(settled.id), "\(revision)")
+        }
+
+        fold.toggle(live.id)
+        fold.reconcile(
+            turns: [settled, live], settledIDs: [settled.id], revision: .appended,
+            previousBoundarySequence: nil, opensRunningTurns: false
+        )
+        XCTAssertTrue(fold.isExpanded(live.id), "The reader's open survives later work")
+
+        var history = ToasttyTurnFoldState()
+        history.reconcile(turns: [], settledIDs: [], revision: .initial, previousBoundarySequence: nil,
+                          opensRunningTurns: false)
+        let spanning = turnStub(id: 8, workSequences: [9, 10], hasResponse: false)
+        history.reconcile(
+            turns: [spanning], settledIDs: [], revision: .prepended,
+            previousBoundarySequence: 9, opensRunningTurns: false
+        )
+        XCTAssertTrue(history.isExpanded(spanning.id), "Work that was on screen must not vanish on prepend")
+        history.reconcile(
+            turns: [spanning], settledIDs: [], revision: .appended,
+            previousBoundarySequence: nil, opensRunningTurns: false
+        )
+        XCTAssertTrue(history.isExpanded(spanning.id), "Work that was on screen must not vanish on the next update")
+    }
+
+    /// One place shows that the agent works: the end of the running turn.
+    /// With folded work that is the turn's own line, or the line of a
+    /// digest that was typed and is not in the transcript yet. Otherwise,
+    /// it is the working row: while the reader has the turn open, and after
+    /// the turn's answer, when the agent works on a message that the
+    /// transcript does not show yet. A failed send's receipt changes
+    /// nothing.
+    func testTheWorkingLineSitsAtTheEndOfTheRunningTurn() {
+        let live = rowID(8)
+        let running = turnStub(id: 8, workSequences: [9], hasResponse: false)
+        let answered = turnStub(id: 8, workSequences: [9], hasResponse: true)
+        let receipt = ToasttySendPresentationItem(
+            clientRequestID: "failed", text: "Merge it", content: .receipt(.init(kind: .rejected(.promptNotOpen)))
+        )
+        let typedDigest = ToasttySendPresentationItem(
+            clientRequestID: "wake", text: "[Toastty] Wake", content: .optimistic(response: .accepted),
+            hostMessage: ToasttyHostMessagePresentation(summary: "Toastty · 1 update · 2:01 PM", text: "[Toastty] Wake")
+        )
+        let typedSender = ToasttySendPresentationItem(
+            clientRequestID: "send", text: "[Toastty] From task", content: .optimistic(response: .accepted),
+            hostMessage: ToasttyHostMessagePresentation(
+                summary: "From task · 2:01 PM", text: "Done", style: .sender(name: "task", timeText: "2:01 PM")
+            )
+        )
+        let typedByUser = ToasttySendPresentationItem(
+            clientRequestID: "user", text: "Also check CI", content: .optimistic(response: .accepted)
+        )
+        let waitingDigest = ToasttySendPresentationItem(
+            clientRequestID: "later", text: "[Toastty] Wake",
+            content: .queued(ToasttyQueuedSendPresentation(position: 1, attachmentCount: 0, isPaused: false, canSteer: false)),
+            hostMessage: typedDigest.hostMessage
+        )
+        func place(
+            isWorking: Bool = true, folds: Bool = true, sends: [ToasttySendPresentationItem] = [],
+            liveTurn: ToasttyTranscriptTurn? = running, expanded: Bool = false
+        ) -> ToasttyTranscriptWorkingLine {
+            .place(isWorking: isWorking, foldsRunningWork: folds, sendItems: sends,
+                   liveTurn: liveTurn, isLiveTurnExpanded: expanded)
+        }
+
+        XCTAssertEqual(place(isWorking: false), .none)
+        XCTAssertEqual(place(folds: false), .row, "Open work ends with the working row")
+        XCTAssertEqual(place(folds: false, sends: [typedDigest]), .row)
+        XCTAssertEqual(place(), .turn(live))
+        XCTAssertEqual(place(expanded: true), .row, "An open turn's end is the row under its work")
+        XCTAssertEqual(place(liveTurn: nil), .row, "Before the turn's message comes")
+        XCTAssertEqual(place(sends: [typedDigest]), .send("wake"))
+        XCTAssertEqual(place(sends: [typedDigest, waitingDigest]), .send("wake"), "Waiting messages come after it")
+        XCTAssertEqual(place(sends: [waitingDigest]), .turn(live))
+        XCTAssertEqual(place(sends: [typedSender]), .row, "A card is not a line")
+        XCTAssertEqual(place(sends: [typedDigest, typedByUser]), .row)
+        XCTAssertEqual(place(liveTurn: answered), .row, "After its answer the turn may not be the one that runs")
+        XCTAssertEqual(place(sends: [receipt]), .turn(live))
+        XCTAssertEqual(place(sends: [typedDigest, receipt]), .send("wake"))
+    }
+
+    /// A digest's line is its turn's line where running work folds: no work
+    /// strip, and a click opens the digest and the work. A sender's card and
+    /// the user's message do not stand in for the strip. A quiet turn's
+    /// line opens it in every chat.
+    func testADigestsLineStandsInForTheWorkStripWhereRunningWorkFolds() {
+        let rows: [ToasttyTranscriptRow] = [
+            row(1, .hostMessage(.init(summary: "Toastty · 1 update · 2:01 PM", text: "[Toastty] Wake"))),
+            row(2, .toolStarted(callID: "a", name: "Bash", detail: "toastty task list")),
+            row(3, .assistantMessage(text: "Ready for review.", phase: .final)),
+            row(4, .hostMessage(.init(summary: "From task · 2:02 PM", text: "Done",
+                                      style: .sender(name: "task", timeText: "2:02 PM")))),
+            row(5, .toolStarted(callID: "b", name: "Bash", detail: "gh pr view")),
+            row(6, .assistantMessage(text: "Noted.", phase: .final)),
+            row(7, .hostMessage(.init(summary: "Toastty · 1 update · 2:05 PM", text: "[Toastty] Wake", foldsTurn: true))),
+            row(8, .toolStarted(callID: "c", name: "Bash", detail: "toastty task list")),
+            row(9, .userMessage(text: "Status?", origin: .local)),
+            row(10, .toolStarted(callID: "d", name: "Bash", detail: "toastty task list")),
+        ]
+        let turns = ToasttyConversationPresentationState(
+            rows: rows, phase: .live, revision: .initial, historyTruncated: false
+        ).turns
+
+        XCTAssertEqual(turns.map(\.anchorIsLine), [true, false, true, false])
+        XCTAssertEqual(turns.map { $0.opensFromAnchorLine(foldsRunningWork: true) }, [true, false, true, false])
+        XCTAssertEqual(turns.map { $0.opensFromAnchorLine(foldsRunningWork: false) }, [false, false, true, false])
+        XCTAssertFalse(turns[0].workBlockIDs.contains { $0.rowID.sequence == 3 }, "A digest turn's answer stays out")
+    }
+
+    /// The coordinator's chat shows each tool call as one line: a call's end
+    /// updates the line its start made, and the calls keep their order.
+    func testToolCallsMergeTheirStartAndEnd() {
+        let calls = ToasttyToolCall.calls(in: [
+            row(1, .toolStarted(callID: "a", name: "Bash", detail: "toastty task list")),
+            row(2, .toolStarted(callID: "b", name: "Read", detail: "policy.md")),
+            row(3, .toolFinished(callID: "a", name: "Bash", outcome: .failed, detail: "exit 1")),
+            row(4, .toolFinished(callID: "c", name: "Tool", outcome: .succeeded, detail: nil)),
+            row(5, .toolFinished(callID: "b", name: "Read", outcome: .succeeded, detail: "policy.md")),
+        ])
+        XCTAssertEqual(calls.map(\.id), ["a", "b", "c"])
+        XCTAssertEqual(calls.map(\.name), ["Bash", "Read", "Tool"])
+        XCTAssertEqual(calls.map(\.outcome), [.failed, .succeeded, .succeeded])
+        XCTAssertEqual(calls.map(\.details), [["toastty task list", "exit 1"], ["policy.md"], []])
+
+        let running = ToasttyToolCall.calls(in: [row(1, .toolStarted(callID: "a", name: "Bash", detail: nil))])
+        XCTAssertEqual(running.map(\.outcome), [nil])
+
+        // An approval between a call's start and its end splits them into
+        // two batches: the call shows once, where it starts, with its end.
+        let state = ToasttyConversationPresentationState(rows: [
+            row(1, .userMessage(text: "Merge it", origin: .local)),
+            row(2, .toolStarted(callID: "merge", name: "Bash", detail: "toastty task request-merge")),
+            row(3, .interaction(ToasttyInteractionPresentation(interaction: pendingInteraction))),
+            row(4, .toolFinished(callID: "merge", name: "Bash", outcome: .succeeded, detail: nil)),
+        ], phase: .live, revision: .initial, historyTruncated: false)
+        let batches = state.blocks.compactMap { block -> ToasttyTranscriptBlockID? in
+            if case .toolBatch = block.content { return block.id }
+            return nil
+        }
+        XCTAssertEqual(batches.count, 2)
+        let calls = batches.map { state.preparedTranscript.toolCallsByBlock[$0] ?? [] }
+        XCTAssertEqual(calls[0].map(\.outcome), [.succeeded])
+        XCTAssertEqual(calls[0].map(\.details), [["toastty task request-merge"]])
+        XCTAssertEqual(calls[1], [])
+    }
+
     private func turnStub(
         id sequence: UInt64,
         workSequences: [UInt64],

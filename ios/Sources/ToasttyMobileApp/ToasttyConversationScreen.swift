@@ -123,8 +123,12 @@ struct ToasttyConversationScreen: View {
     }
 
     /// The coordinator's chat has Copy under each message, always shown on
-    /// a phone, as the Mac's coordinator chat has it under the pointer.
-    static let coordinatorTranscriptOptions = ToasttyTranscriptOptions(showsMessageCopyButton: true)
+    /// a phone, as the Mac's coordinator chat has it under the pointer. As
+    /// on the Mac, a turn's work stays folded under one line while it runs.
+    static let coordinatorTranscriptOptions = ToasttyTranscriptOptions(
+        showsMessageCopyButton: true,
+        foldsRunningWork: true
+    )
 
     var body: some View {
         let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard, finished: controller.finishedTasks)

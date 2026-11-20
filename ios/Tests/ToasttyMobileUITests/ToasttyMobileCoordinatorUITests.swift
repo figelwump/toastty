@@ -963,13 +963,18 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(textView(containing: "Nothing needs you.", in: app).waitForNonExistence(timeout: 5))
     }
 
-    /// An older Mac does not share which turns are quiet: they show open,
-    /// with their work strip and answer, as before.
+    /// An older Mac does not share which turns are quiet: their answers
+    /// show, as before. Their work folds under the digest's line, as the
+    /// work of every turn in the coordinator's chat does, so they have no
+    /// work strip.
     func testQuietWakeTurnsStayOpenWithAMacThatDoesNotShareTheMarks() {
         let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS": "unsupported"])
         app.tabBars.buttons["Coordinator"].tap()
-        XCTAssertTrue(textView(containing: "Nothing needs you.", in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(workStrips(in: app).firstMatch.exists)
+        for answer in ToasttyQuietTurnText.answers {
+            XCTAssertTrue(textView(containing: answer, in: app).waitForExistence(timeout: 5), answer)
+        }
+        XCTAssertFalse(workStrips(in: app).firstMatch.exists, "A digest's line is its turn's line")
+        XCTAssertFalse(textView(containing: "[Toastty] Wake", in: app).exists, "A digest shows open")
         attachScreenshot(named: "coordinator-quiet-turns-older-mac", of: app)
     }
 

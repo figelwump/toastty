@@ -207,6 +207,10 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
     public let hasResponse: Bool
     /// The anchor is a host message that folds the whole turn.
     public let foldsWholeTurn: Bool
+    /// The anchor is a host message that shows as one line, such as a
+    /// digest (`ToasttyHostMessagePresentation.isLine`). Where the running
+    /// work folds, that line stands in for the work strip.
+    public let anchorIsLine: Bool
 
     public init(
         id: ToasttyTranscriptRowID,
@@ -214,7 +218,8 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
         toolCallCount: Int,
         noteCount: Int,
         hasResponse: Bool,
-        foldsWholeTurn: Bool = false
+        foldsWholeTurn: Bool = false,
+        anchorIsLine: Bool = false
     ) {
         self.id = id
         self.workBlockIDs = workBlockIDs
@@ -222,6 +227,14 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
         self.noteCount = noteCount
         self.hasResponse = hasResponse
         self.foldsWholeTurn = foldsWholeTurn
+        self.anchorIsLine = anchorIsLine
+    }
+
+    /// The anchor's own line opens the turn's work, so the turn has no
+    /// work strip: a turn that folds whole, and, where the running work
+    /// folds, any turn that a host's line starts.
+    func opensFromAnchorLine(foldsRunningWork: Bool) -> Bool {
+        foldsWholeTurn || (foldsRunningWork && anchorIsLine)
     }
 
     /// Includes user turns before their first work block arrives, so the
@@ -234,6 +247,7 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
         var noteRowIDs: Set<ToasttyTranscriptRowID> = []
         var hasResponse = false
         var foldsWholeTurn = false
+        var anchorIsLine = false
 
         func flushTurn() {
             guard let id = currentID else { return }
@@ -243,7 +257,8 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
                 toolCallCount: toolCallIDs.count,
                 noteCount: noteRowIDs.count,
                 hasResponse: hasResponse,
-                foldsWholeTurn: foldsWholeTurn
+                foldsWholeTurn: foldsWholeTurn,
+                anchorIsLine: anchorIsLine
             ))
             currentID = nil
             workBlockIDs.removeAll(keepingCapacity: true)
@@ -251,6 +266,7 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
             noteRowIDs.removeAll(keepingCapacity: true)
             hasResponse = false
             foldsWholeTurn = false
+            anchorIsLine = false
         }
 
         /// Whether the block belongs to the current turn's foldable work:
@@ -271,6 +287,7 @@ public struct ToasttyTranscriptTurn: Equatable, Sendable {
                     flushTurn()
                     currentID = row.id
                     foldsWholeTurn = message.foldsTurn
+                    anchorIsLine = message.isLine
                 case .assistantMessage(_, let phase):
                     // Only explicit commentary folds as work. Codex transcripts
                     // deliver responses with an unknown phase, so anything not
@@ -344,11 +361,15 @@ public final class ToasttyPreparedTranscript: Equatable, Sendable {
     public let rows: [ToasttyTranscriptRow]
     public let blocks: [ToasttyTranscriptBlock]
     public let turns: [ToasttyTranscriptTurn]
+    /// Each tool batch's calls, for a transcript that lists them
+    /// (`ToasttyToolCallList`).
+    let toolCallsByBlock: [ToasttyTranscriptBlockID: [ToasttyToolCall]]
 
     public init(rows: [ToasttyTranscriptRow]) {
         self.rows = rows
         blocks = ToasttyTranscriptBlock.group(rows)
         turns = ToasttyTranscriptTurn.turns(for: blocks)
+        toolCallsByBlock = ToasttyToolCall.callsByBlock(blocks)
     }
 
     public static func == (lhs: ToasttyPreparedTranscript, rhs: ToasttyPreparedTranscript) -> Bool {

@@ -277,37 +277,51 @@ public enum CoordinatorChatTranscript {
         return ToasttyMessageQuote(text: quote, timeText: time)
     }
 
+    /// A message that Toastty typed for the coordinator, as the chat shows
+    /// it: a digest as its one line, and a message that `coordinator send`
+    /// brought as its sender's card. `nil` for any other message, which
+    /// shows as the user's. A message that waits or is still being typed
+    /// shows the same way, so that nothing changes when its row comes.
+    /// `timeText` is the time the line or the card shows.
+    public static func hostMessage(_ text: String, timeText: String) -> ToasttyHostMessagePresentation? {
+        // Toastty's first line says whose message it is. The line is the
+        // only thing read here: text after it cannot change the answer.
+        switch CoordinatorMessageHeader.kind(of: text) {
+        case .digest(let updateCount):
+            return ToasttyHostMessagePresentation(
+                summary: CoordinatorDigestFold.summary(updateCount: updateCount, time: timeText),
+                title: CoordinatorDigestFold.title(updateCount: updateCount),
+                text: text
+            )
+        case .fromSender(let sender):
+            // Only Toastty's first line identifies the sender. The body
+            // stays third-party text, even when it imitates another header.
+            let body = text.split(maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                .dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            return ToasttyHostMessagePresentation(
+                summary: "From \(sender) · \(timeText)",
+                text: body,
+                style: .sender(name: sender, timeText: timeText)
+            )
+        case .reply, .quickEntry, .plain:
+            return nil
+        }
+    }
+
     static func userMessage(
         _ payload: ConversationUserMessagePayload,
         at timestamp: Date,
         messages: Messages,
         quotedRowID: (_ text: String, _ time: String?) -> ToasttyTranscriptRowID?
     ) -> ToasttyTranscriptRow.Content {
-        // Toastty's first line says whose message it is. The line is the
-        // only thing read here: text after it cannot change the answer.
+        if var message = hostMessage(payload.text, timeText: messages.timeText(timestamp)) {
+            message.foldsTurn = message.isLine && messages.isQuietDigest(payload.text)
+            return .hostMessage(message)
+        }
+        // A reply's first line names the coordinator's message it answers.
         var quote: ToasttyMessageQuote?
-        switch CoordinatorMessageHeader.kind(of: payload.text) {
-        case .digest(let updateCount):
-            return .hostMessage(ToasttyHostMessagePresentation(
-                summary: CoordinatorDigestFold.summary(updateCount: updateCount, time: messages.timeText(timestamp)),
-                text: payload.text,
-                foldsTurn: messages.isQuietDigest(payload.text)
-            ))
-        case .fromSender(let sender):
-            // Only Toastty's first line identifies the sender. The body
-            // stays third-party text, even when it imitates another header.
-            let body = payload.text.split(maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-                .dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            let time = messages.timeText(timestamp)
-            return .hostMessage(ToasttyHostMessagePresentation(
-                summary: "From \(sender) · \(time)",
-                text: body,
-                style: .sender(name: sender, timeText: time)
-            ))
-        case .reply(let quoted, let time, _, _):
+        if case .reply(let quoted, let time, _, _) = CoordinatorMessageHeader.kind(of: payload.text) {
             quote = ToasttyMessageQuote(text: quoted, timeText: time, sourceRowID: quotedRowID(quoted, time))
-        case .quickEntry, .plain:
-            break
         }
         let text: String
         let attachments: [URL]
