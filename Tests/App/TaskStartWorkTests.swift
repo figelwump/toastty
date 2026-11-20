@@ -212,7 +212,10 @@ struct TaskStartWorkTests {
             coordinator = makeCoordinator(records: TaskRecordStore(fileURL: recordsFile))
         }
 
-        func makeCoordinator(records: TaskRecordStore) -> TaskCoordinator {
+        func makeCoordinator(
+            records: TaskRecordStore,
+            worktreeCreator: TaskWorktreeCreator = TaskGitTestRepository.creator()
+        ) -> TaskCoordinator {
             let coordinator = TaskCoordinator(
                 records: records,
                 store: store,
@@ -221,7 +224,7 @@ struct TaskStartWorkTests {
                 attachmentsDirectoryURL: repository.root.appendingPathComponent("task-attachments"),
                 hasActiveSession: { _ in false },
                 grantScope: { _, _ in },
-                worktreeCreator: TaskGitTestRepository.creator(),
+                worktreeCreator: worktreeCreator,
                 terminalReadinessTimeout: .seconds(1),
                 timing: .init(
                     sourceTurnTimeout: .seconds(3),

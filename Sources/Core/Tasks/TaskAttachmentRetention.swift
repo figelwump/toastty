@@ -36,7 +36,8 @@ public enum TaskAttachmentRetention {
         if record.archivedAt != nil || record.doneAt != nil || record.shippedAt != nil {
             return true
         }
-        return record.mergedAt != nil && (releaseTagsConfigured == false || record.mergeTarget?.waitsForRelease == false)
+        return record.release == nil && record.mergedAt != nil
+            && (releaseTagsConfigured == false || record.mergeTarget?.waitsForRelease == false)
     }
 
     /// `hasFiles` is whether the task's attachments folder exists; a record

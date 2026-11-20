@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 import Testing
 @testable import ToasttyApp
 
@@ -387,7 +388,7 @@ struct TaskLifecycleTests {
         // A release names the release skill, never the start skill.
         #expect(launch.prompt.contains("Use the task-start skill.") == false)
         #expect(launch.prompt.contains("Ask for a review first.") == false)
-        #expect(launch.prompt.contains("- Fix the parser — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))"))
+        #expect(launch.prompt.contains("- \(CoordinatorTaskLink.markdown(taskID: child.id, title: child.title)) — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))"))
 
         // One release per project at a time.
         #expect(throws: TaskError.self) { try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged) }
@@ -397,7 +398,7 @@ struct TaskLifecycleTests {
     func releaseSkillStartsTheReleaseMessage(releasePrompt: String?) async throws {
         let fixture = try Fixture()
         let tip = try fixture.repository.pushToRemote("released")
-        _ = try releasingProject(fixture, mergeCommit: tip, releaseSkill: "toastty-release", releasePrompt: releasePrompt)
+        let child = try releasingProject(fixture, mergeCommit: tip, releaseSkill: "toastty-release", releasePrompt: releasePrompt)
 
         let release = try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged)
         await fixture.waitUntil("setup ends") { fixture.record(release.id)?.setup != .settingUp }
@@ -407,9 +408,11 @@ struct TaskLifecycleTests {
         if let releasePrompt {
             #expect(launch.prompt.contains("\(releasePrompt)\n\nThe task, as written:\n\nRelease "))
         }
-        #expect(launch.prompt.hasSuffix(
-            "- Fix the parser — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
+        #expect(launch.prompt.contains(
+            "- \(CoordinatorTaskLink.markdown(taskID: child.id, title: child.title)) — https://github.com/example/project/pull/3 (merge \(tip.prefix(12)))"
         ))
+        #expect(launch.prompt.contains("toastty task release-complete --text-file"))
+        #expect(launch.prompt.hasSuffix("\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"))
     }
 
     /// A coordinator passes the agent its policy names for releases; the
@@ -497,41 +500,176 @@ struct TaskLifecycleTests {
         try git(["tag", "v1.2", tip], in: fixture.repository.seed)
         try git(["push", "--quiet", "origin", "v1.2"], in: fixture.repository.seed)
         await fixture.coordinator.checkReleases()
+        #expect(fixture.record(child.id)?.shippedAt == nil)
+        #expect(fixture.record(release.id)?.shippedAt == nil)
+        let started = try #require(fixture.record(release.id))
+        _ = try await fixture.coordinator.reportReleaseCompletion(
+            caller: TaskCaller(sessionID: started.currentSessionID, workspaceID: started.taskSpaceWorkspaceID),
+            tags: [.init(tag: "v1.2", taskIDs: [child.id])]
+        )
         #expect(fixture.record(child.id)?.releaseTag == "v1.2")
-        #expect(fixture.record(release.id)?.releaseTag == "v1.2")
         #expect(fixture.record(feature.id)?.shippedAt == nil)
     }
 
-    @Test func onlyATagTheRemoteHasShipsATaskAndItsRelease() async throws {
+    @Test func onlyTheReleaseAgentCanConfirmWhichTasksEachTagShipped() async throws {
         let fixture = try Fixture()
-        let tip = try fixture.repository.pushToRemote("released")
-        let child = try releasingProject(fixture, mergeCommit: tip)
+        let tip = try fixture.repository.pushToRemote("worker work")
+        let worker = try releasingProject(fixture, mergeCommit: tip)
+        fixture.config.workspaces[0].releaseTracking = .reported
+        var bundle = TaskRecord(
+            createdAt: Date(), text: "Bundle", title: "Bundle", slug: "bundle", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: fixture.repository.project, setup: .started
+        )
+        bundle.mergedAt = Date()
+        bundle.mergeCommit = try fixture.repository.pushToRemote("bundle work")
+        try fixture.coordinator.records.insert(bundle)
+        var unreported = TaskRecord(
+            createdAt: Date(), text: "Website", title: "Website", slug: "website", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: fixture.repository.project, setup: .started
+        )
+        unreported.mergedAt = Date()
+        unreported.mergeCommit = bundle.mergeCommit
+        try fixture.coordinator.records.insert(unreported)
+        try git(["tag", "v1.0-worker", try #require(bundle.mergeCommit)], in: fixture.repository.seed)
+        try git(["push", "--quiet", "origin", "v1.0-worker"], in: fixture.repository.seed)
+
         let release = try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged)
         await fixture.waitUntil("setup ends") { fixture.record(release.id)?.setup != .settingUp }
-        let releaseWorktree = try #require(fixture.record(release.id)?.worktree)
+        let started = try #require(fixture.record(release.id))
+        let releaseWorktree = try #require(started.worktree)
+        let sessionID = try #require(started.currentSessionID)
+        let caller = TaskCaller(sessionID: sessionID, workspaceID: started.taskSpaceWorkspaceID)
 
-        // A tag made here but never pushed was not released, and a local tag
-        // that differs from the remote's does not stop the check.
-        try git(["fetch", "--quiet", "origin"], in: fixture.repository.project)
-        try git(["tag", "v0.9", "origin/main"], in: fixture.repository.project)
-        try git(["tag", "v1.0", "origin/main~1"], in: fixture.repository.project)
+        fixture.sessions.report(sessionID, .ready)
         await fixture.coordinator.checkReleases()
-        #expect(fixture.record(child.id)?.shippedAt == nil)
+        #expect(fixture.record(release.id)?.shippedAt == nil)
+        #expect(fixture.record(worker.id)?.shippedAt == nil)
+        #expect(fixture.record(bundle.id)?.shippedAt == nil)
+        #expect(fixture.coordinator.releaseUnderWay(projectRoot: fixture.repository.project)?.id == release.id)
 
-        try git(["tag", "v1.0", tip], in: fixture.repository.seed)
-        try git(["push", "--quiet", "origin", "v1.0"], in: fixture.repository.seed)
+        let report: [TaskRelease.Tag] = [
+            .init(tag: "v1.0-worker", taskIDs: [worker.id]),
+            .init(tag: "v1.0-bundle", taskIDs: [bundle.id]),
+        ]
+        try git(["tag", "v1.0-bundle", "origin/main"], in: fixture.repository.project)
+        await #expect(throws: TaskError.self) {
+            try await fixture.coordinator.reportReleaseCompletion(caller: caller, tags: report)
+        }
+        #expect(fixture.record(worker.id)?.shippedAt == nil)
+        try git(["tag", "v1.0-bundle", try #require(bundle.mergeCommit)], in: fixture.repository.seed)
+        try git(["push", "--quiet", "origin", "v1.0-bundle"], in: fixture.repository.seed)
+        await #expect(throws: TaskError.self) {
+            try await fixture.coordinator.reportReleaseCompletion(caller: .unmanaged, tags: report)
+        }
+        try git(["tag", "v0.9-worker", tip], in: fixture.repository.seed)
+        try git(["push", "--quiet", "origin", "v0.9-worker"], in: fixture.repository.seed)
+        await #expect(throws: TaskError.self) {
+            try await fixture.coordinator.reportReleaseCompletion(caller: caller, tags: [.init(tag: "v0.9-worker", taskIDs: [bundle.id])])
+        }
+        #expect(fixture.record(release.id)?.release?.completion == nil)
+
+        fixture.sessions.report(sessionID, .working)
+        let accepted = try await fixture.coordinator.reportReleaseCompletion(caller: caller, tags: report)
+        #expect(accepted.release?.completion?.tags == report)
+        let repeated = try await fixture.coordinator.reportReleaseCompletion(caller: caller, tags: report)
+        #expect(repeated.release?.completion == accepted.release?.completion)
+        let restored = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(restored)
+        let restoredReport = try #require(fixture.record(release.id)?.release?.completion)
+        #expect(restoredReport.tags == report)
+        #expect(abs(restoredReport.reportedAt.timeIntervalSince(try #require(accepted.release?.completion?.reportedAt))) < 1)
+        #expect(fixture.record(worker.id)?.releaseTag == "v1.0-worker")
+        #expect(fixture.record(bundle.id)?.releaseTag == "v1.0-bundle")
+        #expect(fixture.record(unreported.id)?.shippedAt == nil)
         await fixture.coordinator.checkReleases()
-        #expect(fixture.record(child.id)?.releaseTag == "v1.0")
-        #expect(fixture.record(child.id)?.shippedAt != nil)
-        #expect(fixture.record(release.id)?.releaseTag == "v1.0")
-
-        // The release's agent is still in its turn, so its task space stays
-        // until the turn ends.
+        #expect(fixture.record(release.id)?.shippedAt == nil)
+        fixture.sessions.report(sessionID, .ready)
+        fixture.sessions.sessions[sessionID]?.hasBackgroundWork = true
+        await fixture.coordinator.checkReleases()
+        #expect(fixture.record(release.id)?.shippedAt == nil)
+        fixture.sessions.sessions[sessionID]?.hasBackgroundWork = false
+        _ = try fixture.coordinator.setWaiting(taskID: release.id, reason: "Waiting on final work", wakeAt: nil)
+        await fixture.coordinator.checkReleases()
+        #expect(fixture.record(release.id)?.shippedAt == nil)
         #expect(fixture.record(release.id)?.cleanup == nil)
-        fixture.sessions.endTurn(try #require(fixture.record(release.id)?.currentSessionID))
+        _ = try fixture.coordinator.clearWaiting(taskID: release.id)
+        let localChanges = URL(filePath: releaseWorktree.path).appending(path: "pending-notes")
+        try Data("keep my local notes".utf8).write(to: localChanges)
         await fixture.coordinator.checkReleases()
+        await fixture.waitUntil("cleanup stops at local changes") { fixture.record(release.id)?.cleanup?.problem != nil }
+        #expect(fixture.store.state.workspacesByID[try #require(started.taskSpaceWorkspaceID)] != nil)
+        #expect(FileManager.default.fileExists(atPath: localChanges.path))
+        try FileManager.default.removeItem(at: localChanges)
+        try fixture.coordinator.retryCleanup(taskID: release.id)
         await fixture.waitUntil("the release cleans up") { fixture.record(release.id)?.cleanup?.finishedAt != nil }
         #expect(FileManager.default.fileExists(atPath: releaseWorktree.path) == false)
         #expect(fixture.store.state.workspacesByID[try #require(fixture.record(release.id)?.taskSpaceWorkspaceID)] == nil)
+        await fixture.coordinator.checkReleases()
+        #expect(fixture.record(unreported.id)?.shippedAt == nil)
+    }
+
+    @Test func anOldTagOnlyReleaseRecordDoesNotAuthorizeCleanup() async throws {
+        let fixture = try Fixture()
+        let tip = try fixture.repository.pushToRemote("release work")
+        _ = try releasingProject(fixture, mergeCommit: tip)
+        let release = try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged)
+        await fixture.waitUntil("release setup ends") { fixture.record(release.id)?.setup != .settingUp }
+        let started = try #require(fixture.record(release.id))
+        let worktree = try #require(started.worktree)
+        fixture.sessions.report(try #require(started.currentSessionID), .ready)
+        try fixture.coordinator.records.save(id: release.id) {
+            $0.shippedAt = Date()
+            $0.releaseTag = "v1.0"
+        }
+        await fixture.coordinator.checkReleases()
+        #expect(fixture.coordinator.cleanupTasks[release.id] == nil)
+        #expect(fixture.record(release.id)?.cleanup == nil)
+        #expect(FileManager.default.fileExists(atPath: worktree.path))
+        #expect(fixture.store.state.workspacesByID[try #require(started.taskSpaceWorkspaceID)] != nil)
+    }
+
+    @Test func keepingAReleaseDuringRetryPreservesItsSpaceAndWorktree() async throws {
+        let fixture = try Fixture()
+        let tip = try fixture.repository.pushToRemote("release work")
+        _ = try releasingProject(fixture, mergeCommit: tip)
+        let release = try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged)
+        await fixture.waitUntil("release setup ends") { fixture.record(release.id)?.setup != .settingUp }
+        let started = try #require(fixture.record(release.id))
+        let worktree = try #require(started.worktree)
+        fixture.sessions.report(try #require(started.currentSessionID), .ready)
+        try fixture.coordinator.records.save(id: release.id) {
+            $0.shippedAt = Date()
+            $0.release?.completion = .init(reportedAt: Date(), tags: [.init(tag: "v1.0", taskIDs: [])])
+            $0.cleanup = TaskCleanup(kind: .release, problem: "Previous cleanup stopped.")
+        }
+        let git = PausedReleaseStatus()
+        fixture.replaceCoordinator(fixture.makeCoordinator(
+            records: fixture.coordinator.records,
+            worktreeCreator: TaskWorktreeCreator(runner: git, environment: { TaskGitTestRepository.environment })
+        ))
+        try fixture.coordinator.retryCleanup(taskID: release.id)
+        await fixture.waitUntil("cleanup waits on git status") { git.statusCheck != nil }
+        let check = try #require(git.statusCheck)
+        do {
+            defer { check.resume() }
+            try fixture.coordinator.dismissCleanup(taskID: release.id)
+        }
+        await fixture.waitUntil("the retry exits") { fixture.coordinator.cleanupTasks[release.id] == nil }
+        #expect(fixture.record(release.id)?.cleanup?.stepsDone == ["left the rest as it was"])
+        #expect(FileManager.default.fileExists(atPath: worktree.path))
+        #expect(fixture.store.state.workspacesByID[try #require(started.taskSpaceWorkspaceID)] != nil)
+    }
+
+    @MainActor
+    private final class PausedReleaseStatus: TaskCommandRunning {
+        var statusCheck: CheckedContinuation<Void, Never>?
+
+        func run(_ command: TaskCommand) async -> TaskCommandResult {
+            if command.arguments.suffix(2).elementsEqual(["status", "--porcelain"]) {
+                await withCheckedContinuation { statusCheck = $0 }
+                statusCheck = nil
+            }
+            return await TaskLiveCommandRunner().run(command)
+        }
     }
 }

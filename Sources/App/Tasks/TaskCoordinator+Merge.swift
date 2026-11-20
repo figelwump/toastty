@@ -523,8 +523,16 @@ extension TaskCoordinator {
             }
             try saveMergeState(taskID: taskID) { $0.cleanup = nil }
             cleanUpMergedTasks([taskID])
-        case .archive, .release:
-            startTeardown(taskID: taskID, kind: cleanup.kind, options: cleanup.kind == .archive ? lastArchiveOptions(record) : TaskArchiveOptions())
+        case .archive:
+            startTeardown(taskID: taskID, kind: .archive, options: lastArchiveOptions(record))
+        case .release:
+            guard record.release?.completion != nil else {
+                throw TaskError("This release has no completion report. Archive it when its work is over.")
+            }
+            guard releaseHasOutstandingWork(record) == false else {
+                throw TaskError("This release still has work outstanding. Clean up after it finishes.")
+            }
+            startTeardown(taskID: taskID, kind: .release, options: TaskArchiveOptions())
         }
     }
 
