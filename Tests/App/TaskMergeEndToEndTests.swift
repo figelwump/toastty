@@ -296,6 +296,57 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    @Test(arguments: [false, true])
+    func newWorkBeforeMergeConfirmationDropsItsCleanup(confirmationFails: Bool) async throws {
+        try await withScenario(cleanupHold: 0.5, persistTaskRecords: true) { scenario in
+            let blockPoll = scenario.mergedMarker + (confirmationFails ? "-fail-cleanup-poll" : "-pause-cleanup-poll")
+            FileManager.default.createFile(atPath: blockPoll, contents: nil)
+            defer { try? FileManager.default.removeItem(atPath: blockPoll) }
+            scenario.reportAgent(.ready)
+            try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+            if confirmationFails {
+                await scenario.waitUntil("the cleanup stops after repeated GitHub errors") {
+                    if case .failed? = scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase { return true }
+                    return false
+                }
+            } else {
+                let started = scenario.mergedMarker + "-cleanup-poll-started"
+                await scenario.waitUntil("the cleanup's first GitHub request is in flight") {
+                    FileManager.default.fileExists(atPath: started)
+                }
+                try #require(scenario.merges.request(workspaceID: scenario.taskSpaceID)?.phase == .awaitingMerge)
+            }
+            try #require(FileManager.default.fileExists(atPath: scenario.mergedMarker))
+            try #require(scenario.record?.cleanup == nil)
+
+            scenario.reportAgent(.working)
+            try #require(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            try #require(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+            let savedRecord = TaskRecordStore(fileURL: scenario.taskRecordsURL).record(id: scenario.taskID)
+            #expect(savedRecord?.droppedMergeCleanupPullRequestURL == scenario.pullRequest.url)
+            try FileManager.default.removeItem(atPath: blockPoll)
+            if confirmationFails {
+                await scenario.pullRequests.refresh(scenario.pullRequest).value
+            }
+
+            await scenario.waitUntil("the late GitHub answer records the merge") { scenario.record?.mergedAt != nil }
+            try #require(scenario.record?.mergeCommit == scenario.head)
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+
+            scenario.reportAgent(.ready)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+            try await Task.sleep(for: .seconds(1.5))
+            try #require(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+
+            scenario.store.send(.closeWorkspace(workspaceID: scenario.taskSpaceID))
+            await scenario.waitUntil("the explicit close finishes cleanup") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+        }
+    }
+
     @Test
     func aWatchedCommandDoesNotHoldUpTheCleanup() async throws {
         try await withScenario { scenario in
@@ -1284,6 +1335,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
 
         var record: TaskRecord? { tasks.records.record(id: taskID) }
+        var taskRecordsURL: URL { URL(filePath: mergedMarker + "-task-records.json") }
         /// The merge skill's caller: the agent in the task's task space.
         var agentCaller: TaskCaller { TaskCaller(sessionID: "agent", workspaceID: taskSpaceID) }
         var socketPath = ""
@@ -1405,7 +1457,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     private func withScenario(
         checksPending: Bool = false, baseBranch: String = "main", adopted: Bool = false,
         cleanupHold: TimeInterval = 0, pullRequestBranch: String = "fix/task-7",
-        restoredCleanup: WorkspaceMergeRequest.Phase? = nil,
+        restoredCleanup: WorkspaceMergeRequest.Phase? = nil, persistTaskRecords: Bool = false,
         _ body: (Scenario) async throws -> Void
     ) async throws {
         let root = URL(filePath: NSTemporaryDirectory())
@@ -1470,7 +1522,21 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         server_error() { echo '{"message":"Server Error"}'; echo 'gh: Server Error (HTTP 500)' >&2; exit 1; }
         case "$1 $2" in
           "repo view") echo '{"nameWithOwner":"test/repo","defaultBranchRef":{"name":"main"},"mergeCommitAllowed":true}' ;;
-          "pr view") if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; elif [ -e '\(mergedMarker)-retargeted' ]; then echo '\(try json(retargeted))'; elif [ -e '\(mergedMarker)-checks-passed' ]; then echo '\(try json(checksPassed))'; else echo '\(try json(pullRequest))'; fi ;;
+          "pr view")
+            # Only the cleanup poll uses these exact fields in this scenario.
+            if [ "$5" = '\(PullRequestStateCache.viewFields)' ] && [ -e '\(mergedMarker)-fail-cleanup-poll' ]; then
+              server_error
+            fi
+            if [ "$5" = '\(PullRequestStateCache.viewFields)' ] && [ -e '\(mergedMarker)-pause-cleanup-poll' ]; then
+              touch '\(mergedMarker)-cleanup-poll-started' || exit 1
+              attempts=0
+              while [ -e '\(mergedMarker)-pause-cleanup-poll' ]; do
+                [ "$attempts" -lt 200 ] || { echo 'test did not release cleanup poll' >&2; exit 1; }
+                sleep 0.05 || exit 1
+                attempts=$((attempts + 1))
+              done
+            fi
+            if [ -e '\(mergedMarker)' ]; then echo '\(try json(merged))'; elif [ -e '\(mergedMarker)-retargeted' ]; then echo '\(try json(retargeted))'; elif [ -e '\(mergedMarker)-checks-passed' ]; then echo '\(try json(checksPassed))'; else echo '\(try json(pullRequest))'; fi ;;
           "pr list") echo '[]' ;;
           "api --method")
             [ -e '\(mergedMarker)-github-down' ] && server_error
@@ -1541,7 +1607,7 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             notify: { [scenario] title, body in scenario.notifications.append("\(title): \(body)") }
         )
         scenario.tasks = TaskCoordinator(
-            records: TaskRecordStore.inMemory(),
+            records: TaskRecordStore(fileURL: persistTaskRecords ? scenario.taskRecordsURL : nil),
             store: store,
             launcher: nil,
             configLoader: { [unowned scenario] in scenario.config },
