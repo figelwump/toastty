@@ -670,7 +670,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.renderedRightAuxPanelWidth(
                 for: RightAuxPanelState(isVisible: true, width: 520, hasCustomWidth: true),
-                availableWidth: 1_200,
+                targetWidth: 520,
                 focusedPanelModeActive: false
             ),
             520
@@ -678,7 +678,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.renderedRightAuxPanelWidth(
                 for: RightAuxPanelState(isVisible: false, width: 520, hasCustomWidth: true),
-                availableWidth: 1_200,
+                targetWidth: 520,
                 focusedPanelModeActive: false
             ),
             0
@@ -686,7 +686,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.renderedRightAuxPanelWidth(
                 for: RightAuxPanelState(isVisible: true, width: 520, hasCustomWidth: true),
-                availableWidth: 1_200,
+                targetWidth: 520,
                 focusedPanelModeActive: true
             ),
             0

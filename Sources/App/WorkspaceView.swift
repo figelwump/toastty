@@ -98,6 +98,7 @@ struct WorkspaceView: View {
     /// coordinator's dock. Without one, the top bar starts after the
     /// titlebar's buttons.
     let leftColumnVisible: Bool
+    var columnResize = LiveColumnResize()
     /// The buttons at the titlebar's left, after the traffic lights.
     var titlebarButtonCount = 3
     /// Runs a click on the top bar's Merge button for a workspace.
@@ -566,9 +567,8 @@ struct WorkspaceView: View {
             topBar
 
             if let window = store.window(id: windowID) {
-                GeometryReader { geometry in
+                GeometryReader { _ in
                     workspaceStack(for: window)
-                        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                 }
             } else {
                 EmptyStateView(onCreateWorkspace: createWorkspaceAction)
@@ -1079,7 +1079,7 @@ struct WorkspaceView: View {
             "Selected window references workspace(s) missing from state map: \(missingWorkspaceIDs)"
         )
 
-        return ZStack {
+        return ZStack(alignment: .topLeading) {
             ForEach(window.workspaceIDs, id: \.self) { workspaceID in
                 if let workspace = store.state.workspacesByID[workspaceID] {
                     let isSelected = store.selectedWorkspaceID(in: windowID) == workspaceID
@@ -1111,11 +1111,11 @@ struct WorkspaceView: View {
 
     static func renderedRightAuxPanelWidth(
         for panel: RightAuxPanelState,
-        availableWidth: CGFloat,
+        targetWidth: CGFloat,
         focusedPanelModeActive: Bool = false
     ) -> CGFloat {
         panel.isVisible && focusedPanelModeActive == false
-            ? effectiveRightAuxPanelWidth(for: panel, availableWidth: availableWidth)
+            ? targetWidth
             : 0
     }
 
@@ -1242,7 +1242,7 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState, isSelected: Bool) -> some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             ForEach(workspace.orderedTabs) { tab in
                 let isSelectedTab = workspace.resolvedSelectedTabID == tab.id
                 workspaceTabContent(
@@ -1251,6 +1251,10 @@ struct WorkspaceView: View {
                     isWorkspaceSelected: isSelected,
                     isTabSelected: isSelectedTab
                 )
+                // Keep background terminals attached, but don't resize their
+                // PTYs or web panels for intermediate window column widths.
+                .frame(width: isSelected && isSelectedTab && store.window(id: windowID)?.showsTasksView != true
+                    ? nil : columnResize.heldWorkspaceWidth, alignment: .topLeading)
                 .opacity(Self.mountedContentOpacity(isVisible: isSelectedTab))
                 .allowsHitTesting(isSelected && isSelectedTab)
                 .accessibilityHidden(!(isSelected && isSelectedTab))
@@ -1289,14 +1293,14 @@ struct WorkspaceView: View {
         )
 
         GeometryReader { geometry in
-            let rightPanelTargetWidth = Self.effectiveRightAuxPanelWidth(
+            let rightColumn = ResizingColumn.rightPanel(workspaceID: workspace.id, tabID: tab.id)
+            let previewWidth = isWorkspaceSelected && isTabSelected ? columnResize.width(for: rightColumn) : nil
+            let rightPanelTargetWidth = previewWidth ?? Self.effectiveRightAuxPanelWidth(
                 for: tab.rightAuxPanel,
                 availableWidth: geometry.size.width
             )
             let rightPanelRenderedWidth = Self.renderedRightAuxPanelWidth(
-                for: tab.rightAuxPanel,
-                availableWidth: geometry.size.width,
-                focusedPanelModeActive: tab.focusedPanelModeActive
+                for: tab.rightAuxPanel, targetWidth: rightPanelTargetWidth, focusedPanelModeActive: tab.focusedPanelModeActive
             )
             let primaryContentWidth = Self.primaryContentWidth(
                 availableWidth: geometry.size.width,
@@ -1353,6 +1357,7 @@ struct WorkspaceView: View {
                         primaryContentWidth: primaryContentWidth,
                         height: geometry.size.height,
                         appIsActive: appIsActive,
+                        resize: columnResize,
                         store: store
                     )
                     .frame(
@@ -3397,9 +3402,9 @@ private struct RightAuxPanelResizeLayer: View {
     let primaryContentWidth: CGFloat
     let height: CGFloat
     let appIsActive: Bool
+    let resize: LiveColumnResize
     @ObservedObject var store: AppStore
 
-    @State private var resizeStartWidth: Double?
     @State private var hovered = false
     @State private var dragging = false
 
@@ -3428,7 +3433,9 @@ private struct RightAuxPanelResizeLayer: View {
     }
 
     private var boundaryDescriptor: BoundaryInteractionDescriptor {
-        BoundaryInteractionDescriptor(
+        let column = ResizingColumn.rightPanel(workspaceID: workspaceID, tabID: workspaceTabID)
+        let availableWidth = primaryContentWidth + targetWidth
+        return BoundaryInteractionDescriptor(
             id: boundaryID,
             hitFrame: WorkspaceView.rightAuxPanelResizeHandleFrame(
                 primaryContentWidth: primaryContentWidth,
@@ -3449,17 +3456,23 @@ private struct RightAuxPanelResizeLayer: View {
                 "workspaceTabID": workspaceTabID.uuidString,
                 "targetWidth": String(format: "%.1f", targetWidth),
             ],
+            coalescesDragUpdates: true,
             onBegan: { _ in
-                resizeStartWidth = Double(targetWidth)
+                resize.begin(column, width: targetWidth)
                 updateInteraction(dragging: true)
             },
             onChanged: { value in
-                guard let startingWidth = resizeStartWidth else { return }
-                let nextWidth = startingWidth - Double(value.translation.width)
-                _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: nextWidth))
+                resize.update(column, translation: value.translation.width, availableWidth: availableWidth)
             },
-            onEnded: { _ in
-                resizeStartWidth = nil
+            onEnded: { value in
+                if let width = resize.finish(column, translation: value.translation.width, availableWidth: availableWidth),
+                   store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID == workspaceTabID {
+                    _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: width))
+                }
+                updateInteraction(dragging: false)
+            },
+            onCancelled: { _ in
+                resize.cancel(column)
                 updateInteraction(dragging: false)
             },
             onHoverChanged: { hovering in

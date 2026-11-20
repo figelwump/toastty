@@ -31,6 +31,7 @@ struct AppWindowView: View {
     @State private var appIsActive = true
     /// The width of the window's content, which limits the dock's width.
     @State private var windowContentWidth: CGFloat = 0
+    @State private var columnResize = LiveColumnResize()
     @Environment(\.openWindow) private var openWindow
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -95,10 +96,11 @@ struct AppWindowView: View {
         var edges: [ResizableColumnEdge] = []
         var dividerX: CGFloat = 0
         if sidebarVisible {
-            let sidebarWidth = effectiveSidebarWidth
+            let sidebarWidth = columnResize.width(for: .sidebar) ?? effectiveSidebarWidth
             dividerX = sidebarWidth
             edges.append(ResizableColumnEdge(
                 id: "sidebar.resize.\(windowID.uuidString)",
+                column: .sidebar,
                 dividerX: dividerX,
                 columnWidth: sidebarWidth,
                 accessibilityLabel: "Resize Sidebar",
@@ -118,10 +120,11 @@ struct AppWindowView: View {
             dividerX += Self.sidebarDividerWidth
         }
         if dockShows {
-            let dockWidth = dockWidth
+            let dockWidth = columnResize.width(for: .dock) ?? dockWidth
             dividerX += dockWidth
             edges.append(ResizableColumnEdge(
                 id: "coordinator-dock.resize.\(windowID.uuidString)",
+                column: .dock,
                 dividerX: dividerX,
                 columnWidth: dockWidth,
                 accessibilityLabel: "Resize Coordinator Dock",
@@ -130,11 +133,8 @@ struct AppWindowView: View {
                     "windowID": windowID.uuidString,
                     "dockWidth": String(format: "%.1f", dockWidth),
                 ],
-                setWidth: { [store, windowID, dockLimitWindowWidth] width in
-                    // A drag stops at this window's limit, so the saved
-                    // width is one the user saw.
-                    let limit = WindowState.maxCoordinatorDockWidth(windowWidth: dockLimitWindowWidth)
-                    _ = store.send(.setCoordinatorDockWidth(windowID: windowID, width: min(width, limit)))
+                setWidth: { [store, windowID] width in
+                    _ = store.send(.setCoordinatorDockWidth(windowID: windowID, width: width))
                 }
             ))
         }
@@ -193,7 +193,7 @@ struct AppWindowView: View {
                         requestWorkspaceClose: requestWorkspaceClose,
                         requestSessionClose: requestSessionClose
                     )
-                    .frame(width: effectiveSidebarWidth)
+                    .modifier(ResizableColumnFrame(column: .sidebar, savedWidth: effectiveSidebarWidth, resize: columnResize))
 
                     Rectangle()
                         .fill(ToastyTheme.hairline)
@@ -215,7 +215,7 @@ struct AppWindowView: View {
                             : ToastyTheme.topBarLeadingPadding(titlebarButtonCount: titlebarButtonCount),
                         appIsActive: appIsActive
                     )
-                    .frame(width: dockWidth)
+                    .modifier(ResizableColumnFrame(column: .dock, savedWidth: dockWidth, resize: columnResize))
                     .transition(.move(edge: .leading).combined(with: .opacity))
 
                     Rectangle()
@@ -243,6 +243,7 @@ struct AppWindowView: View {
                     presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
                     leftColumnVisible: sidebarVisible || dockShows,
+                    columnResize: columnResize,
                     titlebarButtonCount: titlebarButtonCount,
                     requestWorkspaceMerge: requestWorkspaceMerge,
                     requestWorkspaceClose: requestWorkspaceClose,
@@ -274,6 +275,8 @@ struct AppWindowView: View {
                     if edges.isEmpty == false {
                         ColumnResizeLayer(
                             edges: edges,
+                            resize: columnResize,
+                            windowWidth: geometry.size.width,
                             height: geometry.size.height,
                             appIsActive: appIsActive
                         )
@@ -733,6 +736,7 @@ private struct WindowSlotFocusSignature: Equatable {
 /// or the coordinator's dock.
 struct ResizableColumnEdge: Identifiable {
     let id: String
+    let column: ResizingColumn
     /// Where the column's divider starts, in the window's content.
     let dividerX: CGFloat
     let columnWidth: CGFloat
@@ -745,10 +749,11 @@ struct ResizableColumnEdge: Identifiable {
 /// The resize edges of the window's columns, in one overlay.
 private struct ColumnResizeLayer: View {
     let edges: [ResizableColumnEdge]
+    let resize: LiveColumnResize
+    let windowWidth: CGFloat
     let height: CGFloat
     let appIsActive: Bool
 
-    @State private var resizeStartWidth: Double?
     @State private var hoveredEdgeID: String?
     @State private var draggingEdgeID: String?
 
@@ -792,16 +797,23 @@ private struct ColumnResizeLayer: View {
             accessibilityLabel: edge.accessibilityLabel,
             accessibilityIdentifier: edge.accessibilityIdentifier,
             metadata: edge.metadata,
+            coalescesDragUpdates: true,
             onBegan: { _ in
-                resizeStartWidth = Double(edge.columnWidth)
+                let columnsWidth = (edges.last?.dividerX ?? 0) + AppWindowView.sidebarDividerWidth
+                resize.begin(edge.column, width: edge.columnWidth, holdingWorkspaceAt: max(0, windowWidth - columnsWidth))
                 draggingEdgeID = edge.id
             },
             onChanged: { value in
-                guard let startingWidth = resizeStartWidth else { return }
-                edge.setWidth(startingWidth + Double(value.translation.width))
+                resize.update(edge.column, translation: value.translation.width, availableWidth: windowWidth)
             },
-            onEnded: { _ in
-                resizeStartWidth = nil
+            onEnded: { value in
+                if let width = resize.finish(edge.column, translation: value.translation.width, availableWidth: windowWidth) {
+                    edge.setWidth(width)
+                }
+                draggingEdgeID = nil
+            },
+            onCancelled: { _ in
+                resize.cancel(edge.column)
                 draggingEdgeID = nil
             },
             onHoverChanged: { hovering in
@@ -815,7 +827,6 @@ private struct ColumnResizeLayer: View {
     }
 
     private func releaseInteraction() {
-        resizeStartWidth = nil
         guard hoveredEdgeID != nil || draggingEdgeID != nil else { return }
 
         DispatchQueue.main.async {
