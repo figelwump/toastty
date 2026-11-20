@@ -132,6 +132,7 @@ struct WorkspaceView: View {
     @State private var transientUnfocusHighlightFadeWorkItem: DispatchWorkItem?
     @State private var transientUnfocusHighlightResetWorkItem: DispatchWorkItem?
     @StateObject private var splitResizeCoordinator = WorkspaceSplitResizeCoordinator()
+    @State private var warmRightPanels = WarmRightPanelHosts()
 
     static let seenUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
@@ -619,6 +620,9 @@ struct WorkspaceView: View {
         }
         .onChange(of: selectedWorkspaceTabSignature) { previous, current in
             handleSelectedWorkspaceTabChange(from: previous, to: current)
+        }
+        .onChange(of: presentedRightPanelID, initial: true) { _, panelID in
+            if let panelID { warmRightPanels.visit(panelID) }
         }
         .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
             consumePendingWorkspaceTabRenameRequestIfNeeded()
@@ -1137,9 +1141,17 @@ struct WorkspaceView: View {
         isWorkspaceSelected: Bool,
         isWorkspaceTabSelected: Bool,
         rightAuxPanelVisible: Bool,
-        focusedPanelModeActive: Bool
+        focusedPanelModeActive: Bool,
+        keepHostWarm: Bool = false
     ) -> Bool {
-        isWorkspaceSelected && isWorkspaceTabSelected && rightAuxPanelVisible && focusedPanelModeActive == false
+        rightAuxPanelVisible && !focusedPanelModeActive &&
+            ((isWorkspaceSelected && isWorkspaceTabSelected) || keepHostWarm)
+    }
+
+    private var presentedRightPanelID: UUID? {
+        guard let tab = selectedWorkspace?.selectedTab,
+              tab.rightAuxPanel.isVisible, !tab.focusedPanelModeActive else { return nil }
+        return tab.rightAuxPanel.activePanelID
     }
 
     static func rightAuxPanelResizeHandleVisible(
@@ -1658,9 +1670,10 @@ struct WorkspaceView: View {
             isWorkspaceSelected: isWorkspaceSelected,
             isWorkspaceTabSelected: isTabSelected,
             rightAuxPanelVisible: tab.rightAuxPanel.isVisible,
-            focusedPanelModeActive: tab.focusedPanelModeActive
+            focusedPanelModeActive: tab.focusedPanelModeActive,
+            keepHostWarm: tab.rightAuxPanel.activePanelID.map(warmRightPanels.contains) == true
         )
-        let isVisible = mountsBodyContent
+        let isVisible = mountsBodyContent && isWorkspaceSelected && isTabSelected
 
         return Group {
             if mountsBodyContent {
@@ -3921,18 +3934,36 @@ private struct TerminalLiveTitleText: View {
     }
 }
 
+/// Keep the current and previous side panels attached for a quick return,
+/// without instantiating every restored web view. A cache hit doesn't change
+/// which workspace subtrees need to render.
+@MainActor @Observable
+final class WarmRightPanelHosts {
+    @ObservationIgnored private var mostRecent: UUID?
+    private var retained: Set<UUID> = []
+
+    func visit(_ panelID: UUID) {
+        if !retained.contains(panelID) {
+            retained = Set([mostRecent, panelID].compactMap { $0 })
+        }
+        mostRecent = panelID
+    }
+
+    func contains(_ panelID: UUID) -> Bool { retained.contains(panelID) }
+}
+
 private struct SlotPlacementView: View {
     let placement: LayoutSlotPlacement
     let workspaceID: UUID
     let tab: WorkspaceTabState
     let isWorkspaceSelected: Bool
     let isTabSelected: Bool
-    @ObservedObject var store: AppStore
-    @ObservedObject var terminalProfileStore: TerminalProfileStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let store: AppStore
+    let terminalProfileStore: TerminalProfileStore
+    let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalLiveTitleStore: TerminalLiveTitleStore
-    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
-    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    let sessionRuntimeStore: SessionRuntimeStore
+    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
@@ -4027,7 +4058,12 @@ struct PanelCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader
+            if isWorkspaceSelected && isTabSelected {
+                panelHeader
+            } else {
+                // Preserve the PTY's viewport without laying out offscreen controls.
+                Color.clear.frame(height: PanelHeaderSearchLayout.headerHeight)
+            }
 
             switch panelState {
             case .terminal(let terminalState):
