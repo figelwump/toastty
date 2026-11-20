@@ -25,6 +25,11 @@ that:
 - Stop ends the turn and sets the waiting message aside; Send next types it;
 - a digest that Toastty typed shows as one folded line from the moment it
   is typed, never as Toastty's text, and a click opens it;
+- wake turns that the coordinator marks quiet, three in a row, show as one
+  line, "Toastty · 3 quiet checks · …", that a click opens into each
+  check's own line; a check's line opens its turn; the check that runs
+  keeps its own line beside the row until it ends quiet; the row shows
+  again after the relaunch;
 - a task link shows as a chip with the task's own title; a click in the
   full view opens the task's space with the chat beside it in the dock; a
   link to no task and another Toastty link are plain text that a click does
@@ -127,6 +132,9 @@ while IFS= read -r line; do :; done
 
 NO_BREAK_SPACE = '\u00a0'
 HOLD_COMMAND = './hold-turn.sh'
+# Holds a wake turn for the given seconds and marks it quiet, as the
+# coordinator's skill does when a wake finds nothing for the user.
+QUIET_COMMAND = './quiet-wake.sh'
 # The labels of the coordinator's sidebar row.
 ROW_READ = 'Coordinator'
 ROW_UNREAD = 'Coordinator, unread'
@@ -293,8 +301,8 @@ def run(check):
     # Only this disposable app sees the profiles. The coordinator may run
     # the run's own wait script, which holds a turn open, and nothing else.
     # Claude Code refuses a plain `sleep` in the foreground.
-    argv = [claude, '--setting-sources=', '--allowedTools', f'Bash({HOLD_COMMAND}:*)', '--tools', 'Bash',
-            '--strict-mcp-config']
+    argv = [claude, '--setting-sources=', '--allowedTools', f'Bash({HOLD_COMMAND}:*)',
+            '--allowedTools', f'Bash({QUIET_COMMAND}:*)', '--tools', 'Bash', '--strict-mcp-config']
     runtime_home, user_home = check.home('chat', argv)
     helper = check.root / 'bin/helper-agent'
     helper.parent.mkdir()
@@ -324,6 +332,9 @@ def run(check):
     hold = directory / 'hold-turn.sh'
     hold.write_text('#!/bin/sh\nsleep "$1"\necho waited "$1" seconds\n')
     hold.chmod(0o755)
+    quiet = directory / 'quiet-wake.sh'
+    quiet.write_text('#!/bin/sh\nsleep "$1"\nexec "$TOASTTY_CLI_PATH" coordinator wake --clear --quiet\n')
+    quiet.chmod(0o755)
     # Typed text cannot answer the folder-trust dialog, so trust only this
     # run's folder for the run.
     steer.set_directory_trust(directory, True)
@@ -785,6 +796,50 @@ def run(check):
         wait_for('Claude to end the digest\'s turn', at_prompt, timeout=240)
         step('a digest showed folded and opened', timer=timer, digest=transcript()[digest_at]['text'])
 
+        # Wake turns that the coordinator marks quiet, three in a row, show as
+        # one line that opens into each check's own line. The check that runs
+        # keeps its own line, which shows that the coordinator works, beside
+        # the row of the two before it.
+        ui.send('For each of the next three messages from Toastty that start with "[Toastty] Wake", do exactly '
+                f'this: run the shell command `{QUIET_COMMAND} 8` with the Bash tool, in the foreground and with a '
+                'timeout of 60 seconds, then reply with exactly: QUIET-OK. '
+                'Now reply with exactly this one word and nothing else: QUIET-READY')
+        wait_for_reply('QUIET-READY')
+        wait_for('the prompt to open again', at_prompt, timeout=120)
+        single_lines = ui.texts().count('Toastty · 1 update')
+        running = None
+        for number in (1, 2, 3):
+            cli('coordinator', 'wake', '--in', '60s')
+            if number == 3:
+                running = wait_for('the third check on its own line beside the row of two',
+                                   lambda: (shown := ui.texts()) and 'Toastty · 2 quiet checks' in shown
+                                   and 'Toastty · 1 update · working' in shown and shown[-800:],
+                                   timeout=210, interval=0.1)
+                capture('quiet-checks-running')
+            # Step 5's digest came before; the instruction only names them.
+            wait_for(f'quiet check {number} in Claude\'s transcript',
+                     lambda: sum(entry['text'].startswith('[Toastty] Wake') for entry in transcript()
+                                 if entry['role'] == 'user') >= 1 + number, timeout=210)
+            wait_for(f'Claude to end quiet check {number}', at_prompt, timeout=240)
+            # The instruction names the answer once; each check's answer folds.
+            wait_for(f'quiet check {number}\'s answer to fold', lambda: ui.texts().count('QUIET-OK') == 1, timeout=30)
+        wait_for('one line for the three checks',
+                 lambda: 'Toastty · 3 quiet checks' in (shown := ui.texts())
+                 and shown.count('Toastty · 1 update') == single_lines, timeout=30)
+        capture('quiet-checks-closed')
+        ui.run('click-prefix', 'toastty-mobile-transcript-quiet-checks-')
+        wait_for('the open row\'s three lines', lambda: ui.texts().count('Toastty · 1 update') == single_lines + 3,
+                 timeout=30)
+        require(ui.texts().count('QUIET-OK') == 1, 'Opening the row opened a check')
+        capture('quiet-checks-open')
+        ui.run('click-last-label', 'Toastty · 1 update')
+        wait_for('the last check\'s answer', lambda: ui.texts().count('QUIET-OK') == 2, timeout=30)
+        capture('quiet-check-one-open')
+        ui.run('click-prefix', 'toastty-mobile-transcript-quiet-checks-')
+        wait_for('the closed row', lambda: (shown := ui.texts()).count('Toastty · 1 update') == single_lines
+                 and shown.count('QUIET-OK') == 1, timeout=30)
+        step('three quiet wakes showed as one line that opened into their own lines', running=running)
+
         # 6. A task link is a chip; in the full view, a click opens the task
         # with the chat in the dock.
         missing = str(uuid.uuid4()).upper()
@@ -982,7 +1037,8 @@ def run(check):
         require(selected_workspace() == coordinator_id, 'The relaunch did not show the coordinator')
         resumed = wait_for('Claude to be resumed', lambda: (s := status()).get('sessionID') and s, timeout=120)
         wait_for('the same conversation in the chat',
-                 lambda: all(marker in ui.texts() for marker in ('CHAT-ONE', 'CHAT-FIVE', chip_title)), timeout=120)
+                 lambda: all(marker in ui.texts() for marker in ('CHAT-ONE', 'CHAT-FIVE', chip_title,
+                                                                 'Toastty · 3 quiet checks')), timeout=120)
         wait_for('the resumed prompt', at_prompt, timeout=180)
         capture('relaunched')
         # The dock comes back beside the task, at its width.

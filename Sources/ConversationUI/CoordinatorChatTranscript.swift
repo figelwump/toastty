@@ -256,6 +256,14 @@ public enum CoordinatorChatTranscript {
         )
     }
 
+    /// A time as the coordinator's chat shows it on the Mac and on the
+    /// iPhone, such as "2:05 PM" in the device's format: a digest's line, a
+    /// sender's card, a waiting message. A row of quiet checks shows its
+    /// times in the same format (`ToasttyQuietCheckRun.timeRangeText`).
+    public static func timeText(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+
     /// Names a digest by its text, as the Mac's `CoordinatorWakeState.digestKey`
     /// does: the SHA-256, in hex, of the text without leading and trailing
     /// white space. A device that shows the coordinator's chat gets the

@@ -29,4 +29,11 @@ public enum CoordinatorDigestFold {
     public static func title(updateCount: Int) -> String {
         updateCount == 1 ? "Toastty · 1 update" : "Toastty · \(updateCount) updates"
     }
+
+    /// The one line for several quiet wake turns in a row:
+    /// "Toastty · 3 quiet checks · 1:40 – 2:01 PM". `timeRange` runs from
+    /// the first check's digest to the last one's.
+    public static func quietChecksSummary(count: Int, timeRange: String) -> String {
+        "Toastty · \(count) quiet checks · \(timeRange)"
+    }
 }
