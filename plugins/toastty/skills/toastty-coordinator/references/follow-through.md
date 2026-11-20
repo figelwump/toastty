@@ -152,30 +152,35 @@ quiet.
    numbers the items, so that a later turn knows what "2 yes" answers:
 
    ```text
-   - 2026-11-16T17:00Z list 1 release webapp; 2 question [Billing rollout](toastty://task/<id>); 3 offer safari-check.
+   - 2026-11-16T17:00Z list 1 release webapp; 2 question [Billing rollout](toastty://task/<id>); 3 offer safari-check; 4 rule unblocking-parents; 5 done [Assess the export API](toastty://task/<id>).
    ```
 
 5. **Tell** the user the whole list in one message. Each item is one line:
    its number; its task as a link, or its project when it has no task; what
    waits; and the answer you suggest. Add the mark of step 3 to the item.
+   Show the Moving group too, although its tasks need nothing from the user.
    Use this default form, and keep it the same from day to day. Leave out a
    group that has no items, and write nothing else about the items:
 
    ```markdown
-   6 items wait for you; the oldest waits 4 days. Answer with the number, such as "2 yes".
+   5 items wait for you; the oldest waits 4 days. Answer with the number, such as "2 yes".
 
    **Blocks work you started**
+
    1. webapp: 5 merged tasks wait in To ship, the oldest for 4 days. Suggested: start the release now. *On 3 lists, no answer.*
    2. [Billing rollout](toastty://task/<id>): canary at 5% or 20%? Suggested: 5%.
 
    **Offers**
+
    3. A task for a check of the sign-up page in Safari. Suggested: yes, in webapp. *List 2 of 3.*
 
    **Closes by default**
+
    4. Keep the Unblocking rule about parent tasks? With no answer, the rule stays.
    5. [Assess the export API](toastty://task/<id>): you have its answer, and nothing remains. With no answer, it is marked Done at the next list.
 
    **Moving**
+
    - [Finish the rollout](toastty://task/<id>) continues the billing migration.
 
    Dropped after 3 lists: a task for the local test fallback.
@@ -185,10 +190,11 @@ quiet.
    order, a group for each project, or another field. A rule there wins over
    the default. A review can propose such a rule when `friction.md` shows
    that the user missed an item of the list; see `references/improving.md`.
-6. **Nothing waits:** write the `list` line. When this list marked no task
-   Done, mark the turn quiet if nothing else needs the user, and answer only
-   "Nothing needs you." Otherwise answer only with the line that names those
-   tasks.
+6. **Nothing waits:** no item is in Blocks work you started, Offers or
+   Closes by default. Write the `list` line. When this list dropped an offer,
+   tell the user in the Dropped line. When it marked a task Done, name those
+   tasks in one line. When it did neither, mark the turn quiet if nothing
+   else needs the user, and answer only "Nothing needs you."
 
 When a review follows the list in the same turn, it numbers its proposals
 after the list's last number. When the user answers with a number, find the
