@@ -28,6 +28,7 @@ struct CoordinatorChatView: View {
     let hasPanelFocus: Bool
     /// Where this view of the chat is.
     var host: CoordinatorChatModel.Host = .panel
+    var settledDockWidth: CGFloat?
     @StateObject private var linkOpener = CoordinatorChatLinkOpener()
 
     /// The size of the notice's text before the text scale: the caption
@@ -62,6 +63,7 @@ struct CoordinatorChatView: View {
                 newMessages: model.newMessages
             )
             .equatable()
+            .modifier(TranscriptViewport(settledDockWidth: settledDockWidth))
             .overlay {
                 if model.showsIntroduction {
                     introduction
@@ -96,6 +98,23 @@ struct CoordinatorChatView: View {
         .onDisappear { model.hide(panelID: panelID, host: host) }
         .onChange(of: isOnScreen && hasPanelFocus, initial: true) { _, takesKeyboard in
             if takesKeyboard { model.requestComposerFocus() }
+        }
+    }
+
+    private struct TranscriptViewport: ViewModifier {
+        let settledDockWidth: CGFloat?
+
+        func body(content: Content) -> some View {
+            if let settledDockWidth {
+                // Move the dock edge and composer live, without asking every
+                // message to wrap at each intermediate width.
+                content.frame(width: settledDockWidth)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .clipped()
+                    .contentShape(Rectangle())
+            } else {
+                content
+            }
         }
     }
 

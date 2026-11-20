@@ -16,6 +16,56 @@ final class CoordinatorChatViewTests: XCTestCase {
     private static let questionTaskID = UUID(uuidString: "41B7E9C0-1111-4222-8333-444455556666")!
     private static let missingTaskID = UUID(uuidString: "99999999-9999-4999-8999-999999999999")!
 
+    func testDockDragResizesComposerButRewrapsMountedTranscriptOnlyOnCommit() async throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("The transcript requires macOS 15.") }
+        let message = String(repeating: "This message wraps across several lines. ", count: 8)
+        let fixture = try CoordinatorChatFixture(initialUserMessages: [message])
+        defer { fixture.tearDown() }
+        let location = try XCTUnwrap(fixture.store.state.coordinator)
+        let resize = LiveColumnResize()
+        let start: CGFloat = 360
+        func dock(_ settledWidth: CGFloat) -> some View {
+            CoordinatorDockView(
+                controller: fixture.controller, sessionRuntimeStore: fixture.conversations.sessionRuntimeStore,
+                store: fixture.store, chat: fixture.chat, board: .disabled, location: location,
+                settledWidth: settledWidth, headerLeadingInset: 14, appIsActive: true
+            )
+            .modifier(ResizableColumnFrame(column: .dock, savedWidth: settledWidth, resize: resize))
+        }
+        let (host, window) = Self.host(dock(start))
+        defer { window.close() }
+        let text = try await fixture.waitFor("wrapped dock message") {
+            Self.descendants(of: host, as: ToasttyTranscriptTextView.self).first { $0.string.contains("This message wraps") }
+        }
+        let composer = try XCTUnwrap(Self.descendants(of: host, as: CoordinatorComposerTextView.self).first)
+        let textWidth = text.frame.width
+        let composerWidth = composer.frame.width
+        let selection = NSRange(location: 0, length: 4)
+        text.setSelectedRange(selection)
+
+        resize.begin(.dock, width: start)
+        resize.update(.dock, translation: -80, availableWidth: Self.windowSize.width)
+        Self.settle(host)
+        XCTAssertLessThan(composer.frame.width, composerWidth)
+        XCTAssertEqual(text.frame.width, textWidth)
+        resize.cancel(.dock)
+        Self.settle(host)
+        XCTAssertEqual(composer.frame.width, composerWidth)
+        XCTAssertEqual(text.frame.width, textWidth)
+
+        resize.begin(.dock, width: start)
+        resize.update(.dock, translation: 80, availableWidth: Self.windowSize.width)
+        Self.settle(host)
+        XCTAssertGreaterThan(composer.frame.width, composerWidth)
+        XCTAssertEqual(text.frame.width, textWidth)
+        let committed = try XCTUnwrap(resize.finish(.dock, translation: 80, availableWidth: Self.windowSize.width))
+        host.rootView = Self.hosted(dock(committed))
+        Self.settle(host)
+        XCTAssertTrue(text.window === window)
+        XCTAssertGreaterThan(text.frame.width, textWidth)
+        XCTAssertEqual(text.selectedRange(), selection)
+    }
+
     func testSenderCardShowsShortMessagesAndOnlyShortensLongMessages() throws {
         let short = "How should we prevent GUI checks from failing while Screen Sharing is connected?"
         XCTAssertNil(ToasttySenderMessageCard.preview(of: short))
