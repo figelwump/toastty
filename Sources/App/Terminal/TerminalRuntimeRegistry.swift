@@ -605,7 +605,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func readVisibleText(panelID: UUID) -> String? {
-        readVisibleText(panelID: panelID, includeScrollback: false)
+        if let automationReadVisibleTextHandlerForTesting {
+            return automationReadVisibleTextHandlerForTesting(panelID, false)
+        }
+        return runtimeStore.existingController(for: panelID)?.readActiveScreenText()
     }
 
     func readVisibleText(panelID: UUID, includeScrollback: Bool) -> String? {

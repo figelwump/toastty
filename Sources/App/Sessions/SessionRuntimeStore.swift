@@ -142,6 +142,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// lifecycle so no later status can follow its `session-stop` event.
     private var completedHookLifecycleSessionIDs: Set<String> = []
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
+    private var codexStatusBeforeComputerUseApprovalBySessionID: [String: SessionStatus] = [:]
     private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private struct CursorHookCorrelationState: Equatable {
@@ -401,6 +402,7 @@ final class SessionRuntimeStore: ObservableObject {
         pendingHookReadyBySessionID = [:]
         completedHookLifecycleSessionIDs = []
         suppressedCodexVisibleErrorDetailBySessionID = [:]
+        codexStatusBeforeComputerUseApprovalBySessionID = [:]
         codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         nativeBindingConfirmationBySessionID = [:]
@@ -1048,8 +1050,18 @@ final class SessionRuntimeStore: ObservableObject {
                 endInitialPromptTurnWait(sessionID: sessionID)
             }
         }
-        let previousRecord = sessionRegistry.sessionsByID[sessionID]
-        let previousProjectedStatus = previousRecord.flatMap { record in
+        if codexStatusBeforeComputerUseApprovalBySessionID[sessionID] != nil, status.kind == .working {
+            // Other tool activity can report progress while the menu is open.
+            // Keep its latest detail for when the user closes the menu.
+            codexStatusBeforeComputerUseApprovalBySessionID[sessionID] = status
+            return
+        }
+        let priorWorkingStatus = codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
+        var previousRecord = sessionRegistry.sessionsByID[sessionID]
+        if let priorWorkingStatus {
+            previousRecord?.status = priorWorkingStatus
+        }
+        let previousProjectedStatus = priorWorkingStatus ?? previousRecord.flatMap { record in
             sessionRegistry.panelStatus(for: record.panelID, at: now)?.status
         }
         let storedStatus = normalizedStatusForStorage(
@@ -3297,6 +3309,9 @@ final class SessionRuntimeStore: ObservableObject {
         programStatusRuntime.stop(record)
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         logSessionStop(record, reason: reason, at: now)
+        if let status = codexStatusBeforeComputerUseApprovalBySessionID[record.sessionID] {
+            registry.updateStatus(sessionID: record.sessionID, status: status, fromAgent: false, at: now)
+        }
         clearSessionRuntimeState(sessionID: record.sessionID)
         removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
         completeHookLifecycle(record: record, at: now)
@@ -3314,6 +3329,7 @@ final class SessionRuntimeStore: ObservableObject {
         sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
         invalidateClaudeQuestionBinding(sessionID: sessionID)
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+        codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
@@ -6085,6 +6101,11 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        if promptState == .busy,
+           let changed = refreshCodexComputerUseApproval(record: record, status: currentStatus, screen: visibleText, at: now) {
+            return changed
+        }
+
         if let nextStatus = CodexVisibleTextStatusParser.fatalErrorStatus(from: visibleText) {
             guard currentStatus.kind == .working || currentStatus.kind == .error,
                   isSuppressedCodexVisibleError(nextStatus, sessionID: record.sessionID) == false,
@@ -6129,6 +6150,36 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         return true
     }
 
+    /// Codex's terminal receives the MCP elicitation directly. Neither its
+    /// status hooks nor its session recording report the incoming request.
+    /// Terminal text can drive the task's waiting state, but cannot attest
+    /// to a provider approval for hooks, notifications or remote answering.
+    private func refreshCodexComputerUseApproval(
+        record: SessionRecord,
+        status: SessionStatus,
+        screen: String,
+        at now: Date
+    ) -> Bool? {
+        let sessionID = record.sessionID
+        let priorStatus = codexStatusBeforeComputerUseApprovalBySessionID[sessionID]
+        guard status.kind == .working || priorStatus != nil else { return nil }
+        let waiting = CodexVisibleTextStatusParser.hasComputerUseApprovalPrompt(in: screen)
+        let nextStatus: SessionStatus
+        if let priorStatus {
+            guard !waiting, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
+            nextStatus = priorStatus
+        } else {
+            guard waiting else { return nil }
+            codexStatusBeforeComputerUseApprovalBySessionID[sessionID] = status
+            nextStatus = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Computer Use app access")
+        }
+        var nextRegistry = sessionRegistry
+        nextRegistry.updateStatus(sessionID: sessionID, status: nextStatus, at: now)
+        publish(nextRegistry, reason: "codex_computer_use_approval_prompt", at: now)
+        return true
+    }
+
     private func refreshedWorkingCodexStatus(
         currentStatus: SessionStatus,
         visibleText: String,
@@ -6155,6 +6206,12 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         guard let record = sessionRegistry.activeSession(for: panelID),
               let currentStatus = record.status,
               currentStatus.kind == .working || currentStatus.kind == .needsApproval else {
+            return false
+        }
+
+        // Escape cancels the elicitation's menu. Codex can continue the
+        // same turn once the menu disappears.
+        if kind == .escape, codexStatusBeforeComputerUseApprovalBySessionID[record.sessionID] != nil {
             return false
         }
 

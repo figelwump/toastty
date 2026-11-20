@@ -4,6 +4,54 @@ import Testing
 
 struct CodexVisibleTextStatusParserTests {
     @Test
+    func recognizesComputerUseApprovalMenuAtTheBottomOfTheScreen() {
+        #expect(CodexVisibleTextStatusParser.hasComputerUseApprovalPrompt(in: """
+        • Hook failed
+          hook timed out after 5s
+        • Using computer · 1 action
+
+          Field 1/1
+          Allow Computer Use to use "Calculator"?
+
+          App: Calculator
+
+            1. Allow                   Run the tool and continue
+          › 2. Allow for this session  Run the tool and remember this choice
+                                       for this session
+            3. Always allow            Run the tool and remember this choice
+            4. Cancel                  Cancel this tool call
+          enter to submit | esc to cancel
+        """))
+    }
+
+    @Test(arguments: [
+        "Allow Computer Use to use \"Safari\"?",
+        """
+        Field 1/1
+        Allow Computer Use to use "Safari"?
+        App: Safari
+        › 1. Allow
+          2. Allow for this session
+          3. Always allow
+          4. Cancel
+        enter to submit | esc to cancel
+        › Ask Codex to do anything
+        """,
+        """
+        Field 1/1
+        Do you want to run this command?
+        › 1. Allow
+          2. Allow for this session
+          3. Always allow
+          4. Cancel
+        enter to submit | esc to cancel
+        """,
+    ])
+    func ignoresOtherApprovalsAndPromptTextOutsideTheActiveMenu(screen: String) {
+        #expect(CodexVisibleTextStatusParser.hasComputerUseApprovalPrompt(in: screen) == false)
+    }
+
+    @Test
     func parsesUsageLimitBannerAsError() {
         let status = CodexVisibleTextStatusParser.fatalErrorStatus(
             from: """
