@@ -3108,56 +3108,74 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testRightPanelRuntimeSurvivesWorkspaceTabSwitch() throws {
-        let rightPanelID = UUID()
-        var visibleTabID: UUID?
-        var inactiveTabID: UUID?
-        let harness = try makeWorkspaceHarness(tabCount: 2) { state, _, workspaceID in
+    func testRightPanelsKeepTwoRecentAttachmentsAcrossWorkspaceTabSwitches() throws {
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+        let thirdPanelID = UUID()
+        let alternatePanelID = UUID()
+        let panelIDs = [firstPanelID, secondPanelID, thirdPanelID]
+        let harness = try makeWorkspaceHarness(tabCount: panelIDs.count) { state, _, workspaceID in
             var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
-            let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
-            var selectedTab = try XCTUnwrap(workspace.tabsByID[selectedTabID])
-            selectedTab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
-                panelID: rightPanelID,
-                isVisible: true
-            )
-            workspace.tabsByID[selectedTabID] = selectedTab
-            visibleTabID = selectedTabID
-            inactiveTabID = try XCTUnwrap(workspace.tabIDs.dropFirst().first)
+            for (tabID, panelID) in zip(workspace.tabIDs, panelIDs) {
+                var tab = try XCTUnwrap(workspace.tabsByID[tabID])
+                tab.rightAuxPanel = self.makeScratchpadRightAuxPanel(panelID: panelID, isVisible: true)
+                if panelID == secondPanelID {
+                    let alternatePanel = try XCTUnwrap(
+                        self.makeScratchpadRightAuxPanel(panelID: alternatePanelID, isVisible: true).activeTab
+                    )
+                    tab.rightAuxPanel.appendTab(alternatePanel, activate: false)
+                }
+                workspace.tabsByID[tabID] = tab
+            }
             state.workspacesByID[workspaceID] = workspace
         }
         defer { harness.window.orderOut(nil) }
 
-        pumpMainRunLoop(duration: 0.1)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let initialRuntime = try XCTUnwrap(
-            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
-        )
+        func settleLayout() {
+            pumpMainRunLoop(duration: 0.1)
+            harness.hostingView.layoutSubtreeIfNeeded()
+        }
 
-        _ = harness.store.send(
-            .selectWorkspaceTab(
-                workspaceID: harness.workspaceID,
-                tabID: try XCTUnwrap(inactiveTabID)
-            )
-        )
-        pumpMainRunLoop(duration: 0.1)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let runtimeAfterSwitchAway = try XCTUnwrap(
-            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
-        )
-        XCTAssertTrue(initialRuntime === runtimeAfterSwitchAway)
+        let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        func selectTab(at index: Int) {
+            _ = harness.store.send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: workspace.tabIDs[index]))
+            settleLayout()
+        }
 
-        _ = harness.store.send(
-            .selectWorkspaceTab(
-                workspaceID: harness.workspaceID,
-                tabID: try XCTUnwrap(visibleTabID)
-            )
-        )
-        pumpMainRunLoop(duration: 0.1)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let runtimeAfterSwitchBack = try XCTUnwrap(
-            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
-        )
-        XCTAssertTrue(initialRuntime === runtimeAfterSwitchBack)
+        settleLayout()
+        let first = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: firstPanelID))
+        let firstAttachment = try XCTUnwrap(first.lifecycleState.attachmentToken)
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: secondPanelID))
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: thirdPanelID))
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: alternatePanelID))
+
+        selectTab(at: 1)
+        let second = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: secondPanelID))
+        let secondAttachment = try XCTUnwrap(second.lifecycleState.attachmentToken)
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+        XCTAssertEqual(second.lifecycleState, .ready(secondAttachment))
+
+        let secondTab = try XCTUnwrap(workspace.tabsByID[workspace.tabIDs[1]])
+        let alternateTabID = try XCTUnwrap(secondTab.rightAuxPanel.tabID(containingPanelID: alternatePanelID))
+        _ = harness.store.send(.selectRightAuxPanelTab(workspaceID: workspace.id, tabID: alternateTabID, focus: false))
+        settleLayout()
+        let alternate = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: alternatePanelID))
+        let alternateAttachment = try XCTUnwrap(alternate.lifecycleState.attachmentToken)
+        XCTAssertEqual(second.lifecycleState, .detached)
+        XCTAssertEqual(alternate.lifecycleState, .ready(alternateAttachment))
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+
+        selectTab(at: 0)
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+        XCTAssertEqual(alternate.lifecycleState, .ready(alternateAttachment))
+
+        selectTab(at: 2)
+        let third = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: thirdPanelID))
+        let thirdAttachment = try XCTUnwrap(third.lifecycleState.attachmentToken)
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+        XCTAssertEqual(alternate.lifecycleState, .detached)
+        XCTAssertEqual(third.lifecycleState, .ready(thirdAttachment))
     }
 
     private func assertColor(
