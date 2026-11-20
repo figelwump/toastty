@@ -311,22 +311,7 @@ final class ConversationUIRenderTests: XCTestCase {
         // opens the digest, the work and the answer.
         let lineY = try XCTUnwrap(Self.firstDrawnRow(in: folded, scale: hostingView.window?.backingScaleFactor ?? 2),
                                   "Nothing is drawn")
-        let point = CGPoint(x: size.width / 2, y: lineY + 6)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(
-                with: type,
-                location: hostingView.convert(CGPoint(x: point.x, y: hostingView.isFlipped ? point.y : size.height - point.y), to: nil),
-                modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber,
-                context: nil,
-                eventNumber: 0,
-                clickCount: 1,
-                pressure: type == .leftMouseDown ? 1 : 0
-            ))
-            window.sendEvent(event)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        }
+        try click(CGPoint(x: size.width / 2, y: lineY + 6), in: hostingView, window: window, size: size)
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline, shownTexts().contains(where: { $0.contains("Nothing needs you.") }) == false {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
@@ -338,6 +323,193 @@ final class ConversationUIRenderTests: XCTestCase {
         XCTAssertTrue(shownTexts().contains { $0.contains("needsYou (agentFinished)") }, "The open line does not show the digest")
         XCTAssertTrue(shownTexts().contains { $0.contains("ready for your review") })
         try keep(try Self.snapshot(hostingView), name: "coordinator-quiet-wake-open")
+    }
+
+    /// In the coordinator's chat a wake turn is one line from its start to
+    /// its end. The typed digest shows as its line before its row comes, not
+    /// as Toastty's text. While the turn runs, that line is the only thing
+    /// that shows that the agent works, and the work stays folded. When the
+    /// turn ends only the answer is new. A click on the line opens the
+    /// digest and the work, each tool call as one line.
+    func testACoordinatorWakeTurnIsOneLineFromItsStartToItsEnd() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let header = "[Toastty] Wake: this message is from Toastty, not from the user."
+        let digest = [header, "- [Fix the unread dot](toastty://task/1): readyForReview at 2026-11-19T22:01:04Z"]
+            .joined(separator: "\n")
+        let line = ToasttyHostMessagePresentation(
+            summary: "Toastty · 1 update · 2:01 PM", title: "Toastty · 1 update", text: digest
+        )
+        let earlier = [
+            Self.row(1, .assistantMessage(text: "**Tag pause:** the release task no longer needs the pause.", phase: .final)),
+            Self.row(2, .hostMessage(.init(summary: "Toastty · 4 updates · 1:52 PM", title: "Toastty · 4 updates",
+                                           text: header, foldsTurn: true))),
+            Self.row(3, .toolStarted(callID: "quiet", name: "Bash", detail: "toastty task list")),
+            Self.row(4, .toolFinished(callID: "quiet", name: "Bash", outcome: .succeeded, detail: nil)),
+            Self.row(5, .assistantMessage(text: "Nothing needs you.", phase: .final)),
+        ]
+        let wake = [
+            Self.row(6, .hostMessage(line)),
+            Self.row(7, .assistantMessage(text: "Checking its pull request.", phase: .commentary)),
+            Self.row(8, .toolStarted(callID: "checks", name: "Bash", detail: "gh pr checks 449")),
+            Self.row(9, .toolFinished(callID: "checks", name: "Bash", outcome: .succeeded, detail: nil)),
+        ]
+        let answer = Self.row(10, .assistantMessage(text: "Fix the unread dot is ready for review.", phase: .final))
+        let size = CGSize(width: 560, height: 460)
+
+        func render(
+            _ rows: [ToasttyTranscriptRow],
+            sendItems: [ToasttySendPresentationItem] = [],
+            working: Bool,
+            options: ToasttyTranscriptOptions = Self.coordinatorOptions,
+            name: String
+        ) throws -> (texts: [String], spinners: Int) {
+            let transcript = ToasttyTranscriptView(
+                state: ToasttyConversationPresentationState(
+                    rows: rows, sendItems: sendItems, phase: .live, revision: .initial, historyTruncated: false
+                ),
+                isSubmitting: false,
+                readAcknowledgementEpoch: working ? .working : .ready,
+                workingIndicator: working ? ToasttyTranscriptWorkingIndicator(turnElapsed: .init(
+                    secondsAtReceipt: 16, receivedAtMonotonicTime: ProcessInfo.processInfo.systemUptime
+                )) : nil,
+                jumpToLiveEdgeRequest: .constant(0),
+                canAcknowledgeRead: false,
+                options: options
+            )
+            let (hostingView, window) = Self.host(transcript, size: size)
+            defer { window.close() }
+            try keep(Self.snapshot(hostingView), name: name)
+            return (
+                Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).map(\.string),
+                Self.descendants(of: hostingView, as: ToasttyLayerAnimationNSView.self).count
+            )
+        }
+
+        // Toastty typed the digest; its row has not come yet.
+        let typed = try render(earlier, sendItems: [ToasttySendPresentationItem(
+            clientRequestID: "wake", text: digest, content: .optimistic(response: .accepted), hostMessage: line
+        )], working: true, name: "coordinator-wake-typed")
+        XCTAssertFalse(typed.texts.contains { $0.contains("[Toastty] Wake") }, "The typed digest shows raw")
+        XCTAssertEqual(typed.spinners, 1)
+
+        let running = try render(earlier + wake, working: true, name: "coordinator-wake-running")
+        XCTAssertFalse(running.texts.contains { $0.contains("Checking its pull request") }, "Running work shows")
+        XCTAssertFalse(running.texts.contains { $0.contains("[Toastty] Wake") })
+        XCTAssertEqual(running.spinners, 1, "More than one thing says that the agent works")
+
+        let answered = try render(earlier + wake + [answer], working: false, name: "coordinator-wake-answered")
+        XCTAssertTrue(answered.texts.contains { $0.contains("ready for review") })
+        XCTAssertFalse(answered.texts.contains { $0.contains("Checking its pull request") })
+        XCTAssertEqual(answered.spinners, 0)
+
+        // A digest and a message from `coordinator send` that wait show as
+        // their line and card, with the queue's caption and Remove.
+        let waitingQueue = { (position: Int) in
+            ToasttySendPresentationItem.Content.queued(ToasttyQueuedSendPresentation(
+                position: position, attachmentCount: 0, isPaused: false, canSteer: false, canEdit: false
+            ))
+        }
+        let waiting = try render(earlier + wake + [answer], sendItems: [
+            ToasttySendPresentationItem(
+                clientRequestID: "wake-2", text: digest, content: waitingQueue(1),
+                hostMessage: ToasttyHostMessagePresentation(
+                    summary: "Toastty · 1 update · waiting", title: "Toastty · 1 update", text: digest
+                )
+            ),
+            ToasttySendPresentationItem(
+                clientRequestID: "from-task", text: "[Toastty] From task Fix the unread dot\nChecks passed.",
+                content: waitingQueue(2),
+                hostMessage: ToasttyHostMessagePresentation(
+                    summary: "From task Fix the unread dot · waiting", text: "Checks passed.",
+                    style: .sender(name: "task Fix the unread dot", timeText: "waiting")
+                )
+            ),
+        ], working: true, name: "coordinator-waiting-messages")
+        XCTAssertFalse(waiting.texts.contains { $0.contains("[Toastty]") }, "A waiting message shows raw")
+        XCTAssertTrue(waiting.texts.contains { $0.contains("Checks passed.") })
+
+        // A turn that the user started shows its line under the message
+        // before any work comes.
+        let asked = try render(
+            [Self.row(11, .userMessage(text: "What blocks the release?", origin: .local))],
+            working: true, name: "coordinator-user-turn-starting"
+        )
+        XCTAssertEqual(asked.spinners, 1)
+
+        // A session's chat keeps its running work open, so the agent's
+        // notes show as they come, and only the row at the end has a
+        // spinner.
+        let session = try render(
+            [
+                Self.row(12, .userMessage(text: "Fix the flaky upload test", origin: .local)),
+                Self.row(13, .assistantMessage(text: "Checking its pull request.", phase: .commentary)),
+                Self.row(14, .toolStarted(callID: "test", name: "Bash", detail: "swift test --filter Upload")),
+            ],
+            working: true, options: ToasttyTranscriptOptions(), name: "session-running-turn"
+        )
+        XCTAssertTrue(session.texts.contains { $0.contains("Checking its pull request") })
+        XCTAssertEqual(session.spinners, 1, "The chip and the row both show a spinner")
+
+        // A click on the line opens the digest and the work.
+        let transcript = ToasttyTranscriptView(
+            state: ToasttyConversationPresentationState(
+                rows: wake + [answer], phase: .live, revision: .initial, historyTruncated: false
+            ),
+            isSubmitting: false,
+            readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false,
+            options: Self.coordinatorOptions
+        )
+        let (hostingView, window) = Self.host(transcript, size: size)
+        defer { window.close() }
+        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        func shownTexts() -> [String] {
+            Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).map(\.string)
+        }
+        let lineY = try XCTUnwrap(
+            Self.firstDrawnRow(in: try Self.snapshot(hostingView), scale: window.backingScaleFactor), "Nothing is drawn"
+        )
+        try click(CGPoint(x: size.width / 2, y: lineY + 6), in: hostingView, window: window, size: size)
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, shownTexts().contains(where: { $0.contains("Checking its pull request") }) == false {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        hostingView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(shownTexts().contains { $0.contains("Checking its pull request") }, "The line does not open the work")
+        XCTAssertTrue(shownTexts().contains { $0.contains("[Toastty] Wake") }, "The open line does not show the digest")
+        try keep(try Self.snapshot(hostingView), name: "coordinator-wake-open")
+    }
+
+    private static let coordinatorOptions = ToasttyTranscriptOptions(
+        readOnlyInteractionMessage: "Answer in the terminal",
+        showsMessageCopyButton: true,
+        foldsRunningWork: true
+    )
+
+    private func click(_ point: CGPoint, in hostingView: NSView, window: NSWindow, size: CGSize) throws {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type,
+                location: hostingView.convert(
+                    CGPoint(x: point.x, y: hostingView.isFlipped ? point.y : size.height - point.y), to: nil
+                ),
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0
+            ))
+            window.sendEvent(event)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
     }
 
     /// The transcript opens at the line above the messages the reader has

@@ -40,7 +40,8 @@ struct CoordinatorChatView: View {
         maximumContentWidth: maximumContentWidth,
         readOnlyInteractionMessage: "Answer in the terminal",
         shortenedPreviewMessage: "Preview shortened. The terminal shows the full request.",
-        showsMessageCopyButton: true
+        showsMessageCopyButton: true,
+        foldsRunningWork: true
     )
 
     var body: some View {

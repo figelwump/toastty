@@ -728,6 +728,49 @@ extension ToasttyComposerPresentationTests {
         XCTAssertTrue(readOnly.allSatisfy { $0.canChange == false && $0.resumeTitle == nil })
     }
 
+    /// A digest or a message from `coordinator send` that waits in the
+    /// coordinator's queue shows as its row will: the digest's line and the
+    /// sender's card, not Toastty's raw text. A digest that the Mac
+    /// shortened lost lines, so its line gives no count. The user's own
+    /// message stays a bubble.
+    func testAWaitingDigestOrSendersMessageShowsAsItsRowWill() throws {
+        let digest = [
+            "\(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.",
+            "- [Fix the unread dot](toastty://task/1): needsYou (review) at 2026-11-19T22:01:04Z",
+            "- [Ship the release](toastty://task/2): running at 2026-11-19T22:01:09Z",
+        ].joined(separator: "\n")
+        let queue = RemoteCoordinatorQueue(
+            revision: "r", conversationID: RemoteConversationID(rawValue: UUID()), heldSetToken: nil,
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "digest", text: digest),
+                RemoteCoordinatorQueueEntry(id: "shortened", text: digest, isTextShortened: true),
+                RemoteCoordinatorQueueEntry(id: "sender", text: "Checks passed.", sender: "task Fix the unread dot"),
+                RemoteCoordinatorQueueEntry(id: "own", text: "Later"),
+            ]
+        )
+
+        let items = ToasttySendPresentationAdapter.makeItems(
+            from: SendReconciliationState(), readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: true)
+        )
+
+        XCTAssertEqual(items.map(\.id), ["digest", "shortened", "sender", "own"])
+        let line = try XCTUnwrap(items[0].hostMessage)
+        XCTAssertTrue(line.isLine)
+        XCTAssertEqual(line.summary, "Toastty · 2 updates · waiting")
+        XCTAssertEqual(line.title, "Toastty · 2 updates")
+        XCTAssertEqual(items[1].hostMessage?.summary, "Toastty · waiting")
+        let card = try XCTUnwrap(items[2].hostMessage)
+        XCTAssertEqual(card.style, .sender(name: "task Fix the unread dot", timeText: "waiting"))
+        XCTAssertEqual(card.text, "Checks passed.")
+        XCTAssertNil(items[3].hostMessage)
+        // Remove still acts on the queue's entry.
+        XCTAssertTrue(items.allSatisfy { item in
+            guard case .queued(let queued) = item.content else { return false }
+            return queued.canChange && queued.canEdit == false
+        })
+    }
+
     func testQueueRejectionReceiptsExplainTheQueue() {
         for reason in [RemoteMessageRejectionReason.queueFull, .notWorking, .turnMismatch, .steerUnavailable] {
             let receipt = ToasttySendReceiptPresentation(kind: .rejected(reason))

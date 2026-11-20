@@ -36,6 +36,9 @@ final class CoordinatorChatModel: ObservableObject {
         let id: String
         let text: String
         let steered: Bool
+        /// When Toastty typed it: the time its line or card shows until
+        /// its row comes.
+        let typedAt: Date
     }
 
     /// What the chat says above the composer, in place of sending.
@@ -458,7 +461,7 @@ final class CoordinatorChatModel: ObservableObject {
                 projectionGeneration: loaded.projectionGeneration,
                 isSentFromThisMac: { [weak controller] id in controller?.didType(messageID: id) ?? false },
                 isQuietDigest: { [weak controller] text in controller?.isQuietDigest(text) ?? false },
-                timeText: { $0.formatted(date: .omitted, time: .shortened) }
+                timeText: Self.timeText
             )
         } else {
             rows = []
@@ -490,11 +493,17 @@ final class CoordinatorChatModel: ObservableObject {
         if next != presentation { presentation = next }
     }
 
+    /// How the chat shows a time, such as a digest line's.
+    private static func timeText(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+
     /// The tail of the chat: messages typed but not shown yet, then the
     /// messages that wait, in the order they will be typed.
     private func sendItems() -> [ToasttySendPresentationItem] {
         // A waiting message shows as its row will: a quick entry message
-        // without Toastty's first line.
+        // without Toastty's first line, and a digest or a message from
+        // `coordinator send` as its line or card.
         var items = pendingSends.map { pending in
             let parts = CoordinatorMessageHeader.displayParts(of: pending.text)
             return ToasttySendPresentationItem(
@@ -507,10 +516,13 @@ final class CoordinatorChatModel: ObservableObject {
                     ? ToasttyUserMessageCaption.text(origin: .local, deliveryMode: .steer)
                     : nil,
                 quote: CoordinatorChatTranscript.quote(of: pending.text),
-                attachments: parts.attachmentPaths.map { URL(fileURLWithPath: $0) }
+                attachments: parts.attachmentPaths.map { URL(fileURLWithPath: $0) },
+                hostMessage: CoordinatorChatTranscript.hostMessage(pending.text, timeText: Self.timeText(pending.typedAt))
             )
         }
         guard let controller else { return items }
+        // A waiting message's line or card says so in place of a time.
+        let waitingTime = "waiting"
         // Only a message the user wrote in the chat can go into the running
         // turn.
         let turnTakesSteer = controller.canSteer
@@ -524,7 +536,8 @@ final class CoordinatorChatModel: ObservableObject {
                     isPaused: true,
                     canSteer: turnTakesSteer && entry.canBeSteered
                 )),
-                quote: CoordinatorChatTranscript.quote(of: entry.text)
+                quote: CoordinatorChatTranscript.quote(of: entry.text),
+                hostMessage: CoordinatorChatTranscript.hostMessage(entry.text, timeText: waitingTime)
             ))
         }
         // A phone's queue is in the conversation. Its messages go first:
@@ -561,7 +574,8 @@ final class CoordinatorChatModel: ObservableObject {
                     canSteer: turnTakesSteer && entry.canBeSteered,
                     waitingCaption: Self.waitingCaption(position: position, hold: controller.hold)
                 )),
-                quote: CoordinatorChatTranscript.quote(of: entry.text)
+                quote: CoordinatorChatTranscript.quote(of: entry.text),
+                hostMessage: CoordinatorChatTranscript.hostMessage(entry.text, timeText: waitingTime)
             ))
         }
         return items
@@ -680,7 +694,7 @@ final class CoordinatorChatModel: ObservableObject {
         // Without the conversation there is no echo to wait for.
         guard entry.echoesInConversation, subscription != nil else { return }
         guard events.contains(where: { Self.echoedRequestID($0) == entry.id }) == false else { return }
-        pendingSends.append(PendingSend(id: entry.id, text: entry.text, steered: entry.steered))
+        pendingSends.append(PendingSend(id: entry.id, text: entry.text, steered: entry.steered, typedAt: now()))
         publishMetadata()
     }
 

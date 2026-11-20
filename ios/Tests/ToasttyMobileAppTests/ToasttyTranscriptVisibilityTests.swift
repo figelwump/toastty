@@ -57,6 +57,15 @@ final class ToasttyTranscriptVisibilityTests: XCTestCase {
         )
         XCTAssertEqual(showingToolDetails.target, .responseContext(response.id))
         XCTAssertEqual(showingToolDetails.markerHostID, .transcript(state.blocks[1].id))
+
+        // Where running work folds, a batch is its list of calls, as tall
+        // as an open card: entry stops just above the response.
+        let listedCalls = TranscriptResponseEntryContext(
+            responseID: response.id,
+            items: state.blocks.map { .block($0, isWork: true) },
+            toolBatchesAreCards: false
+        )
+        XCTAssertEqual(listedCalls, showingToolDetails)
     }
 
     func testResponseEntryWithoutAdjacentWorkUsesOnlyPrecedingContent() throws {

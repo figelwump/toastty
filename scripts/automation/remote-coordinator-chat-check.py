@@ -23,7 +23,8 @@ that:
   as Queued and is typed after the turn, in its own turn (Return steers the
   turn; remote-coordinator-steer-check.py covers that);
 - Stop ends the turn and sets the waiting message aside; Send next types it;
-- a digest that Toastty typed shows as one folded line, and a click opens it;
+- a digest that Toastty typed shows as one folded line from the moment it
+  is typed, never as Toastty's text, and a click opens it;
 - a task link shows as a chip with the task's own title; a click in the
   full view opens the task's space with the chat beside it in the dock; a
   link to no task and another Toastty link are plain text that a click does
@@ -757,11 +758,24 @@ def run(check):
         capture('send-next')
         step('Stop ended the turn, and Send next typed what waited')
 
-        # 5. A digest is one folded line; a click opens it.
+        # 5. A digest is one folded line, also while Toastty types it and
+        # before Claude's transcript has it; a click opens it. Each read of
+        # the chat while the digest comes is checked: one read can miss a
+        # short showing of Toastty's text.
         timer = cli('coordinator', 'wake', '--in', '60s')['wake']
-        digest_at = wait_for('the digest in Claude\'s transcript',
-                             lambda: index_of('user', '[Toastty] Wake'), timeout=150)
-        wait_for('the folded line', lambda: 'Toastty · 1 update' in ui.texts(), timeout=60)
+        raw_digest = []
+
+        def shows_folded_line():
+            shown = ui.texts()
+            if '[Toastty] Wake' in shown:
+                raw_digest.append(shown[-800:])
+            return 'Toastty · 1 update' in shown
+
+        wait_for('the digest in Claude\'s transcript and its folded line',
+                 lambda: shows_folded_line() and index_of('user', '[Toastty] Wake') is not None,
+                 timeout=210, interval=0.1)
+        digest_at = index_of('user', '[Toastty] Wake')
+        require(not raw_digest, f'The digest showed as Toastty\'s text: {raw_digest[:1]}')
         require('[Toastty] Wake' not in ui.texts(), f'The digest is not folded: {ui.texts()[-800:]}')
         capture('digest-folded')
         ui.run('click-label', 'Toastty · 1 update')

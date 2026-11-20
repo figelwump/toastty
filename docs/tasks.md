@@ -1113,6 +1113,16 @@ that Toastty started has no message, as for a new coordinator or after
 Restart, the chat shows Toasty and a short introduction. A conversation that a
 relaunch resumes does not show it.
 
+- **One line for each turn's work.** The coordinator's tool calls and notes
+  stay folded under one line, also while the turn runs. That line is the one
+  place that shows that the coordinator works, with the turn's running time:
+  "working · 16s · 2 tool calls" under your message, or "Toastty · 1 update ·
+  working 16s" for a turn that a digest started. When the turn ends, the line
+  stays where it is, and the answer shows under it. A click on the line opens
+  the work, each tool call on one line; a click on a tool call shows its
+  details. A turn without tool calls or notes keeps no line. A digest and a
+  message from `coordinator send` show as their line or card from the moment
+  Toastty types them, and while they wait.
 - **What you have not read.** A red-orange **New** line marks the first
   message from the coordinator since you last read the chat, and the chat
   opens at it. While you scroll up, **Jump to latest** reads "N new". Your own

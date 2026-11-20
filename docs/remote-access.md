@@ -321,7 +321,8 @@ with a button bar: attach on the left and Stop on the right. As soon as there
 is something to send, Stop gives way to **Send**, with a **Queue**/**Steer**
 chip directly left of it; Send uses the same arrow for every mode, and Stop and
 Send are never shown together. The agent's working state is shown in the
-transcript, not under the field.
+transcript, not under the field: once, at the end of the running turn, with
+the turn's running time.
 
 - **Steer** is the default while the host allows it. Send submits the message
   to the running Codex or Claude Code CLI, only while nobody has typed in that
@@ -845,14 +846,21 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   as a thumbnail, and a tap opens it full screen; any other file shows by its
   name. With an older Mac, or without read access, the phone shows the names
   of all the files. Other sessions' chats show every message as it was typed.
+- **One line for each turn's work.** As in the Mac's chat, the
+  coordinator's tool calls and notes stay folded under one line, also while
+  the turn runs, and that line alone shows that the coordinator works, with
+  the turn's running time. For a turn that a digest started, the digest's
+  line is that line, and a tap opens the digest and the work. When the turn
+  ends, only the answer is new. Other sessions' chats show a running turn's
+  work as it comes.
 - **Quiet wake turns fold.** A wake turn that the coordinator marked quiet
   on the Mac (see [Quiet turns](tasks.md#quiet-turns)) folds whole under
-  Toastty's line for its digest, as in the Mac's chat: no work strip and no
-  answer. A tap on the line opens the digest, the coordinator's work and its
+  Toastty's line for its digest, as in the Mac's chat: no answer shows. A
+  tap on the line opens the digest, the coordinator's work and its
   answer, and a second tap closes them. When a mark comes or goes while the
   chat is open, for example at the end of the turn, the turn folds or opens
   where it is, without a reload. With an older Mac, which does not share the
-  marks, quiet turns show open, as before.
+  marks, the answers of quiet turns show, as before.
 - **Waiting messages.** The chat lists every message that waits for the
   coordinator, as one list in the order Toastty types them: first the
   messages this phone queued in the chat, then the coordinator's own

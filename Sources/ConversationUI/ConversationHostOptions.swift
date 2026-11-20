@@ -16,17 +16,25 @@ public struct ToasttyTranscriptOptions: Equatable, Sendable {
     /// whole message. On the Mac it shows while the pointer is over the
     /// message.
     public var showsMessageCopyButton: Bool
+    /// A turn's work stays folded under one line, also while the turn runs,
+    /// and that line shows that the agent works. The coordinator's chats
+    /// set it: there the answer is what the reader follows. Without it, the
+    /// running turn's work is open, so that the agent's notes show as they
+    /// come, and the line at the end of the chat shows that it works.
+    public var foldsRunningWork: Bool
 
     public init(
         maximumContentWidth: CGFloat? = nil,
         readOnlyInteractionMessage: String = "Respond on the desktop",
         shortenedPreviewMessage: String = "Preview shortened. Check the desktop for the full request.",
-        showsMessageCopyButton: Bool = false
+        showsMessageCopyButton: Bool = false,
+        foldsRunningWork: Bool = false
     ) {
         self.maximumContentWidth = maximumContentWidth
         self.readOnlyInteractionMessage = readOnlyInteractionMessage
         self.shortenedPreviewMessage = shortenedPreviewMessage
         self.showsMessageCopyButton = showsMessageCopyButton
+        self.foldsRunningWork = foldsRunningWork
     }
 }
 
@@ -41,6 +49,10 @@ public struct ToasttyHostMessagePresentation: Equatable, Sendable {
 
     /// The one line, for example "Toastty · 2 updates · 14:05".
     public var summary: String
+    /// The line without its time, for example "Toastty · 2 updates". While
+    /// the turn that the message started runs, the line shows this and the
+    /// turn's running time. `nil` keeps `summary`.
+    public var title: String?
     /// The full text, without the sender header for a sender card.
     public var text: String
     public var style: Style
@@ -50,11 +62,25 @@ public struct ToasttyHostMessagePresentation: Equatable, Sendable {
     /// visible.
     public var foldsTurn: Bool
 
-    public init(summary: String, text: String, foldsTurn: Bool = false, style: Style = .disclosure) {
+    public init(
+        summary: String,
+        title: String? = nil,
+        text: String,
+        foldsTurn: Bool = false,
+        style: Style = .disclosure
+    ) {
         self.summary = summary
+        self.title = title
         self.text = text
         self.foldsTurn = foldsTurn
         self.style = style
+    }
+
+    /// The message is one line that opens to its text, such as a digest.
+    /// A sender's card shows its text.
+    public var isLine: Bool {
+        if case .disclosure = style { return true }
+        return false
     }
 }
 
