@@ -177,9 +177,8 @@ the files in its folder with no question, also add this rule:
 ```
 
 The rule also lets it edit `policy.md` with no question. The coordinator
-still asks before it writes its daily list
-(`action run panel.scratchpad.set-content`), before it commits a change to
-its policy (`git commit` in its folder), and before `task request-merge`.
+still asks before it commits a change to its policy (`git commit` in its
+folder), and before `task request-merge`.
 
 Tested in Claude Code's default permission mode:
 
@@ -1519,10 +1518,11 @@ you. A release, a deployment or another production step still needs your
 approval.
 
 **The daily list.** Once a day, at 09:00 by default, the coordinator brings
-one list of everything that waits for you: a short message in its chat, and
-its Scratchpad "Waiting on you" beside the chat. Items that waited longest
-come first. The list marks an item that was on 2 lists or more, or a task in
-which you typed nothing since it began to wait. The groups:
+one list of everything that waits for you, as one message in its chat. Each
+item is one line, with its number, its task as a link and the answer the
+coordinator suggests. Items that waited longest come first. The list marks
+an item that was on 2 lists or more, or a task in which you typed nothing
+since it began to wait. The groups:
 
 - **Blocks work you started:** a review, a question, a failed merge, merged
   tasks that wait for a release. Such an item stays on the list until you
@@ -1542,11 +1542,10 @@ which you typed nothing since it began to wait. The groups:
 Answer in the chat with the number, such as "2 yes". Ask "what waits for
 me?" for the list at any time. Outside the list, the coordinator tells you
 each thing once. The Talking section of [your policy](#the-policy-file)
-changes the time, turns the list off, or changes what its Scratchpad shows,
-such as `- Waiting on you list at 08:30 on weekdays; group it by project.`
+changes the time, turns the list off, or changes its form, such as
+`- Daily list at 08:30 on weekdays; group it by project.`
 A [review](#how-the-coordinator-improves-the-work) can propose such a line
-when you overlooked items on the list. Links do not open from a Scratchpad:
-the task links are in the chat message.
+when you overlooked items on the list.
 
 ### How the coordinator improves the work
 
@@ -1717,7 +1716,7 @@ by asking you:
 ## Talking
 - Answer short questions about code yourself; make a task for the rest.
 - Tell me only what blocks a task.
-- Waiting on you list at 08:30 on weekdays.
+- Daily list at 08:30 on weekdays.
 
 ## Reviewing
 - Good proof = a scenario list, each checked through the real UI or CLI;

@@ -40,8 +40,8 @@ enum ToasttyPreviewFixture {
 
     static func content(for target: RemotePreviewTarget) throws -> RemotePreviewContent {
         switch target {
-        case .panel(workspaceID: ToasttyMobileFixture.coordinatorWorkspaceID, panelID: ToasttyMobileFixture.coordinatorWaitingPanelID):
-            return scratchpad(title: "Waiting on you", documentNumber: 90)
+        case .panel(workspaceID: ToasttyMobileFixture.coordinatorWorkspaceID, panelID: ToasttyMobileFixture.coordinatorScratchpadPanelID):
+            return scratchpad(title: "Release plan", documentNumber: 90)
         case .panel(workspaceID: ToasttyMobileFixture.coordinatorWorkspaceID, panelID: ToasttyMobileFixture.coordinatorPolicyPanelID):
             return try coordinatorFile("policy.md")
         case .conversationFile(let conversationID, let fileReference)

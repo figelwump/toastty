@@ -135,7 +135,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-top-bar", of: app)
 
         menu.tap()
-        let entries = ["Policy", "Ledger", "Friction Notes", "Waiting on you"].map { menuItem($0, in: app) }
+        let entries = ["Policy", "Ledger", "Friction Notes", "Release plan"].map { menuItem($0, in: app) }
         XCTAssertTrue(entries[0].waitForExistence(timeout: 5))
         XCTAssertTrue(entries.allSatisfy { $0.exists })
         let tops = entries.map { $0.frame.minY }
@@ -178,7 +178,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         closeSheet(in: app)
 
         menu.tap()
-        menuItem("Waiting on you", in: app).tap()
+        menuItem("Release plan", in: app).tap()
         XCTAssertTrue(app.buttons["toastty-scratchpad-fit"].waitForExistence(timeout: 10))
         closeSheet(in: app)
     }
@@ -198,7 +198,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
 
         let older = openCoordinatorChat(environment: ["TOASTTY_MOBILE_FIXTURE_FILE_PREVIEW": "unsupported"])
         older.buttons["toastty-coordinator-menu"].tap()
-        XCTAssertTrue(menuItem("Waiting on you", in: older).waitForExistence(timeout: 5))
+        XCTAssertTrue(menuItem("Release plan", in: older).waitForExistence(timeout: 5))
         XCTAssertTrue(menuItem("policy.md", in: older).exists)
         XCTAssertFalse(menuItem("Ledger", in: older).exists)
         XCTAssertFalse(menuItem("Policy", in: older).exists)

@@ -76,8 +76,10 @@ Toastty is designed to run locally on your machine. The app itself does not send
     and what the coordinator did. `friction.md` holds what the coordinator
     saw slow your work, with task titles, and `decisions.md` holds task IDs,
     pull request addresses and what you decided. The coordinator's daily
-    list is a Scratchpad document, "Waiting on you", with task titles; it is
-    kept in `scratchpad-documents/` as every Scratchpad is. Closing the coordinator's workspace leaves it.
+    list is a message in its chat. An earlier version also wrote the list to
+    a Scratchpad document, "Waiting on you", with task titles; such a
+    document is kept in `scratchpad-documents/` as every Scratchpad is, and
+    closing the coordinator's workspace leaves it.
   - Before Toastty starts Claude Code there, it marks this one folder as
     trusted in Claude Code's config file: `~/.claude.json`, or `.claude.json`
     in `CLAUDE_CONFIG_DIR` when Toastty's environment or the `claude`

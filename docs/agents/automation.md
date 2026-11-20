@@ -773,9 +773,10 @@ the task, and that after the merge the coordinator creates one task for the
 remaining work in the same project, without `--start-work`, and tells the
 user. `daily-list` names a list time in Talking that has just passed and
 seeds the ledger with a question, two offers (one that was on 3 lists), a
-question that the policy already answers, and a follow-up. It checks the
-Scratchpad "Waiting on you", the dropped offer and the answered question, the
-raised `listed=` counts, the `list` line, and the next check a day later;
+question that the policy already answers, and a follow-up. It checks that
+the list is one chat message with the open items and no Scratchpad, the
+dropped offer and the answered question, the raised `listed=` counts, the
+`list` line, and the next check a day later;
 then that "what waits for me?" changes no count, and that an answer with an
 item's number creates the offered task. `daily-list-quiet` checks that a due
 list with nothing on it is a quiet turn. Every other scenario seeds Talking
