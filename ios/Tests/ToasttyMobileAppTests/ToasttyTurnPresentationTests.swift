@@ -409,10 +409,10 @@ final class ToasttyTurnPresentationTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(batches.count, 2)
-        let calls = batches.map { state.preparedTranscript.toolCallsByBlock[$0] ?? [] }
-        XCTAssertEqual(calls[0].map(\.outcome), [.succeeded])
-        XCTAssertEqual(calls[0].map(\.details), [["toastty task request-merge"]])
-        XCTAssertEqual(calls[1], [])
+        let split = batches.map { state.preparedTranscript.toolCallsByBlock[$0] ?? [] }
+        XCTAssertEqual(split[0].map(\.outcome), [.succeeded])
+        XCTAssertEqual(split[0].map(\.details), [["toastty task request-merge"]])
+        XCTAssertEqual(split[1], [])
     }
 
     private func turnStub(
