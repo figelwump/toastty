@@ -346,10 +346,31 @@ public struct TaskReleaseAfterMerge: Codable, Equatable, Sendable {
     }
 }
 
-/// What a release task releases. Its commit is the setup's pinned base.
+/// The work offered to a release agent and the delivery it confirmed.
 public struct TaskRelease: Codable, Equatable, Sendable {
+    public struct Tag: Codable, Equatable, Sendable {
+        public var tag: String
+        public var taskIDs: [UUID]
+
+        public init(tag: String, taskIDs: [UUID]) {
+            self.tag = tag
+            self.taskIDs = taskIDs
+        }
+    }
+
+    public struct Completion: Codable, Equatable, Sendable {
+        public var reportedAt: Date
+        public var tags: [Tag]
+
+        public init(reportedAt: Date, tags: [Tag]) {
+            self.reportedAt = reportedAt
+            self.tags = tags
+        }
+    }
+
     /// The project's To ship tasks when the release started.
     public var childTaskIDs: [UUID]
+    public var completion: Completion?
 
     public init(childTaskIDs: [UUID]) {
         self.childTaskIDs = childTaskIDs

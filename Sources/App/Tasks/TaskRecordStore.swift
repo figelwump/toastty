@@ -99,6 +99,15 @@ final class TaskRecordStore: ObservableObject {
         schedulePersist()
     }
 
+    /// A release and the tasks it ships must be saved together.
+    func saveEach(_ body: (inout TaskRecord) -> Void) throws {
+        var next = records
+        for index in next.indices {
+            body(&next[index])
+        }
+        if next != records { try commit(next) }
+    }
+
     /// Removes a record and saves at once. When the save fails, the record
     /// stays and the error is thrown.
     func remove(id: UUID) throws {

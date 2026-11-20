@@ -803,7 +803,13 @@ public enum ToasttyCLI {
                 )
 
             default:
-                let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
+                let client: ToasttySocketClient
+                if case .appControlRun(.action, "task.release-complete", _) = invocation.command {
+                    // Verification reads the remote and may need to fetch commits.
+                    client = ToasttySocketClient(socketPath: invocation.options.socketPath, timeoutInterval: 120)
+                } else {
+                    client = ToasttySocketClient(socketPath: invocation.options.socketPath)
+                }
                 let response: AutomationResponseEnvelope
                 if let request = invocation.command.makeRequestEnvelope(callerSessionID: callerSessionID) {
                     response = try client.send(request)
@@ -1175,6 +1181,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
+      toastty [--json] [--socket-path <path>] task release-complete --text-file <report.json>
       toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>]
       toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer] [--from <name>]
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
@@ -2646,6 +2653,15 @@ public enum ToasttyCLI {
                 }
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.release", args: args))
+
+        case "release-complete":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--text-file"])
+            guard parsed.positionals.isEmpty, parsed.values("--text-file").count == 1,
+                  let file = parsed.singleValue("--text-file") else {
+                throw ToasttyCLIError.usage("task release-complete requires one --text-file with the release report\n\n\(usage)")
+            }
+            let report = try textFileContents(file, environment: environment)
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.release-complete", args: ["report": .string(report)]))
 
         case "send":
             let parsed = try parseCommandArguments(remaining, valueOptions: ["--text", "--text-file", "--from"], flagOptions: ["--steer"])

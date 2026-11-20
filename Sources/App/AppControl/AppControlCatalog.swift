@@ -93,6 +93,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskMarkDone = "task.mark-done"
     case taskArchive = "task.archive"
     case taskRelease = "task.release"
+    case taskReleaseComplete = "task.release-complete"
     case taskAdopt = "task.adopt"
     case coordinatorOpen = "coordinator.open"
     case coordinatorRestart = "coordinator.restart"
@@ -770,13 +771,21 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Start a release task for a project that tasks.toml gives a release_skill or a release_prompt. Toastty fetches the remote's default branch (the fetch must succeed) and starts the agent in a new worktree on no branch at that commit. [defaults] in ~/.toastty/tasks.toml fills an agent, model or effort the request leaves out. Its first message names release_skill, then release_prompt, then the project's To ship tasks. Release tags matching release_tags mark tasks shipped. Uses the given workspace's project, or the calling agent's.",
+                summary: "Start a release task for a project that tasks.toml gives a release_skill or a release_prompt. Toastty fetches the remote's default branch and starts the agent in a detached worktree at that commit. [defaults] fills missing agent settings. The release agent confirms completion with task.release-complete. Uses the given workspace's project, or the calling agent's.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [
                     .taskAgent(required: false),
                     .taskModel(required: false),
                     .taskEffort(required: false),
                 ]
+            )
+        case .taskReleaseComplete:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Confirm the calling agent's release after all approved lanes and checks finish. Verifies each remote tag and the merge commits of the tasks it shipped. Toastty finishes and cleans up the release after its agent and background work stop.",
+                selectors: [],
+                parameters: [.init(name: "report", summary: "JSON text with a tags array. Each entry has a tag name and taskIDs array.", valueType: .string, required: true)]
             )
         case .taskAdopt:
             return .init(
