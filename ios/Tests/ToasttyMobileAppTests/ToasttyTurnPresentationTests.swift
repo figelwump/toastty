@@ -478,6 +478,11 @@ final class ToasttyTurnPresentationTests: XCTestCase {
         fold.reconcile(runs: [run([1, 2, 5, 7])], revision: .prepended, expandedTurnIDs: [])
         XCTAssertTrue(fold.isOpen(run([1, 2, 5, 7])), "An older check that loads joins the open row")
         XCTAssertFalse(fold.isOpen(run([9, 11])), "Another row stays closed")
+        // Toastty keeps the newest 200 quiet marks: the row's first checks
+        // can leave it, and the rest stays open.
+        fold.reconcile(runs: [run([5, 7])], revision: .appended, expandedTurnIDs: [])
+        XCTAssertTrue(fold.isOpen(run([5, 7])), "The row closed when its first checks left it")
+        fold.reconcile(runs: [run([1, 2, 5, 7])], revision: .appended, expandedTurnIDs: [])
         fold.toggle(run([1, 2, 5, 7]))
         XCTAssertFalse(fold.isOpen(run([1, 2, 5, 7])))
         XCTAssertFalse(fold.isOpen(run([7, 9])), "Closing the row forgets every check in it")

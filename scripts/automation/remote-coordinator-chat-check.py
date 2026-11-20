@@ -806,7 +806,15 @@ def run(check):
                 'Now reply with exactly this one word and nothing else: QUIET-READY')
         wait_for_reply('QUIET-READY')
         wait_for('the prompt to open again', at_prompt, timeout=120)
+        # The chat's text names each message more than once: compare counts
+        # with these, taken before the checks.
         single_lines = ui.texts().count('Toastty · 1 update')
+        shown_answers = ui.texts().count('QUIET-OK')
+
+        def answered(count):
+            return sum(entry['role'] == 'assistant' and entry['text'].strip() == 'QUIET-OK'
+                       for entry in transcript()) >= count
+
         running = None
         for number in (1, 2, 3):
             cli('coordinator', 'wake', '--in', '60s')
@@ -820,24 +828,27 @@ def run(check):
             wait_for(f'quiet check {number} in Claude\'s transcript',
                      lambda: sum(entry['text'].startswith('[Toastty] Wake') for entry in transcript()
                                  if entry['role'] == 'user') >= 1 + number, timeout=210)
+            wait_for(f'Claude to answer quiet check {number}', lambda: answered(number), timeout=240)
             wait_for(f'Claude to end quiet check {number}', at_prompt, timeout=240)
-            # The instruction names the answer once; each check's answer folds.
-            wait_for(f'quiet check {number}\'s answer to fold', lambda: ui.texts().count('QUIET-OK') == 1, timeout=30)
+            # The chat reads the answer after a moment; it folds with its turn.
+            time.sleep(3)
+            require(ui.texts().count('QUIET-OK') == shown_answers,
+                    f'Quiet check {number}\'s answer shows: {ui.texts()[-600:]}')
         wait_for('one line for the three checks',
                  lambda: 'Toastty · 3 quiet checks' in (shown := ui.texts())
                  and shown.count('Toastty · 1 update') == single_lines, timeout=30)
         capture('quiet-checks-closed')
         ui.run('click-prefix', 'toastty-mobile-transcript-quiet-checks-')
-        wait_for('the open row\'s three lines', lambda: ui.texts().count('Toastty · 1 update') == single_lines + 3,
+        wait_for('the open row\'s three lines', lambda: ui.texts().count('Toastty · 1 update') >= single_lines + 3,
                  timeout=30)
-        require(ui.texts().count('QUIET-OK') == 1, 'Opening the row opened a check')
+        require(ui.texts().count('QUIET-OK') == shown_answers, 'Opening the row opened a check')
         capture('quiet-checks-open')
         ui.run('click-last-label', 'Toastty · 1 update')
-        wait_for('the last check\'s answer', lambda: ui.texts().count('QUIET-OK') == 2, timeout=30)
+        wait_for('the last check\'s answer', lambda: ui.texts().count('QUIET-OK') > shown_answers, timeout=30)
         capture('quiet-check-one-open')
         ui.run('click-prefix', 'toastty-mobile-transcript-quiet-checks-')
         wait_for('the closed row', lambda: (shown := ui.texts()).count('Toastty · 1 update') == single_lines
-                 and shown.count('QUIET-OK') == 1, timeout=30)
+                 and shown.count('QUIET-OK') == shown_answers, timeout=30)
         step('three quiet wakes showed as one line that opened into their own lines', running=running)
 
         # 6. A task link is a chip; in the full view, a click opens the task

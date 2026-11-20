@@ -84,7 +84,9 @@ struct ToasttyTurnFoldState: Equatable {
 /// Which rows of quiet checks (`ToasttyQuietCheckRun`) the reader opened.
 /// Rows start closed. A row is open while any of its turns is in
 /// `openTurnIDs`, so it stays open when a check joins it: at its end when a
-/// turn ends quiet, or in front when older history loads.
+/// turn ends quiet, or in front when older history loads. Each reconcile
+/// records every turn of an open row, so the row also stays open when its
+/// first turns leave it, such as when Toastty forgets their quiet marks.
 struct ToasttyQuietCheckFoldState: Equatable {
     private(set) var openTurnIDs: Set<ToasttyTranscriptRowID> = []
     /// The turns in a row at the last reconcile.
@@ -127,7 +129,7 @@ struct ToasttyQuietCheckFoldState: Equatable {
         case .appended, .prepended, .metadataOnly:
             openTurnIDs.formIntersection(currentMemberIDs)
         }
-        for run in runs where isOpen(run) == false && run.turnIDs.contains(where: { turnID in
+        for run in runs where isOpen(run) || run.turnIDs.contains(where: { turnID in
             memberIDs.contains(turnID) == false && expandedTurnIDs.contains(turnID)
         }) {
             open(run)
