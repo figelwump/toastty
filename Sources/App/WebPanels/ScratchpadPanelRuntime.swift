@@ -137,7 +137,6 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         let webViewCreationStartTime = CFAbsoluteTimeGetCurrent()
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         let webViewCreationDuration = CFAbsoluteTimeGetCurrent() - webViewCreationStartTime
-        webView.setValue(false, forKey: "drawsBackground")
         webView.showsHistoryContextMenuItems = true
         // Magnification scales the whole page, like pinch zoom in Safari, and
         // scrolling pans across the scaled page.
