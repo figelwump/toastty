@@ -292,11 +292,19 @@ extension AppControlExecutor {
     }
 
     /// `task.release`, once the caller's access to the workspace is checked.
-    func runTaskRelease(workspaceID: UUID) throws -> AppControlActionOutcome {
+    func runTaskRelease(workspaceID: UUID, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
         let coordinator = try requiredTaskCoordinator()
         let parentIDs = try requiredStore().state.subspaceParentIDsByWorkspaceID()
         try enforceWorkspaceAutomationAccess(parentIDs[workspaceID] ?? workspaceID)
-        let record = try perform { try coordinator.release(workspaceID: workspaceID, caller: taskCaller()) }
+        let record = try perform {
+            try coordinator.release(
+                workspaceID: workspaceID,
+                caller: taskCaller(),
+                agent: args.taskString("agent"),
+                model: args.taskString("model"),
+                effort: args.taskString("effort")
+            )
+        }
         return .init(didMutateState: true, result: Self.taskSnapshot(record))
     }
 

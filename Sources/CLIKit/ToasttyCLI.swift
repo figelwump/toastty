@@ -1174,7 +1174,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
-      toastty [--json] [--socket-path <path>] task release [--workspace <id>]
+      toastty [--json] [--socket-path <path>] task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
       toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>]
       toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer] [--from <name>]
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
@@ -2629,7 +2629,7 @@ public enum ToasttyCLI {
             ]))
 
         case "release":
-            let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace"])
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--workspace", "--agent", "--model", "--effort"])
             guard parsed.positionals.isEmpty else {
                 throw ToasttyCLIError.usage("task release takes --workspace, or releases the calling agent's project\n\n\(usage)")
             }
@@ -2639,6 +2639,11 @@ public enum ToasttyCLI {
                     throw ToasttyCLIError.usage("--workspace must be a workspace ID\n\n\(usage)")
                 }
                 args["workspaceID"] = .string(workspace)
+            }
+            for (flag, key) in ["--agent": "agent", "--model": "model", "--effort": "effort"] {
+                if let value = parsed.singleValue(flag) {
+                    args[key] = .string(value)
+                }
             }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.release", args: args))
 

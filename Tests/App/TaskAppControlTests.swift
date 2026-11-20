@@ -90,6 +90,35 @@ struct TaskAppControlTests {
         #expect(try taskID(repeated.result) == id)
     }
 
+    /// A coordinator passes the agent, model and effort its policy names
+    /// for releases.
+    @Test func releaseTakesTheCallersAgentModelAndEffort() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config.workspaces = [TasksConfig.Workspace(path: fixture.projectRoot, releasePrompt: "Release it.")]
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+
+        await expectInvalidPayload("Agent gemini is not a profile in agents.toml (available: claude, codex).") {
+            _ = try executor.runAction(
+                id: "task.release",
+                args: ["workspaceID": .string(fixture.workspaceID.uuidString), "agent": .string("gemini")],
+                context: context()
+            )
+        }
+        let outcome = try executor.runAction(
+            id: "task.release",
+            args: [
+                "workspaceID": .string(fixture.workspaceID.uuidString),
+                "agent": .string("codex"),
+                "model": .string("gpt-6.2-sol"),
+                "effort": .string("high"),
+            ],
+            context: context()
+        )
+        #expect(outcome.result?["agent"] == .string("codex"))
+        #expect(outcome.result?["model"] == .string("gpt-6.2-sol"))
+        #expect(outcome.result?["effort"] == .string("high"))
+    }
+
     /// The bug this guards: an agent's `workspace.set-done` finished its own
     /// task while the task's pull request was open, so the task skipped the
     /// merge and To ship. The done checkbox, on the Mac and on a phone,

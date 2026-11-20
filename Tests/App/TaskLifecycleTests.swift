@@ -412,6 +412,33 @@ struct TaskLifecycleTests {
         ))
     }
 
+    /// A coordinator passes the agent its policy names for releases; the
+    /// default agent fills only what the caller leaves out.
+    @Test func releaseStartsTheAgentTheCallerChose() async throws {
+        let fixture = try Fixture()
+        let tip = try fixture.repository.pushToRemote("released")
+        _ = try releasingProject(fixture, mergeCommit: tip)
+        fixture.config.defaults.model = "default-model"
+        fixture.config.defaults.effort = "low"
+
+        #expect(throws: TaskError.self) {
+            try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged, agent: "missing")
+        }
+        #expect(throws: TaskError.self) {
+            try fixture.coordinator.release(workspaceID: fixture.workspaceID, caller: .unmanaged, agent: "codex", effort: "very high")
+        }
+        let release = try fixture.coordinator.release(
+            workspaceID: fixture.workspaceID, caller: .unmanaged, agent: "codex", model: "gpt-6.2-sol", effort: "high"
+        )
+        #expect(release.resolved?.agent == "codex")
+        #expect(release.resolved?.model == "gpt-6.2-sol")
+        #expect(release.resolved?.effort == "high")
+        await fixture.waitUntil("setup ends") { fixture.record(release.id)?.setup != .settingUp }
+        let launch = try #require(fixture.launcher.calls.last)
+        #expect(launch.profileID == "codex")
+        #expect(launch.model == "gpt-6.2-sol")
+    }
+
     @Test func releaseFailsRatherThanBuildFromAnOldCommit() async throws {
         let fixture = try Fixture()
         _ = try releasingProject(fixture, mergeCommit: "0000000")

@@ -864,7 +864,7 @@ final class AppControlExecutor {
             return try runCoordinatorWatch(args: args)
 
         case .taskRelease:
-            return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
+            return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args), args: args)
 
         case .taskAdopt:
             return try runTaskAdopt(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))

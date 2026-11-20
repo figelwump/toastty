@@ -2632,7 +2632,9 @@ release skill is set, then `release_prompt` if one is set, then the list of
 tasks waiting to ship. A parent that is To ship only through its child tasks
 has no merge of its own, so the list names its children, not the parent.
 `toastty task release` starts a release for an open project even when its To
-ship list is empty.
+ship list is empty. The release agent is the `[defaults]` agent, model and
+effort. `toastty task release` can choose others with `--agent`, `--model` and
+`--effort`, as `task create` does.
 
 Toastty looks for release tags every 15 minutes and when the Tasks view opens:
 it fetches tags and counts only a tag the remote has at the same commit. A
