@@ -158,6 +158,7 @@ struct ToasttyInteractionCard: View {
     let onEdit: (ToasttyInteractionAnswerEdit) -> Void
     let onSubmit: () -> Void
     @Environment(\.toasttyTranscriptOptions) private var options
+    @Environment(\.showQuestionTerminal) private var showQuestionTerminal
 
     private var interaction: RemotePendingInteraction { presentation.interaction }
 
@@ -245,23 +246,38 @@ struct ToasttyInteractionCard: View {
 
             statusView(state)
 
-            Button(action: onSubmit) {
+            if let showQuestionTerminal {
                 HStack(spacing: 8) {
-                    if state.status == .submitting { ProgressView().controlSize(.small) }
-                    Text(submitTitle(state.status))
+                    submitButton(state)
+                    Button(action: showQuestionTerminal) {
+                        Text("Show Terminal").frame(minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityIdentifier("coordinator.chat.question.show-terminal")
                 }
-                .conversationFont(.subheadline, weight: .semibold)
-                .frame(maxWidth: .infinity, minHeight: 44)
+            } else {
+                submitButton(state)
+                Label("You can also answer on the desktop", systemImage: "desktopcomputer")
+                    .conversationFont(.caption)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(ConversationDesignTokens.amber)
-            .disabled(state.canSubmit == false)
-            .accessibilityIdentifier("toastty-mobile-interaction-submit-\(interaction.id.rawValue)")
-
-            Label("You can also answer on the desktop", systemImage: "desktopcomputer")
-                .conversationFont(.caption)
-                .foregroundStyle(ConversationDesignTokens.mutedText)
         }
+    }
+
+    private func submitButton(_ state: ToasttyInteractionAnswerState) -> some View {
+        Button(action: onSubmit) {
+            HStack(spacing: 8) {
+                if state.status == .submitting { ProgressView().controlSize(.small) }
+                Text(submitTitle(state.status))
+            }
+            .conversationFont(.subheadline, weight: .semibold)
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(ConversationDesignTokens.amber)
+        .disabled(state.canSubmit == false)
+        .accessibilityIdentifier("toastty-mobile-interaction-submit-\(interaction.id.rawValue)")
     }
 
     private func questionView(
@@ -291,6 +307,7 @@ struct ToasttyInteractionCard: View {
                     selected: draft.usesCustomText,
                     multiSelect: question.multiSelect
                 )
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(isEditingDisabled(state.status))
@@ -455,7 +472,9 @@ struct ToasttyInteractionCard: View {
     }
 
     private var readOnlyMessage: String {
-        guard let reason = presentation.responseClosedReason else { return options.readOnlyInteractionMessage }
+        guard showQuestionTerminal == nil, let reason = presentation.responseClosedReason else {
+            return options.readOnlyInteractionMessage
+        }
         return switch reason {
         case .expired: "Answer window closed on iPhone · respond on the desktop"
         default: "This answer is no longer available on iPhone · respond on the desktop"

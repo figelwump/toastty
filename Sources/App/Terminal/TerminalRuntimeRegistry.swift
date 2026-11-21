@@ -825,6 +825,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
     }
 
+    func focusVisibleTerminalIfPossible(panelID: UUID) -> Bool {
+        guard !isCoveredByTasksView(panelID: panelID),
+              let controller = runtimeStore.existingController(for: panelID),
+              controller.lifecycleState.isReadyForFocus else { return false }
+        return controller.focusVisibleHostViewIfNeeded()
+    }
+
     /// Retries first-responder restoration for a specific panel host view. This
     /// covers launch/layout races where the host exists in state but is not yet
     /// attached when focus should be applied.

@@ -802,6 +802,13 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         hostedView.window?.firstResponder === keyboardFocusTarget
     }
 
+    func focusVisibleHostViewIfNeeded() -> Bool {
+        let target = keyboardFocusTarget
+        guard target.window?.isKeyWindow == true,
+              !target.isHidden, !target.hasHiddenAncestor, !target.visibleRect.isEmpty else { return false }
+        return focusHostViewIfNeeded() && hasKeyboardFocus
+    }
+
     @discardableResult
     func focusHostViewIfNeeded() -> Bool {
         guard let window = hostedView.window else { return false }

@@ -1203,11 +1203,15 @@ relaunch resumes does not show it.
   messages. **Stop** in the coordinator's chat on a paired iPhone does the
   same: the messages that waited show here as Paused. The phone does not
   list them, so **Send next** is on the Mac.
+- **Structured questions.** Supported Claude Code questions show choices and
+  **Submit answer** in the full chat and the dock. Complete each question in
+  the form, then submit. The card shows the answer when Claude confirms it.
+  **Show Terminal** opens Claude's own prompt and gives it the keyboard.
 - **Terminal.** The **Terminal** button in the full view's panel header
-  shows the terminal in place of the chat, and **Chat** switches back. Use the terminal
-  for a login, a folder-trust or a permission prompt, and to answer a
-  question: the chat shows such a prompt but cannot answer it, and it says so
-  above the field. The choice is not saved: a relaunch shows the chat.
+  shows the terminal in place of the chat, and **Chat** switches back. Use the
+  terminal for logins, folder trust, permissions, and unsupported questions.
+  The chat tells you above the field when the coordinator waits in the terminal.
+  A relaunch shows the chat.
 - **An agent that has not started.** A login or a folder-trust question comes
   before the agent reports anything to Toastty. While the agent's process
   runs and the agent has not reported its session, the chat says that the

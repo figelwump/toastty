@@ -60,7 +60,8 @@ struct CoordinatorChatView: View {
                 sessionStatus: model.sessionStatus,
                 workingIndicator: model.workingIndicator,
                 jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest,
-                newMessages: model.newMessages
+                newMessages: model.newMessages,
+                answerStates: model.interactionAnswerStates
             )
             .equatable()
             .modifier(TranscriptViewport(settledDockWidth: settledDockWidth))
@@ -81,6 +82,9 @@ struct CoordinatorChatView: View {
         .environment(\.conversationLinkPresenter, chips.presenter)
         .environment(\.conversationTextScale, model.textScale)
         .environment(\.openURL, linkOpener.action)
+        .environment(\.showQuestionTerminal, { [controller, host] in
+            Self.showTerminal(using: controller, from: host)
+        })
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coordinator.chat")
         // Read the conversation only while the chat is on screen.
@@ -228,10 +232,14 @@ struct CoordinatorChatView: View {
     /// the full view with its terminal.
     private var showTerminalButton: some View {
         noticeButton("Show Terminal", identifier: "coordinator.chat.notice.show-terminal") {
-            switch host {
-            case .panel: controller.showTerminal()
-            case .dock: controller.openFullView(showingTerminal: true)
-            }
+            Self.showTerminal(using: controller, from: host)
+        }
+    }
+
+    private static func showTerminal(using controller: CoordinatorController, from host: CoordinatorChatModel.Host) {
+        switch host {
+        case .panel: controller.showTerminal()
+        case .dock: controller.openFullView(showingTerminal: true)
         }
     }
 
@@ -358,6 +366,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
     let workingIndicator: ToasttyTranscriptWorkingIndicator?
     let jumpToLiveEdgeRequest: UInt64
     let newMessages: ToasttyNewMessagesMarker?
+    let answerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -366,6 +375,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             && lhs.workingIndicator == rhs.workingIndicator
             && lhs.jumpToLiveEdgeRequest == rhs.jumpToLiveEdgeRequest
             && lhs.newMessages == rhs.newMessages
+            && lhs.answerStates == rhs.answerStates
     }
 
     var body: some View {
@@ -374,6 +384,9 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             isSubmitting: false,
             loadOlder: { model.loadOlder() },
             queuedMessageAction: { model.perform($0) },
+            interactionAnswerStates: answerStates,
+            editInteractionAnswer: { model.editQuestionAnswer($0, $1) },
+            submitInteractionAnswer: { model.submitQuestionAnswer($0) },
             readAcknowledgementEpoch: sessionStatus,
             workingIndicator: workingIndicator,
             jumpToLiveEdgeRequest: Binding(

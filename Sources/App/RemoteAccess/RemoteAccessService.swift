@@ -3823,8 +3823,20 @@ final class RemoteAccessService: ObservableObject {
     func performQuestionAnswer(_ request: RemoteQuestionAnswerRequest, device: RemoteDeviceRecord) -> RemoteQuestionAnswerResult {
         guard device.scopes.contains(.send) else { return .rejected(reason: .sendScopeDenied) }
         guard sessionWritePolicy.isEnabled(for: request.conversationID) else { return .rejected(reason: .sessionWritesDisabled) }
-        guard isReady,
-              let panelID = panelIDByConversationID[request.conversationID],
+        guard isReady else { return .rejected(reason: .notBound) }
+        return submitQuestionAnswer(request, origin: .device(device))
+    }
+
+    private enum QuestionAnswerOrigin {
+        case device(RemoteDeviceRecord)
+        case local
+    }
+
+    private func submitQuestionAnswer(
+        _ request: RemoteQuestionAnswerRequest,
+        origin: QuestionAnswerOrigin
+    ) -> RemoteQuestionAnswerResult {
+        guard let panelID = panelIDByConversationID[request.conversationID],
               let sessionID = activeSessionIDByConversationID[request.conversationID] else {
             return .rejected(reason: .notBound)
         }
@@ -3832,8 +3844,13 @@ final class RemoteAccessService: ObservableObject {
             .first(where: { $0.id == request.interactionID }) else { return .rejected(reason: .notPending) }
         guard interaction.inputEpoch == request.expectedInputEpoch else { return .rejected(reason: .epochMismatch) }
         guard interaction.responseID == request.responseID else { return .rejected(reason: .notPending) }
-        if interaction.kind == .permission, device.canApprovePermissions == false {
-            return .rejected(reason: .approvalsDisabled)
+        switch origin {
+        case .device(let device):
+            if interaction.kind == .permission, device.canApprovePermissions == false {
+                return .rejected(reason: .approvalsDisabled)
+            }
+        case .local:
+            guard interaction.kind == .question else { return .rejected(reason: .unsupported) }
         }
         return sessionRuntimeStore.submitClaudeQuestion(request, sessionID: sessionID, panelID: panelID)
     }
@@ -5395,6 +5412,16 @@ extension RemoteAccessService: LocalConversationAccess {
         return performInterrupt(request, origin: .mac(byUser: true))
     }
 
+    fileprivate func answerLocalQuestion(
+        _ request: RemoteQuestionAnswerRequest,
+        subscriptionID: UUID
+    ) -> RemoteQuestionAnswerResult {
+        guard localConversationID(subscriptionID: subscriptionID) == request.conversationID else {
+            return .rejected(reason: .notBound)
+        }
+        return submitQuestionAnswer(request, origin: .local)
+    }
+
     fileprivate func localStopHandler(subscriptionID: UUID) -> (@MainActor () -> Void)? {
         localSubscriptions[subscriptionID]?.onStop
     }
@@ -5479,6 +5506,10 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult {
         service?.interruptLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
+    }
+
+    func answerQuestion(_ request: RemoteQuestionAnswerRequest) -> RemoteQuestionAnswerResult {
+        service?.answerLocalQuestion(request, subscriptionID: id) ?? .rejected(reason: .notBound)
     }
 
     var onStop: (@MainActor () -> Void)? {
