@@ -35,7 +35,9 @@ so that "yes" takes them all:
    task in any repository on this Mac, also one that is not open in
    Toastty; you only need to know which one the user means. Show your draft
    from the history and the projects in one line: which work goes to which
-   project. Then offer two ways, and suggest the second:
+   project. The draft is the first rules in both ways below: write each of
+   its projects as a rule, with its directory. Then offer two ways, and
+   suggest the second:
    - the user gives the common projects now, each with its directory and
      the kind of work that goes there;
    - the rules build up: the user names the project in a request, you ask
