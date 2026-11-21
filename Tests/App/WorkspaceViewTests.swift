@@ -962,7 +962,7 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testRightAuxPanelBodyContentMountRequiresSelectedVisibleOwner() {
+    func testColdRightAuxPanelBodyContentMountRequiresSelectedVisibleOwner() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelBodyContentMounted(
                 isWorkspaceSelected: true,
@@ -3108,7 +3108,20 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testRightPanelRuntimeSurvivesWorkspaceTabSwitch() throws {
+    func testWarmRightPanelHostsKeepOnlyTwoMostRecentPanels() {
+        let cache = WarmRightPanelHosts()
+        let a = UUID(), b = UUID(), c = UUID()
+        cache.visit(a)
+        cache.visit(b)
+        cache.visit(a)
+        cache.visit(c)
+        XCTAssertTrue(cache.contains(a))
+        XCTAssertFalse(cache.contains(b))
+        XCTAssertTrue(cache.contains(c))
+    }
+
+    @MainActor
+    func testRightPanelAttachmentSurvivesWorkspaceTabSwitch() throws {
         let rightPanelID = UUID()
         var visibleTabID: UUID?
         var inactiveTabID: UUID?
@@ -3132,6 +3145,11 @@ final class WorkspaceViewTests: XCTestCase {
         let initialRuntime = try XCTUnwrap(
             harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
         )
+        let attachment = try XCTUnwrap(initialRuntime.lifecycleState.attachmentToken)
+        let terminal = harness.terminalRuntimeRegistry.controller(
+            for: harness.panelID, workspaceID: harness.workspaceID, windowID: harness.windowID
+        )
+        let terminalAttachment = try XCTUnwrap(terminal.lifecycleState.attachmentToken)
 
         _ = harness.store.send(
             .selectWorkspaceTab(
@@ -3145,6 +3163,8 @@ final class WorkspaceViewTests: XCTestCase {
             harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
         )
         XCTAssertTrue(initialRuntime === runtimeAfterSwitchAway)
+        XCTAssertEqual(runtimeAfterSwitchAway.lifecycleState, .ready(attachment))
+        XCTAssertEqual(terminal.lifecycleState, .ready(terminalAttachment))
 
         _ = harness.store.send(
             .selectWorkspaceTab(
@@ -3158,6 +3178,8 @@ final class WorkspaceViewTests: XCTestCase {
             harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
         )
         XCTAssertTrue(initialRuntime === runtimeAfterSwitchBack)
+        XCTAssertEqual(runtimeAfterSwitchBack.lifecycleState, .ready(attachment))
+        XCTAssertEqual(terminal.lifecycleState, .ready(terminalAttachment))
     }
 
     private func assertColor(
