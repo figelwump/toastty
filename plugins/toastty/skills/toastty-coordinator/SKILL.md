@@ -608,8 +608,9 @@ ledger has no `asked first-run` line. Start also when the user asks you to
 set yourself up again. Then, while the ledger has an `asked first-run` line,
 go on in each turn that the user started; when the line says `paused`,
 only when the user says "continue" or "defaults", or answers a part. In each
-of these turns, first read `references/first-run.md` in your folder and
-follow it. If you cannot read it, do not ask.
+of these turns, first read `references/first-run.md` in your folder, and the
+time with `date -u +%Y-%m-%dT%H:%MZ` in the same command, and follow the
+file. If you cannot read it, do not ask.
 
 ## Follow through
 

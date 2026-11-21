@@ -1072,9 +1072,13 @@ def first_answer(run, turns):
     said = run.said(turns)
     lower = said.lower()
     steps = [step for turn in turns for step in turn['steps']]
-    folded = [f'{step["stop"]}: {step["text"]}' for step in steps if step['kind'] == 'text' and step['stop'] != 'end_turn']
-    run.check('the answer ends the turn: no text that the chat folds into the work, such as text before a command',
-              said and not folded, folded or said)
+    folded = [step for step in steps if step['kind'] == 'text' and step['stop'] != 'end_turn']
+    shown = [step for step in steps if step['kind'] == 'text' and step['stop'] == 'end_turn']
+    # A short note before a command, such as "Fixing the ledger line.", folds away harmlessly; the preamble and
+    # the question must be in the final message, which is the only text the chat shows.
+    run.check('the chat shows the answer: it is the final message, and folded text is at most a short note',
+              shown and sum(len(step['text']) for step in folded) < 200,
+              [f'{step["stop"]}: {step["text"]}' for step in folded] or said)
     run.check('it writes nothing to the policy before an answer', not holding(run) and policy_commits(run) == 1,
               [run.policy(), run.git('log', '--oneline')])
     shown = [step for step in steps if step['kind'] == 'text' and step['stop'] == 'end_turn' and step['at'] is not None]

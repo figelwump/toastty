@@ -20,7 +20,8 @@ the turn.
 1. Each step costs the user seconds, so do these two in one step, with both
    commands at once, and read nothing more before you write:
    - add an `asked first-run` line to the ledger, in place of an earlier
-     one. It names the parts that you ask about, in order:
+     one, with the time that you read with this file. It names the parts
+     that you ask about, in order:
      `- 2026-11-21T01:26Z asked first-run: Agents, Projects, Talking, Reviewing, Improving.`
    - when you ask about Agents, read the task history with the command
      under New tasks in your instructions.
