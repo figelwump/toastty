@@ -109,6 +109,10 @@ with open(os.environ["FAKE_TOASTTY_LOG"], "a+") as log:
     earlier_lists = log.read().count("workspace.list")
     log.write(" ".join(args) + "\n")
 if "workspace.list" in args:
+    # "unanswered_lists" holds the indexes of list calls that Toastty does not
+    # answer, as when its main thread is busy past the CLI's timeout.
+    if earlier_lists in state.get("unanswered_lists", []):
+        sys.exit("read() timed out waiting for Toastty")
     # "later_workspaces" replaces the list after the first read, as if the user
     # changed a workspace while the script was running.
     if earlier_lists:
@@ -223,7 +227,8 @@ class WorkspacePullRequestTests(unittest.TestCase):
         return branch, path
 
     def run_script(self, action, number, url=None, workspace=None, repo=None, env=None, head=None, expect_head=None,
-                   accepted_base="main", worktree=None, worktree_branch=None, expect_absent_worktree=False):
+                   accepted_base="main", worktree=None, worktree_branch=None, expect_absent_worktree=False,
+                   expect_error=False):
         """Runs the script as Toastty does, from the workspace's checkout: the
         task's worktree unless `repo` says otherwise. `head` is a waiting
         merge's accepted commit; `expect_head` the commit a merge skill checked."""
@@ -240,6 +245,11 @@ class WorkspacePullRequestTests(unittest.TestCase):
                if worktree else []),
              *(["--expect-absent-worktree"] if expect_absent_worktree else [])],
             env=env or self.env, capture_output=True, text=True)
+        if expect_error:
+            # A run that Toastty runs again: an error exit with no report.
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(result.stdout, "")
+            return result.stderr
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -1230,6 +1240,41 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertIn("full Toastty workspace list", self.run_script("clean-up", 1)["detail"])
         env = {k: v for k, v in self.env.items() if k != "TOASTTY_CLI_PATH"}
         self.assertIn("TOASTTY_CLI_PATH", self.run_script("clean-up", 1, env=env)["detail"])
+        self.assertTrue(path.exists())
+
+    def test_cleanup_exits_with_an_error_when_toastty_does_not_answer_the_workspace_list(self):
+        # Clean-up changed nothing yet, so it exits with an error and Toastty
+        # runs it again; first read or the reread just before the close.
+        for unanswered in (0, 1):
+            with self.subTest(unanswered=unanswered):
+                self.log.unlink(missing_ok=True)
+                branch, path = self.task(unanswered + 1)
+                self.extra_state["unanswered_lists"] = [unanswered]
+                error = self.run_script("clean-up", unanswered + 1, expect_error=True)
+                self.assertIn("could not read the full Toastty workspace list: read() timed out waiting for Toastty",
+                              error)
+                self.assertTrue(path.exists())
+                self.assertNotEqual(self.git("branch", "--list", branch), "")
+                self.assertEqual(self.closed(), [])
+        # Toastty answers again: the same clean-up passes.
+        self.extra_state["unanswered_lists"] = []
+        self.assertEqual(self.run_script("clean-up", 1)["status"], "cleaned")
+
+    def test_close_without_merging_still_reports_an_unanswered_workspace_list(self):
+        # Close is the user's one-time action, so it still reports, and after
+        # the PR closed it says so.
+        _, path = self.task(1, state="OPEN")
+        self.extra_state["unanswered_lists"] = [0]
+        result = self.run_script("close", 1)
+        self.assertEqual(result["status"], "skipped", result)
+        self.assertIn("could not read the full Toastty workspace list", result["detail"])
+        self.assertEqual(self.gh_state(1)["state"], "OPEN")
+        self.log.unlink()
+        self.extra_state["unanswered_lists"] = [1]
+        result = self.run_script("close", 1)
+        self.assertEqual(result["status"], "partial", result)
+        self.assertIn("closed PR #1", result["detail"])
+        self.assertIn("workspace kept", result["detail"])
         self.assertTrue(path.exists())
 
     def test_cleanup_matches_a_workspace_through_a_path_alias(self):

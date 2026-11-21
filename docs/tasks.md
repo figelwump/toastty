@@ -2501,7 +2501,8 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    task space, removes the worktree and deletes the branch, the same way as the
    Merge button does for any other workspace. **Close Task Space** in the
    task's menu does it at once. When the cleanup fails for a cause that can
-   pass, such as no network or a GitHub error, Toastty holds the task space
+   pass, such as no network, a GitHub error, or no answer from Toastty to the
+   cleanup's workspace list, Toastty holds the task space
    again and tries again after 1, 5, 15 and 30 minutes, before it moves the
    task to Needs you with **Cleanup stopped**. A cleanup that stops for a
    cause that needs you, such as uncommitted files in the worktree, moves

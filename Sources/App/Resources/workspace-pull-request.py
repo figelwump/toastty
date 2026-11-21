@@ -72,6 +72,8 @@ Prints one JSON object, {"status": ..., "detail": ...}. merge reports "merged",
 changed), or "failed", and adds "head", the accepted commit. clean-up
 and close report "cleaned", "partial" (some changes made and something kept),
 "stopped" (a step failed before any change), or "skipped" (nothing changed).
+clean-up exits with an error, before any change, when Toastty does not answer
+the workspace list query, so that Toastty can run it again.
 """
 
 from __future__ import annotations
@@ -107,6 +109,12 @@ REMOTE_SLUG = re.compile(r"[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
 
 class Refusal(Exception):
     """A check failed before any change; the message says which."""
+
+
+class WorkspaceListUnavailable(Refusal):
+    """Toastty did not answer the workspace list query, for example while its main
+    thread was busy. This can pass by itself: clean-up exits with an error before its
+    first change, so that Toastty runs it again later."""
 
 
 def run(args: list[str], cwd: str | None = None, check: bool = True) -> str:
@@ -395,13 +403,16 @@ def toastty_workspaces() -> list[dict]:
     cli = os.environ.get("TOASTTY_CLI_PATH")
     if not cli:
         raise Refusal("TOASTTY_CLI_PATH is not set")
-    output = run([cli, "--json", "query", "run", "workspace.list"], check=False)
+    answer = subprocess.run([cli, "--json", "query", "run", "workspace.list"], capture_output=True, text=True)
     try:
-        response = json.loads(output)
+        response = json.loads(answer.stdout)
     except json.JSONDecodeError:
         response = {}
+    if not isinstance(response, dict) or not response.get("ok"):
+        why = answer.stderr.strip().splitlines()[-1:] or [f"exit status {answer.returncode}"]
+        raise WorkspaceListUnavailable(f"could not read the full Toastty workspace list: {why[0]}")
     result = response.get("result") or {}
-    if not response.get("ok") or result.get("callerIsScoped") is not False:
+    if result.get("callerIsScoped") is not False:
         raise Refusal("could not read the full Toastty workspace list")
     return result.get("workspaces", [])
 
@@ -589,6 +600,8 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     try:
         workspace, problem = workspace_problem(ctx, require_done=not close_pr)
     except Refusal as refusal:
+        if isinstance(refusal, WorkspaceListUnavailable) and not done:
+            raise
         problem = str(refusal)
     if problem:
         return stop(f"{problem}; workspace kept")
@@ -811,6 +824,12 @@ def main() -> None:
             status, detail, report["head"] = merge(ctx, options.head, options.base)
         else:
             status, detail = clean_up(ctx, close_pr=options.action == "close")
+    except WorkspaceListUnavailable as unavailable:
+        if options.action == "clean-up":
+            # Nothing changed, and Toastty may answer again soon.
+            sys.exit(f"workspace-pull-request: {unavailable}")
+        status = "refused" if options.action == "merge" else "skipped"
+        detail = str(unavailable)
     except Refusal as refusal:
         status = "refused" if options.action == "merge" else "skipped"
         detail = str(refusal)

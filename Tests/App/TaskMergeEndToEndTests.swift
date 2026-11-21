@@ -252,11 +252,13 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
-    /// A held cleanup whose script cannot reach GitHub runs again later by
-    /// itself and never asks the user. One that the script refuses, here
-    /// for an uncommitted file, stops at once for the user.
-    @Test(arguments: [false, true])
-    func aCleanupRunsAgainAfterANetworkErrorButStopsForUncommittedWork(uncommittedWork: Bool) async throws {
+    /// A held cleanup whose script cannot reach GitHub, or gets no answer
+    /// from Toastty for its workspace list, runs again later by itself and
+    /// never asks the user. One that the script refuses, here for an
+    /// uncommitted file, stops at once for the user.
+    @Test(arguments: ["unreachable", "workspace-list-unanswered", "uncommitted"])
+    func aCleanupRunsAgainAfterAPassingFailureButStopsForUncommittedWork(cause: String) async throws {
+        let uncommittedWork = cause == "uncommitted"
         try await withScenario(cleanupHold: 1.5, cleanupRetryDelays: [1]) { scenario in
             scenario.reportAgent(.ready)
             try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
@@ -281,11 +283,12 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
                 #expect(FileManager.default.fileExists(atPath: scenario.worktree))
                 return
             }
-            FileManager.default.createFile(atPath: scenario.mergedMarker + "-unreachable-once", contents: nil)
+            let failOnce = scenario.mergedMarker + "-\(cause)-once"
+            FileManager.default.createFile(atPath: failOnce, contents: nil)
             await scenario.waitUntil("the failed cleanup waits to run again") {
                 scenario.merges.request(workspaceID: scenario.taskSpaceID)?.cleanupRetries == 1 && scenario.isHeld
             }
-            #expect(FileManager.default.fileExists(atPath: scenario.mergedMarker + "-unreachable-once") == false)
+            #expect(FileManager.default.fileExists(atPath: failOnce) == false)
             #expect(scenario.boardItem?.stage == .done)
             #expect(scenario.record?.cleanup?.problem == nil)
             #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
@@ -1635,9 +1638,25 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         scenario.parentWorkspaceID = parentWorkspaceID
         let cliPath = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/toastty").path
         scenario.cliPath = cliPath
+        // The pull request script's Toastty CLI. It fails one workspace list
+        // as the CLI does when Toastty does not answer in time.
+        let scriptCLI = fakeBin.appendingPathComponent("toastty-for-script")
+        try """
+        #!/bin/sh
+        case "$*" in
+          *workspace.list*)
+            if [ -e '\(mergedMarker)-workspace-list-unanswered-once' ]; then
+              rm '\(mergedMarker)-workspace-list-unanswered-once'
+              echo 'read() timed out waiting for Toastty' >&2
+              exit 1
+            fi ;;
+        esac
+        exec '\(cliPath)' "$@"
+        """.write(to: scriptCLI, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptCLI.path)
         let runner = WorkspaceMergeLiveCommandRunner(
             socketPath: socketPath,
-            cliExecutablePath: cliPath,
+            cliExecutablePath: scriptCLI.path,
             pathOverride: "\(fakeBin.path):/usr/bin:/bin"
         )
         let defaultsSuite = "TaskMergeEndToEndTests.\(UUID())"

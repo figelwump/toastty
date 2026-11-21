@@ -650,8 +650,9 @@ with `toastty task merge` finish its reply.
   that closes the workspace and then cannot remove the worktree or a branch
   reports what it kept in a notification. A pull request that closes without
   merging also stops the cleanup.
-- A cleanup that fails for a cause that can pass, such as no network or a
-  GitHub error, runs again by itself: after 1, 5, 15 and 30 minutes. This
+- A cleanup that fails for a cause that can pass, such as no network, a
+  GitHub error, or Toastty not answering the script's workspace list in time,
+  runs again by itself: after 1, 5, 15 and 30 minutes. This
   applies when the cleanup script ends with an error instead of its report, or
   when three `gh` checks of the merged pull request in a row fail. While a
   failed script run waits, the button reads **Done · PR #N** and a task's
