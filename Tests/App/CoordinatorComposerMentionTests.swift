@@ -48,16 +48,16 @@ final class CoordinatorComposerMentionTests: XCTestCase {
 
     private static let candidates: [CoordinatorMentionCandidate] = [
         CoordinatorMentionCandidate(
-            taskID: dotID, title: "Fix the unread dot", projectTitle: "toastty", pullRequestNumber: 312,
+            taskID: dotID, title: "Fix the unread dot", projectTitle: "toastty-task-system-coordinator", pullRequestNumber: 312,
             group: .needsYou, markColor: ConversationChipColor(red: 0.56, green: 0.36, blue: 0.85), doneAt: nil
         ),
         CoordinatorMentionCandidate(
-            taskID: dockID, title: "Show the coordinator's chat in a dock", projectTitle: "toastty",
+            taskID: dockID, title: "Show the coordinator's chat in a dock", projectTitle: "toastty-task-system-coordinator",
             pullRequestNumber: 331, group: .working,
             markColor: ConversationChipColor(red: 0.18, green: 0.44, blue: 0.87), doneAt: nil
         ),
         CoordinatorMentionCandidate(
-            taskID: UUID(), title: "Keep image thumbnails one size", projectTitle: "toastty", pullRequestNumber: 335,
+            taskID: UUID(), title: "Keep image thumbnails one size", projectTitle: "toastty-task-system-coordinator", pullRequestNumber: 335,
             group: .toShip, markColor: ConversationChipColor(red: 0.18, green: 0.61, blue: 0.37), doneAt: nil
         ),
     ]
