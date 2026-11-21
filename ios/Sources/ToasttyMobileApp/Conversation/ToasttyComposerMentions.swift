@@ -386,11 +386,23 @@ private struct ToasttyMentionRow: View {
                         .foregroundStyle(ToasttyDesignTokens.primaryText)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    if let detail = Self.detail(candidate) {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                            .lineLimit(1)
+                    if candidate.projectTitle != nil || candidate.pullRequestNumber != nil {
+                        // A long project name shortens; the pull request
+                        // number always shows.
+                        HStack(spacing: 0) {
+                            if let project = candidate.projectTitle {
+                                Text(project)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            if let number = candidate.pullRequestNumber {
+                                Text(verbatim: candidate.projectTitle == nil ? "#\(number)" : " · #\(number)")
+                                    .lineLimit(1)
+                                    .fixedSize()
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(ToasttyDesignTokens.secondaryText)
                     }
                 }
                 Spacer(minLength: 0)
@@ -403,11 +415,6 @@ private struct ToasttyMentionRow: View {
         .buttonStyle(ToasttyMentionRowButtonStyle())
         .accessibilityLabel(Self.accessibilityLabel(candidate))
         .accessibilityIdentifier("toastty-mobile-mention-\(candidate.taskID.uuidString)")
-    }
-
-    static func detail(_ candidate: CoordinatorMentionCandidate) -> String? {
-        let parts = [candidate.projectTitle, candidate.pullRequestNumber.map { "#\($0)" }].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     static func accessibilityLabel(_ candidate: CoordinatorMentionCandidate) -> String {
