@@ -2446,6 +2446,10 @@ checkbox.
 **Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
 menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 
+When running checks are the reason the top bar shows **Open PR**, the task
+header says **Checks running** beside the button. You can still request a
+merge from the button's arrow menu or with `Option+Shift+M`.
+
 1. Toastty sends the task's agent `Use the <merge_skill> skill.` when a
    `merge_skill` is set, then `merge_prompt` if one is set, then the pull
    request you accepted. With neither set, the skill is `toastty-task-merge`,

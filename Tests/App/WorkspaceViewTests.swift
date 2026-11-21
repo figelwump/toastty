@@ -1942,9 +1942,26 @@ final class WorkspaceViewTests: XCTestCase {
     /// turns back into Merge once GitHub says it is ready.
     @MainActor
     func testPullRequestSubspaceHeaderOpensAPullRequestThatIsNotReady() throws {
+        try checkPullRequestHeaderWhileBlocked(task: nil)
+    }
+
+    @MainActor
+    func testTaskHeaderShowsChecksRunningBesideOpenPR() throws {
+        let taskTitle = "@-mention list: task titles crowded by workspace names"
+        let task = TaskRecord(
+            createdAt: Date(), text: taskTitle, title: taskTitle,
+            slug: "mention-list", source: .quickEntry
+        )
+        try checkPullRequestHeaderWhileBlocked(task: task)
+    }
+
+    @MainActor
+    private func checkPullRequestHeaderWhileBlocked(task: TaskRecord?) throws {
         var mergeRequests: [UUID] = []
         var openedURLs: [URL] = []
-        let pullRequestURL = "https://github.com/example/toastty/pull/59"
+        let prNumber = task == nil ? 59 : 479
+        let pullRequestURL = "https://github.com/example/toastty/pull/\(prNumber)"
+        let evidencePrefix = task == nil ? "subspace-header" : "task-header"
         var observedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let cache = PullRequestStateCache(runner: OfflinePullRequestRunner(), now: { observedAt })
         let link = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: pullRequestURL))
@@ -1954,18 +1971,19 @@ final class WorkspaceViewTests: XCTestCase {
             pumpMainRunLoop(duration: 0.05)
         }
         let harness = try makeWorkspaceHarness(
-            hostWidth: 720,
-            isWorkspaceMergeEnabled: true,
+            hostWidth: task == nil ? 720 : 653,
+            isWorkspaceMergeEnabled: task == nil,
+            taskRecord: task,
             configureState: { state, windowID, workspaceID in
                 let parent = WorkspaceState.bootstrap(title: "toastty")
                 state.workspacesByID[parent.id] = parent
                 let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
                 state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
                 var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
-                workspace.title = "fix-claude-question-lifetime"
+                workspace.title = task?.title ?? "fix-claude-question-lifetime"
                 workspace.parentWorkspaceID = parent.id
                 workspace.annotations["github-pr"] = try XCTUnwrap(
-                    WorkspaceAnnotation.validated(text: "PR #59", url: pullRequestURL)
+                    WorkspaceAnnotation.validated(text: "PR #\(prNumber)", url: pullRequestURL)
                 )
                 state.workspacesByID[workspaceID] = workspace
             },
@@ -1977,7 +1995,7 @@ final class WorkspaceViewTests: XCTestCase {
         let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
 
         answer(TaskPullRequestState(state: .open, isDraft: true, mergeability: PullRequestMergeability(mergeState: .draft)))
-        try writeTopBarEvidence(harness, name: "topbar-open-pr-draft")
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-open-pr-draft")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(openedURLs, [URL(string: pullRequestURL)])
         XCTAssertEqual(mergeRequests, [])
@@ -1986,7 +2004,7 @@ final class WorkspaceViewTests: XCTestCase {
             state: .open, headSHA: "head1",
             mergeability: PullRequestMergeability(mergeState: .blocked, checks: .failing)
         ))
-        try writeTopBarEvidence(harness, name: "topbar-open-pr-checks-failing")
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-open-pr-checks-failing")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(openedURLs.count, 2)
         XCTAssertEqual(mergeRequests, [])
@@ -2006,12 +2024,21 @@ final class WorkspaceViewTests: XCTestCase {
 
         answer(TaskPullRequestState(
             state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .unstable, checks: .running)
+        ))
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-open-pr-checks-running")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs.count, 4)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+
+        answer(TaskPullRequestState(
+            state: .open, headSHA: "head1",
             mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
         ))
-        try writeTopBarEvidence(harness, name: "topbar-merge-ready-clean")
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-merge-ready-clean")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(mergeRequests, [harness.workspaceID, harness.workspaceID])
-        XCTAssertEqual(openedURLs.count, 3)
+        XCTAssertEqual(openedURLs.count, 4)
     }
 
     func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
