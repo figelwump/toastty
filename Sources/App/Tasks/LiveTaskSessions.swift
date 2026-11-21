@@ -30,8 +30,7 @@ final class LiveTaskSessions: TaskSessionProviding {
     /// Ends the follow of a panel whose agent ended, with the messages
     /// that waited for it.
     private var endedAgentObservation: AnyCancellable?
-    /// The conversations of the agents' panels, for `deliverSteering`.
-    /// Without it, that delivery types nothing.
+    /// The conversations of the agents' panels, for checked sends and watches.
     weak var conversationAccess: (any LocalConversationAccess)? {
         get { steerSender.access }
         set { steerSender.access = newValue }
@@ -129,6 +128,23 @@ final class LiveTaskSessions: TaskSessionProviding {
             sessionRuntimeStore?.lastUserInputAt(panelID: panelID),
             exitController?.remoteInputProbe?.lastRemoteUserInputAt(panelID: panelID),
         ].compactMap { $0 }.max()
+    }
+
+    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool {
+        switch conversationAccess?.inputAvailability(panelID: session.panelID, sessionID: session.sessionID) {
+        case .pendingInteraction?:
+            return true
+        case .localDraft?:
+            // The conversation can carry a draft over from the running turn.
+            // Only user input counts here: programmatic delivery can also
+            // mark a draft, even when the terminal was unavailable.
+            guard let typedAt = sessionRuntimeStore?.lastUserInputAt(panelID: session.panelID),
+                  let record = sessionRuntimeStore?.sessionRegistry.sessionsByID[session.sessionID] else { return false }
+            let lastTurnStartedAt = record.lastTurnEndedAt?.addingTimeInterval(-(record.lastTurnDuration ?? 0))
+            return typedAt > (lastTurnStartedAt ?? .distantPast)
+        default:
+            return false
+        }
     }
 
     /// The effective scope: an empty explicit scope still allows the

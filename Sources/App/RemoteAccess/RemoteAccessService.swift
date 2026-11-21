@@ -5244,6 +5244,14 @@ final class RemoteAccessService: ObservableObject {
 // MARK: - In-app conversation access
 
 extension RemoteAccessService: LocalConversationAccess {
+    func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability? {
+        guard let conversationID = conversationIDByPanelID[panelID],
+              activeSessionIDByConversationID[conversationID] == sessionID else {
+            return nil
+        }
+        return coordinator.availability(for: conversationID)
+    }
+
     func subscribeToConversation(inPanel panelID: UUID) -> any LocalConversationSubscription {
         let id = UUID()
         let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))

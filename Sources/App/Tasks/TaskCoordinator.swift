@@ -130,6 +130,8 @@ protocol TaskSessionProviding: AnyObject {
     /// or sent it a message from Toastty Mobile. Text that Toastty or the
     /// CLI typed, such as `task send`, does not count.
     func lastUserInputAt(panelID: UUID) -> Date?
+    /// Whether the tracked conversation reports an interaction or a user draft.
+    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool
 }
 
 extension TaskSessionProviding {
@@ -142,6 +144,7 @@ extension TaskSessionProviding {
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }
     func lastUserInputAt(panelID: UUID) -> Date? { nil }
+    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool { false }
 }
 
 /// What a caller asked for in `task.create`. Every field except the text is
@@ -307,6 +310,9 @@ final class TaskCoordinator {
     /// `toastty task watch --wait` watches, which only last while the app runs.
     var waitWatches: [UUID: TaskWaitWatch] = [:]
     var watchMonitor: Task<Void, Never>?
+    /// By session ID, the last completed turn when a watch or uncertain send
+    /// used the prompt. Another watch must wait for a new prompt.
+    var watchDeliveryTurnEnds: [String: Date] = [:]
     /// Sends the wakes of `task waiting` marks when their time comes.
     var wakeMonitor: Task<Void, Never>?
     /// When to try a due wake again after its agent could not take it.

@@ -97,6 +97,8 @@ struct TaskCoordinationTests {
         let fixture = try Fixture()
         let target = try await fixture.startedTask()
         let watcher = try await fixture.startedTask()
+        let watcherSession = try sessionID(watcher)
+        fixture.sessions.report(watcherSession, .idle)
         fixture.sessions.deliveryResult = .uncertain
         #expect(throws: TaskError("Toastty typed the message into task \(watcher.title)'s terminal but may not have submitted it. Check that terminal before you send it again.")) {
             try fixture.coordinator.send(taskID: watcher.id, text: "status?")
@@ -104,6 +106,11 @@ struct TaskCoordinationTests {
 
         _ = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .waiting, notifyTaskID: watcher.id)
         fixture.sessions.report(try sessionID(target), .needsApproval)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher) == ["status?"])
+
+        fixture.sessions.report(watcherSession, .working)
+        fixture.sessions.report(watcherSession, .ready)
         fixture.coordinator.evaluateWatches()
         fixture.coordinator.evaluateWatches()
         #expect(try messages(fixture, to: watcher).filter { $0.hasPrefix("[Toastty watch") }.count == 1)
@@ -315,6 +322,7 @@ struct TaskCoordinationTests {
         let fixture = try Fixture()
         let target = try await fixture.startedTask()
         let watcher = try await fixture.startedTask()
+        fixture.sessions.report(try sessionID(watcher), .idle)
         // The target finished a turn before anyone watched it.
         fixture.sessions.report(try sessionID(target), .ready, at: Date().addingTimeInterval(-30))
 
@@ -341,6 +349,70 @@ struct TaskCoordinationTests {
         }
     }
 
+    @Test(arguments: [SessionStatusKind.working, .needsApproval, .error])
+    func aFiredWatchWaitsForAPrompt(_ status: SessionStatusKind) async throws {
+        let fixture = try Fixture()
+        let target = try await fixture.startedTask()
+        let watcher = try await fixture.startedTask()
+        let watcherSession = try sessionID(watcher)
+        fixture.sessions.report(watcherSession, status)
+        let watch = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .waiting, notifyTaskID: watcher.id)
+
+        fixture.sessions.report(try sessionID(target), .needsApproval)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher).isEmpty)
+        guard case .fired(_, _, false, false)? = fixture.coordinator.watch(id: watch.id)?.watch.state else {
+            Issue.record("expected a fired watch waiting for a prompt")
+            return
+        }
+
+        // A provider can still show an interaction while its hooks say ready.
+        fixture.sessions.sessionsWithPendingInput.insert(watcherSession)
+        fixture.sessions.report(watcherSession, .ready)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher).isEmpty)
+
+        fixture.sessions.sessionsWithPendingInput.remove(watcherSession)
+        await fixture.waitUntil("the watch is delivered after the interaction closes", timeout: .seconds(5)) {
+            (try? messages(fixture, to: watcher).count) == 1
+        }
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher).count == 1)
+    }
+
+    @Test func aFiredWatchLeavesADraftAndRetriesUnavailableDelivery() async throws {
+        let fixture = try Fixture()
+        let target = try await fixture.startedTask()
+        let watcher = try await fixture.startedTask()
+        let watcherSession = try sessionID(watcher)
+        let at = Date()
+        fixture.sessions.report(watcherSession, .ready, at: at)
+        fixture.sessions.userInputAt[try panelID(watcher)] = at.addingTimeInterval(1)
+        fixture.sessions.report(try sessionID(target), .needsApproval)
+        let watch = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .waiting, notifyTaskID: watcher.id)
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher).isEmpty)
+        guard case .fired(_, _, false, false)? = fixture.coordinator.watch(id: watch.id)?.watch.state else {
+            Issue.record("expected a fired watch waiting behind a draft")
+            return
+        }
+
+        fixture.sessions.report(watcherSession, .working, at: at.addingTimeInterval(2))
+        fixture.sessions.report(watcherSession, .idle, at: at.addingTimeInterval(3))
+        fixture.sessions.deliveryResult = .unavailable
+        fixture.coordinator.evaluateWatches()
+        guard case .fired(_, _, false, false)? = fixture.coordinator.watch(id: watch.id)?.watch.state else {
+            Issue.record("expected a fired watch after unavailable delivery")
+            return
+        }
+        #expect(try messages(fixture, to: watcher).isEmpty)
+
+        fixture.sessions.deliveryResult = .delivered
+        fixture.coordinator.evaluateWatches()
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher).count == 1)
+    }
+
     @Test func aFiredMessageWaitsForTheWatchersAgentToRun() async throws {
         let fixture = try Fixture()
         let target = try await fixture.startedTask()
@@ -361,6 +433,9 @@ struct TaskCoordinationTests {
             cwd: nil, isActive: true, isInTurn: false, nativeConversationID: nil, title: nil
         )
         fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher).isEmpty)
+        fixture.sessions.report("back", .idle)
+        fixture.coordinator.evaluateWatches()
         #expect(try messages(fixture, to: watcher).count == 1)
         #expect(try messages(fixture, to: watcher).first?.contains("is waiting for input") == true)
     }
@@ -369,6 +444,7 @@ struct TaskCoordinationTests {
         let fixture = try Fixture()
         let target = try await fixture.startedTask()
         let watcher = try await fixture.startedTask()
+        fixture.sessions.report(try sessionID(watcher), .idle)
         _ = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .merged, notifyTaskID: watcher.id)
 
         try fixture.coordinator.delete(taskID: target.id)
@@ -398,12 +474,43 @@ struct TaskCoordinationTests {
         fixture.replaceCoordinator(relaunched)
         relaunched.reconcileAfterLaunch()
 
+        fixture.sessions.report("restored-\(watcher.id)", .idle)
         fixture.sessions.report("restored-\(target.id)", .working)
         fixture.sessions.report("restored-\(target.id)", .ready, at: Date().addingTimeInterval(1))
         // The monitor that reconcileAfterLaunch started picks it up.
         await fixture.waitUntil("the watcher is told", timeout: .seconds(5)) {
             (try? messages(fixture, to: watcher).count) == 1
         }
+    }
+
+    @Test func anUndeliveredFiredWatchSurvivesRelaunch() async throws {
+        let fixture = try Fixture()
+        let target = try await fixture.startedTask()
+        let watcher = try await fixture.startedTask()
+        let watcherSession = try sessionID(watcher)
+        fixture.sessions.report(watcherSession, .needsApproval)
+        fixture.sessions.report(try sessionID(target), .needsApproval)
+        let watch = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .waiting, notifyTaskID: watcher.id)
+        #expect(try messages(fixture, to: watcher).isEmpty)
+        fixture.sessions.report(try sessionID(target), .ready)
+
+        let relaunched = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(relaunched)
+        relaunched.reconcileAfterLaunch()
+        guard case .fired(_, _, false, false)? = relaunched.watch(id: watch.id)?.watch.state else {
+            Issue.record("expected the fired watch to be restored from disk")
+            return
+        }
+        #expect(try messages(fixture, to: watcher).isEmpty)
+
+        fixture.sessions.report(watcherSession, .ready)
+        await fixture.waitUntil("the restored watch is delivered", timeout: .seconds(5)) {
+            (try? messages(fixture, to: watcher).count) == 1
+        }
+        let reopened = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(reopened)
+        reopened.reconcileAfterLaunch()
+        #expect(try messages(fixture, to: watcher).count == 1)
     }
 
     @Test func stageWatchesFireOnceTheTaskBoardShowsTheStageOrALaterOne() async throws {
@@ -472,6 +579,8 @@ struct TaskCoordinationTests {
         let fixture = try Fixture()
         let target = try await fixture.startedTask()
         let watcher = try await fixture.startedTask()
+        let watcherSession = try sessionID(watcher)
+        fixture.sessions.report(watcherSession, .idle)
         let done = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .done, notifyTaskID: watcher.id)
         let archived = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .archived, notifyTaskID: watcher.id)
         let idle = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .idle, notifyTaskID: watcher.id)
@@ -481,6 +590,13 @@ struct TaskCoordinationTests {
         fixture.sessions.report(try sessionID(target), .ready, at: Date().addingTimeInterval(2))
         try fixture.coordinator.records.save(id: target.id) { $0.archivedAt = Date() }
         fixture.coordinator.evaluateWatches()
+        fixture.coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: watcher).count == 1)
+        for _ in 0..<2 {
+            fixture.sessions.report(watcherSession, .working)
+            fixture.sessions.report(watcherSession, .ready)
+            fixture.coordinator.evaluateWatches()
+        }
         let sent = try messages(fixture, to: watcher)
         #expect(sent.count == 3)
         let link = "[\(target.title)](toastty://task/\(target.id.uuidString))"

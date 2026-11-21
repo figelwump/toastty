@@ -163,10 +163,15 @@ struct TaskStartWorkTests {
         /// When a person last typed into each panel, or a phone message
         /// reached it.
         var userInputAt: [UUID: Date] = [:]
+        var sessionsWithPendingInput: Set<String> = []
 
         func lastOutputAt(sessionID: String) -> Date? { outputAt[sessionID] }
 
         func lastUserInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
+
+        func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool {
+            sessionsWithPendingInput.contains(session.sessionID)
+        }
 
         /// Reports a status, as the agent's hooks do.
         /// A turn that was running ends at `.idle`, `.ready` or `.error`.

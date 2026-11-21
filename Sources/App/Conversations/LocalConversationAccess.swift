@@ -13,6 +13,12 @@ protocol LocalConversationAccess: AnyObject {
     /// Starts tracking the panel's conversation. The panel does not need an
     /// agent yet; the subscription reports the conversation when one starts.
     func subscribeToConversation(inPanel panelID: UUID) -> any LocalConversationSubscription
+    /// Reads input availability if the conversation is already tracked for this session.
+    func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability?
+}
+
+extension LocalConversationAccess {
+    func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability? { nil }
 }
 
 /// One in-app reader and sender of a panel's conversation.

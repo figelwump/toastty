@@ -197,6 +197,9 @@ extension TaskCoordinator {
         case .delivered:
             ToasttyLog.info("Sent a message to a task", category: .tasks, metadata: metadata)
         case .uncertain:
+            // The text can still be at the prompt, including after a
+            // manual send or wake. A watch must not submit it.
+            watchDeliveryTurnEnds[session.sessionID] = session.lastTurnEndedAt ?? .distantPast
             ToasttyLog.warning("A message to a task may not have been submitted", category: .tasks, metadata: metadata)
         case .unavailable:
             break
@@ -314,6 +317,7 @@ extension TaskCoordinator {
     /// hold, and delivers fired messages that have not gone out yet.
     func evaluateWatches() {
         let at = now()
+        watchDeliveryTurnEnds = watchDeliveryTurnEnds.filter { sessions?.session($0.key)?.isActive == true }
         // Building the board walks every task, so only a pass with a pending
         // watch that needs it does so, and only once. Archived is read from
         // the record.
@@ -339,11 +343,13 @@ extension TaskCoordinator {
                     ])
                 }
                 guard case .fired(let firedAt, let reason, let impossible, false) = updated[index].state,
-                      let session = liveAgentSession(of: holder) else { continue }
+                      let session = liveAgentSession(of: holder),
+                      let turnEnd = watchDeliveryTurnEnd(for: session) else { continue }
                 let message = Self.watchMessage(updated[index], targetTitle: records.record(id: watch.targetTaskID)?.title)
                 // A message that may have been typed without its Return is not
                 // sent again: a second copy would land in the same prompt.
                 if deliver(message, to: session, taskID: holder.id) != .unavailable {
+                    watchDeliveryTurnEnds[session.sessionID] = turnEnd
                     updated[index].state = .fired(at: firedAt, reason: reason, impossible: impossible, delivered: true)
                 }
             }
@@ -365,6 +371,18 @@ extension TaskCoordinator {
                 waitWatches[id] = nil
             }
         }
+    }
+
+    /// A submitted watch uses this prompt. Wait for the next completed turn
+    /// before submitting another, even if the agent has yet to report it started.
+    private func watchDeliveryTurnEnd(for session: TaskSessionInfo) -> Date? {
+        guard isAtPromptWithoutUserInput(session),
+              sessions?.hasPendingInteractionOrUserDraft(in: session) == false else {
+            return nil
+        }
+        let turnEnd = session.lastTurnEndedAt ?? .distantPast
+        if let previous = watchDeliveryTurnEnds[session.sessionID], turnEnd <= previous { return nil }
+        return turnEnd
     }
 
     /// Drops delivered watches past their time, for a task with nothing
@@ -511,11 +529,7 @@ extension TaskCoordinator {
     private func sendWake(_ record: TaskRecord, waiting: TaskWaiting, at: Date) -> Bool {
         guard record.replyRequest == nil,
               let session = liveAgentSession(of: record, ownAgentOnly: true),
-              let kind = session.status?.kind, kind == .idle || kind == .ready else { return false }
-        if let typedAt = sessions?.lastUserInputAt(panelID: session.panelID),
-           typedAt > (session.lastTurnEndedAt ?? .distantPast) {
-            return false
-        }
+              isAtPromptWithoutUserInput(session) else { return false }
         // Marked first, so that the turn the line starts clears the mark
         // (`clearMarksForNewWork`), and no second line goes.
         saveOrDefer(taskID: record.id) { $0.waiting?.wokenAt = at }
@@ -532,6 +546,12 @@ extension TaskCoordinator {
         // prompt.
         ToasttyLog.info("Sent a waiting task its wake", category: .tasks, metadata: metadata)
         return true
+    }
+
+    private func isAtPromptWithoutUserInput(_ session: TaskSessionInfo) -> Bool {
+        guard let kind = session.status?.kind, kind == .idle || kind == .ready else { return false }
+        guard let typedAt = sessions?.lastUserInputAt(panelID: session.panelID) else { return true }
+        return typedAt <= (session.lastTurnEndedAt ?? .distantPast)
     }
 
     /// The line a wake sends: one line, so no agent reads part of it as a
