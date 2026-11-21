@@ -397,7 +397,13 @@ extension AppControlExecutor {
                 }
                 return id
             }
-            return workspaceChoicesSnapshot(coordinator.workspaceChoices(taskID: taskID))
+            var snapshot = workspaceChoicesSnapshot(coordinator.workspaceChoices(taskID: taskID))
+            if let name = args.taskString("name") {
+                let isScoped = requestContext().callerSessionID.map(callerIsWorkspaceScoped(sessionID:)) ?? false
+                let matches = coordinator.projectMatches(named: name, workspaceScope: isScoped ? { self.callerMayAutomateWorkspace($0) } : nil)
+                snapshot["matches"] = .array(projectMatchesSnapshot(matches))
+            }
+            return snapshot
         case .taskWatches:
             let watchID = try args.taskString("watchID").map { raw -> UUID in
                 guard let id = UUID(uuidString: raw) else { throw AutomationSocketError.invalidPayload("watchID must be a watch ID") }
@@ -673,6 +679,19 @@ extension AppControlExecutor {
             return .recent(recentID)
         default:
             throw AutomationSocketError.invalidPayload("pass one of workspace, recentWorkspace or rootDirectory")
+        }
+    }
+
+    private func projectMatchesSnapshot(_ matches: [TaskProjectMatch]) -> [AutomationJSONValue] {
+        matches.map { match -> AutomationJSONValue in
+            var object: [String: AutomationJSONValue] = [
+                "title": .string(match.title),
+                "rootDirectory": .string(match.rootDirectory),
+                "source": .string(match.source.rawValue),
+            ]
+            if let id = match.workspaceID { object["workspaceID"] = .string(id.uuidString) }
+            if let id = match.recentWorkspaceID { object["recentWorkspace"] = .string(id.uuidString) }
+            return .object(object)
         }
     }
 

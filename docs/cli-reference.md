@@ -874,7 +874,7 @@ toastty task retry|delete <task-id>
 toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
 toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
-toastty task workspace-choices [<task-id>]
+toastty task workspace-choices [<task-id>] [--name <project>]
 toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer] [--from <name>]
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
@@ -919,7 +919,11 @@ first when `[triage]` is set up.
 in a recently closed one from `task workspace-choices`, which Toastty reopens,
 or in a project directory (`--root`), which Toastty opens as a new workspace.
 With triage on, `task workspace-choices <task-id>` also shows the project
-triage suggested for that task, if any.
+triage suggested for that task, if any. `--name <project>` also lists the
+project directories with that name under `matches`: the ones Toastty knows
+(open, recent, in tasks.toml or in a task), then git repositories next to
+them that Toastty never opened, as `source: "sibling"`. See
+[`task.workspace-choices`](socket-protocol.md) for the fields.
 
 `task start-work` runs from an agent session and moves its task into a git
 worktree; see [Work in a git worktree](tasks.md#work-in-a-git-worktree). It

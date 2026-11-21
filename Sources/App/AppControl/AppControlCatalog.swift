@@ -979,10 +979,11 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. With taskID, also the project triage suggested for that task when triage is on, under suggested, with the choice that places it there. A workspace-scoped session sees only open workspaces in its scope.",
+                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. With taskID, also the project triage suggested for that task when triage is on, under suggested, with the choice that places it there. With name, also the project directories whose folder name or workspace title matches it, ignoring case, -, _, . and spaces, under matches, each with its source: open, recent, config (a tasks.toml root) or history (a task's project), which the user has worked in, or sibling, a git repository in the same parent directory as one of those that Toastty never opened. A workspace-scoped session sees only open workspaces in its scope.",
                 selectors: [],
                 parameters: [
                     .taskID(required: false),
+                    .init(name: "name", summary: "A project name to look up, such as the one the user gave.", valueType: .string, required: false),
                 ]
             )
         case .taskWatches:
