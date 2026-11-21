@@ -1056,6 +1056,18 @@ def asks_every_part(run, said):
               re.search(r'\?|confirm|correct|"?yes|tell me what to change|let me know', lower), said, required=False)
 
 
+def offers_project_routes(run, said):
+    """The Projects part says that work can go to any repository, and offers a list now or rules that build up."""
+    lower = said.lower()
+    run.check('it says that it can create a task in any repository, not only an open one',
+              re.search(r'any (repository|repo|project|folder|directory|git)|not (only|just)[^.]*open|not open', lower),
+              said, required=False)
+    run.check('it offers to take the common projects now', re.search(r'\blist\b|director(y|ies)|folders', lower), said,
+              required=False)
+    run.check('it offers to let the rules build up', re.search(r'build up|builds up|as we go|over time|as they come', lower),
+              said, required=False)
+
+
 def first_run(run):
     """The first run drafts Projects and Agents from the task history, and asks about all five parts."""
     history(run)
@@ -1068,6 +1080,7 @@ def first_run(run):
     run.check('the draft names both projects', 'marketing' in said.lower() and re.search(r'\bapp\b', said.lower()), said)
     run.check('the draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
     asks_every_part(run, said)
+    offers_project_routes(run, said)
     run.check('it writes nothing before the answer', run.policy() == template and run.git('rev-list', '--count', 'HEAD') == '1',
               run.policy())
     run.check('the ledger records that it asked', 'first-run' in run.ledger(), run.ledger(), required=False)
@@ -1148,6 +1161,44 @@ def first_run_request(run):
     run.check('hard, open work gets the xhigh row', len(created) == 1
               and created[0].get('model') == 'claude-opus-5-5' and created[0].get('effort') == 'xhigh',
               [(t['title'], t.get('model'), t.get('effort')) for t in created])
+
+
+def first_run_one_project(run):
+    """One project is known: the first run does not limit work to it, and a task can go to a repository that
+    Toastty never opened."""
+    for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
+        run.create_task(title, done=True)
+    # A repository on this Mac that Toastty has never opened.
+    website = os.path.realpath(run.project('website'))
+    run.open_coordinator()
+    said = run.said(run.tell('Hi. I just turned you on.'))
+    asks_every_part(run, said)
+    offers_project_routes(run, said)
+    commits = int(run.git('rev-list', '--count', 'HEAD') or 0)
+    run.tell('Yes. Let the projects build up.')
+    check_first_run_saved(run, commits)
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell(f'New task in {website}: the README says "teh site". Make it "the site".'))
+    created = created_since(run, before)
+    run.check('it creates the task in the repository that Toastty never opened',
+              len(created) == 1 and os.path.realpath(created[0].get('projectRoot') or '') == website,
+              [(t['title'], t.get('projectRoot')) for t in created])
+    if len(created) == 1:
+        record = wait_for('the task in the new repository to finish setup',
+                          lambda: (lambda r: r if r['setup']['state'] in ('started', 'setupFailed', 'needsWorkspace') else None)(
+                              run.cli('task', 'get', created[0]['taskID'])), timeout=120, interval=1)
+        run.check('its setup starts the agent', record['setup']['state'] == 'started', record['setup'])
+        opened = run.cli('task', 'workspace-choices')['open']
+        run.check('Toastty opened a workspace for the repository',
+                  any(os.path.realpath(w.get('rootDirectory') or '') == website for w in opened),
+                  [(w['title'], w.get('rootDirectory')) for w in opened])
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell('New task in the billing service: invoice totals round down. Round them to the nearest cent.'))
+    created = created_since(run, before)
+    run.check('a named project with no known directory gets no task before the answer', created == [],
+              [(t['title'], t.get('projectRoot')) for t in created])
+    run.check('it asks where that project is', '?' in said and re.search(r'director|folder|path|where', said.lower()), said,
+              required=False)
 
 
 def first_run_upgrade(run):
@@ -2972,6 +3023,7 @@ SCENARIOS = {
     'first-run': first_run,
     'first-run-instructions': first_run_instructions,
     'first-run-request': first_run_request,
+    'first-run-one-project': first_run_one_project,
     'first-run-upgrade': first_run_upgrade,
     'first-run-improving': first_run_improving,
     'permission': permission,
@@ -3018,7 +3070,7 @@ SCENARIOS = {
     'ui-mockup': ui_mockup,
 }
 # The scenarios whose result depends on the coordinator's judgment.
-JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-upgrade', 'question-settled',
+JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-one-project', 'first-run-upgrade', 'question-settled',
             'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
             'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted', 'sender-add',
