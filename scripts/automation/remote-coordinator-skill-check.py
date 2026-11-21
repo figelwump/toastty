@@ -822,7 +822,10 @@ class Run:
                 for part in parts:
                     if part.get('type') == 'text' and part.get('text', '').strip():
                         turn['texts'].append(part['text'].strip())
-                        turn['steps'].append(dict(kind='text', at=at, text=part['text'].strip()[:200]))
+                        # Toastty's chat shows a Claude text as an answer only with `end_turn`
+                        # (ClaudeTranscriptParser); any other text folds into the turn's work.
+                        turn['steps'].append(dict(kind='text', at=at, text=part['text'].strip()[:200],
+                                                  stop=(record.get('message') or {}).get('stop_reason')))
                     elif part.get('type') == 'tool_use':
                         tool, tool_input = part.get('name'), part.get('input') or {}
                         turn['tools'].append(tool)
@@ -1042,10 +1045,11 @@ def holding(run):
 
 
 def check_saved_so_far(run, sections, commits_expected, label):
-    """In the middle of the first run: only the parts that the answers settled hold rules."""
+    """In the middle of the first run: only the parts that the answers settled hold rules, all committed."""
     run.check(f'{label}: only {", ".join(sections)} hold rules, after {commits_expected - 1} commit(s) of the policy',
-              holding(run) == set(sections) and policy_commits(run) == commits_expected,
-              [sorted(holding(run)), run.git('log', '--oneline')])
+              holding(run) == set(sections) and policy_commits(run) == commits_expected
+              and run.git('status', '--porcelain', 'policy.md') == '',
+              [sorted(holding(run)), run.git('log', '--oneline'), run.git('status', '--porcelain', 'policy.md')])
 
 
 def check_first_run_saved(run, commits_before, answers):
@@ -1061,20 +1065,22 @@ def check_first_run_saved(run, commits_before, answers):
     run.check('the ledger no longer waits for an answer', 'asked first-run' not in run.ledger(), run.ledger())
 
 
-def first_answer(run, turns, order_required=True):
+def first_answer(run, turns):
     """The first answer: a preamble and one question, written after the commands, as the end of the turn.
     Toastty's chat folds text that comes before a command into the turn's work, where the user does not see it."""
+    turns = [turn for turn in turns if not turn['wake']]
     said = run.said(turns)
     lower = said.lower()
     steps = [step for turn in turns for step in turn['steps']]
-    early = [step['text'] for index, step in enumerate(steps)
-             if step['kind'] == 'text' and any(later['kind'] == 'tool' for later in steps[index + 1:])]
-    run.check('the answer ends the turn: no text before a command, which the chat would fold away', not early, early,
-              required=order_required)
-    texts = [step for step in steps if step['kind'] == 'text' and step['at'] is not None]
-    if texts:
-        timing = (f'first answer: first text after {texts[0]["at"]:.1f} s, end after {steps[-1]["at"]:.1f} s, '
-                  f'{len(said)} characters, {len(steps) - len(texts)} tool calls')
+    folded = [f'{step["stop"]}: {step["text"]}' for step in steps if step['kind'] == 'text' and step['stop'] != 'end_turn']
+    run.check('the answer ends the turn: no text that the chat folds into the work, such as text before a command',
+              said and not folded, folded or said)
+    run.check('it writes nothing to the policy before an answer', not holding(run) and policy_commits(run) == 1,
+              [run.policy(), run.git('log', '--oneline')])
+    shown = [step for step in steps if step['kind'] == 'text' and step['stop'] == 'end_turn' and step['at'] is not None]
+    if shown:
+        timing = (f'first answer: first text shown after {shown[0]["at"]:.1f} s, end after {steps[-1]["at"]:.1f} s, '
+                  f'{len(said)} characters, {sum(step["kind"] == "tool" for step in steps)} tool calls')
         run.notes.append(timing)
         say(run.label, 'time', timing)
     run.check('it introduces itself by name', 'toasty' in lower, said, required=False)
@@ -1119,7 +1125,6 @@ def first_run(run):
               all(run.section(name) == [] for name in FIRST_RUN_SECTIONS) and '## Talking' in template, template)
     said = first_answer(run, run.tell('Hi. I just turned you on.'))
     run.check('the Agents draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
-    run.check('it writes nothing before the answer', run.policy() == template and policy_commits(run) == 1, run.policy())
     said = run.said(run.tell('Yes.'))
     check_saved_so_far(run, ['Agents'], 2, 'the first yes saves its part at once')
     run.check('Agents holds the drafted models', any('sonnet' in line.lower() for line in run.section('Agents')),
@@ -1168,9 +1173,8 @@ def first_run_instructions(run):
     run.check("it suggests the instruction file's table", 'sonnet' in lower and 'xhigh' in lower, said)
     run.check('it says where the table comes from', re.search(r'claude\.md|agents\.md|instruction', lower), said,
               required=False)
-    before_commits = policy_commits(run)
     shows_saved(run, run.said(run.tell('Defaults.')))
-    check_first_run_saved(run, before_commits, answers=1)
+    check_first_run_saved(run, 1, answers=1)
     agents = '\n'.join(run.section('Agents')).lower()
     run.check('Agents holds the three rows', 'sonnet' in agents and 'xhigh' in agents and 'medium' in agents, agents)
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
@@ -1190,16 +1194,14 @@ def first_run_request(run):
         run.create_task(title, done=True)
     run.open_coordinator()
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
-    said = first_answer(run, run.tell('Add a --verbose flag to the import command. It should print each file it reads.'),
-                        order_required=False)
+    said = first_answer(run, run.tell('Add a --verbose flag to the import command. It should print each file it reads.'))
     run.check('it makes the task at once', len(created_since(run, before)) == 1,
               [t['title'] for t in created_since(run, before)])
     run.check('it suggests a starter table with rising effort', re.search(r'medium|low', said.lower())
               and re.search(r'x?high', said.lower()), said)
-    before_commits = policy_commits(run)
     run.tell('Use claude-sonnet-5-5 at medium for small clear changes, claude-opus-5-5 at high for features, '
              'and claude-opus-5-5 at xhigh for hard or open work. The rest as you suggest.')
-    check_first_run_saved(run, before_commits, answers=1)
+    check_first_run_saved(run, 1, answers=1)
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     run.tell('New task: find out why the importer sometimes skips files on network drives. Nobody knows the cause yet; '
              'it may need a redesign of how we watch folders.')
