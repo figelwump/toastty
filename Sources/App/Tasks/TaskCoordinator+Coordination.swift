@@ -106,9 +106,16 @@ extension TaskCoordinator {
     @discardableResult
     func send(taskID: UUID, text: String) throws -> TaskSessionInfo {
         let (record, session) = try sendTarget(taskID: taskID, text: text)
-        switch deliver(text, to: session, taskID: taskID) {
+        try submitTaskMessage(text, to: session, for: record)
+        return session
+    }
+
+    func submitTaskMessage(
+        _ text: String, to session: TaskSessionInfo, for record: TaskRecord, automaticPromptTurnEnd: Date? = nil
+    ) throws {
+        switch deliver(text, to: session, taskID: record.id, automaticPromptTurnEnd: automaticPromptTurnEnd) {
         case .delivered:
-            return session
+            break
         case .uncertain:
             throw Self.uncertainSendError(record)
         case .unavailable:
@@ -185,9 +192,17 @@ extension TaskCoordinator {
 
     /// Types `text` and presses Return, with image paths kept as text so
     /// that the Return submits it (`AgentPasteText`).
-    private func deliver(_ text: String, to session: TaskSessionInfo, taskID: UUID) -> TerminalInputDeliveryResult {
+    private func deliver(
+        _ text: String, to session: TaskSessionInfo, taskID: UUID, automaticPromptTurnEnd: Date? = nil
+    ) -> TerminalInputDeliveryResult {
         let text = AgentPasteText.keepingImagePathsAsText(text)
         let result = sessions?.deliver(text, panelID: session.panelID) ?? .unavailable
+        if result == .uncertain {
+            // The text may still be at the prompt, even after a manual send.
+            automaticPromptDeliveryTurnEnds[session.sessionID] = session.lastTurnEndedAt ?? .distantPast
+        } else if result == .delivered, let automaticPromptTurnEnd {
+            automaticPromptDeliveryTurnEnds[session.sessionID] = automaticPromptTurnEnd
+        }
         let metadata = [
             "task_id": taskID.uuidString,
             "session_id": session.sessionID,
@@ -197,9 +212,6 @@ extension TaskCoordinator {
         case .delivered:
             ToasttyLog.info("Sent a message to a task", category: .tasks, metadata: metadata)
         case .uncertain:
-            // The text can still be at the prompt, including after a
-            // manual send or wake. A watch must not submit it.
-            watchDeliveryTurnEnds[session.sessionID] = session.lastTurnEndedAt ?? .distantPast
             ToasttyLog.warning("A message to a task may not have been submitted", category: .tasks, metadata: metadata)
         case .unavailable:
             break
@@ -317,7 +329,9 @@ extension TaskCoordinator {
     /// hold, and delivers fired messages that have not gone out yet.
     func evaluateWatches() {
         let at = now()
-        watchDeliveryTurnEnds = watchDeliveryTurnEnds.filter { sessions?.session($0.key)?.isActive == true }
+        automaticPromptDeliveryTurnEnds = automaticPromptDeliveryTurnEnds.filter {
+            sessions?.session($0.key)?.isActive == true
+        }
         // Building the board walks every task, so only a pass with a pending
         // watch that needs it does so, and only once. Archived is read from
         // the record.
@@ -344,12 +358,11 @@ extension TaskCoordinator {
                 }
                 guard case .fired(let firedAt, let reason, let impossible, false) = updated[index].state,
                       let session = liveAgentSession(of: holder),
-                      let turnEnd = watchDeliveryTurnEnd(for: session) else { continue }
+                      let turnEnd = automaticPromptTurnEnd(for: session) else { continue }
                 let message = Self.watchMessage(updated[index], targetTitle: records.record(id: watch.targetTaskID)?.title)
                 // A message that may have been typed without its Return is not
                 // sent again: a second copy would land in the same prompt.
-                if deliver(message, to: session, taskID: holder.id) != .unavailable {
-                    watchDeliveryTurnEnds[session.sessionID] = turnEnd
+                if deliver(message, to: session, taskID: holder.id, automaticPromptTurnEnd: turnEnd) != .unavailable {
                     updated[index].state = .fired(at: firedAt, reason: reason, impossible: impossible, delivered: true)
                 }
             }
@@ -373,15 +386,15 @@ extension TaskCoordinator {
         }
     }
 
-    /// A submitted watch uses this prompt. Wait for the next completed turn
-    /// before submitting another, even if the agent has yet to report it started.
-    private func watchDeliveryTurnEnd(for session: TaskSessionInfo) -> Date? {
-        guard isAtPromptWithoutUserInput(session),
-              sessions?.hasPendingInteractionOrUserDraft(in: session) == false else {
-            return nil
-        }
+    /// The open prompt a watch, wake or merge message can use. A provider
+    /// can show an interaction while its hooks report ready, or keep
+    /// reporting ready after an automatic submission starts the next turn.
+    func automaticPromptTurnEnd(for session: TaskSessionInfo) -> Date? {
+        guard let sessions, let kind = session.status?.kind, kind == .idle || kind == .ready,
+              sessions.hasPendingInteractionOrUserDraft(in: session) == false else { return nil }
         let turnEnd = session.lastTurnEndedAt ?? .distantPast
-        if let previous = watchDeliveryTurnEnds[session.sessionID], turnEnd <= previous { return nil }
+        if let typedAt = sessions.lastUserInputAt(panelID: session.panelID), typedAt > turnEnd { return nil }
+        if let previous = automaticPromptDeliveryTurnEnds[session.sessionID], turnEnd <= previous { return nil }
         return turnEnd
     }
 
@@ -518,22 +531,18 @@ extension TaskCoordinator {
     }
 
     /// Types the waiting task's wake line into its own agent's terminal, as
-    /// a watch's line goes, and submits it. It goes only while the agent's
-    /// own report says it waits at its prompt, so not at a permission
-    /// prompt; while no question waits for the user, which the turn would
-    /// clear; and while nobody typed in its terminal since its last turn
-    /// ended, since that text can still be in its prompt. The checks, the
-    /// typing and the mark that the line went happen in one step, so a
-    /// mark cleared or replaced since cannot get the line. Returns false
-    /// when the wake must wait.
+    /// a watch's line goes, and submits it. A question from the task for
+    /// the user also blocks the wake, since its turn would clear the
+    /// question. The checks, typing and mark happen in one step. Returns
+    /// false when the wake must wait.
     private func sendWake(_ record: TaskRecord, waiting: TaskWaiting, at: Date) -> Bool {
         guard record.replyRequest == nil,
               let session = liveAgentSession(of: record, ownAgentOnly: true),
-              isAtPromptWithoutUserInput(session) else { return false }
+              let turnEnd = automaticPromptTurnEnd(for: session) else { return false }
         // Marked first, so that the turn the line starts clears the mark
         // (`clearMarksForNewWork`), and no second line goes.
         saveOrDefer(taskID: record.id) { $0.waiting?.wokenAt = at }
-        let result = deliver(Self.wakeMessage(waiting), to: session, taskID: record.id)
+        let result = deliver(Self.wakeMessage(waiting), to: session, taskID: record.id, automaticPromptTurnEnd: turnEnd)
         let metadata = ["task_id": record.id.uuidString, "session_id": session.sessionID, "delivery": "\(result)"]
         guard result != .unavailable else {
             ToasttyLog.info("A waiting task's wake must wait", category: .tasks, metadata: metadata)
@@ -546,12 +555,6 @@ extension TaskCoordinator {
         // prompt.
         ToasttyLog.info("Sent a waiting task its wake", category: .tasks, metadata: metadata)
         return true
-    }
-
-    private func isAtPromptWithoutUserInput(_ session: TaskSessionInfo) -> Bool {
-        guard let kind = session.status?.kind, kind == .idle || kind == .ready else { return false }
-        guard let typedAt = sessions?.lastUserInputAt(panelID: session.panelID) else { return true }
-        return typedAt <= (session.lastTurnEndedAt ?? .distantPast)
     }
 
     /// The line a wake sends: one line, so no agent reads part of it as a

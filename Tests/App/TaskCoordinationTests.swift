@@ -205,7 +205,8 @@ struct TaskCoordinationTests {
     /// `task waiting --wake`: at the time the agent set, its own agent gets
     /// one line while it waits at its prompt, and the turn that line starts
     /// clears the mark.
-    @Test func aDueWakeGoesOnceToTheTasksIdleAgentAndItsTurnClearsTheMark() async throws {
+    @Test(arguments: [false, true])
+    func aDueWakeGoesOnceToTheTasksIdleAgentAndItsTurnClearsTheMark(submissionUncertain: Bool) async throws {
         let fixture = try Fixture()
         let task = try await fixture.startedTask()
         let session = try sessionID(task)
@@ -238,6 +239,15 @@ struct TaskCoordinationTests {
         fixture.sessions.report(session, .working)
         #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
         fixture.sessions.report(session, .ready)
+        // A tracked interaction can still occupy the prompt while the
+        // session reports ready and there is no recent user input.
+        fixture.sessions.sessionsWithPendingInput.insert(session)
+        coordinator.wakeRetryAt = [:]
+        #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
+        #expect(try wakes().isEmpty)
+        #expect(waiting()?.wokenAt == nil)
+        fixture.sessions.sessionsWithPendingInput.remove(session)
+
         fixture.sessions.userInputAt[panel] = Date()
         coordinator.wakeRetryAt = [:]
         #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
@@ -249,7 +259,7 @@ struct TaskCoordinationTests {
         #expect(waiting()?.wokenAt == nil)
 
         // At its prompt the agent gets one line that says what it waited for.
-        fixture.sessions.deliveryResult = .delivered
+        fixture.sessions.deliveryResult = submissionUncertain ? .uncertain : .delivered
         coordinator.wakeRetryAt = [:]
         #expect(coordinator.evaluateWakes() == nil)
         let lines = try wakes()

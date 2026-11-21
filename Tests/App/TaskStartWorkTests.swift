@@ -164,13 +164,15 @@ struct TaskStartWorkTests {
         /// reached it.
         var userInputAt: [UUID: Date] = [:]
         var sessionsWithPendingInput: Set<String> = []
+        private(set) var pendingInputChecks: [String: Int] = [:]
 
         func lastOutputAt(sessionID: String) -> Date? { outputAt[sessionID] }
 
         func lastUserInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
 
         func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool {
-            sessionsWithPendingInput.contains(session.sessionID)
+            pendingInputChecks[session.sessionID, default: 0] += 1
+            return sessionsWithPendingInput.contains(session.sessionID)
         }
 
         /// Reports a status, as the agent's hooks do.
@@ -203,7 +205,7 @@ struct TaskStartWorkTests {
         let recentWorkspaces = RecentWorkspacesStore.inMemory()
         private(set) var coordinator: TaskCoordinator!
 
-        init() throws {
+        init(mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout) throws {
             repository = try TaskGitTestRepository()
             recordsFile = repository.root.appendingPathComponent("task-records.json")
             let workspace = try #require(store.selectedWorkspace)
@@ -214,10 +216,14 @@ struct TaskStartWorkTests {
                 cwd: repository.project
             ))
             launcher.sessions = sessions
-            coordinator = makeCoordinator(records: TaskRecordStore(fileURL: recordsFile))
+            coordinator = makeCoordinator(
+                records: TaskRecordStore(fileURL: recordsFile), mergePromptTurnTimeout: mergePromptTurnTimeout
+            )
         }
 
-        func makeCoordinator(records: TaskRecordStore) -> TaskCoordinator {
+        func makeCoordinator(
+            records: TaskRecordStore, mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout
+        ) -> TaskCoordinator {
             let coordinator = TaskCoordinator(
                 records: records,
                 store: store,
@@ -228,6 +234,7 @@ struct TaskStartWorkTests {
                 grantScope: { _, _ in },
                 worktreeCreator: TaskGitTestRepository.creator(),
                 terminalReadinessTimeout: .seconds(1),
+                mergePromptTurnTimeout: mergePromptTurnTimeout,
                 timing: .init(
                     sourceTurnTimeout: .seconds(3),
                     forkConfirmationTimeout: .milliseconds(600),

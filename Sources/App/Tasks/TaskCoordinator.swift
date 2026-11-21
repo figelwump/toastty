@@ -250,6 +250,9 @@ final class TaskCoordinator {
     let fileManager: FileManager
     let now: () -> Date
     let terminalReadinessTimeout: Duration
+    static let defaultMergePromptTurnTimeout: Duration = .seconds(30 * 60)
+    /// How long an agent-routed merge waits for an open prompt.
+    let mergePromptTurnTimeout: Duration
     let timing: StartWorkTiming
 
     /// How long a move into a worktree waits; shorter in tests.
@@ -302,7 +305,7 @@ final class TaskCoordinator {
     /// focus to the next active panel. Without it, the close selects the
     /// neighboring workspace.
     var closeFinishedTaskSpace: ((UUID) -> Bool)?
-    /// Merge prompts waiting for a busy agent's turn to end.
+    /// Merge prompts waiting for an agent's input to be ready.
     var mergeDeliveryTasks: [UUID: Task<Void, Never>] = [:]
     /// Archives and release cleanups running in the background.
     var cleanupTasks: [UUID: Task<Void, Never>] = [:]
@@ -310,9 +313,9 @@ final class TaskCoordinator {
     /// `toastty task watch --wait` watches, which only last while the app runs.
     var waitWatches: [UUID: TaskWaitWatch] = [:]
     var watchMonitor: Task<Void, Never>?
-    /// By session ID, the last completed turn when a watch or uncertain send
-    /// used the prompt. Another watch must wait for a new prompt.
-    var watchDeliveryTurnEnds: [String: Date] = [:]
+    /// By session ID, the completed turn whose prompt an automatic message
+    /// or uncertain send used. Automatic messages wait for a new prompt.
+    var automaticPromptDeliveryTurnEnds: [String: Date] = [:]
     /// Sends the wakes of `task waiting` marks when their time comes.
     var wakeMonitor: Task<Void, Never>?
     /// When to try a due wake again after its agent could not take it.
@@ -340,6 +343,7 @@ final class TaskCoordinator {
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         terminalReadinessTimeout: Duration = .seconds(10),
+        mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout,
         timing: StartWorkTiming = StartWorkTiming(),
         triageRunner: (any TaskTriageRunning)? = nil,
         recentWorkspaces: RecentWorkspacesStore? = nil,
@@ -356,6 +360,7 @@ final class TaskCoordinator {
         self.fileManager = fileManager
         self.now = now
         self.terminalReadinessTimeout = terminalReadinessTimeout
+        self.mergePromptTurnTimeout = mergePromptTurnTimeout
         self.timing = timing
         self.triageRunner = triageRunner
         self.recentWorkspaces = recentWorkspaces

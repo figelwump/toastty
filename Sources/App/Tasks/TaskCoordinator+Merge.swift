@@ -12,9 +12,6 @@ enum TaskMergeRoute: Equatable {
 }
 
 extension TaskCoordinator {
-    /// How long a merge prompt waits for a busy agent to finish its turn.
-    static let mergePromptTurnTimeout: Duration = .seconds(30 * 60)
-
     /// The task space, pull request and checkout a merge acts on.
     struct MergeTarget {
         var taskSpaceID: UUID
@@ -728,30 +725,39 @@ extension TaskCoordinator {
         }
     }
 
-    /// Sends the merge prompt to the task's agent once it is at rest, or
-    /// starts an agent for it when none runs. A busy agent finishes its
-    /// turn first, so the prompt is the next thing it reads.
+    /// Sends the merge prompt when the task's agent has an open prompt, or
+    /// starts an agent for it when none runs.
     private func deliverMergePrompt(_ prompt: MergePrompt, taskID: UUID, target: MergeTarget, requestedAt: Date) throws {
         guard let record = records.record(id: taskID) else { return }
         if let session = liveAgentSession(of: record) {
-            guard session.isInTurn else {
-                try send(taskID: taskID, text: prompt.text(for: session, launcher: launcher))
+            if let turnEnd = automaticPromptTurnEnd(for: session) {
+                try submitTaskMessage(
+                    prompt.text(for: session, launcher: launcher), to: session, for: record, automaticPromptTurnEnd: turnEnd
+                )
                 return
             }
+            let timeout = mergePromptTurnTimeout
             mergeDeliveryTasks[taskID] = Task { [weak self] in
                 let clock = ContinuousClock()
-                let deadline = clock.now.advanced(by: Self.mergePromptTurnTimeout)
+                let deadline = clock.now.advanced(by: timeout)
                 while Task.isCancelled == false, clock.now < deadline {
-                    try? await Task.sleep(for: .seconds(1))
-                    guard let self, self.records.record(id: taskID)?.mergeRequestedAt == requestedAt else { return }
-                    guard let current = self.records.record(id: taskID).flatMap(self.liveAgentSession(of:)) else { break }
-                    if current.isInTurn { continue }
+                    try? await Task.sleep(until: min(deadline, clock.now.advanced(by: .seconds(1))), clock: clock)
+                    guard Task.isCancelled == false, let self else { return }
+                    guard let record = self.records.record(id: taskID), record.mergeRequestedAt == requestedAt else {
+                        self.mergeDeliveryTasks[taskID] = nil
+                        return
+                    }
+                    guard clock.now < deadline, let current = self.liveAgentSession(of: record) else { break }
+                    guard let turnEnd = self.automaticPromptTurnEnd(for: current) else { continue }
                     self.mergeDeliveryTasks[taskID] = nil
                     do {
                         // The request starts when the agent can read it, so
                         // its earlier statuses do not count as a reply.
                         try self.saveMergeState(taskID: taskID) { $0.mergeRequestedAt = self.now() }
-                        try self.send(taskID: taskID, text: prompt.text(for: current, launcher: self.launcher))
+                        try self.submitTaskMessage(
+                            prompt.text(for: current, launcher: self.launcher),
+                            to: current, for: record, automaticPromptTurnEnd: turnEnd
+                        )
                     } catch {
                         self.mergePromptFailed(taskID: taskID, reason: error.localizedDescription)
                     }
@@ -759,7 +765,7 @@ extension TaskCoordinator {
                 }
                 guard Task.isCancelled == false else { return }
                 self?.mergeDeliveryTasks[taskID] = nil
-                self?.mergePromptFailed(taskID: taskID, reason: "the agent did not finish its turn")
+                self?.mergePromptFailed(taskID: taskID, reason: "the agent did not have an open prompt")
             }
             return
         }
