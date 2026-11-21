@@ -1177,6 +1177,8 @@ def first_run_one_project(run):
     commits = int(run.git('rev-list', '--count', 'HEAD') or 0)
     run.tell('Yes. Let the projects build up.')
     check_first_run_saved(run, commits)
+    run.check('Projects keeps the drafted rule for app', any(re.search(r'\bapp\b', line) for line in run.section('Projects')),
+              run.section('Projects'))
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     said = run.said(run.tell(f'New task in {website}: the README says "teh site". Make it "the site".'))
     created = created_since(run, before)
