@@ -4112,6 +4112,56 @@ private struct ReleasedWorkspaceDoneResponse: Decodable {
 
 extension RemoteAccessServiceSafetyTests {
     @MainActor
+    @Test func localClaudeQuestionUsesTheLiveSubscriptionWithRemoteAccessOff() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working)
+        defer { fixture.removeRuntimeFiles(); fixture.sessionRuntimeStore.reset() }
+        let subscription = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
+        defer { subscription.cancel() }
+        fixture.service.setEnabled(false, persist: false)
+        #expect(fixture.confirmCurrentLaunchBinding())
+
+        let questions = [RemoteInteractionQuestion(id: "q0", header: "Color", question: "Choose a color",
+            options: [.init(id: "blue", label: "Blue"), .init(id: "green", label: "Green")])]
+        let responseID = UUID().uuidString
+        let now = Date()
+        func hook(_ phase: ClaudeQuestionHookRequest.Phase, _ event: ClaudeQuestionHookEvent.EventName) -> ClaudeQuestionHookRequest {
+            .init(phase: phase, sessionID: fixture.sessionID, panelID: fixture.panelID,
+                  event: .init(eventName: event, nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                               promptID: "prompt", transcriptPath: fixture.resumeRecord.sessionFilePath,
+                               providerCallID: phase == .observe ? "color-call" : nil, questions: questions),
+                  responseID: phase == .begin ? responseID : nil)
+        }
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.observe, .preToolUse), at: now).status == .observed)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.begin, .permissionRequest), at: now).status == .pending)
+        let snapshot = try #require(subscription.snapshot(at: now))
+        let interaction = try #require(snapshot.pendingInteractions.first)
+        let request = RemoteQuestionAnswerRequest(
+            conversationID: snapshot.summary.conversationID, interactionID: interaction.id,
+            responseID: responseID, expectedInputEpoch: interaction.inputEpoch,
+            clientRequestID: "mac", answers: [.init(questionID: "q0", text: "Purple")]
+        )
+
+        var wrongConversation = request
+        wrongConversation.conversationID = RemoteConversationID()
+        #expect(subscription.answerQuestion(wrongConversation) == .rejected(reason: .notBound))
+        var stale = request
+        stale.expectedInputEpoch = .init(bindingID: UUID(), counter: 1)
+        #expect(subscription.answerQuestion(stale) == .rejected(reason: .epochMismatch))
+        fixture.service.setSessionWriteEnabled(false, for: snapshot.summary.conversationID)
+        #expect(fixture.service.isEnabled == false)
+        #expect(subscription.answerQuestion(request) == .submitted)
+        #expect(subscription.answerQuestion(request) == .duplicate)
+        var differentAnswer = request
+        differentAnswer.answers = [.init(questionID: "q0", selectedOptionIDs: ["blue"])]
+        #expect(subscription.answerQuestion(differentAnswer) == .rejected(reason: .alreadySubmitted))
+        let poll = ClaudeQuestionHookRequest(phase: .poll, sessionID: fixture.sessionID,
+                                             panelID: fixture.panelID, responseID: responseID)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(poll, at: now).answers == request.answers)
+        subscription.cancel()
+        #expect(subscription.answerQuestion(request) == .rejected(reason: .notBound))
+    }
+
+    @MainActor
     @Test func cursorHookHistoryAndRemoteSendWorkWithoutAResumeRecord() throws {
         let fixture = try Self.cursorFixtureWithoutResumeRecord()
         defer { fixture.removeRuntimeFiles() }

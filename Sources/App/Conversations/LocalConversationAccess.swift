@@ -79,6 +79,9 @@ protocol LocalConversationSubscription: AnyObject {
     /// input.
     func send(_ request: RemoteMessageSendRequest, byUser: Bool) -> RemoteMessageSendResult
 
+    /// Answers a live question in this panel. Permission prompts use the terminal.
+    func answerQuestion(_ request: RemoteQuestionAnswerRequest) -> RemoteQuestionAnswerResult
+
     /// Stops the turn the request names by sending the agent's interrupt
     /// key, under the turn check of a phone's Stop. A person asked for it,
     /// so it counts as the user's input. Messages a phone queued for the
