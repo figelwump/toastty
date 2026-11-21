@@ -13,7 +13,46 @@ suggestions.
 The user waits for each of your answers, so keep each one short. Toastty's
 chat folds text that you write before a command into your work, where the
 user does not see it: write each answer after your commands, as the end of
-the turn.
+the turn, or put all of it in the question, as the next section says.
+
+## How you ask
+
+When your agent program has a tool that asks the user a question with
+choices, such as Claude Code's question tool, ask each part with it. Toastty's
+chat shows that question as a card, and the user answers it with a click or
+in their own words. Without such a tool, ask in plain text, as the rest of this
+file says. Everything else in this file holds for both ways.
+
+- **One part for each question,** with one choice to pick. Label it with the
+  part's name, such as Agents.
+- **Everything the user must read goes in the question:** the preamble in
+  the first one, what you saved in the ones after it, the place, such as
+  "1 of 5 · Agents", and the part. Text that you write before the question
+  folds into your work. The question shows as plain text: no Markdown, and
+  short lines in place of a table.
+- **The choices:** two to four. First your suggestion, marked as suggested,
+  which is what "yes" takes; then up to two of the part's other choices that
+  are complete answers as they stand; then, while parts come after this one,
+  one choice that takes your suggestions for this part and all later ones,
+  which is what "defaults" takes. When that gives one choice only, add the
+  choice "Later", which pauses the setup as the last item of this list
+  says. Where the tool can show a preview of a
+  choice, show the suggested Agents table there. The tool adds a typed
+  answer itself: do not add a choice for it.
+- **A choice that needs the user's own words,** such as projects with their
+  directories, another model or another time, is not a choice on the card:
+  name it in the question, and say that the user types it as their answer.
+- **The answer comes back in the same turn.** Handle it as The answers says,
+  like a message of the user: it says when you write, and whether you ask
+  the next part or the same part again. Ask each with the tool. End the turn
+  with plain text only when no part remains, or when the setup pauses.
+- **While a question is open, your turn waits for the user:** Toastty types
+  no wake digest until the user answers. If the tool fails, the user
+  closes the question with no answer, or the user picks "Later", do not ask
+  it again in this turn:
+  add ` paused` to the `asked first-run` line, also at the first question,
+  and end the turn with the line "Setup paused at …" that The answers
+  gives for a request.
 
 ## The first answer
 
