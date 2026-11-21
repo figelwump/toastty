@@ -383,12 +383,23 @@ struct CoordinatorMentionPickerView: View {
                     .foregroundStyle(ToastyTheme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if let detail = Self.detail(candidate) {
-                    Text(detail)
-                        .font(.system(size: 11.5 * textScale))
-                        .foregroundStyle(ToastyTheme.inactiveText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                if candidate.projectTitle != nil || candidate.pullRequestNumber != nil {
+                    // A long project name shortens; the pull request number
+                    // always shows.
+                    HStack(spacing: 0) {
+                        if let project = candidate.projectTitle {
+                            Text(project)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        if let number = candidate.pullRequestNumber {
+                            Text(verbatim: candidate.projectTitle == nil ? "#\(number)" : " · #\(number)")
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
+                    .font(.system(size: 11.5 * textScale))
+                    .foregroundStyle(ToastyTheme.inactiveText)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -415,11 +426,5 @@ struct CoordinatorMentionPickerView: View {
             .overlay(alignment: .top) {
                 Rectangle().fill(ToastyTheme.hairline).frame(height: 1)
             }
-    }
-
-    /// The project and the pull request number, or `nil` with neither.
-    static func detail(_ candidate: CoordinatorMentionCandidate) -> String? {
-        let parts = [candidate.projectTitle, candidate.pullRequestNumber.map { "#\($0)" }].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
