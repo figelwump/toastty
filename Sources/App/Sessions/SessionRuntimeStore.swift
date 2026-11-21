@@ -2099,6 +2099,30 @@ final class SessionRuntimeStore: ObservableObject {
         return true
     }
 
+    /// Codex records cancellation in the rollout. Only the active root turn
+    /// can end hook-tracked work, since a watcher can replay an older turn.
+    @discardableResult
+    func handleCodexRolloutTurnAbort(
+        sessionID: String,
+        turnID: String?,
+        at now: Date
+    ) -> Bool {
+        guard codexStatusTrackingSourceBySessionID[sessionID] == .hooks,
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications,
+              record.status?.kind == .working || record.status?.kind == .needsApproval,
+              let turnID,
+              turnID == codexLegacyPolicySnapshot(sessionID: sessionID).rootTurnID else {
+            return false
+        }
+
+        endInitialPromptTurnWait(sessionID: sessionID)
+        removePendingCodexHookApproval(sessionID: sessionID)
+        updateStatus(sessionID: sessionID, status: Self.interruptedIdleStatus, at: now)
+        return true
+    }
+
     /// Codex fires neither `Stop` nor `notify` when a turn fails, for example
     /// when the model request is rejected, so a hook-tracked session would stay
     /// working. The rollout's `task_complete` records the error instead. It
@@ -6211,7 +6235,9 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         if record.agent == .codex,
            codexSessionUsesFixedStatusAuthority(sessionID: record.sessionID) {
-            endInitialPromptTurnWait(sessionID: record.sessionID)
+            if codexStatusTrackingSourceBySessionID[record.sessionID] != .hooks {
+                endInitialPromptTurnWait(sessionID: record.sessionID)
+            }
             let interrupt: CodexRootProgressInterrupt = switch kind {
             case .escape:
                 .escape

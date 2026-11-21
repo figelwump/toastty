@@ -4581,14 +4581,36 @@ extension RemoteAccessServiceSafetyTests {
     }
 
     @MainActor
-    @Test func remoteStopUpdatesHookTrackedStatusOnlyAfterSuccessfulDelivery() async throws {
+    @Test func remoteStopKeepsHookTrackedStatusUntilCodexConfirmsAbort() async throws {
         let fixture = try RemoteBootstrapFixture(
             statusKind: .working,
             codexStatusTrackingSource: .hooks,
             pairNativeDevice: true
         )
-        defer { fixture.removeRuntimeFiles() }
+        let planner = ManagedAgentLaunchPlanner(
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            cliExecutablePathProvider: { nil },
+            socketPathProvider: { "/tmp/toastty-unused.sock" },
+            readVisibleText: { _ in nil },
+            promptState: { _ in .idleAtPrompt }
+        )
+        defer { withExtendedLifetime(planner) { fixture.removeRuntimeFiles() } }
         #expect(fixture.confirmCurrentLaunchBinding())
+        #expect(fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: fixture.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: fixture.resumeRecord.nativeSessionID,
+                turnID: "turn-1",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .working, summary: "Working"),
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: fixture.confirmedAt
+        ))
         let device = try #require(fixture.service.devices.first { $0.authKind == .native })
         fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
         var canDeliver = false
@@ -4638,33 +4660,35 @@ extension RemoteAccessServiceSafetyTests {
         #expect(fixture.summary.presentationStatus == .working)
         #expect(fixture.summary.inputControl?.isQueuePaused == false)
 
-        // Successful Escape delivery uses the same status update as a local interrupt.
+        // Delivery pauses the queue at once. Codex still owns the turn status.
         canDeliver = true
         fixture.server.removeAllBroadcasts()
         #expect(fixture.service.performRemoteInterrupt(request, device: device) == .accepted)
         #expect(interrupts == 2)
         // The stop is the phone user's input too.
         #expect(try #require(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID)) > queuedAt)
-        #expect(fixture.sessionRuntimeStore.panelStatus(for: fixture.panelID)?.status.kind == .idle)
-        #expect(fixture.summary.presentationStatus == .idle)
-        #expect(fixture.summary.statusDetail == "Ready for prompt")
+        #expect(fixture.sessionRuntimeStore.panelStatus(for: fixture.panelID)?.status.kind == .working)
+        #expect(fixture.summary.presentationStatus == .working)
         #expect(fixture.summary.inputControl?.isQueuePaused == true)
         #expect(delivered.isEmpty)
         let broadcast = try #require(fixture.server.sessionListSnapshots.last?.conversations.first {
             $0.conversationID == fixture.conversationID
         })
-        #expect(broadcast.presentationStatus == .idle)
+        #expect(broadcast.presentationStatus == .working)
         #expect(broadcast.inputControl?.isQueuePaused == true)
 
         // The provider confirms the abort and opens the prompt. Stop must still
-        // hold the queued message, even when the shared session is already idle.
+        // hold the queued message after the shared session becomes idle.
         try transcript.write(contentsOf: Self.codexLine(
             #"{"type":"turn_aborted","turn_id":"turn-1"}"#,
             at: "2026-08-07T10:00:06.000Z"
         ))
-        let stopped = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        let stopped = try await Self.waitForSummary(fixture) {
+            $0.inputAvailability.allowsRemoteSend && $0.presentationStatus == .idle
+        }
         #expect(stopped.inputAvailability.allowsRemoteSend)
         #expect(stopped.presentationStatus == .idle)
+        #expect(stopped.statusDetail == "Ready for prompt")
         #expect(stopped.inputControl?.isQueuePaused == true)
         #expect(stopped.inputControl?.queuedMessages.map(\.clientRequestID) == ["after-stop"])
         #expect(delivered.isEmpty)

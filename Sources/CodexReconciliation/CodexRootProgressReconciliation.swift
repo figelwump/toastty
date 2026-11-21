@@ -1,6 +1,6 @@
 import Foundation
 
-/// Selects the one provider signal allowed to drive root-session progress.
+/// Selects the primary provider signal for root-session progress.
 /// Authority is chosen by the application for the lifetime of a session.
 public enum CodexRootProgressAuthority: Equatable, Sendable {
     case hooks
@@ -92,33 +92,22 @@ public enum CodexRootProgressEvaluator {
             }
 
         case .localInterrupt(let interrupt):
-            switch interrupt {
-            case .escape:
-                switch currentRegistryKind {
-                case .working, .needsApproval:
-                    switch authority {
-                    case .hooks:
-                        return .projectIdle(detail: "Ready for prompt")
-                    case .sessionLogFallback:
-                        return .ignored(.fallbackEscapeSuppressed)
-                    }
-                case .none, .idle, .ready, .error:
-                    return .ignored(.currentRegistryKindDoesNotPermitTransition)
-                }
-            case .controlC:
-                return idleAfterInterrupt(currentRegistryKind: currentRegistryKind)
+            // A key may dismiss a Codex UI element while the turn is still
+            // running. Hook-tracked sessions wait for Codex's turn-end event.
+            guard authority == .sessionLogFallback else {
+                return .ignored(.incompatibleWithAuthority)
             }
-        }
-    }
-
-    private static func idleAfterInterrupt(
-        currentRegistryKind: CodexRootProgressRegistryKind
-    ) -> CodexRootProgressDecision {
-        switch currentRegistryKind {
-        case .working, .needsApproval:
-            return .projectIdle(detail: "Ready for prompt")
-        case .none, .idle, .ready, .error:
-            return .ignored(.currentRegistryKindDoesNotPermitTransition)
+            switch currentRegistryKind {
+            case .working, .needsApproval:
+                switch interrupt {
+                case .escape:
+                    return .ignored(.fallbackEscapeSuppressed)
+                case .controlC:
+                    return .projectIdle(detail: "Ready for prompt")
+                }
+            case .none, .idle, .ready, .error:
+                return .ignored(.currentRegistryKindDoesNotPermitTransition)
+            }
         }
     }
 }
