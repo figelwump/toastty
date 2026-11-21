@@ -1754,8 +1754,11 @@ by asking you:
 
 **The first run.** The first time you write to the coordinator while one
 of Projects, Agents, Talking, Reviewing and Improving holds no rule, it asks
-you how to set it up, in one message with a suggested answer for each part. "Yes" takes
-all the suggestions.
+you how to set it up, one part at a time, with a suggested answer for each part. "Yes"
+takes the suggestion, and "defaults" takes the suggestions for all remaining parts. When
+its agent program can ask a question with choices, such as Claude Code, the chat shows
+each part as a card that you answer with a click or in your own words; otherwise it asks
+in plain text.
 
 - **Agents:** which agent, model and effort for which kind of work, as a
   table. It suggests a rule for choosing a model that your own agent
