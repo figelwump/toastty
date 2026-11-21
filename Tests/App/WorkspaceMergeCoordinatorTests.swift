@@ -15,6 +15,9 @@ private final class FakeMergeRunner: WorkspaceMergeCommandRunning, @unchecked Se
     /// Reports for a waiting merge's later runs, which pass `--head`, in
     /// order; the last one repeats.
     var waitingMergeResults: [WorkspaceMergeCommandResult] = []
+    /// Reports for clean-up runs, in order, before `scriptResults`; the
+    /// last one repeats.
+    var cleanUpResults: [WorkspaceMergeCommandResult] = []
     var onScript: [String: @MainActor () -> Void] = [:]
 
     /// Each `gh pr view` call takes the next state; the last one repeats.
@@ -51,6 +54,14 @@ private final class FakeMergeRunner: WorkspaceMergeCommandRunning, @unchecked Se
                 return result
             }
         }
+        if action == "clean-up" {
+            let result: WorkspaceMergeCommandResult? = lock.withLock {
+                cleanUpResults.count > 1 ? cleanUpResults.removeFirst() : cleanUpResults.first
+            }
+            if let result {
+                return result
+            }
+        }
         return scriptResults[action] ?? Self.report(status: "failed", detail: "no scripted result for \(action)")
     }
 
@@ -61,6 +72,25 @@ private final class FakeMergeRunner: WorkspaceMergeCommandRunning, @unchecked Se
         let data = try! JSONSerialization.data(withJSONObject: object)
         return WorkspaceMergeCommandResult(exitCode: 0, stdout: String(decoding: data, as: UTF8.self), stderr: "", failure: nil)
     }
+
+    /// The script exits as it does when `gh` cannot reach GitHub.
+    static let unreachable = WorkspaceMergeCommandResult(
+        exitCode: 1, stdout: "",
+        stderr: #"workspace-pull-request: gh repo view failed: Post "https://api.github.com/graphql": net/http: TLS handshake timeout"#,
+        failure: nil
+    )
+}
+
+/// The coordinator's clock, which a test moves forward.
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date = Date(timeIntervalSince1970: 1_800_000_000)
+
+    var now: Date { lock.withLock { date } }
+
+    func advance(by interval: TimeInterval) {
+        lock.withLock { date = date.addingTimeInterval(interval) }
+    }
 }
 
 @MainActor
@@ -70,6 +100,9 @@ private final class MergeFixture {
     let store: AppStore
     let sessionRuntimeStore = SessionRuntimeStore()
     let runner = FakeMergeRunner()
+    let clock = TestClock()
+    /// The coordinator's waits before a cleanup runs again; none by default.
+    var cleanupRetryDelays: [TimeInterval] = []
     let userDefaults: UserDefaults
     let taskWorkspaceID: UUID
     var notifications: [(title: String, body: String)] = []
@@ -119,6 +152,8 @@ private final class MergeFixture {
             scriptPath: #filePath,
             userDefaults: userDefaults,
             pollInterval: .milliseconds(10),
+            cleanupRetryDelays: cleanupRetryDelays,
+            now: { [clock] in clock.now },
             notify: { [unowned self] title, body in notifications.append((title, body)) }
         )
         coordinator.cleanupObserver = { [unowned self] _, event in events.append(event) }
@@ -679,6 +714,9 @@ struct WorkspaceMergeCoordinatorTests {
     @Test
     func skippedCleanupKeepsTheWorkspaceAndShowsWhy() async throws {
         let fixture = try MergeFixture()
+        // A refusal needs the user, so it never runs again by itself.
+        fixture.cleanupRetryDelays = [0]
+        fixture.makeCoordinator()
         fixture.runner.scriptResults["clean-up"] = FakeMergeRunner.report(
             status: "skipped",
             detail: "the worktree has uncommitted changes"
@@ -690,6 +728,102 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.request?.phase == .failed(reason: "the worktree has uncommitted changes"))
         #expect(fixture.store.state.workspacesByID[fixture.taskWorkspaceID] != nil)
         #expect(fixture.notifications.isEmpty)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fixture.runner.scriptCalls.count == 2)
+    }
+
+    @Test
+    func aCleanupThatCannotReachGitHubRunsAgainLaterAndSurvivesARelaunch() async throws {
+        let fixture = try MergeFixture()
+        fixture.cleanupRetryDelays = [60, 300]
+        fixture.makeCoordinator()
+        fixture.runner.cleanUpResults = [
+            FakeMergeRunner.unreachable,
+            FakeMergeRunner.report(status: "cleaned", detail: "closed fix-question-lifetime; removed worktree"),
+        ]
+        await fixture.mergeAndWait(pullRequestStates: ["MERGED"])
+
+        let retryAt = fixture.clock.now.addingTimeInterval(60)
+        try await fixture.waitUntil { fixture.request?.phase == .holdingCleanup(until: retryAt) }
+        #expect(fixture.request?.cleanupRetries == 1)
+        // Nothing asks the user: no stopped cleanup, no notification.
+        #expect(fixture.events.contains { if case .stopped = $0 { true } else { false } } == false)
+        #expect(fixture.notifications.isEmpty)
+
+        // The wait is saved, so a relaunch keeps it.
+        fixture.sessionRuntimeStore.setWorkspaceMergeRequests([:])
+        fixture.makeCoordinator()
+        #expect(fixture.request?.phase == .holdingCleanup(until: retryAt))
+        #expect(fixture.request?.cleanupRetries == 1)
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fixture.runner.scriptCalls.count == 2)
+
+        fixture.clock.advance(by: 60)
+        try await fixture.waitUntil { fixture.request == nil }
+        #expect(fixture.runner.scriptCalls.count == 3)
+        #expect(fixture.runner.scriptCalls.last == fixture.arguments("clean-up"))
+        #expect(fixture.events.contains(.cleaned(detail: "closed fix-question-lifetime; removed worktree")))
+        #expect(fixture.notifications.map(\.title) == ["Cleaned up PR #59"])
+    }
+
+    @Test
+    func aCleanupThatKeepsFailingStopsAfterItsRetriesAndAUserRetryStartsThemAgain() async throws {
+        let fixture = try MergeFixture()
+        fixture.cleanupRetryDelays = [0, 0]
+        fixture.makeCoordinator()
+        fixture.runner.cleanUpResults = [FakeMergeRunner.unreachable]
+        await fixture.mergeAndWait(pullRequestStates: ["MERGED"])
+
+        let reason = "The pull request script failed: workspace-pull-request: gh repo view failed: "
+            + #"Post "https://api.github.com/graphql": net/http: TLS handshake timeout"#
+        try await fixture.waitUntil { fixture.request?.phase == .failed(reason: reason) }
+        // The first run and two retries.
+        #expect(fixture.runner.scriptCalls.count == 4)
+        #expect(fixture.events.filter { $0 == .stopped(reason: reason) }.count == 1)
+
+        fixture.coordinator.retryCleanup(workspaceID: fixture.taskWorkspaceID, afterMerge: true)
+        #expect(fixture.request?.cleanupRetries == nil)
+        try await fixture.waitUntil { fixture.runner.scriptCalls.count == 7 && fixture.request?.phase == .failed(reason: reason) }
+    }
+
+    @Test
+    func failedPullRequestChecksAfterTheMergeCheckAgainLater() async throws {
+        let fixture = try MergeFixture()
+        fixture.cleanupRetryDelays = [60]
+        fixture.makeCoordinator()
+        fixture.runner.scriptResults["clean-up"] = FakeMergeRunner.report(status: "cleaned", detail: "removed worktree")
+        await fixture.mergeAndWait(pullRequestStates: [nil, nil, nil, "MERGED"])
+
+        try await fixture.waitUntil { fixture.request?.cleanupRetries == 1 }
+        #expect(fixture.request?.phase == .awaitingMerge)
+        try await Task.sleep(for: .milliseconds(50))
+        // No check runs before the retry is due.
+        #expect(fixture.runner.checkCalls.count == 3)
+        #expect(fixture.runner.scriptCalls.count == 1)
+
+        fixture.clock.advance(by: 60)
+        try await fixture.waitUntil { fixture.request == nil }
+        #expect(fixture.runner.checkCalls.count == 4)
+        #expect(fixture.notifications.map(\.title) == ["Cleaned up PR #59"])
+    }
+
+    @Test
+    func newWorkWhileACleanupWaitsToRunAgainDropsIt() async throws {
+        let fixture = try MergeFixture()
+        fixture.cleanupRetryDelays = [60]
+        fixture.makeCoordinator()
+        fixture.runner.cleanUpResults = [FakeMergeRunner.unreachable]
+        await fixture.mergeAndWait(pullRequestStates: ["MERGED"])
+        try await fixture.waitUntil { fixture.request?.cleanupRetries == 1 }
+
+        fixture.markDone(false)
+
+        #expect(fixture.request == nil)
+        fixture.clock.advance(by: 60)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fixture.runner.scriptCalls.count == 2)
+        #expect(fixture.store.state.workspacesByID[fixture.taskWorkspaceID] != nil)
     }
 
     @Test
@@ -793,7 +927,7 @@ struct WorkspaceMergeCoordinatorTests {
     func scriptOutcomeTreatsAFailedRunOrAMissingReportAsAFailure() {
         let failedScript = WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "Traceback\nKeyError: 'x'", failure: nil)
         #expect(WorkspaceMergeCoordinator.scriptOutcome(from: failedScript)
-            == .init(status: nil, detail: "The pull request script failed: KeyError: 'x'"))
+            == .init(status: nil, detail: "The pull request script failed: KeyError: 'x'", endedWithoutReport: true))
 
         let noReport = WorkspaceMergeCommandResult(exitCode: 0, stdout: "", stderr: "", failure: nil)
         #expect(WorkspaceMergeCoordinator.scriptOutcome(from: noReport).status == nil)

@@ -2500,7 +2500,12 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
    is not in a turn and no window shows the task space, Toastty closes the
    task space, removes the worktree and deletes the branch, the same way as the
    Merge button does for any other workspace. **Close Task Space** in the
-   task's menu does it at once. A prompt to the agent after the merge clears
+   task's menu does it at once. When the cleanup fails for a cause that can
+   pass, such as no network or a GitHub error, Toastty holds the task space
+   again and tries again after 1, 5, 15 and 30 minutes, before it moves the
+   task to Needs you with **Cleanup stopped**. A cleanup that stops for a
+   cause that needs you, such as uncommitted files in the worktree, moves
+   there at once. A prompt to the agent after the merge clears
    the task space's done mark, which cancels the wait: the task space stays
    until you close it. When you close the task space of a merged task
    yourself, Toastty removes the worktree and the local branch, with Archive's
