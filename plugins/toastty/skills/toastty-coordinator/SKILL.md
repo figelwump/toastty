@@ -438,8 +438,8 @@ COORDINATOR_MESSAGE_END
   lists the open and recent projects with their directories and workspace
   IDs. A project need not be on that list: `--root` takes any repository
   directory on this Mac, and Toastty opens a workspace for it. When the user
-  names a project that the list, policy and history do not give a directory
-  for, ask for its directory.
+  names a project without its directory, and the list, policy and history
+  do not give one, ask for the directory.
 - Add `--start-work` when the request says clearly what to change, or when a
   rule says to start work at once. Leave it out for a question or an
   investigation, and when the work needs shaping first.
