@@ -139,7 +139,8 @@ quiet.
      lists. When it was on 3 lists, remove its line, and name it under
      Dropped on that day's list; the user can ask for it again.
    - **Closes by default:** a question with a default for no answer, such as
-     the first-run question or a question about a rule, and a finished task
+     the first-run parts that are still open or a question about a rule,
+     and a finished task
      that you mark Done at the next list. It is on one list,
      which names the default. Keep its line, with `listed=1`, and do not list
      it again: the `asked first-run` line also keeps you from asking again.

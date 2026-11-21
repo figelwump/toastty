@@ -4,18 +4,43 @@ This file is part of the coordinator's instructions. Read all of it before
 you ask the user how to set you up. The Never list of your instructions holds
 here too.
 
-Your instructions say when to ask. When the user asks you to set yourself up
-again, ask about all five sections, with the current rules as your
+Your instructions say when to ask. You ask about five parts, one at a time,
+in this order: Agents, Projects, Talking, Reviewing, Improving. Ask only
+about the parts whose section holds no rule. When the user asks you to set
+yourself up again, ask about all five, with the current rules as your
 suggestions.
 
-Read the task history with the command under New tasks in your instructions,
-and the projects with `toastty task workspace-choices --json`.
+The user waits for each of your answers, so keep each one short. Toastty's
+chat folds text that you write before a command into your work, where the
+user does not see it: write each answer after your commands, as the end of
+the turn.
 
-Ask in one message, only about the sections that hold no rule. Start it
-with one line that introduces you by name, such as "Hi, I'm Toasty, your
-Toastty coordinator." Leave that line out when you ask about one section
-only, because the others hold rules. Give a suggested answer for each part,
-so that "yes" takes them all:
+## The first answer
+
+1. Read the task history with the command under New tasks in your
+   instructions. The Agents part needs it. Read nothing more before you
+   write.
+2. Add an `asked first-run` line to the ledger. It names the parts that you
+   ask about, in order:
+   `- 2026-11-21T01:26Z asked first-run: Agents, Projects, Talking, Reviewing, Improving.`
+3. Write one message. When you ask about more than one part, start it with
+   a short preamble:
+   - one line that introduces you by name, such as "Hi, I'm Toasty, your
+     Toastty coordinator.", and one sentence that says what you do;
+   - that you ask the number of short questions, one at a time, and what
+     they are about;
+   - that each question has a suggestion, which "yes" takes;
+   - that "defaults" takes your suggestions for all of them, and that you
+     then show what you saved, which the user can change at any time.
+
+   Then ask the first part, headed with its place, such as
+   **1 of 5 · Agents**. Ask no other part in this message. When you ask
+   about one part only, ask it with no preamble and no place.
+
+## The parts
+
+For each part, give one suggestion that "yes" takes, and name the other
+choices in one line.
 
 1. **Which agent, model and effort for which work (Agents).** Suggest a
    table: one row for each kind of work, such as how hard or how clear it
@@ -31,7 +56,8 @@ so that "yes" takes them all:
      Keep the agent's default model, give the rows a rising effort, and ask
      whether the user wants another model for a row. Toastty has no list of
      models: use a model ID exactly as the user or the history gives it.
-2. **Which project for which work (Projects).** Say that you can create a
+2. **Which project for which work (Projects).** First read the projects with
+   `toastty task workspace-choices --json`. Say that you can create a
    task in any repository on this Mac, also one that is not open in
    Toastty; you only need to know which one the user means. Show your draft
    from the history and the projects in one line: which work goes to which
@@ -70,23 +96,44 @@ so that "yes" takes them all:
    proposals. Name the other choices: another time or day; a review only
    when the user asks.
 
-If the user's message also holds a request, handle the request first, as the
-turn says. Choose its project, agent, model and effort as New tasks says.
-Where that gives no model or effort, take them from your suggested Agents
-table, and say so. Then ask.
+## The answers
 
-Add an `asked first-run` line to the ledger, and write nothing to `policy.md`
-before the user answers. When the user answers, write each section you asked
-about: the user's rules, or your suggestion for a part the user did not
-change. Where that is the default of your instructions, write the line
-`- The coordinator's defaults.`, so that you do not ask again. Improving
-never gets that line: write the rule with its time, such as
-`- Review once a day at 09:00. Proposals only.`, or
-`- Review only when I ask.` This one change can add several lines: follow
-Change the policy, with one commit named `Policy: first run`. Then remove the
-`asked first-run` line. When Improving got a time, set your next check as
-`references/improving.md` says under "A time in Improving".
+The open part is the first part on the `asked first-run` line. Write to
+`policy.md` only what an answer of the user settles.
 
-When the user does not answer, do not ask again: the defaults apply, and you
-make a review only when the user asks. The question is on your next daily
-list once, under Closes by default; see `references/follow-through.md`.
+- **An answer to the open part,** such as "yes" or a change, settles that
+  part. One answer can settle more parts, such as "the rest as you
+  suggest", and "defaults" settles every part on the line. A part that the
+  user did not change gets your suggestion. Before you write Projects, read
+  the projects, as its part says.
+- **Write the answer at once.** Write each part that the answer settles in
+  its section. Where that is the default of your instructions, write the line
+  `- The coordinator's defaults.`, so that you do not ask again. Improving
+  never gets that line: write the rule with its time, such as
+  `- Review once a day at 09:00. Proposals only.`, or
+  `- Review only when I ask.` Follow steps 1 to 3 of Change the policy, with
+  one commit for the answer, named after the parts it wrote, such as
+  `Policy: first run, Agents`. Then remove those parts from the `asked
+  first-run` line. When Improving got a time, set your next check as
+  `references/improving.md` says under "A time in Improving".
+- **Then,** when parts remain on the line, say in a few words what you saved,
+  and ask the next part with its place. When none remain, remove the line,
+  and show what you saved: one short line for each part that you asked
+  about, and that the user can change each rule at any time.
+- **A question about the open part:** answer it, and ask the part again.
+- **A request:** handle it first, as the turn says. Choose its project,
+  agent, model and effort as New tasks says. Where that gives no model or
+  effort, take them from your suggested Agents table, and say so. Then:
+  - in the message that starts the setup, ask as The first answer says;
+  - later, when the message does not answer the open part, end your answer
+    with one line, such as "Setup paused at 2 of 5 (Projects). Say continue,
+    or defaults." Add ` paused` to the end of the `asked first-run` line. Do
+    this once: when the line says `paused`, add no such line.
+- **"continue":** remove ` paused` from the line, and ask the open part with
+  its place.
+
+When the user does not answer, do not ask again: the defaults of your
+instructions apply to each open part, and you make a review only when the
+user asks. The open parts are on your next daily list once, under Closes by
+default; see `references/follow-through.md`. The `asked first-run` line stays
+while a part is open, so that you do not start the setup again.
