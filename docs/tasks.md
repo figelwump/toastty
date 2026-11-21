@@ -760,8 +760,9 @@ it waits for something else, fires with that reason. So does a watch for
 merging, until a new merge starts; see [Merge a task](#merge-a-task). A fired
 notification stays queued, including after a relaunch, until the receiving agent
 reports idle or ready at its prompt. Toastty waits while it detects a permission
-prompt, a question, or typing that may still be in the prompt. It submits one
-watch message per prompt. `toastty task watches` lists watches, with `--task` or
+prompt, a question, or typing that may still be in the prompt. Watches, scheduled
+wakes, and merge messages share one automatic submission per prompt.
+`toastty task watches` lists watches, with `--task` or
 `--notify` to filter them, and `toastty task unwatch <watch-id>` cancels one.
 Delivered watches stay listed for up to a day.
 
@@ -2220,11 +2221,10 @@ toastty task waiting --on "email replies; step 4 work on Dec 1" --wake 2026-12-0
 - `--wake` is optional. It takes an ISO 8601 time in the future. At that
   time, Toastty types one line into the terminal of the task's own agent,
   starting `[Toastty wake]`, that names the time and what the task waited
-  for. It types the line only while the agent's own report says that it
-  waits at its prompt, so never into a permission prompt; while no question
-  from `task needs-reply` waits for you; and while nobody typed in that
-  terminal since the agent's last turn ended, since that text can still be in
-  its prompt. Otherwise it tries again 30 seconds later. If Toastty was not
+  for. Toastty waits for the agent to report idle or ready and for the prompt
+  to be free of a tracked interaction or typing that may still be there.
+  A question from `task needs-reply` also holds the wake. Toastty tries again
+  30 seconds later when the wake has to wait. If Toastty was not
   running at that time, it sends the line after the next launch, once the
   agent runs. The mark clears when the turn that the line starts begins, so
   the agent runs `task waiting` again if the task still waits.
@@ -2445,9 +2445,10 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 1. Toastty sends the task's agent `Use the <merge_skill> skill.` when a
    `merge_skill` is set, then `merge_prompt` if one is set, then the pull
    request you accepted. With neither set, the skill is `toastty-task-merge`,
-   which Toastty ships. A busy
-   agent gets the message once its turn ends; with no agent in the task
-   space, Toastty starts the task's agent in a new tab there. The task shows "Merging…".
+   which Toastty ships. Toastty waits up to 30 minutes for the agent's prompt
+   to be ready and free of a tracked interaction or draft. With no agent in
+   the task space, Toastty starts the task's agent in a new tab there. The task
+   shows "Merging…".
 2. The skill checks what you cannot see at a glance: unresolved review threads,
    merge prerequisites in the description, tasks that must land first, and CI.
    If something blocks, it says why and ends its turn, and the task is back in
