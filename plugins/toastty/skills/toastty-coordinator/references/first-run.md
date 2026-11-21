@@ -17,13 +17,14 @@ the turn.
 
 ## The first answer
 
-1. Read the task history with the command under New tasks in your
-   instructions. The Agents part needs it. Read nothing more before you
-   write.
-2. Add an `asked first-run` line to the ledger, in place of an earlier one.
-   It names the parts that you ask about, in order:
-   `- 2026-11-21T01:26Z asked first-run: Agents, Projects, Talking, Reviewing, Improving.`
-3. Write one message. When you ask about more than one part, start it with
+1. Each step costs the user seconds, so do these two in one step, with both
+   commands at once, and read nothing more before you write:
+   - add an `asked first-run` line to the ledger, in place of an earlier
+     one. It names the parts that you ask about, in order:
+     `- 2026-11-21T01:26Z asked first-run: Agents, Projects, Talking, Reviewing, Improving.`
+   - when you ask about Agents, read the task history with the command
+     under New tasks in your instructions.
+2. Write one message. When you ask about more than one part, start it with
    a short preamble:
    - one line that introduces you by name, such as "Hi, I'm Toasty, your
      Toastty coordinator.", and one sentence that says what you do;
