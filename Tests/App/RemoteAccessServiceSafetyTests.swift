@@ -4781,6 +4781,7 @@ extension RemoteAccessServiceSafetyTests {
             #expect(delivered.isEmpty)
             // Answering the modal from the keyboard does not mark the turn's
             // composer as a draft. The turn's input epoch is closed here.
+            fixture.terminalRuntimeRegistry.bind(sessionLifecycleTracker: fixture.sessionRuntimeStore)
             fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
             #expect(fixture.sessionRuntimeStore.lastUserInputAt(panelID: fixture.panelID) != nil)
             observeClaude(.transcript(.toolFinished(.init(callID: "approval-1"))),
