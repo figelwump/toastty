@@ -31,10 +31,18 @@ so that "yes" takes them all:
      Keep the agent's default model, give the rows a rising effort, and ask
      whether the user wants another model for a row. Toastty has no list of
      models: use a model ID exactly as the user or the history gives it.
-2. **Which project for which work (Projects).** Draft it from the history and
-   the projects. Ask about it only when more than one project is open or
-   recent and the history does not show which work goes where. Otherwise,
-   show the draft in one line.
+2. **Which project for which work (Projects).** Say that you can create a
+   task in any repository on this Mac, also one that is not open in
+   Toastty; you only need to know which one the user means. Show your draft
+   from the history and the projects in one line: which work goes to which
+   project. The draft is the first rules in both ways below: write each of
+   its projects as a rule, with its directory. Then offer two ways, and
+   suggest the second:
+   - the user gives the common projects now, each with its directory and
+     the kind of work that goes there;
+   - the rules build up: the user names the project in a request, you ask
+     when you are not sure, and you learn from the answer as New tasks
+     says.
 3. **How you answer (Talking).** Suggest the defaults of your instructions: a
    task for every question and every piece of work, except questions about
    where the tasks stand; short answers; only what needs the user; and each
