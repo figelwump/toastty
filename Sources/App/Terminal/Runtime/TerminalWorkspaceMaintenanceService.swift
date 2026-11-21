@@ -192,7 +192,7 @@ final class TerminalWorkspaceMaintenanceService {
         }
 
         let promptState = GhosttySurfaceSemanticState.promptState(for: controller.currentGhosttySurface())
-        if let visibleText = controller.automationReadVisibleText() {
+        if let visibleText = controller.readActiveScreenText() {
             _ = sessionLifecycleTracker?.refreshManagedSessionStatusFromVisibleTextIfNeeded(
                 panelID: panelID,
                 visibleText: visibleText,

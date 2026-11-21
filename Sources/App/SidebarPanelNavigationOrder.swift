@@ -1,8 +1,15 @@
 import CoreState
 import Foundation
 
-/// Navigation follows the sidebar's model order, including rows in collapsed
-/// subspaces. Panels without session rows remain reachable after those rows.
+/// Navigation follows the sidebar's order, including rows in collapsed
+/// subspaces. Task spaces keep the window's workspace order, with a task
+/// space drawn under the task that started it, so the order does not change
+/// while the user jumps. Panels without session rows remain reachable after
+/// those rows.
+///
+/// The coordinator's workspace is left out: its chat shows in the dock
+/// beside the user's tasks, and its toolbar button shows when it needs the
+/// user. Jump to Next Active stays about the tasks.
 @MainActor
 struct SidebarPanelNavigationOrder {
     let forward: [PanelNavigationTarget]
@@ -13,7 +20,7 @@ struct SidebarPanelNavigationOrder {
     init(
         state: AppState,
         sessionRegistry: SessionRegistry?,
-        displayedSubspaceOrderByParentID: [UUID: [UUID]],
+        linkedParentID: (UUID) -> UUID? = { _ in nil },
         windowID: UUID,
         workspaceID: UUID,
         focusedPanelID: UUID?
@@ -24,11 +31,13 @@ struct SidebarPanelNavigationOrder {
             return
         }
 
+        // One reader for every workspace of every window.
+        let statusReader = sessionRegistry.map(SessionRegistry.WorkspaceStatusReader.init)
         let current = Self.targets(
             in: state,
             windowID: windowID,
-            sessionRegistry: sessionRegistry,
-            displayedSubspaceOrderByParentID: displayedSubspaceOrderByParentID
+            statusReader: statusReader,
+            linkedParentID: linkedParentID
         )
         let focusedIndex = current.targets.firstIndex { $0.panelID == focusedPanelID }
         let hasSessionRows = current.targets.contains {
@@ -54,8 +63,8 @@ struct SidebarPanelNavigationOrder {
             forwardTargets += Self.targets(
                 in: state,
                 windowID: window.id,
-                sessionRegistry: sessionRegistry,
-                displayedSubspaceOrderByParentID: displayedSubspaceOrderByParentID
+                statusReader: statusReader,
+                linkedParentID: linkedParentID
             ).targets
         }
         var seenPanelIDs = Set<UUID>()
@@ -66,20 +75,20 @@ struct SidebarPanelNavigationOrder {
     private static func targets(
         in state: AppState,
         windowID: UUID,
-        sessionRegistry: SessionRegistry?,
-        displayedSubspaceOrderByParentID: [UUID: [UUID]]
+        statusReader: SessionRegistry.WorkspaceStatusReader?,
+        linkedParentID: (UUID) -> UUID?
     ) -> (targets: [PanelNavigationTarget], sessionPanelIDs: Set<UUID>, workspaceIDs: [UUID]) {
         guard let window = state.window(id: windowID) else { return ([], [], []) }
+        let coordinatorWorkspaceID = state.coordinatorWorkspaceID
         var workspaceIDs = state.topLevelWorkspaceIDs(in: windowID).flatMap { parentID in
-            let subspaceIDs = state.subspaceWorkspaceIDs(of: parentID)
-            let displayedIDs = displayedSubspaceOrderByParentID[parentID] ?? []
-            let validIDs = Set(subspaceIDs)
-            var placedIDs = Set<UUID>()
-            let orderedIDs = (displayedIDs + subspaceIDs).filter { validIDs.contains($0) && placedIDs.insert($0).inserted }
-            return [parentID] + orderedIDs
+            [parentID] + SidebarSubspacePresentation.groupingLinkedChildren(
+                state.subspaceWorkspaceIDs(of: parentID),
+                id: { $0 },
+                linkedParentID: linkedParentID
+            )
         }
         let sidebarWorkspaceIDs = Set(workspaceIDs)
-        workspaceIDs += window.workspaceIDs.filter { !sidebarWorkspaceIDs.contains($0) }
+        workspaceIDs += window.workspaceIDs.filter { !sidebarWorkspaceIDs.contains($0) && $0 != coordinatorWorkspaceID }
         var targets: [PanelNavigationTarget] = []
         var seenPanelIDs = Set<UUID>()
         var sessionPanelIDs = Set<UUID>()
@@ -99,7 +108,7 @@ struct SidebarPanelNavigationOrder {
                 }
             }
             let statuses = SidebarSessionPresentation.orderedStatuses(
-                sessionRegistry?.workspaceStatuses(for: workspaceID) ?? [],
+                statusReader?.statuses(for: workspaceID) ?? [],
                 panelOrder: workspace.sidebarSessionPanelOrder
             )
             for status in statuses {

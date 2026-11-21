@@ -16,7 +16,7 @@
 //   <name>.png         one PNG per --stills entry: the padded stage at that time, or only the
 //                      element matching @selector (e.g. sidebar=0@.sbdemo, annotate=11.7@.rp)
 //   social-preview.png 1200x630 card, with --social. Its close-up defaults to the poster's
-//                      sidebar; --social-image and --social-crop (pixels) use another image,
+//                      sidebar and coordinator dock; --social-image and --social-crop (pixels) use another image,
 //                      such as sidebar.png from capture-demo-screenshots.sh.
 // For --target mobile the same files are toastty-mobile.mp4 (portrait, width --width, default
 // 1080), mobile-poster.png, mobile-<name>.png, and mobile-social.png (the phone poster beside
@@ -102,13 +102,17 @@ try {
   const hero = await page.evaluate(`({ duration: ${target.api}.duration, poster: ${target.api}.poster })`);
 
   writeFileSync(join(outDir, target.poster), await capture(hero.poster, true));
-  // Sidebar region of the hero poster (in poster pixels) for the social card's close-up.
+  // The hero poster's sidebar and coordinator dock (in poster pixels) for the social card's
+  // close-up: from the sidebar's All | Needs you switch down to the dock's message field, so the
+  // Needs you list with the ready row and the coordinator's note about it all show.
   const sidebarCrop = target !== TARGETS.hero ? null : await page.evaluate(`(() => {
     const sb = document.querySelector('.sb').getBoundingClientRect();
-    const docs = document.getElementById('card-docs').getBoundingClientRect();
-    // Start a few pixels inside the window so its rounded corner and the page background stay out.
-    const x = sb.left - ${clip.x} + 6, y = sb.top + window.scrollY - ${clip.y} + 6;
-    return [x, y, sb.width + 34, docs.bottom + window.scrollY - ${clip.y} - y + 12].map((v) => Math.round(v * ${SCALE}));
+    const dock = document.querySelector('.dock').getBoundingClientRect();
+    const win = document.querySelector('.win').getBoundingClientRect();
+    const top = document.querySelector('.sb .side-seg').getBoundingClientRect();
+    // Stay a few pixels inside the window so its rounded corner and the page background stay out.
+    const x = sb.left - ${clip.x} + 6, y = top.top + window.scrollY - ${clip.y} - 3;
+    return [x, y, dock.right - sb.left - 6, win.bottom + window.scrollY - ${clip.y} - y - 6].map((v) => Math.round(v * ${SCALE}));
   })()`);
   for (const { name, t, selector } of stills) {
     writeFileSync(join(outDir, target.still(name)), await capture(t, true, selector));

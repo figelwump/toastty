@@ -272,7 +272,7 @@ struct SetupCommandRunnerTests {
     func setupRunnerRendersGuideFromResourceStore() throws {
         let setupURL = try makeTemporarySetupResources()
         defer { try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent()) }
-        let store = SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: setupURL)
+        let store = SetupResourceStore(setupDirectoryURL: setupURL)
 
         let guideText = try SetupCommandRunner.render(
             command: .guide(topic: .onboarding, format: .text),
@@ -301,13 +301,12 @@ struct SetupCommandRunnerTests {
     func setupRunnerRendersWorkflowGuideTopic() throws {
         let setupURL = try makeTemporarySetupResources()
         defer { try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent()) }
-        try "# Workflow Guide\n\nExamples live in {{WORKFLOW_EXAMPLES_DIR}}.\n".write(
+        try "# Workflow Guide\n\nStart narrow.\n".write(
             to: setupURL.appendingPathComponent("workflow-guide.md", isDirectory: false),
             atomically: true,
             encoding: .utf8
         )
-        let examplesURL = URL(fileURLWithPath: "/Applications/Toastty.app/Contents/Resources/WorkflowExamples/skills", isDirectory: true)
-        let store = SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: examplesURL)
+        let store = SetupResourceStore(setupDirectoryURL: setupURL)
 
         let text = try SetupCommandRunner.render(
             command: .guide(topic: .workflows, format: .text),
@@ -315,8 +314,7 @@ struct SetupCommandRunnerTests {
             store: store
         )
         #expect(text.hasPrefix("Workflow Guide"))
-        #expect(text.contains("Examples live in \(examplesURL.path)."))
-        #expect(text.contains("{{") == false)
+        #expect(text.contains("Start narrow."))
 
         let json = try SetupCommandRunner.render(
             command: .guide(topic: .workflows, format: .md),
@@ -344,7 +342,7 @@ struct SetupCommandRunnerTests {
         let environment = [
             ToasttyLaunchContextEnvironment.userSkillsRootKey: skillsRoot.path,
         ]
-        let store = SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: setupURL)
+        let store = SetupResourceStore(setupDirectoryURL: setupURL)
 
         let text = try SetupCommandRunner.render(
             command: .skillsList,
@@ -400,7 +398,7 @@ struct SetupCommandRunnerTests {
         let text = try SetupCommandRunner.render(
             command: .skillsList,
             jsonOutput: false,
-            store: SetupResourceStore(setupDirectoryURL: setupURL, workflowExamplesDirectoryURL: setupURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL),
             environment: [
                 ToasttyLaunchContextEnvironment.userSkillsRootKey: missingRoot.path,
             ]

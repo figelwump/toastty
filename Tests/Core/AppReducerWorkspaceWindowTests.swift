@@ -737,6 +737,35 @@ extension AppReducerTests {
     }
 
     @Test
+    func closeWorkspaceSelectsANeighborOtherThanTheCoordinator() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let projectID = try #require(state.windows.first?.workspaceIDs.first)
+        let lastID = try #require(state.windows.first?.workspaceIDs.last)
+        // The coordinator's workspace is appended, so a task space made
+        // later sits after it: [project, last, coordinator, task].
+        #expect(reducer.send(.createCoordinatorWorkspace(
+            windowID: windowID, workspaceID: UUID(), panelID: UUID(), terminalCWD: "/tmp/coordinator"
+        ), state: &state))
+        let coordinatorID = try #require(state.coordinatorWorkspaceID)
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "task", activate: true), state: &state))
+        let taskID = try #require(state.windows.first?.workspaceIDs.last)
+        #expect(state.windows.first?.selectedWorkspaceID == taskID)
+
+        // Closing the last workspace selects the one before the coordinator.
+        #expect(reducer.send(.closeWorkspace(workspaceID: taskID), state: &state))
+        #expect(state.windows.first?.selectedWorkspaceID == lastID)
+        // Closing the workspace before the coordinator skips it too.
+        #expect(reducer.send(.closeWorkspace(workspaceID: lastID), state: &state))
+        #expect(state.windows.first?.selectedWorkspaceID == projectID)
+        // The coordinator is selected only when no other workspace is left.
+        #expect(reducer.send(.closeWorkspace(workspaceID: projectID), state: &state))
+        #expect(state.windows.first?.selectedWorkspaceID == coordinatorID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func closeLastWorkspaceKeepsEmptyWindow() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

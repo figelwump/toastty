@@ -32,6 +32,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFileInSplit
     case newScratchpad
     case showScratchpadForCurrentSession
+    case newTask
+    case toggleTasksView
     case toggleSidebar
     case toggleRightPanel
     case toggleFocusedPanelMode
@@ -56,6 +58,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case sendDiagnostics
     case reloadConfiguration
 
+    private static let showTasksTitle = "Show Tasks"
+    private static let hideTasksTitle = "Hide Tasks"
     private static let showSidebarTitle = "Show Sidebar"
     private static let hideSidebarTitle = "Hide Sidebar"
     private static let showRightPanelTitle = "Show Right Panel"
@@ -122,6 +126,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "local-document.open-split"
         case .newScratchpad:
             return "scratchpad.create"
+        case .newTask:
+            return "task.new"
+        case .toggleTasksView:
+            return "window.toggle-tasks-view"
         case .showScratchpadForCurrentSession:
             return "scratchpad.show-current-session"
         case .toggleSidebar:
@@ -230,6 +238,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Open Local File in Split"
         case .newScratchpad:
             return "New Scratchpad"
+        case .newTask:
+            return "New Task…"
+        case .toggleTasksView:
+            return Self.showTasksTitle
         case .showScratchpadForCurrentSession:
             return "Show Scratchpad For Current Session"
         case .toggleSidebar:
@@ -337,6 +349,12 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.newScratchpad
         case .showScratchpadForCurrentSession:
             return nil
+        case .newTask:
+            // The global quick entry shortcut comes from tasks.toml; menus
+            // and the palette read it from QuickEntryController.
+            return nil
+        case .toggleTasksView:
+            return ToasttyKeyboardShortcuts.toggleTasksView
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
         case .toggleRightPanel:
@@ -447,6 +465,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["scratchpad", "new", "create", "visual", "canvas", "diagram", "wireframe"]
         case .showScratchpadForCurrentSession:
             return ["scratchpad", "show", "current", "session", "agent", "visual"]
+        case .newTask:
+            return ["task", "new", "create", "quick", "entry", "inbox", "todo", "capture"]
+        case .toggleTasksView:
+            return ["tasks", "task", "show", "hide", "view", "board", "toggle"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleRightPanel:
@@ -494,6 +516,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .reloadConfiguration:
             return ["reload", "configuration", "config", "preferences"]
         }
+    }
+
+    static func toggleTasksViewTitle(tasksViewShown: Bool) -> String {
+        tasksViewShown ? hideTasksTitle : showTasksTitle
     }
 
     static func toggleSidebarTitle(sidebarVisible: Bool) -> String {

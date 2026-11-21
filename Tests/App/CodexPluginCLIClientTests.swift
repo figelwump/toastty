@@ -134,6 +134,18 @@ final class CodexPluginCLIClientTests: XCTestCase {
         XCTAssertEqual(runtime.processEnvironment.path, "\(binURL.path):/usr/bin:/bin")
     }
 
+    func testRuntimeLocatorUsesTheConfiguredExecutableEvenWhenItIsNotOnPath() throws {
+        let runtime = try CodexIntegrationRuntimeLocator.resolve(
+            environment: ["PATH": "/no-codex-here", "CODEX_HOME": "/tmp/custom-codex-home"],
+            executableURL: URL(fileURLWithPath: "/bin/sh")
+        )
+        XCTAssertEqual(runtime.executableURL.path, "/bin/sh")
+        XCTAssertEqual(runtime.codexHomeURL.path, "/tmp/custom-codex-home")
+        XCTAssertThrowsError(try CodexIntegrationRuntimeLocator.resolve(
+            executableURL: URL(fileURLWithPath: "/missing/configured-codex")
+        ), "An unavailable explicit executable must not fall back to another installation")
+    }
+
     func testDecodesMarketplaceAndInstalledPluginJSON() throws {
         let executor = RecordingPluginCLIExecutor(responses: [
             ["plugin", "marketplace", "list", "--json"]: #"{"marketplaces":[{"name":"toastty","root":"/tmp/market","marketplaceSource":{"sourceType":"path","source":"/tmp/market"}}]}"#,

@@ -1,0 +1,371 @@
+---
+name: toastty-task-start
+description: Use when a Toastty task's first message names this skill, and in any Toastty-managed session when the user asks to start implementing, start work, move the work into a worktree, or split agreed work into separate tasks. Takes a task from the user's request to the user's review - clarify, move implementation into its own git worktree with `toastty task start-work`, implement and verify, publish the pull request and evidence, and set the task's status.
+---
+
+# Toastty Task Start
+
+Toastty runs each task in its own task space. The task's agent owns the task
+from the user's request to the user's review: it reports progress, questions
+and results to the user in that task space.
+
+Run the Toastty commands below as written: `toastty`, then the command words,
+then the arguments. Where a command has `--json`, it comes after the command
+words, as in `toastty task get --json`. Toastty puts `toastty` on `PATH` in each
+agent session it manages, and the user's allow rules match this form. If
+`toastty` is not found, run `"$TOASTTY_CLI_PATH"` in its place. If that is not
+set either, report that this skill
+must run inside a Toastty-managed agent session, and stop.
+
+## Sandbox permissions
+
+Every Toastty CLI command in this skill connects to the app's local socket,
+and `git push` and `gh` need the network. In a sandboxed runtime, request the
+runtime's per-command sandbox escalation for these commands on the first
+attempt. Do not try the command sandboxed first.
+
+In Codex, use `sandbox_permissions="require_escalated"` with a short
+justification that the command needs Toastty's local socket or the network.
+Escalation runs that invocation outside the sandbox; it does not restrict
+access to one socket. Limit the request to the exact command. Do not request a
+broad approval prefix, change sandbox settings, or widen Toastty's workspace
+scope. If escalation is unavailable or denied by runtime policy or approval
+review, report the restriction and stop.
+
+## Which instructions win
+
+The task's first message can have text from the user's `start_prompt` between
+the skill line and the task. The repository has its own instructions, such as
+`AGENTS.md` or `CLAUDE.md`, for building, testing, review, commits and pull
+requests. Both take precedence over this skill where they differ. This skill
+gives the defaults and Toastty's own rules.
+
+## Name other tasks by title
+
+Name another task by its `markdownLink`, `[title](toastty://task/<id>)`, from
+`task get` or `task list`, wherever a person or another agent reads it: your
+replies, task messages, a child task's brief, and plan or notes files.
+Toastty's chats on the Mac and the iPhone draw that link as a chip with the
+task's current title and stage; a bare ID stays plain text that the user must
+look up. GitHub drops the link, so in a pull request write the title, and link
+the task's pull request when it has one. Use the ID only where a command
+takes a task ID, not in the text of a message. Before you send a reply, a
+message or a brief, replace every other task ID with the task's link.
+
+## Show suggested UI changes as mockups
+
+When you suggest a change to a UI, a design, or a user experience, at any step
+of the task, include a mockup of it in the same answer. Publish it in a
+Scratchpad in this task workspace, as `toastty-scratchpad` describes, and keep
+it separate from the verification report. Do not describe the change only in
+words. Show the current UI next to the change when that makes the difference
+clear. If you are not sure which direction is best, mock up a few directions
+next to each other and recommend one.
+
+## 1. Read the request and check the location
+
+The text after the skill line, or after "The task, as written:", is the user's
+request. The user often writes it quickly and without context. The message
+lists any attached files with their paths; read them.
+
+When the task already runs in a worktree, the first message names the
+worktree, its branch and its base. Without that line, you are in the
+project's own checkout, not in a worktree: do not edit files there. If the
+directory or branch does not match the message, stop and say what you found.
+
+If the request is for a different repository than this task's project, say so
+and ask the user how to continue. `task set-workspace` does not move a task
+that has started. When the user agrees, create a child task in that project
+with `task create --workspace <id> --start-work` (see
+[Split work into new tasks](#split-work-into-new-tasks));
+`task workspace-choices` lists the workspace IDs.
+
+## 2. Clarify
+
+Read the code and documents the task touches. Then ask the user, in one
+message, only the questions whose answers change the scope, the approach, or
+how the user will accept the work. Give your recommended answer for each
+question, and wait for the reply. If nothing is unclear, state the plan in two
+or three lines and continue without waiting.
+
+## 3. Choose where to work
+
+- **A question or an investigation:** answer it here. Do not move it into a
+  worktree, and do not edit files. Then report and set the status (step 7).
+- **Implementation work:** move this task into its own worktree, as the next
+  section describes.
+- **Parts that should land as separate pull requests, or work in another
+  repository:** give each part its own task (see
+  [Split work into new tasks](#split-work-into-new-tasks)).
+
+The user's request authorizes the work within its stated scope. A merge
+requires the user's explicit approval or a user-approved Merging rule that
+covers it, as `toastty-task-merge` describes. Deployment, production changes
+and deleting the user's data still need the user's explicit approval.
+
+## Move this task into a worktree
+
+1. Choose a branch prefix that describes the work and follows the repository's
+   conventions, such as `feat`, `fix`, `refactor`, `docs`, or `chore`. Add
+   `--base <branch>` only when the work must start from something other than
+   the remote's default branch, such as a feature branch the work lands on or
+   the branch of a stacked pull request.
+2. Run `toastty task start-work --branch-prefix <prefix>`. In a
+   session that is not a task yet, also pass `--title "<short title>"`.
+3. If the command fails, report its error and stop. Otherwise end your turn
+   at once with one short line saying that the work continues in the worktree.
+   Run nothing else: Toastty waits for this turn to end, continues this
+   conversation in a new session in the worktree, and then closes this one.
+
+The continued session's first message names its worktree, branch and base.
+Work only there, and do not run `start-work` again. If the move fails, the task
+shows in the sidebar Inbox with the reason, and `toastty task get <task-id>`
+reports it under `worktree`. The user can retry from the Inbox or with
+`toastty task retry <task-id>`.
+
+## 4. Implement and verify
+
+Toastty runs the project's `create_hook` in a new worktree. If the repository's
+instructions name a setup step for a fresh worktree that the hook did not run,
+such as a bootstrap script, run it before you build or test.
+
+Follow the repository's instructions for design, code style, tests, review and
+commits. Then verify the work before you report it ready:
+
+- Run the checks the repository requires, and the smallest set of tests that
+  covers the changed behavior. Use the repository's verification skill or
+  documented workflow when it has one.
+- For a change the user can see or use, check it through the real surface
+  where practical: the app, the CLI, the API or the browser.
+- Record what you ran, on which commit, and what happened. A plan or code
+  alone is not completion, and a summary without output is not proof.
+
+Commit only the changes for this task.
+
+## 5. Publish the pull request
+
+In a repository that uses pull requests, push the task's branch and open or
+update its pull request on the base the worktree started from, unless the user
+limited publication. Keep it a draft while required checks run, and mark it
+ready when they pass. Readiness does not authorize a merge.
+
+Toastty reads pull requests only from GitHub, through `gh`. Before you publish
+the first time, check whether the remote you push to is on `github.com`.
+
+- **The pull request is not on GitHub:** open it as the repository's
+  instructions say; `gh` is not needed. Annotate the workspace with another
+  key, such as `merge-request`, never `github-pr`. Toastty cannot read it, so
+  when the pull request is ready, run `task ready-for-review` as step 7
+  describes. The user merges it on its host; Toastty's Merge does not apply.
+  Skip the GitHub steps below.
+- **On GitHub, check `gh auth status` once.** If `gh` is missing or not signed
+  in, push the branch, then ask the user to install `gh` or run
+  `gh auth login`, with `task needs-reply` (step 7). Do not open the pull
+  request another way.
+
+On GitHub:
+
+- Set the workspace's `github-pr` annotation to the pull request, as
+  `toastty-capabilities` describes. Toastty reads the pull request from it: the
+  task shows as ready for review while the pull request is open, not a draft,
+  and no agent works on it. Do not run `task ready-for-review` for work with a
+  GitHub pull request.
+- Open the pull request in a browser panel in this task workspace's right
+  panel, as `toastty-capabilities` describes. Reuse a panel that already shows
+  it.
+- Follow the pull request's checks to their result. Use one waiter, such as
+  `gh pr checks --watch`, and keep the turn active until it returns. Pending
+  checks are not a blocker and not a reason to hand off. Only results for the
+  pull request's current head commit count. When checks are expected, an
+  empty check list, or a waiter that exits before the checks start, is not a
+  pass. If no checks apply, or they start only when the pull request is
+  marked ready, follow the repository's readiness rule. An error from the query
+  is an error, not a pending result. Marking the pull request ready can start
+  more checks: follow those too. If a check fails, fix it within the task's
+  scope and check again.
+- After later changes, update the pull request's description and the evidence
+  for the new commit.
+- **Work that remains after the merge.** When work in this task's scope goes
+  on after the pull request merges, such as a rollout, a later step or a fix
+  that you found, add a section `## Remaining after merge` to the
+  description: what remains, its plan, and the open questions with the
+  answers you suggest. Toastty removes the worktree after the merge, and its
+  ignored files with it: never keep such a plan only in an ignored folder,
+  such as an `artifacts/` folder if the repository has one. The coordinator,
+  when one runs, then continues the work in a new task.
+- **When Toastty cleans up.** After the pull request merges, by Toastty or on
+  GitHub, Toastty closes this task space, removes the worktree and deletes
+  the branch 24 hours after the merge, at the first check when no agent turn
+  runs. `toastty task get` reports that time as `cleanup.taskSpaceClosesAt`.
+  A new turn in the task space after the merge, or a `github-pr` link to
+  another pull request, keeps the task space open. When the recorded worktree
+  is on a different branch, cleanup keeps the pull request's local branch and
+  both remote branches. It keeps the local task branch if it cannot verify
+  that its commits are on origin.
+
+In a repository without pull requests, report the verified commit instead.
+
+## 6. Show the evidence
+
+For implementation work, publish one verification report in this task
+workspace's Scratchpad, as `toastty-scratchpad` describes.
+
+- Lead with the result in plain language. In a short summary that stands on
+  its own, include the problem or requested feature, the cause when known,
+  and what changed. Keep material failures, coverage gaps, and decisions
+  visible near the top.
+- Show screenshots or video for visual changes. Put the key verification
+  screenshots and videos directly below the summary and any material
+  failures, gaps, or decisions. Caption each capture with what it proves.
+  Point to each key capture from the checks it supports. Keep supporting
+  captures with their checks.
+- Group checks by behavior in a short list or table with the outcome and test
+  target. Give the checked commit for each check, stating it once when checks
+  share it. Keep commands or user steps and inspectable proof with each check.
+  Put long output in an expandable section. Size the proof to the change.
+  Link each material change and risk to the check that covers it, or mark it
+  as not covered.
+- Look at the screenshots and video yourself, and confirm that they show in
+  the report.
+- After later changes, refresh the same report so it names the current commit.
+- Open the pull request's panel before you publish the final version of the
+  report, so that the report is the selected tab in the right panel. Do not
+  publish it again only to select it.
+- Do not change the user's selected workspace, tab or keyboard focus to show
+  the report or the pull request.
+
+This task owns the report, also when child tasks do the work. A child's summary,
+or a report in the child's own workspace, is not proof: read the child's
+evidence files yourself, check them, and publish the report with its proof here.
+
+## 7. Report and set the status
+
+Prepare the complete answer before you change the status. Finish with what you
+found or changed, how you verified it, what remains and who owns it, and the
+task's status. Put work that goes on after a merge under the heading
+`Remaining after merge`, as in the description. Point to the evidence in this
+task's Scratchpad.
+
+- **A question for the user:** run
+  `toastty task needs-reply --question "<the question in a few words>"`
+  just before you end the turn. The task then waits in Needs you until the
+  user answers. Also use it for blocked work, and report the blocker and the
+  next action. Use it when continuing this task depends on the user's
+  decision about a proposed change or plan, even when the explanation or
+  investigation is complete. State the decision needed in your final answer.
+  Check the conversation first: if the user already authorized the work,
+  continue within that scope instead of asking for the same approval again.
+- **A completed answer, investigation, plan, or other work without a GitHub
+  pull request:** use this only when the requested work is complete and the
+  task does not wait for a decision to continue that work. A request only for an
+  answer, investigation, or plan can be complete when delivered, even if it
+  suggests possible future work. An explanation or proposed fix alone does
+  not complete requested or authorized implementation. Mark the task ready
+  for review, so that the user can read the result and follow up before
+  deciding the task is Done. Run
+  `toastty task get --json` and confirm that its request matches
+  this conversation. Then run
+  `toastty task ready-for-review --json <task-id>`, require
+  `ok=true`, and read the task again to confirm `readyForReviewAt` is set and
+  `doneAt` is null. If you cannot verify the task's identity, do not change
+  it, and say so.
+- **Work with a GitHub pull request:** the user accepts it with the Merge
+  button or by saying "merge it", which runs `toastty-task-merge`. Do not merge
+  it yourself, and do not mark the task Done.
+- **Work in child tasks:** do not mark this task ready for review or Done.
+  Before merging any child, use the coordinating-tasks procedure in
+  `toastty-task-merge` to confirm permission and check the work and its proof.
+  Toastty finishes it when its children finish and at least one of them
+  merged. A ready-for-review mark from before the newest child task does not
+  keep it open. A pending `task watch` on a child keeps it open. If this task
+  still owns work after its children merge, and that work waits on something
+  outside Toastty, such as an email reply or a date, mark it with
+  `task waiting` before you end the turn (see
+  [Wait for other tasks](#wait-for-other-tasks)). Use `task needs-reply`
+  only for a real question for the user: it puts the task in Needs you.
+- **Done:** mark a task Done only when the user explicitly accepts the result
+  and asks to finish it. Answering the question, finishing a turn, or having
+  no file changes is not acceptance. Use `task mark-done <task-id>`.
+
+## Split work into new tasks
+
+When the agreed plan has parts that should land as separate pull requests, give
+each part its own task:
+
+```bash
+toastty task create "<one-line summary>" --start-work \
+  --agent <profile> --model <model> --effort <effort> \
+  --prompt-file <brief.md> [--title <title>] [--slug <slug>] \
+  [--branch-prefix <prefix>] [--base <branch>] [--workspace <id>]
+```
+
+- Choose the agent, model and effort for the part. You know the work, so Toastty
+  does not need to choose them.
+- Put everything the new agent needs in the prompt file: the goal, decisions
+  already made, where to start, what done means, and the authorization the user
+  gave, such as publishing a pull request. In the brief, name tasks by their
+  `markdownLink`, so the new agent names them the same way.
+- Use `--base` with a branch on the remote for work that builds on another
+  part's branch.
+- Each call returns a task ID while setup continues. Check one with
+  `toastty task get <task-id>`, or add `--wait` to wait until its agent starts.
+- The new tasks record this one as their parent. Coordinate them from here.
+- Toastty tells each new task which task created it, as a link, and how to
+  report to it with `toastty task send`. In the brief, say what to report:
+  the paths of the new task's verification report and evidence files, such as
+  screenshots and test output.
+
+This needs this session to be a task, so that the new tasks record it as
+their parent and can report to it. `toastty task get` with no ID fails in a
+session that is not a task. Then, in a task space, run `toastty task adopt`
+first; in a top-level workspace, move the work into a task first with
+`task start-work --title` (see
+[Move this task into a worktree](#move-this-task-into-a-worktree)). If the
+user does not want that, the new tasks have no parent and no report step:
+check them with `toastty task get <task-id>`.
+
+## Wait for other tasks
+
+Do not poll in a shell loop. To continue when another task reaches a point,
+run `toastty task watch <task-id> --until <condition>` and end your
+turn. Toastty sends you one line, starting `[Toastty watch`, when the condition
+holds or can never hold. Conditions: `idle` (its agent finished a turn after
+you started watching), `waiting` (it waits for an approval or an answer),
+`ready-for-review`, `merged`, `to-ship`, `done`, or `archived`.
+
+Toastty can send that line only to a task's agent. In a session that is not
+a task, add `--wait --timeout <seconds>` instead: the command then waits for
+the condition and returns its result.
+
+To wait on something outside Toastty, such as an email reply, a person
+outside Toastty, or a date, run
+`toastty task waiting --on "<what the task waits for>"` and end your turn.
+The task then rests in Idle with a clock and that reason, not in Needs you,
+and a task with child tasks stays open. The mark stays across turns. For
+dated work, add `--wake <ISO time>`, such as `--wake 2026-12-01T17:00:00Z`:
+at that time Toastty sends you one line, starting `[Toastty wake`, and the
+mark clears when that turn starts. Run `task waiting` again before the turn
+ends if the task still waits. When the wait is over, run
+`toastty task waiting --clear`, or mark the work ready for review.
+
+To ask another task's agent something, run `toastty task send <task-id>
+"<question>"`, then watch it `--until idle` and read the answer with
+`toastty task get <task-id>`, under `lastReply`. A milestone that is not a
+stage, such as "the API is defined", is a `task send` from the task that
+reaches it.
+
+## Ask the coordinator
+
+When the user asks you to ask the coordinator something, send the question
+directly with `toastty coordinator send "<question>"`. For a long
+message, write it to a file and use `coordinator send --text-file <path>`.
+Include the relevant context and the decision needed. Toastty identifies
+this task as the sender; no coordinator panel or session ID is needed.
+
+Check the result: `sent` means the text was submitted, not that the agent
+read or answered it. `queued` means it waits for an open prompt.
+`sentUnconfirmed` means Return was not confirmed; check the coordinator's
+terminal before sending it again. The answer appears in Coordinator chat.
+It returns to this task only if the coordinator sends it here with
+`toastty task send <task-id> "<answer>"`. A question that needs the user's
+decision is shown to the user there.

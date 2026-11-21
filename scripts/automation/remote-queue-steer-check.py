@@ -100,7 +100,7 @@ def set_directory_trust(directory, trusted):
     os.replace(temporary, CLAUDE_CONFIG)
 
 
-def run_in_gui_session(name, script, arguments=()):
+def run_in_gui_session(name, script, arguments=(), timeout=1500):
     """Reruns a check from Terminal in the logged-in GUI session."""
     artifacts = Path(os.environ['TOASTTY_ARTIFACTS_DIR']).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -117,7 +117,7 @@ def run_in_gui_session(name, script, arguments=()):
     ])
     script = f'tell application "Terminal" to do script {json.dumps(command)}'
     subprocess.run(['osascript', '-e', script], check=True, capture_output=True, timeout=30)
-    wait_for('the GUI-session check', done.exists, timeout=1500, interval=2)
+    wait_for('the GUI-session check', done.exists, timeout=timeout, interval=2)
     print(output.read_text())
     raise SystemExit(int(done.read_text().strip() or 1))
 
@@ -298,7 +298,9 @@ def main():
         evidence.update(cliVersion=version, gatewayPort=port)
         log = open(artifacts / f'{prefix}-app.log', 'w')
         app = subprocess.Popen(
-            [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port)],
+            [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port),
+             # This run is not about the question at a first launch.
+             '-toastty.coordinator.startOfferAnswered', 'YES'],
             env=environment, stdout=log, stderr=subprocess.STDOUT)
         if provider == 'claude':
             run_claude(app, Gateway(port), App(bundle, socket_path), runtime_home, work, evidence)

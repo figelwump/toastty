@@ -225,6 +225,57 @@ enum AgentLaunchArgumentOverrideAdapter {
         }
     }
 
+    /// Sets Codex's `project_doc_max_bytes` for this launch only, replacing
+    /// any value the profile sets. Codex reads at most that many bytes of
+    /// its `AGENTS.md` files and drops the rest without an error. Other
+    /// agents have no such limit, so their argv is returned unchanged.
+    ///
+    /// When Toastty cannot find the Codex executable in the argv, such as a
+    /// shell helper (`argv = ["scodex"]`), or cannot replace the profile's
+    /// value, the argv is returned unchanged and a warning is logged: the
+    /// agent still starts, with the limit of its own configuration, as
+    /// other managed launch flags are skipped for such a profile.
+    static func applying(
+        codexProjectDocMaxBytes: Int?,
+        to argv: [String],
+        agent: AgentKind,
+        profileID: String
+    ) -> [String] {
+        guard let codexProjectDocMaxBytes, agent == .codex else { return argv }
+        do {
+            return try codexArgv(argv, settingProjectDocMaxBytes: codexProjectDocMaxBytes, profileID: profileID)
+        } catch {
+            ToasttyLog.warning(
+                "Launching Codex without project_doc_max_bytes because its argv cannot take it",
+                category: .terminal,
+                metadata: [
+                    "profile_id": profileID,
+                    "error": error.localizedDescription,
+                ]
+            )
+            return argv
+        }
+    }
+
+    /// Whether `applying(codexProjectDocMaxBytes:)` sets the limit in this
+    /// Codex argv, rather than leaving the argv unchanged.
+    static func canApplyCodexProjectDocMaxBytes(to argv: [String], profileID: String) -> Bool {
+        (try? codexArgv(argv, settingProjectDocMaxBytes: 1, profileID: profileID)) != nil
+    }
+
+    private static func codexArgv(
+        _ argv: [String],
+        settingProjectDocMaxBytes bytes: Int,
+        profileID: String
+    ) throws -> [String] {
+        var editor = try ProviderArgvEditor(argv: argv, agent: .codex, profileID: profileID)
+        try editor.removeCodexConfigAssignments(
+            key: "project_doc_max_bytes",
+            parameter: "projectDocMaxBytes"
+        )
+        return editor.inserting(["--config", "project_doc_max_bytes=\(bytes)"])
+    }
+
     private static func validatedValue(
         _ value: String?,
         parameter: String
@@ -295,8 +346,13 @@ private struct ProviderArgvEditor {
             )
         }
         if executableIndex > 0 {
-            guard let wrapper,
-                  ManagedAgentCommandResolver.inferManagedAgent(
+            guard let wrapper else {
+                throw AgentLaunchError.unsafeLaunchOverrideArgv(
+                    profileID: profileID,
+                    message: "could not resolve an unambiguous \(agent.displayName) executable boundary"
+                )
+            }
+            guard ManagedAgentCommandResolver.inferManagedAgent(
                       commandName: argv[0],
                       argv: argv
                   ) == agent else {

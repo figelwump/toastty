@@ -30,6 +30,9 @@ enum ToastyTheme {
     static let sidebarSessionActiveHoverBackground = Color(hex: 0x484848)
     static let sidebarSessionHoverBackground = Color(hex: 0x222222)
     static let sidebarSessionHoverBorder = Color(hex: 0x555555)
+    /// The coordinator's row while its dock shows beside another workspace.
+    static let sidebarCoordinatorDockOpenBackground = Color(hex: 0x2B2B2B)
+    static let sidebarCoordinatorDockOpenHoverBackground = Color(hex: 0x333333)
     /// Row fills for the states that want the user, on session and subspace
     /// rows alike. Faint on purpose: the rail mark and heavy name carry the
     /// state, and approval and error rows also keep their word badge.
@@ -57,6 +60,23 @@ enum ToastyTheme {
     /// finished task does not read as an unread turn.
     static let sidebarSubspaceDoneMark = Color(hex: 0x7CC47F)
     static let sidebarSubspaceDoneMarkBackground = Color(hex: 0x7CC47F, alpha: 0.2)
+    /// A task whose pull request waits for the user's review. Blue, so it
+    /// reads apart from amber "the agent asked you something".
+    /// The Needs you group's yellow: its heading, count mark, and stage chip.
+    static let sidebarNeedsYouMark = Color(hex: 0xF2C46B)
+    static let sidebarNeedsYouMarkBackground = Color(hex: 0xF2C46B, alpha: 0.18)
+    static let sidebarTaskReviewMark = Color(hex: 0x6E9FE6)
+    static let sidebarTaskReviewMarkBackground = Color(hex: 0x6E9FE6, alpha: 0.22)
+    /// A task whose agent ended its turn with a question. Amber, as when the
+    /// agent asks something, but a tinted box like review: nothing blocks
+    /// until the user replies.
+    static let sidebarTaskQuestionMark = Color(hex: 0xE8A635)
+    static let sidebarTaskQuestionMarkBackground = Color(hex: 0xE8A635, alpha: 0.22)
+    /// A merged task waiting for a release.
+    static let sidebarTaskToShipMark = Color(hex: 0xB98CE0)
+    static let sidebarTaskToShipMarkBackground = Color(hex: 0xB98CE0, alpha: 0.22)
+    /// The dashed box of a task that has not started.
+    static let sidebarTaskStartingMark = Color(hex: 0x8F877D)
     /// A done subspace's title recedes next to open work.
     static let sidebarSubspaceDoneTitleText = Color(hex: 0x9A9189)
     static let sidebarSessionRailApprovalHalo = Color(hex: 0xE8A635, alpha: 0.22)
@@ -72,6 +92,11 @@ enum ToastyTheme {
     static let hoverTipTabPillText = Color(hex: 0xBCD0F5)
     static let hoverTipTabPillBackground = Color(hex: 0x6E96E6, alpha: 0.2)
     static let hoverTipTabPillBorder = Color(hex: 0xBCD0F5, alpha: 0.42)
+    /// The task space card's Parent button wears the tab pill's colors,
+    /// with a stronger fill under the pointer.
+    static let hoverTipParentButtonHoverBackground = Color(hex: 0x6E96E6, alpha: 0.34)
+    /// The faint panel under a task space card's sessions.
+    static let hoverTipSessionPanelBackground = Color(hex: 0xFFFFFF, alpha: 0.035)
     static let hoverTipAgentPillText = Color(hex: 0xD9D1C7)
     static let hoverTipAgentPillBackground = Color(hex: 0xB7AEA5, alpha: 0.16)
     static let hoverTipAgentPillBorder = Color(hex: 0xB7AEA5, alpha: 0.3)
@@ -134,8 +159,7 @@ enum ToastyTheme {
     static let emptyStateShortcutBorder = Color(hex: 0x3A3028)
     static let emptyStateShortcutText = Color(hex: 0x8A7B6E)
 
-    static let sidebarWidthBeforeAgentLaunch = CGFloat(WindowState.defaultSidebarWidthBeforeAgentLaunch)
-    static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidthAfterAgentLaunch)
+    static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidth)
     static let workspaceTabBarHeight: CGFloat = 34
     // Keep a small inset above the folder-style tabs so the accent line does
     // not sit flush against the window edge when the tab strip lives in the
@@ -164,9 +188,16 @@ enum ToastyTheme {
     static let hiddenSidebarTitleLeadingSpacing: CGFloat = 2
     /// Leading padding for the top bar content when the sidebar is hidden,
     /// leaving room for the traffic lights, sidebar toggle, and history buttons.
-    static let topBarLeadingPaddingWithoutSidebar: CGFloat =
-        titlebarSidebarToggleLeadingPadding + (3 * titlebarSidebarToggleButtonSize) +
-        (2 * titlebarControlSpacing) + hiddenSidebarTitleLeadingSpacing
+    static let topBarLeadingPaddingWithoutSidebar: CGFloat = topBarLeadingPadding(titlebarButtonCount: 3)
+
+    /// Leading padding for content at the window's left edge, below the
+    /// titlebar's buttons: the traffic lights, then `titlebarButtonCount`
+    /// buttons. The coordinator's window adds the dock's button.
+    static func topBarLeadingPadding(titlebarButtonCount: Int) -> CGFloat {
+        let count = CGFloat(max(1, titlebarButtonCount))
+        return titlebarSidebarToggleLeadingPadding + (count * titlebarSidebarToggleButtonSize) +
+            ((count - 1) * titlebarControlSpacing) + hiddenSidebarTitleLeadingSpacing
+    }
     static let hiddenSidebarTitleCenterY: CGFloat =
         titlebarSidebarToggleTopPadding + (titlebarSidebarToggleButtonSize / 2)
 

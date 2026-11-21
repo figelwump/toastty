@@ -64,7 +64,7 @@ private struct SidebarScrollViewportHeightReporter: NSViewRepresentable {
 /// Reports a child's intrinsic width until it reaches either the configured
 /// cap or a tighter parent proposal. Unlike `fixedSize`, the layout stays
 /// compressible so narrow sidebars can truncate chip content normally.
-private struct SidebarCappedIntrinsicWidthLayout: Layout {
+struct SidebarCappedIntrinsicWidthLayout: Layout {
     let maximumWidth: CGFloat
 
     func sizeThatFits(
@@ -395,7 +395,7 @@ private extension SessionChildRow {
 /// The status mark in a session row's left rail. The subspace hover card
 /// draws its session rows with it too.
 struct SessionRailStatusIcon: View {
-    private static let dotSize: CGFloat = 7
+    static let dotSize: CGFloat = 7
 
     let state: SidebarSessionPresentation.SessionRailState
 
@@ -441,7 +441,9 @@ private struct SubspaceRailStatusIcon: View {
         switch status {
         case .working:
             SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-        case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed:
+        case .idle where isDoneTogglePreviewed, .ready where isDoneTogglePreviewed,
+             .question where isDoneTogglePreviewed, .review where isDoneTogglePreviewed,
+             .waiting where isDoneTogglePreviewed:
             RoundedRectangle(cornerRadius: 2)
                 .strokeBorder(ToastyTheme.sidebarSubspaceDoneMark, lineWidth: 1.2)
                 .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
@@ -450,6 +452,8 @@ private struct SubspaceRailStatusIcon: View {
             RoundedRectangle(cornerRadius: Self.cornerRadius)
                 .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
                 .frame(width: Self.markSize, height: Self.markSize)
+        case .waiting:
+            TaskWaitingGlyph()
         case .done:
             RoundedRectangle(cornerRadius: 2)
                 .fill(ToastyTheme.sidebarSubspaceDoneMarkBackground)
@@ -466,6 +470,32 @@ private struct SubspaceRailStatusIcon: View {
                 }
         case .error:
             filledMark(ToastyTheme.sessionErrorText)
+        case .review:
+            // A tinted box with a blue dot: the pull request waits for you.
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ToastyTheme.sidebarTaskReviewMarkBackground)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay {
+                    Circle()
+                        .fill(ToastyTheme.sidebarTaskReviewMark)
+                        .frame(width: 4.5, height: 4.5)
+                }
+        case .question:
+            // A tinted box with a question mark: the agent asked you something
+            // and waits for your reply.
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ToastyTheme.sidebarTaskQuestionMarkBackground)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay { TaskQuestionGlyph() }
+        case .toShip:
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ToastyTheme.sidebarTaskToShipMarkBackground)
+                .frame(width: Self.doneMarkSize, height: Self.doneMarkSize)
+                .overlay {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 6.5, weight: .black))
+                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                }
         }
     }
 
@@ -489,28 +519,125 @@ struct SessionStatusBadge: View {
     var label: String? = nil
 
     var body: some View {
-        Text(label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
+        SidebarStatusPill(
+            text: label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind),
+            foreground: ToastyTheme.sessionStatusTextColor(for: kind),
+            background: ToastyTheme.sessionStatusBackgroundColor(for: kind)
+        )
+    }
+}
+
+/// The filled pill on a row's first line: the session status badge, and the
+/// task-row `question` pill, which has no session status kind.
+struct SidebarStatusPill: View {
+    let text: String
+    let foreground: Color
+    let background: Color
+
+    var body: some View {
+        Text(text)
             .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
+            .foregroundStyle(foreground)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(
-                ToastyTheme.sessionStatusBackgroundColor(for: kind),
-                in: RoundedRectangle(cornerRadius: 4)
-            )
+            .background(background, in: RoundedRectangle(cornerRadius: 4))
     }
 }
 
-/// What each Subspaces group last put on screen, and the slot its selected
-/// row holds. A plain reference rather than SwiftUI state: the group records
-/// it while computing its order, where state writes are not allowed, and the
-/// pin must be in place in the same update that reads the jumped-to row.
+/// The row is one accessibility element and carries the spoken wording, so a
+/// pill's shortened text is otherwise invisible to AppKit inspectors and
+/// host-based tests.
+private struct SidebarStatusPillSemanticText: ViewModifier {
+    let text: String
+
+    func body(content: Content) -> some View {
+        content.background {
+            SidebarSemanticTextBridge(text: text)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// The task board as of the sidebar's last body pass. Built once per pass
+/// and read by the header, the segments, card footers and rows, so a
+/// redraw does not rebuild the board for every card. A plain reference
+/// rather than SwiftUI state, because the body writes it while it computes.
 @MainActor
-private final class SubspaceOrderMemory {
-    var displayedOrderByParentID: [UUID: [UUID]] = [:]
-    var pinByParentID: [UUID: SidebarSubspacePresentation.Pin] = [:]
+private final class SidebarTaskBoardSnapshot {
+    private(set) var windowItems: [TaskBoardItem] = []
+    private(set) var allItems: [TaskBoardItem] = []
+    /// The window and the windows that `windowItems` was filtered for.
+    private var windowID: UUID?
+    private var windows: [WindowState] = []
+    /// Each parent task's child progress, worked out at the first request
+    /// after the items changed.
+    private var childProgressByParentTaskID: [UUID: TaskBoard.ChildProgress]?
+    /// Each task and each task's child tasks, in `allItems` order, worked
+    /// out at the first request after the items changed.
+    private var family: (itemsByTaskID: [UUID: TaskBoardItem], childrenByParentTaskID: [UUID: [TaskBoardItem]])?
+
+    /// Takes the board's items for a pass. While the items and the windows
+    /// stay equal, the window's items and the child progress labels of the
+    /// last pass still hold, and they are kept.
+    func update(allItems: [TaskBoardItem], windowID: UUID, state: AppState) {
+        guard allItems != self.allItems || windowID != self.windowID || state.windows != windows else { return }
+        self.allItems = allItems
+        self.windowID = windowID
+        windows = state.windows
+        windowItems = TaskBoard.items(allItems, in: windowID, state: state)
+        childProgressByParentTaskID = nil
+        family = nil
+    }
+
+    func clear() {
+        allItems = []
+        windowItems = []
+        windowID = nil
+        windows = []
+        childProgressByParentTaskID = nil
+        family = nil
+    }
+
+    /// As `TaskBoard.childProgress(of:items:)` for `allItems`. Every task
+    /// space row asks, so one pass over the items answers them all.
+    func childProgress(of taskID: UUID) -> TaskBoard.ChildProgress? {
+        if childProgressByParentTaskID == nil {
+            childProgressByParentTaskID = TaskBoard.childProgressByParentTaskID(allItems)
+        }
+        return childProgressByParentTaskID?[taskID]
+    }
+
+    /// A task and the tasks it started, for its task space card. Every task
+    /// space row asks, so one pass over the items answers them all.
+    func family(of taskID: UUID) -> (item: TaskBoardItem, children: [TaskBoardItem])? {
+        if family == nil {
+            var itemsByTaskID: [UUID: TaskBoardItem] = [:]
+            var childrenByParentTaskID: [UUID: [TaskBoardItem]] = [:]
+            for item in allItems {
+                guard let id = item.taskID else { continue }
+                itemsByTaskID[id] = itemsByTaskID[id] ?? item
+                if let parentTaskID = item.parentTaskID {
+                    childrenByParentTaskID[parentTaskID, default: []].append(item)
+                }
+            }
+            family = (itemsByTaskID, childrenByParentTaskID)
+        }
+        guard let item = family?.itemsByTaskID[taskID] else { return nil }
+        return (item, family?.childrenByParentTaskID[taskID] ?? [])
+    }
+}
+
+/// The bucket each row was last drawn in and the selected row's hold, for
+/// the segment that drew them. Kept out of view state, like
+/// `SidebarTaskBoardSnapshot`, so recording them does not draw the sidebar
+/// again.
+private final class SidebarBucketMemory {
+    var segment: SidebarSegment?
+    var displayed: [SidebarRowKey: SidebarBucket] = [:]
+    var pin: SidebarBucketPin?
 }
 
 /// Scroll target for a card's Subspaces group.
@@ -548,6 +675,12 @@ struct SidebarView: View {
     // Observed so first-use claims, unlocked replacements, and legacy
     // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
+    /// Not observed here: `taskBoard` publishes task changes.
+    let taskCoordinator: TaskCoordinator?
+    /// Every task's stage. Observed: a stage change moves rows and marks.
+    @ObservedObject var taskBoard: TaskBoardStore
+    /// Opens the quick entry panel; `nil` hides the Tasks row's ＋.
+    let newTask: (@MainActor () -> Void)?
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Runs a subspace row's Merge menu item for that workspace.
     let requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void
@@ -575,19 +708,32 @@ struct SidebarView: View {
     @State private var activeSessionDrag: SessionDragState?
     @State private var sessionPointerRowID: SidebarSessionPresentation.SidebarSessionRowID?
     @State private var activeWorkspaceDrag: WorkspaceDragState?
-    @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
+    /// Counts changes of the workspace row frames during a card drag, when
+    /// the insertion indicator must follow them. The frames are in
+    /// `scrollGeometry`, outside the view's state: they change whenever a
+    /// row's height does, and as state each such change drew the whole
+    /// sidebar a second time.
+    @State private var workspaceRowFrameChangesDuringDrag = 0
     @State private var hoverState = SidebarHoverState()
     // The sidebar owns this reference; only the pill overlay observes it.
     @State private var scrollGeometry = SidebarScrollGeometry()
     @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
     @State private var expandedSessionChildrenBySessionID: [String: Bool] = [:]
     @State private var collapsedSubspaceGroupParentIDs: Set<UUID> = []
+    /// Project cards whose To ship group is expanded. Each card starts
+    /// collapsed, and like a collapsed Subspaces group the choice is not
+    /// saved: it resets when the sidebar hides or the app quits.
+    @State private var expandedToShipProjectIDs: Set<UUID> = []
+    /// Project cards whose Done line lists the task spaces Toastty still
+    /// keeps open after their merge.
+    @State private var expandedDoneProjectIDs: Set<UUID> = []
+    /// Parent task rows whose merged children show. Each starts collapsed;
+    /// like the To ship group, the choice is not saved.
+    @State private var expandedFinishedChildrenParents: Set<SidebarRowKey> = []
     /// Spawning session whose subspaces the group shows, per parent workspace.
     @State private var subspaceFilterSessionIDByParentID: [UUID: String] = [:]
-    /// Row order captured when the pointer entered a group, so rows hold
-    /// still under the pointer; released on exit.
-    @State private var frozenSubspaceOrderByParentID: [UUID: [UUID]] = [:]
-    @State private var subspaceOrderMemory = SubspaceOrderMemory()
+    @State private var bucketMemory = SidebarBucketMemory()
+    @State private var taskBoardSnapshot = SidebarTaskBoardSnapshot()
     @State private var subspaceGroupScrollRequest: SubspaceGroupScrollRequest?
     @State private var hoveredSpawnerSessionID: String?
     @State private var optionKeyPressed = false
@@ -600,7 +746,33 @@ struct SidebarView: View {
     /// chip, so the chip does not squeeze the name to a bare ellipsis.
     private static let sessionRowTitleReservedWidth: CGFloat = 60
     private static let sessionParentTagMaximumWidth: CGFloat = 90
-    private static let subspaceRowArrowWidth: CGFloat = 10
+    private static let linkedChildIndent: CGFloat = 14
+
+    /// The ↳ mark in a linked child row's indent, level with the row's
+    /// first line and just left of its status mark.
+    private static var linkedChildArrow: some View {
+        TaskChildArrowMark()
+            .frame(width: linkedChildIndent, height: sessionRowLineMinHeight)
+            .padding(.leading, 6)
+            .padding(.top, 4)
+    }
+
+    /// A small tag on a task row's second line: its project, or how many of
+    /// the tasks it started have merged.
+    static func sidebarTaskTag(_ text: String, maximumWidth: CGFloat = 90) -> some View {
+        // Like a parent-task tag, leave room for the row's status. The text
+        // must accept a tighter proposal rather than widen the whole list.
+        SidebarCappedIntrinsicWidthLayout(maximumWidth: maximumWidth) {
+            Text(text)
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+        }
+    }
 
     /// Space under a card's session list: room above the card's bottom edge,
     /// or a short step down to a Subspaces group, whose header adds its own.
@@ -714,6 +886,9 @@ struct SidebarView: View {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         annotationStyleStore: AnnotationStyleStore,
+        taskCoordinator: TaskCoordinator? = nil,
+        taskBoard: TaskBoardStore = .disabled,
+        newTask: (@MainActor () -> Void)? = nil,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
         requestWorkspaceClose: @escaping @MainActor (UUID) -> Void = { _ in },
@@ -727,6 +902,9 @@ struct SidebarView: View {
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.annotationStyleStore = annotationStyleStore
+        self.taskCoordinator = taskCoordinator
+        self.taskBoard = taskBoard
+        self.newTask = newTask
         self.terminalRuntimeContext = terminalRuntimeContext
         self.requestWorkspaceMerge = requestWorkspaceMerge
         self.requestWorkspaceClose = requestWorkspaceClose
@@ -749,11 +927,15 @@ struct SidebarView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        refreshTaskBoardSnapshot()
+        let bucketed = taskBoard.isEnabled ? makeBucketedSidebar() : nil
+        return VStack(alignment: .leading, spacing: 4) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
-                        if store.window(id: windowID) != nil {
+                        if let bucketed, sidebarSegment == .needsYou {
+                            needsYouSegmentContent(bucketed)
+                        } else if store.window(id: windowID) != nil {
                             // Subspaces render inside their parent's card, so
                             // the card list, its numbering, and drag reordering
                             // all work on the top-level workspaces only.
@@ -766,10 +948,14 @@ struct SidebarView: View {
                                         shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
                                         isSelected: workspaceCardContainsSelection(workspaceID),
                                         index: index + 1,
-                                        orderedWorkspaceIDs: topLevelWorkspaceIDs
+                                        orderedWorkspaceIDs: topLevelWorkspaceIDs,
+                                        card: bucketed?.cards[workspaceID]
                                     )
                                     .id(workspaceID)
                                 }
+                            }
+                            if let other = bucketed?.other {
+                                otherTasksCard(other)
                             }
                         } else {
                             Text("No windows")
@@ -789,7 +975,10 @@ struct SidebarView: View {
                         }
                     }
                     .onPreferenceChange(WorkspaceRowFramePreferenceKey.self) { framesByID in
-                        measuredWorkspaceRowFramesByID = framesByID
+                        scrollGeometry.workspaceRowFrames = framesByID
+                        if activeWorkspaceDrag != nil {
+                            workspaceRowFrameChangesDuringDrag &+= 1
+                        }
                         workspaceRowFrameObserver?(framesByID)
                     }
                     .onPreferenceChange(SidebarSessionRowFramePreferenceKey.self) { framesByID in
@@ -804,9 +993,11 @@ struct SidebarView: View {
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
                            activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex,
+                           // Read so that a frame change draws the indicator again.
+                           workspaceRowFrameChangesDuringDrag >= 0,
                            let indicatorFrame = Self.workspaceInsertionIndicatorFrame(
                                orderedWorkspaceIDs: store.state.topLevelWorkspaceIDs(in: windowID),
-                               measuredRowFramesByID: measuredWorkspaceRowFramesByID,
+                               measuredRowFramesByID: scrollGeometry.workspaceRowFrames,
                                draggedWorkspaceID: activeWorkspaceDrag.workspaceID,
                                targetIndex: activeWorkspaceDrag.targetIndex
                            ) {
@@ -825,10 +1016,16 @@ struct SidebarView: View {
                 // Keep the titlebar region opaque while letting rows scroll
                 // underneath it instead of showing through the traffic-light area.
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    sidebarTitlebarCover
+                    VStack(spacing: 0) {
+                        sidebarTitlebarCover
+                        coordinatorRow
+                        if let bucketed {
+                            tasksHeader(needsYouCount: bucketed.needsYouCount, readyToReviewCount: bucketed.readyToReviewCount)
+                        }
+                    }
                 }
                 .overlay {
-                    SidebarHiddenSessionPills(geometry: scrollGeometry, content: sidebarHiddenSessionContent) { pill in
+                    SidebarHiddenSessionPills(geometry: scrollGeometry, content: sidebarHiddenSessionContent(bucketed)) { pill in
                         hiddenSessionPill(pill, using: proxy)
                     }
                 }
@@ -913,7 +1110,8 @@ struct SidebarView: View {
                   let workspace = store.state.workspacesByID[request.workspaceID],
                   // Subspace rows have no inline rename field yet; entering the
                   // rename state for one would be invisible and block card drags.
-                  workspace.parentWorkspaceID == nil else { return }
+                  // The coordinator's workspace keeps its name.
+                  workspace.parentWorkspaceID == nil, workspace.isCoordinator == false else { return }
             beginWorkspaceRename(workspace)
         }
         .onAppear {
@@ -936,6 +1134,1223 @@ struct SidebarView: View {
         }
     }
 
+    private func refreshTaskBoardSnapshot() {
+        guard taskBoard.isEnabled else {
+            taskBoardSnapshot.clear()
+            return
+        }
+        taskBoardSnapshot.update(allItems: taskBoard.items(), windowID: windowID, state: store.state)
+    }
+
+    private var sidebarSegment: SidebarSegment {
+        store.window(id: windowID)?.sidebarSegment ?? .all
+    }
+
+    private func tasksHeader(needsYouCount: Int, readyToReviewCount: Int) -> some View {
+        SidebarTasksHeader(
+            needsYouCount: needsYouCount,
+            readyToReviewCount: readyToReviewCount,
+            isTasksViewShown: store.window(id: windowID)?.showsTasksView ?? false,
+            segment: sidebarSegment,
+            openTasksView: { openTasksView(selecting: nil) },
+            newTask: newTask.map { action in { action() } },
+            newTaskShortcutLabel: taskBoard.newTaskShortcut?.label,
+            showsShortcutBadge: optionKeyPressed,
+            selectSegment: { segment in
+                _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
+            },
+            webhooks: taskBoard.coordinator?.webhooks
+        )
+    }
+
+    /// The coordinator's row, when this window holds its workspace. It is
+    /// outside the scrolling list and outside both segments, so no segment
+    /// or card state hides it.
+    @ViewBuilder
+    private var coordinatorRow: some View {
+        if let controller = taskCoordinator?.coordinatorController,
+           let location = store.state.coordinator, location.windowID == windowID,
+           let workspace = store.state.workspacesByID[location.workspaceID] {
+            let isSelected = selectedWorkspaceID == location.workspaceID
+                && store.window(id: windowID)?.showsTasksView != true
+            let dockShows = controller.dockShows(in: windowID)
+            SidebarCoordinatorRow(
+                workspace: workspace,
+                isSelected: isSelected,
+                // The full view's panel, or the dock's chat, is read.
+                readPanelID: isSelected ? workspace.focusedPanelID : (dockShows ? location.panelID : nil),
+                offersDock: controller.chatIsAvailable,
+                dockShows: dockShows,
+                controller: controller,
+                sessionRuntimeStore: sessionRuntimeStore,
+                select: {
+                    cancelWorkspaceRename()
+                    // Where the chat can show, a click acts as the
+                    // toolbar button does: it hides a dock that shows, and
+                    // otherwise shows the dock with the keyboard in its
+                    // field. In the full view, the field there takes the
+                    // keyboard.
+                    if controller.chatIsAvailable, isSelected == false {
+                        controller.toggleDock()
+                    } else if controller.chatIsAvailable {
+                        controller.chat?.requestComposerFocus(host: .panel)
+                    } else {
+                        _ = store.selectWorkspace(
+                            windowID: windowID,
+                            workspaceID: location.workspaceID,
+                            preferringUnreadSessionPanelIn: sessionRuntimeStore
+                        )
+                    }
+                },
+                openFullView: {
+                    cancelWorkspaceRename()
+                    controller.openFullView()
+                },
+                toggleDock: {
+                    cancelWorkspaceRename()
+                    controller.toggleDock()
+                },
+                openDocument: { document in
+                    cancelWorkspaceRename()
+                    do {
+                        try controller.openDocument(document)
+                    } catch {
+                        TaskActions.presentFailure(document.openFailureTitle, error.localizedDescription)
+                    }
+                },
+                restart: {
+                    controller.perform(.restart)
+                },
+                close: { requestWorkspaceClose(workspaceID: location.workspaceID) }
+            )
+        }
+    }
+
+    /// The Parent button and the child tasks on a task space card: the
+    /// task's task space in the window that holds it, else the task in the
+    /// Tasks view. The sidebar keeps its segment, as other ways of opening a
+    /// task space do, so in Needs you the task can open without a row of its
+    /// own.
+    private func openTask(taskID: UUID) {
+        guard let task = taskBoardSnapshot.family(of: taskID)?.item else { return }
+        cancelWorkspaceRename()
+        guard let taskSpaceID = task.taskSpaceWorkspaceID,
+              let holderWindowID = store.state.windows.first(where: { $0.workspaceIDs.contains(taskSpaceID) })?.id,
+              let taskSpace = store.state.workspacesByID[taskSpaceID] else {
+            openTasksView(selecting: task.id)
+            return
+        }
+        if holderWindowID == windowID {
+            // As a click on the task's row would.
+            store.selectWorkspace(
+                windowID: windowID,
+                workspaceID: taskSpaceID,
+                preferringUnreadSessionPanelIn: sessionRuntimeStore
+            )
+        } else if let panelID = sessionRuntimeStore.preferredUnreadStatusPanelID(in: taskSpace) ?? taskSpace.focusedPanelID {
+            // Selecting a workspace does not raise its window; focusing a
+            // panel there does.
+            store.focusExplicitlyNavigatedPanel(windowID: holderWindowID, workspaceID: taskSpaceID, panelID: panelID)
+        }
+    }
+
+    private func openTasksView(selecting subject: TaskBoardItem.Subject?, revealing group: TaskStage.Group? = nil) {
+        cancelWorkspaceRename()
+        taskBoard.showTasksView(
+            windowID: windowID,
+            selecting: subject,
+            revealing: group,
+            store: store,
+            source: .ui("sidebar_tasks_row")
+        )
+    }
+
+    // MARK: - Buckets
+
+    /// A row a card lists in a bucket.
+    private struct CardRow {
+        enum Kind {
+            case terminal(TerminalStatusRow)
+            case subspace(SidebarSubspacePresentation.Row)
+            case task(TaskBoardItem)
+        }
+
+        let kind: Kind
+        /// The task that started this one. The Needs you segment names it on
+        /// a row that lists without that task, and the task space card's
+        /// Parent button opens it.
+        var parentTask: SidebarSubspacePresentation.ParentTask? = nil
+    }
+
+    private static func parentTask(_ item: TaskBoardItem) -> SidebarSubspacePresentation.ParentTask? {
+        item.taskID.map { SidebarSubspacePresentation.ParentTask(taskID: $0, title: item.title) }
+    }
+
+    /// One card's rows for a body pass. The Other tasks card has no
+    /// workspace.
+    private struct BucketedCard: Identifiable {
+        let workspaceID: UUID?
+        let title: String
+        let sessionStatuses: [WorkspaceSessionStatus]
+        /// The card's task space rows, before the spawner filter.
+        let subspaceRows: [SidebarSubspacePresentation.Row]
+        /// Task spaces the card's sessions started under other cards.
+        let otherCardSpawns: [String: OtherCardSubspaceSpawn]
+        let counts: [SidebarBucket: Int]
+        /// Merged child tasks that the All segment folds under their parent,
+        /// among the rows the ⑂ filter shows. Folded rows do not count in a
+        /// bucket.
+        var folded: Set<SidebarRowKey> = []
+        /// Merged tasks whose task spaces Toastty still keeps open, in
+        /// families with nothing open, newest merge first. They leave the
+        /// buckets: To ship ones list under the card's To ship line, Done
+        /// ones under its Done line.
+        var finished: [SidebarBucketEntry<CardRow>] = []
+        /// The task spaces that every card in the window lists under its
+        /// footer. ⑂ chips and filters leave them out, since the buckets
+        /// do not list them.
+        var footerTaskSpaceIDs: Set<UUID> = []
+        var layout = SidebarBuckets.Layout<CardRow>()
+        /// The card's rows in the Needs you segment.
+        var needsYou = SidebarBuckets.Layout<CardRow>()
+
+        var id: UUID { workspaceID ?? SidebarView.otherTasksCardID }
+        /// Whether the All segment draws any bucket for the card.
+        var hasRows: Bool { layout.entries.isEmpty == false }
+    }
+
+    /// The bucketed sidebar for one body pass, while the task system is on.
+    private struct BucketedSidebar {
+        var cards: [UUID: BucketedCard] = [:]
+        /// Tasks whose project is not open in the window, such as one that
+        /// waits for its workspace to be picked.
+        var other: BucketedCard?
+        /// Rows in Needs you and in Ready to review, for the switcher.
+        var needsYouCount = 0
+        var readyToReviewCount = 0
+    }
+
+    /// Stands in for a workspace ID where the Other tasks card needs one.
+    nonisolated private static let otherTasksCardID = UUID(uuidString: "00000000-0000-0000-0000-00000000071D")!
+    static let otherTasksCardTitle = "Other tasks"
+
+    private func isCardCollapsed(_ workspaceID: UUID) -> Bool {
+        store.window(id: windowID)?.collapsedSidebarWorkspaceIDs.contains(workspaceID) ?? false
+    }
+
+    /// The selected row: a task space, or the focused session of a selected
+    /// project workspace. Selecting either reads its finished turn.
+    private var selectedRowKey: SidebarRowKey? {
+        guard let workspace = store.selectedWorkspace(in: windowID) else { return nil }
+        if workspace.parentWorkspaceID != nil { return .workspace(workspace.id) }
+        return workspace.focusedPanelID.map(SidebarRowKey.panel)
+    }
+
+    /// Every card's rows in their buckets, for the segment on screen.
+    private func makeBucketedSidebar() -> BucketedSidebar {
+        let segment = sidebarSegment
+        if bucketMemory.segment != segment {
+            // Buckets from a segment that is not on screen would hold the
+            // next selection where the user no longer sees it.
+            bucketMemory.segment = segment
+            bucketMemory.pin = nil
+            bucketMemory.displayed = [:]
+        }
+        let pin = SidebarBuckets.pin(previous: bucketMemory.pin, selected: selectedRowKey, displayed: bucketMemory.displayed)
+        let windowWorkspaceIDs = Set(store.window(id: windowID)?.workspaceIDs ?? [])
+        let topLevelWorkspaceIDs = store.state.topLevelWorkspaceIDs(in: windowID)
+        let itemsByTaskID = Dictionary(
+            taskBoardSnapshot.allItems.compactMap { item in item.taskID.map { ($0, item) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        // A task's row in this window: its task space row, or its own.
+        func rowKey(_ item: TaskBoardItem) -> SidebarRowKey {
+            if let taskSpace = item.taskSpaceWorkspaceID, windowWorkspaceIDs.contains(taskSpace) {
+                return .workspace(taskSpace)
+            }
+            return .task(item.id)
+        }
+        func parentItem(ofTaskID taskID: UUID?) -> TaskBoardItem? {
+            taskID.flatMap { itemsByTaskID[$0]?.parentTaskID }.flatMap { itemsByTaskID[$0] }
+        }
+        // Each card's sessions and task space rows, read once for the pass.
+        var cardInputs: [(workspace: WorkspaceState, sessionStatuses: [WorkspaceSessionStatus], subspaceRows: [SidebarSubspacePresentation.Row])] = []
+        for workspaceID in topLevelWorkspaceIDs {
+            guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
+            let sessionStatuses = sidebarSessionStatuses(for: workspaceID)
+            cardInputs.append((workspace, sessionStatuses, subspaceRows(for: workspaceID, parentSessionStatuses: sessionStatuses)))
+        }
+        let nestedTaskSpaceIDs = Set(cardInputs.flatMap { $0.subspaceRows.map(\.id) })
+        // Tasks that list by a row of their own: no task space row under a
+        // card, and a stage the buckets list. A task space that became a
+        // top-level workspace, such as when its project closed, lists here
+        // too, so its task's stage still shows. Rows keep the order the
+        // sidebar lists tasks in, not their latest activity.
+        let recordItems = SidebarStatusSections.sidebarOrder(
+            taskBoardSnapshot.windowItems.filter { item in
+                item.taskSpaceWorkspaceID.map(nestedTaskSpaceIDs.contains) != true
+                    && SidebarBucket(item.stage) != nil
+            },
+            workspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
+        )
+        func recordCandidates(_ items: [TaskBoardItem]) -> [SidebarBucketCandidate<CardRow>] {
+            items.compactMap { item in
+                guard let bucket = SidebarBucket(item.stage) else { return nil }
+                let parent = parentItem(ofTaskID: item.taskID)
+                return SidebarBucketCandidate(
+                    key: rowKey(item), bucket: bucket, parent: parent.map(rowKey),
+                    payload: CardRow(kind: .task(item), parentTask: parent.flatMap(Self.parentTask))
+                )
+            }
+        }
+
+        var displayed: [SidebarRowKey: SidebarBucket] = [:]
+        var nextPin: SidebarBucketPin?
+        var needsYouCount = 0
+        var readyToReviewCount = 0
+        func taskItem(_ row: SidebarSubspacePresentation.Row) -> TaskBoardItem? {
+            store.state.workspacesByID[row.id]?.taskID.flatMap { itemsByTaskID[$0] }
+        }
+        // When a task space row's task merged, for the footer's newest
+        // first order, as the To ship list orders its rows.
+        func mergedAt(_ candidate: SidebarBucketCandidate<CardRow>) -> Date {
+            guard case .subspace(let row) = candidate.payload.kind, let item = taskItem(row) else { return .distantPast }
+            return SidebarRecentToShip.mergedAt(item)
+        }
+        func card(
+            workspaceID: UUID?,
+            title: String,
+            sessionStatuses: [WorkspaceSessionStatus] = [],
+            subspaceRows: [SidebarSubspacePresentation.Row] = [],
+            otherCardSpawns: [String: OtherCardSubspaceSpawn] = [:],
+            candidates: [SidebarBucketCandidate<CardRow>],
+            shown: [SidebarBucketCandidate<CardRow>]
+        ) -> BucketedCard {
+            func isHeldFinished(_ candidate: SidebarBucketCandidate<CardRow>) -> Bool {
+                guard case .subspace(let row) = candidate.payload.kind else { return false }
+                return SidebarSubspacePresentation.isHeldFinished(row)
+            }
+            // Families with nothing open leave the buckets for the footer,
+            // whatever the ⑂ filter shows. The footer lists its project's
+            // tasks, so a task space moved under another project's card
+            // stays in that card's buckets.
+            let finishedKeys = SidebarBuckets.finishedFamilyKeys(candidates, keeping: pin?.key) { candidate in
+                guard isHeldFinished(candidate), case .subspace(let row) = candidate.payload.kind else { return false }
+                return workspaceID != nil && taskItem(row)?.projectWorkspaceID == workspaceID
+            }
+            let finished = candidates.filter { finishedKeys.contains($0.key) }
+            let candidates = candidates.filter { finishedKeys.contains($0.key) == false }
+            let shown = shown.filter { finishedKeys.contains($0.key) == false }
+            func folded(_ rows: [SidebarBucketCandidate<CardRow>]) -> Set<SidebarRowKey> {
+                SidebarBuckets.foldedKeys(rows, isFinished: isHeldFinished)
+            }
+            // The counts ignore the ⑂ filter; the folds follow the families
+            // that the filtered layout draws.
+            let countedFolded = folded(candidates)
+            var card = BucketedCard(
+                workspaceID: workspaceID, title: title, sessionStatuses: sessionStatuses,
+                subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns,
+                counts: SidebarBuckets.counts(candidates.filter { countedFolded.contains($0.key) == false }),
+                folded: folded(shown),
+                finished: finished
+                    .sorted { mergedAt($0) > mergedAt($1) }
+                    .map { SidebarBucketEntry(key: $0.key, payload: $0.payload, ownBucket: $0.bucket) }
+            )
+            switch segment {
+            case .all:
+                card.layout = SidebarBuckets.layout(shown, pin: pin)
+                displayed.merge(card.layout.displayed) { first, _ in first }
+                nextPin = card.layout.pin ?? nextPin
+            case .needsYou:
+                card.needsYou = SidebarBuckets.needsYou(candidates, pin: pin)
+                displayed.merge(card.needsYou.displayed) { first, _ in first }
+                nextPin = card.needsYou.pin ?? nextPin
+            }
+            needsYouCount += card.counts[.needsYou] ?? 0
+            readyToReviewCount += card.counts[.readyToReview] ?? 0
+            return card
+        }
+
+        var result = BucketedSidebar()
+        for (workspace, sessionStatuses, subspaceRows) in cardInputs {
+            let workspaceID = workspace.id
+            let otherCardSpawns = otherCardSubspaceSpawns(cardWorkspaceID: workspaceID, sessionStatuses: sessionStatuses)
+            var candidates = terminalStatusRows(sessionStatuses, workspace: workspace).map { row in
+                let bucket: SidebarBucket = switch row {
+                case .session(let status):
+                    // As the row draws it: without children a task space
+                    // row shows.
+                    .session(
+                        kind: status.status.kind,
+                        isUnread: showsUnreadSessionAccent(for: status.panelID, in: workspace),
+                        childNeedsAttention: SidebarSessionPresentation.sessionChildRowsNeedAttention(
+                            hidingSubspaceChildren(status, subspaceIDs: childWorkspaceIDsShownElsewhere(
+                                sessionID: status.sessionID, subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns
+                            )).children
+                        )
+                    )
+                case .program(let program):
+                    .session(kind: program.status.kind, isUnread: program.presentation.record.state == .done)
+                }
+                return SidebarBucketCandidate(key: .panel(row.panelID), bucket: bucket, payload: CardRow(kind: .terminal(row)))
+            }
+            candidates += subspaceRows.map { row in
+                let parent = parentItem(ofTaskID: store.state.workspacesByID[row.id]?.taskID)
+                return SidebarBucketCandidate(
+                    key: .workspace(row.id), bucket: .subspace(row), parent: parent.map(rowKey),
+                    payload: CardRow(kind: .subspace(row), parentTask: parent.flatMap(Self.parentTask))
+                )
+            }
+            candidates += recordCandidates(recordItems.filter { $0.projectWorkspaceID == workspaceID })
+            // The ⑂ filter narrows the task space rows the All card draws;
+            // the counts and the Needs you segment ignore it.
+            let filterSessionID = subspaceFilterSessionIDByParentID[workspaceID]
+            let filteredIDs = Set(SidebarSubspacePresentation.filteredRows(subspaceRows, spawningSessionID: filterSessionID).map(\.id))
+            let shown = candidates.filter { candidate in
+                guard case .subspace(let row) = candidate.payload.kind else { return true }
+                return filteredIDs.contains(row.id)
+            }
+            result.cards[workspaceID] = card(
+                workspaceID: workspaceID, title: workspace.title, sessionStatuses: sessionStatuses,
+                subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns, candidates: candidates, shown: shown
+            )
+        }
+
+        let topLevel = Set(topLevelWorkspaceIDs)
+        let otherCandidates = recordCandidates(recordItems.filter { $0.projectWorkspaceID.map(topLevel.contains) != true })
+        if otherCandidates.isEmpty == false || otherFinishedItems(.toShip).isEmpty == false {
+            result.other = card(workspaceID: nil, title: Self.otherTasksCardTitle, candidates: otherCandidates, shown: otherCandidates)
+        }
+        let footerTaskSpaceIDs = Set(result.cards.values.flatMap { card in
+            card.finished.compactMap { entry -> UUID? in
+                guard case .workspace(let id) = entry.key else { return nil }
+                return id
+            }
+        })
+        for id in result.cards.keys {
+            result.cards[id]?.footerTaskSpaceIDs = footerTaskSpaceIDs
+        }
+        result.needsYouCount = needsYouCount
+        result.readyToReviewCount = readyToReviewCount
+        bucketMemory.pin = nextPin
+        bucketMemory.displayed = displayed
+        return result
+    }
+
+    /// To ship or Done tasks whose project is not open in the window.
+    private func otherFinishedItems(_ group: TaskStage.Group) -> [TaskBoardItem] {
+        let topLevel = Set(store.state.topLevelWorkspaceIDs(in: windowID))
+        return taskBoardSnapshot.windowItems.filter { item in
+            item.stage.group == group && item.projectWorkspaceID.map(topLevel.contains) != true
+        }
+    }
+
+    /// A card's buckets in the All segment: Needs you, Running and Idle,
+    /// each with its header. Empty buckets do not show.
+    private func bucketedCardBody(_ card: BucketedCard, workspace: WorkspaceState?) -> some View {
+        let filterSessionID = workspace.flatMap { subspaceFilterSessionIDByParentID[$0.id] }
+        let filteredRows = SidebarSubspacePresentation.filteredRows(
+            card.subspaceRows.filter { card.footerTaskSpaceIDs.contains($0.id) == false },
+            spawningSessionID: filterSessionID
+        )
+        let attentionRowIDs = Set(card.subspaceRows.filter { $0.status.needsAttention }.map(\.id))
+        let orderedKeys = SidebarBucket.allCases.flatMap { card.layout.entries($0).map(\.key) }
+        let expandedFolds = expandedFinishedChildrenParents
+        return VStack(alignment: .leading, spacing: 0) {
+            if let workspace, let filterSessionID {
+                subspacesFilterBar(
+                    spawnerName: card.subspaceRows.first { $0.spawningSessionID == filterSessionID }?.spawnerName ?? "this agent",
+                    parentWorkspaceID: workspace.id
+                )
+                .padding(.bottom, 2)
+            }
+            ForEach(SidebarBucket.allCases, id: \.self) { bucket in
+                let entries = card.layout.entries(bucket)
+                if entries.isEmpty == false {
+                    bucketHeader(bucket, count: card.counts[bucket] ?? 0)
+                    let items = SidebarBuckets.items(entries, folded: card.folded)
+                    let foldedParents = Set(items.compactMap { item -> SidebarRowKey? in
+                        guard case .finishedChildren(let parent, _) = item else { return nil }
+                        return parent
+                    })
+                    VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
+                        ForEach(items) { item in
+                            switch item {
+                            case .row(let entry):
+                                bucketRow(
+                                    entry, card: card, workspace: workspace,
+                                    hidesChildProgress: foldedParents.contains(entry.key)
+                                )
+                            case .finishedChildren(let parent, let rows):
+                                let parentIndex = entries.firstIndex { $0.key == parent }
+                                let family = parentIndex.map { Array(entries[($0 + 1)...].prefix(while: \.isLinkedChild)) } ?? rows
+                                finishedChildrenFold(
+                                    parent: parentIndex.map { entries[$0] }, parentKey: parent, rows: rows,
+                                    listedFinishedCount: family.filter(Self.isFinishedChild).count,
+                                    card: card, workspace: workspace
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.28), value: orderedKeys)
+        .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2), value: expandedFolds)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 12)
+        .id(SubspaceGroupScrollID(parentWorkspaceID: card.id))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar.workspace.buckets.\(card.id.uuidString)")
+        // As in the Task Spaces group: a task space that newly needs the
+        // user clears a ⑂ filter that would hide it, and a filter whose
+        // agent has no task spaces left clears itself.
+        .onChange(of: attentionRowIDs) { previousIDs, currentIDs in
+            guard let workspace, let filterSessionID else { return }
+            let hiddenNewIDs = currentIDs.subtracting(previousIDs).filter { rowID in
+                card.subspaceRows.first { $0.id == rowID }?.spawningSessionID != filterSessionID
+            }
+            if hiddenNewIDs.isEmpty == false {
+                subspaceFilterSessionIDByParentID.removeValue(forKey: workspace.id)
+            }
+        }
+        .onChange(of: filteredRows.isEmpty, initial: true) { _, isEmpty in
+            if isEmpty, let workspace, filterSessionID != nil {
+                subspaceFilterSessionIDByParentID.removeValue(forKey: workspace.id)
+            }
+        }
+    }
+
+    /// "NEEDS YOU 4" over a bucket's rows. The count is the rows whose own
+    /// state is in the bucket; a relative listed with its family, or a held
+    /// row, counts where its own state is.
+    private func bucketHeader(_ bucket: SidebarBucket, count: Int) -> some View {
+        SidebarGroupTitle(title: bucket.title, count: count)
+            .foregroundStyle(Self.bucketTitleColor(bucket))
+            .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
+            .padding(.leading, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 1)
+            .background {
+                SidebarSemanticTextBridge(text: "\(bucket.title), \(count)")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Yellow for Needs you, the review mark's blue for Ready to review,
+    /// gray for the calm buckets.
+    private static func bucketTitleColor(_ bucket: SidebarBucket) -> Color {
+        switch bucket {
+        case .needsYou: ToastyTheme.sidebarNeedsYouMark
+        case .readyToReview: ToastyTheme.sidebarTaskReviewMark
+        case .running, .idle: ToastyTheme.sidebarChildContextText
+        }
+    }
+
+    /// A count in a card's header, after its bucket's mark.
+    private static func bucketCountMark(_ bucket: SidebarBucket, count: Int) -> some View {
+        HStack(spacing: 3) {
+            switch bucket {
+            case .needsYou:
+                Circle().fill(ToastyTheme.sidebarNeedsYouMark).frame(width: 6, height: 6)
+            case .readyToReview:
+                RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sidebarTaskReviewMark).frame(width: 6, height: 6)
+            case .running:
+                SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.4)
+            case .idle:
+                Circle().fill(ToastyTheme.sidebarSubspaceQuietMark).frame(width: 6, height: 6)
+            }
+            Text("\(count)")
+                .foregroundStyle(bucket.isListedInNeedsYouSegment ? bucketTitleColor(bucket) : ToastyTheme.inactiveText)
+        }
+    }
+
+    /// One row in a bucket, drawn by the row's own kind: a session or
+    /// program row, a task space row, or a task without an open task space.
+    /// A compact row takes one line, as the Needs you segment lists rows.
+    @ViewBuilder
+    private func bucketRow(
+        _ entry: SidebarBucketEntry<CardRow>,
+        card: BucketedCard,
+        workspace: WorkspaceState?,
+        isCompact: Bool = false,
+        hidesChildProgress: Bool = false
+    ) -> some View {
+        Group {
+            switch entry.payload.kind {
+            case .terminal(let row):
+                if let workspace {
+                    terminalStatusRowView(
+                        row, workspace: workspace, subspaceRows: card.subspaceRows,
+                        otherCardSpawns: card.otherCardSpawns, footerTaskSpaceIDs: card.footerTaskSpaceIDs,
+                        isCompact: isCompact
+                    )
+                }
+            case .subspace(let row):
+                let parentWorkspaceID = card.workspaceID ?? row.id
+                subspaceRow(
+                    Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact, hidesChildProgress: hidesChildProgress),
+                    parentWorkspaceID: parentWorkspaceID,
+                    showsSpawnerTag: SidebarSubspacePresentation.showsSpawnerTag(
+                        row,
+                        parentWorkspaceID: parentWorkspaceID,
+                        groupShowsSpawnerTags: SidebarSubspacePresentation.showsSpawnerTags(card.subspaceRows)
+                    )
+                )
+            case .task(let item):
+                if let taskSpaceID = item.taskSpaceWorkspaceID,
+                   store.window(id: windowID)?.workspaceIDs.contains(taskSpaceID) == true,
+                   let taskSpace = store.state.workspacesByID[taskSpaceID] {
+                    // Its task space is open as a workspace of its own.
+                    let row = subspaceRowModel(workspace: taskSpace, spawner: nil, projectTag: card.workspaceID == nil ? item.projectTitle : nil)
+                    subspaceRow(
+                        Self.bucketedSubspaceRow(row, entry: entry, isCompact: isCompact, hidesChildProgress: hidesChildProgress),
+                        parentWorkspaceID: taskSpaceID, showsSpawnerTag: false
+                    )
+                } else {
+                    SidebarTaskRecordRow(
+                        item: item,
+                        showsProject: card.workspaceID == nil,
+                        parentTaskTitle: entry.listsApartFromParent ? entry.payload.parentTask?.title : nil,
+                        isCompact: isCompact
+                    ) { openTasksView(selecting: item.id) }
+                        .padding(.leading, entry.isLinkedChild ? Self.linkedChildIndent : 0)
+                        .overlay(alignment: .topLeading) {
+                            if entry.isLinkedChild {
+                                Self.linkedChildArrow
+                            }
+                        }
+                        .contextMenu {
+                            TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(item), run: runTaskMenuItem)
+                        }
+                }
+            }
+        }
+    }
+
+    private static func bucketedSubspaceRow(
+        _ row: SidebarSubspacePresentation.Row,
+        entry: SidebarBucketEntry<CardRow>,
+        isCompact: Bool,
+        hidesChildProgress: Bool = false
+    ) -> SidebarSubspacePresentation.Row {
+        var row = row
+        row.isCompact = isCompact
+        row.isLinkedChild = entry.isLinkedChild
+        row.parentTask = entry.payload.parentTask
+        row.listsApartFromParent = entry.listsApartFromParent
+        if hidesChildProgress {
+            // The fold line under the row shows it.
+            row.childProgressLabel = nil
+        }
+        return row
+    }
+
+    /// A parent task's finished children, folded into one progress line
+    /// after its open children. Expanded, the children show as rows, then
+    /// "Show N more" for finished children whose task spaces closed. A fold
+    /// that holds the selected row shows it.
+    @ViewBuilder
+    private func finishedChildrenFold(
+        parent: SidebarBucketEntry<CardRow>?,
+        parentKey: SidebarRowKey,
+        rows: [SidebarBucketEntry<CardRow>],
+        listedFinishedCount: Int,
+        card: BucketedCard,
+        workspace: WorkspaceState?
+    ) -> some View {
+        let isExpanded = Binding(
+            get: {
+                expandedFinishedChildrenParents.contains(parentKey)
+                    || rows.contains { $0.key == selectedRowKey }
+            },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedFinishedChildrenParents.insert(parentKey)
+                } else {
+                    expandedFinishedChildrenParents.remove(parentKey)
+                }
+            }
+        )
+        let parentTaskID = parent.flatMap(taskID(of:))
+        let progress = parentTaskID.flatMap { taskID in
+            taskCoordinator == nil ? nil : taskBoardSnapshot.childProgress(of: taskID)
+        }
+        let title = progress?.label ?? "\(rows.count) finished"
+        let closedCount = max(0, (progress?.finished ?? 0) - listedFinishedCount)
+        VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
+            SidebarFinishedChildrenToggle(title: title, rowCount: rows.count, isExpanded: isExpanded)
+                .padding(.leading, Self.linkedChildIndent)
+                .accessibilityIdentifier("sidebar.task.finishedChildren.\(Self.accessibilityKey(parentKey))")
+            if isExpanded.wrappedValue {
+                ForEach(rows) { entry in
+                    bucketRow(entry, card: card, workspace: workspace)
+                }
+                if closedCount > 0, let progress, let parentTaskID {
+                    SidebarShowMoreToShipButton(
+                        count: closedCount,
+                        help: "Show the other \(progress.outcomeLabel) tasks in the Tasks view",
+                        accessibilityText: "Show \(closedCount) more \(progress.outcomeLabel) \(closedCount == 1 ? "task" : "tasks") in the Tasks view"
+                    ) {
+                        openTasksView(selecting: .task(parentTaskID))
+                    }
+                    .padding(.leading, Self.linkedChildIndent + 22)
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
+    /// Whether the row counts toward its parent's finished children.
+    private static func isFinishedChild(_ entry: SidebarBucketEntry<CardRow>) -> Bool {
+        let stage: TaskStage? = switch entry.payload.kind {
+        case .subspace(let row): row.stage
+        case .task(let item): item.stage
+        case .terminal: nil
+        }
+        return stage == .toShip || stage == .done
+    }
+
+    /// The task a bucket row shows, if any.
+    private func taskID(of entry: SidebarBucketEntry<CardRow>) -> UUID? {
+        switch entry.payload.kind {
+        case .subspace(let row): store.state.workspacesByID[row.id]?.taskID
+        case .task(let item): item.taskID
+        case .terminal: nil
+        }
+    }
+
+    /// A row key as an accessibility identifier suffix.
+    private static func accessibilityKey(_ key: SidebarRowKey) -> String {
+        switch key {
+        case .panel(let id): "panel.\(id.uuidString)"
+        case .workspace(let id): "workspace.\(id.uuidString)"
+        case .task(.task(let id)): "task.\(id.uuidString)"
+        case .task(.taskSpace(let id)): "taskSpace.\(id.uuidString)"
+        }
+    }
+
+    /// The card's counts by bucket, in place of the running-agents chip:
+    /// a yellow dot for Needs you, a blue square for Ready to review, a
+    /// spinner for Running, a gray dot for Idle. Empty buckets show no
+    /// count. The Needs you segment passes only its two buckets.
+    @ViewBuilder
+    private func bucketCountsBadge(
+        _ counts: [SidebarBucket: Int],
+        buckets: [SidebarBucket] = SidebarBucket.allCases
+    ) -> some View {
+        let label = Self.bucketCountsLabel(counts, buckets: buckets)
+        if label.isEmpty == false {
+            HStack(spacing: 7) {
+                ForEach(buckets, id: \.self) { bucket in
+                    if let count = counts[bucket], count > 0 {
+                        Self.bucketCountMark(bucket, count: count)
+                    }
+                }
+            }
+            .font(ToastyTheme.fontWorkspaceAgentCount)
+            .foregroundStyle(ToastyTheme.inactiveText)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityIdentifier("sidebar.workspace.bucketCounts")
+            .background {
+                SidebarSemanticTextBridge(text: label)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// "4 need you, 1 ready for review, 2 running, 3 idle", leaving out
+    /// empty buckets.
+    static func bucketCountsLabel(
+        _ counts: [SidebarBucket: Int],
+        buckets: [SidebarBucket] = SidebarBucket.allCases
+    ) -> String {
+        buckets.compactMap { bucket -> String? in
+            guard let count = counts[bucket], count > 0 else { return nil }
+            switch bucket {
+            case .needsYou: return "\(count) \(count == 1 ? "needs" : "need") you"
+            case .readyToReview: return "\(count) ready for review"
+            case .running: return "\(count) running"
+            case .idle: return "\(count) idle"
+            }
+        }
+        .joined(separator: ", ")
+    }
+
+    /// The chevron left of a project card's name. A collapsed card shows
+    /// only its name line with its counts; the choice is saved.
+    private func cardCollapseButton(workspace: WorkspaceState, isCollapsed: Bool) -> some View {
+        let label = "\(isCollapsed ? "Expand" : "Collapse") \(workspace.title)"
+        return Button {
+            cancelWorkspaceRename()
+            _ = store.send(
+                .setSidebarWorkspaceCollapsed(windowID: windowID, workspaceID: workspace.id, collapsed: isCollapsed == false),
+                source: .ui("sidebar_card_collapse")
+            )
+        } label: {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 4)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("sidebar.workspace.collapse.\(workspace.id.uuidString)")
+        .background {
+            SidebarSemanticTextBridge(text: label)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// The All segment's last card: tasks whose project is not open in the
+    /// window, such as one that waits for its workspace to be picked.
+    private func otherTasksCard(_ card: BucketedCard) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(card.title)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                bucketCountsBadge(card.counts)
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 10)
+            .background {
+                SidebarSemanticTextBridge(text: card.title)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+            bucketedCardBody(card, workspace: nil)
+            otherTasksFooter
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar.otherTasks")
+    }
+
+    /// The Other tasks card's To ship and Done counts. Each opens the Tasks
+    /// view at its group.
+    @ViewBuilder
+    private var otherTasksFooter: some View {
+        let toShip = otherFinishedItems(.toShip).count
+        let done = otherFinishedItems(.done).count
+        if toShip > 0 || done > 0 {
+            HStack(spacing: 12) {
+                if toShip > 0 {
+                    finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: Self.otherTasksCardID) {
+                        Label("To ship \(toShip)", systemImage: "arrow.up.square")
+                            .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                    }
+                }
+                if done > 0 {
+                    finishedTasksDoneButton(count: done, projectWorkspaceID: Self.otherTasksCardID)
+                }
+                Spacer(minLength: 0)
+            }
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
+        }
+    }
+
+    /// The Needs you segment: only the rows that need the user, from every
+    /// project, under each project's name. Projects with nothing for the
+    /// user are left out.
+    private func needsYouSegmentContent(_ sidebar: BucketedSidebar) -> some View {
+        let cards = store.state.topLevelWorkspaceIDs(in: windowID).compactMap { sidebar.cards[$0] }
+            + [sidebar.other].compactMap { $0 }
+        let listed = cards.filter { $0.needsYou.entries.isEmpty == false }
+        return VStack(alignment: .leading, spacing: 4) {
+            if listed.isEmpty {
+                VStack(spacing: 3) {
+                    Text("Nothing needs you")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.primaryText)
+                    Text("Running and idle work is in All.")
+                        .font(ToastyTheme.fontWorkspaceSessionChip)
+                        .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .background {
+                    SidebarSemanticTextBridge(text: "Nothing needs you")
+                        .frame(width: 0, height: 0)
+                        .allowsHitTesting(false)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("sidebar.needsYou.empty")
+            }
+            ForEach(listed) { card in
+                needsYouCard(card)
+            }
+        }
+        .padding(.top, 2)
+        .padding(.bottom, 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar.needsYou")
+    }
+
+    /// A project's rows in the Needs you segment, under its name and
+    /// counts: Needs you, then Ready to review, each with its header when
+    /// it has rows. Rows take one line each. The name selects the
+    /// project's workspace.
+    private func needsYouCard(_ card: BucketedCard) -> some View {
+        let workspace = card.workspaceID.flatMap { store.state.workspacesByID[$0] }
+        let isSelected = card.workspaceID.map(workspaceCardContainsSelection) ?? false
+        let buckets = SidebarBucket.needsYouSegmentBuckets
+        let countsLabel = Self.bucketCountsLabel(card.counts, buckets: buckets)
+        let label = countsLabel.isEmpty ? card.title : "\(card.title), \(countsLabel)"
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(card.title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                HStack(spacing: 7) {
+                    ForEach(buckets, id: \.self) { bucket in
+                        if let count = card.counts[bucket], count > 0 {
+                            Self.bucketCountMark(bucket, count: count)
+                        }
+                    }
+                }
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+                .fixedSize()
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 9)
+            .padding(.bottom, 3)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard let workspaceID = card.workspaceID else { return }
+                cancelWorkspaceRename()
+                store.selectWorkspace(windowID: windowID, workspaceID: workspaceID, preferringUnreadSessionPanelIn: sessionRuntimeStore)
+            }
+            .background {
+                SidebarSemanticTextBridge(text: label)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(card.workspaceID == nil ? .isHeader : [.isHeader, .isButton])
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(buckets, id: \.self) { bucket in
+                    let entries = card.needsYou.entries(bucket)
+                    if entries.isEmpty == false {
+                        bucketHeader(bucket, count: card.counts[bucket] ?? 0)
+                        VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
+                            ForEach(entries) { entry in
+                                bucketRow(entry, card: card, workspace: workspace, isCompact: true)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(isSelected ? ToastyTheme.accent : Color.clear)
+                .frame(width: 2)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar.needsYou.\(card.id.uuidString)")
+    }
+
+    /// A merged task waiting for a release, under its project's card. Its
+    /// task space usually closed at the merge, so the row opens the task in
+    /// the Tasks view; a task space the user kept open opens instead.
+    private func toShipTaskRow(_ item: TaskBoardItem) -> some View {
+        let hoverID = switch item.id {
+        case .task(let id), .taskSpace(let id): id
+        }
+        return SidebarHoverRegion(id: hoverID, selection: hoverState.toShipTask) { isHovered in
+            let label = TaskBoardPresentation.addingReleaseAfterMerge(
+                to: "\(item.title), \(TaskBoardPresentation.statusLine(item))", item
+            )
+            let open = {
+                if let workspaceID = item.taskSpaceWorkspaceID {
+                    runTaskMenuItem(.openTaskSpace(workspaceID: workspaceID))
+                } else {
+                    openTasksView(selecting: item.id)
+                }
+            }
+            HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
+                SubspaceRailStatusIcon(status: .toShip, isDoneTogglePreviewed: false)
+                    .frame(width: Self.sessionStatusRailWidth, height: Self.sessionRowLineMinHeight)
+                    .accessibilityHidden(true)
+                Self.styledSessionNameText(item.title, isEmphasized: false)
+                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(minHeight: Self.sessionRowLineMinHeight, alignment: .leading)
+                if TaskBoardPresentation.releaseAfterMergeRequestedAt(item) != nil {
+                    TaskReleaseAfterMergeMark()
+                        .frame(minHeight: Self.sessionRowLineMinHeight)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+            .onTapGesture(perform: open)
+            .onHover { isHovering in
+                if isHovering {
+                    hoverState.toShipTask.value = hoverID
+                } else if hoverState.toShipTask.value == hoverID {
+                    hoverState.toShipTask.value = nil
+                }
+            }
+            .help(TaskBoardPresentation.addingReleaseAfterMerge(to: TaskBoardPresentation.statusLine(item), item))
+            .background {
+                SidebarSemanticTextBridge(text: label)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, open)
+            .accessibilityIdentifier(Self.toShipTaskRowIdentifier(item.id))
+            .contextMenu {
+                TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(item), run: runTaskMenuItem)
+            }
+        }
+    }
+
+    static func toShipTaskRowIdentifier(_ subject: TaskBoardItem.Subject) -> String {
+        switch subject {
+        case .task(let id): "sidebar.toShip.task.\(id.uuidString)"
+        case .taskSpace(let id): "sidebar.toShip.taskSpace.\(id.uuidString)"
+        }
+    }
+
+    /// Under a project card: the tasks that left it because they finished.
+    /// The To ship tasks list under "› TO SHIP N", which starts collapsed,
+    /// with the Done count on the same line. Expanded, the latest To ship tasks show as rows, then
+    /// "Show N more". When every To ship task shows as a task space row, the
+    /// line counts them instead. While Toastty keeps merged Done tasks'
+    /// task spaces open, the Done count expands the same way to list them
+    /// (`BucketedCard.finished`); otherwise it opens the Tasks view.
+    @ViewBuilder
+    private func finishedTasksFooter(
+        projectWorkspaceID: UUID,
+        shownTaskSpaceIDs: Set<UUID>,
+        card: BucketedCard? = nil,
+        workspace: WorkspaceState? = nil
+    ) -> some View {
+        if taskBoard.isEnabled {
+            let items = taskBoardSnapshot.windowItems.filter { $0.projectWorkspaceID == projectWorkspaceID }
+            let recent = SidebarRecentToShip.card(items, projectWorkspaceID: projectWorkspaceID, shownTaskSpaceIDs: shownTaskSpaceIDs)
+            let listed = recent.shown.count + recent.hidden.count
+            let toShip = listed == 0 ? items.filter { $0.stage == .toShip }.count : 0
+            let done = items.filter { $0.stage == .done }.count
+            let openDone = (card?.finished ?? []).filter { entry in
+                guard case .subspace(let row) = entry.payload.kind else { return false }
+                return row.stage != .toShip
+            }
+            let isDoneExpanded = Binding(
+                get: {
+                    expandedDoneProjectIDs.contains(projectWorkspaceID)
+                        || openDone.contains { $0.key == selectedRowKey }
+                },
+                set: { isExpanded in
+                    if isExpanded {
+                        expandedDoneProjectIDs.insert(projectWorkspaceID)
+                    } else {
+                        expandedDoneProjectIDs.remove(projectWorkspaceID)
+                    }
+                }
+            )
+            // While Done tasks' task spaces are open, Done takes a toggle line
+            // of its own under the To ship line; otherwise it is a count on it.
+            let doneCountOnLine = done > 0 && openDone.isEmpty
+            if listed > 0 || toShip > 0 || done > 0 {
+                VStack(alignment: .leading, spacing: 3) {
+                    if listed > 0 || toShip > 0 || doneCountOnLine {
+                        // A To ship toggle takes the width the Done count
+                        // leaves. Each count opens the Tasks view at its own
+                        // group.
+                        HStack(spacing: 12) {
+                            if listed > 0 {
+                                cardToShipToggle(count: listed, projectWorkspaceID: projectWorkspaceID)
+                            } else if toShip > 0 {
+                                finishedTasksButton(.toShip, count: toShip, projectWorkspaceID: projectWorkspaceID) {
+                                    Label("To ship \(toShip)", systemImage: "arrow.up.square")
+                                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                                }
+                            }
+                            if doneCountOnLine {
+                                finishedTasksDoneButton(count: done, projectWorkspaceID: projectWorkspaceID)
+                            }
+                            if listed == 0 {
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .font(ToastyTheme.fontWorkspaceSessionChip)
+                        .labelStyle(.titleAndIcon)
+                        // A toggle lines up with the card's other toggles; a
+                        // count lines up its mark with the rows' marks.
+                        .padding(.horizontal, listed > 0 ? 10 : 18)
+                    }
+                    if listed > 0, expandedToShipProjectIDs.contains(projectWorkspaceID) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(recent.shown) { item in
+                                toShipTaskRow(item)
+                            }
+                            if let firstHidden = recent.hidden.first {
+                                SidebarShowMoreToShipButton(count: recent.hidden.count) {
+                                    openTasksView(selecting: firstHidden.id, revealing: .toShip)
+                                }
+                                // Lines up with the task titles: the row's
+                                // padding, status mark and gap.
+                                .padding(.leading, 8 + Self.sessionStatusRailWidth + Self.sessionStatusRailGap)
+                                .padding(.vertical, 3)
+                                .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipMore.\(projectWorkspaceID.uuidString)")
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                    }
+                    if done > 0, openDone.isEmpty == false {
+                        cardDoneToggle(
+                            count: done, openCount: openDone.count,
+                            isExpanded: isDoneExpanded, projectWorkspaceID: projectWorkspaceID
+                        )
+                        .padding(.horizontal, 10)
+                    }
+                    if let card, done > 0, openDone.isEmpty == false, isDoneExpanded.wrappedValue {
+                        // The task spaces Toastty still keeps open, newest
+                        // merge first, then the rest in the Tasks view.
+                        VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
+                            ForEach(openDone) { entry in
+                                bucketRow(entry, card: card, workspace: workspace)
+                            }
+                            let closedCount = max(0, done - openDone.count)
+                            if closedCount > 0 {
+                                SidebarShowMoreToShipButton(
+                                    count: closedCount,
+                                    help: "Show the other done tasks in the Tasks view",
+                                    accessibilityText: "Show \(closedCount) more done \(closedCount == 1 ? "task" : "tasks") in the Tasks view"
+                                ) {
+                                    openTasksView(selecting: nil, revealing: .done)
+                                }
+                                .padding(.leading, 8 + Self.sessionStatusRailWidth + Self.sessionStatusRailGap)
+                                .padding(.vertical, 3)
+                                .accessibilityIdentifier("sidebar.workspace.finishedTasks.doneMore.\(projectWorkspaceID.uuidString)")
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                    }
+                }
+                .padding(.bottom, 10)
+            }
+        }
+    }
+
+    /// "› TO SHIP N" under a project card, lined up with the card's
+    /// "TASK SPACES" toggle.
+    private func cardToShipToggle(count: Int, projectWorkspaceID: UUID) -> some View {
+        let isExpanded = Binding(
+            get: { expandedToShipProjectIDs.contains(projectWorkspaceID) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedToShipProjectIDs.insert(projectWorkspaceID)
+                } else {
+                    expandedToShipProjectIDs.remove(projectWorkspaceID)
+                }
+            }
+        )
+        return SidebarToShipGroupToggle(
+            count: count,
+            isExpanded: isExpanded,
+            showsMark: true,
+            accessibilityText: SidebarToShipGroupToggle.label(count: count, isExpanded: isExpanded.wrappedValue)
+        )
+        .accessibilityIdentifier("sidebar.workspace.finishedTasks.toShipToggle.\(projectWorkspaceID.uuidString)")
+    }
+
+    /// "› ☑ DONE 91   9 open" under a project card while Toastty keeps
+    /// merged Done tasks' task spaces open: it expands to list them.
+    private func cardDoneToggle(
+        count: Int,
+        openCount: Int,
+        isExpanded: Binding<Bool>,
+        projectWorkspaceID: UUID
+    ) -> some View {
+        SidebarToShipGroupToggle(
+            count: count,
+            isExpanded: isExpanded,
+            summary: Text("\(openCount) open")
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText),
+            showsMark: true,
+            group: .done,
+            accessibilityText: Self.cardDoneToggleLabel(count: count, openCount: openCount, isExpanded: isExpanded.wrappedValue)
+        )
+        .accessibilityIdentifier("sidebar.workspace.finishedTasks.doneToggle.\(projectWorkspaceID.uuidString)")
+    }
+
+    static func cardDoneToggleLabel(count: Int, openCount: Int, isExpanded: Bool) -> String {
+        let spaces = "\(openCount) task \(openCount == 1 ? "space" : "spaces") open"
+        return "Done, \(count) \(count == 1 ? "task" : "tasks"), \(spaces), \(isExpanded ? "expanded" : "collapsed")"
+    }
+
+    private func finishedTasksDoneButton(count: Int, projectWorkspaceID: UUID) -> some View {
+        finishedTasksButton(.done, count: count, projectWorkspaceID: projectWorkspaceID) {
+            Label("Done \(count)", systemImage: "checkmark.square")
+                .foregroundStyle(ToastyTheme.sidebarSubspaceDoneMark.opacity(0.85))
+        }
+    }
+
+    private func finishedTasksButton(
+        _ group: TaskStage.Group,
+        count: Int,
+        projectWorkspaceID: UUID,
+        @ViewBuilder label: () -> some View
+    ) -> some View {
+        let accessibilityText = Self.finishedTasksFooterLabel(group, count: count)
+        return Button {
+            openTasksView(selecting: nil, revealing: group)
+        } label: {
+            label()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(group == .done ? "Show done tasks in the Tasks view" : "Show tasks to ship in the Tasks view")
+        .accessibilityLabel(accessibilityText)
+        .accessibilityIdentifier("sidebar.workspace.finishedTasks.\(group == .done ? "done" : "toShip").\(projectWorkspaceID.uuidString)")
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityText)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    static func finishedTasksFooterLabel(_ group: TaskStage.Group, count: Int) -> String {
+        let counted = group == .done ? "\(count) done" : "\(count) to ship"
+        return "Finished tasks: \(counted). Opens the Tasks view."
+    }
+
     private var sidebarTitlebarCover: some View {
         Rectangle()
             .fill(ToastyTheme.chromeBackground)
@@ -944,15 +2359,24 @@ struct SidebarView: View {
             .allowsHitTesting(false)
     }
 
-    private var sidebarHiddenSessionContent: SidebarScrollGeometry.Content {
+    /// `bucketed` is the pass's buckets, when the task system is on: they
+    /// hold each card's task space rows, which are not worked out again.
+    private func sidebarHiddenSessionContent(_ bucketed: BucketedSidebar?) -> SidebarScrollGeometry.Content {
         guard activeWorkspaceDrag == nil, activeSessionDrag == nil else {
             return SidebarScrollGeometry.Content(isDragging: true)
+        }
+        // The pills point at session rows in project cards, which the Needs
+        // you segment does not draw. Rows in a collapsed card have no frame,
+        // so the pills leave them out; the card's counts show them.
+        guard taskBoard.isEnabled == false || sidebarSegment == .all else {
+            return SidebarScrollGeometry.Content()
         }
 
         var content = SidebarScrollGeometry.Content()
         // Derive IDs and attention from the same status pass for both pills.
         for workspaceID in store.window(id: windowID)?.workspaceIDs ?? [] {
-            guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
+            // The coordinator's pinned row draws no session rows to point at.
+            guard let workspace = store.state.workspacesByID[workspaceID], workspace.isCoordinator == false else { continue }
             for status in sidebarSessionStatuses(for: workspaceID) {
                 let rowID = SidebarSessionPresentation.SidebarSessionRowID(
                     workspaceID: workspaceID, sessionID: status.sessionID, panelID: status.panelID
@@ -967,8 +2391,10 @@ struct SidebarView: View {
             }
         }
         for parentID in store.state.topLevelWorkspaceIDs(in: windowID) {
-            let rows = subspaceRows(for: parentID, parentSessionStatuses: sidebarSessionStatuses(for: parentID))
-            let isCollapsed = collapsedSubspaceGroupParentIDs.contains(parentID)
+            let rows = bucketed?.cards[parentID]?.subspaceRows
+                ?? subspaceRows(for: parentID, parentSessionStatuses: sidebarSessionStatuses(for: parentID))
+            // Bucketed cards have no Task Spaces group to collapse.
+            let isCollapsed = taskBoard.isEnabled == false && collapsedSubspaceGroupParentIDs.contains(parentID)
             let displayedRows = isCollapsed ? rows : SidebarSubspacePresentation.filteredRows(
                 rows, spawningSessionID: subspaceFilterSessionIDByParentID[parentID]
             )
@@ -1046,7 +2472,8 @@ struct SidebarView: View {
         shortcutLabel: String?,
         isSelected: Bool,
         index: Int,
-        orderedWorkspaceIDs: [UUID]
+        orderedWorkspaceIDs: [UUID],
+        card: BucketedCard? = nil
     ) -> some View {
         let row = Group {
             if renamingWorkspaceID == workspaceID {
@@ -1056,7 +2483,8 @@ struct SidebarView: View {
                     shortcutLabel: shortcutLabel,
                     isSelected: isSelected,
                     sourceIndex: index - 1,
-                    orderedWorkspaceIDs: orderedWorkspaceIDs
+                    orderedWorkspaceIDs: orderedWorkspaceIDs,
+                    card: card
                 )
             } else {
                 workspaceButton(
@@ -1065,7 +2493,8 @@ struct SidebarView: View {
                     shortcutLabel: shortcutLabel,
                     isSelected: isSelected,
                     sourceIndex: index - 1,
-                    orderedWorkspaceIDs: orderedWorkspaceIDs
+                    orderedWorkspaceIDs: orderedWorkspaceIDs,
+                    card: card
                 )
             }
         }
@@ -1092,16 +2521,18 @@ struct SidebarView: View {
         shortcutLabel: String?,
         isSelected: Bool,
         sourceIndex: Int,
-        orderedWorkspaceIDs: [UUID]
+        orderedWorkspaceIDs: [UUID],
+        card: BucketedCard?
     ) -> some View {
-        let sessionStatuses = sidebarSessionStatuses(for: workspace.id)
-        let subspaceRows = subspaceRows(for: workspace.id, parentSessionStatuses: sessionStatuses)
+        let sessionStatuses = card?.sessionStatuses ?? sidebarSessionStatuses(for: workspace.id)
+        let subspaceRows = card?.subspaceRows ?? subspaceRows(for: workspace.id, parentSessionStatuses: sessionStatuses)
         let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses, workspaceID: workspace.id)
         let accessibilityLabel = SidebarSessionPresentation.workspaceAccessibilityLabel(
             for: workspace,
             isSelected: isSelected,
             agentSummary: agentSummary
         )
+        let isCollapsed = card != nil && isCardCollapsed(workspaceID)
 
         return workspaceRowChrome(
             workspaceID: workspaceID,
@@ -1109,75 +2540,105 @@ struct SidebarView: View {
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
             VStack(alignment: .leading, spacing: 0) {
-                workspaceHeaderContent {
-                    workspacePrimaryContent(
-                        workspace: workspace,
-                        shortcutLabel: shortcutLabel,
-                        selectionSubtitle: nil,
-                        isSelected: isSelected,
-                        agentSummary: agentSummary
-                    ) {
-                        Self.styledWorkspaceTitleText(
-                            workspace.title,
+                HStack(spacing: 0) {
+                    if card != nil {
+                        // Outside the header's pointer overlay, which would
+                        // take its clicks for selection and drags.
+                        cardCollapseButton(workspace: workspace, isCollapsed: isCollapsed)
+                    }
+                    workspaceHeaderContent(leadingPadding: card == nil ? 10 : 2) {
+                        workspacePrimaryContent(
+                            workspace: workspace,
+                            shortcutLabel: shortcutLabel,
+                            selectionSubtitle: nil,
                             isSelected: isSelected,
-                            hasBeenVisited: workspace.hasBeenVisited
+                            agentSummary: agentSummary,
+                            bucketCounts: card?.counts
+                        ) {
+                            Self.styledWorkspaceTitleText(
+                                workspace.title,
+                                isSelected: isSelected,
+                                hasBeenVisited: workspace.hasBeenVisited
+                            )
+                                .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .overlay {
+                        PointerInteractionRegion(
+                            name: "workspace-sidebar-row",
+                            metadata: [
+                                "workspaceID": workspaceID.uuidString,
+                                "sourceIndex": "\(sourceIndex)",
+                            ],
+                            onBegan: { _ in
+                                beginWorkspaceInteraction(workspaceID: workspaceID)
+                            },
+                            onChanged: { value in
+                                updateWorkspaceDrag(
+                                    workspaceID: workspaceID,
+                                    sourceIndex: sourceIndex,
+                                    orderedWorkspaceIDs: orderedWorkspaceIDs,
+                                    value: value
+                                )
+                            },
+                            onEnded: { value in
+                                finishWorkspaceInteraction(
+                                    workspaceID: workspaceID,
+                                    workspace: workspace,
+                                    value: value
+                                )
+                            }
                         )
-                            .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(accessibilityLabel)
+                    .accessibilityAction {
+                        handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
+                    }
+                    .background {
+                        SidebarSemanticTextBridge(text: accessibilityLabel)
                     }
                 }
-                .contentShape(Rectangle())
-                .overlay {
-                    PointerInteractionRegion(
-                        name: "workspace-sidebar-row",
-                        metadata: [
-                            "workspaceID": workspaceID.uuidString,
-                            "sourceIndex": "\(sourceIndex)",
-                        ],
-                        onBegan: { _ in
-                            beginWorkspaceInteraction(workspaceID: workspaceID)
-                        },
-                        onChanged: { value in
-                            updateWorkspaceDrag(
-                                workspaceID: workspaceID,
-                                sourceIndex: sourceIndex,
-                                orderedWorkspaceIDs: orderedWorkspaceIDs,
-                                value: value
-                            )
-                        },
-                        onEnded: { value in
-                            finishWorkspaceInteraction(
-                                workspaceID: workspaceID,
-                                workspace: workspace,
-                                value: value
-                            )
+
+                if let card {
+                    // A collapsed card keeps only its name line.
+                    if isCollapsed == false {
+                        workspaceAnnotationChipsRow(workspace: workspace)
+                        if card.hasRows {
+                            bucketedCardBody(card, workspace: workspace)
                         }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(accessibilityLabel)
-                .accessibilityAction {
-                    handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
-                }
-                .background {
-                    SidebarSemanticTextBridge(text: accessibilityLabel)
-                }
+                        // A merged task that leaves the buckets lists in
+                        // the footer, as a To ship row or under Done.
+                        let finishedIDs = Set(card.finished.compactMap { entry -> UUID? in
+                            guard case .workspace(let id) = entry.key else { return nil }
+                            return id
+                        })
+                        finishedTasksFooter(
+                            projectWorkspaceID: workspace.id,
+                            shownTaskSpaceIDs: Set(subspaceRows.map(\.id)).subtracting(finishedIDs),
+                            card: card, workspace: workspace
+                        )
+                    }
+                } else {
+                    // Rendered below and outside the title header's AppKit
+                    // pointer-interaction overlay: workspace drag keeps starting
+                    // from the title region while link chips stay real buttons.
+                    workspaceAnnotationChipsRow(workspace: workspace)
 
-                // Rendered below and outside the title header's AppKit
-                // pointer-interaction overlay: workspace drag keeps starting
-                // from the title region while link chips stay real buttons.
-                workspaceAnnotationChipsRow(workspace: workspace)
+                    if !sessionStatuses.isEmpty || !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty {
+                        sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
+                    }
 
-                if !sessionStatuses.isEmpty || !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty {
-                    sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
+                    subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
+                    finishedTasksFooter(projectWorkspaceID: workspace.id, shownTaskSpaceIDs: Set(subspaceRows.map(\.id)))
                 }
-
-                subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
             }
         }
     }
@@ -1188,11 +2649,13 @@ struct SidebarView: View {
         shortcutLabel: String?,
         isSelected: Bool,
         sourceIndex _: Int,
-        orderedWorkspaceIDs _: [UUID]
+        orderedWorkspaceIDs _: [UUID],
+        card: BucketedCard?
     ) -> some View {
-        let sessionStatuses = sidebarSessionStatuses(for: workspace.id)
-        let subspaceRows = subspaceRows(for: workspace.id, parentSessionStatuses: sessionStatuses)
+        let sessionStatuses = card?.sessionStatuses ?? sidebarSessionStatuses(for: workspace.id)
+        let subspaceRows = card?.subspaceRows ?? subspaceRows(for: workspace.id, parentSessionStatuses: sessionStatuses)
         let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses, workspaceID: workspace.id)
+        let isCollapsed = card != nil && isCardCollapsed(workspaceID)
 
         return workspaceRowChrome(
             workspaceID: workspaceID,
@@ -1200,38 +2663,53 @@ struct SidebarView: View {
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
             VStack(alignment: .leading, spacing: 0) {
-                workspaceHeaderContent {
-                    workspacePrimaryContent(
-                        workspace: workspace,
-                        shortcutLabel: shortcutLabel,
-                        selectionSubtitle: nil,
-                        isSelected: isSelected,
-                        agentSummary: agentSummary
-                    ) {
-                        WorkspaceRenameTextField(
-                            text: $renameDraftTitle,
-                            itemID: workspaceID,
-                            placeholder: "Workspace name",
-                            font: ToastyTheme.sidebarWorkspaceNameNSFont(isSelected: isSelected),
-                            accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
-                            onSubmit: {
-                                commitWorkspaceRename(workspaceID: workspaceID)
-                            },
-                            onCancel: {
-                                cancelWorkspaceRename()
-                                scheduleWorkspaceSlotFocusRestore()
-                            }
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 0) {
+                    if card != nil {
+                        cardCollapseButton(workspace: workspace, isCollapsed: isCollapsed)
+                    }
+                    workspaceHeaderContent(leadingPadding: card == nil ? 10 : 2) {
+                        workspacePrimaryContent(
+                            workspace: workspace,
+                            shortcutLabel: shortcutLabel,
+                            selectionSubtitle: nil,
+                            isSelected: isSelected,
+                            agentSummary: agentSummary,
+                            bucketCounts: card?.counts
+                        ) {
+                            WorkspaceRenameTextField(
+                                text: $renameDraftTitle,
+                                itemID: workspaceID,
+                                placeholder: "Workspace name",
+                                font: ToastyTheme.sidebarWorkspaceNameNSFont(isSelected: isSelected),
+                                accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
+                                onSubmit: {
+                                    commitWorkspaceRename(workspaceID: workspaceID)
+                                },
+                                onCancel: {
+                                    cancelWorkspaceRename()
+                                    scheduleWorkspaceSlotFocusRestore()
+                                }
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
-                workspaceAnnotationChipsRow(workspace: workspace)
-                if !sessionStatuses.isEmpty || !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty {
-                    sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
+                if let card {
+                    if isCollapsed == false {
+                        workspaceAnnotationChipsRow(workspace: workspace)
+                        if card.hasRows {
+                            bucketedCardBody(card, workspace: workspace)
+                        }
+                    }
+                } else {
+                    workspaceAnnotationChipsRow(workspace: workspace)
+                    if !sessionStatuses.isEmpty || !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty {
+                        sessionStatusesContent(sessionStatuses, workspace: workspace, subspaceRows: subspaceRows)
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, Self.sessionListBottomPadding(followedBySubspaces: subspaceRows.isEmpty == false))
+                    }
+                    subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
                 }
-                subspacesGroup(subspaceRows, parentWorkspaceID: workspace.id)
             }
         }
     }
@@ -1389,11 +2867,13 @@ struct SidebarView: View {
     }
 
     private func workspaceHeaderContent<Content: View>(
+        leadingPadding: CGFloat = 10,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
             .padding(.vertical, 12)
-            .padding(.horizontal, 10)
+            .padding(.leading, leadingPadding)
+            .padding(.trailing, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
     }
@@ -1404,6 +2884,7 @@ struct SidebarView: View {
         selectionSubtitle: String?,
         isSelected: Bool,
         agentSummary: WorkspaceAgentSummary?,
+        bucketCounts: [SidebarBucket: Int]? = nil,
         @ViewBuilder titleView: () -> Title
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -1426,12 +2907,14 @@ struct SidebarView: View {
 
                 Spacer(minLength: 0)
 
-                if let agentSummary, agentSummary.hasRunning {
+                if let bucketCounts {
+                    bucketCountsBadge(bucketCounts)
+                } else if let agentSummary, agentSummary.hasRunning {
                     workspaceAgentCountBadge(agentSummary)
                 }
 
                 if optionKeyPressed, let shortcutLabel {
-                    shortcutBadge(shortcutLabel, highlighted: true)
+                    SidebarShortcutBadge(label: shortcutLabel, highlighted: true)
                 }
             }
 
@@ -1491,7 +2974,7 @@ struct SidebarView: View {
         }.map(\.element)
     }
 
-    private func programStatusContent(_ row: SidebarProgramStatusRow, workspace: WorkspaceState) -> some View {
+    private func programStatusContent(_ row: SidebarProgramStatusRow, workspace: WorkspaceState, isCompact: Bool = false) -> some View {
         SidebarHoverRegion(id: row.panelID, selection: hoverState.panel) { isHovered in
             Button {
                 focusSessionPanel(workspaceID: workspace.id, panelID: row.panelID)
@@ -1505,12 +2988,13 @@ struct SidebarView: View {
                     isActivePanel: workspace.focusedPanelID == row.panelID,
                     isHovered: isHovered, isFlashing: false,
                     childCount: 0, childRowsExpanded: false, collapsedChildNeedsAttention: false,
-                    parentSessionName: nil, onToggleChildRows: {}
+                    parentSessionName: nil, isCompact: isCompact, onToggleChildRows: {}
                 )
             }
             .buttonStyle(.plain)
             .onHover { hoverState.panel.value = $0 ? row.panelID : nil }
-            .help("Terminal: \(row.terminalLabel)")
+            // A one-line row has no summary line, so its tooltip carries it.
+            .help([isCompact ? row.summary : nil, "Terminal: \(row.terminalLabel)"].compactMap { $0 }.joined(separator: "\n"))
             .accessibilityLabel(row.accessibilityLabel)
             .accessibilityIdentifier("sidebar.programStatus.\(row.panelID.uuidString)")
             .background {
@@ -1533,42 +3017,74 @@ struct SidebarView: View {
         )
         VStack(alignment: .leading, spacing: Self.sessionRowSpacing) {
             ForEach(terminalStatusRows(workspaceSessionStatuses, workspace: workspace)) { row in
-                switch row {
-                case .program(let program):
-                    programStatusContent(program, workspace: workspace)
-                case .session(let workspaceSessionStatus):
-                    let sessionID = workspaceSessionStatus.sessionID
-                    let ownChip = SidebarSubspacePresentation.spawnerChip(
-                        sessionID: sessionID,
-                        rows: subspaceRows,
-                        activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
-                    )
-                    // The card's own group wins; a session that nested its
-                    // subspaces only under other cards points at that card's group.
-                    let otherCardSpawn = ownChip == nil ? otherCardSpawns[sessionID] : nil
-                    let hiddenChildWorkspaceIDs = Set(subspaceRows.map(\.id))
-                        .union(otherCardSpawn?.spawnedRows.map(\.id) ?? [])
-                    SidebarHoverRegion(id: workspaceSessionStatus.panelID, selection: hoverState.panel) { isHovered in
-                        sessionStatusContent(
-                            hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
-                            workspace: workspace,
-                            isHovered: isHovered,
-                            spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
-                                SidebarSubspacePresentation.spawnerChip(
-                                    sessionID: sessionID,
-                                    rows: spawn.spawnedRows,
-                                    activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
-                                    targetWorkspaceTitle: spawn.parentWorkspaceTitle
-                                )
-                            },
-                            spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id
-                        )
-                    }
-                }
+                terminalStatusRowView(row, workspace: workspace, subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Self.sessionStatusesTopSpacing)
+    }
+
+    /// One session or program row in a project card.
+    @ViewBuilder
+    private func terminalStatusRowView(
+        _ row: TerminalStatusRow,
+        workspace: WorkspaceState,
+        subspaceRows: [SidebarSubspacePresentation.Row],
+        otherCardSpawns: [String: OtherCardSubspaceSpawn],
+        footerTaskSpaceIDs: Set<UUID> = [],
+        isCompact: Bool = false
+    ) -> some View {
+        switch row {
+        case .program(let program):
+            programStatusContent(program, workspace: workspace, isCompact: isCompact)
+        case .session(let workspaceSessionStatus):
+            let sessionID = workspaceSessionStatus.sessionID
+            // The ⑂ chip counts the task spaces its filter can show: not
+            // the merged ones a card lists under its footer.
+            let isListed = { (row: SidebarSubspacePresentation.Row) in footerTaskSpaceIDs.contains(row.id) == false }
+            let ownChip = SidebarSubspacePresentation.spawnerChip(
+                sessionID: sessionID,
+                rows: subspaceRows.filter(isListed),
+                activeFilterSessionID: subspaceFilterSessionIDByParentID[workspace.id]
+            )
+            // The card's own group wins; a session that nested its
+            // subspaces only under other cards points at that card's group.
+            let otherCardSpawn = ownChip == nil ? otherCardSpawns[sessionID] : nil
+            let hiddenChildWorkspaceIDs = childWorkspaceIDsShownElsewhere(
+                sessionID: sessionID, subspaceRows: subspaceRows, otherCardSpawns: otherCardSpawns
+            )
+            SidebarHoverRegion(id: workspaceSessionStatus.panelID, selection: hoverState.panel) { isHovered in
+                sessionStatusContent(
+                    hidingSubspaceChildren(workspaceSessionStatus, subspaceIDs: hiddenChildWorkspaceIDs),
+                    workspace: workspace,
+                    isHovered: isHovered,
+                    spawnerChip: ownChip ?? otherCardSpawn.flatMap { spawn in
+                        SidebarSubspacePresentation.spawnerChip(
+                            sessionID: sessionID,
+                            rows: spawn.spawnedRows.filter(isListed),
+                            activeFilterSessionID: subspaceFilterSessionIDByParentID[spawn.parentWorkspaceID],
+                            targetWorkspaceTitle: spawn.parentWorkspaceTitle
+                        )
+                    },
+                    spawnerChipParentWorkspaceID: otherCardSpawn?.parentWorkspaceID ?? workspace.id,
+                    isCompact: isCompact
+                )
+            }
+        }
+    }
+
+    /// The workspaces whose sessions a session row leaves out of its
+    /// children, because a task space row shows them: the card's task
+    /// spaces, and, for a session that started task spaces only under another
+    /// card, that card's ones.
+    private func childWorkspaceIDsShownElsewhere(
+        sessionID: String,
+        subspaceRows: [SidebarSubspacePresentation.Row],
+        otherCardSpawns: [String: OtherCardSubspaceSpawn]
+    ) -> Set<UUID> {
+        let startedHere = subspaceRows.contains { $0.spawningSessionID == sessionID }
+        let elsewhere = startedHere ? nil : otherCardSpawns[sessionID]
+        return Set(subspaceRows.map(\.id)).union(elsewhere?.spawnedRows.map(\.id) ?? [])
     }
 
     private func selectionSubtitle(for workspace: WorkspaceState) -> String? {
@@ -1582,7 +3098,8 @@ struct SidebarView: View {
         workspace: WorkspaceState,
         isHovered: Bool,
         spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil,
-        spawnerChipParentWorkspaceID: UUID
+        spawnerChipParentWorkspaceID: UUID,
+        isCompact: Bool = false
     ) -> some View {
         let sessionRowID = SidebarSessionPresentation.SidebarSessionRowID(
             workspaceID: workspace.id,
@@ -1714,6 +3231,7 @@ struct SidebarView: View {
             collapsedChildNeedsAttention: collapsedChildNeedsAttention,
             parentSessionName: parentTagName,
             spawnerChip: spawnerChip,
+            isCompact: isCompact,
             onToggleChildRows: {
                 toggleSessionChildRows(sessionID: workspaceSessionStatus.sessionID)
             },
@@ -1793,7 +3311,10 @@ struct SidebarView: View {
             }
             .background(sessionRowFrameMeasurement(rowID: sessionRowID))
 
-            if workspaceSessionStatus.children.isEmpty == false && childRowsExpanded {
+            // A compact row has no sub-agent control, so it shows its
+            // sub-agents when one of them is why the row needs the user.
+            if workspaceSessionStatus.children.isEmpty == false
+                && (isCompact ? childRowsNeedAttention : childRowsExpanded) {
                 sessionChildRowsContainer(
                     workspaceSessionStatus.children,
                     parentWorkspaceID: workspace.id,
@@ -1922,6 +3443,7 @@ struct SidebarView: View {
         collapsedChildNeedsAttention: Bool,
         parentSessionName: String?,
         spawnerChip: SidebarSubspacePresentation.SpawnerChip? = nil,
+        isCompact: Bool = false,
         onToggleChildRows: @escaping () -> Void,
         onToggleSpawnerFilter: @escaping () -> Void = {},
         onHoverSpawnerChip: @escaping (Bool) -> Void = { _ in }
@@ -1965,21 +3487,34 @@ struct SidebarView: View {
         )
 
         return HStack(alignment: .top, spacing: Self.sessionStatusRailGap) {
-            sessionStatusRail(railState, marker: railMarker)
+            // A compact row has one line, so a standing mark such as the
+            // later flag sits after the name instead of under the status.
+            sessionStatusRail(railState, marker: isCompact ? nil : railMarker)
 
             VStack(alignment: .leading, spacing: 1) {
                 sessionRowStateLine(accessories) {
-                    Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
-                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    if isCompact, let railMarker {
+                        HStack(spacing: 4) {
+                            Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
+                                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                            sessionStatusRailMarkerSlot(railMarker)
+                        }
+                    } else {
+                        Self.styledSessionNameText(title, isEmphasized: isEmphasized, isItalic: isItalic)
+                            .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    }
                 }
                 // Reserved even without a summary yet, so every row keeps one
                 // height and the list does not reflow as summaries or names
-                // arrive.
-                sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
-                    if let waitingSummary {
-                        sessionWaitingSummaryLabel(waitingSummary)
-                    } else {
-                        sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
+                // arrive. A compact row leaves the summary, the parent tag
+                // and the sub-agent control to the hover card.
+                if isCompact == false {
+                    sessionRowSummaryLine(accessories, onToggleChildRows: onToggleChildRows) {
+                        if let waitingSummary {
+                            sessionWaitingSummaryLabel(waitingSummary)
+                        } else {
+                            sessionSummaryLabel(summary ?? " ", isResuming: isResuming, isItalic: isItalic)
+                        }
                     }
                 }
             }
@@ -2319,10 +3854,20 @@ struct SidebarView: View {
         value: PointerInteractionValue
     ) -> SidebarSessionPresentation.SessionDropTarget? {
         guard let parentFrame = scrollGeometry.sessionRowFrames[rowID] else { return nil }
-        let rows = currentSidebarSessionRowIDs().filter { $0.workspaceID == rowID.workspaceID }
+        let frames = scrollGeometry.sessionGroupFrames
+        // Top to bottom as drawn: buckets list a card's sessions apart from
+        // the card's panel order.
+        let rows = currentSidebarSessionRowIDs()
+            .filter { $0.workspaceID == rowID.workspaceID }
+            .enumerated()
+            .sorted { lhs, rhs in
+                let left = frames[lhs.element]?.minY ?? .infinity, right = frames[rhs.element]?.minY ?? .infinity
+                return left == right ? lhs.offset < rhs.offset : left < right
+            }
+            .map(\.element)
         return SidebarSessionPresentation.sessionDropTarget(
             orderedRowIDs: rows,
-            frames: scrollGeometry.sessionGroupFrames,
+            frames: frames,
             source: rowID,
             pointer: CGPoint(x: parentFrame.minX + value.location.x, y: parentFrame.minY + value.location.y),
             viewportHeight: scrollGeometry.viewportHeight
@@ -2465,7 +4010,7 @@ struct SidebarView: View {
 
         var dragState = activeWorkspaceDrag
         if dragState?.workspaceID != workspaceID {
-            let startPointerY = (measuredWorkspaceRowFramesByID[workspaceID]?.minY ?? 0) + value.startLocation.y
+            let startPointerY = (scrollGeometry.workspaceRowFrames[workspaceID]?.minY ?? 0) + value.startLocation.y
             dragState = WorkspaceDragState(
                 workspaceID: workspaceID,
                 sourceIndex: sourceIndex,
@@ -2491,7 +4036,7 @@ struct SidebarView: View {
         let pointerY = (dragState?.startPointerY ?? value.location.y) + value.translation.height
         let targetIndex = Self.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: orderedWorkspaceIDs,
-            measuredRowFramesByID: measuredWorkspaceRowFramesByID,
+            measuredRowFramesByID: scrollGeometry.workspaceRowFrames,
             draggedWorkspaceID: workspaceID,
             pointerY: pointerY
         ) ?? sourceIndex
@@ -2649,7 +4194,7 @@ struct SidebarView: View {
             metadata["activeTargetIndex"] = "\(activeWorkspaceDrag.targetIndex)"
             metadata["activeTranslationHeight"] = "\(activeWorkspaceDrag.translationHeight)"
         }
-        if let measuredFrame = measuredWorkspaceRowFramesByID[workspaceID] {
+        if let measuredFrame = scrollGeometry.workspaceRowFrames[workspaceID] {
             metadata["measuredFrame"] = DraggableInteractionLog.rectDescription(measuredFrame)
         }
         return metadata
@@ -2819,15 +4364,23 @@ struct SidebarView: View {
 
     private func sessionStatusChip(kind: SessionStatusKind, label: String? = nil) -> some View {
         SessionStatusBadge(kind: kind, label: label)
-            .background {
-                // The row is one accessibility element and carries the spoken
-                // wording, so the badge's shortened text is otherwise
-                // invisible to AppKit inspectors and host-based tests.
-                SidebarSemanticTextBridge(text: label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind))
-                    .frame(width: 0, height: 0)
-                    .allowsHitTesting(false)
-            }
+            .modifier(SidebarStatusPillSemanticText(
+                text: label ?? SidebarSessionPresentation.sessionStatusBadgeLabel(for: kind)
+            ))
     }
+
+    /// A task row whose agent waits for the user's reply. Same colors as the
+    /// rail's question box.
+    private func taskQuestionChip() -> some View {
+        SidebarStatusPill(
+            text: Self.taskQuestionChipLabel,
+            foreground: ToastyTheme.sidebarTaskQuestionMark,
+            background: ToastyTheme.sidebarTaskQuestionMarkBackground
+        )
+        .modifier(SidebarStatusPillSemanticText(text: Self.taskQuestionChipLabel))
+    }
+
+    static let taskQuestionChipLabel = "question"
 
     static func sessionWaitingChip() -> some View {
         Text("waiting")
@@ -3303,48 +4856,128 @@ struct SidebarView: View {
         }
         return subspaceIDs.compactMap { subspaceID in
             guard let workspace = store.state.workspacesByID[subspaceID] else { return nil }
-            let spawner = workspace.spawningSessionID.flatMap(spawnerStatus)
-            let statuses = sidebarSessionStatuses(for: subspaceID)
-            let sessions = statuses.map { status in
-                SidebarSubspacePresentation.SessionLine(
-                    title: status.displayTitle,
-                    panelID: status.panelID,
-                    // An unnamed session's title is already the agent's name.
-                    agentLabel: status.sessionName == nil ? nil : SidebarSessionPresentation.sessionAgentLabel(for: status.agent),
-                    statusKind: status.status.kind,
-                    isWaiting: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: status.projection) != nil,
-                    showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
-                    summary: SidebarSessionPresentation.sessionWaitingSummary(for: status)?.rowText(.compact)
-                        ?? normalizedSessionDetail(status.status.detail)
-                        ?? normalizedSessionDetail(status.status.summary),
-                    turnStartedAt: status.turnStartedAt,
-                    statusUpdatedAt: status.statusUpdatedAt
-                )
+            let row = subspaceRowModel(
+                workspace: workspace,
+                spawner: workspace.spawningSessionID.flatMap(spawnerStatus)
+            )
+            // A finished task leaves its project's card; the card's footer
+            // counts it and the Tasks view lists it.
+            if taskBoard.isEnabled, SidebarSubspacePresentation.isHiddenAsFinished(row) {
+                return nil
             }
-            return SidebarSubspacePresentation.Row(
-                id: subspaceID,
-                title: workspace.title,
-                status: SidebarSubspacePresentation.rowStatus(
-                    sessionStatus: SidebarSubspacePresentation.rowStatus(
-                        sessionStatuses: sessions.map { session in
-                            (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
-                        }
-                    ),
-                    isDone: workspace.doneAt != nil
-                ),
-                doneAt: workspace.doneAt,
-                annotations: workspace.annotations,
-                primaryAnnotationKey: workspace.primaryAnnotationKey,
-                summary: SidebarSubspacePresentation.rowSummary(sessions: sessions),
-                spawningSessionID: workspace.spawningSessionID,
-                spawnerName: spawner?.displayTitle,
-                spawnerPanelID: spawner?.panelID,
-                spawnerWorkspaceID: spawner?.workspaceID,
-                sessions: sessions,
-                creationIndex: windowWorkspaceIDs.firstIndex(of: subspaceID) ?? Int.max,
-                path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace)
+            return row
+        }
+    }
+
+    /// One task space's row, with its task's stage when the task system is on.
+    func subspaceRowModel(
+        workspace: WorkspaceState,
+        spawner: WorkspaceSessionStatus?,
+        projectTag: String? = nil,
+        isLinkedChild: Bool = false
+    ) -> SidebarSubspacePresentation.Row {
+        let subspaceID = workspace.id
+        let statuses = sidebarSessionStatuses(for: subspaceID)
+        let boardItem = taskBoard.item(taskSpace: workspace, statuses: statuses)
+        let sessions = statuses.map { status in
+            SidebarSubspacePresentation.SessionLine(
+                title: status.displayTitle,
+                panelID: status.panelID,
+                // An unnamed session's title is already the agent's name.
+                agentLabel: status.sessionName == nil ? nil : SidebarSessionPresentation.sessionAgentLabel(for: status.agent),
+                statusKind: status.status.kind,
+                isWaiting: SidebarSessionPresentation.sessionStatusProjectionChipLabel(for: status.projection) != nil,
+                showsUnreadSessionAccent: showsUnreadSessionAccent(for: status.panelID, in: workspace),
+                summary: SidebarSessionPresentation.sessionWaitingSummary(for: status)?.rowText(.compact)
+                    ?? normalizedSessionDetail(status.status.detail)
+                    ?? normalizedSessionDetail(status.status.summary),
+                turnStartedAt: status.turnStartedAt,
+                statusUpdatedAt: TaskBoard.agentActivityAt(status)
             )
         }
+        let rowStatus = SidebarSubspacePresentation.rowStatus(
+            sessionStatus: SidebarSubspacePresentation.rowStatus(
+                sessionStatuses: sessions.map { session in
+                    (kind: session.statusKind, showsUnreadSessionAccent: session.showsUnreadSessionAccent)
+                }
+            ),
+            isDone: workspace.doneAt != nil,
+            stage: boardItem?.stage,
+            waitsOutside: boardItem?.record?.waiting != nil
+        )
+        return SidebarSubspacePresentation.Row(
+            id: subspaceID,
+            title: boardItem?.title ?? workspace.title,
+            status: rowStatus,
+            stage: boardItem?.stage,
+            isTask: workspace.taskID != nil,
+            isCleanupHeld: boardItem?.cleanupHeldUntil != nil,
+            projectTag: projectTag,
+            linkedParentID: taskCoordinator?.records.linkedParentTaskSpaceID(of: workspace, in: store.state),
+            isLinkedChild: isLinkedChild,
+            childProgressLabel: boardItem?.taskID.flatMap(childProgressLabel(ofTaskID:)),
+            doneAt: workspace.doneAt,
+            acceptsDoneMark: boardItem?.acceptsDoneMark ?? true,
+            releasesAfterMerge: boardItem.flatMap(TaskBoardPresentation.releaseAfterMergeRequestedAt) != nil,
+            annotations: workspace.annotations,
+            primaryAnnotationKey: workspace.primaryAnnotationKey,
+            // While setup or the move into a worktree runs or has failed,
+            // the row says so instead of what its sessions show.
+            summary: boardItem.flatMap { item in
+                // The agent's question replaces its last status line.
+                if case .needsYou(.awaitingReply) = item.stage { return TaskBoardPresentation.replyLine(item) }
+                // So does a start that may wait in the terminal: the session
+                // itself only shows that it waits.
+                if case .needsYou(.startWaitsInTerminal) = item.stage { return TaskBoardPresentation.statusLine(item) }
+                // A task that waits outside Toastty says what for, under
+                // its clock.
+                if rowStatus == .waiting { return TaskBoardPresentation.waitingLine(item) }
+                // A merged task's held task space says when it closes.
+                return item.stage.isBeforeStart || item.cleanupHeldUntil != nil ? TaskBoardPresentation.statusLine(item) : nil
+            } ?? SidebarSubspacePresentation.rowSummary(sessions: sessions),
+            spawningSessionID: workspace.spawningSessionID,
+            spawnerName: spawner?.displayTitle,
+            spawnerPanelID: spawner?.panelID,
+            spawnerWorkspaceID: spawner?.workspaceID,
+            sessions: sessions,
+            path: SidebarSubspacePresentation.path(sessionCWDs: statuses.map(\.cwd), workspace: workspace),
+            taskMenu: taskMenu(for: boardItem, workspace: workspace)
+        )
+    }
+
+    /// A task space's task menu. Only a task space with a task record has
+    /// one; other subspaces keep their own menu.
+    private func taskMenu(for item: TaskBoardItem?, workspace: WorkspaceState) -> [[TaskBoardPresentation.MenuItem]]? {
+        guard let item, item.record != nil else { return nil }
+        // The window shows the selected task space unless the Tasks view
+        // covers it.
+        let showsTasksView = store.window(id: windowID)?.showsTasksView ?? false
+        let currentWorkspaceID = showsTasksView ? nil : selectedWorkspaceID
+        return TaskBoardPresentation.menuItems(
+            item,
+            currentWorkspaceID: currentWorkspaceID,
+            showsMergeShortcut: currentWorkspaceID == workspace.id && isMergeButtonReady(workspace)
+        )
+    }
+
+    /// Whether Option+Shift+M would merge the workspace: its Merge button is
+    /// ready, as the shortcut's handler checks.
+    private func isMergeButtonReady(_ workspace: WorkspaceState) -> Bool {
+        guard case .ready? = WorkspaceMergePresentation.make(
+            workspace: workspace,
+            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
+            mode: store.workspaceMergeMode,
+            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+            isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspace.id)
+        ) else { return false }
+        return true
+    }
+
+    private func childProgressLabel(ofTaskID taskID: UUID) -> String? {
+        // Each record has an item, so a task without child records has no
+        // child items and no label.
+        guard taskCoordinator != nil, let progress = taskBoardSnapshot.childProgress(of: taskID) else { return nil }
+        return progress.label
     }
 
     @ViewBuilder
@@ -3364,17 +4997,9 @@ struct SidebarView: View {
         let filterSessionID = subspaceFilterSessionIDByParentID[parentWorkspaceID]
         let isExpanded = collapsedSubspaceGroupParentIDs.contains(parentWorkspaceID) == false
         let filteredRows = SidebarSubspacePresentation.filteredRows(rows, spawningSessionID: filterSessionID)
-        let unpinnedRows = SidebarSubspacePresentation.orderedRows(
-            filteredRows,
-            frozenOrder: frozenSubspaceOrderByParentID[parentWorkspaceID]
-        )
-        let pin = SidebarSubspacePresentation.pin(
-            previous: subspaceOrderMemory.pinByParentID[parentWorkspaceID],
-            selectedRowID: selectedWorkspaceID,
-            displayedOrder: subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID],
-            unpinnedOrder: unpinnedRows.map(\.id)
-        )
-        let orderedRows = SidebarSubspacePresentation.applyingPin(pin, to: unpinnedRows)
+        // Rows keep the window's workspace order; only adding or removing a
+        // task space moves the rows around it.
+        let orderedRows = SidebarSubspacePresentation.groupingLinkedChildren(filteredRows)
         let tally = SidebarSubspacePresentation.tally(rows)
         let needsAttention = SidebarSubspacePresentation.needsAttention(rows)
         let attentionRowIDs = Set(rows.filter { $0.status.needsAttention }.map(\.id))
@@ -3383,9 +5008,6 @@ struct SidebarView: View {
             rows.first { $0.spawningSessionID == sessionID }?.spawnerName
         }
         let orderedRowIDs = orderedRows.map(\.id)
-        subspaceOrderMemory.pinByParentID[parentWorkspaceID] = pin
-        subspaceOrderMemory.displayedOrderByParentID[parentWorkspaceID] = orderedRowIDs
-        store.recordSidebarSubspaceOrder(orderedRowIDs, parentWorkspaceID: parentWorkspaceID)
 
         return VStack(alignment: .leading, spacing: 3) {
             subspacesGroupHeader(
@@ -3422,22 +5044,12 @@ struct SidebarView: View {
                     accessibilityReduceMotion ? nil : .easeInOut(duration: 0.28),
                     value: orderedRowIDs
                 )
-                .onHover { isHovering in
-                    if isHovering {
-                        frozenSubspaceOrderByParentID[parentWorkspaceID] = orderedRowIDs
-                    } else {
-                        frozenSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
-                    }
-                }
             }
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 12)
         .id(SubspaceGroupScrollID(parentWorkspaceID: parentWorkspaceID))
         .accessibilityIdentifier("sidebar.workspace.subspaces.\(parentWorkspaceID.uuidString)")
-        .onDisappear {
-            store.clearSidebarSubspaceOrder(parentWorkspaceID: parentWorkspaceID)
-        }
         .onAppear {
             if needsAttention {
                 collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
@@ -3555,8 +5167,10 @@ struct SidebarView: View {
             if showsTally, tally.isEmpty == false {
                 HStack(spacing: 8) {
                     subspacesTallyItem(count: tally.ready, color: ToastyTheme.sessionReadyText)
+                    subspacesTallyItem(count: tally.question, color: ToastyTheme.sidebarTaskQuestionMark)
                     subspacesTallyItem(count: tally.needsApproval, color: ToastyTheme.sessionNeedsApprovalText)
                     subspacesTallyItem(count: tally.error, color: ToastyTheme.sessionErrorText)
+                    subspacesTallyItem(count: tally.review, color: ToastyTheme.sidebarTaskReviewMark)
                 }
                 .accessibilityHidden(true)
             }
@@ -3640,14 +5254,17 @@ struct SidebarView: View {
         _ row: SidebarSubspacePresentation.Row,
         isEmphasized: Bool,
         showsAnnotation: Bool,
-        showsWaitingChip: Bool
+        showsWaitingChip: Bool,
+        showsCompactTag: Bool = false
     ) -> some View {
         HStack(spacing: 6) {
             // The ideal width is what the fit check reserves for the title;
             // in layout it takes whatever the chips leave.
             Self.styledSessionNameText(row.title, isEmphasized: isEmphasized, isItalic: row.status == .working)
                 .foregroundStyle(
-                    row.status == .done ? ToastyTheme.sidebarSubspaceDoneTitleText : ToastyTheme.sidebarSessionAgentText
+                    row.status == .done
+                        ? ToastyTheme.sidebarSubspaceDoneTitleText
+                        : ToastyTheme.sidebarSessionAgentText
                 )
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -3659,8 +5276,13 @@ struct SidebarView: View {
                 )
 
             HStack(spacing: 6) {
+                if row.releasesAfterMerge {
+                    TaskReleaseAfterMergeMark()
+                }
                 if let chipKind = Self.subspaceStatusChipKind(row.status) {
                     sessionStatusChip(kind: chipKind)
+                } else if row.status == .question {
+                    taskQuestionChip()
                 }
                 if showsWaitingChip {
                     Self.sessionWaitingChip()
@@ -3675,9 +5297,49 @@ struct SidebarView: View {
                         showsLinkGlyph: false
                     )
                 }
+                if showsCompactTag {
+                    subspaceCompactTag(row)
+                }
             }
             .fixedSize(horizontal: true, vertical: false)
             .layoutPriority(1)
+        }
+    }
+
+    /// The one tag a one-line row shows: its pull request, else the task
+    /// that started it, else how many of its child tasks merged.
+    @ViewBuilder
+    private func subspaceCompactTag(_ row: SidebarSubspacePresentation.Row) -> some View {
+        if let pullRequest = row.pullRequestAnnotation {
+            workspaceAnnotationChip(
+                key: pullRequest.key,
+                annotation: pullRequest.annotation,
+                maximumWidth: Self.subspaceRowAnnotationChipMaximumWidth,
+                showsLinkGlyph: false
+            )
+        } else if let parentTaskTitle = row.parentTaskTitle {
+            Self.parentTaskTag(parentTaskTitle, maximumWidth: Self.subspaceSpawnerTagMaximumWidth)
+        } else if let childProgressLabel = row.childProgressLabel {
+            Self.sidebarTaskTag(childProgressLabel)
+        }
+    }
+
+    /// "↖ Parent title", for a row that lists without the task that
+    /// started it.
+    static func parentTaskTag(_ parentTaskTitle: String, maximumWidth: CGFloat) -> some View {
+        SidebarCappedIntrinsicWidthLayout(maximumWidth: maximumWidth) {
+            Text(SidebarSubspacePresentation.spawnerTagLabel(parentTaskTitle))
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(ToastyTheme.sidebarWorkspaceTagBackground, in: RoundedRectangle(cornerRadius: 4))
+        }
+        .background {
+            SidebarTooltipBridge(text: "Started by \(parentTaskTitle)")
+                .allowsHitTesting(false)
         }
     }
 
@@ -3717,10 +5379,23 @@ struct SidebarView: View {
         let borderColor = isHovered || (isSpawnerHighlighted && attentionKind != nil && isSelected == false)
             ? ToastyTheme.sidebarSessionHoverBorder
             : Color.clear
-        let hoverTipModel = SidebarSubspacePresentation.hoverTipModel(
+        var hoverTipModel = SidebarSubspacePresentation.hoverTipModel(
             row,
             annotationColorToken: annotationStyleStore.effectiveColorToken(forKey:)
         )
+        let taskID = store.state.workspacesByID[row.id]?.taskID
+        if taskCoordinator != nil, let taskID, let family = taskBoardSnapshot.family(of: taskID) {
+            let childTasks = SidebarSubspacePresentation.hoverTipChildTasks(
+                of: family.item,
+                children: SidebarStatusSections.sidebarOrder(
+                    family.children,
+                    workspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
+                )
+            )
+            hoverTipModel.openChildTasks = childTasks.open
+            hoverTipModel.finishedChildTasks = childTasks.finished
+            hoverTipModel.childProgress = taskBoardSnapshot.childProgress(of: taskID)
+        }
         let accessibilityLabel = SidebarSubspacePresentation.rowAccessibilityLabel(
             row,
             showsSpawnerTag: showsSpawnerTag
@@ -3746,7 +5421,12 @@ struct SidebarView: View {
                 // Status takes priority over the annotation at narrow widths.
                 // Both remain available in the hover card and spoken label.
                 ViewThatFits(in: .horizontal) {
-                    if row.rowAnnotation != nil {
+                    if row.isCompact {
+                        subspaceRowTitleLine(
+                            row, isEmphasized: attentionKind != nil,
+                            showsAnnotation: false, showsWaitingChip: row.isWaiting, showsCompactTag: true
+                        )
+                    } else if row.rowAnnotation != nil {
                         subspaceRowTitleLine(
                             row, isEmphasized: attentionKind != nil,
                             showsAnnotation: true, showsWaitingChip: row.isWaiting
@@ -3765,7 +5445,8 @@ struct SidebarView: View {
                 }
                 .frame(minHeight: Self.sessionRowLineMinHeight)
 
-                if row.summary != nil || (showsSpawnerTag && row.spawnerName != nil) {
+                if row.isCompact == false, row.summary != nil || (showsSpawnerTag && row.spawnerName != nil)
+                    || row.projectTag != nil || row.childProgressLabel != nil || row.parentTaskTitle != nil {
                     HStack(spacing: 6) {
                         if let summary = row.summary {
                             Self.styledSessionSummaryText(summary, isItalic: row.status == .working)
@@ -3774,6 +5455,15 @@ struct SidebarView: View {
                                 .truncationMode(.tail)
                         }
                         Spacer(minLength: 0)
+                        if let childProgressLabel = row.childProgressLabel {
+                            Self.sidebarTaskTag(childProgressLabel)
+                        }
+                        if let projectTag = row.projectTag {
+                            Self.sidebarTaskTag(projectTag)
+                        }
+                        if let parentTaskTitle = row.parentTaskTitle {
+                            Self.parentTaskTag(parentTaskTitle, maximumWidth: Self.subspaceSpawnerTagMaximumWidth + 30)
+                        }
                         if showsSpawnerTag, let spawnerName = row.spawnerName {
                             SidebarCappedIntrinsicWidthLayout(maximumWidth: Self.subspaceSpawnerTagMaximumWidth) {
                                 spawnerTag(
@@ -3791,22 +5481,17 @@ struct SidebarView: View {
                     }
                 }
             }
-            // Room for the arrow overlay.
-            .padding(.trailing, Self.subspaceRowArrowWidth + Self.sessionStatusRailGap)
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Only a subspace row leaves the current workspace, so only it
-        // carries the arrow.
-        .overlay(alignment: .trailing) {
-            Image(systemName: "arrow.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(isHovered ? ToastyTheme.sidebarSessionPathText : ToastyTheme.sidebarSubspaceQuietMark)
-                .frame(width: Self.subspaceRowArrowWidth)
-                .padding(.trailing, 8)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+        // A task an agent split off draws under the task that started it,
+        // indented, with a ↳ mark.
+        .padding(.leading, row.isLinkedChild ? Self.linkedChildIndent : 0)
+        .overlay(alignment: .topLeading) {
+            if row.isLinkedChild {
+                Self.linkedChildArrow
+            }
         }
         .background(background, in: RoundedRectangle(cornerRadius: 5))
         .overlay {
@@ -3830,9 +5515,15 @@ struct SidebarView: View {
             refreshID: hoverTipModel,
             placement: .trailing(gap: Self.hoverTipTrailingGap)
         ) {
-            SubspaceHoverTipCard(model: hoverTipModel) { panelID in
-                focusSessionPanel(workspaceID: row.id, panelID: panelID)
-            }
+            SubspaceHoverTipCard(
+                model: hoverTipModel,
+                onSelectSession: { panelID in
+                    focusSessionPanel(workspaceID: row.id, panelID: panelID)
+                },
+                onSelectParentTask: row.parentTask.map { parent in { openTask(taskID: parent.taskID) } },
+                onSelectChildTask: { childTaskID in openTask(taskID: childTaskID) },
+                onShowTaskInTasksView: taskID.map { taskID in { openTasksView(selecting: .task(taskID)) } }
+            )
         }
         .background {
             SidebarSemanticTextBridge(text: accessibilityLabel)
@@ -3843,8 +5534,12 @@ struct SidebarView: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default, select)
-        .accessibilityAction(named: Text(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone))) {
-            toggleSubspaceDone(row)
+        .accessibilityActions {
+            if SidebarSubspacePresentation.canToggleDone(row) {
+                Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
+                    toggleSubspaceDone(row)
+                }
+            }
         }
         .accessibilityAction(named: Text("Move to top level")) {
             _ = store.send(
@@ -3856,15 +5551,24 @@ struct SidebarView: View {
         .background(subspaceFrameMeasurement(id: .row(row.id)))
         .id(row.id)
         .contextMenu {
-            let mergePresentation = subspaceMergeMenuPresentation(row)
-            if let mergePresentation {
-                subspaceMergeMenuItems(row, presentation: mergePresentation)
-            }
-            Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
-                toggleSubspaceDone(row)
-            }
-            if mergePresentation != nil {
-                Divider()
+            // A task's own items replace the merge items and the done mark:
+            // its Mark Done and merge are what done means for it.
+            if let taskMenu = row.taskMenu {
+                TaskContextMenuItems(sections: taskMenu, run: runTaskMenuItem)
+                if taskMenu.isEmpty == false {
+                    Divider()
+                }
+            } else {
+                let mergePresentation = subspaceMergeMenuPresentation(row)
+                if let mergePresentation {
+                    subspaceMergeMenuItems(row, presentation: mergePresentation)
+                }
+                Button(SidebarSubspacePresentation.doneToggleActionTitle(isDone: row.isDone)) {
+                    toggleSubspaceDone(row)
+                }
+                if mergePresentation != nil {
+                    Divider()
+                }
             }
             Button("Move to top level") {
                 _ = store.send(
@@ -3934,7 +5638,21 @@ struct SidebarView: View {
         presentation: WorkspaceMergePresentation
     ) -> some View {
         switch presentation {
-        case .ready(let pullRequest, let currentMode):
+        case .ready(let pullRequest, _, _) where sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: row.id):
+            // A task merges its own way and always cleans up after.
+            Button(ToasttyKeyboardShortcuts.mergeWorkspacePullRequest.menuTitle("Merge \(pullRequest)")) {
+                requestWorkspaceMerge(row.id, store.workspaceMergeMode)
+            }
+            Button("Merge \(pullRequest) Without Checks") {
+                TaskActions.mergeWithoutChecks(workspaceID: row.id, store: store, sessionRuntimeStore: sessionRuntimeStore)
+            }
+            Button("Archive Task…") {
+                if let coordinator = sessionRuntimeStore.taskCoordinator,
+                   let taskID = store.state.workspacesByID[row.id]?.taskID {
+                    TaskActions.archive(taskID: taskID, coordinator: coordinator)
+                }
+            }
+        case .ready(let pullRequest, let currentMode, _):
             ForEach(WorkspaceMergeMode.allCases, id: \.self) { mode in
                 let title = WorkspaceMergePresentation.actionTitle(mode: mode, pullRequest: pullRequest)
                 // The shortcut runs the mode selected in the top bar button menu.
@@ -3949,7 +5667,7 @@ struct SidebarView: View {
             Button(presentation.title) {}
                 .disabled(true)
             Button("Retry Clean Up") {
-                sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: row.id)
+                TaskActions.retryCleanup(workspaceID: row.id, sessionRuntimeStore: sessionRuntimeStore)
             }
             Button("Don't Clean Up") {
                 sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: row.id)
@@ -3965,12 +5683,14 @@ struct SidebarView: View {
     private func subspaceMergeMenuPresentation(
         _ row: SidebarSubspacePresentation.Row
     ) -> WorkspaceMergePresentation? {
-        guard store.isWorkspaceMergeEnabled,
+        guard store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: row.id),
               let workspace = store.state.workspacesByID[row.id],
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[row.id],
-                mode: store.workspaceMergeMode
+                mode: store.workspaceMergeMode,
+                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: row.id),
+                isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: row.id)
               ) else {
             return nil
         }
@@ -3980,8 +5700,21 @@ struct SidebarView: View {
         return presentation
     }
 
+    private func runTaskMenuItem(_ item: TaskBoardPresentation.MenuItem) {
+        guard let coordinator = taskCoordinator else { return }
+        TaskActions.runFromMenu(item, coordinator: coordinator) { workspaceID in
+            TaskActions.openTaskSpace(
+                workspaceID: workspaceID,
+                fallbackWindowID: windowID,
+                store: store,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+        }
+    }
+
     private func toggleSubspaceDone(_ row: SidebarSubspacePresentation.Row) {
         let isDone = store.state.workspacesByID[row.id]?.doneAt != nil
+        guard isDone || sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: row.id) else { return }
         _ = store.send(
             .setWorkspaceDone(workspaceID: row.id, doneAt: isDone ? nil : Date()),
             source: .ui("sidebar_subspace_toggle_done")
@@ -4011,19 +5744,20 @@ struct SidebarView: View {
         case .ready: return .ready
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .working, .idle, .done: return nil
+        case .working, .idle, .question, .review, .toShip, .done, .waiting: return nil
         }
     }
 
     /// Ready gets no chip: the rail dot, the header tally, and the sort order
     /// already show it, and the chip would squeeze the title next to an annotation chip.
+    /// Question has no session kind; `subspaceRowTitleLine` draws its pill.
     private static func subspaceStatusChipKind(
         _ status: SidebarSubspacePresentation.RowStatus
     ) -> SessionStatusKind? {
         switch status {
         case .needsApproval: return .needsApproval
         case .error: return .error
-        case .ready, .working, .idle, .done: return nil
+        case .ready, .working, .idle, .question, .review, .toShip, .done, .waiting: return nil
         }
     }
 
@@ -4099,6 +5833,13 @@ struct SidebarView: View {
         }
         subspaceFilterSessionIDByParentID[parentWorkspaceID] = spawningSessionID
         collapsedSubspaceGroupParentIDs.remove(parentWorkspaceID)
+        // The chip asks to see those task spaces, so a collapsed card opens.
+        if isCardCollapsed(parentWorkspaceID) {
+            _ = store.send(
+                .setSidebarWorkspaceCollapsed(windowID: windowID, workspaceID: parentWorkspaceID, collapsed: false),
+                source: .ui("sidebar_spawner_filter")
+            )
+        }
         guard parentWorkspaceID != fromCardWorkspaceID else { return }
 
         let awaitsSelection = workspaceCardContainsSelection(parentWorkspaceID) == false
@@ -4128,10 +5869,6 @@ struct SidebarView: View {
         }
         collapsedSubspaceGroupParentIDs = collapsedSubspaceGroupParentIDs.filter(parentIDs.contains)
         subspaceFilterSessionIDByParentID = subspaceFilterSessionIDByParentID.filter { parentIDs.contains($0.key) }
-        frozenSubspaceOrderByParentID = frozenSubspaceOrderByParentID.filter { parentIDs.contains($0.key) }
-        subspaceOrderMemory.displayedOrderByParentID = subspaceOrderMemory.displayedOrderByParentID
-            .filter { parentIDs.contains($0.key) }
-        subspaceOrderMemory.pinByParentID = subspaceOrderMemory.pinByParentID.filter { parentIDs.contains($0.key) }
     }
 
     private func toggleSessionChildRows(sessionID: String) {
@@ -4340,7 +6077,7 @@ struct SidebarView: View {
 
     private func pruneTransientWorkspaceDragState() {
         guard let window = store.window(id: windowID) else {
-            measuredWorkspaceRowFramesByID = [:]
+            scrollGeometry.workspaceRowFrames = [:]
             scrollGeometry.sessionRowFrames = [:]
             scrollGeometry.subspaceFrames = [:]
             cancelWorkspaceDrag()
@@ -4348,7 +6085,7 @@ struct SidebarView: View {
         }
 
         let workspaceIDs = Set(window.workspaceIDs)
-        measuredWorkspaceRowFramesByID = measuredWorkspaceRowFramesByID.filter { workspaceIDs.contains($0.key) }
+        scrollGeometry.workspaceRowFrames = scrollGeometry.workspaceRowFrames.filter { workspaceIDs.contains($0.key) }
         scrollGeometry.subspaceFrames = scrollGeometry.subspaceFrames.filter { workspaceIDs.contains($0.key.workspaceID) }
         let currentSessionRowIDs = Set(currentSidebarSessionRowIDs())
         scrollGeometry.sessionRowFrames = scrollGeometry.sessionRowFrames.filter { currentSessionRowIDs.contains($0.key) }
@@ -4408,19 +6145,6 @@ struct SidebarView: View {
     static func styledSessionSummaryText(_ text: String, isItalic: Bool = false) -> Text {
         let base = Text(SidebarSessionPresentation.sessionSummaryAttributedText(text)).font(ToastyTheme.fontSidebarSummary)
         return isItalic ? base.italic() : base
-    }
-
-    private func shortcutBadge(_ label: String, highlighted: Bool) -> some View {
-        Text(label)
-            .font(ToastyTheme.fontShortcutBadge)
-            .foregroundStyle(highlighted ? ToastyTheme.shortcutBadgeText : ToastyTheme.subtleText)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(
-                ToastyTheme.hairline.opacity(highlighted ? 1 : 0.55),
-                in: RoundedRectangle(cornerRadius: 3)
-            )
-            .animation(.easeOut(duration: 0.12), value: highlighted)
     }
 
     @ViewBuilder
@@ -4533,5 +6257,25 @@ private struct SidebarSessionGroupFramePreferenceKey: PreferenceKey {
         nextValue: () -> [SidebarSessionPresentation.SidebarSessionRowID: CGRect]
     ) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// A shortcut such as "⌥3" that the sidebar shows beside the control it
+/// opens while Option is held.
+struct SidebarShortcutBadge: View {
+    let label: String
+    var highlighted = true
+
+    var body: some View {
+        Text(label)
+            .font(ToastyTheme.fontShortcutBadge)
+            .foregroundStyle(highlighted ? ToastyTheme.shortcutBadgeText : ToastyTheme.subtleText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(
+                ToastyTheme.hairline.opacity(highlighted ? 1 : 0.55),
+                in: RoundedRectangle(cornerRadius: 3)
+            )
+            .animation(.easeOut(duration: 0.12), value: highlighted)
     }
 }

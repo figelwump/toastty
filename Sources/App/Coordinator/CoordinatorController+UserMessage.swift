@@ -1,0 +1,92 @@
+import CoreState
+import Foundation
+import RemoteProtocol
+
+/// The user's message for the coordinator, from the chat's composer or from
+/// the quick entry panel, with the files attached to it.
+struct CoordinatorUserMessage: Equatable {
+    /// Names the message. One draft sends one message, so a second submit
+    /// of the same draft cannot make a second one.
+    var id = UUID()
+    var text: String
+    /// Files to copy into the coordinator's folder for this message.
+    var files: [URL] = []
+    /// The name of each copy, in the order of `files`, when a file's own
+    /// name is not the user's name for it: a phone's upload is stored under
+    /// a random name. `nil` keeps each file's own name.
+    var fileNames: [String]?
+    /// Copies that a waiting message made, which the user took back into
+    /// the chat's field with Edit. They stay where they are and come first.
+    /// The new message owns their folders, as the edited message did.
+    var stagedFiles: [URL] = []
+    /// The choices the user made in the quick entry panel, and the project
+    /// that was selected in Toastty when the panel opened. `nil` for a
+    /// message from the chat, which has no header line.
+    var quickEntry: CoordinatorMessageHeader.QuickEntry?
+    /// The coordinator's message that this one answers, for a reply from
+    /// the chat.
+    var reply: CoordinatorReplyTarget?
+}
+
+extension CoordinatorController {
+    /// Sends the user's message. Toastty copies the attached files into the
+    /// coordinator's folder first, and the message names the copies. With
+    /// `steering`, a message from the chat goes into the coordinator's
+    /// running turn when that turn can take it, as `sendUserText` sends it.
+    /// Otherwise the message waits, saved, until the coordinator's prompt
+    /// takes it. A quick entry message never goes into a running turn.
+    /// `beforeSend` runs after the files are copied, directly before the
+    /// message is typed or saved; a throw there sends nothing.
+    func sendUserMessage(
+        _ message: CoordinatorUserMessage,
+        steering: Bool = false,
+        beforeSend: (@MainActor () throws -> Void)? = nil
+    ) async throws -> SendResult {
+        let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.isEmpty == false || message.files.isEmpty == false || message.stagedFiles.isEmpty == false else {
+            throw CoordinatorError("The message is empty.")
+        }
+        guard let workspaceID = location?.workspaceID else {
+            throw CoordinatorError("There is no coordinator. Open it first.")
+        }
+        guard message.files.count + message.stagedFiles.count <= TaskRecord.maximumAttachmentCount else {
+            throw CoordinatorError("Attach at most \(TaskRecord.maximumAttachmentCount) files.")
+        }
+        let attachments = attachments
+        try attachments.checkStaged(message.stagedFiles)
+        let carriedFolders = message.stagedFiles.compactMap(attachments.folderName(of:))
+        let files = message.files
+        let names = message.fileNames
+        let id = message.id
+        let copies = try await Task.detached(priority: .userInitiated) {
+            try attachments.stage(files, names: names, messageID: id)
+        }.value
+        do {
+            // The copy took time. The message is for the coordinator that
+            // was there when the user sent it, not for one opened since.
+            guard location?.workspaceID == workspaceID else {
+                throw CoordinatorError("The coordinator closed. Nothing was sent.")
+            }
+            try beforeSend?()
+            let paths = (message.stagedFiles + copies).map { $0.path(percentEncoded: false) }
+            let delivered = if let choices = message.quickEntry {
+                CoordinatorMessageHeader.quickEntryMessage(choices, text: text, attachmentPaths: paths)
+            } else if let reply = message.reply {
+                reply.message(text: text, attachmentPaths: paths)
+            } else {
+                RemoteMessageAttachmentStore.Staged.deliveryText(text: text, paths: paths)
+            }
+            return try sendUserText(
+                delivered,
+                steering: steering && message.quickEntry == nil,
+                id: id.uuidString,
+                attachmentFolders: carriedFolders
+            )
+        } catch {
+            // Not taken: the copies have no message. The staged files stay
+            // with the folder of the message they came from.
+            attachments.discard(folders: [id.uuidString])
+            throw error
+        }
+    }
+}

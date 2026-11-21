@@ -1,5 +1,6 @@
 import RemoteProtocol
 import AppKit
+import ConversationUI
 import CoreState
 import SwiftUI
 import UniformTypeIdentifiers
@@ -93,11 +94,23 @@ struct WorkspaceView: View {
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
-    let sidebarVisible: Bool
+    /// A column shows left of the workspace: the sidebar or the
+    /// coordinator's dock. Without one, the top bar starts after the
+    /// titlebar's buttons.
+    let leftColumnVisible: Bool
+    var columnResize = LiveColumnResize()
+    /// The buttons at the titlebar's left, after the traffic lights.
+    var titlebarButtonCount = 3
     /// Runs a click on the top bar's Merge button for a workspace.
     var requestWorkspaceMerge: @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
     /// Runs the Merge button menu's Close Without Merging for a workspace.
     var requestWorkspaceClose: @MainActor (UUID) -> Void = { _ in }
+    /// Opens a pull request that is not ready to merge, from the button
+    /// that replaces Merge. `nil` routes it like any other link.
+    var openPullRequestURL: (@MainActor (URL) -> Void)? = nil
+    /// The task board, for the top bar's title. Not observed here: the
+    /// title's own view observes it, so a task's rename redraws only that.
+    var taskBoard: TaskBoardStore = .disabled
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var seenUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -120,7 +133,7 @@ struct WorkspaceView: View {
     @State private var transientUnfocusHighlightResetWorkItem: DispatchWorkItem?
     @StateObject private var splitResizeCoordinator = WorkspaceSplitResizeCoordinator()
 
-    private static let seenUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+    static let seenUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
     private static let workspaceTabsToControlsSpacing: CGFloat = 12
     private static let workspaceTabStripSpacing: CGFloat = -1.5
@@ -263,7 +276,7 @@ struct WorkspaceView: View {
     private static let transientUnfocusHighlightFadeDuration: Double = 0.3
     // Once tabs compress near their minimum width, keep the focus badge
     // single-line by switching to the icon-only variant.
-    private static let workspaceTabCompactFocusIndicatorThreshold: CGFloat = 120
+    nonisolated private static let workspaceTabCompactFocusIndicatorThreshold: CGFloat = 120
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
@@ -554,9 +567,8 @@ struct WorkspaceView: View {
             topBar
 
             if let window = store.window(id: windowID) {
-                GeometryReader { geometry in
+                GeometryReader { _ in
                     workspaceStack(for: window)
-                        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                 }
             } else {
                 EmptyStateView(onCreateWorkspace: createWorkspaceAction)
@@ -593,6 +605,9 @@ struct WorkspaceView: View {
             handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
+            scheduleSeenUnreadPanelClearIfNeeded()
+        }
+        .onChange(of: isCoveredByTasksView) { _, _ in
             scheduleSeenUnreadPanelClearIfNeeded()
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
@@ -690,7 +705,10 @@ struct WorkspaceView: View {
                     }
                 }
             }
-            .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+            .padding(
+                .leading,
+                leftColumnVisible ? 12 : ToastyTheme.topBarLeadingPadding(titlebarButtonCount: titlebarButtonCount)
+            )
             .padding(.trailing, 12)
             .padding(.top, ToastyTheme.topBarContentTopPadding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -701,40 +719,93 @@ struct WorkspaceView: View {
     }
 
     private var workspaceTitleLabel: some View {
-        Text(selectedWorkspace?.title ?? "")
-            .font(ToastyTheme.fontTitle)
-            .foregroundStyle(ToastyTheme.primaryText)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .accessibilityIdentifier("topbar.workspace.title")
+        WorkspaceHeaderTitleText(
+            workspace: selectedWorkspace,
+            taskBoard: taskBoard,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+    }
+
+    /// The top bar's title, as the workspace's sidebar row shows it. A task
+    /// space shows its task's title, not the workspace's name, which is the
+    /// task's branch-like slug; so does a task space whose project closed,
+    /// which the sidebar still lists by its task. Another subspace shows its
+    /// agent session's name, as its row does. A top-level workspace shows
+    /// its name.
+    static func workspaceHeaderTitle(
+        for workspace: WorkspaceState,
+        taskBoard: TaskBoardStore,
+        registry: SessionRegistry
+    ) -> String {
+        guard workspace.parentWorkspaceID != nil || workspace.taskID != nil,
+              let coordinator = taskBoard.coordinator else { return workspace.title }
+        // Read the record and sessions directly: a board item depends on the
+        // whole app state, so building one would rebuild the board on every
+        // layout change.
+        let record = workspace.taskID.flatMap(coordinator.records.record(id:))
+        return TaskBoard.title(record: record, taskSpace: workspace, registry: registry)
     }
 
     @ViewBuilder
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
+        if workspace.isCoordinator, let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController {
+            WorkspaceHeaderCoordinatorControl(controller: controller, sessionRuntimeStore: sessionRuntimeStore) {
+                workspaceHeaderSummaryLabel(for: workspace)
+            }
+        } else {
+            workspaceHeaderSummaryLabel(for: workspace)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceHeaderSummaryLabel(for workspace: WorkspaceState) -> some View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if store.isWorkspaceMergeEnabled,
+        // Tasks with a pull request keep their merge controls. Tasks without
+        // one offer completion only while their derived stage is ready.
+        if store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
            let mergePresentation = WorkspaceMergePresentation.make(
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
-            mode: store.workspaceMergeMode
+            mode: store.workspaceMergeMode,
+            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+            isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspace.id)
         ) {
             // A pull request subspace gives the whole slot to its merge
             // control; the sidebar and tab dots still show unreads.
-            WorkspaceHeaderMergeControl(
-                presentation: mergePresentation,
-                pullRequestName: WorkspaceMergePresentation.pullRequestLink(in: workspace)?.displayName
-                    ?? mergePresentation.pullRequest,
-                merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
-                setMode: { store.setWorkspaceMergeMode($0) },
-                retryCleanup: {
-                    sessionRuntimeStore.workspaceMergeCoordinator?.retryCleanup(workspaceID: workspace.id)
-                },
-                cancelCleanup: {
-                    sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)
-                },
-                closeWithoutMerging: { requestWorkspaceClose(workspace.id) }
-            )
+            if let cache = sessionRuntimeStore.pullRequestStateCache,
+               let link = WorkspaceMergePresentation.pullRequestLink(in: workspace) {
+                PullRequestStateReader(cache: cache, link: link) { pullRequestState in
+                    workspaceHeaderMergeControl(
+                        for: workspace,
+                        presentation: WorkspaceMergePresentation.make(
+                            workspace: workspace,
+                            request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
+                            mode: store.workspaceMergeMode,
+                            isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+                            isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspace.id),
+                            pullRequestState: pullRequestState
+                        ) ?? mergePresentation
+                    )
+                }
+            } else {
+                workspaceHeaderMergeControl(for: workspace, presentation: mergePresentation)
+            }
+        } else if workspace.parentWorkspaceID != nil,
+                  let taskID = workspace.taskID,
+                  let coordinator = sessionRuntimeStore.taskCoordinator,
+                  coordinator.records.record(id: taskID) != nil {
+            if let board = coordinator.board {
+                WorkspaceHeaderTaskControl(
+                    board: board,
+                    coordinator: coordinator,
+                    taskID: taskID
+                )
+            } else {
+                WorkspaceHeaderArchiveControl {
+                    TaskActions.archive(taskID: taskID, coordinator: coordinator)
+                }
+            }
         } else if let unreadText {
             // Unreads take priority over the running count in the top bar; show
             // one summary, never both, so the title column never overflows.
@@ -755,6 +826,62 @@ struct WorkspaceView: View {
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
             }
+        }
+    }
+
+    private func workspaceHeaderMergeControl(
+        for workspace: WorkspaceState,
+        presentation mergePresentation: WorkspaceMergePresentation
+    ) -> some View {
+        WorkspaceHeaderMergeControl(
+            presentation: mergePresentation,
+            pullRequestName: WorkspaceMergePresentation.pullRequestLink(in: workspace)?.displayName
+                ?? mergePresentation.pullRequest,
+            merge: { requestWorkspaceMerge(workspace.id, store.workspaceMergeMode) },
+            mergeInMode: { requestWorkspaceMerge(workspace.id, $0) },
+            openPullRequest: { openWorkspacePullRequest(workspace) },
+            setMode: { store.setWorkspaceMergeMode($0) },
+            retryCleanup: {
+                TaskActions.retryCleanup(workspaceID: workspace.id, sessionRuntimeStore: sessionRuntimeStore)
+            },
+            cancelCleanup: {
+                sessionRuntimeStore.workspaceMergeCoordinator?.cancelCleanup(workspaceID: workspace.id)
+            },
+            closeWithoutMerging: { requestWorkspaceClose(workspace.id) },
+            isTask: sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
+            mergeWithoutChecks: {
+                TaskActions.mergeWithoutChecks(workspaceID: workspace.id, store: store, sessionRuntimeStore: sessionRuntimeStore)
+            },
+            archiveTask: {
+                guard let coordinator = sessionRuntimeStore.taskCoordinator,
+                      let taskID = store.state.workspacesByID[workspace.id]?.taskID else { return }
+                TaskActions.archive(taskID: taskID, coordinator: coordinator)
+            },
+            cleanupHeldUntil: {
+                if case .holdingCleanup(let until)? = sessionRuntimeStore.workspaceMergeRequests[workspace.id]?.phase {
+                    return until
+                }
+                return nil
+            }(),
+            closeHeldTaskSpace: {
+                guard let coordinator = sessionRuntimeStore.taskCoordinator,
+                      let taskID = store.state.workspacesByID[workspace.id]?.taskID else { return }
+                TaskActions.runFromMenu(
+                    .action(.closeTaskSpace, taskID: taskID),
+                    coordinator: coordinator,
+                    openTaskSpace: { _ in }
+                )
+            }
+        )
+    }
+
+    private func openWorkspacePullRequest(_ workspace: WorkspaceState) {
+        guard let link = WorkspaceMergePresentation.pullRequestLink(in: workspace),
+              let url = URL(string: link.url) else { return }
+        if let openPullRequestURL {
+            openPullRequestURL(url)
+        } else {
+            _ = AppURLRouter.open(url, preferredWindowID: windowID, appStore: store)
         }
     }
 
@@ -952,7 +1079,7 @@ struct WorkspaceView: View {
             "Selected window references workspace(s) missing from state map: \(missingWorkspaceIDs)"
         )
 
-        return ZStack {
+        return ZStack(alignment: .topLeading) {
             ForEach(window.workspaceIDs, id: \.self) { workspaceID in
                 if let workspace = store.state.workspacesByID[workspaceID] {
                     let isSelected = store.selectedWorkspaceID(in: windowID) == workspaceID
@@ -984,11 +1111,11 @@ struct WorkspaceView: View {
 
     static func renderedRightAuxPanelWidth(
         for panel: RightAuxPanelState,
-        availableWidth: CGFloat,
+        targetWidth: CGFloat,
         focusedPanelModeActive: Bool = false
     ) -> CGFloat {
         panel.isVisible && focusedPanelModeActive == false
-            ? effectiveRightAuxPanelWidth(for: panel, availableWidth: availableWidth)
+            ? targetWidth
             : 0
     }
 
@@ -1115,7 +1242,7 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState, isSelected: Bool) -> some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             ForEach(workspace.orderedTabs) { tab in
                 let isSelectedTab = workspace.resolvedSelectedTabID == tab.id
                 workspaceTabContent(
@@ -1124,6 +1251,12 @@ struct WorkspaceView: View {
                     isWorkspaceSelected: isSelected,
                     isTabSelected: isSelectedTab
                 )
+                // Keep background terminals attached, but don't resize their
+                // PTYs or web panels for intermediate window column widths.
+                .modifier(MountedTabViewport(heldWidth:
+                    isSelected && isSelectedTab && store.window(id: windowID)?.showsTasksView != true
+                        ? nil : columnResize.heldWorkspaceWidth
+                ))
                 .opacity(Self.mountedContentOpacity(isVisible: isSelectedTab))
                 .allowsHitTesting(isSelected && isSelectedTab)
                 .accessibilityHidden(!(isSelected && isSelectedTab))
@@ -1162,14 +1295,14 @@ struct WorkspaceView: View {
         )
 
         GeometryReader { geometry in
-            let rightPanelTargetWidth = Self.effectiveRightAuxPanelWidth(
+            let rightColumn = ResizingColumn.rightPanel(workspaceID: workspace.id, tabID: tab.id)
+            let previewWidth = isWorkspaceSelected && isTabSelected ? columnResize.width(for: rightColumn) : nil
+            let rightPanelTargetWidth = previewWidth ?? Self.effectiveRightAuxPanelWidth(
                 for: tab.rightAuxPanel,
                 availableWidth: geometry.size.width
             )
             let rightPanelRenderedWidth = Self.renderedRightAuxPanelWidth(
-                for: tab.rightAuxPanel,
-                availableWidth: geometry.size.width,
-                focusedPanelModeActive: tab.focusedPanelModeActive
+                for: tab.rightAuxPanel, targetWidth: rightPanelTargetWidth, focusedPanelModeActive: tab.focusedPanelModeActive
             )
             let primaryContentWidth = Self.primaryContentWidth(
                 availableWidth: geometry.size.width,
@@ -1226,6 +1359,7 @@ struct WorkspaceView: View {
                         primaryContentWidth: primaryContentWidth,
                         height: geometry.size.height,
                         appIsActive: appIsActive,
+                        resize: columnResize,
                         store: store
                     )
                     .frame(
@@ -1641,7 +1775,9 @@ struct WorkspaceView: View {
     private func scheduleSeenUnreadPanelClearIfNeeded() {
         cancelSeenUnreadClearTask()
 
-        guard let clearCandidate = Self.unreadClearCandidate(
+        // The Tasks view covers the workspace, so its output is not seen.
+        guard isCoveredByTasksView == false,
+              let clearCandidate = Self.unreadClearCandidate(
             workspace: selectedWorkspace,
             appIsActive: store.isAppActive
         ) else {
@@ -1651,7 +1787,7 @@ struct WorkspaceView: View {
         // The delay keeps panels the user only passes through on the way elsewhere unread.
         seenUnreadClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.seenUnreadClearDelayNanoseconds)
-            guard Task.isCancelled == false else { return }
+            guard Task.isCancelled == false, isCoveredByTasksView == false else { return }
             let panelIDs = Self.unreadPanelIDsToClear(
                 currentWorkspace: store.selectedWorkspace(in: windowID),
                 candidate: clearCandidate,
@@ -1666,6 +1802,10 @@ struct WorkspaceView: View {
                 )
             }
         }
+    }
+
+    private var isCoveredByTasksView: Bool {
+        store.window(id: windowID)?.showsTasksView == true
     }
 
     private func cancelSeenUnreadClearTask() {
@@ -2221,6 +2361,15 @@ struct WorkspaceView: View {
         guard let terminalPanelID = Self.terminalTitleSourcePanelID(for: tab) else {
             return nil
         }
+        // A tab that shows the coordinator's terminal is named after it,
+        // not after the title its agent writes to the terminal.
+        if terminalPanelID == store.state.coordinator?.panelID {
+            return TerminalLiveTitleDisplayConfiguration(
+                liveTitleModel: terminalLiveTitleStore.model(for: terminalPanelID),
+                fallbackTitle: AppState.coordinatorWorkspaceTitle,
+                displayTitleForLiveTitle: { _ in AppState.coordinatorWorkspaceTitle }
+            )
+        }
 
         return TerminalLiveTitleDisplayConfiguration(
             liveTitleModel: terminalLiveTitleStore.model(for: terminalPanelID),
@@ -2238,9 +2387,11 @@ struct WorkspaceView: View {
     }
 
     private func workspaceTabDisplayTitle(for tab: WorkspaceTabState) -> String {
-        guard let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab),
-              let liveTitle = titleConfiguration.liveTitleModel.title else {
+        guard let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab) else {
             return tab.displayTitle
+        }
+        guard let liveTitle = titleConfiguration.liveTitleModel.title else {
+            return titleConfiguration.fallbackTitle
         }
 
         return titleConfiguration.displayTitleForLiveTitle(liveTitle)
@@ -2480,6 +2631,24 @@ struct WorkspaceView: View {
             }
         } localDocumentCloseConfirmationState: { panelID in
             webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
+        }
+
+        // Closing a task space's only tab asks about its task, in place of
+        // the tab's own confirmation. A save in progress still refuses.
+        let taskSpaceCloseAsker = TaskSpaceCloseAsker.live(sessionRuntimeStore: sessionRuntimeStore)
+        if shouldBypassInteractiveConfirmation == false,
+           workspace.tabIDs.count <= 1,
+           closeAssessment.allowsDestructiveConfirmation,
+           let answer = taskSpaceCloseAsker.ask(
+               closingWorkspaceID: workspaceID,
+               warning: { closeAssessment.requiresConfirmation ? closeAssessment.confirmationMessage : nil }
+           ) {
+            pendingWorkspaceTabClose = nil
+            if answer.choice != nil,
+               store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID), source: .ui("workspace_tab_close")) {
+                taskSpaceCloseAsker.taskSpaceClosed(answer)
+            }
+            return
         }
 
         guard closeAssessment.requiresConfirmation else {
@@ -3235,9 +3404,9 @@ private struct RightAuxPanelResizeLayer: View {
     let primaryContentWidth: CGFloat
     let height: CGFloat
     let appIsActive: Bool
+    let resize: LiveColumnResize
     @ObservedObject var store: AppStore
 
-    @State private var resizeStartWidth: Double?
     @State private var hovered = false
     @State private var dragging = false
 
@@ -3266,7 +3435,9 @@ private struct RightAuxPanelResizeLayer: View {
     }
 
     private var boundaryDescriptor: BoundaryInteractionDescriptor {
-        BoundaryInteractionDescriptor(
+        let column = ResizingColumn.rightPanel(workspaceID: workspaceID, tabID: workspaceTabID)
+        let availableWidth = primaryContentWidth + targetWidth
+        return BoundaryInteractionDescriptor(
             id: boundaryID,
             hitFrame: WorkspaceView.rightAuxPanelResizeHandleFrame(
                 primaryContentWidth: primaryContentWidth,
@@ -3287,17 +3458,23 @@ private struct RightAuxPanelResizeLayer: View {
                 "workspaceTabID": workspaceTabID.uuidString,
                 "targetWidth": String(format: "%.1f", targetWidth),
             ],
+            coalescesDragUpdates: true,
             onBegan: { _ in
-                resizeStartWidth = Double(targetWidth)
+                resize.begin(column, width: targetWidth)
                 updateInteraction(dragging: true)
             },
             onChanged: { value in
-                guard let startingWidth = resizeStartWidth else { return }
-                let nextWidth = startingWidth - Double(value.translation.width)
-                _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: nextWidth))
+                resize.update(column, translation: value.translation.width, availableWidth: availableWidth)
             },
-            onEnded: { _ in
-                resizeStartWidth = nil
+            onEnded: { value in
+                if let width = resize.finish(column, translation: value.translation.width, availableWidth: availableWidth),
+                   store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID == workspaceTabID {
+                    _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: width))
+                }
+                updateInteraction(dragging: false)
+            },
+            onCancelled: { _ in
+                resize.cancel(column)
                 updateInteraction(dragging: false)
             },
             onHoverChanged: { hovering in
@@ -3394,6 +3571,33 @@ private struct FocusModeViewportChrome: View {
                     .strokeBorder(color.opacity(0.6), lineWidth: 1)
             }
             .accessibilityHidden(true)
+    }
+}
+
+/// Observes the task board, so that a task's new title, from its agent
+/// session's name, redraws the top bar's title.
+private struct WorkspaceHeaderTitleText: View {
+    let workspace: WorkspaceState?
+    @ObservedObject var taskBoard: TaskBoardStore
+    let sessionRuntimeStore: SessionRuntimeStore
+
+    var body: some View {
+        let title = workspace.map { workspace in
+            WorkspaceView.workspaceHeaderTitle(
+                for: workspace,
+                taskBoard: taskBoard,
+                registry: sessionRuntimeStore.sessionRegistry
+            )
+        } ?? ""
+        Text(title)
+            .font(ToastyTheme.fontTitle)
+            .foregroundStyle(ToastyTheme.primaryText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            // The title column stops at `workspaceTitleMaxWidth`; a long
+            // task title shows in full on hover.
+            .help(title)
+            .accessibilityIdentifier("topbar.workspace.title")
     }
 }
 
@@ -3828,14 +4032,24 @@ struct PanelCardView: View {
             switch panelState {
             case .terminal(let terminalState):
                 if let terminalRuntimeContext {
+                    // The coordinator's chat covers its terminal, which
+                    // stays mounted and keeps running under it.
+                    let coveredByChat = coordinatorController?.coversTerminal(panelID: panelID) == true
                     TerminalPanelHostView(
                         workspaceID: workspaceID,
                         panelID: panelID,
                         hostState: TerminalPanelHostState(terminalState: terminalState),
-                        focused: isFocused,
+                        focused: isFocused && coveredByChat == false,
                         windowFontPoints: windowFontPoints,
                         runtimeContext: terminalRuntimeContext
                     )
+                    .allowsHitTesting(coveredByChat == false)
+                    .accessibilityHidden(coveredByChat)
+                    .overlay {
+                        if coveredByChat {
+                            coordinatorChatCover
+                        }
+                    }
                     .overlay {
                         if isWorkspaceSelected,
                            focusedPanelID != nil,
@@ -4016,7 +4230,7 @@ struct PanelCardView: View {
                 liveTitleModel: terminalLiveTitleStore.model(for: panelID),
                 fallbackTitle: panelLabel,
                 displayTitleForLiveTitle: { liveTitle in
-                    TerminalDisplayTitleResolver.panelHeaderTitle(
+                    coordinatorPanelTitle ?? TerminalDisplayTitleResolver.panelHeaderTitle(
                         panelState: panelState,
                         liveTerminalTitle: liveTitle,
                         panelSessionStatus: panelSessionStatus
@@ -4036,11 +4250,21 @@ struct PanelCardView: View {
     }
 
     private var panelLabel: String {
-        TerminalDisplayTitleResolver.panelHeaderTitle(
+        coordinatorPanelTitle ?? TerminalDisplayTitleResolver.panelHeaderTitle(
             panelState: panelState,
             liveTerminalTitle: nil,
             panelSessionStatus: panelSessionStatus
         )
+    }
+
+    /// The coordinator's terminal is named after it, not after the title
+    /// its agent writes to the terminal.
+    private var coordinatorPanelTitle: String? {
+        isCoordinatorPanel ? AppState.coordinatorWorkspaceTitle : nil
+    }
+
+    private var isCoordinatorPanel: Bool {
+        coordinatorController?.location?.panelID == panelID
     }
 
     private var terminalProfileBadge: TerminalProfileBadge? {
@@ -4332,6 +4556,15 @@ struct PanelCardView: View {
             scratchpadHeaderAccessory
         }
 
+        if let coordinatorController, isCoordinatorPanel {
+            // Dock, Terminal, then "…": the dock and the switch need the chat.
+            if coordinatorController.chatIsAvailable {
+                CoordinatorPanelDockButton(controller: coordinatorController)
+                CoordinatorPanelModeToggle(store: store, controller: coordinatorController)
+            }
+            CoordinatorPanelActionsButton(controller: coordinatorController)
+        }
+
         switch resolvedPanelHeaderTrailingAccessory {
         case .closeButton:
             panelHeaderCloseButton
@@ -4339,6 +4572,36 @@ struct PanelCardView: View {
             shortcutBadge(label)
         case .empty:
             EmptyView()
+        }
+    }
+
+    private var coordinatorController: CoordinatorController? {
+        sessionRuntimeStore.taskCoordinator?.coordinatorController
+    }
+
+    /// The chat over the coordinator's terminal. On macOS 14 the shared
+    /// transcript is not available, and the terminal shows.
+    ///
+    /// The chat is made only while it is on screen. A hidden workspace stays
+    /// mounted, and the dock shows the same chat while this one is hidden:
+    /// one view of the chat at a time keeps one composer for the keyboard.
+    @ViewBuilder
+    private var coordinatorChatCover: some View {
+        if isWorkspaceSelected == false || isTabSelected == false {
+            ConversationDesignTokens.background
+        } else if #available(macOS 15.0, *), let coordinatorController, let chat = coordinatorController.chat,
+           let location = coordinatorController.location {
+            CoordinatorChatView(
+                model: chat,
+                controller: coordinatorController,
+                sessionRuntimeStore: sessionRuntimeStore,
+                board: sessionRuntimeStore.taskCoordinator?.board ?? .disabled,
+                store: store,
+                panelID: panelID,
+                windowID: location.windowID,
+                isOnScreen: isWorkspaceSelected && isTabSelected,
+                hasPanelFocus: isFocused
+            )
         }
     }
 
@@ -5904,5 +6167,18 @@ private struct TopBarButtonChrome<Content: View>: View {
                     .strokeBorder(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
             )
             .fixedSize(horizontal: true, vertical: true)
+    }
+}
+
+/// Redraws its content when GitHub's answer for `link` changes, so the top
+/// bar's merge control follows it without the whole workspace view
+/// observing the cache.
+private struct PullRequestStateReader<Content: View>: View {
+    @ObservedObject var cache: PullRequestStateCache
+    let link: WorkspacePullRequestLink
+    @ViewBuilder let content: (TaskPullRequestState?) -> Content
+
+    var body: some View {
+        content(cache.state(for: link))
     }
 }

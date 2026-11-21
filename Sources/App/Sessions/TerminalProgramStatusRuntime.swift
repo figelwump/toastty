@@ -187,6 +187,17 @@ extension SessionRuntimeStore {
         }
     }
 
+    /// Panels whose program row shows Running. Like `programStatusRows`, a
+    /// panel an agent session owns shows that session instead.
+    func workingProgramPanelIDs() -> Set<UUID> {
+        Set(programStatusRuntime.recordsByPanel.compactMap { panelID, records in
+            guard records.presentation?.record.state == .working else { return nil }
+            if let owner = sessionRegistry.activeSession(for: panelID),
+               !programStatusRuntime.fallbackSessionIDs.contains(owner.sessionID) { return nil }
+            return panelID
+        })
+    }
+
     func scheduleProgramStatusPublication(ifRecordsChangedFrom previousRecords: [UUID: TerminalProgramStatusRecords]) {
         if programStatusRuntime.recordsByPanel != previousRecords {
             scheduleProgramStatusPublication()

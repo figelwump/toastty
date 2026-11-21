@@ -125,7 +125,7 @@ extension AppReducerTests {
                 .setSidebarWidth(
                     windowID: windowID,
                     width: 320,
-                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             )
@@ -137,7 +137,7 @@ extension AppReducerTests {
                 .setSidebarWidth(
                     windowID: windowID,
                     width: 320,
-                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             ) == false
@@ -156,8 +156,8 @@ extension AppReducerTests {
             reducer.send(
                 .setSidebarWidth(
                     windowID: windowID,
-                    width: WindowState.defaultSidebarWidthBeforeAgentLaunch,
-                    defaultWidth: WindowState.defaultSidebarWidthBeforeAgentLaunch
+                    width: WindowState.defaultSidebarWidth,
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             ) == false
@@ -169,7 +169,7 @@ extension AppReducerTests {
                 .setSidebarWidth(
                     windowID: windowID,
                     width: 320,
-                    defaultWidth: WindowState.defaultSidebarWidthBeforeAgentLaunch
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             )
@@ -180,8 +180,8 @@ extension AppReducerTests {
             reducer.send(
                 .setSidebarWidth(
                     windowID: windowID,
-                    width: WindowState.defaultSidebarWidthBeforeAgentLaunch,
-                    defaultWidth: WindowState.defaultSidebarWidthBeforeAgentLaunch
+                    width: WindowState.defaultSidebarWidth,
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             )
@@ -201,13 +201,13 @@ extension AppReducerTests {
             reducer.send(
                 .setSidebarWidth(
                     windowID: windowID,
-                    width: WindowState.defaultSidebarWidthBeforeAgentLaunch,
-                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                    width: 200,
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             )
         )
-        #expect(state.windows.first?.sidebarWidthPointsOverride == WindowState.defaultSidebarWidthBeforeAgentLaunch)
+        #expect(state.windows.first?.sidebarWidthPointsOverride == 200)
 
         try StateValidator.validate(state)
     }
@@ -223,7 +223,7 @@ extension AppReducerTests {
                 .setSidebarWidth(
                     windowID: windowID,
                     width: 12,
-                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             )
@@ -235,7 +235,7 @@ extension AppReducerTests {
                 .setSidebarWidth(
                     windowID: windowID,
                     width: 900,
-                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             )
@@ -257,7 +257,7 @@ extension AppReducerTests {
                 .setSidebarWidth(
                     windowID: UUID(),
                     width: 320,
-                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             ) == false
@@ -269,7 +269,7 @@ extension AppReducerTests {
                 .setSidebarWidth(
                     windowID: windowID,
                     width: .infinity,
-                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                    defaultWidth: WindowState.defaultSidebarWidth
                 ),
                 state: &state
             ) == false

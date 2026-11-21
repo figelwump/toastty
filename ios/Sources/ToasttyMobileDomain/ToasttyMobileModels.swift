@@ -564,6 +564,27 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     public let primaryAnnotationKey: String?
     /// The subspace's done mark on the Mac.
     public let isDone: Bool
+    /// Whether the Mac takes a done mark for the subspace. False for a task
+    /// with an open pull request, which finishes through Merge.
+    public let acceptsDoneMark: Bool
+    /// The Mac marks this workspace as the coordinator's. See
+    /// `MobileHomeSnapshot.coordinator` for when the phone sets it apart.
+    public let isCoordinator: Bool
+    /// On the coordinator's workspace, the coordinator's own session, which
+    /// the Mac names because other sessions can share the workspace.
+    public let coordinatorConversationID: UUID?
+    /// On the coordinator's workspace, the newest row of the coordinator's
+    /// chat that the user read, on the Mac or on this phone. Absent from an
+    /// older Mac and before the first read.
+    public let coordinatorChatRead: RemoteCoordinatorChatReadPoint?
+    /// On the coordinator's workspace, the revision of the digests whose
+    /// wake turn the coordinator marked quiet
+    /// (`RemoteCoordinatorQuietDigests.revision`). Absent from an older Mac.
+    public let coordinatorQuietDigestsRevision: String?
+    /// On the coordinator's workspace, the revision of the coordinator's
+    /// own queue (`RemoteCoordinatorQueue.revision`). Absent from an older
+    /// Mac, whose waiting messages this phone shows as before.
+    public let coordinatorQueueRevision: String?
 
     public init(
         id: UUID,
@@ -574,7 +595,13 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         parentWorkspaceID: UUID? = nil,
         spawningConversationID: UUID? = nil,
         primaryAnnotationKey: String? = nil,
-        isDone: Bool = false
+        isDone: Bool = false,
+        acceptsDoneMark: Bool = true,
+        isCoordinator: Bool = false,
+        coordinatorConversationID: UUID? = nil,
+        coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil,
+        coordinatorQuietDigestsRevision: String? = nil,
+        coordinatorQueueRevision: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -585,6 +612,12 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         self.spawningConversationID = spawningConversationID
         self.primaryAnnotationKey = primaryAnnotationKey
         self.isDone = isDone
+        self.acceptsDoneMark = acceptsDoneMark
+        self.isCoordinator = isCoordinator
+        self.coordinatorConversationID = coordinatorConversationID
+        self.coordinatorChatRead = coordinatorChatRead
+        self.coordinatorQuietDigestsRevision = coordinatorQuietDigestsRevision
+        self.coordinatorQueueRevision = coordinatorQueueRevision
     }
 
     public var sortedConversations: [MobileConversation] {
@@ -603,7 +636,13 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             parentWorkspaceID: parentWorkspaceID,
             spawningConversationID: spawningConversationID,
             primaryAnnotationKey: primaryAnnotationKey,
-            isDone: isDone
+            isDone: isDone,
+            acceptsDoneMark: acceptsDoneMark,
+            isCoordinator: isCoordinator,
+            coordinatorConversationID: coordinatorConversationID,
+            coordinatorChatRead: coordinatorChatRead,
+            coordinatorQuietDigestsRevision: coordinatorQuietDigestsRevision,
+            coordinatorQueueRevision: coordinatorQueueRevision
         )
     }
 
@@ -617,30 +656,54 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
             parentWorkspaceID: parentWorkspaceID,
             spawningConversationID: spawningConversationID,
             primaryAnnotationKey: primaryAnnotationKey,
-            isDone: isDone
+            isDone: isDone,
+            acceptsDoneMark: acceptsDoneMark,
+            isCoordinator: isCoordinator,
+            coordinatorConversationID: coordinatorConversationID,
+            coordinatorChatRead: coordinatorChatRead,
+            coordinatorQuietDigestsRevision: coordinatorQuietDigestsRevision,
+            coordinatorQueueRevision: coordinatorQueueRevision
         )
     }
 }
 
 public struct MobileHomeSnapshot: Equatable, Sendable {
     public let hostName: String
+    /// Every workspace the Mac sends, the coordinator's included, so a
+    /// lookup by ID finds any of them.
     public let workspaces: [MobileWorkspace]
+    /// Every session but the coordinator's, most urgent first.
     public let activitySessions: [MobileConversation]
-    /// Every workspace, subspaces included, most urgent first.
+    /// Every workspace but the coordinator's, subspaces included, most
+    /// urgent first.
     public let rankedWorkspaces: [MobileWorkspace]
     /// Workspaces that are not nested under another, most urgent first. A
     /// workspace's urgency counts its subspaces' sessions, so a parent whose
-    /// only activity is in a subspace still ranks by it.
+    /// only activity is in a subspace still ranks by it. The coordinator's
+    /// workspace is not one of them.
     public let topLevelWorkspaces: [MobileWorkspace]
+    /// The coordinator's workspace, which the phone shows in its own tab, as
+    /// the Mac pins it apart from the projects. `nil` without a task board:
+    /// the phone then has no tab bar and lists the workspace as an ordinary
+    /// one, as it does for an older Mac that sends no mark.
+    public let coordinator: MobileWorkspace?
+    /// The Mac's task board; `nil` from a Mac without the task system,
+    /// which keeps Home's All and Active filters.
+    public let taskBoard: MobileTaskBoard?
     private let subspaceRowsByParentID: [UUID: [MobileSubspaceRow]]
 
-    public init(hostName: String, workspaces: [MobileWorkspace]) {
+    public init(hostName: String, workspaces: [MobileWorkspace], taskBoard: MobileTaskBoard? = nil) {
         self.hostName = hostName
         self.workspaces = workspaces
-        activitySessions = workspaces
+        self.taskBoard = taskBoard
+        // The Mac keeps one coordinator, which is never nested.
+        let coordinator = taskBoard == nil ? nil : workspaces.first { $0.isCoordinator && $0.parentWorkspaceID == nil }
+        self.coordinator = coordinator.map { $0.withConversations($0.sortedConversations) }
+        let others = workspaces.filter { $0.id != coordinator?.id }
+        activitySessions = others
             .flatMap(\.conversations)
             .sorted(by: MobileConversation.isOrderedBeforeInActivity)
-        let sorted = workspaces.map { $0.withConversations($0.sortedConversations) }
+        let sorted = others.map { $0.withConversations($0.sortedConversations) }
         rankedWorkspaces = sorted.sorted {
             Self.isOrderedBefore($0, $0.conversations.first, $1, $1.conversations.first)
         }
@@ -661,7 +724,10 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         }
         var rows: [UUID: [MobileSubspaceRow]] = [:]
         for workspace in sorted where isSubspace(workspace) {
-            rows[workspace.parentWorkspaceID!, default: []].append(MobileSubspaceRow(workspace: workspace))
+            rows[workspace.parentWorkspaceID!, default: []].append(MobileSubspaceRow(
+                workspace: workspace,
+                task: taskBoard?.task(taskSpaceID: workspace.id)
+            ))
         }
         subspaceRowsByParentID = rows.mapValues { $0.sorted(by: MobileSubspaceRow.isOrderedBefore) }
         topLevelWorkspaces = sorted
@@ -675,9 +741,26 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
             .map(\.0)
     }
 
+    /// The same snapshot listing other workspaces, such as with a change the
+    /// phone shows before the Mac confirms it. The host and its task board
+    /// stay.
+    public func withWorkspaces(_ workspaces: [MobileWorkspace]) -> MobileHomeSnapshot {
+        MobileHomeSnapshot(hostName: hostName, workspaces: workspaces, taskBoard: taskBoard)
+    }
+
+    /// The same snapshot with another task board, such as one a fixture
+    /// changed after a task action.
+    public func withTaskBoard(_ taskBoard: MobileTaskBoard?) -> MobileHomeSnapshot {
+        MobileHomeSnapshot(hostName: hostName, workspaces: workspaces, taskBoard: taskBoard)
+    }
+
     /// Subspaces nested under `parentID`, in the desktop sidebar's order.
+    /// With the task system, a finished task leaves its project's list, as
+    /// on the Mac; its project counts it instead.
     public func subspaceRows(of parentID: UUID) -> [MobileSubspaceRow] {
-        subspaceRowsByParentID[parentID] ?? []
+        let rows = subspaceRowsByParentID[parentID] ?? []
+        guard taskBoard != nil else { return rows }
+        return rows.filter { $0.isHiddenAsFinished == false }
     }
 
     /// The listed parent of a subspace, or `nil` for a top-level workspace.
@@ -689,6 +772,13 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
 
     public func subspaceRow(id workspaceID: UUID) -> MobileSubspaceRow? {
         subspaceRowsByParentID.values.lazy.joined().first { $0.id == workspaceID }
+    }
+
+    /// The task space that opens for `task`: `nil` when the task has none or
+    /// the phone does not list it.
+    public func openableTaskSpaceID(of task: RemoteTaskSummary) -> UUID? {
+        guard let id = task.taskSpaceWorkspaceID, subspaceRow(id: id) != nil else { return nil }
+        return id
     }
 
     /// Orders two workspaces by their most urgent member.
@@ -723,10 +813,19 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
 /// on and done tasks sink to the bottom.
 public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     case ready
+    /// The task's agent asked a question and waits for the reply.
+    case question
     case needsApproval
     case error
+    /// The task's pull request, or work marked ready, waits for review.
+    case review
     case working
     case idle
+    /// The task rests while it waits on something outside Toastty
+    /// (`task waiting`): a still clock in place of the quiet box.
+    case waiting
+    /// The task merged and waits for a release.
+    case toShip
     case done
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -735,8 +834,8 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     /// the subspace or it wants the user.
     public var isActive: Bool {
         switch self {
-        case .ready, .needsApproval, .error, .working: true
-        case .idle, .done: false
+        case .ready, .question, .needsApproval, .error, .review, .working: true
+        case .idle, .waiting, .toShip, .done: false
         }
     }
 
@@ -744,8 +843,20 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
     /// or an approval or error mark says something the box would hide.
     public var showsDoneToggle: Bool {
         switch self {
-        case .idle, .ready, .done: true
-        case .needsApproval, .error, .working: false
+        case .idle, .ready, .done, .question, .review: true
+        // The clock says what the box would hide; the menu still marks it.
+        case .needsApproval, .error, .working, .toShip, .waiting: false
+        }
+    }
+
+    /// The pill a row shows beside its title, as Mac task rows do. Ready
+    /// and review show through the mark and the title's weight instead.
+    public var pillLabel: String? {
+        switch self {
+        case .question: "question"
+        case .needsApproval: "approval"
+        case .error: "error"
+        case .ready, .review, .working, .idle, .waiting, .toShip, .done: nil
         }
     }
 
@@ -757,7 +868,7 @@ public enum MobileSubspaceStatus: Int, Comparable, Equatable, Sendable {
         case .error: 3
         case .ready: 2
         case .working: 1
-        case .idle, .done: 0
+        case .idle, .question, .review, .waiting, .toShip, .done: 0
         }
     }
 
@@ -778,15 +889,22 @@ public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
     public static let pullRequestAnnotationKey = "github-pr"
 
     public let workspace: MobileWorkspace
+    /// The task this subspace is the task space of, from the Mac's board.
+    public let task: RemoteTaskSummary?
     public let status: MobileSubspaceStatus
     /// From the session that sets the status, so the mark and the text
-    /// describe the same session.
+    /// describe the same session. A task's question or setup progress
+    /// replaces it.
     public let summary: String?
 
     public var id: UUID { workspace.id }
 
-    public init(workspace: MobileWorkspace) {
+    /// The task's title, as the Mac's row shows it, else the workspace's.
+    public var title: String { task?.title ?? workspace.title }
+
+    public init(workspace: MobileWorkspace, task: RemoteTaskSummary? = nil) {
         self.workspace = workspace
+        self.task = task
         let lead = workspace.conversations.max { lhs, rhs in
             let left = MobileSubspaceStatus(lhs.state.bucket).precedence
             let right = MobileSubspaceStatus(rhs.state.bucket).precedence
@@ -796,11 +914,57 @@ public struct MobileSubspaceRow: Identifiable, Equatable, Sendable {
             return MobileConversation.isMoreRecent(rhs, lhs)
         }
         let sessionStatus = lead.map { MobileSubspaceStatus($0.state.bucket) } ?? .idle
-        // The done mark replaces a quiet status, including the unread turn
-        // that set it. A session that is working or wants the user still
-        // shows, since the user may need to act.
-        status = workspace.isDone && sessionStatus.showsDoneToggle ? .done : sessionStatus
-        summary = lead?.lastActivity
+        status = Self.status(sessionStatus: sessionStatus, isDone: workspace.isDone, task: task)
+        summary = task?.rowSummary ?? lead?.lastActivity
+    }
+
+    /// The Mac sidebar's rule. A session that is working or wants the user
+    /// shows first, since the user may need to act. Otherwise a task shows
+    /// where it stands; without a task, the done mark replaces a quiet
+    /// status, including the unread turn that set it.
+    static func status(
+        sessionStatus: MobileSubspaceStatus,
+        isDone: Bool,
+        task: RemoteTaskSummary?
+    ) -> MobileSubspaceStatus {
+        switch sessionStatus {
+        case .needsApproval, .error, .working: return sessionStatus
+        case .ready, .question, .review, .idle, .waiting, .toShip, .done: break
+        }
+        guard let task else { return isDone ? .done : sessionStatus }
+        switch task.mark {
+        case .question?: return .question
+        case .review?: return .review
+        case .toShip?: return .toShip
+        case .done?: return .done
+        // Setup or the move into a worktree runs, often before any agent
+        // in the task space reports.
+        case .starting?: return .working
+        // A quiet task space of a task that waits outside Toastty; an
+        // unread turn still shows first.
+        case .waiting?: return sessionStatus == .idle ? .waiting : sessionStatus
+        // The task's stage already counts a done mark that finishes it.
+        case nil: return sessionStatus
+        }
+    }
+
+    /// A finished task whose task space has nothing running or waiting
+    /// for the user leaves its project's list, as on the Mac.
+    public var isHiddenAsFinished: Bool {
+        guard status == .done || status == .toShip else { return false }
+        return workspace.conversations.contains { conversation in
+            switch conversation.state.bucket {
+            case .working, .needsApproval, .error: true
+            case .ready, .idle: false
+            }
+        } == false
+    }
+
+    /// Whether the status mark is a done checkbox: the row is quiet, and the
+    /// Mac takes the change. A task with an open pull request offers only to
+    /// clear a mark.
+    public var showsDoneToggle: Bool {
+        status.showsDoneToggle && (workspace.isDone || workspace.acceptsDoneMark)
     }
 
     /// The one chip the row shows: the primary annotation, or the pull

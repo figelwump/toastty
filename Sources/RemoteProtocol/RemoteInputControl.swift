@@ -132,25 +132,41 @@ public enum RemoteConversationQueueAction: String, Codable, Equatable, Sendable 
     case remove
     /// Let a paused queue deliver again at the next open prompt.
     case resume
+    /// Drop one entry of the coordinator's own queue
+    /// (`RemoteCoordinatorQueue`), named by `clientRequestID`, with its
+    /// attached files. Only on the coordinator's live conversation, on a Mac
+    /// that advertises `RemoteGatewayCapability.coordinatorQueue`. An older
+    /// Mac cannot decode the value and refuses the request.
+    case coordinatorRemove = "coordinator_remove"
+    /// Let go every message that the Stop named by `heldSetToken` holds, in
+    /// both of the coordinator's queues: the conversation's send queue
+    /// first, then the coordinator's own. Refused as `stale` when a later
+    /// Stop holds other messages.
+    case coordinatorResume = "coordinator_resume"
 }
 
 public struct RemoteConversationQueueUpdateRequest: Codable, Equatable, Sendable {
     public var protocolVersion: String
     public var conversationID: RemoteConversationID
     public var action: RemoteConversationQueueAction
-    /// Required for `remove`; ignored for `resume`.
+    /// Required for `remove` and `coordinatorRemove`; ignored otherwise.
     public var clientRequestID: String?
+    /// Required for `coordinatorResume`: `RemoteCoordinatorQueue.heldSetToken`
+    /// as the device last read it.
+    public var heldSetToken: String?
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
         conversationID: RemoteConversationID,
         action: RemoteConversationQueueAction,
-        clientRequestID: String? = nil
+        clientRequestID: String? = nil,
+        heldSetToken: String? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.conversationID = conversationID
         self.action = action
         self.clientRequestID = clientRequestID
+        self.heldSetToken = heldSetToken
     }
 }
 
@@ -160,6 +176,17 @@ public enum RemoteConversationQueueUpdateResult: String, Codable, Equatable, Sen
     /// retry after a lost response lands here.
     case unchanged
     case conversationNotFound = "conversation_not_found"
+    /// For a coordinator action: the token names an earlier Stop. Nothing
+    /// changed; the device reads the queue again.
+    case stale
+    /// For a coordinator action: the Mac takes no writes from devices for
+    /// the coordinator's session, or its agent is not bound.
+    case sessionWritesDisabled = "session_writes_disabled"
+    /// For `coordinatorRemove`: the Mac could not save its queue without
+    /// the message, so nothing changed. The message and its files stay.
+    /// An older phone cannot decode this value; it then treats the request
+    /// as failed and keeps the row, which the Mac's queue still lists.
+    case failed
 }
 
 public struct RemoteConversationQueueUpdateResponse: Codable, Equatable, Sendable {

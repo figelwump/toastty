@@ -228,6 +228,7 @@ public final class RemoteDeviceStore: @unchecked Sendable {
             let device = RemoteDeviceRecord(
                 name: normalizedName,
                 scopes: [.read, .send],
+                permissionApprovalEnabled: true,
                 authKind: .native,
                 tailscaleLogin: tailscaleLogin,
                 createdAt: date,
@@ -341,6 +342,20 @@ public final class RemoteDeviceStore: @unchecked Sendable {
                   storedState.devices[index].permissionApprovalEnabled != enabled else { return false }
             var nextState = storedState
             nextState.devices[index].permissionApprovalEnabled = enabled
+            try persistSynchronously(nextState)
+            storedState = nextState
+            return true
+        }
+    }
+
+    /// Turns "Task actions" on or off for one device.
+    @discardableResult
+    public func setTaskActionsEnabled(_ enabled: Bool, forDevice deviceID: UUID) throws -> Bool {
+        try withStateLock {
+            guard let index = storedState.devices.firstIndex(where: { $0.id == deviceID }),
+                  storedState.devices[index].taskActionsEnabled != enabled else { return false }
+            var nextState = storedState
+            nextState.devices[index].taskActionsEnabled = enabled
             try persistSynchronously(nextState)
             storedState = nextState
             return true

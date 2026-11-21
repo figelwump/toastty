@@ -77,8 +77,16 @@ installed_skills = (
     Path(os.environ["CODEX_HOME"]) / "plugins/cache/toastty/toastty"
     / manifest["version"] / "skills"
 )
-examples = repo_root / "examples/skills"
-shutil.copytree(examples / "worktree-create", installed_skills / "worktree-create")
+def write_package(directory, name):
+    # A personal package with a retired worktree-* name, as a user who copied
+    # the old examples still has.
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: A personal {name} workflow kept from the retired examples.\n---\n\n# {name}\n"
+    )
+
+
+write_package(installed_skills / "worktree-create", "worktree-create")
 user_marketplace = working_directory / "user-marketplace"
 user_plugin = user_marketplace / "plugins/toastty-user"
 (user_plugin / ".codex-plugin").mkdir(parents=True)
@@ -86,7 +94,7 @@ manifest["name"] = "toastty-user"
 (user_plugin / ".codex-plugin/plugin.json").write_text(json.dumps(manifest))
 example_names = ("worktree-cleanup", "worktree-create", "worktree-done")
 for name in example_names:
-    shutil.copytree(examples / name, user_plugin / "skills" / name)
+    write_package(user_plugin / "skills" / name, name)
 marketplace = json.loads((repo_root / ".agents/plugins/marketplace.json").read_text())
 marketplace["name"] = "toastty-user"
 marketplace["plugins"][0]["name"] = "toastty-user"

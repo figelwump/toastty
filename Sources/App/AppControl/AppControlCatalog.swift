@@ -74,6 +74,39 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case terminalSendText = "terminal.send-text"
     case terminalDropImageFiles = "terminal.drop-image-files"
     case sessionExitAfterTurn = "session.exit-after-turn"
+    case taskCreate = "task.create"
+    case taskRetry = "task.retry"
+    case taskDelete = "task.delete"
+    case taskSetWorkspace = "task.set-workspace"
+    case taskSetRelease = "task.set-release"
+    case taskStartWork = "task.start-work"
+    case taskSend = "task.send"
+    case taskWatch = "task.watch"
+    case taskUnwatch = "task.unwatch"
+    case taskMerge = "task.merge"
+    case taskRequestMerge = "task.request-merge"
+    case taskCancelMerge = "task.cancel-merge"
+    case taskCleanUp = "task.clean-up"
+    case taskReadyForReview = "task.ready-for-review"
+    case taskNeedsReply = "task.needs-reply"
+    case taskWaiting = "task.waiting"
+    case taskMarkDone = "task.mark-done"
+    case taskArchive = "task.archive"
+    case taskRelease = "task.release"
+    case taskAdopt = "task.adopt"
+    case coordinatorOpen = "coordinator.open"
+    case coordinatorRestart = "coordinator.restart"
+    case coordinatorSend = "coordinator.send"
+    case coordinatorReply = "coordinator.reply"
+    case coordinatorWake = "coordinator.wake"
+    case coordinatorWatch = "coordinator.watch"
+    case webhookAdd = "webhook.add"
+    case webhookSet = "webhook.set"
+    case webhookRemove = "webhook.remove"
+    case webhookTest = "webhook.test"
+    case windowTasksShow = "window.tasks.show"
+    case windowTasksHide = "window.tasks.hide"
+    case windowSidebarSetSegment = "window.sidebar.set-segment"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let action = Self(rawValue: rawValue) {
@@ -210,7 +243,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Mark a task space's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. An agent in the workspace starting new work clears the mark.",
+                summary: "Mark a task space's task done, shown as a check on its row. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected, and so is a task with an open pull request or a merge under way, which finishes through Merge or Archive. An agent in the workspace starting new work clears the mark, except while a merge waits for checks.",
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClearDone:
@@ -221,7 +254,26 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [.windowID, .workspaceID]
             )
         case .workspaceClose:
-            return .init(id: rawValue, kind: .action, summary: "Close a workspace. Its task spaces stay open as top-level workspaces.", selectors: [.windowID, .workspaceID])
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Close a workspace. Its task spaces stay open as top-level workspaces.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [
+                    .init(
+                        name: "requireDone",
+                        summary: "true to refuse unless the workspace is still marked done: new work since the mark was set clears it.",
+                        valueType: .boolean,
+                        required: false
+                    ),
+                    .init(
+                        name: "requirePullRequest",
+                        summary: "Only close if the workspace still links to this pull request and has no unsaved documents.",
+                        valueType: .string,
+                        required: false
+                    ),
+                ]
+            )
         case .workspaceTabCreate:
             return .init(id: rawValue, kind: .action, summary: "Create a terminal tab and return workspaceID, tabID and panelID. Managed callers default to their own workspace.", selectors: [.windowID, .workspaceID], parameters: [.terminalCreationActivation(required: false)], aliases: aliases)
         case .workspaceTabSelect:
@@ -463,6 +515,334 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [.windowID, .workspaceID, .panelID],
                 parameters: [.expectedSessionID(required: true)]
             )
+        case .taskCreate:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Create a task. Toastty saves it, makes a task space under the workspace, and starts the agent there with the prompt, the text as written and the attached files. With startWork=true, the agent starts in a new git worktree instead of the project directory. With fork=true, from a Claude Code or Codex session, the agent starts as a fork of the caller's conversation once the caller's turn ends; the caller keeps running. Returns taskID at once, while setup continues; poll task.get for its state. workspace defaults to the calling agent's workspace. [defaults] in ~/.toastty/tasks.toml fills an agent, model or effort the request leaves out. A task with no workspace waits in Needs you until one is picked with task.set-workspace. Optional: when [triage] in tasks.toml has a command, it first chooses the workspace, agent, model, effort and first prompt the request leaves out. A repeated clientRequestID from the same caller returns the first task.",
+                selectors: [],
+                parameters: [
+                    .taskText(required: false),
+                    .taskFiles(required: false),
+                    .taskClientRequestID(required: false),
+                    .taskTitle(required: false),
+                    .taskSlug(required: false),
+                    .taskWorkspace(required: false),
+                    .init(name: "rootDirectory", summary: "A project directory, instead of workspace: the open top-level workspace on it, or a new one that Toastty opens once the other checks pass. Absolute or starting with ~.", valueType: .string, required: false),
+                    .init(name: "externalRef", summary: "The issue or report the task came from, such as github:owner/repo#123: printable ASCII with no spaces, at most 128 characters. task.get and task.list return it.", valueType: .string, required: false),
+                    .init(name: "externalURL", summary: "The http or https page of externalRef.", valueType: .string, required: false),
+                    .taskAgent(required: false),
+                    .taskModel(required: false),
+                    .taskEffort(required: false),
+                    .taskPrompt(required: false),
+                    .taskStartWork(required: false),
+                    .taskBase(required: false),
+                    .taskBranchPrefix(required: false),
+                    .taskFork(required: false),
+                ]
+            )
+        case .taskStartWork:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Move the calling agent's task into its own git worktree. Toastty fetches the base, adds the worktree next to the main checkout on branch <prefix>/<slug>, and runs the workspace's create_hook. Once the caller's turn ends, it forks the caller's Claude Code or Codex conversation into a new terminal in the worktree, waits for the fork's own conversation, then closes the caller's pane. Other agents start fresh there and the caller stays. Returns taskID at once; end the turn so the move can continue. From a session that is not a task's, it makes the task first: a top-level workspace gets a new task space.",
+                selectors: [],
+                parameters: [
+                    .taskBase(required: false),
+                    .taskBranchPrefix(required: false),
+                    .taskTitle(required: false),
+                    .taskSlug(required: false),
+                ]
+            )
+        case .taskRetry:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished. A task that still needs a workspace or an agent fills them again: from triage when [triage] has a command, otherwise from [defaults], and without a workspace it waits for one.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskDelete:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Delete a task and its attachments and stop its setup. A task space that setup made is closed if nothing used it; otherwise it stays without its task link.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskSetWorkspace:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Place a task that has not started in a workspace: an open one (workspace), a recently closed one (recentWorkspace, from task.workspace-choices), which Toastty opens again, or a project directory (rootDirectory), which Toastty opens as a new workspace unless the project is open. [defaults], or triage when it is on, then fills anything else the task still needs, and setup starts.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .taskWorkspace(required: false),
+                    .taskRecentWorkspace(required: false),
+                    .taskRootDirectory(required: false),
+                ]
+            )
+        case .taskSetRelease:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Save the user's request to release one task's work right after it merges, whatever the project's release rule says, or clear it. Toastty only saves the request and marks the task's rows; it starts no release. task.get and task.list report it as releaseAfterMerge, with the time of the first request, and it survives a relaunch. afterMerge=true saves it; asking again keeps the first time. afterMerge=false clears it, also on a task that has none. Saving is refused on a Done or archived task and on a release task. Without taskID, a task's agent sets it on its own task.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "afterMerge", summary: "true asks for a release right after the task merges; false clears the request.", valueType: .boolean, required: true),
+                ]
+            )
+        case .taskSend:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Type a message into a task's agent and submit it. Toastty finds the task's current agent session when it delivers, so the task ID keeps working after a relaunch, a fork or start-work. Without steer, Toastty types whatever the agent does: a busy agent queues the message as typed input, and the Return key can answer a permission prompt that is on screen. With steer=true, Toastty checks the agent first and types nothing into a permission prompt or a question, and the result's message says in a sentence what it did: an agent at its open prompt gets the message (delivery sent); a Claude Code or Codex agent in a turn gets it in that turn (steered); in every other case Toastty holds the message and types it at the agent's next open prompt (queued, with queuePosition, and delivered false). Toastty holds at most 5 messages for an agent, loses them when it quits or the agent restarts, and reports neither. A steer send fails, with nothing typed, when Toastty cannot tell what the agent does (an agent whose conversation it does not follow, or one that starts, ended or failed), when text that someone typed in the terminal can still be in the agent's prompt, and when 5 messages already wait. Fails when the task has no running agent. Toastty types the text after a first line that names the sender, as coordinator.send does. Any unscoped caller may send to any task; a workspace-scoped session only to tasks it may see in task.list.",
+                selectors: [],
+                parameters: [.taskID(required: true), .taskMessage(required: true), .taskSteer(required: false), .senderName(required: false)]
+            )
+        case .coordinatorOpen:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Open the coordinator: one long-lived agent session in its own workspace, pinned at the top of the sidebar. The first call creates the workspace in the window (windowID; the selected window without it), with a terminal in the coordinator's folder, and starts the agent from the [coordinator] table of tasks.toml. Later calls select the workspace, and start the agent only when none runs there. Returns after the start attempt, with the coordinator.get fields, createdWorkspace and startedAgent. Fails with the reason when the agent does not start; a terminal that is busy with something else is left alone. The coordinator is not a task.",
+                selectors: [.windowID],
+                parameters: [
+                    .init(name: "select", summary: "Select the coordinator's workspace. Defaults to true.", valueType: .boolean, required: false),
+                ]
+            )
+        case .coordinatorRestart:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Start a fresh agent session for the coordinator in its workspace, without selecting it. An agent that still runs there is ended: the new session starts in a new terminal, and then the old terminal closes. A start that fails leaves the running agent alone. A terminal at its shell prompt is used again. Messages that wait in the coordinator's queue stay. Creates the workspace when there is none.",
+                selectors: [.windowID],
+                parameters: []
+            )
+        case .coordinatorSend:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Give the coordinator's agent a message. delivery is sent when the agent was at an open prompt and the text was typed and submitted there; sentUnconfirmed when the terminal did not confirm the Return key, after which later messages wait until a turn runs; queued, with position and hold, when it waits. Text waits while the agent works or waits for an approval (busy), while text the user typed in the coordinator's terminal may still be in its prompt (userDraft), while no agent runs (noSession), while the agent starts, and while the agent's conversation shows no open prompt after a stopped or failed turn (promptNotOpen). One message is typed for each open prompt, in order, through the queue that the coordinator's chat and Toastty's digests also use. The queue holds up to 50 messages: it survives an agent restart, and an app quit loses a message of this action. Toastty types the text after a first line that names the sender, which it takes from the caller and not from the text: the task whose space the calling session is in, else that session, else the name in from, marked as the caller's own, else a terminal command. The coordinator reads such a message as data from that sender, not as the user's input, unless its policy names that sender as one that passes on the user's decisions. A message from outside a task gets a messageID, a UUID, which the first line ends with (\"Message ID <uuid>.\"): the coordinator answers it with coordinator.reply, and the sender reads the answer with coordinator.replies. Toastty keeps the ID while the message waits and for 7 days after it types it. messageID is null for a message from a task, which the coordinator answers with task.send. Fails when there is no coordinator.",
+                selectors: [],
+                parameters: [.taskMessage(required: true), .senderName(required: false)]
+            )
+        case .coordinatorReply:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Reply to a message that coordinator.send brought from outside a task, named by the messageID that its first line ends with. Only the coordinator's own agent can reply. Toastty keeps the reply for 7 days, and the sender reads it with coordinator.replies. Each approved webhook whose events include coordinator_reply gets a coordinator.reply event with the reply's ID, the messageID and the sender's name, never the text. A message can have several replies, such as one that says the user was asked and one with the user's answer. The text is at most 16 KB. Returns replyID, messageID, repliedAt and webhookEvents, the number of events queued. Fails for a message that has no ID, such as a task's, or whose ID is older than 7 days.",
+                selectors: [],
+                parameters: [
+                    .init(name: "messageID", summary: "The ID at the end of the message's first line.", valueType: .string, required: true),
+                    .init(name: "text", summary: "The reply, for the sender. It leaves Toastty: the sender and any program on this Mac that runs toastty can read it.", valueType: .string, required: true),
+                ]
+            )
+        case .coordinatorWake:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Set the coordinator's next check: the time when Toastty wakes it if nothing else does. Pass exactly one of inSeconds, at and clear. The time must be at least 1 minute from now. Toastty saves it across a relaunch, and a time that came while Toastty was quit wakes the coordinator once after the relaunch. Every wake that Toastty types removes the time: the coordinator sets or clears its next check in the turn that the wake starts. Toastty has no timer of its own: with no time set, only a task change that may need the coordinator wakes it: a task that moves into Needs you; an alert (a busy agent silent for 30 minutes, failing checks, checks pending for 30 minutes, or a turn that a quit cut off); a merge that the coordinator watches (coordinator.watch) or that the user asked to release right after; or the end of a task it watches. Other changes wait for the next wake. clear removes the time. With quiet, the coordinator also says that the wake turn it runs now needs nothing from the user: the chat folds the turn under Toastty's line, and its end marks nothing unread and sends no notification. quiet works only for the coordinator's own agent, in a turn that Toastty's last wake started and that no other message came into; otherwise the action fails and changes nothing. Returns the coordinator.get fields. Fails when there is no coordinator.",
+                selectors: [],
+                parameters: [
+                    .init(name: "inSeconds", summary: "Wake the coordinator this many seconds from now.", valueType: .integer, required: false),
+                    .init(name: "at", summary: "Wake the coordinator at this ISO 8601 time, such as 2026-11-09T18:30:00Z.", valueType: .string, required: false),
+                    .init(name: "clear", summary: "Remove the time the coordinator set.", valueType: .boolean, required: false),
+                    .init(name: "quiet", summary: "Mark the wake turn that runs now as one that needs nothing from the user. Defaults to false.", valueType: .boolean, required: false),
+                ]
+            )
+        case .coordinatorWatch:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Watch a task or a project for the coordinator, or with remove=true stop. Pass exactly one of taskID and workspaceID. A watched task wakes the coordinator once when it merges or ends (Done, archived or deleted); the watch then ends. A watched project, named by its workspace or one of its subspaces, wakes the coordinator at every merge of its tasks, until the watch is removed. Watching again what is watched changes nothing. Up to 100 tasks and 100 projects. Toastty saves the watches with the coordinator's wake state; closing the coordinator's workspace drops them. Returns the coordinator.get fields. Fails when there is no coordinator.",
+                selectors: [],
+                parameters: [
+                    .init(name: "taskID", summary: "The task to watch.", valueType: .string, required: false),
+                    .init(name: "workspaceID", summary: "The project to watch: its workspace, or one of its subspaces.", valueType: .string, required: false),
+                    .init(name: "remove", summary: "Stop watching it. Defaults to false.", valueType: .boolean, required: false),
+                ]
+            )
+        case .taskWatch:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Be told once when a task reaches a condition. When it holds, Toastty sends a one-line message to the notified task's agent, as task.send does, so a waiting agent can end its turn instead of polling. idle means the agent finished a turn after the watch was made; waiting means it waits for an approval or an answer; a stage condition (ready-for-review, merged, to-ship, done) holds once task.get's stage reaches it and stays true after the task moves past it; archived holds only for an archived task. notifyTaskID defaults to the calling agent's own task. With wait=true, nothing is notified: the watch is kept in memory for a caller that polls task.watches, as toastty task watch --wait does. Saved watches survive a relaunch. A watch whose task is deleted or archived fires with that reason.",
+                selectors: [],
+                parameters: [.taskID(required: true), .taskWatchCondition(required: true), .taskNotifyTaskID(required: false), .taskWatchWait(required: false)]
+            )
+        case .taskUnwatch:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Cancel a watch made with task.watch.",
+                selectors: [],
+                parameters: [.taskWatchID(required: true)]
+            )
+        case .taskMerge:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Merge a task's pull request: what a merge skill calls once its checks pass. It records the user's acceptance, hands the merge to Toastty's merge owner, and waits up to 8 seconds for the pull request script's first answer: a refusal or a failure is an error with its reason; otherwise merge is waitingForChecks, cleaningUp (merged), or merging when the script has not answered yet. Toastty merges at the checkout's commit with GitHub's merge API (never auto-merge), waits for checks that still run, and after the agent's turn ends closes the task space, removes the worktree and deletes the branch. With head, it refuses unless the checkout is still at that commit. Without taskID, a task's agent merges its own task. Only an agent session in the task's task space, or in its parent task's task space, may call it; other callers use task.request-merge. Refused after the user cancelled the merge, for the agent turn that was checking it.",
+                selectors: [],
+                parameters: [.taskID(required: false), .taskHead(required: false)]
+            )
+        case .taskRequestMerge:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Accept a task's pull request for merging from outside the task, as the Merge button does: the task's agent gets the merge prompt, checks review threads, prerequisites and CI, then merges with task.merge or reports what blocks it. It always goes through the agent, even in a project with merge = \"direct\". Refused where the Merge button is not offered: no open pull request, no task space, or a merge under way.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskCancelMerge:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Stop a merge the user accepted while the task's agent checks it or Toastty waits for GitHub's checks. Clears the acceptance and the task space's done mark. Refused while Toastty is merging or after the pull request merged.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
+            )
+        case .taskCleanUp:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Try again a cleanup that stopped: after a merge (\"Merged · clean up?\"), an archive, or a release.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskReadyForReview:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Mark a task's work, which has no pull request, ready for the user to review. The task waits in Needs you until the user marks it done. Without taskID, a task's agent marks its own task.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
+            )
+        case .taskNeedsReply:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Mark that a task's agent is ending its turn with a question for the user. The task waits in Needs you, even after the user reads the turn, until an agent in its task space starts new work, usually because the user answered. Run it just before ending the turn. Without taskID, a task's agent marks its own task.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "question", summary: "The question in a few words; the task's row shows it.", valueType: .string, required: false),
+                ]
+            )
+        case .taskWaiting:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Mark that a task waits on something outside Toastty, such as an email reply or a date, or clear that mark. The task rests in Idle with a clock and the reason, and a task with child tasks does not finish through them while the mark is set. The mark stays across turns until the agent clears or replaces it, or marks the task ready for review. At wakeAt, Toastty sends the task's agent one line to go on, and the mark clears when that turn starts. Without taskID, a task's agent marks its own task.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "on", summary: "What the task waits for, in a few words; the task's row shows it. Required unless clear is true.", valueType: .string, required: false),
+                    .init(name: "wakeAt", summary: "When Toastty sends the agent its wake line, as an ISO 8601 time in the future, such as 2026-12-01T17:00:00Z.", valueType: .string, required: false),
+                    .init(name: "clear", summary: "Remove the mark: the task no longer waits.", valueType: .boolean, required: false),
+                ]
+            )
+        case .taskMarkDone:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Finish a task without a merge. Its task space gets the done mark too; new work there clears that mark again.",
+                selectors: [],
+                parameters: [.taskID(required: true)]
+            )
+        case .taskArchive:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Close a task without merging. Checks first and refuses with the reason: unsaved documents, a merge under way, uncommitted changes without discardChanges, or a detached worktree whose commit is on no remote branch or tag without deleteUnpushedCommits. Then, in the background and each step saved: closes the pull request only with closePullRequest, closes the task space, removes the worktree, and deletes the local branch when the remote has all its commits (or with deleteUnpushedCommits). The remote branch stays. Running it again continues a stopped archive. With dryRun, changes nothing and returns summary, the lines that say what the archive would close, remove and keep, and refusal, the reason it would refuse, or null.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .init(name: "closePullRequest", summary: "true also closes the task's pull request on GitHub.", valueType: .boolean, required: false),
+                    .init(name: "deleteUnpushedCommits", summary: "true deletes the local branch, or a detached worktree, even with commits no remote has.", valueType: .boolean, required: false),
+                    .init(name: "discardChanges", summary: "true removes the worktree even with uncommitted changes.", valueType: .boolean, required: false),
+                    .init(name: "dryRun", summary: "true only reports what the archive would do, with the other options.", valueType: .boolean, required: false),
+                ]
+            )
+        case .taskRelease:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Start a release task for a project that tasks.toml gives a release_skill or a release_prompt. Toastty fetches the remote's default branch (the fetch must succeed) and starts the agent in a new worktree on no branch at that commit. [defaults] in ~/.toastty/tasks.toml fills an agent, model or effort the request leaves out. Its first message names release_skill, then release_prompt, then the project's To ship tasks. Release tags matching release_tags mark tasks shipped. Uses the given workspace's project, or the calling agent's.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [
+                    .taskAgent(required: false),
+                    .taskModel(required: false),
+                    .taskEffort(required: false),
+                ]
+            )
+        case .taskAdopt:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Give a task space without a task record one, so Toastty tracks it as a task: its stage, its pull request, and its Done history after it closes. Targets the calling agent's own workspace when no workspace is given; a top-level workspace is rejected. Returns the existing task when it has one.",
+                selectors: [.windowID, .workspaceID]
+            )
+        case .webhookAdd:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Register an HTTPS address that receives task events: a POST with a small JSON body when a task needs the user, merges, finishes, or is archived or deleted. The webhook waits for the user's approval in the Tasks view and receives nothing until then; no command can approve it. Each event includes the task's ID, title, project root, external reference, stage, the question an agent asked, the pull request URL and mergedAt, never the agent's reply or attachments. auth is bearer (Authorization: Bearer <secret>), header:<Name> (<Name>: <secret>), hmac (Toastty-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, \"<t>.<body>\")>), or none for 127.0.0.1 and localhost only. The secret is kept in the Keychain and never returned. Without a secret, the user enters it in the approval sheet; pass secretHint to tell them where to find it. Refused for workspace-scoped sessions.",
+                selectors: [],
+                parameters: [
+                    .webhookName(required: true), .webhookURL(required: true), .webhookEvents(required: false),
+                    .webhookRoots(required: false), .webhookExternalRefPrefix(required: false), .webhookAuth(required: false),
+                    .webhookSecret(required: false), .webhookSecretHint(required: false),
+                ]
+            )
+        case .webhookSet:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Change a webhook from webhook.add. A change to its URL, events, filters or auth sends it back to the user for approval. A new secret alone keeps the approval and resumes a webhook that stopped after HTTP 401, 403 or 410. An empty externalRefPrefix or secretHint clears it.",
+                selectors: [],
+                parameters: [
+                    .webhookName(required: true), .webhookURL(required: false), .webhookEvents(required: false),
+                    .webhookRoots(required: false), .webhookExternalRefPrefix(required: false), .webhookAuth(required: false),
+                    .webhookSecret(required: false), .webhookSecretHint(required: false),
+                ]
+            )
+        case .webhookRemove:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Remove a webhook, its Keychain secret, and its unsent events.",
+                selectors: [],
+                parameters: [.webhookName(required: true)]
+            )
+        case .webhookTest:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Send an approved webhook a task.test event now and return the HTTP status, or the class of failure.",
+                selectors: [],
+                parameters: [.webhookName(required: true)]
+            )
+        case .windowTasksShow:
+            return .init(id: rawValue, kind: .action, summary: "Show the Tasks view over a window's workspace. Selecting a workspace leaves it.", selectors: [.windowID])
+        case .windowTasksHide:
+            return .init(id: rawValue, kind: .action, summary: "Hide a window's Tasks view.", selectors: [.windowID])
+        case .windowSidebarSetSegment:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Show every project card in a window's sidebar (segment=all), or only the rows that need the user (segment=needsYou).",
+                selectors: [.windowID],
+                parameters: [.init(
+                    name: "segment",
+                    summary: "all or needsYou. The older names projects and status also work.",
+                    valueType: .string,
+                    required: true,
+                    allowedValues: SidebarSegment.allCases.map(\.rawValue)
+                )]
+            )
         }
     }
 
@@ -490,6 +870,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case panelScratchpadList = "panel.scratchpad.list"
     case panelScratchpadState = "panel.scratchpad.state"
     case agentProfileState = "agent.profile.state"
+    case taskGet = "task.get"
+    case taskList = "task.list"
+    case taskWorkspaceChoices = "task.workspace-choices"
+    case taskWatches = "task.watches"
+    case coordinatorGet = "coordinator.get"
+    case coordinatorReplies = "coordinator.replies"
+    case webhookList = "webhook.list"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -567,6 +954,71 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 summary: "Return the executable an agent profile would run, resolved in the launch environment and skipping Toastty's command shims. Launches no agent and starts no shell; omits the profile's arguments.",
                 selectors: [],
                 parameters: [.profileID(required: true)]
+            )
+        case .taskGet:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return one task: its text, title, chosen workspace, agent, model, effort and first prompt, setup state (routing while Toastty fills what the task left out, needsWorkspace with a reason, settingUp, setupFailed with a reason, or started), triageNote when triage did not answer in full, task space, agentState (notRunning, busy, waiting, idle or error, with the session, when it entered that state, interruptedAtQuit when a quit or a crash cut off its turn, and lastOutputAt), stage with changedAt, lastUserInputAt, cleanup (kind, stepsDone, problem, finishedAt, and taskSpaceClosesAt while a merged task space waits for its cleanup), pullRequest (GitHub's last answer: state, isDraft, mergeStateStatus, checks and checksPendingSince), and lastReply: the agent's latest message from its transcript, cut at 16 KB. Without taskID, a task's agent gets its own task.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
+            )
+        case .taskList:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List tasks, oldest first, in the task.get shape without lastReply unless includeReply=true. Every answer has a cursor; with changedSince set to an earlier cursor, only tasks whose record, stage, agentState or pullRequest changed since are listed (a change of only lastOutputAt or lastUserInputAt does not count), deleted task IDs are in deletedTaskIDs, and reset=true means the cursor was from an earlier launch, so every task is listed. A workspace-scoped session sees only tasks it created or whose workspace or task space is in its scope.",
+                selectors: [],
+                parameters: [
+                    .taskChangedSince(required: false),
+                    .taskIncludeReply(required: false),
+                    .init(name: "parent", summary: "List only the tasks this task started.", valueType: .uuid, required: false),
+                ]
+            )
+        case .taskWorkspaceChoices:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "The workspaces a task can be placed in with task.set-workspace: the open top-level workspaces, then recently closed ones whose project is not open. With taskID, also the project triage suggested for that task when triage is on, under suggested, with the choice that places it there. With name, also the project directories whose folder name or workspace title matches it, ignoring case, -, _, . and spaces, under matches, each with its source: open, recent, config (a tasks.toml root) or history (a task's project), which the user has worked in, or sibling, a git repository in the same parent directory as one of those that Toastty never opened. A workspace-scoped session sees only open workspaces in its scope.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: false),
+                    .init(name: "name", summary: "A project name to look up, such as the one the user gave.", valueType: .string, required: false),
+                ]
+            )
+        case .taskWatches:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List watches from task.watch: pending ones, and fired ones for a while after they fire, with the reason and whether the message was delivered. Filter by watchID, by the watched taskID, or by notifyTaskID.",
+                selectors: [],
+                parameters: [.taskWatchID(required: false), .taskID(required: false), .taskNotifyTaskID(required: false)]
+            )
+        case .coordinatorGet:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a change that wakes nothing on its own, such as a task that started running or is Done, or an alert that cleared; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator; and watchedTaskIDs and watchedProjectRoots, what coordinator.watch watches.",
+                selectors: []
+            )
+        case .coordinatorReplies:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return the coordinator's replies to messages from coordinator.send, oldest first: each with id, messageID, from (the sender's own name, or null), text and repliedAt. With messageID, only the replies to that message. With since, a cursor from an earlier answer, only newer replies. Every answer has a cursor. truncated is true when replies after since are no longer kept, or since is from a store that no longer exists; the answer then has every kept reply. Toastty keeps replies for 7 days, up to 500. Any caller that may run coordinator.send may read them; a workspace-scoped session cannot unless the coordinator's workspace is in its scope.",
+                selectors: [],
+                parameters: [
+                    .init(name: "messageID", summary: "Only the replies to this message.", valueType: .string, required: false),
+                    .init(name: "since", summary: "A cursor from an earlier coordinator.replies answer.", valueType: .string, required: false),
+                ]
+            )
+        case .webhookList:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "List task webhooks with their status (pendingApproval, approved, disabled), shortened URL, events, filters, auth mode and last delivery. Never returns a secret or the full URL path. With name, only that webhook.",
+                selectors: [],
+                parameters: [.webhookName(required: false)]
             )
         }
     }
@@ -729,6 +1181,169 @@ private extension AppControlParameterDescriptor {
             required: required,
             allowedValues: ScratchpadPanelCreatePolicy.allCases.map(\.rawValue)
         )
+    }
+
+    static func taskText(required: Bool) -> Self {
+        .init(name: "text", summary: "The task, as written. The agent receives it unchanged. Required unless prompt is given.", valueType: .string, required: required)
+    }
+
+    static func taskFiles(required: Bool) -> Self {
+        .init(name: "files", summary: "Absolute path of a file to attach; Toastty keeps a copy. Repeat for more files.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func taskClientRequestID(required: Bool) -> Self {
+        .init(name: "clientRequestID", summary: "The caller's key for this request. A repeat with the same key returns the first task.", valueType: .string, required: required)
+    }
+
+    static func taskTitle(required: Bool) -> Self {
+        .init(name: "title", summary: "One-line title. Defaults to the first line of the text.", valueType: .string, required: required)
+    }
+
+    static func taskSlug(required: Bool) -> Self {
+        .init(name: "slug", summary: "Lowercase words joined by hyphens; names the task space. Defaults to one made from the title.", valueType: .string, required: required)
+    }
+
+    static func taskWorkspace(required: Bool) -> Self {
+        .init(name: "workspace", summary: "Workspace ID the task belongs to. A subspace means its parent. Defaults to the calling agent's workspace.", valueType: .uuid, required: required)
+    }
+
+    static func taskAgent(required: Bool) -> Self {
+        .init(name: "agent", summary: "Agent profile ID from agents.toml.", valueType: .string, required: required)
+    }
+
+    static func taskModel(required: Bool) -> Self {
+        .init(name: "model", summary: "Model for the agent.", valueType: .string, required: required)
+    }
+
+    static func taskEffort(required: Bool) -> Self {
+        .init(name: "effort", summary: "Reasoning effort for the agent.", valueType: .string, required: required)
+    }
+
+    static func taskRecentWorkspace(required: Bool) -> Self {
+        .init(name: "recentWorkspace", summary: "ID of a recently closed workspace from task.workspace-choices. Toastty opens it again.", valueType: .uuid, required: required)
+    }
+
+    static func taskRootDirectory(required: Bool) -> Self {
+        .init(name: "rootDirectory", summary: "A project directory that is not open. Toastty opens a workspace there.", valueType: .string, required: required)
+    }
+
+    static func taskPrompt(required: Bool) -> Self {
+        .init(name: "prompt", summary: "First prompt, sent before the task text.", valueType: .string, required: required)
+    }
+
+    static func taskStartWork(required: Bool) -> Self {
+        .init(name: "startWork", summary: "true makes a git worktree during setup and starts the agent there.", valueType: .boolean, required: required)
+    }
+
+    static func taskBase(required: Bool) -> Self {
+        .init(name: "base", summary: "Branch on the remote, fetched now, or local commit the worktree starts from. Defaults to the remote's default branch.", valueType: .string, required: required)
+    }
+
+    static func taskBranchPrefix(required: Bool) -> Self {
+        .init(name: "branchPrefix", summary: "First part of the worktree's branch name, before /<slug>. Defaults to the workspace's branch_prefix in tasks.toml, else task.", valueType: .string, required: required)
+    }
+
+    static func taskFork(required: Bool) -> Self {
+        .init(name: "fork", summary: "true starts the agent as a fork of the calling Claude Code or Codex session's conversation, after the caller's current turn ends. It uses the caller's agent; model and effort default to the caller's task's. The caller keeps running.", valueType: .boolean, required: required)
+    }
+
+    static func taskMessage(required: Bool) -> Self {
+        .init(name: "text", summary: "The message, typed into the agent and submitted.", valueType: .string, required: required)
+    }
+
+    static func senderName(required: Bool) -> Self {
+        .init(
+            name: "from",
+            summary: "The caller's own name, such as Grok Bot, for the first line when the caller runs in no Toastty session. Toastty does not check it. A caller in a Toastty session is named by that session instead.",
+            valueType: .string,
+            required: required
+        )
+    }
+
+    static func taskSteer(required: Bool) -> Self {
+        .init(
+            name: "steer",
+            summary: "true checks the agent first: the message goes to its open prompt or into its running turn, or waits for its next open prompt. Nothing is typed into a permission prompt or a question.",
+            valueType: .boolean,
+            required: required
+        )
+    }
+
+    static func taskWatchCondition(required: Bool) -> Self {
+        .init(
+            name: "until",
+            summary: "What to wait for: idle, waiting, or a stage.",
+            valueType: .string,
+            required: required,
+            allowedValues: TaskWatchCondition.allCases.map(\.rawValue)
+        )
+    }
+
+    static func taskNotifyTaskID(required: Bool) -> Self {
+        .init(name: "notifyTaskID", summary: "Task whose agent gets the message.", valueType: .uuid, required: required)
+    }
+
+    static func taskWatchWait(required: Bool) -> Self {
+        .init(name: "wait", summary: "true keeps the watch in memory for polling instead of notifying a task.", valueType: .boolean, required: required)
+    }
+
+    static func taskWatchID(required: Bool) -> Self {
+        .init(name: "watchID", summary: "Watch ID from task.watch.", valueType: .uuid, required: required)
+    }
+
+    static func taskChangedSince(required: Bool) -> Self {
+        .init(name: "changedSince", summary: "Cursor from an earlier task.list.", valueType: .string, required: required)
+    }
+
+    static func taskIncludeReply(required: Bool) -> Self {
+        .init(name: "includeReply", summary: "true adds each task's lastReply.", valueType: .boolean, required: required)
+    }
+
+    static func taskHead(required: Bool) -> Self {
+        .init(name: "head", summary: "The commit the merge checks ran on; the merge is refused if the checkout moved.", valueType: .string, required: required)
+    }
+
+    static func webhookName(required: Bool) -> Self {
+        .init(name: "name", summary: "The webhook's name: lowercase letters, digits, - and _.", valueType: .string, required: required)
+    }
+
+    static func webhookURL(required: Bool) -> Self {
+        .init(name: "url", summary: "An https:// URL; http:// only for 127.0.0.1 and localhost.", valueType: .string, required: required)
+    }
+
+    static func webhookEvents(required: Bool) -> Self {
+        .init(
+            name: "events",
+            summary: "Events to send. Defaults to needs_you, merged, done, archived, deleted. coordinator_reply adds an event each time the coordinator replies to a message from coordinator.send; it needs at least one task event with it.",
+            valueType: .string,
+            required: required,
+            repeatable: true,
+            allowedValues: TaskWebhookEventType.allCases.map(\.rawValue) + [TaskWebhook.coordinatorReplyEventName]
+        )
+    }
+
+    static func webhookRoots(required: Bool) -> Self {
+        .init(name: "roots", summary: "Only tasks under these project roots. Defaults to every root.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func webhookExternalRefPrefix(required: Bool) -> Self {
+        .init(name: "externalRefPrefix", summary: "Only tasks whose externalRef ID starts with this.", valueType: .string, required: required)
+    }
+
+    static func webhookAuth(required: Bool) -> Self {
+        .init(name: "auth", summary: "bearer, header:<Name>, hmac (default), or none (loopback only).", valueType: .string, required: required)
+    }
+
+    static func webhookSecret(required: Bool) -> Self {
+        .init(name: "secret", summary: "The shared secret or sender key, 16 to 4096 printable ASCII bytes. Kept in the Keychain.", valueType: .string, required: required)
+    }
+
+    static func webhookSecretHint(required: Bool) -> Self {
+        .init(name: "secretHint", summary: "Where the user finds the key, shown under the key field of the approval sheet, such as the receiving service's menu path and settings URL. One line, at most 300 characters. Not part of the approval.", valueType: .string, required: required)
+    }
+
+    static func taskID(required: Bool) -> Self {
+        .init(name: "taskID", summary: "Task ID from task.create or task.list.", valueType: .uuid, required: required)
     }
 
     static func files(required: Bool) -> Self {

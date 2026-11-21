@@ -35,7 +35,7 @@
 <div class="card">
   <div class="brand"><svg aria-hidden="true"><use href="#icon-toast"/></svg><span>Toastty</span></div>
   <div class="eyebrow">A native macOS terminal multiplexer<br>for coding agents</div>
-  <h1>Any agent.<em>Any workflow.</em></h1>
+  <h1>Coordinate<em>all your agents.</em></h1>
   <div class="shot"><img alt=""></div>
 </div>
 <script>
@@ -46,9 +46,10 @@
   // Scale the crop to fill the box width (or height, whichever is tighter), anchored top-left.
   const scale = Math.min(box.clientWidth / w, box.clientHeight / h);
   img.style.transform = `translate(${-x * scale}px, ${-y * scale}px) scale(${scale})`;
-  // End the box at the crop's bottom edge so a partly cut row never shows.
+  // End the box at the crop's bottom and right edges so a partly cut row or panel never shows.
   const height = Math.min(box.clientHeight, h * scale);
   box.style.height = `${height}px`;
+  box.style.width = `${Math.min(box.clientWidth, w * scale)}px`;
   box.style.top = `${(630 - height) / 2}px`;
   img.src = params.get('poster');
 </script>

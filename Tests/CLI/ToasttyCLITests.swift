@@ -1209,6 +1209,55 @@ struct ToasttyCLITests {
         #expect(parsedPanelID == panelID)
     }
 
+    /// A Claude Stop hook sends its Ready status and its turn end in one
+    /// request, so a reply that times out cannot deliver only the status.
+    @Test
+    func hookEventSendsAllItsUpdatesInOneRequest() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: UUID(),
+            payload: Data(
+                #"{"hook_event_name":"Stop","session_id":"claude-root","turn_id":"turn-7","stop_hook_active":false,"last_assistant_message":"Done"}"#.utf8
+            )
+        )
+        let request = try #require(try ToasttyCLI.ingestRequest(for: commands))
+
+        #expect(request.eventType == AutomationSocketProtocol.eventBatchEventType)
+        guard case .array(let values)? = request.payload["events"] else {
+            Issue.record("expected the batched events")
+            return
+        }
+        let events = try values.map {
+            try JSONDecoder().decode(AutomationEventEnvelope.self, from: JSONEncoder().encode($0))
+        }
+        let expected = commands.map { $0.makeEventEnvelope() }
+        try #require(events.count == 2)
+        #expect(events.map(\.eventType) == ["session.status", "session.provider_conversation.observation"])
+        #expect(events.map(\.eventType) == expected.map(\.eventType))
+        #expect(events.map(\.sessionID) == expected.map(\.sessionID))
+        #expect(events.map(\.panelID) == expected.map(\.panelID))
+        #expect(events[0].payload == expected[0].payload)
+        var observationPayload = events[1].payload
+        var expectedObservationPayload = expected[1].payload
+        guard case .string(let observationJSON)? = observationPayload.removeValue(forKey: "observationJSON"),
+              case .string(let expectedObservationJSON)? = expectedObservationPayload.removeValue(forKey: "observationJSON") else {
+            Issue.record("expected the provider observation JSON in both events")
+            return
+        }
+        #expect(observationPayload == expectedObservationPayload)
+        // The observation is JSON inside a string. Encoding the same value
+        // twice can change object key order without changing the observation.
+        #expect(
+            try JSONDecoder().decode(ProviderTranscriptObservation.self, from: Data(observationJSON.utf8))
+                == JSONDecoder().decode(ProviderTranscriptObservation.self, from: Data(expectedObservationJSON.utf8))
+        )
+
+        // One update needs no batch, and no update needs no request.
+        #expect(try ToasttyCLI.ingestRequest(for: [commands[0]])?.eventType == "session.status")
+        #expect(try ToasttyCLI.ingestRequest(for: []) == nil)
+    }
+
     @Test
     func socketClientTimesOutWhenServerDoesNotReply() throws {
         let socketPath = "/tmp/toastty-cli-tests-\(UUID().uuidString.prefix(8)).sock"

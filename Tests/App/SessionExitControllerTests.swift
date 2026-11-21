@@ -487,6 +487,8 @@ final class SessionExitControllerTests: XCTestCase {
             askedSince.append(date)
             return hasInput
         }
+
+        func lastRemoteUserInputAt(panelID _: UUID) -> Date? { nil }
     }
 
     @MainActor

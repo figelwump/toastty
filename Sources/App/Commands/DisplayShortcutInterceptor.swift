@@ -9,6 +9,9 @@ final class DisplayShortcutInterceptor {
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    /// Select Next Split and Select Previous Split, which include the
+    /// coordinator's dock. Without it, the shortcuts cycle the panels only.
+    private let splitLayoutCommandController: SplitLayoutCommandController?
     private let processWatchCommandController: ProcessWatchCommandController
     private let isCommandPalettePresented: @MainActor () -> Bool
     private let toggleCommandPalette: @MainActor (UUID?) -> Bool
@@ -17,6 +20,7 @@ final class DisplayShortcutInterceptor {
 
     enum ShortcutAction: Equatable {
         case commandPalette
+        case coordinatorDockShortcut
         case closePanel
         case consumeShortcut
         case createWindow
@@ -63,6 +67,7 @@ final class DisplayShortcutInterceptor {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         processWatchCommandController: ProcessWatchCommandController? = nil,
+        splitLayoutCommandController: SplitLayoutCommandController? = nil,
         isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
         toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
@@ -73,6 +78,7 @@ final class DisplayShortcutInterceptor {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.splitLayoutCommandController = splitLayoutCommandController
         self.processWatchCommandController = processWatchCommandController ?? ProcessWatchCommandController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -84,11 +90,14 @@ final class DisplayShortcutInterceptor {
         if installEventMonitor {
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
-                guard let action = self.shortcutAction(for: event) else { return event }
+                let windowID = self.shortcutWindowID(for: event)
+                guard let action = self.shortcutAction(for: event, appOwnedWindowID: windowID) else {
+                    return event
+                }
                 // Keep workspace switching in the local monitor so the embedded
                 // terminal's key handling cannot swallow Option+digit before the
                 // menu-based workspace switch path can run reliably.
-                let didHandleShortcut = self.handle(action)
+                let didHandleShortcut = self.handle(action, appOwnedWindowID: windowID)
                 // If no workspace or panel is mapped to this shortcut, keep default key behavior.
                 return didHandleShortcut ? nil : event
             }
@@ -101,10 +110,6 @@ final class DisplayShortcutInterceptor {
         }
     }
 
-    private func shortcutAction(for event: NSEvent) -> ShortcutAction? {
-        shortcutAction(for: event, appOwnedWindowID: appOwnedShortcutWindowID())
-    }
-
     func shortcutAction(for event: NSEvent, appOwnedWindowID: UUID?) -> ShortcutAction? {
         if Self.isCommandPaletteShortcut(event),
            isCommandPalettePresented() {
@@ -114,6 +119,17 @@ final class DisplayShortcutInterceptor {
         if Self.isCommandPaletteShortcut(event),
            appOwnedWindowID != nil {
             return .commandPalette
+        }
+
+        if Self.isCoordinatorDockShortcut(event),
+           let appOwnedWindowID,
+           let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController,
+           CoordinatorDockPresentation.showsToggle(
+               windowID: appOwnedWindowID,
+               coordinator: controller.location,
+               chatAvailable: controller.chatIsAvailable
+           ) {
+            return .coordinatorDockShortcut
         }
         if Self.isRepeatedNewWindowShortcut(event),
            canConsumeRepeatedWindowShortcut() {
@@ -293,14 +309,12 @@ final class DisplayShortcutInterceptor {
         }
     }
 
-    private func handle(_ action: ShortcutAction) -> Bool {
-        handle(action, appOwnedWindowID: appOwnedShortcutWindowID())
-    }
-
     func handle(_ action: ShortcutAction, appOwnedWindowID: UUID?) -> Bool {
         switch action {
         case .commandPalette:
             toggleCommandPalette(appOwnedWindowID)
+        case .coordinatorDockShortcut:
+            performCoordinatorDockShortcut()
         case .closePanel:
             closeFocusedPanel(preferredWindowID: appOwnedWindowID)
         case .consumeShortcut:
@@ -382,6 +396,19 @@ final class DisplayShortcutInterceptor {
         guard event.type == .keyDown,
               event.isARepeat == false,
               event.charactersIgnoringModifiers?.lowercased() == "p" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
+    /// Cmd+Shift+K. The app owns it rather than the View menu item: SwiftUI
+    /// menu state is not told of every change it depends on, such as the
+    /// key window, and a stale disabled item would drop the key.
+    static func isCoordinatorDockShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "k" else {
             return false
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -813,16 +840,57 @@ final class DisplayShortcutInterceptor {
     }
 
     static func closePanelShortcutWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
+        // Be conservative around active text input so Cmd+W stays with the
+        // field editor or text control rather than being reclaimed by Toastty.
+        if let keyWindow,
+           toasttyResponderUsesReservedClosePanelShortcut(keyWindow.firstResponder) {
+            return nil
+        }
+        return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+    }
+
+    /// The window that the shortcut in `event` acts on. Text input focus
+    /// keeps most shortcuts with the text control, but Cmd+Shift+P and
+    /// Cmd+Shift+K have no text-editing meaning, so the command palette and
+    /// the coordinator's dock shortcut also work from text views such as the
+    /// Coordinator message bar and its transcript. Cmd+] and Cmd+[ also
+    /// leave the Coordinator message bar: the coordinator's dock is a stop
+    /// of Select Next Split and Select Previous Split. Text size shortcuts
+    /// also work from the Coordinator message bar.
+    static func shortcutWindowID(
+        for event: NSEvent,
+        keyWindow: NSWindow?,
+        modalWindow: NSWindow?
+    ) -> UUID? {
+        if isCommandPaletteShortcut(event) || isCoordinatorDockShortcut(event) {
+            return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+        }
+        if keyWindow?.firstResponder is CoordinatorComposerTextView,
+           focusSplitDirection(for: event) != nil || textSizeShortcutDirection(for: event) != nil {
+            return keyToasttyWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+        }
+        return closePanelShortcutWindowID(keyWindow: keyWindow, modalWindow: modalWindow)
+    }
+
+    private static func keyToasttyWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
         guard modalWindow == nil else { return nil }
         guard let keyWindow else { return nil }
         guard keyWindow.sheetParent == nil else { return nil }
-        // Be conservative around active text input so Cmd+W stays with the
-        // field editor or text control rather than being reclaimed by Toastty.
-        if toasttyResponderUsesReservedClosePanelShortcut(keyWindow.firstResponder) {
-            return nil
-        }
         guard let rawWindowID = keyWindow.identifier?.rawValue else { return nil }
         return UUID(uuidString: rawWindowID)
+    }
+
+    private func shortcutWindowID(for event: NSEvent) -> UUID? {
+        guard let store,
+              let windowID = Self.shortcutWindowID(
+                  for: event,
+                  keyWindow: NSApp.keyWindow,
+                  modalWindow: NSApp.modalWindow
+              ),
+              store.window(id: windowID) != nil else {
+            return nil
+        }
+        return windowID
     }
 
     private func appOwnedShortcutWindowID() -> UUID? {
@@ -891,6 +959,12 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func performCoordinatorDockShortcut() -> Bool {
+        guard let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController else { return false }
+        controller.performDockShortcut()
+        return true
     }
 
     private func toggleRightPanel(preferredWindowID: UUID?) -> Bool {
@@ -1016,6 +1090,12 @@ final class DisplayShortcutInterceptor {
             case .reset: adjustment = .reset
             }
             webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: adjustment)
+        case (.coordinatorChat, .increase):
+            coordinatorChat?.changeTextScale(.increase)
+        case (.coordinatorChat, .decrease):
+            coordinatorChat?.changeTextScale(.decrease)
+        case (.coordinatorChat, .reset):
+            coordinatorChat?.changeTextScale(.reset)
         }
         return true
     }
@@ -1055,19 +1135,21 @@ final class DisplayShortcutInterceptor {
     /// key stays with the terminal in a workspace without a merge control.
     private func mergeWorkspacePullRequest(preferredWindowID: UUID?) -> Bool {
         guard let store,
-              store.isWorkspaceMergeEnabled,
               let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID(),
               let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace,
+              store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
-                mode: store.workspaceMergeMode
+                mode: store.workspaceMergeMode,
+                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspace.id),
+                isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspace.id)
               ) else {
             return false
         }
         // While a merge or cleanup is under way the shortcut does nothing,
         // like the button, and is not passed to the terminal.
-        if case .ready(_, let mode) = presentation {
+        if case .ready(_, let mode, _) = presentation {
             requestWorkspaceMerge(workspace.id, mode)
         }
         return true
@@ -1182,7 +1264,11 @@ final class DisplayShortcutInterceptor {
         guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        _ = store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
+        if let splitLayoutCommandController {
+            _ = splitLayoutCommandController.focusSplit(direction: direction, preferredWindowID: preferredWindowID)
+        } else {
+            _ = store.sendNavigation(.focusSlot(workspaceID: workspaceID, direction: direction))
+        }
         // Toastty-owned pane-focus shortcuts should not fall through to
         // embedded views once the current workspace window resolves, even if
         // there is no adjacent split target in that direction.
@@ -1365,7 +1451,16 @@ final class DisplayShortcutInterceptor {
               let store else {
             return nil
         }
-        return store.focusedScaleCommandTarget(preferredWindowID: preferredWindowID)
+        let coordinatorController = sessionRuntimeStore.taskCoordinator?.coordinatorController
+        return store.focusedScaleCommandTarget(
+            preferredWindowID: preferredWindowID,
+            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true },
+            coordinatorDockHasKeyboard: { coordinatorController?.dockHasKeyboard(in: $0) == true }
+        )
+    }
+
+    private var coordinatorChat: CoordinatorChatModel? {
+        sessionRuntimeStore.taskCoordinator?.coordinatorController?.chat
     }
 
     private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {

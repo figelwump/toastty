@@ -33,32 +33,18 @@ The shipped `toastty-capabilities` skill covers these actions in more depth, inc
 
 Match these to what the user works on and which tools they use. Issue trackers, documents, and monitoring are reached through the agent's own tools, such as MCP servers or the `gh` CLI; Toastty provides the workspace around them. If a workflow needs a tool the user's agent lacks, say so.
 
-- **Worktree handoff** ("hand this off"): packages the conversation into a handoff, opens a Git worktree in a new task space, and comes back with a screenshot report and a PR chip. Toastty bundles it; see below.
+- **Running tasks** ("start work", "merge it"): takes a task from the request to a reviewed, merged PR, and removes its worktree. Toastty bundles this; see below.
 - **Issue to PR** ("start ENG-412"): reads a Linear or GitHub issue, names a workspace after it with a chip linking back, drafts the plan in a Scratchpad, and links the PR on the issue when it is up.
 - **Review queue** ("review my PRs"): opens a task space per requested review with the diff in the browser, writes notes into a Scratchpad, and notifies the user as each one is ready.
 - **Spec to tasks** ("build from this spec"): opens a spec from Google Docs, Notion, or a Markdown file beside the terminal, splits it into tasks, starts a task space for each, and keeps a progress page current.
 - **Crash to fix** ("fix this crash"): reproduces a Sentry report or log error in a worktree with the dev server in a split the agent can read, then shows before and after screenshots.
 - **Second opinion** ("ask another model"): runs two agents side by side on the same question and compares their answers in a Scratchpad.
 
-## Worked example: worktree handoff
+## Worked example: the task lifecycle
 
-Toastty bundles example workflow skills, read-only, at:
+Running a task needs no personal skill. Every task's first message names the shipped `toastty-task-start` skill. Its agent clarifies the request, runs `toastty task start-work` to move implementation into its own worktree, verifies the work, publishes the PR and a Scratchpad report, and sets the task's status. It follows the repository's own instructions, such as `AGENTS.md`, where they differ. When the user presses Merge on a task, or says "merge it", the shipped `toastty-task-merge` skill checks the pull request: unresolved review threads, merge prerequisites in its description, tasks that must land first, and CI. If nothing blocks, it runs `toastty task merge`; otherwise it reports the blockers and stops. Toastty then merges at the commit the skill checked, waits for checks that still run, and keeps the task space open for 24 hours so the user can look at the task; then, once the agent's turn has ended, it closes the task space and removes its worktree. The checks need an authenticated `gh` CLI.
 
-```text
-{{WORKFLOW_EXAMPLES_DIR}}
-```
-
-The worktree handoff is three packages there that work together. `worktree-create` hands a task to its own Git worktree and task space, forking the conversation when the task was already discussed. `worktree-done` accepts the reviewed PR and turns on auto-merge. `worktree-cleanup` reports which task PRs are ready and removes merged worktrees. The PR steps need an authenticated `gh` CLI, and `worktree-done` relies on the repository's auto-merge setting. The `README.md` beside them explains the flow.
-
-To set it up for the user:
-
-1. Read the three `SKILL.md` files and the README.
-2. Ask what to adapt: the landing branch and remote, how PRs are reviewed and merged, the commands that verify a change, preferred agent models, and how task workspaces should be named. Keep anything they do not want to change.
-3. Copy each package folder into the user skills directory as real files, keeping its subfolders and the executable permission on its scripts (for example, `cp -R`). Then make the agreed edits. Show the planned folders and edits first, and write only after an explicit OK.
-4. If a package with the same name already exists, do not overwrite it. Show how it differs from the bundled copy and ask whether to keep it, merge the changes, or move it aside.
-5. Install all three packages together; they refer to each other.
-
-The examples are also a model for a custom workflow. `worktree-create` checks its inputs, creates the worktree with a script in its own folder, launches the child agent with `agent.launch`, opens the related documents in the new workspace's right panel, and records every ID it creates.
+To change how a project merges, set its `merge_skill` in `~/.toastty/tasks.toml` to the user's own skill, or set `merge = "direct"` to merge without an agent. A custom merge skill decides, then calls `toastty task merge`; it does not merge with `gh` itself, so Toastty stays the one place that merges and cleans up. To add rules that apply only to tasks, such as asking before a pull request opens, set `start_prompt` in `[defaults]` or a project's table; the first message gives it after the skill line. To replace the start skill, set `start_skill` to the user's own skill, or to `"none"` for no skill. `release_skill` names the skill a release task starts with. Toastty does not check that the agent has the skill.
 
 ## Rules for workflow skills
 

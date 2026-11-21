@@ -21,6 +21,9 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case sessionStartOptions
     case sessionStart
     case sessionStartWithAttachments
+    case taskCreateOptions
+    case taskCreate
+    case taskCreateWithAttachments
     case questionAnswer
     case messageSend
     case messageSendWithAttachments
@@ -29,6 +32,15 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
     case nativeDeviceRevoke
     case nativePushConfiguration
     case nativePushRegistration
+    case taskAction
+    case taskArchiveCheck
+    case coordinatorSend
+    case coordinatorSendWithAttachments
+    case coordinatorChatRead
+    case coordinatorQuietDigests
+    case coordinatorQueue
+    case coordinatorAttachmentImage
+    case finishedTasks
 
     var path: String {
         switch self {
@@ -49,6 +61,9 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .sessionStartOptions: RemoteSessionStartPolicy.optionsPath
         case .sessionStart: RemoteSessionStartPolicy.startPath
         case .sessionStartWithAttachments: RemoteSessionStartPolicy.startWithAttachmentsPath
+        case .taskCreateOptions: RemoteTaskCreatePolicy.optionsPath
+        case .taskCreate: RemoteTaskCreatePolicy.createPath
+        case .taskCreateWithAttachments: RemoteTaskCreatePolicy.createWithAttachmentsPath
         case .questionAnswer: "/api/conversation.question.answer"
         case .messageSendWithAttachments: RemoteAttachmentPolicy.sendPath
         case .messageSend: "/api/conversation.message.send"
@@ -57,6 +72,15 @@ enum RemoteGatewayRoute: CaseIterable, Hashable, Sendable {
         case .nativeDeviceRevoke: "/v1/native-device/revoke"
         case .nativePushConfiguration: RemotePushPolicy.configurationPath
         case .nativePushRegistration: RemotePushPolicy.registrationPath
+        case .taskAction: RemoteTaskActionPolicy.actionPath
+        case .taskArchiveCheck: RemoteTaskActionPolicy.archiveCheckPath
+        case .coordinatorSend: RemoteCoordinatorSendPolicy.sendPath
+        case .coordinatorSendWithAttachments: RemoteCoordinatorSendPolicy.sendWithAttachmentsPath
+        case .coordinatorChatRead: RemoteCoordinatorChatReadPolicy.readPath
+        case .coordinatorQuietDigests: RemoteCoordinatorQuietDigestsPolicy.path
+        case .coordinatorQueue: RemoteCoordinatorQueuePolicy.path
+        case .coordinatorAttachmentImage: RemoteCoordinatorAttachmentImagePolicy.path
+        case .finishedTasks: RemoteFinishedTasksPolicy.path
         }
     }
 }
@@ -119,6 +143,11 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .sessionStartOptions: .init(route: .sessionStartOptions, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
         .sessionStart: .init(route: .sessionStart, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .sessionStartWithAttachments: .init(route: .sessionStartWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // A task starts an agent with the task as its first message, so the
+        // create routes follow the session start routes.
+        .taskCreateOptions: .init(route: .taskCreateOptions, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        .taskCreate: .init(route: .taskCreate, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .taskCreateWithAttachments: .init(route: .taskCreateWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .questionAnswer: .init(route: .questionAnswer, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSendWithAttachments: .init(route: .messageSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
         .messageSend: .init(route: .messageSend, method: "POST", origin: .browserCredentialRequired, authentication: .browserOrNative, scope: .send),
@@ -127,6 +156,38 @@ struct RemoteGatewayRoutePolicy: Equatable, Sendable {
         .nativeDeviceRevoke: .init(route: .nativeDeviceRevoke, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
         .nativePushConfiguration: .init(route: .nativePushConfiguration, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
         .nativePushRegistration: .init(route: .nativePushRegistration, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .none),
+        // Task actions change tasks on the Mac, so they need send scope; the
+        // handler also checks the device's Task actions switch. The archive
+        // check reads git state only to offer an archive, so it needs the
+        // same.
+        .taskAction: .init(route: .taskAction, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .taskArchiveCheck: .init(route: .taskArchiveCheck, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // A message to the coordinator is a send, and the coordinator makes
+        // a task from it, so these follow the task create routes; the
+        // handler checks the start permission itself.
+        .coordinatorSend: .init(route: .coordinatorSend, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        .coordinatorSendWithAttachments: .init(route: .coordinatorSendWithAttachments, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .send),
+        // A read of the coordinator's chat changes only what the chat marks
+        // as new, as a read acknowledgement does, so it needs the read scope
+        // that showing the chat needs.
+        .coordinatorChatRead: .init(route: .coordinatorChatRead, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        // Which wake turns are quiet changes only how the coordinator's chat
+        // folds, so it needs the read scope that showing the chat needs.
+        .coordinatorQuietDigests: .init(route: .coordinatorQuietDigests, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        // The coordinator's waiting messages are what the coordinator's
+        // chat shows below its rows, so reading them needs the read scope
+        // that showing the chat needs. Their text is not sent yet, so only a
+        // native device reads it, never a browser. Changing them goes
+        // through `conversationQueueUpdate`, which needs send.
+        .coordinatorQueue: .init(route: .coordinatorQueue, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        // An image attached to a message in the coordinator's chat is part
+        // of what the chat shows, so it needs the read scope that showing
+        // the chat needs, as a preview does.
+        .coordinatorAttachmentImage: .init(route: .coordinatorAttachmentImage, method: "POST", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
+        // The titles of finished tasks are what a chat's chips show, as the
+        // task board's titles are, so reading them needs the read scope
+        // that the board needs. Only the native app draws chips from them.
+        .finishedTasks: .init(route: .finishedTasks, method: "GET", origin: .optionalAllowed, authentication: .nativeBearer, scope: .read),
     ]
 
     static func policy(for path: String) -> RemoteGatewayRoutePolicy? {

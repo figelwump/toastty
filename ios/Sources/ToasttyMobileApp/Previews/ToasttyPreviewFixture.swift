@@ -19,6 +19,13 @@ extension ToasttyPreviewService {
                     return RemoteHTMLResourceResponse(error: .missing)
                 }
                 return RemoteHTMLResourceResponse(mimeType: resource.mimeType, data: Data(resource.text.utf8))
+            },
+            attachmentImage: { request in
+#if DEBUG
+                try await ToasttyAttachmentImageFixture.image(for: request)
+#else
+                throw RemotePreviewError.unsupported
+#endif
             }
         )
     }
@@ -33,6 +40,19 @@ enum ToasttyPreviewFixture {
 
     static func content(for target: RemotePreviewTarget) throws -> RemotePreviewContent {
         switch target {
+        case .panel(workspaceID: ToasttyMobileFixture.coordinatorWorkspaceID, panelID: ToasttyMobileFixture.coordinatorScratchpadPanelID):
+            return scratchpad(title: "Release plan", documentNumber: 90)
+        case .panel(workspaceID: ToasttyMobileFixture.coordinatorWorkspaceID, panelID: ToasttyMobileFixture.coordinatorPolicyPanelID):
+            return try coordinatorFile("policy.md")
+        case .conversationFile(let conversationID, let fileReference)
+            where conversationID.rawValue == ToasttyMobileFixture.coordinatorConversationID:
+#if DEBUG
+            // An older coordinator folder, before the coordinator wrote its files.
+            if ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_FILES"] == "missing" {
+                throw RemotePreviewError.missing
+            }
+#endif
+            return try coordinatorFile(fileReference)
         case .panel(let workspaceID, let panelID):
             guard let workspace = ToasttyMobileFixture.home.workspaces.first(where: { $0.id == workspaceID }),
                   workspace.panels.contains(where: { $0.panelID == panelID }) else {
@@ -88,6 +108,77 @@ enum ToasttyPreviewFixture {
             formatLabel: "Markdown"
         ))
     }
+
+    /// The coordinator's files, as its folder holds them. The ledger is long
+    /// enough that its first entries are off screen when it opens at its end.
+    private static func coordinatorFile(_ name: String) throws -> RemotePreviewContent {
+        let content: String
+        switch name {
+        case "policy.md": content = coordinatorPolicy
+        case "ledger.md": content = coordinatorLedger
+        case "friction.md": content = coordinatorFriction
+        default: throw RemotePreviewError.missing
+        }
+        return .document(RemotePreviewDocument(
+            title: name,
+            sourcePath: "/fixtures/home/.toastty/coordinator/\(name)",
+            content: content,
+            format: "markdown",
+            revision: "fixture-coordinator-\(name)",
+            formatLabel: "Markdown"
+        ))
+    }
+
+    private static let coordinatorPolicy = """
+    # Coordinator policy
+
+    ## Projects
+
+    - toastty: changes land on the feature branch.
+
+    ## Talking
+
+    - Name tasks by title, as links.
+    - Short answers; lists for choices.
+
+    ## Reviewing
+
+    - A UI change needs a mock-up.
+    - Proof comes from the Mac mini.
+
+    ## Merging
+
+    - Child pull requests merge into the feature branch.
+
+    """
+
+    static let coordinatorLedgerFirstEntry = "Nov 12 · 09:02 started: read the policy and the open tasks."
+    static let coordinatorLedgerLastEntry = "Nov 17 · 17:29 created: Coordinator policy and ledger menu, from your message."
+
+    private static let coordinatorLedger: String = {
+        let middle = (1...36).map { index in
+            let day = 12 + index / 8
+            let minute = String(format: "%02d", (index * 7) % 60)
+            return "- Nov \(day) · \(10 + index % 8):\(minute) checked: task \(index) is still working."
+        }
+        return (["# Ledger", "", "- \(coordinatorLedgerFirstEntry)"] + middle
+            + ["- Nov 17 · 17:22 asked: keep the Unblocking rule about parent tasks?",
+               "- \(coordinatorLedgerLastEntry)", ""])
+            .joined(separator: "\n")
+    }()
+
+    private static let coordinatorFriction = """
+    # Friction notes
+
+    ## Remote checks wait for the shared mini
+
+    Two tasks waited 20 minutes for the mini on Nov 16.
+
+    ## Hosted CI flakes
+
+    The keyboard tests failed once each and passed on rerun.
+
+    """
 
     private static func scratchpad(title: String, documentNumber: Int) -> RemotePreviewContent {
         .scratchpad(RemotePreviewScratchpad(

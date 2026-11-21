@@ -115,7 +115,7 @@ launch_toastty_app() {
     "TOASTTY_DERIVED_PATH=$DERIVED_PATH"
     "$APP_BINARY"
   )
-  "${launch_command[@]}"
+  exec "${launch_command[@]}"
 }
 
 json_string() {

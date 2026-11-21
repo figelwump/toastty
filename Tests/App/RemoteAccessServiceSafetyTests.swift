@@ -601,9 +601,9 @@ struct RemoteAccessServiceSafetyTests {
     @Test func activeMacDropsEventsWithoutReplayingThemWhenAway() async throws {
         let relay = RemotePushRelaySpy()
         let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
-        var presence = RemotePushMacPresence(screenIsLocked: false, idleSeconds: 0)
+        let presence = MainActorValue(RemotePushMacPresence(screenIsLocked: false, idleSeconds: 0))
         let fixture = try RemoteBootstrapFixture(pairNativeDevice: true, pushConfiguration: configuration,
-            pushRelay: relay, pushMacPresence: { presence })
+            pushRelay: relay, pushMacPresence: { presence.value })
         defer { fixture.removeRuntimeFiles() }
         try fixture.setPushRegistration(.init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43), relayID: configuration.relayID))
         let pushHandler = fixture.sessionRuntimeStore.onActionableEvent
@@ -618,7 +618,7 @@ struct RemoteAccessServiceSafetyTests {
         }
         status(.working, at: 1)
         status(.ready, at: 2)
-        presence = .init(screenIsLocked: false, idleSeconds: 120)
+        presence.value = .init(screenIsLocked: false, idleSeconds: 120)
         status(.ready, at: 3) // A duplicate after walking away must not replay the dropped event.
         status(.working, at: 4)
         status(.ready, at: 5)
@@ -627,10 +627,10 @@ struct RemoteAccessServiceSafetyTests {
         #expect(acceptedEvents.map(\.timestamp) == [2.0, 5.0].map { fixture.confirmedAt.addingTimeInterval($0) })
         #expect(relay.notifications.map(\.eventID) == [readyEvent.eventID])
 
-        presence = .init(screenIsLocked: false, idleSeconds: 0)
+        presence.value = .init(screenIsLocked: false, idleSeconds: 0)
         status(.working, at: 6)
         status(.needsApproval, at: 7)
-        presence = .init(screenIsLocked: true, idleSeconds: 0)
+        presence.value = .init(screenIsLocked: true, idleSeconds: 0)
         status(.needsApproval, at: 8)
         status(.working, at: 9)
         status(.needsApproval, at: 10)
@@ -1068,10 +1068,12 @@ struct RemoteAccessServiceSafetyTests {
 
     @Test func remoteDoneRefusesALateRequestWhileWorkIsInProgress() {
         func result(
-            done: Bool, isSubspace: Bool = true, isDone: Bool = false, busy: Bool = false
+            done: Bool, isSubspace: Bool = true, isDone: Bool = false, busy: Bool = false, accepts: Bool = true,
+            knows: Bool = true
         ) -> RemoteWorkspaceDoneResult {
             RemoteAccessService.workspaceDoneResult(
-                requestedDone: done, isSubspace: isSubspace, isDone: isDone, hasWorkInProgress: busy)
+                requestedDone: done, isSubspace: isSubspace, isDone: isDone, hasWorkInProgress: busy,
+                acceptsDoneMark: accepts, clientKnowsOpenPullRequestResult: knows)
         }
         #expect(result(done: true) == .updated)
         // An agent started new work after the tap; its turn cleared or will
@@ -1080,6 +1082,219 @@ struct RemoteAccessServiceSafetyTests {
         #expect(result(done: false, isDone: true, busy: true) == .updated)
         #expect(result(done: true, isDone: true, busy: true) == .unchanged)
         #expect(result(done: true, isSubspace: false) == .notSubspace)
+        // A task with an open pull request finishes through Merge; clearing
+        // a mark it already has stays allowed.
+        #expect(result(done: true, accepts: false) == .hasOpenPullRequest)
+        #expect(result(done: false, isDone: true, accepts: false) == .updated)
+        #expect(result(done: true, isDone: true, accepts: false) == .unchanged)
+        // A client that cannot decode that refusal gets one it can.
+        #expect(result(done: true, accepts: false, knows: false) == .workInProgress)
+        #expect(result(done: false, isDone: true, accepts: false, knows: false) == .updated)
+    }
+
+    /// The bug this guards: a phone's done checkbox finished a task in
+    /// Ready for review whose pull request was still open, skipping the
+    /// merge and To ship. Runs a real task, board, and remote service.
+    @MainActor
+    @Test func remoteDoneRefusesATaskWithAnOpenPullRequestAndTellsClientsToHideTheBox() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = TaskBoardTests.FakeGitHub()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: gitHub),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Fix the unread dot", workspaceID: fixture.workspaceID, agent: "codex", prompt: "Fix it."))
+        await fixture.waitForSetup(created.id)
+        let taskID = created.id
+        let taskSpace = try #require(fixture.record(taskID)?.taskSpaceWorkspaceID)
+        // The agent finished its turn and the user read it.
+        let session = try #require(fixture.record(taskID)?.operation.agentLaunch?.sessionID)
+        let panel = try #require(fixture.record(taskID)?.operation.taskSpace?.panelID)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: Date().addingTimeInterval(1))
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        #expect(fixture.sessionRuntimeStore.workspaceStatuses(for: taskSpace).map(\.status.kind) == [.idle])
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "plain", activate: false)))
+        let plain = try #require(fixture.store.state.windows.first?.workspaceIDs.last)
+        #expect(fixture.store.send(.setWorkspaceParent(
+            workspaceID: plain, parentWorkspaceID: fixture.workspaceID, spawningSessionID: nil)))
+        let pullRequestURL = "https://github.com/example/toastty/pull/124"
+        for workspaceID in [taskSpace, plain] {
+            #expect(fixture.store.send(.setWorkspaceAnnotation(
+                workspaceID: workspaceID,
+                key: "github-pr",
+                annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+            )))
+        }
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        await board.pullRequests?.refresh(link).value
+
+        let server = RemoteAccessGatewayServerSpy()
+        let runtimeHome = "/tmp/toastty-remote-access-done-pr-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: runtimeHome) }
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-remote-access-test-home",
+            environment: [ToasttyRuntimePaths.environmentKey: runtimeHome]
+        )
+        let service = RemoteAccessService(
+            store: fixture.store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            port: 42_995,
+            initiallyEnabled: false,
+            gatewayServerFactory: { _ in server }
+        )
+        defer { service.setEnabled(false, persist: false) }
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_995)
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: Date())
+        func summary(_ workspaceID: UUID) throws -> RemoteWorkspaceSummary {
+            try #require(service.facadeSessionList(at: Date()).workspaces.first { $0.id == workspaceID })
+        }
+
+        // The task finishes through Merge: the Mac refuses the mark and
+        // tells clients to hide the box. A subspace without a task keeps it.
+        let refused = service.setWorkspaceDone(
+            .init(workspaceID: taskSpace, done: true, knowsOpenPullRequestResult: true), device: device)
+        #expect(refused == .hasOpenPullRequest)
+        // The v0.9.2 iPhone app shows the box anyway and cannot decode that
+        // refusal. Its request gets the refusal it shipped with, so it says
+        // the task can't be marked done, not that the connection failed.
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Tests/RemoteProtocol/Fixtures/v1", isDirectory: true)
+        var oldRequest = try ConversationEventCoding.makeDecoder().decode(
+            RemoteWorkspaceDoneRequest.self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("workspace-done-request.json"))
+        )
+        oldRequest.workspaceID = taskSpace
+        let oldResponse = try ConversationEventCoding.makeEncoder().encode(
+            RemoteWorkspaceDoneResponse(result: service.setWorkspaceDone(oldRequest, device: device)))
+        let releasedRefusal = try Data(contentsOf: fixtures.appendingPathComponent(
+            "workspace-done-response-work_in_progress.json"))
+        #expect(oldResponse == releasedRefusal)
+        #expect(try JSONDecoder().decode(ReleasedWorkspaceDoneResponse.self, from: oldResponse).result == .workInProgress)
+        // The new iPhone build ships before this Mac. The v0.9.2 Mac decodes
+        // its request and ignores the key it does not know.
+        let newRequest = try ConversationEventCoding.makeDecoder().decode(
+            ReleasedWorkspaceDoneRequest.self,
+            from: Data(contentsOf: fixtures.appendingPathComponent("workspace-done-request-knows-open-pull-request.json"))
+        )
+        #expect(newRequest.done && newRequest.protocolVersion == RemoteGatewayProtocol.version)
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
+        #expect(board.items().first { $0.id == .task(taskID) }?.stage.group != .done)
+        #expect(try summary(taskSpace).acceptsDoneMark == false)
+        #expect(try summary(plain).acceptsDoneMark)
+        #expect(service.setWorkspaceDone(.init(workspaceID: plain, done: true), device: device) == .updated)
+
+        // A mark the task already has can still be cleared.
+        #expect(fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: Date())))
+        #expect(service.setWorkspaceDone(.init(workspaceID: taskSpace, done: false), device: device) == .updated)
+        #expect(fixture.store.state.workspacesByID[taskSpace]?.doneAt == nil)
+
+        // Once the pull request is closed without a merge, the box returns.
+        // Only GitHub's answer changed, and clients still hear of it.
+        try await Task.sleep(for: .milliseconds(300))
+        server.removeAllBroadcasts()
+        gitHub.answer(pullRequestURL, state: "CLOSED")
+        await board.pullRequests?.refresh(link).value
+        #expect(try summary(taskSpace).acceptsDoneMark)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline, server.sessionListSnapshots.last?
+            .workspaces.first(where: { $0.id == taskSpace })?.acceptsDoneMark != true {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(server.sessionListSnapshots.last?.workspaces.first { $0.id == taskSpace }?.acceptsDoneMark == true)
+        #expect(service.setWorkspaceDone(.init(workspaceID: taskSpace, done: true), device: device) == .updated)
+        #expect(board.items().first { $0.id == .task(taskID) }?.stage == .done)
+    }
+
+    /// A phone reads the Mac's capabilities when it connects. The Mac makes
+    /// the coordinator's controller at launch, not at the first Open
+    /// Coordinator, so a phone that connects before the coordinator ever
+    /// started is offered its sends and its chat's read point. Built as
+    /// `ToasttyApp` builds it.
+    @MainActor
+    @Test func aCoordinatorThatNeverStartedIsStillOfferedToPhones() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        let controller = CoordinatorController(
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            launcher: nil,
+            directoryURL: fixture.root.appendingPathComponent("coordinator", isDirectory: true),
+            configLoader: { TasksConfig() },
+            deliverText: { _, _ in .unavailable },
+            promptState: { _ in .unavailable }
+        )
+        fixture.coordinator.coordinatorController = controller
+        let quickEntry = QuickEntryController(
+            store: fixture.store,
+            agentProfiles: { [unowned fixture] in fixture.launcher.launchProfileSummaries() },
+            presetUsage: QuickEntryPresetUsage(runtimePaths: .resolve(homeDirectoryPath: fixture.root.path, environment: [:])),
+            create: { _ in throw TaskError("not used") },
+            configLoader: { TasksConfig() },
+            stagingRootURL: fixture.root.appendingPathComponent("quick-entry", isDirectory: true),
+            registersGlobalHotKey: false,
+            frontmostApplication: { nil }
+        )
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: fixture.root.path,
+            environment: [ToasttyRuntimePaths.environmentKey: fixture.root.appendingPathComponent("runtime").path]
+        )
+        let server = RemoteAccessGatewayServerSpy()
+        var capturedHandler: RemoteGatewayRequestHandler?
+        let service = RemoteAccessService(
+            store: fixture.store,
+            annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
+            taskBoard: board,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            terminalRuntimeRegistry: TerminalRuntimeRegistry(),
+            runtimePaths: runtimePaths,
+            taskCoordinator: fixture.coordinator,
+            quickEntryController: quickEntry,
+            port: 42_994,
+            initiallyEnabled: false,
+            gatewayServerFactory: { handler in
+                capturedHandler = handler
+                return server
+            }
+        )
+        defer { service.setEnabled(false, persist: false) }
+        service.setEnabled(true, persist: false)
+        server.reportReady(port: 42_994)
+        let handler = try #require(capturedHandler)
+
+        let hello = RemoteGatewayHTTPRequest(method: "GET", path: "/api/hello", headers: [:], body: Data())
+        guard case .respond(let response) = handler.handle(hello, at: .now) else {
+            Issue.record("The hello request got no response")
+            return
+        }
+        let capabilities = try ConversationEventCoding.makeDecoder()
+            .decode(RemoteGatewayHelloResponse.self, from: response.body).capabilities
+        #expect(controller.location == nil, "The coordinator has never started")
+        #expect(capabilities.contains(.coordinatorSend))
+        #expect(capabilities.contains(.coordinatorChatRead))
+        #expect(capabilities.contains(.taskCreate))
     }
 
     @MainActor
@@ -1115,6 +1330,56 @@ struct RemoteAccessServiceSafetyTests {
         let flat = try #require(dangling.first { $0.id == subspace.id })
         #expect(flat.parentWorkspaceID == nil)
         #expect(flat.doneAt == nil)
+    }
+
+    /// The phone shows the coordinator in its own tab, so the snapshot marks
+    /// the coordinator's workspace, and only that one, and names the
+    /// coordinator's own session while its agent runs. The mark leaves the
+    /// wire when the coordinator closes.
+    @MainActor
+    @Test func workspaceInventoryMarksOnlyTheCoordinatorsWorkspace() throws {
+        var state = AppState.bootstrap()
+        let windowID = try #require(state.windows.first?.id)
+        let projectID = try #require(state.selectedWorkspaceSelection()?.workspaceID)
+        var subspace = WorkspaceState.bootstrap(title: "task")
+        subspace.parentWorkspaceID = projectID
+        state.workspacesByID[subspace.id] = subspace
+        state.windows[0].workspaceIDs.append(subspace.id)
+        let coordinatorID = UUID()
+        let coordinatorPanelID = UUID()
+        #expect(AppReducer.reduce(
+            action: .createCoordinatorWorkspace(
+                windowID: windowID, workspaceID: coordinatorID, panelID: coordinatorPanelID,
+                terminalCWD: "/Users/tester/.toastty/coordinator"
+            ),
+            state: &state
+        ))
+        #expect(state.coordinator?.panelID == coordinatorPanelID)
+        // The coordinator's agent and another agent in a project both run.
+        let coordinatorConversation = RemoteConversationID()
+        let live = [
+            coordinatorPanelID: coordinatorConversation,
+            try #require(state.workspacesByID[projectID]?.focusedPanelID): RemoteConversationID(),
+        ]
+
+        let summaries = RemoteAccessService.workspaceInventory(state: state, liveConversationIDsByPanelID: live)
+        #expect(Set(summaries.map(\.id)) == [projectID, subspace.id, coordinatorID])
+        #expect(summaries.filter(\.isCoordinator).map(\.id) == [coordinatorID])
+        let coordinator = try #require(summaries.first { $0.id == coordinatorID })
+        #expect(coordinator.parentWorkspaceID == nil)
+        #expect(coordinator.coordinatorConversationID == coordinatorConversation)
+        #expect(summaries.filter { $0.coordinatorConversationID != nil }.map(\.id) == [coordinatorID])
+        // Without a running agent the coordinator has no session to name.
+        #expect(RemoteAccessService.workspaceInventory(state: state)
+            .first { $0.id == coordinatorID }?.coordinatorConversationID == nil)
+        // Only the coordinator's workspace carries the field on the wire.
+        for summary in summaries {
+            let json = String(decoding: try ConversationEventCoding.makeEncoder().encode(summary), as: UTF8.self)
+            #expect(json.contains(#""isCoordinator":true"#) == (summary.id == coordinatorID), "\(json)")
+        }
+
+        #expect(AppReducer.reduce(action: .closeWorkspace(workspaceID: coordinatorID), state: &state))
+        #expect(RemoteAccessService.workspaceInventory(state: state).contains(where: \.isCoordinator) == false)
     }
 
     /// Waits for a broadcast session list whose annotations for the workspace
@@ -1846,6 +2111,51 @@ struct RemoteAccessServiceSafetyTests {
         #expect(unaffectedPayload.text == pendingText)
     }
 
+    @MainActor
+    @Test func claudeHistoryCannotConsumeTheFirstSendAfterResume() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .ready)
+        defer { fixture.removeRuntimeFiles() }
+        let wake = "[Toastty] Wake: test digest\n- Scheduled check"
+        let path = URL(filePath: fixture.resumeRecord.sessionFilePath)
+        let beforeLaunch = fixture.confirmedAt.addingTimeInterval(-60)
+        var transcript = try Self.claudeUserLine("Old prompt", id: "old-other", at: beforeLaunch)
+        transcript.append(try Self.claudeUserLine(wake, id: "old-identical", at: beforeLaunch))
+        try transcript.write(to: path)
+
+        let subscription = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
+        defer { subscription.cancel() }
+        try #require(fixture.confirmCurrentLaunchBinding())
+        try #require(subscription.isReadingInitialTranscript)
+        guard case .openPrompt(let epoch)? = subscription.snapshot(at: .now)?.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt during replay")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "wake-after-resume",
+            expectedInputEpoch: epoch, text: wake
+        )
+        try #require(subscription.send(request, byUser: false) == .accepted(epoch: epoch))
+        let wrapped = "<pasted_content id=\"abcd\">\n\(wake)\n</pasted_content id=\"abcd\">"
+        let handle = try FileHandle(forWritingTo: path)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Self.claudeUserLine(wrapped, id: "new-wake"))
+
+        try await Self.waitForReceipt(request.clientRequestID, mode: nil, in: fixture)
+        guard case .page(let page) = subscription.events(before: nil, limit: 20) else {
+            Issue.record("Expected replayed Claude transcript")
+            return
+        }
+        let messages = page.events.compactMap { event -> ConversationUserMessagePayload? in
+            guard case .userMessage(let payload) = event.payload else { return nil }
+            return payload
+        }
+        #expect(messages.map(\.text) == ["Old prompt", wake, wake])
+        #expect(messages.map(\.clientRequestID) == [nil, nil, request.clientRequestID])
+    }
+
     @Test func pendingSendCorrelationRemainsFIFOAndExpiresOldestMismatch() throws {
         let conversationID = RemoteConversationID()
         var correlator = RemotePendingSendCorrelator()
@@ -1981,15 +2291,45 @@ struct RemoteAccessServiceSafetyTests {
         #expect(fixture.summary.inputAvailability == .openPrompt(epoch: epoch))
     }
 
+    /// Keys that reached the terminal before the agent's start report
+    /// answered a question of that start, or they wait in the agent's
+    /// prompt. The prompt then opens as a Mac draft: no send can use it
+    /// before a release.
     @MainActor
-    @Test func localInputBeforeCurrentLaunchConfirmationPreventsPromptBootstrap() throws {
+    @Test func localInputBeforeCurrentLaunchConfirmationOpensThePromptAsAMacDraft() throws {
         let fixture = try RemoteBootstrapFixture()
         defer { fixture.removeRuntimeFiles() }
 
         fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        // Before the start report there is no prompt at all.
+        #expect(fixture.summary.inputAvailability ==
+            .unavailable(reason: .unknownProviderState))
         #expect(fixture.confirmCurrentLaunchBinding())
 
-        #expect(fixture.summary.inputAvailability ==
+        guard case .localDraft = fixture.summary.inputAvailability else {
+            Issue.record("Expected a Mac draft, got \(fixture.summary.inputAvailability)")
+            return
+        }
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
+
+        // A key right after the start report, before the service looked at
+        // the session again, gives the same draft.
+        let lateKeyFixture = try RemoteBootstrapFixture()
+        defer { lateKeyFixture.removeRuntimeFiles() }
+        #expect(lateKeyFixture.confirmCurrentLaunchBinding())
+        lateKeyFixture.terminalRuntimeRegistry.handleLocalInput(for: lateKeyFixture.panelID)
+        guard case .localDraft = lateKeyFixture.summary.inputAvailability else {
+            Issue.record("Expected a Mac draft, got \(lateKeyFixture.summary.inputAvailability)")
+            return
+        }
+
+        // An agent that works at its start report has no prompt to open,
+        // with or without keys.
+        let workingFixture = try RemoteBootstrapFixture(statusKind: .working)
+        defer { workingFixture.removeRuntimeFiles() }
+        workingFixture.terminalRuntimeRegistry.handleLocalInput(for: workingFixture.panelID)
+        #expect(workingFixture.confirmCurrentLaunchBinding())
+        #expect(workingFixture.summary.inputAvailability ==
             .unavailable(reason: .unknownProviderState))
     }
 
@@ -2030,6 +2370,103 @@ struct RemoteAccessServiceSafetyTests {
 
         #expect(panelLabelTitle != "Build system explanation")
         #expect(fixture.summary.title == "Build system explanation")
+
+        // The coordinator's session is always "Coordinator", also when its
+        // terminal becomes the coordinator's after the agent started there,
+        // as on a restart into a new terminal.
+        let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
+        fixture.sessionRuntimeStore.bind(store: fixture.store)
+        defer { fixture.sessionRuntimeStore.unbind() }
+        #expect(fixture.summary.title == "Build system explanation")
+        #expect(fixture.store.send(.restoreCoordinatorWorkspace(workspaceID: workspaceID, panelID: fixture.panelID)))
+        #expect(fixture.summary.title == AppState.coordinatorWorkspaceTitle)
+
+        // A terminal moved out of the coordinator's workspace is no longer
+        // the coordinator's, and its session gets its own name back.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(fixture.store.send(.createWorkspace(windowID: windowID, title: "Other", activate: false)))
+        let otherID = try #require(fixture.store.state.windows.first?.workspaceIDs.first { $0 != workspaceID })
+        #expect(fixture.store.send(.movePanelToWorkspace(panelID: fixture.panelID, targetWorkspaceID: otherID, targetSlotID: nil)))
+        #expect(fixture.store.state.coordinator?.panelID != fixture.panelID)
+        #expect(fixture.summary.title == "Build system explanation")
+    }
+
+    /// The user answered a question of the agent's start in the terminal,
+    /// such as a folder-trust question, before the agent reported its
+    /// session. The prompt opens as a Mac draft. A send is refused, a release
+    /// that names an older draft epoch is refused, the current release opens
+    /// the prompt for one send, and a key after a release locks it again.
+    @MainActor
+    @Test(arguments: [AgentKind.claude, .codex])
+    func aDraftFromKeysBeforeTheStartReportIsReleasedForOneSend(agent: AgentKind) throws {
+        let fixture = try RemoteBootstrapFixture(agent: agent)
+        defer { fixture.removeRuntimeFiles() }
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            delivered.append(text)
+            return true
+        }
+        let device = RemoteDeviceRecord(name: "Test iPhone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        func release(_ epoch: RemoteInputEpoch) -> RemoteConversationLocalDraftReleaseResult {
+            fixture.service.performLocalDraftRelease(
+                RemoteConversationLocalDraftReleaseRequest(conversationID: fixture.conversationID, expectedDraftEpoch: epoch),
+                device: device
+            )
+        }
+        func send(_ id: String, _ text: String, at epoch: RemoteInputEpoch) -> RemoteMessageSendResult {
+            fixture.service.performRemoteSend(RemoteMessageSendRequest(
+                conversationID: fixture.conversationID,
+                clientRequestID: id,
+                expectedInputEpoch: epoch,
+                text: text
+            ), device: device)
+        }
+        func draft() throws -> RemoteInputEpoch {
+            guard case .localDraft(let epoch) = fixture.summary.inputAvailability else {
+                Issue.record("Expected a Mac draft, got \(fixture.summary.inputAvailability)")
+                throw LocalConversationFixtureError.timedOut
+            }
+            return epoch
+        }
+
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        #expect(fixture.confirmCurrentLaunchBinding())
+        let seen = try draft()
+        // Nothing is typed into a draft.
+        #expect(send("into-the-draft", "Too early", at: seen).isAccepted == false)
+        #expect(delivered.isEmpty)
+
+        // Another key: a release that names the draft seen before it is refused.
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        let current = try draft()
+        #expect(current != seen)
+        #expect(release(seen) == .rejected(reason: .draftChanged))
+        #expect(delivered.isEmpty)
+
+        // The current release opens the prompt. A second one has no draft.
+        #expect(release(current) == .released)
+        guard case .openPrompt(let prompt) = fixture.summary.inputAvailability else {
+            Issue.record("Expected the released prompt, got \(fixture.summary.inputAvailability)")
+            return
+        }
+        #expect(release(current) == .rejected(reason: .noLocalDraft))
+
+        // A key after the release locks the prompt again, under a new epoch.
+        fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID)
+        let again = try draft()
+        #expect(again != current)
+        #expect(send("into-the-new-draft", "Still too early", at: prompt).isAccepted == false)
+        #expect(delivered.isEmpty)
+        #expect(release(current) == .rejected(reason: .draftChanged))
+        #expect(release(again) == .released)
+        #expect(fixture.summary.inputAvailability == .openPrompt(epoch: prompt))
+
+        // The released prompt takes one send.
+        #expect(send("after-release", "Carry on", at: prompt) == .accepted(epoch: prompt))
+        #expect(delivered == ["Carry on"])
+        #expect(send("second", "And more", at: prompt).isAccepted == false)
+        #expect(delivered == ["Carry on"])
     }
 
     /// The user typed on the Mac, cleared it, and released the lock from the
@@ -2095,7 +2532,7 @@ struct RemoteAccessServiceSafetyTests {
             keyTranslationMods: { _, mods in mods }, sendKey: { _, _ in true },
             keyIsBinding: { _, _ in false }, setPreedit: { _, _, _ in }
         )
-        host.setGhosttySurface(try #require(UnsafeMutableRawPointer(bitPattern: 0x1251)))
+        host.setGhosttySurface(UnsafeMutableRawPointer(bitPattern: 0x1251))
         host.handleLocalInput = { kind in
             fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: kind)
         }
@@ -2474,6 +2911,18 @@ struct RemoteAccessServiceSafetyTests {
         correlator.record(request, deliveredText: deliveredText)
         let unmatched = correlator.stamp([Self.userObservation(text: request.displayText, fingerprint: "not-delivered-text")], for: conversationID)
         #expect(Self.userPayload(from: unmatched[0])?.clientRequestID == nil)
+
+        // The text names the files, and the paths that the delivered text
+        // lists stay with the message, so a chat can show the files
+        // themselves and the Mac can serve their images.
+        let stagedPath = "/private/var/remote-access/attachments/A1/9B1E4C2A.jpg"
+        let listed = RemoteAttachmentDeliveryText.text("Look", paths: [stagedPath])
+        correlator.record(request, deliveredText: listed)
+        let withFiles = correlator.stamp([Self.userObservation(text: listed, fingerprint: "listed")], for: conversationID)
+        let filesPayload = try #require(Self.userPayload(from: withFiles[0]))
+        #expect(filesPayload.text == request.displayText)
+        #expect(filesPayload.attachmentPaths == [stagedPath])
+        #expect(payload.attachmentPaths == nil, "A delivered text without Toastty's list keeps no paths")
     }
 
     @MainActor
@@ -2627,6 +3076,403 @@ struct RemoteAccessServiceSafetyTests {
         }
     }
 
+    /// A delivered message whose Return the agent did not take starts no
+    /// turn, so no turn end opens the prompt again. After the send's deadline
+    /// the prompt opens under a new epoch, and the next message can be typed.
+    /// The lost message is never typed a second time.
+    @MainActor
+    @Test(arguments: [AgentKind.claude, .codex])
+    func sendThatStartsNoTurnOpensThePromptUnderANewEpoch(_ agent: AgentKind) async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: agent,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+
+        let lost = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "lost-send",
+            expectedInputEpoch: epoch, text: "First digest"
+        )
+        #expect(fixture.service.performRemoteSend(lost, device: device) == .accepted(epoch: epoch))
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+        #expect(nextEpoch.bindingID == epoch.bindingID)
+        #expect(nextEpoch.counter > epoch.counter)
+        #expect(Self.hasUnconfirmedReceipt(lost.clientRequestID, in: fixture))
+
+        // A retry of the lost message is not typed, under either epoch.
+        var retry = lost
+        retry.expectedInputEpoch = nextEpoch
+        #expect(fixture.service.performRemoteSend(retry, device: device) == .duplicate)
+        #expect(fixture.service.performRemoteSend(lost, device: device) == .duplicate)
+        // The consumed epoch cannot send.
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "stale-epoch",
+            expectedInputEpoch: epoch, text: "Too late"
+        ), device: device) == .rejected(reason: .epochMismatch))
+        #expect(typed == ["First digest"])
+
+        let next = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Second digest"
+        )
+        #expect(fixture.service.performRemoteSend(next, device: device) == .accepted(epoch: nextEpoch))
+        #expect(typed == ["First digest", "Second digest"])
+        // One message for each prompt: the second send consumed it.
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+    }
+
+    /// The agent can take a message after the deadline, when the prompt has
+    /// opened again. Its late turn closes that prompt as any turn does, the
+    /// message is not typed again, and the next message waits for the turn.
+    @MainActor
+    @Test func turnThatStartsAfterTheDeadlineClosesTheReopenedPrompt() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-late-turn")
+
+        let slow = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "slow-send",
+            expectedInputEpoch: epoch, text: "Slow digest"
+        )
+        #expect(fixture.service.performRemoteSend(slow, device: device) == .accepted(epoch: epoch))
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+
+        // Claude's UserPromptSubmit hook, then the transcript's user record.
+        observe(.turnStarted(turnID: "late-turn"), "late-start", 1)
+        observe(.transcript(.userMessage(.init(text: slow.text))), "late-echo", 1.1)
+        try await Self.waitForReceipt(slow.clientRequestID, mode: nil, in: fixture, afterUnconfirmedReceipt: true)
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+        let next = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Next digest"
+        )
+        #expect(fixture.service.performRemoteSend(next, device: device) == .rejected(reason: .promptNotOpen))
+        #expect(typed == ["Slow digest"])
+
+        observe(.turnEnded(turnID: "late-turn", reason: .completed), "late-end", 2)
+        let afterTurn = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let finalEpoch) = afterTurn.inputAvailability else {
+            Issue.record("Expected an open prompt after the late turn, not \(afterTurn.inputAvailability)")
+            return
+        }
+        #expect(finalEpoch.counter > nextEpoch.counter)
+        var nextAtFinalEpoch = next
+        nextAtFinalEpoch.expectedInputEpoch = finalEpoch
+        #expect(fixture.service.performRemoteSend(nextAtFinalEpoch, device: device) == .accepted(epoch: finalEpoch))
+        #expect(typed == ["Slow digest", "Next digest"])
+    }
+
+    /// A person who types at the reopened prompt holds it as a draft, as at
+    /// any open prompt: no message is typed into their text. If the agent
+    /// then takes the first message late, the rule for every late echo
+    /// applies (see `claudeEchoAfterTheDeadlineConfirmsTheUnconfirmedSend`).
+    @MainActor
+    @Test func macTypingAtTheReopenedPromptHoldsItAsADraft() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-draft-after-reopen")
+
+        let lost = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "lost-send",
+            expectedInputEpoch: epoch, text: "First digest"
+        )
+        #expect(fixture.service.performRemoteSend(lost, device: device) == .accepted(epoch: epoch))
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        guard case .localDraft = fixture.summary.inputAvailability else {
+            Issue.record("Expected the Mac draft to hold the prompt, not \(fixture.summary.inputAvailability)")
+            return
+        }
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Second digest"
+        ), device: device) == .rejected(reason: .localDraftPresent))
+        #expect(typed == ["First digest"])
+
+        observe(.turnStarted(turnID: "late-turn"), "late-start", 1)
+        observe(.transcript(.userMessage(.init(text: lost.text))), "late-echo", 1.1)
+        try await Self.waitForReceipt(lost.clientRequestID, mode: nil, in: fixture, afterUnconfirmedReceipt: true)
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+        observe(.turnEnded(turnID: "late-turn", reason: .completed), "late-end", 2)
+        let afterTurn = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let finalEpoch) = afterTurn.inputAvailability else {
+            Issue.record("Expected an open prompt after the late turn, not \(afterTurn.inputAvailability)")
+            return
+        }
+        #expect(finalEpoch.counter > nextEpoch.counter)
+        #expect(typed == ["First digest"])
+    }
+
+    /// Codex can start the turn of a message after its deadline, and record
+    /// the message later still. The late turn closes the reopened prompt, and
+    /// the message is typed once.
+    @MainActor
+    @Test func codexTurnThatStartsAfterTheDeadlineClosesTheReopenedPrompt() async throws {
+        let fixture = try RemoteBootstrapFixture(sendConfirmationTimeout: .milliseconds(300), pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let slow = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "slow-codex-send",
+            expectedInputEpoch: epoch, text: "Slow digest"
+        )
+        #expect(fixture.service.performRemoteSend(slow, device: device) == .accepted(epoch: epoch))
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the prompt to open again, not \(reopened.inputAvailability)")
+            return
+        }
+
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_started","turn_id":"late-turn"}"#, at: Self.codexTimestamp(Date())
+        ))
+        let working = try await Self.waitForSummary(fixture) { $0.inputAvailability == .unavailable(reason: .working) }
+        #expect(working.inputAvailability == .unavailable(reason: .working))
+        #expect(fixture.service.performRemoteSend(.init(
+            conversationID: fixture.conversationID, clientRequestID: "next-send",
+            expectedInputEpoch: nextEpoch, text: "Next digest"
+        ), device: device) == .rejected(reason: .promptNotOpen))
+
+        // The compaction first, then the turn's message, then its end.
+        var lines = Self.codexLine(
+            #"{"type":"item_completed","turn_id":"late-turn","item":{"type":"ContextCompaction","id":"compaction-1"}}"#,
+            at: Self.codexTimestamp(Date())
+        )
+        lines.append(Self.codexLine(
+            #"{"type":"item_completed","turn_id":"late-turn","item":{"type":"UserMessage","id":"user-1","content":[{"type":"text","text":"Slow digest"}]}}"#,
+            at: Self.codexTimestamp(Date())
+        ))
+        lines.append(Self.codexLine(#"{"type":"task_complete","turn_id":"late-turn"}"#, at: Self.codexTimestamp(Date())))
+        try transcript.write(contentsOf: lines)
+        let afterTurn = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let finalEpoch) = afterTurn.inputAvailability else {
+            Issue.record("Expected an open prompt after the late turn, not \(afterTurn.inputAvailability)")
+            return
+        }
+        #expect(finalEpoch.counter > nextEpoch.counter)
+        #expect(typed == ["Slow digest"])
+    }
+
+    enum TurnEvidenceBeforeTheDeadline: CaseIterable, Sendable {
+        /// The conversation shows the turn start (Claude's UserPromptSubmit hook).
+        case conversationTurnStart
+        /// Only the session's status reports the turn so far.
+        case workingStatus
+    }
+
+    /// A send whose turn started keeps the prompt closed when its deadline
+    /// passes without the transcript's copy of the message. Only the turn's
+    /// end opens the next prompt.
+    @MainActor
+    @Test(arguments: TurnEvidenceBeforeTheDeadline.allCases)
+    func promptStaysClosedAtTheDeadlineWhenATurnStarted(_ evidence: TurnEvidenceBeforeTheDeadline) async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-started-turn")
+        // A prompt that a finished turn opened, as every prompt after the
+        // first one is.
+        observe(.transcript(.userMessage(.init(text: "Earlier turn"))), "earlier-user", 1)
+        observe(.turnEnded(turnID: "earlier-turn", reason: .completed), "earlier-end", 2)
+        let open = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let epoch) = open.inputAvailability else {
+            Issue.record("Expected an open prompt, not \(open.inputAvailability)")
+            return
+        }
+
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "started-turn-send",
+            expectedInputEpoch: epoch, text: "Digest"
+        )
+        #expect(fixture.service.performRemoteSend(request, device: device) == .accepted(epoch: epoch))
+        switch evidence {
+        case .conversationTurnStart:
+            observe(.turnStarted(turnID: "turn"), "turn-start", 3)
+        case .workingStatus:
+            fixture.sessionRuntimeStore.updateStatus(
+                sessionID: fixture.sessionID,
+                status: SessionStatus(kind: .working, summary: "Working"),
+                at: .now
+            )
+        }
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
+            Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture)
+        }
+        #expect(Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture))
+        // The deadline's work ran with the receipt. The prompt did not open.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(fixture.summary.inputAvailability == .unavailable(reason: .working))
+    }
+
+    /// Claude Code's StopFailure hook reports a turn that an API error ended:
+    /// an error status, then an aborted turn end. The prompt opens again
+    /// under a new epoch, and the status keeps the failure.
+    @MainActor
+    @Test func claudeTurnThatFailsOpensThePromptAndKeepsTheErrorStatus() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        var typed: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, _, _, _ in
+            typed.append(text)
+            return true
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        let observe = Self.claudeFeed(of: fixture, snapshotID: "claude-failed-turn")
+
+        let first = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "failing-turn-send",
+            expectedInputEpoch: epoch, text: "First digest"
+        )
+        #expect(fixture.service.performRemoteSend(first, device: device) == .accepted(epoch: epoch))
+        // UserPromptSubmit: the working status, then the turn start.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: fixture.sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: .now
+        )
+        observe(.turnStarted(turnID: nil), "turn-start", 1)
+        observe(.transcript(.userMessage(.init(text: first.text))), "user", 1.1)
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        #expect(working.inputAvailability == .unavailable(reason: .working))
+
+        // StopFailure: the error status, then the aborted turn end.
+        let failure = SessionStatus(kind: .error, summary: "Error", detail: "API Error: Rate limit reached")
+        fixture.sessionRuntimeStore.updateStatus(sessionID: fixture.sessionID, status: failure, at: .now)
+        observe(.turnEnded(turnID: nil, reason: .aborted), "turn-failed", 2)
+
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt(let nextEpoch) = reopened.inputAvailability else {
+            Issue.record("Expected the failed turn to open the prompt, not \(reopened.inputAvailability)")
+            return
+        }
+        #expect(nextEpoch.counter > epoch.counter)
+        #expect(reopened.state == .awaitingInput)
+        // The aborted turn end is not taken for the user's Esc: the session
+        // still shows the failure.
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: fixture.sessionID)?.status == failure)
+
+        let next = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "after-failure-send",
+            expectedInputEpoch: nextEpoch, text: "Second digest"
+        )
+        #expect(fixture.service.performRemoteSend(next, device: device) == .accepted(epoch: nextEpoch))
+        #expect(typed == ["First digest", "Second digest"])
+    }
+
+    /// Feeds observations the way Claude's hooks do: through the session's
+    /// provider conversation feed.
+    @MainActor
+    private static func claudeFeed(
+        of fixture: RemoteBootstrapFixture,
+        snapshotID: String
+    ) -> (ProviderObservationPayload, String, TimeInterval) -> Void {
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: snapshotID, at: fixture.confirmedAt
+        ))
+        return { payload, fingerprint, offset in
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: snapshotID,
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                                   fingerprint: fingerprint, payload: payload)
+            ))
+        }
+    }
+
     /// Claude reads a Steer from its own input queue, possibly long after
     /// the deadline. Its late echo confirms the send but says nothing about
     /// the Mac composer, so a draft typed there stays protected.
@@ -2683,6 +3529,7 @@ struct RemoteAccessServiceSafetyTests {
             Issue.record("Expected the Mac draft to hold the prompt, not \(settled.inputAvailability)")
             return
         }
+        #expect(fixture.service.inputAvailability(panelID: fixture.panelID, sessionID: fixture.sessionID) == settled.inputAvailability)
     }
 
     enum CodexStartedTurnOutcome: CaseIterable, Sendable {
@@ -3241,6 +4088,28 @@ private enum RemoteBootstrapFixtureError: Error {
     case couldNotPublishResumeRecord
 }
 
+/// The done-mark request as the v0.9.2 Mac decodes it.
+private struct ReleasedWorkspaceDoneRequest: Decodable {
+    var protocolVersion: String
+    var workspaceID: UUID
+    var done: Bool
+}
+
+/// The done-mark response as the v0.9.2 iPhone app decodes it: a result
+/// outside these cases fails the decode, and the app reports a failed
+/// connection.
+private struct ReleasedWorkspaceDoneResponse: Decodable {
+    enum Result: String, Decodable {
+        case updated, unchanged
+        case notSubspace = "not_subspace"
+        case workInProgress = "work_in_progress"
+        case workspaceNotFound = "workspace_not_found"
+    }
+
+    var protocolVersion: String
+    var result: Result
+}
+
 extension RemoteAccessServiceSafetyTests {
     @MainActor
     @Test func cursorHookHistoryAndRemoteSendWorkWithoutAResumeRecord() throws {
@@ -3465,6 +4334,11 @@ private final class RemotePushRelaySpy: RemotePushRelaying {
         return sendOutcome
     }
 
+    func send(_ notification: RemotePushTaskNotification, to registration: RemoteDevicePushRegistration) async -> RemotePushSendOutcome {
+        registrations.append(registration)
+        return sendOutcome
+    }
+
     func revoke(_ registration: RemoteDevicePushRegistration) async -> Bool {
         revoked.append(registration)
         if holdRevoke { return await withCheckedContinuation { revokeContinuation = $0 } }
@@ -3626,11 +4500,11 @@ extension RemoteAccessServiceSafetyTests {
         Data((#"{"timestamp":"\#(timestamp)","type":"event_msg","payload":\#(payload)}"# + "\n").utf8)
     }
 
-    private static func claudeUserLine(_ text: String, id: String) throws -> Data {
+    private static func claudeUserLine(_ text: String, id: String, at timestamp: Date = .now) throws -> Data {
         try claudeLine([
             "type": "user", "uuid": id, "promptId": id,
             "message": ["role": "user", "content": text], "origin": ["kind": "human"],
-        ])
+        ], at: timestamp)
     }
 
     private static func claudeSteerLines(_ text: String, id: String) throws -> Data {
@@ -3650,9 +4524,9 @@ extension RemoteAccessServiceSafetyTests {
         return data
     }
 
-    private static func claudeLine(_ fields: [String: Any]) throws -> Data {
+    private static func claudeLine(_ fields: [String: Any], at timestamp: Date = .now) throws -> Data {
         var record = fields
-        record["timestamp"] = "2026-08-07T10:00:05.000Z"
+        record["timestamp"] = timestamp.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
         var data = try JSONSerialization.data(withJSONObject: record)
         data.append(UInt8(ascii: "\n"))
         return data
@@ -3746,7 +4620,10 @@ extension RemoteAccessServiceSafetyTests {
             text: "Continue after review",
             deliveryMode: .queue
         )
+        #expect(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID) == nil)
         #expect(fixture.service.performRemoteSend(queued, device: device) == .queued(position: 1))
+        // A queued message is the phone user's input from when it was queued.
+        let queuedAt = try #require(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID))
 
         // A stale request and an unavailable terminal must keep both sidebars working.
         #expect(fixture.service.performRemoteInterrupt(
@@ -3766,6 +4643,8 @@ extension RemoteAccessServiceSafetyTests {
         fixture.server.removeAllBroadcasts()
         #expect(fixture.service.performRemoteInterrupt(request, device: device) == .accepted)
         #expect(interrupts == 2)
+        // The stop is the phone user's input too.
+        #expect(try #require(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID)) > queuedAt)
         #expect(fixture.sessionRuntimeStore.panelStatus(for: fixture.panelID)?.status.kind == .idle)
         #expect(fixture.summary.presentationStatus == .idle)
         #expect(fixture.summary.statusDetail == "Ready for prompt")
@@ -3887,12 +4766,24 @@ extension RemoteAccessServiceSafetyTests {
             let awaitingApproval = try await Self.waitForSummary(fixture) {
                 $0.inputControl?.turnEpoch == nil
             }
+            guard case .pendingInteraction? = fixture.service.inputAvailability(
+                panelID: fixture.panelID, sessionID: fixture.sessionID
+            ) else {
+                Issue.record("Expected the pending interaction for the current session")
+                return
+            }
+            #expect(fixture.service.inputAvailability(panelID: fixture.panelID, sessionID: "previous-session") == nil)
             #expect(awaitingApproval.inputControl?.canSteer == false)
             #expect(fixture.service.performRemoteSend(.init(
                 conversationID: fixture.conversationID, clientRequestID: "steer-during-approval",
                 expectedInputEpoch: turnEpoch, text: "Use 300 ms", deliveryMode: .steer
             ), device: device) == .rejected(reason: .notWorking))
             #expect(delivered.isEmpty)
+            // Answering the modal from the keyboard does not mark the turn's
+            // composer as a draft. The turn's input epoch is closed here.
+            fixture.terminalRuntimeRegistry.bind(sessionLifecycleTracker: fixture.sessionRuntimeStore)
+            fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
+            #expect(fixture.sessionRuntimeStore.lastUserInputAt(panelID: fixture.panelID) != nil)
             observeClaude(.transcript(.toolFinished(.init(callID: "approval-1"))),
                           fingerprint: "approval-resolved", offset: 1.3)
             let resumed = try await Self.waitForSummary(fixture) {
@@ -3969,6 +4860,7 @@ extension RemoteAccessServiceSafetyTests {
             .init(conversationID: fixture.conversationID, action: .resume), device: device
         ) == .updated)
         #expect(fixture.summary.inputControl?.isQueuePaused == false)
+        let lastPhoneActionAt = try #require(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID))
 
         // The Mac user submitted their typing, then the turn ends: the next
         // prompt opens and the queued message is typed, once, as a prompt.
@@ -3998,6 +4890,8 @@ extension RemoteAccessServiceSafetyTests {
         let drained = try await Self.waitForSummary(fixture) { $0.inputControl?.queuedMessages.isEmpty == true }
         #expect(drained.inputControl?.queuedMessages.isEmpty == true)
         #expect(delivered == ["Use 300 ms", "Also add a UI test"])
+        // Toastty typed the queued message; the phone user did nothing new.
+        #expect(fixture.service.lastRemoteUserInputAt(panelID: fixture.panelID) == lastPhoneActionAt)
         // Delivery consumed the prompt, so nothing else can type until the
         // provider opens the next one.
         #expect(drained.inputAvailability.allowsRemoteSend == false)

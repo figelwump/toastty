@@ -2,7 +2,7 @@
 
 ## Status
 
-The native domain performance budget is provisional until it has repeatable evidence from the remote iOS Simulator used by Toastty's agent-driven test workflow. PR CI runs Linux checks without native simulator jobs. Full manual `Toastty CI`, the default dispatcher, and controlled remote runs retain the numeric assertions. Hosted simulator load can still affect the threshold. Budget changes require recorded target, toolchain, and measurement evidence; a noisy or isolated run is not sufficient justification by itself.
+The native domain performance budget is provisional until it has repeatable evidence from the remote iOS Simulator used by Toastty's agent-driven test workflow. The hosted iOS PR jobs run the large-page correctness test and skip the numeric budget. Full `Toastty CI`, the default dispatcher, and controlled remote runs retain the numeric assertions. Hosted simulator load can still affect the threshold. Use recorded target, toolchain, and measurement evidence from a controlled run to change a budget.
 
 ## Budget
 

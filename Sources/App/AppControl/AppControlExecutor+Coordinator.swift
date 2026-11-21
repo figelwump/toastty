@@ -1,0 +1,413 @@
+import CoreState
+import Foundation
+import RemoteProtocol
+
+extension AppControlActionID {
+    var isCoordinatorAction: Bool {
+        switch self {
+        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorReply, .coordinatorWake, .coordinatorWatch: true
+        default: false
+        }
+    }
+}
+
+/// The coordinator's actions and query. They work on the one coordinator
+/// that `CoordinatorController` owns.
+extension AppControlExecutor {
+    var coordinatorController: CoordinatorController? {
+        taskCoordinator?.coordinatorController
+    }
+
+    private func requiredCoordinatorController() throws -> CoordinatorController {
+        guard let coordinatorController else {
+            throw AutomationSocketError.invalidPayload("the coordinator is not available in this Toastty instance")
+        }
+        return coordinatorController
+    }
+
+    /// A workspace-scoped session reaches the coordinator only when the
+    /// coordinator's workspace is in its scope, and it cannot create one.
+    /// The coordinator acts on every task, so text typed into it must come
+    /// from a caller that could act on every task itself.
+    private func enforceCoordinatorAccess() throws {
+        if let workspaceID = try requiredStore().state.coordinatorWorkspaceID {
+            try enforceWorkspaceAutomationAccess(workspaceID)
+        } else if let callerSessionID = requestContext().callerSessionID, callerIsWorkspaceScoped(sessionID: callerSessionID) {
+            throw AutomationSocketError.invalidPayload("a workspace-scoped session cannot create the coordinator")
+        }
+    }
+
+    struct CoordinatorStartPreparation {
+        let controller: CoordinatorController
+        let windowID: UUID?
+        let select: Bool
+    }
+
+    func prepareCoordinatorStart(
+        _ action: AppControlActionID,
+        args: [String: AutomationJSONValue]
+    ) throws -> CoordinatorStartPreparation {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        // The window only matters while there is no coordinator to open.
+        // Without one, the selected window gets the coordinator.
+        var windowID: UUID?
+        if let rawWindowID = args.coordinatorString("windowID") {
+            guard let requested = UUID(uuidString: rawWindowID), try requiredStore().state.window(id: requested) != nil else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
+            windowID = requested
+        }
+        return CoordinatorStartPreparation(
+            controller: controller,
+            windowID: windowID,
+            select: try optionalBooleanParameter("select", args: args, defaultValue: true)
+        )
+    }
+
+    func finishCoordinatorStart(
+        _ action: AppControlActionID,
+        preparation: CoordinatorStartPreparation
+    ) async throws -> AppControlActionOutcome {
+        let controller = preparation.controller
+        let result: CoordinatorController.StartResult
+        do {
+            if action == .coordinatorRestart {
+                result = try await controller.restart(windowID: preparation.windowID)
+            } else {
+                result = try await controller.open(windowID: preparation.windowID, select: preparation.select)
+            }
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        var response = coordinatorSnapshot(controller)
+        response["createdWorkspace"] = .bool(result.createdWorkspace)
+        response["startedAgent"] = .bool(result.startedAgent)
+        return .init(didMutateState: true, result: response)
+    }
+
+    func runCoordinatorSend(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        guard let text = args.coordinatorString("text") else {
+            throw AutomationSocketError.invalidPayload("text is required")
+        }
+        let sender = messageSender(statedName: try statedSenderName(args: args))
+        // A sender outside a task gets an ID that the coordinator replies
+        // to. The coordinator answers a task with task send.
+        let replies = taskCoordinator?.webhooks
+        let messageID: UUID? = replies != nil && CoordinatorMessageHeader.getsMessageID(sender) ? UUID() : nil
+        let result: CoordinatorController.SendResult
+        do {
+            guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                throw CoordinatorError("The message is empty.")
+            }
+            // The first line says who sent it. Toastty writes that line
+            // from the caller, so the text cannot pass as the user's or as
+            // one of Toastty's own messages.
+            result = try controller.send(
+                CoordinatorMessageHeader.message(from: sender, text: text, messageID: messageID),
+                id: (messageID ?? UUID()).uuidString
+            )
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        if let messageID, let replies {
+            var name: String?
+            if case .named(let stated) = sender { name = stated }
+            replies.recordCoordinatorMessage(id: messageID, from: name, typed: result.wasTyped)
+        }
+        var response: [String: AutomationJSONValue] = [
+            "queuedCount": .int(controller.queuedCount),
+            "messageID": messageID.map { .string($0.uuidString) } ?? .null,
+        ]
+        switch result {
+        case .sent:
+            response["delivery"] = .string("sent")
+        case .sentUnconfirmed:
+            response["delivery"] = .string("sentUnconfirmed")
+        case .queued(let position, let hold):
+            response["delivery"] = .string("queued")
+            response["position"] = .int(position)
+            response["hold"] = .string(hold.rawValue)
+        case .held(let hold):
+            // Only a caller that asks for no queue gets this; the action
+            // always queues.
+            response["delivery"] = .string("held")
+            response["hold"] = .string(hold.rawValue)
+        case .steered, .steeredUnconfirmed:
+            // Not reached: only the user's own messages in the chat steer.
+            response["delivery"] = .string("steered")
+        }
+        return .init(didMutateState: false, result: response)
+    }
+
+    /// Who runs this request, for the first line of a message that
+    /// `coordinator send` or `task send` types: the coordinator's own agent
+    /// session, else the task whose space the caller's session is in, else
+    /// that session, else the name the caller gave itself, else a caller
+    /// that named no running session. A caller in a session is named by its
+    /// session, so a name that it gives cannot hide where the message came
+    /// from.
+    func messageSender(statedName: String? = nil) -> CoordinatorMessageHeader.Sender {
+        guard let session = callerManagedSession() else {
+            return statedName.map { .named($0) } ?? .unknown
+        }
+        if session.sessionID == coordinatorController?.session?.sessionID {
+            return .coordinator
+        }
+        if let task = taskCoordinator?.task(inWorkspace: session.workspaceID) {
+            return .task(id: task.id, title: task.title)
+        }
+        return .session(
+            id: session.sessionID,
+            agent: session.agent.rawValue,
+            workspaceTitle: (try? requiredStore())?.state.workspacesByID[session.workspaceID]?.title
+        )
+    }
+
+    /// The name a caller gives itself with `from`, such as "Grok Bot".
+    /// `nil` without one. A name that the first line would change is
+    /// refused: the coordinator's policy names a sender by its exact text.
+    func statedSenderName(args: [String: AutomationJSONValue]) throws -> String? {
+        guard let value = args["from"] else { return nil }
+        guard case .string(let name) = value, CoordinatorMessageHeader.isSenderName(name) else {
+            throw AutomationSocketError.invalidPayload(
+                "from must be the sender's name: one line of at most 60 characters, without \", | or repeated spaces"
+            )
+        }
+        return name
+    }
+
+    /// Keeps the coordinator's reply to a message from outside a task. Only
+    /// the coordinator's own agent replies: the sender reads the reply as
+    /// the coordinator's.
+    func runCoordinatorReply(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        guard let coordinatorSessionID = controller.session?.sessionID,
+              callerManagedSession()?.sessionID == coordinatorSessionID else {
+            throw AutomationSocketError.invalidPayload(
+                "Only the coordinator's own agent replies to a message. Read the replies with coordinator replies."
+            )
+        }
+        guard let rawID = args.coordinatorString("messageID"), let messageID = UUID(uuidString: rawID) else {
+            throw AutomationSocketError.invalidPayload("messageID must be the ID at the end of the message's first line")
+        }
+        guard let text = args.coordinatorString("text") else {
+            throw AutomationSocketError.invalidPayload("text is required")
+        }
+        let service = try requiredCoordinatorReplies()
+        let added: (reply: CoordinatorReplies.Reply, webhookEvents: Int)
+        do {
+            added = try service.addCoordinatorReply(messageID: messageID, text: text)
+        } catch let error as CoordinatorReplyError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        return .init(didMutateState: false, result: [
+            "replyID": .string(added.reply.id.uuidString),
+            "messageID": .string(messageID.uuidString),
+            "repliedAt": .string(ISO8601DateFormatter().string(from: added.reply.repliedAt)),
+            "webhookEvents": .int(added.webhookEvents),
+        ])
+    }
+
+    /// The coordinator's replies. Any caller that may give the coordinator
+    /// a message may read them: such a caller can already read the
+    /// coordinator's conversation on disk.
+    func coordinatorRepliesQuery(args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
+        _ = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        var messageID: UUID?
+        if let raw = args.coordinatorString("messageID") {
+            guard let id = UUID(uuidString: raw) else {
+                throw AutomationSocketError.invalidPayload("messageID must be a message ID")
+            }
+            messageID = id
+        }
+        let page: CoordinatorReplies.Page
+        do {
+            page = try requiredCoordinatorReplies().coordinatorReplyPage(since: args.coordinatorString("since"), messageID: messageID)
+        } catch let error as CoordinatorReplyError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        let formatter = ISO8601DateFormatter()
+        return [
+            "replies": .array(page.replies.map { reply in
+                .object([
+                    "id": .string(reply.id.uuidString),
+                    "messageID": .string(reply.messageID.uuidString),
+                    "from": reply.from.map(AutomationJSONValue.string) ?? .null,
+                    "text": .string(reply.text),
+                    "repliedAt": .string(formatter.string(from: reply.repliedAt)),
+                ])
+            }),
+            "cursor": .string(page.cursor),
+            "truncated": .bool(page.truncated),
+        ]
+    }
+
+    private func requiredCoordinatorReplies() throws -> TaskWebhookService {
+        guard let service = taskCoordinator?.webhooks else {
+            throw AutomationSocketError.invalidPayload("coordinator replies are not available in this Toastty instance")
+        }
+        return service
+    }
+
+    private func requiredCoordinatorWakes() throws -> TaskWebhookService {
+        guard let wakes = taskCoordinator?.webhooks else {
+            throw AutomationSocketError.invalidPayload("coordinator wakes are not available in this Toastty instance")
+        }
+        return wakes
+    }
+
+    /// Sets, moves or removes the coordinator's next check, and with quiet
+    /// marks the coordinator's running wake turn as one that needs nothing
+    /// from the user.
+    func runCoordinatorWake(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        let wakes = try requiredCoordinatorWakes()
+        let quiet = try optionalBooleanParameter("quiet", args: args, defaultValue: false)
+        // Only the coordinator's own agent says that its turn needs nobody.
+        if quiet, let coordinatorSessionID = controller.session?.sessionID,
+           callerManagedSession()?.sessionID != coordinatorSessionID {
+            throw AutomationSocketError.invalidPayload("quiet marks the coordinator's own turn: only the coordinator's agent can pass it")
+        }
+        let clear = try optionalBooleanParameter("clear", args: args, defaultValue: false)
+        guard [args["inSeconds"] != nil, args["at"] != nil, clear].filter({ $0 }).count == 1 else {
+            throw AutomationSocketError.invalidPayload("pass exactly one of inSeconds, at and clear")
+        }
+        let request: TaskWebhookService.CoordinatorWakeRequest
+        if clear {
+            request = .clear
+        } else if args["inSeconds"] != nil {
+            guard let seconds = args.coordinatorInteger("inSeconds") else {
+                throw AutomationSocketError.invalidPayload("inSeconds must be a whole number of seconds")
+            }
+            request = .after(TimeInterval(seconds))
+        } else {
+            guard let text = args.coordinatorString("at"),
+                  let date = (try? Date(text, strategy: .iso8601))
+                    ?? (try? Date(text, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))) else {
+                throw AutomationSocketError.invalidPayload("at must be an ISO 8601 time, such as 2026-11-09T18:30:00Z")
+            }
+            request = .at(date)
+        }
+        do {
+            try wakes.setCoordinatorWake(request, quiet: quiet)
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        return .init(didMutateState: false, result: coordinatorSnapshot(controller))
+    }
+
+    /// Starts or ends a watch: a task's merge or end, or every merge in a
+    /// project, then wakes the coordinator.
+    func runCoordinatorWatch(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        let wakes = try requiredCoordinatorWakes()
+        guard controller.location != nil else {
+            throw AutomationSocketError.invalidPayload("There is no coordinator. Open it first.")
+        }
+        let watching = try optionalBooleanParameter("remove", args: args, defaultValue: false) == false
+        let target: TaskWebhookService.CoordinatorWatchTarget
+        switch (args.coordinatorString("taskID"), args.coordinatorString("workspaceID")) {
+        case (let rawTaskID?, nil):
+            guard let taskID = UUID(uuidString: rawTaskID) else {
+                throw AutomationSocketError.invalidPayload("taskID must be a task ID")
+            }
+            // A watch that ends needs no task: the task can be gone.
+            if watching, taskCoordinator?.records.record(id: taskID) == nil {
+                throw AutomationSocketError.invalidPayload("No task has ID \(rawTaskID).")
+            }
+            target = .task(taskID)
+        case (nil, let rawWorkspaceID?):
+            guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
+                throw AutomationSocketError.invalidPayload("workspaceID must be a workspace ID")
+            }
+            guard let coordinator = taskCoordinator else {
+                throw AutomationSocketError.invalidPayload("tasks are not available in this Toastty instance")
+            }
+            // A subspace stands for its project, as for a release.
+            let projectID = try requiredStore().state.subspaceParentIDsByWorkspaceID()[workspaceID] ?? workspaceID
+            let root: String
+            do {
+                root = try coordinator.resolvedProjectRoot(workspaceID: projectID).path
+            } catch let error as TaskError {
+                throw AutomationSocketError.invalidPayload(error.message)
+            }
+            target = .project(root: TasksConfigFile.normalizedPath(root, homeDirectoryPath: coordinator.homeDirectoryPath))
+        default:
+            throw AutomationSocketError.invalidPayload("pass exactly one of taskID and workspaceID")
+        }
+        do {
+            try wakes.setCoordinatorWatch(target, watching: watching)
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        return .init(didMutateState: false, result: coordinatorSnapshot(controller))
+    }
+
+    func coordinatorQuery() throws -> [String: AutomationJSONValue] {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        return coordinatorSnapshot(controller)
+    }
+
+    func coordinatorSnapshot(_ controller: CoordinatorController) -> [String: AutomationJSONValue] {
+        var snapshot = Self.coordinatorSnapshot(controller)
+        if let wake = taskCoordinator?.webhooks?.coordinatorWakeStatus {
+            func time(_ date: Date?) -> AutomationJSONValue {
+                date.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null
+            }
+            snapshot["wake"] = .object([
+                "pendingTaskCount": .int(wake.pendingTaskCount),
+                "nextWakeAt": time(wake.nextWakeAt),
+                "lastWakeAt": time(wake.lastWakeAt),
+                "watchedTaskIDs": .array(wake.watchedTaskIDs.map { .string($0.uuidString) }),
+                "watchedProjectRoots": .array(wake.watchedProjectRoots.map(AutomationJSONValue.string)),
+            ])
+        }
+        return snapshot
+    }
+
+    static func coordinatorSnapshot(_ controller: CoordinatorController) -> [String: AutomationJSONValue] {
+        guard let status = controller.status else {
+            return ["exists": .bool(false), "queuedCount": .int(0)]
+        }
+        var snapshot: [String: AutomationJSONValue] = [
+            "exists": .bool(true),
+            "windowID": .string(status.location.windowID.uuidString),
+            "workspaceID": .string(status.location.workspaceID.uuidString),
+            "agentState": .string(status.agentState.rawValue),
+            "queuedCount": .int(status.queuedCount),
+        ]
+        if let panelID = status.location.panelID { snapshot["panelID"] = .string(panelID.uuidString) }
+        if let session = status.session {
+            snapshot["sessionID"] = .string(session.sessionID)
+            snapshot["agent"] = .string(session.agent.rawValue)
+            if let kind = session.status?.kind { snapshot["status"] = .string(kind.rawValue) }
+        }
+        if let startFailure = status.startFailure { snapshot["startFailure"] = .string(startFailure) }
+        if let hold = status.hold { snapshot["hold"] = .string(hold.rawValue) }
+        return snapshot
+    }
+}
+
+private extension Dictionary where Key == String, Value == AutomationJSONValue {
+    func coordinatorString(_ key: String) -> String? {
+        guard case .string(let value)? = self[key] else { return nil }
+        return value
+    }
+
+    /// A number, or the text of one, as `action run key=value` sends it.
+    func coordinatorInteger(_ key: String) -> Int? {
+        switch self[key] {
+        case .int(let value): value
+        case .string(let value): Int(value.trimmingCharacters(in: .whitespaces))
+        default: nil
+        }
+    }
+}

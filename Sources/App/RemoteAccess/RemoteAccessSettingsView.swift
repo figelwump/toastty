@@ -503,7 +503,7 @@ struct RemoteAccessSettingsView: View {
                             .disabled(device.scopes.contains(.send) == false)
                             .help("Let this device start new agent sessions in your workspaces.")
                             // Approving sends a decision to the agent, so it
-                            // also needs send access. Off until turned on.
+                            // also needs send access. New pairings enable it.
                             Toggle("Approve requests", isOn: Binding(
                                 get: { device.permissionApprovalEnabled },
                                 set: { service.setDevicePermissionApproval($0, for: device.id) }
@@ -512,6 +512,16 @@ struct RemoteAccessSettingsView: View {
                             .controlSize(.small)
                             .disabled(device.scopes.contains(.send) == false)
                             .help("Let this device allow or deny Claude Code permission requests, including saving Always Allow rules.")
+                            // Merging, archiving and deleting tasks change
+                            // them on the Mac. On by default for paired devices.
+                            Toggle("Task actions", isOn: Binding(
+                                get: { device.taskActionsEnabled },
+                                set: { service.setDeviceTaskActions($0, for: device.id) }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .disabled(device.scopes.contains(.send) == false)
+                            .help("Let this device merge, complete, archive, retry and delete tasks. Merge Without Checks and deleting unpushed commits stay on the Mac.")
                         }
                         Button("Revoke", role: .destructive) {
                             service.revokeDevice(device.id)

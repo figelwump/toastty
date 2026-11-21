@@ -1,4 +1,5 @@
 #if DEBUG
+import ConversationUI
 import Foundation
 import RemoteProtocol
 import ToasttyMobileDomain
@@ -336,12 +337,21 @@ enum ToasttyConversationFixture {
         )
     }
 
+    /// `responses` adds that many answers that arrived after the fixture's
+    /// transcript, as the incoming fixture delivers them.
     static func gatedSendPresentation(
         for conversationID: UUID,
         sendItems: [ToasttySendPresentationItem],
-        hasShortResponse: Bool = false
+        hasShortResponse: Bool = false,
+        responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         let fixture = presentation(for: conversationID)
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        let incoming = (0..<max(0, responses)).map { index in
+            row(conversationID, UInt64(101 + index), timestamp, .assistantMessage(
+                text: incomingResponseText(index + 1), phase: .final
+            ))
+        }
         return ToasttyConversationPresentationState(
             rows: fixture.rows.filter { $0.id.sequence != 14 }.map { row in
                 guard hasShortResponse, row.id.sequence == 13 else { return row }
@@ -349,12 +359,16 @@ enum ToasttyConversationFixture {
                     id: row.id, timestamp: row.timestamp, provider: row.provider,
                     content: .assistantMessage(text: "The latest response is ready.", phase: .final)
                 )
-            },
+            } + incoming,
             sendItems: sendItems,
             phase: .live,
-            revision: sendItems.isEmpty ? .initial : .appended,
+            revision: sendItems.isEmpty && responses == 0 ? .initial : .appended,
             historyTruncated: false
         )
+    }
+
+    static func incomingResponseText(_ number: Int) -> String {
+        "Incoming response \(number): the checks passed on the remote test Mac."
     }
 
     static func reconciledSendPresentation(
@@ -524,6 +538,339 @@ enum ToasttyConversationFixture {
             revision: .initial,
             historyTruncated: false
         )
+    }
+
+    /// The coordinator's answer with task links, for the task fixture's
+    /// board: three tasks it lists, the Mac's Done task that left the board,
+    /// a task it does not have, a task space with no task record, and
+    /// another Toastty link. The user's question links the Mac's archived
+    /// task. Link text is the title at the time of writing; a chip shows the
+    /// task's current title.
+    static func taskLinkPresentation(
+        for conversationID: UUID
+    ) -> ToasttyConversationPresentationState {
+        let timestamp = Date(timeIntervalSince1970: 1_786_406_400)
+        func link(_ title: String, _ id: UUID) -> String {
+            "[\(title)](toastty://task/\(id.uuidString))"
+        }
+        let markdown = """
+        Yes, it waits for \(link("Should the badge count tasks?", ToasttyMobileFixture.questionTaskID)). \
+        \(link("Compact session rows", ToasttyMobileFixture.reviewTaskID)) has its pull request open, \
+        and \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)) merged. \
+        \(link("Signup feedback", ToasttyMobileFixture.finishedDoneTaskID)) is done.
+
+        These stay text: \(link("Removed task", UUID(uuidString: "99999999-9999-4999-8999-999999999999")!)), \
+        \(link("Watched space", ToasttyMobileFixture.workingSubspaceID)) and \
+        [a settings link](toastty://action/open-settings).
+        """
+        return ToasttyConversationPresentationState(
+            rows: [
+                row(conversationID, 1, timestamp, .userMessage(
+                    text: "Is the badge task blocked, as \(link("CSV export", ToasttyMobileFixture.finishedArchivedTaskID)) was?",
+                    origin: .remote
+                )),
+                row(conversationID, 2, timestamp, .assistantMessage(text: markdown, phase: .final)),
+            ],
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
+    /// A task the Mac does not have, on its board or among its finished
+    /// tasks, so its link stays text.
+    static let unlistedTaskID = UUID(uuidString: "99999999-9999-4999-8999-999999999999")!
+
+    /// The coordinator's chat, as in the proposal's mockup A, from the
+    /// events that the Mac sends: a digest that Toastty typed, the
+    /// coordinator's answer with task links, a task's message that
+    /// `coordinator send` brought, a reply to the coordinator, and a quick
+    /// entry message with its choices and a file. They show as the Mac's
+    /// coordinator chat shows them.
+    /// `hasLongMessage` ends the chat with a coordinator message long
+    /// enough that the transcript draws it as several rows.
+    /// `quietTurns` ends it with two wake turns that the coordinator marked
+    /// quiet, as in the user's report, and says whether the fixture Mac
+    /// shares the marks.
+    /// `attachedImages` adds a message with images, as in the images
+    /// mock-up, and says whether the fixture Mac serves the images.
+    /// Two messages that this phone queued in the coordinator's chat while
+    /// it works (`TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE`).
+    static let coordinatorChatQueue: [RemoteQueuedMessage] = [
+        RemoteQueuedMessage(
+            clientRequestID: "fixture-chat-1",
+            text: "Check the iOS failures first",
+            enqueuedAt: Date(timeIntervalSince1970: 1_790_000_000)
+        ),
+        RemoteQueuedMessage(
+            clientRequestID: "fixture-chat-2",
+            text: "Then summarize the release status",
+            enqueuedAt: Date(timeIntervalSince1970: 1_790_000_060)
+        ),
+    ]
+
+    /// The fixture coordinator's own queue: a quick entry message with
+    /// files, a message from a task, and a reply from the Mac's chat, as
+    /// the Mac shares them. `hasLongMessage` makes the quick entry message
+    /// as long as the Mac sends. With `hasInterruptedMessage`, Toastty on
+    /// the Mac quit while it typed the quick entry message: after the
+    /// relaunch it waits, held and marked, and the others wait behind it.
+    static func coordinatorOwnQueue(
+        hasLongMessage: Bool,
+        hasInterruptedMessage: Bool = false
+    ) -> [RemoteCoordinatorQueueEntry] {
+        let long = String(repeating: "Look at the flaky upload test and the retry budget. ", count: 60)
+        let quickEntry: String = hasLongMessage
+            ? String(long.prefix(RemoteCoordinatorQueuePolicy.maximumTextLength - 1)) + "…"
+            : "Plan the notes export\n\nproject \"toastty\"\n\nnotes.txt, sketch.png"
+        return [
+            RemoteCoordinatorQueueEntry(
+                id: "fixture-own-1",
+                text: quickEntry,
+                isTextShortened: hasLongMessage,
+                fileNames: ["notes.txt", "sketch.png"],
+                isHeld: hasInterruptedMessage,
+                typingWasInterrupted: hasInterruptedMessage
+            ),
+            RemoteCoordinatorQueueEntry(
+                id: "fixture-own-2",
+                text: "The test run is ready for review.",
+                sender: "task iOS parity with the Mac coordinator UI"
+            ),
+            RemoteCoordinatorQueueEntry(
+                id: "fixture-own-3",
+                text: "Yes, merge it after the checks pass.",
+                quote: "PR #431 is ready. Merge it?",
+                quoteTime: "9:41 AM"
+            ),
+        ]
+    }
+
+    static func coordinatorPresentation(
+        for conversationID: UUID,
+        sendItems: [ToasttySendPresentationItem] = [],
+        hasLongMessage: Bool = false,
+        quietTurns: CoordinatorQuietTurns = .none,
+        attachedImages: CoordinatorAttachedImages = .none,
+        wakeTurns: Int = 0,
+        responses: Int = 0
+    ) -> ToasttyConversationPresentationState {
+        ToasttyConversationPresentationAdapter.makeState(
+            events: coordinatorEvents(
+                for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns,
+                attachedImages: attachedImages != .none, wakeTurns: wakeTurns, responses: responses
+            )
+                .map(CompatibleConversationEvent.known),
+            projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
+            projectionGeneration: projectionGeneration,
+            phase: .live,
+            revision: responses == 0 ? .initial : .appended,
+            historyTruncated: false,
+            sendItems: sendItems,
+            coordinatorMessages: ToasttyConversationPresentationAdapter.coordinatorMessages(
+                quietDigestKeys: quietTurns == .shared ? coordinatorQuietDigestKeys : nil,
+                showsAttachedImages: attachedImages == .served
+            )
+        )
+    }
+
+    /// The fixture coordinator chat's message with images.
+    enum CoordinatorAttachedImages: Equatable {
+        case none
+        /// The message, and a Mac that serves its images.
+        case served
+        /// The message, and an older Mac that does not serve them.
+        case notServed
+    }
+
+    /// A message with files attached on the Mac, which its text lists: an
+    /// image, one the Mac no longer has, one that loads slowly, and a file
+    /// that is not an image.
+    static let coordinatorImagesMessage = RemoteAttachmentDeliveryText.text(
+        "Here is the crash screen.",
+        paths: [
+            "/Users/me/Desktop/crash-screen.png",
+            "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.goneFileName)",
+            "/Users/me/Desktop/\(ToasttyAttachmentImageFixture.slowFileName)",
+            "/Users/me/Desktop/notes.txt",
+        ]
+    )
+
+    /// Where the Mac stored the photo that the phone sent.
+    static let coordinatorPhonePhotoPath = "/Users/me/Library/Application Support/Toastty/remote-access/attachments/"
+        + "5F0C2D8E-61B4-4F2A-9E57-3C1A0B7D9E21/\(ToasttyAttachmentImageFixture.phonePhotoFileName)"
+
+    /// A message sent from the phone with a photo, as the Mac keeps it: the
+    /// text names the photo, and the stored path stays apart.
+    static let coordinatorPhonePhotoMessage = ConversationUserMessagePayload(
+        text: "And the photo I took of the phone.\n[Attachment: Photo-3213AEE3.jpg]",
+        origin: .remote,
+        clientRequestID: "fixture-phone-photo",
+        attachmentPaths: [coordinatorPhonePhotoPath]
+    )
+
+    /// The fixture coordinator chat's quiet wake turns.
+    enum CoordinatorQuietTurns: Equatable {
+        case none
+        /// The turns, and a Mac that shares which are quiet.
+        case shared
+        /// The turns, and an older Mac that does not share the marks.
+        case unshared
+    }
+
+    /// The digests of the fixture's quiet wake turns, which a fixture Mac
+    /// that shares the marks names by their keys.
+    static let coordinatorQuietDigests = [
+        """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - [compact-session-rows](toastty://task/\(ToasttyMobileFixture.reviewTaskID.uuidString)): idle at 2026-08-11T15:21:40Z
+        Read `toastty task list` for details.
+        """,
+        """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - [early-session-titles](toastty://task/\(ToasttyMobileFixture.questionTaskID.uuidString)): running at 2026-08-11T15:27:05Z
+        Read `toastty task list` for details.
+        """,
+    ]
+
+    /// The digest of the fixture's wake turn `index`.
+    static func wakeDigest(_ index: Int) -> String {
+        """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - [wake-task-\(index + 1)](toastty://task/\(ToasttyMobileFixture.reviewTaskID.uuidString)): running at 2026-08-11T15:\(10 + index % 50):00Z
+        Read `toastty task list` for details.
+        """
+    }
+
+    static var coordinatorQuietDigestKeys: Set<String> {
+        Set(coordinatorQuietDigests.map(CoordinatorChatTranscript.digestKey))
+    }
+
+    /// Each quiet turn's answer, as in the user's report.
+    static let coordinatorQuietAnswers = ["Nothing new needs you.", "Nothing needs you."]
+
+    /// The opening and the last line of the long message that
+    /// `hasLongMessage` adds.
+    static let coordinatorLongMessageOpening = "Here is the week, task by task."
+    static let coordinatorLongMessageEnding = "That is everything that moved this week."
+
+    static func coordinatorEvents(
+        for conversationID: UUID,
+        hasLongMessage: Bool = false,
+        quietTurns: CoordinatorQuietTurns = .none,
+        attachedImages: Bool = false,
+        wakeTurns: Int = 0,
+        responses: Int = 0
+    ) -> [ConversationEvent] {
+        // Event `n` is `n - 1` times two minutes after the first.
+        func time(_ sequence: Int) -> Date {
+            Date(timeIntervalSince1970: 1_786_406_400).addingTimeInterval(TimeInterval((sequence - 1) * 2 * 60))
+        }
+        func link(_ title: String, _ id: UUID) -> String {
+            "[\(title)](toastty://task/\(id.uuidString))"
+        }
+        let digest = """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - \(link("compact-session-rows", ToasttyMobileFixture.reviewTaskID)): needsYou (review) at 2026-08-11T14:04:10Z
+        - \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)): toShip, merged at 2026-08-11T14:04:40Z
+        Read `toastty task list` for details.
+        """
+        let fromTask = CoordinatorMessageHeader.message(
+            from: .task(id: ToasttyMobileFixture.questionTaskID, title: "early-session-titles"),
+            text: "Done the first pass. Should the old API stay for one release?"
+        )
+        let answer = "I asked it to keep the old API until the next release, as your policy says."
+        // The reply quotes the answer, event 4, by its time.
+        let reply = CoordinatorMessageHeader.replyMessage(
+            quote: answer,
+            time: ToasttyConversationPresentationAdapter.coordinatorMessages().timeText(time(4)),
+            text: "Good. Release toastty once the export API merges."
+        )
+        let quickEntry = CoordinatorMessageHeader.quickEntryMessage(
+            CoordinatorMessageHeader.QuickEntry(
+                project: .init(id: ToasttyMobileFixture.previewWorkspaceID, title: "toastty"),
+                agent: "codex", model: "gpt-6.1-sol", effort: "high"
+            ),
+            text: "Add a CSV export to the Tasks tab, like this mockup.",
+            attachmentPaths: ["/Users/me/.toastty/coordinator/attachments/A1/csv-mockup.png"]
+        )
+        // Over the transcript's chunk threshold, so it draws as several rows.
+        let longMessage = ([coordinatorLongMessageOpening] + (1...20).map { index in
+            "Task \(index) moved from Running to Ready to review after its checks passed on the remote test Mac. "
+                + "Its agent wrote the report, opened the pull request and asked for a review, and nothing waits for you."
+        } + [coordinatorLongMessageEnding]).joined(separator: "\n\n")
+        var payloads: [ConversationEventPayload] = [
+            .userMessage(.init(text: digest, origin: .remote)),
+            .assistantMessage(.init(
+                text: "Two tasks moved. \(link("Compact session rows", ToasttyMobileFixture.reviewTaskID)) "
+                    + "is ready for review, and \(link("Parent task rollup", ToasttyMobileFixture.shippedTaskID)) merged.",
+                phase: .final
+            )),
+            .userMessage(.init(text: fromTask, origin: .remote)),
+            .assistantMessage(.init(text: answer, phase: .final)),
+            .userMessage(.init(text: reply, origin: .remote)),
+            .assistantMessage(.init(
+                text: "Noted. I will start the release right after it merges. "
+                    + "\(link("Early titles", ToasttyMobileFixture.questionTaskID)) keeps the old API for now. "
+                    + "\(link("Old export spike", unlistedTaskID)) is gone from the Mac, so it stays text. "
+                    + "\(link("Signup feedback", ToasttyMobileFixture.finishedDoneTaskID)) is done.",
+                phase: .final
+            )),
+            .userMessage(.init(text: quickEntry, origin: .remote)),
+            .assistantMessage(.init(text: "I made a task for it in toastty, with Codex.", phase: .final)),
+        ]
+        // Before the wake turns, so their event identities stay the same
+        // for the fixture Mac's image service.
+        if attachedImages {
+            payloads.append(.userMessage(.init(text: coordinatorImagesMessage, origin: .remote)))
+            payloads.append(.userMessage(coordinatorPhonePhotoMessage))
+            payloads.append(.assistantMessage(.init(
+                text: "Thanks. The crash is in the export sheet; I added both images to the task.", phase: .final
+            )))
+        }
+        // A long chat, as a coordinator's grows: wake turns that each read
+        // the tasks and answer, at different lengths.
+        for index in 0..<max(0, wakeTurns) {
+            payloads.append(.userMessage(.init(text: wakeDigest(index), origin: .remote)))
+            let callID = "wake-\(index + 1)"
+            payloads.append(.toolStarted(.init(callID: callID, toolName: "Bash", detail: "toastty task list")))
+            payloads.append(.toolFinished(.init(callID: callID, toolName: "Bash", outcome: .succeeded)))
+            let sentence = "Task \(index + 1) is still running its checks on the remote test Mac, and nothing waits for you. "
+            payloads.append(.assistantMessage(.init(
+                text: "Wake \(index + 1). " + String(repeating: sentence, count: 1 + index % 4),
+                phase: .final
+            )))
+        }
+        if hasLongMessage {
+            payloads.append(.userMessage(.init(text: "What moved this week?", origin: .remote)))
+            payloads.append(.assistantMessage(.init(text: longMessage, phase: .final)))
+        }
+        if quietTurns != .none {
+            // Each wake turn reads the tasks, finds nothing for the user and
+            // says so with `coordinator wake --quiet`.
+            for (index, digest) in coordinatorQuietDigests.enumerated() {
+                payloads.append(.userMessage(.init(text: digest, origin: .remote)))
+                for (call, command) in ["toastty task list", "toastty coordinator wake --clear --quiet"].enumerated() {
+                    let callID = "quiet-\(index + 1)-\(call + 1)"
+                    payloads.append(.toolStarted(.init(callID: callID, toolName: "Bash", detail: command)))
+                    payloads.append(.toolFinished(.init(callID: callID, toolName: "Bash", outcome: .succeeded)))
+                }
+                payloads.append(.assistantMessage(.init(text: coordinatorQuietAnswers[index], phase: .final)))
+            }
+        }
+        payloads += (0..<max(0, responses)).map { index -> ConversationEventPayload in
+            .assistantMessage(.init(text: incomingResponseText(index + 1), phase: .final))
+        }
+        return payloads.enumerated().map { index, payload in
+            ConversationEvent(
+                conversationID: RemoteConversationID(rawValue: conversationID),
+                sequence: UInt64(index + 1),
+                eventID: "coordinator-fixture-\(index + 1)",
+                timestamp: time(index + 1),
+                provider: .claude,
+                payload: payload
+            )
+        }
     }
 
     static func toolActivityPresentation(

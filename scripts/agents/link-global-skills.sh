@@ -5,10 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SOURCE_SKILLS_DIR="$ROOT_DIR/.agents/skills"
 DEFAULT_SKILLS=(
   "toastty-capabilities"
+  "toastty-coordinator"
   "toastty-open-markdown"
   "toastty-read-terminal"
   "toastty-scratchpad"
   "toastty-send-diagnostics"
+  "toastty-task-merge"
+  "toastty-task-start"
 )
 
 declare -a REQUESTED_TARGETS=()

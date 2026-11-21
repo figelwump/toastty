@@ -87,6 +87,71 @@ final class RemoteAccessReadAcknowledgementBridge: @unchecked Sendable {
     }
 }
 
+/// Bridges a device's read of the coordinator's chat into the main-actor-owned
+/// read point.
+final class RemoteAccessCoordinatorChatReadBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func read(
+        _ request: RemoteCoordinatorChatReadRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteCoordinatorChatReadResult {
+        MainActor.assumeIsolated {
+            service?.readCoordinatorChat(request, device: device) ?? .noCoordinator
+        }
+    }
+}
+
+/// Bridges the gateway's check of an attached image's message into the
+/// main-actor-owned conversation projection.
+final class RemoteAccessCoordinatorConversationEventsBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func events(_ conversationID: RemoteConversationID) -> [ConversationEvent]? {
+        MainActor.assumeIsolated {
+            service?.coordinatorConversationEvents(conversationID)
+        }
+    }
+}
+
+/// Bridges the gateway's read of the coordinator's quiet digests into the
+/// main-actor-owned coordinator.
+final class RemoteAccessCoordinatorQuietDigestsBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func digests() -> RemoteCoordinatorQuietDigests {
+        MainActor.assumeIsolated {
+            service?.coordinatorQuietDigests() ?? RemoteCoordinatorQuietDigests(keys: [])
+        }
+    }
+}
+
+/// Bridges the gateway's read of the coordinator's own queue into the
+/// main-actor-owned coordinator.
+final class RemoteAccessCoordinatorQueueBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func queue() -> RemoteCoordinatorQueue {
+        MainActor.assumeIsolated {
+            service?.coordinatorQueue() ?? RemoteCoordinatorQueueProjection.queue(
+                held: [], waiting: [], conversationID: nil, heldSetToken: nil
+            )
+        }
+    }
+}
+
+/// Bridges the gateway's read of the finished tasks into the main-actor-owned
+/// task board.
+final class RemoteAccessFinishedTasksBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func finishedTasks() -> RemoteFinishedTasks {
+        MainActor.assumeIsolated {
+            service?.currentFinishedTasks() ?? RemoteFinishedTasks(tasks: [])
+        }
+    }
+}
+
 /// Bridges the gateway's authenticated done request into the main-actor-owned
 /// workspace state.
 final class RemoteAccessWorkspaceDoneBridge: @unchecked Sendable {
@@ -196,6 +261,22 @@ final class RemoteAccessSessionStartBridge: @unchecked Sendable {
     }
 }
 
+final class RemoteAccessTaskCreateBridge: @unchecked Sendable {
+    weak var service: RemoteAccessService?
+
+    func options(
+        _ request: RemoteTaskCreateOptionsRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteTaskCreateOptionsResponse {
+        MainActor.assumeIsolated {
+            service?.taskCreateOptions(request, device: device)
+                ?? RemoteTaskCreateOptionsResponse(
+                    permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device)
+                )
+        }
+    }
+}
+
 enum RemoteAccessPreferences {
     static let defaultPort: UInt16 = 42871
     private static let enabledKey = "toastty.remoteAccess.enabled"
@@ -282,6 +363,7 @@ struct RemotePendingSendCorrelator: Sendable {
         var trimmedText: String
         var displayText: String?
         var deliveryMode: RemoteMessageDeliveryMode
+        var earliestEchoAt: Date
         /// Reported unconfirmed after its deadline. It may still be the next
         /// user message: a provider can hold a delivery in its prompt until
         /// someone submits it on the Mac.
@@ -297,13 +379,15 @@ struct RemotePendingSendCorrelator: Sendable {
     mutating func record(
         _ request: RemoteMessageSendRequest,
         deliveredText: String? = nil,
-        deliveryMode: RemoteMessageDeliveryMode = .prompt
+        deliveryMode: RemoteMessageDeliveryMode = .prompt,
+        earliestEchoAt: Date = .distantPast
     ) {
         let pendingSend = PendingSend(
             clientRequestID: request.clientRequestID,
             trimmedText: (deliveredText ?? request.text).trimmingCharacters(in: .whitespacesAndNewlines),
             displayText: request.attachments.isEmpty ? nil : request.displayText,
-            deliveryMode: deliveryMode
+            deliveryMode: deliveryMode,
+            earliestEchoAt: earliestEchoAt
         )
         var pendingSends = pendingSendsByConversationID[request.conversationID, default: []]
         pendingSends.append(pendingSend)
@@ -342,7 +426,8 @@ struct RemotePendingSendCorrelator: Sendable {
 
     mutating func stamp(
         _ observations: [ProviderTranscriptObservation],
-        for conversationID: RemoteConversationID
+        for conversationID: RemoteConversationID,
+        usesClaudeFileTimestamps: Bool = false
     ) -> [ProviderTranscriptObservation] {
         guard pendingSendsByConversationID[conversationID]?.isEmpty == false else {
             // Keep dictionary membership equivalent to live correlation work.
@@ -356,11 +441,18 @@ struct RemotePendingSendCorrelator: Sendable {
                 return observation
             }
             let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let pending = takeConfirmingSend(text: trimmed, for: conversationID) else {
+            let echoTime = usesClaudeFileTimestamps ? observation.timestamp : .distantFuture
+            guard let pending = takeConfirmingSend(text: trimmed, at: echoTime, for: conversationID) else {
                 return observation
             }
             var stampedPayload = payload
-            if let displayText = pending.displayText { stampedPayload.text = displayText }
+            if let displayText = pending.displayText {
+                // The text names each file; the paths of the files that the
+                // Mac stored, which the delivered text lists, stay with the
+                // message for a chat that shows the files themselves.
+                stampedPayload.attachmentPaths = CoordinatorMessageHeader.attachedFiles(in: payload.text)?.paths
+                stampedPayload.text = displayText
+            }
             stampedPayload.origin = .remote
             stampedPayload.clientRequestID = pending.clientRequestID
             stampedPayload.deliveryMode = pending.deliveryMode == .prompt ? nil : pending.deliveryMode
@@ -371,30 +463,32 @@ struct RemotePendingSendCorrelator: Sendable {
     }
 
     /// Delivery and provider logs are ordered, so normally only the oldest
-    /// pending send can confirm against the next user message; a mismatch
+    /// eligible send can confirm against the next user message; a mismatch
     /// expires it rather than misattributing a later identical local message.
     /// An expired send breaks that order: its late echo can arrive at any
     /// point, or never. While one is pending, a user message confirms
     /// whichever pending send has its text and consumes no other send. A user
-    /// message that matches nothing ends every expired send's chance to
+    /// message that matches nothing ends every eligible expired send's chance to
     /// confirm, so a much later identical message cannot claim one.
     private mutating func takeConfirmingSend(
         text: String,
+        at echoTime: Date,
         for conversationID: RemoteConversationID
     ) -> PendingSend? {
         guard var pendingSends = pendingSendsByConversationID[conversationID],
-              pendingSends.isEmpty == false else {
-            pendingSendsByConversationID.removeValue(forKey: conversationID)
+              let firstEligible = pendingSends.firstIndex(where: { $0.earliestEchoAt <= echoTime }) else {
             return nil
         }
         let match: PendingSend?
-        if pendingSends.contains(where: \.isExpired) {
-            match = pendingSends.firstIndex { $0.trimmedText == text }.map { pendingSends.remove(at: $0) }
+        if pendingSends.contains(where: { $0.isExpired && $0.earliestEchoAt <= echoTime }) {
+            match = pendingSends.firstIndex {
+                $0.trimmedText == text && $0.earliestEchoAt <= echoTime
+            }.map { pendingSends.remove(at: $0) }
             if match == nil {
-                pendingSends.removeAll(where: \.isExpired)
+                pendingSends.removeAll { $0.isExpired && $0.earliestEchoAt <= echoTime }
             }
         } else {
-            let oldest = pendingSends.removeFirst()
+            let oldest = pendingSends.remove(at: firstEligible)
             match = oldest.trimmedText == text ? oldest : nil
         }
         store(pendingSends, for: conversationID)
@@ -441,7 +535,14 @@ enum RemoteAccessActivationState: Equatable, Sendable {
 final class RemoteAccessService: ObservableObject {
     typealias TailnetServeSetup = @Sendable (_ port: UInt16, _ configuredOrigin: String, _ configureIfNeeded: Bool) async throws -> String
 
-    @Published private(set) var activationState: RemoteAccessActivationState = .off
+    @Published private(set) var activationState: RemoteAccessActivationState = .off {
+        didSet {
+            guard oldValue.isEnabled != activationState.isEnabled else { return }
+            gatewayFollowsPanelsSince = activationState.isEnabled ? Date() : nil
+        }
+    }
+    /// When the gateway began to follow every agent panel, while it is on.
+    private var gatewayFollowsPanelsSince: Date?
     @Published private(set) var tailnetSetupState: RemoteAccessTailnetSetupState = .unchecked
     @Published private(set) var deviceManagementError: String?
     @Published private(set) var currentPairingCode: RemotePairingCode?
@@ -473,6 +574,13 @@ final class RemoteAccessService: ObservableObject {
     private let previewScratchpadDirectory: URL
     private let store: AppStore
     private let annotationStyleStore: AnnotationStyleStore
+    /// The task board the snapshot projects for clients; `nil` without a
+    /// task system.
+    private let taskBoard: TaskBoardStore?
+    /// The board the last session list carried, so a board change that
+    /// alters nothing a client sees sends nothing.
+    private var lastBroadcastTaskBoard: RemoteTaskBoard?
+    private var taskBoardBroadcastTask: Task<Void, Never>?
     private let sessionRuntimeStore: SessionRuntimeStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let deviceStore: RemoteDeviceStore
@@ -484,10 +592,14 @@ final class RemoteAccessService: ObservableObject {
     private var nextPushCleanupIndex = 0
     private var pushCleanupRequestedWhileRunning = false
     private var pushForegroundObserver: AnyCancellable?
+    private let taskAlerts: RemoteTaskAlerts
+    private var taskAlertLoop: Task<Void, Never>?
     private let auditLog: RemoteAccessAuditLog
     private let projectionStore = RemoteConversationProjectionStore()
     private let facadeBridge = RemoteAccessFacadeBridge()
     private let attachmentStore: RemoteMessageAttachmentStore
+    /// Where the gateway stores the files that devices send.
+    let attachmentStoreDirectoryURL: URL
     private let sendBridge = RemoteAccessSendBridge()
     private let questionAnswerBridge = RemoteAccessQuestionAnswerBridge()
     private let readAcknowledgementBridge = RemoteAccessReadAcknowledgementBridge()
@@ -495,14 +607,46 @@ final class RemoteAccessService: ObservableObject {
     private let conversationFlagBridge = RemoteAccessConversationFlagBridge()
     private let conversationCloseBridge = RemoteAccessConversationCloseBridge()
     private let sessionCloseController: SessionCloseController?
-    /// When a phone message or stop last reached each panel. Remote delivery
-    /// bypasses local-input tracking, so an exit after the turn asks here.
+    /// When a phone message or stop, or an in-app send, last reached each
+    /// panel. This delivery bypasses local-input tracking, so an exit after
+    /// the turn asks here.
     private var lastRemoteInputAtByPanelID: [UUID: Date] = [:]
+    /// When a person last acted on each panel through this service: a phone
+    /// user sent or queued a message, steered, or stopped, or a person sent
+    /// from an in-app composer. The later delivery of a queued message is
+    /// Toastty's action and does not move it. An in-app send that no person
+    /// made does not move it either.
+    private var lastRemoteUserInputAtByPanelID: [UUID: Date] = [:]
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
     private let sessionStartBridge = RemoteAccessSessionStartBridge()
     private var sessionStarter: RemoteSessionStarter?
+    private var taskActionRunner: RemoteTaskActionRunner?
+    private let taskCreateBridge = RemoteAccessTaskCreateBridge()
+    private var taskCreator: RemoteTaskCreator?
+    private var coordinatorSender: RemoteCoordinatorSender?
+    private let coordinatorChatReadBridge = RemoteAccessCoordinatorChatReadBridge()
+    /// The coordinator chat's read point, which the coordinator's workspace
+    /// carries to devices. `nil` on a Mac without the coordinator, which
+    /// does not advertise it.
+    private var coordinatorChatReadThrough: CoordinatorChatReadThrough?
+    private var coordinatorChatReadObserver: AnyCancellable?
+    private let coordinatorQuietDigestsBridge = RemoteAccessCoordinatorQuietDigestsBridge()
+    private let coordinatorConversationEventsBridge = RemoteAccessCoordinatorConversationEventsBridge()
+    /// The keys of the coordinator's quiet digests. `nil` on a Mac without
+    /// the coordinator, which does not advertise them.
+    private var coordinatorQuietDigestKeys: (() -> [String])?
+    private var coordinatorQuietDigestsObserver: AnyCancellable?
+    private let coordinatorQueueBridge = RemoteAccessCoordinatorQueueBridge()
+    private let finishedTasksBridge = RemoteAccessFinishedTasksBridge()
+    /// The finished tasks that the board's revision last named, so a board
+    /// built for each change hashes them only when they change.
+    private var lastFinishedTasks: RemoteFinishedTasks?
+    /// The coordinator whose own queue paired devices read. `nil` on a Mac
+    /// without the coordinator, which does not advertise the queue.
+    private weak var coordinatorQueueController: CoordinatorController?
+    private var coordinatorQueueObserver: AnyCancellable?
     private var coordinator = RemoteInputCoordinator()
     /// Messages held for the next open prompt, per conversation.
     private var sendQueue = RemoteSendQueue()
@@ -527,9 +671,26 @@ final class RemoteAccessService: ObservableObject {
     }
     private var pendingTailnetSetupIntent: TailnetSetupIntent?
     private var conversationTrackingCancellables: Set<AnyCancellable> = []
+    /// Observers that only the gateway needs. They run while it is on.
+    private var gatewayObservationCancellables: Set<AnyCancellable> = []
+    private struct LocalSubscriptionState {
+        var panelID: UUID
+        var since = Date()
+        var changes: AsyncStream<Void>.Continuation
+        /// The summary the subscriber was last told about.
+        var publishedSummary: RemoteConversationSummary?
+        /// See `LocalConversationSubscription.onStop`.
+        var onStop: (@MainActor () -> Void)?
+    }
+    /// In-app subscribers, by subscription. With the gateway off, only their
+    /// panels are tracked.
+    private var localSubscriptions: [UUID: LocalSubscriptionState] = [:]
     private var storeActionObserverToken: UUID?
     private var conversationTrackingGeneration: UInt64 = 0
     private var sessionListBroadcastTask: Task<Void, Never>?
+    /// The task spaces the last broadcast session list told clients to hide
+    /// the done checkbox for.
+    private var publishedDoneMarkRefusals: Set<UUID> = []
     private var localDraftEpochBroadcastTask: Task<Void, Never>?
     private let claudePromptStabilizationDelay: Duration
     private let sendConfirmationTimeout: Duration
@@ -576,6 +737,10 @@ final class RemoteAccessService: ObservableObject {
         /// The normal deadline passed while `runningCodexTurnID` was set, so
         /// the end of that turn decides the outcome.
         var isWaitingForCodexTurn = false
+        /// The open prompt this send consumed with a confirmed Return. Nil
+        /// for a steer, and for a send whose Return was not confirmed: its
+        /// text may still be in the agent's composer.
+        var consumedPromptEpoch: RemoteInputEpoch?
     }
     private var pendingSendConfirmationWork: [
         PendingSendConfirmationKey: PendingSendConfirmationWork
@@ -612,6 +777,18 @@ final class RemoteAccessService: ObservableObject {
         activationState.isReady
     }
 
+    /// Conversation tracking runs while the gateway is on or an in-app
+    /// subscriber holds a panel. With no subscriber this equals `isEnabled`.
+    private var isTrackingConversations: Bool {
+        isEnabled || localSubscriptions.isEmpty == false
+    }
+
+    /// The gateway tracks every agent panel. Without it, only the panels of
+    /// in-app subscribers are tracked.
+    private func tracksPanel(_ panelID: UUID) -> Bool {
+        isEnabled || localSubscriptions.values.contains { $0.panelID == panelID }
+    }
+
     var listeningPort: UInt16? {
         guard case .ready(let port) = activationState else { return nil }
         return port
@@ -629,12 +806,15 @@ final class RemoteAccessService: ObservableObject {
     init(
         store: AppStore,
         annotationStyleStore: AnnotationStyleStore,
+        taskBoard: TaskBoardStore? = nil,
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
         sessionLauncher: (any RemoteSessionLaunching)? = nil,
         sessionCloseController: SessionCloseController? = nil,
         sessionExitController: SessionExitController? = nil,
+        taskCoordinator: (any RemoteTaskCreating)? = nil,
+        quickEntryController: QuickEntryController? = nil,
         port: UInt16 = RemoteAccessPreferences.loadPort(),
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
@@ -645,6 +825,7 @@ final class RemoteAccessService: ObservableObject {
         pushConfiguration: RemotePushConfiguration? = .configured(),
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
         pushMacPresence: @escaping @MainActor () -> RemotePushMacPresence = { .current() },
+        taskAlerts: RemoteTaskAlerts = RemoteTaskAlerts(),
         tailnetServeSetup: @escaping TailnetServeSetup = { port, configuredOrigin, configureIfNeeded in
             try await TailscaleServeSetup().run(
                 port: port,
@@ -656,10 +837,13 @@ final class RemoteAccessService: ObservableObject {
             RemoteAccessGatewayServer(handler: $0)
         }
     ) {
-        self.attachmentStore = RemoteMessageAttachmentStore(root: runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true))
+        let attachmentStoreDirectoryURL = runtimePaths.remoteAccessDirectoryURL.appendingPathComponent("attachments", isDirectory: true)
+        self.attachmentStoreDirectoryURL = attachmentStoreDirectoryURL
+        self.attachmentStore = RemoteMessageAttachmentStore(root: attachmentStoreDirectoryURL)
         self.previewScratchpadDirectory = runtimePaths.scratchpadDocumentsDirectoryURL
         self.store = store
         self.annotationStyleStore = annotationStyleStore
+        self.taskBoard = taskBoard
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionCloseController = sessionCloseController
@@ -673,6 +857,7 @@ final class RemoteAccessService: ObservableObject {
         self.pushConfiguration = pushConfiguration
         self.pushRelay = pushRelay
         self.pushMacPresence = pushMacPresence
+        self.taskAlerts = taskAlerts
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
         self.deviceStore = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         self.auditLog = RemoteAccessAuditLog(fileURL: runtimePaths.remoteAccessAuditFileURL)
@@ -725,6 +910,11 @@ final class RemoteAccessService: ObservableObject {
         sendBridge.service = self
         questionAnswerBridge.service = self
         readAcknowledgementBridge.service = self
+        coordinatorChatReadBridge.service = self
+        coordinatorQuietDigestsBridge.service = self
+        coordinatorQueueBridge.service = self
+        finishedTasksBridge.service = self
+        coordinatorConversationEventsBridge.service = self
         workspaceDoneBridge.service = self
         conversationFlagBridge.service = self
         conversationCloseBridge.service = self
@@ -753,6 +943,87 @@ final class RemoteAccessService: ObservableObject {
         handler.sessionStartHandler = { [weak self] request, device in
             guard let starter = self?.sessionStarter else { return .rejected(reason: .launchFailed) }
             return await starter.start(request, device: device)
+        }
+        taskActionRunner = RemoteTaskActionRunner(
+            coordinator: { [weak taskBoard] in taskBoard?.coordinator },
+            deviceMayAct: { [weak self] deviceID in
+                guard let self, self.isEnabled else { return false }
+                return self.deviceStore.devices.first { $0.id == deviceID }?.canActOnTasks ?? false
+            },
+            currentTask: { [weak self] taskID in self?.currentTask(id: taskID) }
+        )
+        handler.taskActionHandler = { [weak self] request, device in
+            guard let self, self.isEnabled, let runner = self.taskActionRunner else {
+                return .rejected(reason: .tasksUnavailable, message: nil)
+            }
+            return await runner.perform(request, device: device)
+        }
+        // The board names the finished tasks' revision; a device reads them
+        // here for the chips of links to them.
+        handler.finishedTasksHandler = { [finishedTasksBridge] in
+            finishedTasksBridge.finishedTasks()
+        }
+        handler.taskArchiveCheckHandler = { [weak self] request, _ in
+            guard let self, self.isEnabled, let runner = self.taskActionRunner else {
+                return .rejected(reason: .tasksUnavailable, message: nil)
+            }
+            return await runner.archiveCheck(request)
+        }
+        if let taskCoordinator, let quickEntryController {
+            taskCreateBridge.service = self
+            taskCreator = RemoteTaskCreator(
+                coordinator: taskCoordinator,
+                choices: { [weak quickEntryController] in
+                    quickEntryController?.currentChoices(includeProfile: RemoteTaskCreator.offersProfile)
+                        ?? QuickEntryChoices(workspaces: [], profiles: [], frequentPresets: [])
+                },
+                recordCreatedTask: { [weak quickEntryController] preset, workspaceID in
+                    quickEntryController?.recordCreatedTask(preset: preset, workspaceID: workspaceID)
+                },
+                attachmentStore: attachmentStore,
+                deviceMayCreate: { [weak self] deviceID in
+                    guard let self, self.isEnabled else { return false }
+                    return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
+                }
+            )
+            handler.taskCreateOptionsHandler = { [taskCreateBridge] request, device in
+                taskCreateBridge.options(request, device: device)
+            }
+            handler.taskCreateHandler = { [weak self] request, device in
+                guard let creator = self?.taskCreator else { return .rejected(reason: .createFailed, message: nil) }
+                return await creator.create(request, device: device)
+            }
+            // Only a Mac with the coordinator's controller advertises a send
+            // to it. Whether a coordinator workspace exists now, the options
+            // and each send say.
+            if taskBoard?.coordinator?.coordinatorController != nil {
+                coordinatorSender = RemoteCoordinatorSender(
+                    coordinator: { [weak taskBoard] in taskBoard?.coordinator?.coordinatorController },
+                    choices: { [weak quickEntryController] in
+                        quickEntryController?.currentChoices(includeProfile: RemoteTaskCreator.offersProfile)
+                            ?? QuickEntryChoices(workspaces: [], profiles: [], frequentPresets: [])
+                    },
+                    attachmentStore: attachmentStore,
+                    deviceMaySend: { [weak self] deviceID in
+                        guard let self, self.isEnabled else { return false }
+                        return self.deviceStore.devices.first { $0.id == deviceID }?.canStartSessions ?? false
+                    }
+                )
+                handler.coordinatorSendHandler = { [weak self] request, device in
+                    guard let self, self.isEnabled, let sender = self.coordinatorSender else {
+                        return .rejected(reason: .noCoordinator, message: nil)
+                    }
+                    return await sender.send(request, device: device)
+                }
+            }
+        }
+        // The coordinator chat's read point lives with the coordinator's
+        // controller, so only a Mac with one advertises it.
+        if let coordinatorController = taskBoard?.coordinator?.coordinatorController {
+            installCoordinatorChatRead(coordinatorController.chatReadThrough)
+            installCoordinatorQuietDigests(from: coordinatorController)
+            installCoordinatorQueue(from: coordinatorController)
+            installCoordinatorAttachmentImages(folders: [coordinatorController.attachments.directoryURL, attachmentStoreDirectoryURL])
         }
         handler.onDevicePaired = { [weak self] device in
             guard let self else { return }
@@ -828,6 +1099,7 @@ final class RemoteAccessService: ObservableObject {
             guard isEnabled == false else { return }
             activationState = .starting
             RemoteAccessPreferences.discardLegacyWriteEnabledConversations()
+            beginGatewayObservation()
             beginConversationTracking()
             syncConversations(broadcast: false)
             do {
@@ -850,7 +1122,8 @@ final class RemoteAccessService: ObservableObject {
             server.stop()
             invalidatePairingCode()
             cancelNativePairingOffer()
-            endConversationTracking()
+            endGatewayObservation()
+            endOrNarrowConversationTracking()
             connectedClientCount = 0
             connectedNativeClientCount = 0
             if shouldAudit {
@@ -872,7 +1145,8 @@ final class RemoteAccessService: ObservableObject {
         server.stop()
         invalidatePairingCode()
         cancelNativePairingOffer()
-        endConversationTracking()
+        endGatewayObservation()
+        endOrNarrowConversationTracking()
         connectedClientCount = 0
         connectedNativeClientCount = 0
     }
@@ -977,19 +1251,42 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
-    private func beginConversationTracking() {
-        guard storeActionObserverToken == nil, conversationTrackingCancellables.isEmpty else { return }
-        conversationTrackingGeneration &+= 1
-        let generation = conversationTrackingGeneration
+    /// Starts the work that only gateway clients need: task alerts and the
+    /// metadata of auxiliary panels. Conversation tracking starts separately,
+    /// because an in-app subscriber can need it while the gateway is off.
+    private func beginGatewayObservation() {
+        guard gatewayObservationCancellables.isEmpty else { return }
+        startTaskAlertLoop()
         panelMetadataCache.start()
         store.$state.combineLatest(store.$recentRightPanelItems)
             .sink { [weak self] state, recentItems in
-                guard let self, self.conversationTrackingGeneration == generation else { return }
+                guard let self, self.isEnabled else { return }
                 self.panelMetadataCache.updateInputs(Self.panelMetadataInputs(
                     state: state, recentItems: recentItems, scratchpadDirectory: self.previewScratchpadDirectory
                 ))
             }
-            .store(in: &conversationTrackingCancellables)
+            .store(in: &gatewayObservationCancellables)
+    }
+
+    private func endGatewayObservation() {
+        taskAlertLoop?.cancel()
+        taskAlertLoop = nil
+        taskAlerts.reset()
+        panelMetadataPollTask?.cancel()
+        panelMetadataPollTask = nil
+        panelMetadataCache.stop()
+        gatewayObservationCancellables.removeAll()
+        taskBoardBroadcastTask?.cancel()
+        taskBoardBroadcastTask = nil
+        lastBroadcastTaskBoard = nil
+        writeControllableSessions = []
+        loggedPresentationStateByConversationID.removeAll()
+    }
+
+    private func beginConversationTracking() {
+        guard storeActionObserverToken == nil, conversationTrackingCancellables.isEmpty else { return }
+        conversationTrackingGeneration &+= 1
+        let generation = conversationTrackingGeneration
 
         // Observe local keyboard/paste input to invalidate open remote epochs.
         terminalRuntimeRegistry.localInputObserver = { [weak self] panelID, kind in
@@ -1001,17 +1298,16 @@ final class RemoteAccessService: ObservableObject {
             .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self,
-                      self.isEnabled,
+                      self.isTrackingConversations,
                       self.conversationTrackingGeneration == generation else { return }
                 self.syncConversations()
             }
             .store(in: &conversationTrackingCancellables)
 
-        sessionRuntimeStore.$providerConversationRevision
-            .dropFirst()
+        sessionRuntimeStore.providerConversationRevisions
             .sink { [weak self] _ in
                 guard let self,
-                      self.isEnabled,
+                      self.isTrackingConversations,
                       self.conversationTrackingGeneration == generation else { return }
                 self.syncConversations()
             }
@@ -1031,12 +1327,36 @@ final class RemoteAccessService: ObservableObject {
             }
             .store(in: &conversationTrackingCancellables)
 
+        // Task records, pull request answers and merges change a task's
+        // stage without a session or workspace change. The board publishes
+        // before it changes, so it is read after a yield.
+        taskBoard?.objectWillChange
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation else { return }
+                self.scheduleTaskBoardBroadcast()
+            }
+            .store(in: &conversationTrackingCancellables)
+        // A pull request answer from GitHub, such as a close, can change
+        // which task spaces take a done mark without touching AppState.
+        sessionRuntimeStore.taskCoordinator?.board?.pullRequests?.objectWillChange
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self,
+                      self.isEnabled,
+                      self.conversationTrackingGeneration == generation,
+                      self.doneMarkRefusals() != self.publishedDoneMarkRefusals else { return }
+                self.scheduleSessionListBroadcast()
+            }
+            .store(in: &conversationTrackingCancellables)
+
         // Resume-record and conversation-identity changes mutate panel state
         // without touching the session registry; without this observer a
         // rollout-path change would never restart the transcript tailer.
         storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
             guard let self,
-                  self.isEnabled,
+                  self.isTrackingConversations,
                   self.conversationTrackingGeneration == generation else { return }
             // Passing the claimed colors skips deriving a fallback for every
             // key on every action; color changes have their own trigger.
@@ -1048,7 +1368,9 @@ final class RemoteAccessService: ObservableObject {
             if case .setWorkspaceParent = action {
                 inventoryChanged = true
             }
-            if inventoryChanged
+            // Only gateway clients get the workspace inventory.
+            if self.isEnabled,
+               inventoryChanged
                 || Self.workspaceInventory(state: previousState, annotationColorTokens: colors)
                 != Self.workspaceInventory(state: nextState, annotationColorTokens: colors) {
                 self.scheduleSessionListBroadcast()
@@ -1088,10 +1410,22 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
+    /// The gateway stopped. With no in-app subscriber all tracking ends. With
+    /// one, tracking narrows to the subscribed panels: the sync drops every
+    /// other conversation, and no device can receive what it queued.
+    private func endOrNarrowConversationTracking() {
+        guard isTrackingConversations else {
+            endConversationTracking()
+            return
+        }
+        dropQueuedSends(where: { entry, _ in
+            if case .device = entry.origin { return true }
+            return false
+        }, outcome: "gateway_stopped")
+        syncConversations()
+    }
+
     private func endConversationTracking() {
-        panelMetadataPollTask?.cancel()
-        panelMetadataPollTask = nil
-        panelMetadataCache.stop()
         conversationTrackingCancellables.removeAll()
         if let storeActionObserverToken {
             store.removeActionAppliedObserver(storeActionObserverToken)
@@ -1127,8 +1461,6 @@ final class RemoteAccessService: ObservableObject {
         pendingSendConfirmationWork.removeAll()
         pendingSendCorrelator = RemotePendingSendCorrelator()
         coordinator = RemoteInputCoordinator()
-        writeControllableSessions = []
-        loggedPresentationStateByConversationID.removeAll()
     }
 
     // MARK: - Pairing and devices
@@ -1259,16 +1591,12 @@ final class RemoteAccessService: ObservableObject {
         guard isEnabled, let pushConfiguration,
               ProviderTranscriptSupport.isManagedProvider(event.agent),
               pushTasksByEventID[event.eventID] == nil else { return }
-        guard pushTasksByEventID.count < 8 else {
-            ToasttyLog.warning("Notification event dropped because delivery is busy", category: .automation)
-            return
-        }
         let registrations = deviceStore.eligiblePushRegistrations(configuration: pushConfiguration)
         guard !registrations.isEmpty,
               sessionRuntimeStore.sessionRegistry.activeSessionIDByPanelID[event.panelID] == event.sessionID,
               let record = sessionRuntimeStore.sessionRegistry.sessionsByID[event.sessionID], record.isActive, record.agent == event.agent,
-              let panel = store.state.workspacesByID.values.compactMap({ $0.allPanelsByID[event.panelID] }).first,
-              case .terminal(let terminal) = panel else { return }
+              let workspace = store.state.workspacesByID.values.first(where: { $0.allPanelsByID[event.panelID] != nil }),
+              case .terminal(let terminal) = workspace.allPanelsByID[event.panelID] else { return }
         // SessionRuntimeStore has already accepted and deduplicated the event.
         // Drop it now while the Mac is in use; becoming idle must not replay it.
         guard pushMacPresence().allowsPush else { return }
@@ -1292,16 +1620,40 @@ final class RemoteAccessService: ObservableObject {
             sessionTitle: candidate.title,
             status: status
         )
-        pushTasksByEventID[event.eventID] = Task { [weak self] in
+        // A finished turn in a task space waits briefly: when its task then
+        // needs the user, the task alert replaces this one. An approval puts
+        // the task in Needs you for a reason without a task alert, so it
+        // goes out at once.
+        if event.kind == .turnComplete, let taskID = taskID(ofTaskSpace: workspace.id) {
+            taskAlerts.hold(notification, taskID: taskID)
+            return
+        }
+        startPushDelivery(eventID: notification.eventID, configuration: pushConfiguration) { [weak self] registration in
+            await self?.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
+        }
+    }
+
+    /// Sends one event to each eligible phone, four at a time.
+    private func startPushDelivery(
+        eventID: UUID,
+        configuration: RemotePushConfiguration,
+        deliver: @escaping @MainActor @Sendable (RemoteDevicePushRegistration) async -> Void
+    ) {
+        guard pushTasksByEventID[eventID] == nil else { return }
+        guard pushTasksByEventID.count < 8 else {
+            ToasttyLog.warning("Notification event dropped because delivery is busy", category: .automation)
+            return
+        }
+        let registrations = deviceStore.eligiblePushRegistrations(configuration: configuration)
+        guard !registrations.isEmpty else { return }
+        pushTasksByEventID[eventID] = Task { [weak self] in
             guard let self else { return }
-            defer { self.pushTasksByEventID.removeValue(forKey: event.eventID) }
+            defer { self.pushTasksByEventID.removeValue(forKey: eventID) }
             await withTaskGroup(of: Void.self) { group in
                 for (index, registration) in registrations.enumerated() {
                     guard !Task.isCancelled else { group.cancelAll(); break }
                     if index >= 4 { await group.next() }
-                    group.addTask {
-                        await self.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
-                    }
+                    group.addTask { await deliver(registration) }
                 }
             }
         }
@@ -1315,13 +1667,103 @@ final class RemoteAccessService: ObservableObject {
         guard !Task.isCancelled, isEnabled,
               deviceStore.eligiblePushRegistrations(configuration: configuration).contains(registration) else { return }
         if await pushRelay.send(notification, to: registration) == .registrationUnavailable {
-            do {
-                try deviceStore.clearPushRegistration(matching: registration)
-                retryPushCleanup()
-            } catch {
-                ToasttyLog.error("Failed to save notification grant removal", category: .automation)
+            clearPushRegistration(registration)
+        }
+    }
+
+    private func deliverTaskAlert(
+        _ alert: RemoteTaskAlerts.TaskAlert,
+        to registration: RemoteDevicePushRegistration,
+        configuration: RemotePushConfiguration
+    ) async {
+        guard !Task.isCancelled, isEnabled,
+              deviceStore.eligiblePushRegistrations(configuration: configuration).contains(registration) else { return }
+        switch await pushRelay.send(alert.notification, to: registration) {
+        case .registrationUnavailable:
+            clearPushRegistration(registration)
+        case .unsupportedAlert:
+            // A relay deployed before task alerts refuses them without
+            // sending anything. Send the session alerts this one replaced,
+            // as the Mac did before task alerts.
+            ToasttyLog.info("Notification relay refused a task alert; sending its session alert", category: .automation, metadata: [
+                "replaced_count": String(alert.replaced.count),
+            ])
+            for notification in alert.replaced {
+                await deliverPushNotification(notification, to: registration, configuration: configuration)
+            }
+        case .accepted, .dropped:
+            break
+        }
+    }
+
+    private func clearPushRegistration(_ registration: RemoteDevicePushRegistration) {
+        do {
+            try deviceStore.clearPushRegistration(matching: registration)
+            retryPushCleanup()
+        } catch {
+            ToasttyLog.error("Failed to save notification grant removal", category: .automation)
+        }
+    }
+
+    // MARK: - Task alerts
+
+    /// The task whose task space this workspace is, while the task system
+    /// is on.
+    private func taskID(ofTaskSpace workspaceID: UUID) -> UUID? {
+        guard let taskBoard, taskBoard.isEnabled else { return nil }
+        return taskBoard.coordinator?.records.record(taskSpaceWorkspaceID: workspaceID)?.id
+    }
+
+    private func startTaskAlertLoop() {
+        guard taskAlertLoop == nil, pushConfiguration != nil, taskBoard != nil,
+              let interval = taskAlerts.timing.passInterval else { return }
+        taskAlertLoop = Task { [weak self] in
+            while Task.isCancelled == false {
+                try? await Task.sleep(for: interval)
+                guard Task.isCancelled == false else { return }
+                self?.runTaskAlertPass()
             }
         }
+    }
+
+    /// One sample of the task board: sends the task alerts it finds and the
+    /// held session alerts that no task alert replaced. Internal so tests
+    /// can drive passes without the timer.
+    func runTaskAlertPass() {
+        guard isEnabled, let pushConfiguration, let taskBoard, taskBoard.isEnabled,
+              deviceStore.eligiblePushRegistrations(configuration: pushConfiguration).isEmpty == false else {
+            // Start again from the current stages once a phone can receive.
+            taskAlerts.reset()
+            return
+        }
+        let pullRequests = taskBoard.pullRequests
+        let deliveries = taskAlerts.pass(
+            items: taskBoard.items(),
+            isAwaitingPullRequest: { item in item.pullRequest.map { pullRequests?.isRefreshing($0) == true } ?? false },
+            conversationID: { [weak self] item in self?.taskConversationID(item) }
+        )
+        // As for session alerts: drop alerts while the Mac is in use. A held
+        // alert whose user came back to the Mac during the hold goes too.
+        guard deliveries.isEmpty == false, pushMacPresence().allowsPush else { return }
+        for delivery in deliveries {
+            switch delivery {
+            case .session(let notification):
+                startPushDelivery(eventID: notification.eventID, configuration: pushConfiguration) { [weak self] registration in
+                    await self?.deliverPushNotification(notification, to: registration, configuration: pushConfiguration)
+                }
+            case .task(let alert):
+                startPushDelivery(eventID: alert.notification.eventID, configuration: pushConfiguration) { [weak self] registration in
+                    await self?.deliverTaskAlert(alert, to: registration, configuration: pushConfiguration)
+                }
+            }
+        }
+    }
+
+    /// The conversation of the task's own agent, which a task alert opens.
+    private func taskConversationID(_ item: TaskBoardItem) -> RemoteConversationID? {
+        guard let record = item.record,
+              let session = taskBoard?.coordinator?.liveAgentSession(of: record) else { return nil }
+        return scanConversationCandidates(mintingIDs: false).first { $0.panelID == session.panelID }?.conversationID
     }
 
     private func retryPushCleanup() {
@@ -1368,6 +1810,7 @@ final class RemoteAccessService: ObservableObject {
         let associations = Self.scratchpadConversationAssociations(
             state: store.state, registry: sessionRuntimeStore.sessionRegistry,
             conversations: conversations)
+        let refusals = doneMarkRefusals()
         return RemoteSessionListSnapshot(
             projectionRunID: projectionStore.runID,
             conversations: conversations,
@@ -1376,8 +1819,75 @@ final class RemoteAccessService: ObservableObject {
                 state: store.state, metadata: panelMetadataCache.metadata, associations: associations,
                 annotationColorTokens: annotationStyleStore.colorTokensByKey,
                 conversationIDsBySessionID: Self.conversationIDsBySessionID(
-                    activeSessionIDByConversationID, listed: conversations))
+                    activeSessionIDByConversationID, listed: conversations),
+                liveConversationIDsByPanelID: Dictionary(
+                    conversations.compactMap { conversation in
+                        guard activeSessionIDByConversationID[conversation.conversationID] != nil else { return nil }
+                        return conversation.placement.panelID.map { ($0, conversation.conversationID) }
+                    },
+                    uniquingKeysWith: { first, _ in first }
+                ),
+                acceptsDoneMark: { refusals.contains($0) == false },
+                coordinatorChatRead: coordinatorChatReadThrough?.point,
+                coordinatorQuietDigestsRevision: coordinatorQuietDigestKeys.map {
+                    RemoteCoordinatorQuietDigests.revision(of: $0())
+                },
+                coordinatorQueueRevision: coordinatorQueueRevision()),
+            tasks: makeTaskBoard()
         )
+    }
+
+    /// The task spaces whose done checkbox clients hide; see
+    /// `TaskBoardItem.acceptsDoneMark`.
+    private func doneMarkRefusals() -> Set<UUID> {
+        Set(store.state.subspaceParentIDsByWorkspaceID().keys.filter {
+            sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: $0) == false
+        })
+    }
+
+    private func makeTaskBoard() -> RemoteTaskBoard? {
+        guard let taskBoard, taskBoard.isEnabled else { return nil }
+        let items = taskBoard.items()
+        var board = RemoteTaskBoardProjection.board(items: items, context: taskProjectionContext(taskBoard))
+        board.finishedTasksRevision = finishedTasks(items: items).revision
+        return board
+    }
+
+    /// The recent Done and archived tasks that a device reads for the chips
+    /// of links to them, as the board's revision names them. Without the
+    /// task system there are none.
+    func currentFinishedTasks() -> RemoteFinishedTasks {
+        guard let taskBoard, taskBoard.isEnabled else { return RemoteFinishedTasks(tasks: []) }
+        return finishedTasks(items: taskBoard.items())
+    }
+
+    private func finishedTasks(items: [TaskBoardItem]) -> RemoteFinishedTasks {
+        let tasks = RemoteTaskBoardProjection.finishedTasks(items)
+        if let lastFinishedTasks, lastFinishedTasks.tasks == tasks { return lastFinishedTasks }
+        let finished = RemoteFinishedTasks(tasks: tasks)
+        lastFinishedTasks = finished
+        return finished
+    }
+
+    private func taskProjectionContext(_ taskBoard: TaskBoardStore) -> RemoteTaskBoardProjection.Context {
+        RemoteTaskBoardProjection.Context(
+            state: store.state,
+            mergeRequest: { [sessionRuntimeStore] workspaceID in sessionRuntimeStore.workspaceMergeRequests[workspaceID] },
+            isTriageConfigured: { [weak coordinator = taskBoard.coordinator] in coordinator?.isTriageConfigured ?? false }
+        )
+    }
+
+    /// The task as the snapshot would show it now, with the item it comes
+    /// from, so an action is checked against the Mac's current list.
+    func currentTask(id taskID: UUID) -> (item: TaskBoardItem, summary: RemoteTaskSummary)? {
+        guard let taskBoard, taskBoard.isEnabled else { return nil }
+        let items = taskBoard.items()
+        guard let item = items.first(where: { $0.id == .task(taskID) }) else { return nil }
+        return (item, RemoteTaskBoardProjection.summary(
+            item,
+            context: taskProjectionContext(taskBoard),
+            family: RemoteTaskBoardProjection.Family(items: items)
+        ))
     }
 
     /// Maps each managed session to its conversation, limited to the
@@ -1402,9 +1912,19 @@ final class RemoteAccessService: ObservableObject {
         state: AppState, metadata: [UUID: RemotePanelMetadataCache.Metadata] = [:],
         associations: [UUID: RemoteConversationID] = [:],
         annotationColorTokens: [String: AnnotationColorToken] = [:],
-        conversationIDsBySessionID: [String: RemoteConversationID] = [:]
+        conversationIDsBySessionID: [String: RemoteConversationID] = [:],
+        liveConversationIDsByPanelID: [UUID: RemoteConversationID] = [:],
+        acceptsDoneMark: (UUID) -> Bool = { _ in true },
+        coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil,
+        coordinatorQuietDigestsRevision: String? = nil,
+        coordinatorQueueRevision: String? = nil
     ) -> [RemoteWorkspaceSummary] {
         let parentIDs = state.subspaceParentIDsByWorkspaceID()
+        // The coordinator's own session, by its panel, while its agent runs:
+        // other agents can run in the same workspace, and a listed
+        // transcript outlives the agent.
+        let coordinator = state.coordinator
+        let coordinatorConversationID = coordinator?.panelID.flatMap { liveConversationIDsByPanelID[$0] }
         var ids: [UUID] = []
         var seen: Set<UUID> = []
         for window in state.windows {
@@ -1463,7 +1983,17 @@ final class RemoteAccessService: ObservableObject {
                     ? nil : workspace.spawningSessionID.flatMap { conversationIDsBySessionID[$0] },
                 primaryAnnotationKey: workspace.primaryAnnotationKey
                     .flatMap { workspace.annotations[$0] == nil ? nil : $0 },
-                doneAt: parentID == nil ? nil : workspace.doneAt)
+                doneAt: parentID == nil ? nil : workspace.doneAt,
+                acceptsDoneMark: parentID == nil || acceptsDoneMark(id),
+                isCoordinator: workspace.isCoordinator,
+                coordinatorConversationID: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorConversationID : nil,
+                coordinatorChatRead: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorChatRead : nil,
+                coordinatorQuietDigestsRevision: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorQuietDigestsRevision : nil,
+                coordinatorQueueRevision: workspace.isCoordinator && coordinator?.workspaceID == id
+                    ? coordinatorQueueRevision : nil)
         }
     }
 
@@ -1756,6 +2286,234 @@ final class RemoteAccessService: ObservableObject {
         return .acknowledged
     }
 
+    /// Shares the coordinator chat's read point with paired devices: the
+    /// coordinator's workspace carries it, and a device's read moves it.
+    /// Installing it advertises `coordinatorChatRead`. The app installs the
+    /// coordinator controller's read point once, at launch.
+    func installCoordinatorChatRead(_ readThrough: CoordinatorChatReadThrough) {
+        coordinatorChatReadThrough = readThrough
+        handler.coordinatorChatReadHandler = { [coordinatorChatReadBridge] request, device in
+            coordinatorChatReadBridge.read(request, device: device)
+        }
+        // A read on this Mac or on a device moves it. Reads come with each
+        // new message while a chat is on screen, so they are sent together.
+        coordinatorChatReadObserver = readThrough.moves
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isEnabled else { return }
+                self.scheduleSessionListBroadcast()
+            }
+    }
+
+    /// Shares which of the coordinator's wake turns are quiet with paired
+    /// devices, so their chats fold them as the Mac's does. The
+    /// coordinator's workspace carries the revision of the quiet digests,
+    /// and a device reads their keys when it changes. Installing it
+    /// advertises `coordinatorQuietDigests`. The app installs the
+    /// coordinator's controller once, at launch.
+    func installCoordinatorQuietDigests(from controller: CoordinatorController) {
+        coordinatorQuietDigestKeys = { [weak controller] in controller?.quietDigestKeys() ?? [] }
+        handler.coordinatorQuietDigestsHandler = { [coordinatorQuietDigestsBridge] in
+            coordinatorQuietDigestsBridge.digests()
+        }
+        // A mark comes once in a wake turn, so a new revision goes out at
+        // once, while the turn may still be on a device's screen.
+        coordinatorQuietDigestsObserver = controller.quietDigestChanges
+            .sink { [weak self] in
+                guard let self, self.isEnabled else { return }
+                self.scheduleSessionListBroadcast()
+            }
+    }
+
+    /// Shares the coordinator's own queue with paired devices: the messages
+    /// for the coordinator that wait outside its conversation's send queue,
+    /// so a device's chat lists them with the conversation's and can let
+    /// them go or remove them. The coordinator's workspace carries the
+    /// queue's revision, and a native device reads the queue when it
+    /// changes. Installing it advertises `coordinatorQueue`. The app
+    /// installs the coordinator's controller once, at launch.
+    func installCoordinatorQueue(from controller: CoordinatorController) {
+        coordinatorQueueController = controller
+        handler.coordinatorQueueHandler = { [coordinatorQueueBridge] in
+            coordinatorQueueBridge.queue()
+        }
+        // `@Published` sends before the change; the broadcast reads the
+        // settled queue a turn later. It goes also while the Mac's chat is
+        // closed.
+        coordinatorQueueObserver = Publishers.Merge3(
+            controller.$queuedEntries.map { _ in () },
+            controller.$pausedEntries.map { _ in () },
+            controller.$heldSetToken.map { _ in () }
+        )
+        .dropFirst(3)
+        .sink { [weak self] in
+            guard let self, self.isEnabled else { return }
+            self.scheduleSessionListBroadcast()
+        }
+    }
+
+    /// The coordinator's own conversation while its agent runs: the one in
+    /// the coordinator's terminal, bound to a live session.
+    private func coordinatorLiveConversationID() -> RemoteConversationID? {
+        guard let panelID = store.state.coordinator?.panelID,
+              let conversationID = conversationIDByPanelID[panelID],
+              activeSessionIDByConversationID[conversationID] != nil else { return nil }
+        return conversationID
+    }
+
+    /// The coordinator's own queue now, for a device's read. The Stop's
+    /// token goes with it only while that Stop holds messages, in either of
+    /// the coordinator's queues.
+    func coordinatorQueue() -> RemoteCoordinatorQueue {
+        guard let controller = coordinatorQueueController else {
+            return RemoteCoordinatorQueueProjection.queue(held: [], waiting: [], conversationID: nil, heldSetToken: nil)
+        }
+        let conversationID = coordinatorLiveConversationID()
+        return RemoteCoordinatorQueueProjection.queue(
+            held: controller.pausedEntries,
+            waiting: controller.queuedEntries,
+            conversationID: conversationID,
+            heldSetToken: exposedHeldSetToken(controller, conversationID: conversationID)
+        )
+    }
+
+    /// The revision that the coordinator's workspace carries, or `nil` on a
+    /// Mac without the coordinator.
+    private func coordinatorQueueRevision() -> String? {
+        guard let controller = coordinatorQueueController else { return nil }
+        let conversationID = coordinatorLiveConversationID()
+        return RemoteCoordinatorQueueProjection.revision(
+            held: controller.pausedEntries,
+            waiting: controller.queuedEntries,
+            conversationID: conversationID,
+            heldSetToken: exposedHeldSetToken(controller, conversationID: conversationID)
+        )
+    }
+
+    private func exposedHeldSetToken(
+        _ controller: CoordinatorController,
+        conversationID: RemoteConversationID?
+    ) -> String? {
+        let conversationQueueIsHeld = conversationID.map {
+            sendQueue.isPaused(for: $0) && sendQueue.entries(for: $0).isEmpty == false
+        } ?? false
+        let isHeld = controller.pausedEntries.isEmpty == false || conversationQueueIsHeld
+        return isHeld ? controller.heldSetToken : nil
+    }
+
+    /// A paired device's change to the coordinator's own queue. The gateway
+    /// checked the device's send scope. The request names the coordinator's
+    /// live conversation, and the Mac takes writes from devices for it.
+    private func performCoordinatorQueueUpdate(
+        _ request: RemoteConversationQueueUpdateRequest
+    ) -> RemoteConversationQueueUpdateResult {
+        let conversationID = request.conversationID
+        guard let controller = coordinatorQueueController,
+              coordinatorLiveConversationID() == conversationID else {
+            return .conversationNotFound
+        }
+        guard sessionWritePolicy.isEnabled(for: conversationID) else { return .sessionWritesDisabled }
+        switch request.action {
+        case .coordinatorRemove:
+            // As the Mac chat's Remove: the message will not be sent, so the
+            // folders that it owns go too. When the queue cannot be saved
+            // without it, it stays with its files, and the device is told.
+            guard let id = request.clientRequestID else { return .unchanged }
+            do {
+                return try controller.removeQueuedEntry(id: id, discardingAttachments: true) != nil ? .updated : .unchanged
+            } catch {
+                return .failed
+            }
+        case .coordinatorResume:
+            guard let token = exposedHeldSetToken(controller, conversationID: conversationID) else { return .unchanged }
+            guard request.heldSetToken == token else { return .stale }
+            // The conversation's queue goes first at an open prompt, as it
+            // does at every prompt; the coordinator's set-aside entries
+            // follow, in front of its later ones.
+            if sendQueue.resume(conversationID) {
+                broadcastSessionList()
+                drainSendQueue(for: conversationID)
+            }
+            controller.resumeQueue()
+            return .updated
+        case .remove, .resume:
+            return .unchanged
+        }
+    }
+
+    /// Serves paired devices the images attached to the messages of the
+    /// coordinator's chat, so their chats show them as the Mac's does, from
+    /// `folders` only: where Toastty stores attached files. Installing it
+    /// advertises `coordinatorAttachmentImages`. The app installs it once,
+    /// at launch, with the coordinator.
+    func installCoordinatorAttachmentImages(folders: [URL]) {
+        handler.coordinatorAttachmentFolders = folders
+        handler.coordinatorConversationEventsHandler = { [coordinatorConversationEventsBridge] conversationID in
+            coordinatorConversationEventsBridge.events(conversationID)
+        }
+    }
+
+    /// The events of the coordinator's conversation, by the coordinator's
+    /// panel as the chat read does, or `nil` when `conversationID` is any
+    /// other conversation.
+    func coordinatorConversationEvents(_ conversationID: RemoteConversationID) -> [ConversationEvent]? {
+        guard isReady, isEnabled,
+              let coordinatorPanelID = store.state.coordinator?.panelID,
+              panelIDByConversationID[conversationID] == coordinatorPanelID,
+              let projector = projectionStore.projectorState(for: conversationID)
+        else { return nil }
+        return projector.events
+    }
+
+    /// The coordinator's quiet digests now, for a device's read.
+    func coordinatorQuietDigests() -> RemoteCoordinatorQuietDigests {
+        RemoteCoordinatorQuietDigests(keys: coordinatorQuietDigestKeys?() ?? [])
+    }
+
+    /// A paired device showed the coordinator's chat through the row of
+    /// `request.eventID`. The gateway checked the device's read access. The
+    /// read point moves to that row, by the event this Mac has for it, so
+    /// the device's rounded times never decide which row was read. It only
+    /// moves forward: a late or repeated read leaves it.
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteCoordinatorChatReadResult {
+        let result: RemoteCoordinatorChatReadResult
+        if isReady, isEnabled, let readThrough = coordinatorChatReadThrough,
+           let coordinatorPanelID = store.state.coordinator?.panelID,
+           panelIDByConversationID[request.conversationID] == coordinatorPanelID {
+            let projector = projectionStore.projectorState(for: request.conversationID)
+            let events = projector?.events ?? []
+            // A runtime event's identity counts up again in each run of the
+            // reader: from an earlier run it can name another event now.
+            let isFromThisRun = request.projectionRunID == projectionStore.runID
+                && request.projectionGeneration == projector?.generation
+            if RemoteCoordinatorChatReadPoint.durableEventID(request.eventID) != nil || isFromThisRun,
+               let event = events.last(where: { $0.eventID == request.eventID }) {
+                let candidate = RemoteCoordinatorChatReadPoint(eventID: event.eventID, timestamp: event.timestamp)
+                let moved = readThrough.advance(to: candidate) { point in
+                    point.eventID.flatMap { eventID in events.lastIndex { $0.eventID == eventID } }
+                }
+                result = moved ? .moved : .alreadyRead
+            } else {
+                result = .eventNotFound
+            }
+        } else {
+            result = .noCoordinator
+        }
+        ToasttyLog.info(
+            "Coordinator chat read evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": request.conversationID.rawValue.uuidString,
+                "device_id": device.id.uuidString,
+                "result": result.rawValue,
+            ]
+        )
+        return result
+    }
+
     /// Marks a subspace done or open again for a remote client, through the
     /// same reducer action as the sidebar checkbox, so its rules (subspaces
     /// only, an existing mark keeps its time) hold for every caller.
@@ -1775,7 +2533,9 @@ final class RemoteAccessService: ObservableObject {
                     case .working?, .needsApproval?, .error?: return true
                     case .ready?, .idle?, nil: return false
                     }
-                }
+                },
+                acceptsDoneMark: sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: request.workspaceID),
+                clientKnowsOpenPullRequestResult: request.knowsOpenPullRequestResult
             )
             if result == .updated {
                 let didChange = store.send(.setWorkspaceDone(
@@ -1888,17 +2648,27 @@ final class RemoteAccessService: ObservableObject {
     /// A client offers the checkbox only on a quiet subspace, so a request
     /// to mark one done while a session works, waits on approval, or failed
     /// is late: an agent started after the tap. Refusing it keeps a delayed
-    /// request from restoring a mark that new work just cleared. Opening a
-    /// task again is always allowed.
+    /// request from restoring a mark that new work just cleared. A task with
+    /// an open pull request finishes through Merge, so the Mac refuses its
+    /// mark even when a client offers the checkbox. A client that cannot
+    /// decode that refusal, such as the v0.9.2 iPhone app, gets
+    /// `workInProgress`, so it says the task can't be marked done instead
+    /// of reporting a failed connection. Opening a task again is always
+    /// allowed.
     nonisolated static func workspaceDoneResult(
         requestedDone: Bool,
         isSubspace: Bool,
         isDone: Bool,
-        hasWorkInProgress: Bool
+        hasWorkInProgress: Bool,
+        acceptsDoneMark: Bool,
+        clientKnowsOpenPullRequestResult: Bool
     ) -> RemoteWorkspaceDoneResult {
         guard isSubspace else { return .notSubspace }
         guard isDone != requestedDone else { return .unchanged }
         if requestedDone, hasWorkInProgress { return .workInProgress }
+        if requestedDone, acceptsDoneMark == false {
+            return clientKnowsOpenPullRequestResult ? .hasOpenPullRequest : .workInProgress
+        }
         return .updated
     }
 
@@ -1994,7 +2764,7 @@ final class RemoteAccessService: ObservableObject {
     }
 
     private func syncConversations(broadcast: Bool = true) {
-        guard isEnabled else { return }
+        guard isTrackingConversations else { return }
         let candidates = scanConversationCandidates(mintingIDs: true)
         var seenConversationIDs: Set<RemoteConversationID> = []
         var listChanged = false
@@ -2003,6 +2773,9 @@ final class RemoteAccessService: ObservableObject {
             guard ProviderTranscriptSupport.isManagedProvider(candidate.provider) else {
                 continue
             }
+            // A panel outside the tracked set is not seen, so the cleanup
+            // below removes any state it had while the gateway was on.
+            guard tracksPanel(candidate.panelID) else { continue }
             seenConversationIDs.insert(candidate.conversationID)
 
             if let projector = projectionStore.projectorState(for: candidate.conversationID),
@@ -2162,12 +2935,21 @@ final class RemoteAccessService: ObservableObject {
                 }
             }
 
+            // Keys that reached the terminal before the agent's start report
+            // answered a question of that start, such as a login or a
+            // folder-trust question, or they wait in the agent's prompt.
+            // Toastty cannot tell which. So the first prompt then opens as
+            // the user's draft: nothing is typed into it until the user
+            // releases it, and the session does not stay "starting" until
+            // a turn runs in the terminal.
+            let opensAsLocalDraft = candidate.nativeBindingConfirmation
+                .map(sessionRuntimeStore.nativeSessionBindingHasOnlyLocalInputAgainstIt) ?? false
             if candidate.provider != .cursor,
                let activeSessionID = candidate.activeSessionID,
                let confirmation = candidate.nativeBindingConfirmation,
                candidate.registryState == .ready,
                confirmation.managedSessionID == activeSessionID,
-               sessionRuntimeStore.isNativeSessionBindingInputClean(confirmation) {
+               opensAsLocalDraft || sessionRuntimeStore.isNativeSessionBindingInputClean(confirmation) {
                 let emitted = projectionStore.bootstrapConfirmedOpenPrompt(
                     for: candidate.conversationID,
                     at: confirmation.confirmedAt
@@ -2184,6 +2966,17 @@ final class RemoteAccessService: ObservableObject {
                     // Publish coordinator authority before clients receive the
                     // status event that exposes this prompt epoch.
                     syncCoordinatorAvailability(for: candidate.conversationID)
+                    if opensAsLocalDraft {
+                        // In the same step as the open prompt, so that no
+                        // send can use it first.
+                        let previous = coordinator.availability(for: candidate.conversationID)
+                        coordinator.noteLocalInput(for: candidate.conversationID)
+                        logCoordinatorAvailabilityTransition(
+                            for: candidate.conversationID,
+                            source: "local_input_before_start_report",
+                            previous: previous
+                        )
+                    }
                     broadcastEvents(emitted, for: candidate.conversationID)
                     listChanged = true
                 }
@@ -2217,9 +3010,11 @@ final class RemoteAccessService: ObservableObject {
         // availability are settled for every conversation.
         drainSendQueues()
 
-        let controllableSessions = buildConversationSummaries().filter {
-            ProviderTranscriptSupport.isManagedProvider($0.provider)
-        }
+        // The write controls are for remote clients, so they list sessions
+        // only while the gateway is on.
+        let controllableSessions = isEnabled
+            ? buildConversationSummaries().filter { ProviderTranscriptSupport.isManagedProvider($0.provider) }
+            : []
         if writeControllableSessions != controllableSessions {
             writeControllableSessions = controllableSessions
         }
@@ -2286,7 +3081,7 @@ final class RemoteAccessService: ObservableObject {
                 return
             }
             guard Task.isCancelled == false,
-                  self.isEnabled,
+                  self.isTrackingConversations,
                   self.promptStabilizationWorkByConversationID[conversationID]?.token == token else {
                 return
             }
@@ -2409,6 +3204,8 @@ final class RemoteAccessService: ObservableObject {
                 if let existing = terminalState.remoteConversationID {
                     conversationID = existing
                 } else if mintingIDs {
+                    // Only a tracked panel gets an identity.
+                    guard tracksPanel(panelID) else { continue }
                     let minted = RemoteConversationID()
                     guard store.send(.updateTerminalPanelRemoteConversationID(
                         panelID: panelID,
@@ -2514,8 +3311,8 @@ final class RemoteAccessService: ObservableObject {
     private func removeConversationState(_ conversationID: RemoteConversationID) {
         promptStabilizationWorkByConversationID.removeValue(forKey: conversationID)?.task.cancel()
         cancelPendingSendConfirmations(for: conversationID)
-        if isEnabled, projectionStore.isConversationRegistered(conversationID) {
-            server.broadcast(.resnapshotRequired(conversationID: conversationID))
+        if projectionStore.isConversationRegistered(conversationID) {
+            publishResnapshotRequired(for: conversationID)
         }
         tailersByConversationID.removeValue(forKey: conversationID)?.stop()
         projectionStore.removeConversation(conversationID)
@@ -2535,62 +3332,77 @@ final class RemoteAccessService: ObservableObject {
 
     }
 
+    /// Who reads a summary. The per-session write policy limits remote
+    /// devices only, so a summary for the Mac leaves it out.
+    private enum SummaryAudience {
+        case remoteDevices
+        case mac
+    }
+
     private func buildConversationSummaries() -> [RemoteConversationSummary] {
-        scanConversationCandidates(mintingIDs: false).map { candidate in
-            // Codex conversations with a live projection report
-            // transcript-derived state; everything else stays
-            // presentation-derived and read-only.
-            if let projector = projectionStore.projectorState(for: candidate.conversationID) {
-                // Availability comes from the coordinator, which merges the
-                // projector's provider transitions with local-draft
-                // invalidation and honors the per-session write opt-in — the
-                // client's compose bar must never open when writes are off.
-                let availability = sessionWritePolicy.inputAvailability(
-                    providerAvailability: coordinator.availability(for: candidate.conversationID),
+        scanConversationCandidates(mintingIDs: false).map { conversationSummary(for: $0, audience: .remoteDevices) }
+    }
+
+    private func conversationSummary(
+        for candidate: ConversationCandidate,
+        audience: SummaryAudience
+    ) -> RemoteConversationSummary {
+        // Codex conversations with a live projection report
+        // transcript-derived state; everything else stays
+        // presentation-derived and read-only.
+        if let projector = projectionStore.projectorState(for: candidate.conversationID) {
+            // Availability comes from the coordinator, which merges the
+            // projector's provider transitions with local-draft
+            // invalidation and honors the per-session write opt-in — the
+            // client's compose bar must never open when writes are off.
+            let providerAvailability = coordinator.availability(for: candidate.conversationID)
+            let availability = audience == .mac
+                ? providerAvailability
+                : sessionWritePolicy.inputAvailability(
+                    providerAvailability: providerAvailability,
                     for: candidate.conversationID
                 )
-                return RemoteConversationSummary(
-                    conversationID: candidate.conversationID,
-                    provider: candidate.provider,
-                    title: candidate.title,
-                    placement: candidate.placement,
-                    cwd: candidate.cwd,
-                    executionProfile: projector.executionProfile,
-                    state: projector.state,
-                    presentationStatus: candidate.presentationStatus,
-                    statusDetail: candidate.statusDetail,
-                    inputAvailability: availability,
-                    pendingInteractionPreview: RemotePendingInteractionPreviewFormatter.make(
-                        from: projectionStore.pendingInteractions(for: candidate.conversationID)
-                    ),
-                    isFlaggedForLater: candidate.isFlaggedForLater,
-                    turnStartedAt: candidate.turnStartedAt,
-                    lastTurnDuration: candidate.lastTurnDuration,
-                    waiting: candidate.waiting,
-                    inputControl: inputControl(for: candidate),
-                    projectionGeneration: projector.generation,
-                    latestSequence: projector.latestSequence,
-                    updatedAt: max(projector.updatedAt, candidate.updatedAt)
-                )
-            }
             return RemoteConversationSummary(
                 conversationID: candidate.conversationID,
                 provider: candidate.provider,
                 title: candidate.title,
                 placement: candidate.placement,
                 cwd: candidate.cwd,
-                state: candidate.registryState,
+                executionProfile: projector.executionProfile,
+                state: projector.state,
                 presentationStatus: candidate.presentationStatus,
                 statusDetail: candidate.statusDetail,
-                inputAvailability: .unavailable(reason: .unknownProviderState),
+                inputAvailability: availability,
+                pendingInteractionPreview: RemotePendingInteractionPreviewFormatter.make(
+                    from: projectionStore.pendingInteractions(for: candidate.conversationID)
+                ),
                 isFlaggedForLater: candidate.isFlaggedForLater,
                 turnStartedAt: candidate.turnStartedAt,
                 lastTurnDuration: candidate.lastTurnDuration,
                 waiting: candidate.waiting,
-                latestSequence: 0,
-                updatedAt: candidate.updatedAt
+                inputControl: inputControl(for: candidate, audience: audience),
+                projectionGeneration: projector.generation,
+                latestSequence: projector.latestSequence,
+                updatedAt: max(projector.updatedAt, candidate.updatedAt)
             )
         }
+        return RemoteConversationSummary(
+            conversationID: candidate.conversationID,
+            provider: candidate.provider,
+            title: candidate.title,
+            placement: candidate.placement,
+            cwd: candidate.cwd,
+            state: candidate.registryState,
+            presentationStatus: candidate.presentationStatus,
+            statusDetail: candidate.statusDetail,
+            inputAvailability: .unavailable(reason: .unknownProviderState),
+            isFlaggedForLater: candidate.isFlaggedForLater,
+            turnStartedAt: candidate.turnStartedAt,
+            lastTurnDuration: candidate.lastTurnDuration,
+            waiting: candidate.waiting,
+            latestSequence: 0,
+            updatedAt: candidate.updatedAt
+        )
     }
 
     private static func remoteState(for kind: SessionStatusKind) -> RemoteSessionState {
@@ -2688,7 +3500,7 @@ final class RemoteAccessService: ObservableObject {
                 bindingID: UUID(),
                 at: feed.updatedAt
             )
-            server.broadcast(.resnapshotRequired(conversationID: candidate.conversationID))
+            publishResnapshotRequired(for: candidate.conversationID)
             if let tailer = tailersByConversationID.removeValue(forKey: candidate.conversationID) {
                 let path = tailer.fileURL.path
                 let provider = tailer.provider
@@ -2809,15 +3621,18 @@ final class RemoteAccessService: ObservableObject {
         generation: UInt64
     ) {
         // A detached tailer can deliver one final callback after cancellation.
-        // Once the kill switch is off — or a later activation has begun — it
+        // Once tracking has ended — or a later activation has begun — it
         // must not rebuild projection state from the previous transcript.
-        guard isEnabled, generation == conversationTrackingGeneration else { return }
+        guard isTrackingConversations, generation == conversationTrackingGeneration else { return }
         switch event {
         case .observations(let observations, let linkedFileReferences):
             // Stamp the confirming user message for any pending remote send
             // before it enters the projection, so the sending device can tell
             // its own send apart from another device's identical text.
-            let stamped = stampPendingSends(observations, for: conversationID)
+            let stamped = stampPendingSends(
+                observations, for: conversationID,
+                usesClaudeFileTimestamps: tailersByConversationID[conversationID]?.provider == .claude
+            )
             let previousProfile = projectionStore.projectorState(for: conversationID)?.executionProfile
             let emitted = projectionStore.ingest(stamped, for: conversationID)
             projectionStore.noteLinkedFileReferences(linkedFileReferences, for: conversationID)
@@ -2835,6 +3650,9 @@ final class RemoteAccessService: ObservableObject {
             )
             drainSendQueue(for: conversationID)
 
+        case .initialReadStarted, .initialReadComplete, .initialReadUnavailable:
+            notifyLocalSubscribers(of: conversationID)
+
         case .fileReplaced:
             // Unreconcilable rewrite: discard this conversation's sequence
             // space and re-read the file from the start under a fresh
@@ -2847,9 +3665,7 @@ final class RemoteAccessService: ObservableObject {
             tailer.stop()
             tailersByConversationID[conversationID] = nil
             projectionStore.forceResnapshot(for: conversationID, bindingID: UUID(), at: Date())
-            if isEnabled {
-                server.broadcast(.resnapshotRequired(conversationID: conversationID))
-            }
+            publishResnapshotRequired(for: conversationID)
             startTailer(for: conversationID, provider: provider, path: path)
             broadcastSessionList()
         }
@@ -2862,19 +3678,22 @@ final class RemoteAccessService: ObservableObject {
         for conversationID: RemoteConversationID,
         sessionListChanged: Bool = false
     ) {
-        guard isEnabled, let projector = projectionStore.projectorState(for: conversationID) else {
+        guard isTrackingConversations, let projector = projectionStore.projectorState(for: conversationID) else {
             return
         }
         if !events.isEmpty {
-            server.broadcast(.conversationEvents(ConversationEventPage(
-                conversationID: conversationID,
-                projectionRunID: projectionStore.runID,
-                projectionGeneration: projector.generation,
-                events: events,
-                latestSequence: projector.latestSequence,
-                firstAvailableSequence: projector.firstAvailableSequence,
-                historyTruncated: projector.firstAvailableSequence > 1
-            )))
+            if isEnabled {
+                server.broadcast(.conversationEvents(ConversationEventPage(
+                    conversationID: conversationID,
+                    projectionRunID: projectionStore.runID,
+                    projectionGeneration: projector.generation,
+                    events: events,
+                    latestSequence: projector.latestSequence,
+                    firstAvailableSequence: projector.firstAvailableSequence,
+                    historyTruncated: projector.firstAvailableSequence > 1
+                )))
+            }
+            notifyLocalSubscribers(of: conversationID)
         }
         // Status-bearing events change the list rows too.
         if sessionListChanged || events.contains(where: { $0.kind == .statusChanged || $0.kind == .sessionBindingChanged }) {
@@ -2882,13 +3701,61 @@ final class RemoteAccessService: ObservableObject {
         }
     }
 
+    /// Publishes changed conversation rows: the session list to gateway
+    /// clients, and a change notice to each in-app subscriber whose summary
+    /// differs from the one it last saw.
     private func broadcastSessionList() {
-        guard isEnabled else { return }
+        guard isTrackingConversations else { return }
         sessionListBroadcastTask?.cancel()
         sessionListBroadcastTask = nil
-        let snapshot = makeSessionList(at: Date())
-        logRemotePresentationChanges(in: snapshot)
-        server.broadcast(.sessionList(snapshot))
+        if isEnabled {
+            let snapshot = makeSessionList(at: Date())
+            lastBroadcastTaskBoard = snapshot.tasks
+            publishedDoneMarkRefusals = Set(snapshot.workspaces.filter { $0.acceptsDoneMark == false }.map(\.id))
+            logRemotePresentationChanges(in: snapshot)
+            server.broadcast(.sessionList(snapshot))
+        }
+        notifyLocalSubscribersOfSummaryChanges()
+    }
+
+    /// Tells gateway clients and in-app subscribers that the conversation's
+    /// event sequence restarted.
+    private func publishResnapshotRequired(for conversationID: RemoteConversationID) {
+        if isEnabled {
+            server.broadcast(.resnapshotRequired(conversationID: conversationID))
+        }
+        notifyLocalSubscribers(of: conversationID)
+    }
+
+    private func notifyLocalSubscribers(of conversationID: RemoteConversationID) {
+        guard localSubscriptions.isEmpty == false,
+              let panelID = panelIDByConversationID[conversationID] else { return }
+        for subscription in localSubscriptions.values where subscription.panelID == panelID {
+            subscription.changes.yield()
+        }
+    }
+
+    private func notifyLocalSubscribersOfSummaryChanges() {
+        guard localSubscriptions.isEmpty == false else { return }
+        let candidates = scanConversationCandidates(mintingIDs: false)
+        for (id, subscription) in localSubscriptions {
+            let summary = localSummary(forPanel: subscription.panelID, in: candidates)
+            guard summary != subscription.publishedSummary else { continue }
+            localSubscriptions[id]?.publishedSummary = summary
+            subscription.changes.yield()
+        }
+    }
+
+    /// The summary an in-app reader gets for a tracked panel.
+    private func localSummary(
+        forPanel panelID: UUID,
+        in candidates: [ConversationCandidate]
+    ) -> RemoteConversationSummary? {
+        guard let conversationID = conversationIDByPanelID[panelID],
+              let candidate = candidates.first(where: {
+                  $0.panelID == panelID && $0.conversationID == conversationID
+              }) else { return nil }
+        return conversationSummary(for: candidate, audience: .mac)
     }
 
     private func logRemotePresentationChanges(in snapshot: RemoteSessionListSnapshot) {
@@ -2994,19 +3861,82 @@ final class RemoteAccessService: ObservableObject {
         return result
     }
 
+    /// Who asked for a send. Only the in-app entry point creates `.mac`; a
+    /// gateway request always carries the paired device that sent it.
+    private enum InputOrigin {
+        case device(RemoteDeviceRecord)
+        /// An in-app caller on this Mac. `byUser` is true when a person sent
+        /// the message.
+        case mac(byUser: Bool)
+
+        /// Whether a person acted now, which moves the panel's last user
+        /// input time.
+        var isUserAction: Bool {
+            switch self {
+            case .device: true
+            case .mac(let byUser): byUser
+            }
+        }
+
+        var queueOrigin: RemoteSendQueue.Entry.Origin {
+            switch self {
+            case .device(let device): .device(device.id)
+            case .mac: .mac
+            }
+        }
+
+        var logLabel: String {
+            switch self {
+            case .device: "device"
+            case .mac: "mac"
+            }
+        }
+    }
+
+    /// Whether input from `origin` may reach `panelID` at all. A device needs
+    /// a ready listener. The Mac needs a subscription that holds the panel.
+    private func acceptsInput(from origin: InputOrigin, panelID: UUID) -> Bool {
+        switch origin {
+        case .device:
+            isReady
+        case .mac:
+            localSubscriptions.values.contains { $0.panelID == panelID }
+        }
+    }
+
     private func deliveryContext(
         for conversationID: RemoteConversationID,
         panelID: UUID,
         device: RemoteDeviceRecord
     ) -> RemoteInputCoordinator.DeliveryContext {
+        deliveryContext(for: conversationID, panelID: panelID, origin: .device(device))
+    }
+
+    private func deliveryContext(
+        for conversationID: RemoteConversationID,
+        panelID: UUID,
+        origin: InputOrigin
+    ) -> RemoteInputCoordinator.DeliveryContext {
         let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
+        // Send scope and the per-session write policy limit remote devices.
+        // The Mac has neither.
+        let deviceHasSendScope: Bool
+        let sessionWritesEnabled: Bool
+        switch origin {
+        case .device(let device):
+            deviceHasSendScope = device.scopes.contains(.send)
+            sessionWritesEnabled = sessionWritePolicy.isEnabled(for: conversationID)
+        case .mac:
+            deviceHasSendScope = true
+            sessionWritesEnabled = true
+        }
         // A managed agent TUI commonly reports `.busy` even when its own
         // provider lifecycle says the composer is open. Provider availability
         // remains authoritative; this check only rejects a missing or exited
         // surface.
         return RemoteInputCoordinator.DeliveryContext(
-            deviceHasSendScope: device.scopes.contains(.send),
-            sessionWritesEnabled: sessionWritePolicy.isEnabled(for: conversationID),
+            deviceHasSendScope: deviceHasSendScope,
+            sessionWritesEnabled: sessionWritesEnabled,
             isBoundToLiveSurface: activeSessionIDByConversationID[conversationID] != nil,
             isSurfaceReadyForInput: promptState != .unavailable && promptState != .exited
         )
@@ -3019,19 +3949,19 @@ final class RemoteAccessService: ObservableObject {
     /// runs at delivery time, not here.
     private func enqueueRemoteSend(
         _ request: RemoteMessageSendRequest,
-        device: RemoteDeviceRecord,
+        origin: InputOrigin,
         staged: RemoteMessageAttachmentStore.Staged?
     ) -> RemoteMessageSendResult {
         let conversationID = request.conversationID
-        guard isReady,
-              let panelID = panelIDByConversationID[conversationID],
+        guard let panelID = panelIDByConversationID[conversationID],
+              acceptsInput(from: origin, panelID: panelID),
               let projector = projectionStore.projectorState(for: conversationID) else {
             return .rejected(reason: .notBound)
         }
         if coordinator.hasProcessed(request.clientRequestID, for: conversationID) {
             return .duplicate
         }
-        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        let context = deliveryContext(for: conversationID, panelID: panelID, origin: origin)
         if let rejection = RemoteInputCoordinator.commonRejection(for: request, context: context) {
             return .rejected(reason: rejection)
         }
@@ -3042,7 +3972,7 @@ final class RemoteAccessService: ObservableObject {
         }
         let entry = RemoteSendQueue.Entry(
             request: request,
-            deviceID: device.id,
+            origin: origin.queueOrigin,
             bindingID: projector.bindingID,
             deliveredText: staged?.deliveryText(for: request),
             enqueuedAt: Date()
@@ -3050,6 +3980,9 @@ final class RemoteAccessService: ObservableObject {
         let result: RemoteMessageSendResult
         switch sendQueue.enqueue(entry) {
         case .queued(let position):
+            if origin.isUserAction {
+                lastRemoteUserInputAtByPanelID[panelID] = entry.enqueuedAt
+            }
             if let staged { stagedAttachmentsByQueuedRequestID[request.clientRequestID] = staged }
             result = .queued(position: position)
         case .duplicate:
@@ -3063,6 +3996,7 @@ final class RemoteAccessService: ObservableObject {
             metadata: [
                 "conversation_id": conversationID.rawValue.uuidString,
                 "client_request_id": request.clientRequestID,
+                "origin": origin.logLabel,
                 "result": String(describing: result),
                 "queue_depth": String(sendQueue.entries(for: conversationID).count),
             ]
@@ -3080,28 +4014,30 @@ final class RemoteAccessService: ObservableObject {
     /// send; the turn gate replaces the open-prompt gate.
     private func performRemoteSteer(
         _ request: RemoteMessageSendRequest,
-        device: RemoteDeviceRecord,
+        origin: InputOrigin,
         deliveredText: String?
     ) -> RemoteMessageSendResult {
         let conversationID = request.conversationID
-        guard isReady,
-              let panelID = panelIDByConversationID[conversationID],
+        guard let panelID = panelIDByConversationID[conversationID],
+              acceptsInput(from: origin, panelID: panelID),
               let projector = projectionStore.projectorState(for: conversationID) else {
             return .rejected(reason: .notBound)
         }
         guard Self.steerCapableProviders.contains(projector.provider) else {
             return .rejected(reason: .steerUnavailable)
         }
-        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        let context = deliveryContext(for: conversationID, panelID: panelID, origin: origin)
         switch coordinator.evaluateSteer(request, context: context) {
         case .duplicate:
             return .duplicate
         case .reject(let reason):
             return .rejected(reason: reason)
         case .accept(let turnEpoch):
-            recordRemoteInput(panelID: panelID)
+            recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
+            let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
+            let deliveryStartedAt = Date()
             let delivery = terminalRuntimeRegistry.sendRemoteText(
-                deliveredText ?? request.text,
+                typedText,
                 submit: true,
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -3111,18 +4047,25 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
                 coordinator.markSteerUncertain(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(
+                    request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
+                    confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer
+                )
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
                 coordinator.markSteerDelivered(request)
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer)
+                recordPendingSend(
+                    request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
+                    confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer
+                )
                 ToasttyLog.info(
                     "Remote steer delivered",
                     category: .automation,
                     metadata: [
                         "conversation_id": conversationID.rawValue.uuidString,
                         "client_request_id": request.clientRequestID,
+                        "origin": origin.logLabel,
                     ]
                 )
                 broadcastSessionList()
@@ -3141,6 +4084,8 @@ final class RemoteAccessService: ObservableObject {
         }
         let result: RemoteConversationQueueUpdateResult
         switch request.action {
+        case .coordinatorRemove, .coordinatorResume:
+            result = performCoordinatorQueueUpdate(request)
         case .remove:
             if let clientRequestID = request.clientRequestID,
                let removed = sendQueue.remove(clientRequestID: clientRequestID, for: conversationID) {
@@ -3167,6 +4112,10 @@ final class RemoteAccessService: ObservableObject {
         if result == .updated {
             broadcastSessionList()
             if request.action == .resume { drainSendQueue(for: conversationID) }
+        } else if result == .stale {
+            // The device acted on a queue it no longer has: the revision it
+            // reads next tells it so.
+            broadcastSessionList()
         }
         return result
     }
@@ -3177,11 +4126,21 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteConversationInterruptRequest,
         device: RemoteDeviceRecord
     ) -> RemoteConversationInterruptResult {
+        performInterrupt(request, origin: .device(device))
+    }
+
+    /// The one interrupt path for a paired device and for the Mac. As for a
+    /// send, the origin decides which caller checks apply.
+    private func performInterrupt(
+        _ request: RemoteConversationInterruptRequest,
+        origin: InputOrigin
+    ) -> RemoteConversationInterruptResult {
         let conversationID = request.conversationID
-        guard isReady, let panelID = panelIDByConversationID[conversationID] else {
+        guard let panelID = panelIDByConversationID[conversationID],
+              acceptsInput(from: origin, panelID: panelID) else {
             return .rejected(reason: .notBound)
         }
-        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        let context = deliveryContext(for: conversationID, panelID: panelID, origin: origin)
         let result: RemoteConversationInterruptResult
         switch coordinator.evaluateInterrupt(
             for: conversationID,
@@ -3191,13 +4150,19 @@ final class RemoteAccessService: ObservableObject {
         case .reject(let reason):
             result = .rejected(reason: reason)
         case .accept:
-            recordRemoteInput(panelID: panelID)
+            recordRemoteInput(panelID: panelID, byUserNow: origin.isUserAction)
             let delivery = terminalRuntimeRegistry.sendRemoteInterrupt(
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
             )
             if delivery == .delivered {
                 sendQueue.pause(conversationID)
+                // An in-app sender holds its own waiting messages too, so a
+                // Stop from any app holds the same messages.
+                let stopHandlers = localSubscriptions.values
+                    .filter { $0.panelID == panelID }
+                    .compactMap(\.onStop)
+                for handler in stopHandlers { handler() }
                 // Direct surface input bypasses the local key callback. Pause
                 // queued sends before the shared status can become idle.
                 _ = sessionRuntimeStore.handleLocalInterruptForPanelIfActive(
@@ -3215,6 +4180,7 @@ final class RemoteAccessService: ObservableObject {
             category: .automation,
             metadata: [
                 "conversation_id": conversationID.rawValue.uuidString,
+                "origin": origin.logLabel,
                 "result": String(describing: result),
             ]
         )
@@ -3230,8 +4196,16 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteConversationLocalDraftReleaseRequest,
         device: RemoteDeviceRecord
     ) -> RemoteConversationLocalDraftReleaseResult {
+        performLocalDraftRelease(request, origin: .device(device))
+    }
+
+    private func performLocalDraftRelease(
+        _ request: RemoteConversationLocalDraftReleaseRequest,
+        origin: InputOrigin
+    ) -> RemoteConversationLocalDraftReleaseResult {
         let conversationID = request.conversationID
-        guard isReady, let panelID = panelIDByConversationID[conversationID] else {
+        guard let panelID = panelIDByConversationID[conversationID],
+              acceptsInput(from: origin, panelID: panelID) else {
             return .rejected(reason: .notBound)
         }
         // Apply any provider transition the debounced sync has not pushed yet,
@@ -3242,7 +4216,7 @@ final class RemoteAccessService: ObservableObject {
         switch coordinator.releaseLocalDraft(
             for: conversationID,
             expectedDraftEpoch: request.expectedDraftEpoch,
-            context: deliveryContext(for: conversationID, panelID: panelID, device: device)
+            context: deliveryContext(for: conversationID, panelID: panelID, origin: origin)
         ) {
         case .reject(let reason):
             result = .rejected(reason: reason)
@@ -3289,31 +4263,43 @@ final class RemoteAccessService: ObservableObject {
     /// reports an open prompt. One entry per open prompt: delivery consumes
     /// the prompt, and the rest wait for the turn it starts to end.
     private func drainSendQueue(for conversationID: RemoteConversationID) {
-        guard isReady, let entry = sendQueue.next(for: conversationID) else { return }
+        guard isTrackingConversations, let entry = sendQueue.next(for: conversationID) else { return }
+        // A device's message waits for a ready listener, as before. The
+        // Mac's own message needs none.
+        if case .device = entry.origin, isReady == false { return }
         guard case .openPrompt(let epoch) = coordinator.availability(for: conversationID) else { return }
         guard entry.bindingID == epoch.bindingID else {
             expireStaleQueueEntries(for: conversationID, bindingID: epoch.bindingID)
             return
         }
-        guard let device = deviceStore.devices.first(where: {
-            $0.id == entry.deviceID && !$0.isRevoked && $0.scopes.contains(.send)
-        }) else {
-            // The device lost send access since it queued the message.
-            if let removed = sendQueue.remove(clientRequestID: entry.clientRequestID, for: conversationID) {
-                discardQueuedEntries([removed])
+        let origin: InputOrigin
+        switch entry.origin {
+        case .device(let deviceID):
+            guard let device = deviceStore.devices.first(where: {
+                $0.id == deviceID && !$0.isRevoked && $0.scopes.contains(.send)
+            }) else {
+                // The device lost send access since it queued the message.
+                if let removed = sendQueue.remove(clientRequestID: entry.clientRequestID, for: conversationID) {
+                    discardQueuedEntries([removed])
+                }
+                logQueueDelivery(entry, for: conversationID, outcome: "device_send_denied")
+                noteQueuedSendDropped(entry, for: conversationID)
+                broadcastSessionList()
+                drainSendQueue(for: conversationID)
+                return
             }
-            logQueueDelivery(entry, for: conversationID, outcome: "device_send_denied")
-            noteQueuedSendDropped(entry, for: conversationID)
-            broadcastSessionList()
-            drainSendQueue(for: conversationID)
-            return
+            origin = .device(device)
+        case .mac:
+            // Toastty types the message now. The caller's action was the
+            // enqueue, so this delivery is no one's input.
+            origin = .mac(byUser: false)
         }
         var request = entry.request
         request.deliveryMode = .prompt
         request.expectedInputEpoch = epoch
-        let result = performRemoteSend(
+        let result = performSend(
             request,
-            device: device,
+            origin: origin,
             deliveredText: entry.deliveredText,
             recordedDeliveryMode: .queue
         )
@@ -3376,6 +4362,27 @@ final class RemoteAccessService: ObservableObject {
         broadcastSessionList()
     }
 
+    /// Removes queued entries that can no longer be delivered, and reports
+    /// each one as dropped.
+    private func dropQueuedSends(
+        where shouldDrop: (RemoteSendQueue.Entry, RemoteConversationID) -> Bool,
+        outcome: String
+    ) {
+        var didDrop = false
+        for conversationID in sendQueue.conversationIDs {
+            for entry in sendQueue.entries(for: conversationID) where shouldDrop(entry, conversationID) {
+                guard let removed = sendQueue.remove(
+                    clientRequestID: entry.clientRequestID, for: conversationID
+                ) else { continue }
+                discardQueuedEntries([removed])
+                logQueueDelivery(removed, for: conversationID, outcome: outcome)
+                noteQueuedSendDropped(removed, for: conversationID)
+                didDrop = true
+            }
+        }
+        if didDrop { broadcastSessionList() }
+    }
+
     private func discardQueuedEntries(_ entries: [RemoteSendQueue.Entry]) {
         for entry in entries {
             guard let staged = stagedAttachmentsByQueuedRequestID.removeValue(forKey: entry.clientRequestID) else { continue }
@@ -3400,10 +4407,13 @@ final class RemoteAccessService: ObservableObject {
         )
     }
 
-    private func inputControl(for candidate: ConversationCandidate) -> RemoteConversationInputControl {
+    private func inputControl(
+        for candidate: ConversationCandidate,
+        audience: SummaryAudience
+    ) -> RemoteConversationInputControl {
         let conversationID = candidate.conversationID
         let turnEpoch = coordinator.turnEpoch(for: conversationID)
-        let acceptsWrites = sessionWritePolicy.isEnabled(for: conversationID)
+        let acceptsWrites = (audience == .mac || sessionWritePolicy.isEnabled(for: conversationID))
             && activeSessionIDByConversationID[conversationID] != nil
         let queue = sendQueue.inputControlQueue(for: conversationID)
         return RemoteConversationInputControl(
@@ -3429,6 +4439,25 @@ final class RemoteAccessService: ObservableObject {
         staged: RemoteMessageAttachmentStore.Staged? = nil,
         recordedDeliveryMode: RemoteMessageDeliveryMode = .prompt
     ) -> RemoteMessageSendResult {
+        performSend(
+            request,
+            origin: .device(device),
+            deliveredText: deliveredText,
+            staged: staged,
+            recordedDeliveryMode: recordedDeliveryMode
+        )
+    }
+
+    /// The one send path for a paired device and for the Mac. The origin
+    /// decides which caller checks apply; the queue, steer and prompt-epoch
+    /// rules are the same.
+    private func performSend(
+        _ request: RemoteMessageSendRequest,
+        origin: InputOrigin,
+        deliveredText: String? = nil,
+        staged: RemoteMessageAttachmentStore.Staged? = nil,
+        recordedDeliveryMode: RemoteMessageDeliveryMode = .prompt
+    ) -> RemoteMessageSendResult {
         guard request.attachments.isEmpty || deliveredText != nil else {
             return .rejected(reason: .invalidAttachments)
         }
@@ -3436,15 +4465,13 @@ final class RemoteAccessService: ObservableObject {
         case .prompt:
             break
         case .queue:
-            return enqueueRemoteSend(request, device: device, staged: staged)
+            return enqueueRemoteSend(request, origin: origin, staged: staged)
         case .steer:
-            return performRemoteSteer(request, device: device, deliveredText: deliveredText)
-        }
-        guard isReady else {
-            return .rejected(reason: .notBound)
+            return performRemoteSteer(request, origin: origin, deliveredText: deliveredText)
         }
         let conversationID = request.conversationID
-        guard let panelID = panelIDByConversationID[conversationID] else {
+        guard let panelID = panelIDByConversationID[conversationID],
+              acceptsInput(from: origin, panelID: panelID) else {
             return .rejected(reason: .notBound)
         }
         if let rejection = bootstrappedAuthorityRejection(
@@ -3453,7 +4480,7 @@ final class RemoteAccessService: ObservableObject {
         ) {
             return .rejected(reason: rejection)
         }
-        let context = deliveryContext(for: conversationID, panelID: panelID, device: device)
+        let context = deliveryContext(for: conversationID, panelID: panelID, origin: origin)
 
         switch coordinator.evaluate(request, context: context) {
         case .duplicate:
@@ -3467,9 +4494,13 @@ final class RemoteAccessService: ObservableObject {
             // paste-oriented text plus a real Return key, which preserves
             // Ghostty bracketed-paste semantics for multi-line input and does
             // not steal the local first responder.
-            recordRemoteInput(panelID: panelID)
+            recordRemoteInput(panelID: panelID, byUserNow: recordedDeliveryMode != .queue && origin.isUserAction)
+            // Image paths stay text, or Claude Code drops the Return. The
+            // conversation then echoes the text as typed.
+            let typedText = AgentPasteText.keepingImagePathsAsText(deliveredText ?? request.text)
+            let deliveryStartedAt = Date()
             let delivery = terminalRuntimeRegistry.sendRemoteText(
-                deliveredText ?? request.text,
+                typedText,
                 submit: true,
                 panelID: panelID,
                 focusPolicy: .preserveFirstResponder
@@ -3485,7 +4516,10 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery_uncertain",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, deliveryMode: recordedDeliveryMode)
+                recordPendingSend(
+                    request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
+                    deliveryMode: recordedDeliveryMode
+                )
                 broadcastSessionList()
                 return .uncertain
             case .delivered:
@@ -3496,7 +4530,14 @@ final class RemoteAccessService: ObservableObject {
                     source: "remote_delivery",
                     previous: previous
                 )
-                recordPendingSend(request, for: conversationID, deliveredText: deliveredText, deliveryMode: recordedDeliveryMode)
+                recordPendingSend(
+                    request,
+                    for: conversationID,
+                    deliveredText: typedText,
+                    startedAt: deliveryStartedAt,
+                    deliveryMode: recordedDeliveryMode,
+                    consumedPromptEpoch: epoch
+                )
                 broadcastSessionList()
                 return .accepted(epoch: epoch)
             }
@@ -3607,24 +4648,38 @@ final class RemoteAccessService: ObservableObject {
     /// rather than once per keystroke; the trailing publish always carries the
     /// epoch after the last keystroke.
     private func scheduleLocalDraftEpochBroadcast() {
-        guard isEnabled, localDraftEpochBroadcastTask == nil else { return }
+        guard isTrackingConversations, localDraftEpochBroadcastTask == nil else { return }
         localDraftEpochBroadcastTask = Task { @MainActor [weak self] in
             guard let interval = self?.localDraftEpochBroadcastInterval else { return }
             try? await Task.sleep(for: interval)
             guard let self, Task.isCancelled == false else { return }
             self.localDraftEpochBroadcastTask = nil
-            guard self.isEnabled else { return }
+            guard self.isTrackingConversations else { return }
             self.broadcastSessionList()
         }
     }
 
+    /// Sends the session list when the task board a client sees changed.
+    /// A board change often repeats one the session list already carried,
+    /// such as a pull request answer that did not change its state.
+    private func scheduleTaskBoardBroadcast() {
+        guard isEnabled, taskBoardBroadcastTask == nil else { return }
+        taskBoardBroadcastTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, Task.isCancelled == false else { return }
+            self.taskBoardBroadcastTask = nil
+            guard self.isEnabled, self.makeTaskBoard() != self.lastBroadcastTaskBoard else { return }
+            self.scheduleSessionListBroadcast()
+        }
+    }
+
     private func scheduleSessionListBroadcast() {
-        guard isEnabled, sessionListBroadcastTask == nil else { return }
+        guard isTrackingConversations, sessionListBroadcastTask == nil else { return }
         sessionListBroadcastTask = Task { @MainActor [weak self] in
             await Task.yield()
             guard let self, Task.isCancelled == false else { return }
             self.sessionListBroadcastTask = nil
-            guard self.isEnabled else { return }
+            guard self.isTrackingConversations else { return }
             self.broadcastSessionList()
         }
     }
@@ -3633,12 +4688,21 @@ final class RemoteAccessService: ObservableObject {
         _ request: RemoteMessageSendRequest,
         for conversationID: RemoteConversationID,
         deliveredText: String? = nil,
+        startedAt: Date,
         confirmationTimeout: Duration? = nil,
-        deliveryMode: RemoteMessageDeliveryMode = .prompt
+        deliveryMode: RemoteMessageDeliveryMode = .prompt,
+        consumedPromptEpoch: RemoteInputEpoch? = nil
     ) {
         precondition(request.conversationID == conversationID)
         let confirmationTimeout = confirmationTimeout ?? sendConfirmationTimeout
-        pendingSendCorrelator.record(request, deliveredText: deliveredText, deliveryMode: deliveryMode)
+        // Claude's file timestamps share the local clock at millisecond
+        // precision. The resumed prompt can open while its file still replays
+        // earlier user messages. Only input recorded after delivery began can
+        // settle this send.
+        pendingSendCorrelator.record(
+            request, deliveredText: deliveredText, deliveryMode: deliveryMode,
+            earliestEchoAt: startedAt.addingTimeInterval(-0.001)
+        )
         let clientRequestID = request.clientRequestID
         let key = PendingSendConfirmationKey(
             conversationID: conversationID,
@@ -3661,7 +4725,8 @@ final class RemoteAccessService: ObservableObject {
         }
         pendingSendConfirmationWork[key] = PendingSendConfirmationWork(
             acceptedAt: acceptedAt,
-            task: task
+            task: task,
+            consumedPromptEpoch: consumedPromptEpoch
         )
     }
 
@@ -3669,7 +4734,7 @@ final class RemoteAccessService: ObservableObject {
     /// a Codex turn that started after the send is still running and the
     /// send can still match its user message.
     private func codexTurnConfirmationExtension(for key: PendingSendConfirmationKey) -> Duration? {
-        guard isEnabled,
+        guard isTrackingConversations,
               var work = pendingSendConfirmationWork[key],
               let turnID = work.runningCodexTurnID,
               pendingSendCorrelator.contains(clientRequestID: key.clientRequestID, for: key.conversationID) else {
@@ -3693,7 +4758,7 @@ final class RemoteAccessService: ObservableObject {
     /// Reports the send unconfirmed. When only the deadline passed, a late
     /// echo may still confirm it.
     private func expireUnconfirmedSend(_ key: PendingSendConfirmationKey, allowingLateEcho: Bool) {
-        guard isEnabled,
+        guard isTrackingConversations,
               let work = pendingSendConfirmationWork.removeValue(forKey: key) else {
             return
         }
@@ -3712,18 +4777,79 @@ final class RemoteAccessService: ObservableObject {
             clientRequestID: key.clientRequestID,
             at: Date()
         )
-        guard emitted.isEmpty == false else { return }
-        let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
+        if emitted.isEmpty == false {
+            let latencyMs = max(0, Int(Date().timeIntervalSince(work.acceptedAt) * 1_000))
+            ToasttyLog.warning(
+                "Remote send was not confirmed by the provider transcript",
+                category: .automation,
+                metadata: [
+                    "conversation_id": conversationID.rawValue.uuidString,
+                    "latency_ms": String(latencyMs),
+                    "waited_for_codex_turn": String(work.isWaitingForCodexTurn),
+                ]
+            )
+            broadcastEvents(emitted, for: conversationID)
+        }
+        // Only the deadline's own expiry means that no turn was seen. The
+        // other callers settle a send whose Codex turn ran.
+        if allowingLateEcho, let consumedEpoch = work.consumedPromptEpoch {
+            reopenPromptAfterLostSend(consumedEpoch: consumedEpoch, for: conversationID)
+        }
+    }
+
+    /// A delivered send starts a turn, and the end of that turn opens the
+    /// next prompt. When the send's deadline passes and the provider showed
+    /// no turn, nothing else would open the prompt: every later message,
+    /// from the Mac or a phone, would wait for good. Open the prompt under a
+    /// new epoch instead, so the next message can be typed.
+    ///
+    /// This happens only while the provider still shows the prompt that the
+    /// send consumed and the agent's session is at rest. A turn that started
+    /// late closes the new prompt as any turn does. The lost message stays
+    /// processed: Toastty never types it a second time. Toastty cannot read
+    /// the agent's composer, so text that the agent kept there is submitted
+    /// with the next message.
+    private func reopenPromptAfterLostSend(
+        consumedEpoch: RemoteInputEpoch,
+        for conversationID: RemoteConversationID
+    ) {
+        guard projectionStore.projectorState(for: conversationID)?.inputAvailability
+                == .openPrompt(epoch: consumedEpoch),
+              let sessionID = activeSessionIDByConversationID[conversationID],
+              let session = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            return
+        }
+        // The agent's status can report a turn before the conversation does.
+        switch session.status?.kind {
+        case .working, .needsApproval:
+            return
+        case .idle, .ready, .error, nil:
+            break
+        }
+        let emitted = projectionStore.reopenPromptAfterLostSend(
+            for: conversationID,
+            expectedEpoch: consumedEpoch,
+            at: Date()
+        )
+        guard emitted.isEmpty == false,
+              case .openPrompt(let reopenedEpoch)? = projectionStore.projectorState(for: conversationID)?.inputAvailability else {
+            return
+        }
+        // A prompt opened from the native binding keeps its send-time checks.
+        if bootstrappedPromptAuthorityByConversationID[conversationID]?.inputEpoch == consumedEpoch {
+            bootstrappedPromptAuthorityByConversationID[conversationID]?.inputEpoch = reopenedEpoch
+        }
+        syncCoordinatorAvailability(for: conversationID)
         ToasttyLog.warning(
-            "Remote send was not confirmed by the provider transcript",
+            "Opened the prompt again after a send that started no turn",
             category: .automation,
             metadata: [
                 "conversation_id": conversationID.rawValue.uuidString,
-                "latency_ms": String(latencyMs),
-                "waited_for_codex_turn": String(work.isWaitingForCodexTurn),
+                "session_id": sessionID,
             ]
         )
         broadcastEvents(emitted, for: conversationID)
+        drainSendQueue(for: conversationID)
     }
 
     /// Codex starts a turn before it records the turn's user message. Track a
@@ -3787,7 +4913,8 @@ final class RemoteAccessService: ObservableObject {
     /// reverts to origin=.unknown, which is acceptable runtime enrichment.
     private func stampPendingSends(
         _ observations: [ProviderTranscriptObservation],
-        for conversationID: RemoteConversationID
+        for conversationID: RemoteConversationID,
+        usesClaudeFileTimestamps: Bool = false
     ) -> [ProviderTranscriptObservation] {
         if let sessionID = activeSessionIDByConversationID[conversationID],
            let panelID = panelIDByConversationID[conversationID] {
@@ -3800,7 +4927,9 @@ final class RemoteAccessService: ObservableObject {
         // ends without the send must settle it before a later user message in
         // the same batch can match it.
         for observation in observations {
-            let observation = pendingSendCorrelator.stamp([observation], for: conversationID)[0]
+            let observation = pendingSendCorrelator.stamp(
+                [observation], for: conversationID, usesClaudeFileTimestamps: usesClaudeFileTimestamps
+            )[0]
             stamped.append(observation)
             if case .transcript(.userMessage(let payload)) = observation.payload {
                 var submittedOnMac = true
@@ -3901,9 +5030,24 @@ final class RemoteAccessService: ObservableObject {
             )
     }
 
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest,
+        device: RemoteDeviceRecord
+    ) -> RemoteTaskCreateOptionsResponse {
+        guard var response = taskCreator?.options(device: device) else {
+            return RemoteTaskCreateOptionsResponse(
+                permission: RemoteGatewayRequestHandler.sessionStartPermission(for: device)
+            )
+        }
+        // The New Task sheet sends to the coordinator while one exists.
+        response.coordinator = coordinatorSender?.state()
+        return response
+    }
+
     /// Models that this provider's listed sessions report, most recently
-    /// active first, without repeats.
-    private func recentModels(for provider: AgentKind) -> [String] {
+    /// active first, without repeats. Sessions report a model only while
+    /// remote access is on.
+    func recentModels(for provider: AgentKind) -> [String] {
         var seen: Set<String> = []
         return buildConversationSummaries()
             .filter { $0.provider == provider }
@@ -3951,6 +5095,25 @@ final class RemoteAccessService: ObservableObject {
             action: .deviceScopesChanged,
             deviceID: deviceID,
             detail: enabled ? "approve_enabled" : "approve_disabled"
+        ))
+        deviceManagementError = nil
+        refreshDevices()
+    }
+
+    func setDeviceTaskActions(_ enabled: Bool, for deviceID: UUID) {
+        guard let device = deviceStore.devices.first(where: { $0.id == deviceID }),
+              device.isRevoked == false else { return }
+        do {
+            guard try deviceStore.setTaskActionsEnabled(enabled, forDevice: deviceID) else { return }
+        } catch {
+            reportDeviceManagementFailure("Could not update device permissions", error: error)
+            return
+        }
+        auditLog.record(RemoteAccessAuditEntry(
+            at: Date(),
+            action: .deviceScopesChanged,
+            deviceID: deviceID,
+            detail: enabled ? "task_actions_enabled" : "task_actions_disabled"
         ))
         deviceManagementError = nil
         refreshDevices()
@@ -4078,13 +5241,279 @@ final class RemoteAccessService: ObservableObject {
     }
 }
 
+// MARK: - In-app conversation access
+
+extension RemoteAccessService: LocalConversationAccess {
+    func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability? {
+        guard let conversationID = conversationIDByPanelID[panelID],
+              activeSessionIDByConversationID[conversationID] == sessionID else {
+            return nil
+        }
+        return coordinator.availability(for: conversationID)
+    }
+
+    func subscribeToConversation(inPanel panelID: UUID) -> any LocalConversationSubscription {
+        let id = UUID()
+        let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        localSubscriptions[id] = LocalSubscriptionState(panelID: panelID, changes: continuation)
+        // The gateway already tracks every panel. With it off, this
+        // subscription is what makes the panel tracked.
+        if isEnabled == false {
+            beginConversationTracking()
+            syncConversations()
+        }
+        localSubscriptions[id]?.publishedSummary = localSummary(
+            forPanel: panelID, in: scanConversationCandidates(mintingIDs: false)
+        )
+        return ServiceConversationSubscription(service: self, id: id, panelID: panelID, changes: changes)
+    }
+
+    fileprivate func cancelLocalSubscription(_ id: UUID) {
+        guard let removed = localSubscriptions.removeValue(forKey: id) else { return }
+        removed.changes.finish()
+        let panelID = removed.panelID
+        guard localSubscriptions.values.contains(where: { $0.panelID == panelID }) == false else { return }
+        // Nothing on the Mac holds the panel now, so a message the Mac
+        // queued for it must not be typed later.
+        dropQueuedSends(where: { entry, conversationID in
+            entry.origin == .mac && self.panelIDByConversationID[conversationID] == panelID
+        }, outcome: "subscription_cancelled")
+        guard isEnabled == false else { return }
+        if isTrackingConversations {
+            // Other subscribers remain. The sync stops tracking this panel.
+            syncConversations()
+        } else {
+            endConversationTracking()
+        }
+    }
+
+    fileprivate func localConversationID(subscriptionID: UUID) -> RemoteConversationID? {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID else { return nil }
+        return conversationIDByPanelID[panelID]
+    }
+
+    fileprivate func localFollowedSince(subscriptionID: UUID) -> Date? {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID else { return nil }
+        let subscribed = localSubscriptions.values.filter { $0.panelID == panelID }.map(\.since)
+        return (subscribed + [gatewayFollowsPanelsSince].compactMap { $0 }).min()
+    }
+
+    fileprivate func transcriptReadID(subscriptionID: UUID) -> UUID? {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return nil }
+        return tailersByConversationID[conversationID]?.id
+    }
+
+    fileprivate func isReadingInitialTranscript(subscriptionID: UUID) -> Bool {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return false }
+        return tailersByConversationID[conversationID]?.isReadingInitialContent ?? false
+    }
+
+    fileprivate func awaitsSendConfirmation(clientRequestID: String, subscriptionID: UUID) -> Bool {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else { return false }
+        return pendingSendConfirmationWork[.init(
+            conversationID: conversationID, clientRequestID: clientRequestID
+        )] != nil
+    }
+
+    fileprivate func localSnapshot(subscriptionID: UUID, at date: Date) -> RemoteConversationSnapshot? {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID,
+              let summary = localSummary(
+                  forPanel: panelID, in: scanConversationCandidates(mintingIDs: false)
+              ) else { return nil }
+        guard var snapshot = projectionStore.conversationSnapshot(for: summary.conversationID, at: date) else {
+            return RemoteConversationSnapshot(summary: summary, pendingInteractions: [])
+        }
+        snapshot.summary = summary
+        return snapshot
+    }
+
+    fileprivate func localEvents(
+        subscriptionID: UUID,
+        after cursor: ConversationEventCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else {
+            return .conversationNotFound
+        }
+        return projectionStore.conversationEvents(for: conversationID, after: cursor, limit: limit)
+    }
+
+    fileprivate func localEvents(
+        subscriptionID: UUID,
+        before cursor: ConversationEventBackwardCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        guard let conversationID = localConversationID(subscriptionID: subscriptionID) else {
+            return .conversationNotFound
+        }
+        return projectionStore.conversationEvents(for: conversationID, before: cursor, limit: limit)
+    }
+
+    /// The only place that gives a send the Mac as its origin. It is
+    /// reachable through a subscription object alone, so only code in this
+    /// process can call it.
+    fileprivate func sendLocal(
+        _ request: RemoteMessageSendRequest,
+        subscriptionID: UUID,
+        byUser: Bool
+    ) -> RemoteMessageSendResult {
+        let result: RemoteMessageSendResult
+        if let panelID = localSubscriptions[subscriptionID]?.panelID,
+           panelIDByConversationID[request.conversationID] == panelID {
+            result = performSend(request, origin: .mac(byUser: byUser))
+        } else {
+            // The subscription ended, or the request names the conversation
+            // of a panel this subscription does not hold.
+            result = .rejected(reason: .notBound)
+        }
+        ToasttyLog.info(
+            "Local conversation send evaluated",
+            category: .automation,
+            metadata: [
+                "conversation_id": request.conversationID.rawValue.uuidString,
+                "client_request_id": request.clientRequestID,
+                "delivery_mode": request.deliveryMode.rawValue,
+                "by_user": String(byUser),
+                "gateway_enabled": String(isEnabled),
+                "result": String(describing: result),
+            ]
+        )
+        return result
+    }
+
+    /// Stops the running turn for an in-app caller, under the turn check of
+    /// a phone's Stop. Like `sendLocal`, it needs a live subscription that
+    /// holds the panel of the request's conversation.
+    fileprivate func interruptLocal(
+        _ request: RemoteConversationInterruptRequest,
+        subscriptionID: UUID
+    ) -> RemoteConversationInterruptResult {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID,
+              panelIDByConversationID[request.conversationID] == panelID else {
+            return .rejected(reason: .notBound)
+        }
+        return performInterrupt(request, origin: .mac(byUser: true))
+    }
+
+    fileprivate func localStopHandler(subscriptionID: UUID) -> (@MainActor () -> Void)? {
+        localSubscriptions[subscriptionID]?.onStop
+    }
+
+    fileprivate func setLocalStopHandler(_ handler: (@MainActor () -> Void)?, subscriptionID: UUID) {
+        localSubscriptions[subscriptionID]?.onStop = handler
+    }
+
+    /// Reopens a prompt that a draft in the terminal holds closed, for an
+    /// in-app caller. Nothing is typed.
+    fileprivate func releaseLocalDraftLocal(
+        _ request: RemoteConversationLocalDraftReleaseRequest,
+        subscriptionID: UUID
+    ) -> RemoteConversationLocalDraftReleaseResult {
+        guard let panelID = localSubscriptions[subscriptionID]?.panelID,
+              panelIDByConversationID[request.conversationID] == panelID else {
+            return .rejected(reason: .notBound)
+        }
+        return performLocalDraftRelease(request, origin: .mac(byUser: true))
+    }
+}
+
+/// The subscription a caller holds. It forwards to the service, which
+/// refuses every call once the subscription is cancelled.
+@MainActor
+private final class ServiceConversationSubscription: LocalConversationSubscription {
+    let panelID: UUID
+    let changes: AsyncStream<Void>
+    private let id: UUID
+    private weak var service: RemoteAccessService?
+
+    init(service: RemoteAccessService, id: UUID, panelID: UUID, changes: AsyncStream<Void>) {
+        self.service = service
+        self.id = id
+        self.panelID = panelID
+        self.changes = changes
+    }
+
+    // A subscription that is released without `cancel()` must not keep the
+    // panel tracked.
+    deinit {
+        Task { @MainActor [service, id] in
+            service?.cancelLocalSubscription(id)
+        }
+    }
+
+    var conversationID: RemoteConversationID? {
+        service?.localConversationID(subscriptionID: id)
+    }
+
+    var followedSince: Date? {
+        service?.localFollowedSince(subscriptionID: id)
+    }
+
+    var transcriptReadID: UUID? {
+        service?.transcriptReadID(subscriptionID: id)
+    }
+
+    var isReadingInitialTranscript: Bool {
+        service?.isReadingInitialTranscript(subscriptionID: id) ?? false
+    }
+
+    func awaitsSendConfirmation(clientRequestID: String) -> Bool {
+        service?.awaitsSendConfirmation(clientRequestID: clientRequestID, subscriptionID: id) ?? false
+    }
+
+    func snapshot(at date: Date) -> RemoteConversationSnapshot? {
+        service?.localSnapshot(subscriptionID: id, at: date)
+    }
+
+    func events(after cursor: ConversationEventCursor?, limit: Int) -> ConversationEventPageOutcome {
+        service?.localEvents(subscriptionID: id, after: cursor, limit: limit) ?? .conversationNotFound
+    }
+
+    func events(before cursor: ConversationEventBackwardCursor?, limit: Int) -> ConversationEventPageOutcome {
+        service?.localEvents(subscriptionID: id, before: cursor, limit: limit) ?? .conversationNotFound
+    }
+
+    func send(_ request: RemoteMessageSendRequest, byUser: Bool) -> RemoteMessageSendResult {
+        service?.sendLocal(request, subscriptionID: id, byUser: byUser) ?? .rejected(reason: .notBound)
+    }
+
+    func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult {
+        service?.interruptLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
+    }
+
+    var onStop: (@MainActor () -> Void)? {
+        get { service?.localStopHandler(subscriptionID: id) }
+        set { service?.setLocalStopHandler(newValue, subscriptionID: id) }
+    }
+
+    func releaseLocalDraft(
+        _ request: RemoteConversationLocalDraftReleaseRequest
+    ) -> RemoteConversationLocalDraftReleaseResult {
+        service?.releaseLocalDraftLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
+    }
+
+    func cancel() {
+        service?.cancelLocalSubscription(id)
+    }
+}
+
 extension RemoteAccessService: SessionRemoteInputProbe {
-    /// Phone input is rare, so each write also drops panels that are gone.
-    private func recordRemoteInput(panelID: UUID) {
+    /// Input that Toastty typed for a phone or for an in-app sender. It is
+    /// rare, so each write also drops panels that are gone. `byUserNow` is
+    /// false when Toastty delivers a message that was queued earlier, and
+    /// when an in-app sender that is not a person sends one.
+    private func recordRemoteInput(panelID: UUID, byUserNow: Bool = true) {
         lastRemoteInputAtByPanelID = lastRemoteInputAtByPanelID.filter {
             store.state.workspaceSelection(containingPanelID: $0.key) != nil
         }
-        lastRemoteInputAtByPanelID[panelID] = Date()
+        lastRemoteUserInputAtByPanelID = lastRemoteUserInputAtByPanelID.filter {
+            store.state.workspaceSelection(containingPanelID: $0.key) != nil
+        }
+        let now = Date()
+        lastRemoteInputAtByPanelID[panelID] = now
+        if byUserNow {
+            lastRemoteUserInputAtByPanelID[panelID] = now
+        }
     }
 
     func hasRemoteInput(panelID: UUID, since date: Date) -> Bool {
@@ -4098,5 +5527,9 @@ extension RemoteAccessService: SessionRemoteInputProbe {
                 && (sendQueue.entries(for: conversationID).isEmpty == false
                     || pendingSendCorrelator.conversationIDs.contains(conversationID))
         }
+    }
+
+    func lastRemoteUserInputAt(panelID: UUID) -> Date? {
+        lastRemoteUserInputAtByPanelID[panelID]
     }
 }

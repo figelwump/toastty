@@ -19,6 +19,8 @@ final class SidebarScrollGeometry: ObservableObject {
     // Drag handlers need current geometry even when the pill result is unchanged.
     var sessionRowFrames: [RowID: CGRect] = [:] { didSet { refreshPills() } }
     var sessionGroupFrames: [RowID: CGRect] = [:]
+    /// Each project card's frame, for dragging cards into a new order.
+    var workspaceRowFrames: [UUID: CGRect] = [:]
     var subspaceFrames: [SidebarSubspaceFrameID: CGRect] = [:] { didSet { refreshPills() } }
     var viewportHeight: CGFloat = 0 { didSet { refreshPills() } }
     private var content = Content()

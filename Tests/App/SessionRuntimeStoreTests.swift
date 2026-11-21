@@ -7,6 +7,95 @@ import Testing
 
 @MainActor
 struct SessionRuntimeStoreTests {
+    /// The store keeps each workspace's statuses between reads. The
+    /// registry publishes before it changes, so a reader that the publisher
+    /// calls reads the old statuses; the next read must give the new ones.
+    /// A resume grace period ends with no change of the registry at all.
+    @Test func workspaceStatusesFollowTheRegistryAndTheResumeGracePeriod() {
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        let workspaceID = UUID()
+        let start = Date(timeIntervalSince1970: 1_786_000_000)
+        store.startSession(
+            sessionID: "agent", agent: .claude, panelID: UUID(),
+            windowID: UUID(), workspaceID: workspaceID, codexStatusTrackingSource: .externallyReported,
+            cwd: "/repo", repoRoot: "/repo", at: start
+        )
+        func kind(after seconds: TimeInterval) -> SessionStatusKind? {
+            store.workspaceStatuses(for: workspaceID, at: start.addingTimeInterval(seconds)).first?.status.kind
+        }
+        var readByPublisher: [SessionStatusKind?] = []
+        var time: TimeInterval = 0
+        let subscription = store.$sessionRegistry.dropFirst().sink { _ in readByPublisher.append(kind(after: time)) }
+        defer { subscription.cancel() }
+
+        time = 1
+        store.updateStatus(sessionID: "agent", status: SessionStatus(kind: .working, summary: "Working"), at: start.addingTimeInterval(1))
+        #expect(readByPublisher == [nil])
+        #expect(kind(after: 1) == .working)
+        let working = store.workspaceStatusGeneration(at: start.addingTimeInterval(1))
+        #expect(store.workspaceStatusGeneration(at: start.addingTimeInterval(1.5)) == working)
+
+        time = 2
+        store.updateStatus(sessionID: "agent", status: SessionStatus(kind: .ready, summary: "Ready"), at: start.addingTimeInterval(2))
+        #expect(readByPublisher == [nil, .working])
+        #expect(kind(after: 2) == .ready)
+        #expect(store.workspaceStatusGeneration(at: start.addingTimeInterval(2)) != working)
+
+        // A background activity that finishes after the turn starts a
+        // resume grace period: the row shows working until it ends.
+        time = 3
+        _ = store.updateBackgroundActivity(
+            sessionID: "agent",
+            activity: SessionBackgroundActivity(
+                id: "helper", kind: .subagent,
+                startedAt: start.addingTimeInterval(3), lastUpdatedAt: start.addingTimeInterval(3)
+            ),
+            at: start.addingTimeInterval(3)
+        )
+        time = 4
+        _ = store.finishBackgroundActivity(sessionID: "agent", activityID: "helper", at: start.addingTimeInterval(4))
+        let graceEnd = 4 + SessionRegistry.resumeProjectionGraceInterval
+        #expect(kind(after: 5) == .working)
+        let resuming = store.workspaceStatusGeneration(at: start.addingTimeInterval(5))
+        #expect(kind(after: graceEnd - 0.001) == .working)
+        #expect(store.workspaceStatusGeneration(at: start.addingTimeInterval(graceEnd - 0.001)) == resuming)
+        #expect(kind(after: graceEnd) == .ready)
+        #expect(store.workspaceStatusGeneration(at: start.addingTimeInterval(graceEnd)) != resuming)
+    }
+
+    /// Claude Code's idle reminder reports Ready a minute after any turn.
+    /// After a turn that an API error ended, the session keeps the failure
+    /// until the next turn; the next turn's own end reads as usual.
+    @Test func claudeIdleReminderDoesNotHideAFailedTurn() {
+        let store = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        let sessionID = "sess-failed-turn"
+        let date = Date(timeIntervalSince1970: 1_786_000_000)
+        store.startSession(
+            sessionID: sessionID, agent: .claude, panelID: UUID(),
+            windowID: UUID(), workspaceID: UUID(), codexStatusTrackingSource: .externallyReported,
+            cwd: "/repo", repoRoot: "/repo", at: date
+        )
+        func report(_ kind: SessionStatusKind, _ summary: String, _ detail: String, after seconds: TimeInterval) {
+            store.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: kind, summary: summary, detail: detail),
+                at: date.addingTimeInterval(seconds)
+            )
+        }
+        var status: SessionStatus? { store.sessionRegistry.activeSession(sessionID: sessionID)?.status }
+
+        report(.working, "Working", "Responding to your prompt", after: 1)
+        report(.error, "Error", "API Error: Rate limit reached", after: 2)
+        report(.ready, "Ready", "Claude is waiting for your input", after: 62)
+        #expect(status == SessionStatus(kind: .error, summary: "Error", detail: "API Error: Rate limit reached"))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.lastTurnEndedAt == date.addingTimeInterval(2))
+
+        report(.working, "Working", "Responding to your prompt", after: 70)
+        report(.ready, "Ready", "Done", after: 75)
+        #expect(status?.kind == .ready)
+        #expect(status?.detail == "Done")
+    }
+
     /// Providers save their generated title before the first turn ends.
     /// The row should update while the status remains working.
     @Test(arguments: [AgentKind.claude, .codex, .grok])

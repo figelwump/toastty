@@ -41,6 +41,18 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
 #if DEBUG
     let pushFixtureMode: ToasttyPushFixtureMode?
     let entryLoadFixture: ToasttyConversationFixture.EntryLoad?
+    /// The fixture Mac sends a task board, as one with the task system does:
+    /// "1" for one with work in every state, "quiet" for one where nothing
+    /// needs the user, "long-names" for one whose names are long, "families"
+    /// for parent tasks that wait on other tasks with their nested tasks.
+    let taskFixture: String?
+    /// The fixture Mac has a coordinator workspace, and its session is in
+    /// this state: "quiet", "working", "unread", "approval", "error", or
+    /// "not-running" for a workspace without a session.
+    let coordinatorFixture: String?
+    /// Buttons that deliver a notification tap, for the coordinator's
+    /// session and for a Home session.
+    let showsNotificationTapButtons: Bool
 #endif
     let enablesSystemAppIconBadge: Bool
 
@@ -68,6 +80,10 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             ? environment["TOASTTY_MOBILE_FIXTURE_NOTIFICATIONS"].flatMap(ToasttyPushFixtureMode.init(rawValue:)) : nil
         entryLoadFixture = runtimeMode == .fixture
             ? environment["TOASTTY_MOBILE_FIXTURE_ENTRY_LOAD"].flatMap(ToasttyConversationFixture.EntryLoad.init(rawValue:)) : nil
+        taskFixture = runtimeMode == .fixture ? environment["TOASTTY_MOBILE_FIXTURE_TASKS"] : nil
+        coordinatorFixture = runtimeMode == .fixture ? environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR"] : nil
+        showsNotificationTapButtons = runtimeMode == .fixture
+            && environment["TOASTTY_MOBILE_FIXTURE_NOTIFICATION_TAPS"] == "1"
 #endif
         if runtimeMode == .fixture {
             fixtureScenario = environment["TOASTTY_MOBILE_FIXTURE_SCENARIO"]
@@ -97,6 +113,18 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     var initialSnapshot: MobileHomeSnapshot {
 #if DEBUG
         if entryLoadFixture != nil { return ToasttyConversationFixture.entryLoadHome() }
+        if let coordinatorFixture, let base = fixtureSnapshot {
+            let status: RemoteSessionPresentationStatus? = switch coordinatorFixture {
+            case "working": .working
+            case "unread": .ready
+            case "approval": .needsApproval
+            case "error": .error
+            case "not-running": nil
+            default: .idle
+            }
+            return ToasttyMobileFixture.withCoordinator(base, status: status, chatRead: fixtureCoordinatorChatRead)
+        }
+        if let fixtureSnapshot { return fixtureSnapshot }
 #endif
         return switch runtimeMode {
         case .fixture:
@@ -107,6 +135,43 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             MobileHomeSnapshot(hostName: url.host ?? "Toastty Mac", workspaces: [])
         }
     }
+
+#if DEBUG
+    /// The fixture Mac's read point of the coordinator's chat:
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH=<n>` reads through
+    /// the fixture chat's event `n`, or with a negative `n`, through the
+    /// event `-n` before the chat's end.
+    private var fixtureCoordinatorChatRead: RemoteCoordinatorChatReadPoint? {
+        let environment = ProcessInfo.processInfo.environment
+        guard let value = environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_READ_THROUGH"],
+              var sequence = Int(value) else { return nil }
+        // The chat as the fixture shows it, so that the end is its end.
+        let events = ToasttyConversationFixture.coordinatorEvents(
+            for: ToasttyMobileFixture.coordinatorConversationID,
+            hasLongMessage: environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
+            quietTurns: ["1", "unsupported"].contains(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS"] ?? "")
+                ? .shared : .none,
+            attachedImages: ["1", "unsupported"].contains(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES"] ?? ""),
+            wakeTurns: Int(environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? "") ?? 0
+        )
+        // A negative value counts from the chat's end.
+        if sequence < 0 { sequence += events.count }
+        guard events.indices.contains(sequence - 1) else { return nil }
+        let event = events[sequence - 1]
+        return RemoteCoordinatorChatReadPoint(eventID: event.eventID, timestamp: event.timestamp)
+    }
+
+    /// The fixture Mac's snapshot before any coordinator: with the task
+    /// system when `taskFixture` names a board, otherwise `home`.
+    private var fixtureSnapshot: MobileHomeSnapshot? {
+        if taskFixture == "1" { return ToasttyMobileFixture.taskHome }
+        if taskFixture == "quiet" { return ToasttyMobileFixture.quietTaskHome }
+        if taskFixture == "pick-workspace" { return ToasttyMobileFixture.pickWorkspaceTaskHome }
+        if taskFixture == "long-names" { return ToasttyMobileFixture.longNamesTaskHome }
+        if taskFixture == "families" { return ToasttyMobileFixture.familiesTaskHome }
+        return runtimeMode == .fixture && coordinatorFixture != nil ? ToasttyMobileFixture.home : nil
+    }
+#endif
 
     var initialConnectionState: MobileConnectionState {
         switch fixtureScenario {

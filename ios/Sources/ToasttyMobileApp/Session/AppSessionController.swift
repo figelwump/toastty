@@ -32,6 +32,8 @@ protocol AppLiveSessionsControlling: AnyObject {
     func background(lifecycleSequence: UInt64) async -> Duration?
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
     func stopObserving()
+    /// The app became active, or stopped being active.
+    func sceneActivityChanged(isActive: Bool)
 }
 
 extension LiveSessionsController: AppLiveSessionsControlling {
@@ -46,6 +48,7 @@ extension AppLiveSessionsControlling {
     var supportsPushNotifications: Bool { false }
     var connectionGeneration: UInt64 { 0 }
     func composerPresentation(for conversation: MobileConversation) -> ToasttyComposerPresentation? { nil }
+    func sceneActivityChanged(isActive: Bool) {}
 }
 
 typealias AppLiveSessionsFactory = @MainActor (
@@ -92,11 +95,15 @@ final class AppSessionController {
 
     /// Unknown data must not clear the badge retained by iOS. Count only a
     /// complete live projection, or explicitly clear when pairing is unusable.
+    /// While the Mac runs the task system, the badge shows the yellow number
+    /// on Home's Needs you switcher: the sessions, task spaces and tasks that
+    /// need the user, without those that only wait for a review.
     var appIconBadgeCount: Int? {
         switch state {
         case .paired(.live):
             homeController.freshness == .live
-                ? homeController.sessionsNeedingAttention().count
+                ? MobileHomeBuckets.needsYouCounts(in: homeController.snapshot)?.needsYou
+                    ?? homeController.sessionsNeedingAttention().count
                 : nil
         case .restoring, .keychainLocked, .repairNeeded(.unavailable),
              .paired(.connecting), .paired(.reconnecting), .paired(.unreachable):
@@ -124,6 +131,13 @@ final class AppSessionController {
             let resource = try await client.previewResource(request)
             guard await vault.currentGeneration() == generation else { throw RemotePreviewError.stale }
             return resource
+        }, attachmentImage: { request in
+            let generation = await vault.currentGeneration()
+            let image = try await client.coordinatorAttachmentImage(request)
+            guard await vault.currentGeneration() == generation, let data = image.data else {
+                throw RemotePreviewError.stale
+            }
+            return data
         })
     }
 
@@ -445,9 +459,11 @@ final class AppSessionController {
 
     func sceneBecameInactive() {
         pairingController?.sceneBecameInactive()
+        liveController?.sceneActivityChanged(isActive: false)
     }
 
     func sceneEnteredBackground() {
+        liveController?.sceneActivityChanged(isActive: false)
         pushController?.enteredBackground()
         isSceneBackgrounded = true
         sceneBackgroundedAt = .now
@@ -516,6 +532,7 @@ final class AppSessionController {
     }
 
     func sceneBecameActive() {
+        liveController?.sceneActivityChanged(isActive: true)
         releaseBackgroundHold()
         pushController?.enteredForeground()
         pairingController?.sceneBecameActive()

@@ -137,6 +137,101 @@ struct AgentEventParsersTests {
         #expect(observation.mayAuthorizeCurrentRuntime)
     }
 
+    /// The input that the Claude Code hooks reference gives for StopFailure.
+    @Test
+    func claudeStopFailureEndsTheTurnAsAnError() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"session_id":"abc123","transcript_path":"/Users/.../.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl","cwd":"/Users/...","hook_event_name":"StopFailure","error":"rate_limit","error_details":"429 Too Many Requests","last_assistant_message":"API Error: Rate limit reached"}"#.utf8
+            )
+        )
+
+        #expect(commands.count == 2)
+        #expect(commands.first == .sessionStatus(
+            sessionID: "sess-123",
+            panelID: panelID,
+            kind: .error,
+            summary: "Error",
+            detail: "API Error: Rate limit reached"
+        ))
+        guard case .sessionProviderConversationObservation(
+            let observedSessionID,
+            let observedPanelID,
+            let provider,
+            let nativeSessionID,
+            let snapshotID,
+            let observation
+        ) = commands.last, case .turnEnded(_, let reason) = observation.payload else {
+            Issue.record("Expected the failed turn to end in the conversation")
+            return
+        }
+        #expect(observedSessionID == "sess-123")
+        #expect(observedPanelID == panelID)
+        #expect(provider == .claude)
+        #expect(nativeSessionID == "abc123")
+        #expect(snapshotID == "claude:abc123")
+        // The turn did not complete.
+        #expect(reason == .aborted)
+        #expect(observation.mayAuthorizeCurrentRuntime)
+    }
+
+    @Test
+    func claudeStopFailureWithoutErrorTextStillReportsTheFailure() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"StopFailure","error":"overloaded"}"#.utf8)
+        )
+
+        // Without Claude's session identity, only the status is reported.
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .error,
+                summary: "Error",
+                detail: "Claude Code could not complete the turn"
+            )
+        ])
+    }
+
+    /// Two failed turns are two turn ends: the second one must not be
+    /// dropped as a repeat of the first.
+    @Test
+    func claudeStopFailuresOfTwoTurnsAreDistinctObservations() throws {
+        let payload = Data(#"{"hook_event_name":"StopFailure","session_id":"abc123","error":"overloaded"}"#.utf8)
+        let fingerprints = try (0..<2).map { _ -> String in
+            let commands = try AgentEventIngestor.commands(
+                for: .claudeHooks, sessionID: "sess-123", panelID: nil, payload: payload
+            )
+            guard case .sessionProviderConversationObservation(_, _, _, _, _, let observation) = commands.last else {
+                Issue.record("Expected a conversation observation")
+                return ""
+            }
+            return observation.fingerprint
+        }
+        #expect(fingerprints[0] != fingerprints[1])
+    }
+
+    @Test
+    func claudeStopFailureOfAChildDoesNotEndTheMainTurn() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"StopFailure","session_id":"abc123","agent_id":"agent-7","error":"overloaded","last_assistant_message":"API Error: Overloaded"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
     @Test
     func claudeStopWithRunningSubagentSyncsBeforeReadyStatus() throws {
         let commands = try AgentEventIngestor.commands(

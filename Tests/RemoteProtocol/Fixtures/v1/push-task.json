@@ -1,0 +1,18 @@
+{
+  "aps": {
+    "alert": {
+      "title": "iOS task support asks",
+      "body": "Should the badge count tasks or sessions?"
+    },
+    "sound": "default"
+  },
+  "toastty": {
+    "version": 1,
+    "kind": "task",
+    "registrationID": "fb7b26a7-5b77-4afd-9f30-349d90bd0970",
+    "pairingID": "c0d6d62e-dd0b-4b90-81cd-45083da827ce",
+    "taskID": "5f0c8f2a-3b7e-4c1d-9a6b-2e8d4f1c7a90",
+    "conversationID": "0ab4643d-aeda-43da-96f2-2d04d0e476f0",
+    "eventID": "2c9e7b14-6d3a-4f85-b0e1-7a4c9d2e3f61"
+  }
+}

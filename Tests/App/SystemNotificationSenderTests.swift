@@ -6,7 +6,9 @@ import XCTest
 @MainActor
 final class SystemNotificationSenderTests: XCTestCase {
     override func tearDown() {
-        SystemNotificationSender.resetForTesting()
+        MainActor.assumeIsolated {
+            SystemNotificationSender.resetForTesting()
+        }
         super.tearDown()
     }
 
@@ -146,7 +148,7 @@ final class SystemNotificationSenderTests: XCTestCase {
         var requestAuthorizationCallCount = 0
         var deliveredRequests: [UNNotificationRequest] = []
         var permissionContinuations: [CheckedContinuation<Bool, Never>] = []
-        var permissionGranted = false
+        let permissionGranted = MainActorValue(false)
         let permissionRequested = expectation(description: "Permission request is pending")
         // A duplicate request is reported by the call-count assertion below.
         permissionRequested.assertForOverFulfill = false
@@ -156,7 +158,7 @@ final class SystemNotificationSenderTests: XCTestCase {
                 notificationAuthorizationStatus: { .notDetermined },
                 requestAuthorization: {
                     requestAuthorizationCallCount += 1
-                    if permissionGranted { return true }
+                    if permissionGranted.value { return true }
                     return await withCheckedContinuation { continuation in
                         permissionContinuations.append(continuation)
                         permissionRequested.fulfill()
@@ -189,7 +191,7 @@ final class SystemNotificationSenderTests: XCTestCase {
         // every pending request, and any that starts late, so both sends
         // finish and the assertions report a failure instead of hanging.
         await fulfillment(of: [permissionRequested], timeout: 5)
-        permissionGranted = true
+        permissionGranted.value = true
         permissionContinuations.forEach { $0.resume(returning: true) }
         permissionContinuations.removeAll()
 

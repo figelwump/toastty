@@ -20,6 +20,7 @@ Sources/
 ├── CLI/, CLIKit/  # Bundled `toastty` command-line tool and its command implementations
 ├── AgentShim/     # toastty-agent-shim, the PATH wrapper for typed agent commands
 ├── CodexReconciliation/  # Codex hook, notify, and rollout status reconciliation
+├── ConversationUI/       # SwiftUI conversation transcript views, shared with the iOS client
 └── RemoteProtocol/       # Remote Access protocol models, shared with the iOS client
 ```
 

@@ -46,6 +46,20 @@ enum ToasttyConversationPanels {
         return sections.filter { !$0.panels.isEmpty }
     }
 
+    /// `sections` without the panels that show the coordinator's policy,
+    /// ledger or friction notes from `folder`, for the Coordinator tab's
+    /// menu, which lists those files itself.
+    static func withoutCoordinatorFiles(
+        _ sections: [ToasttyConversationPanelSection], folder: String
+    ) -> [ToasttyConversationPanelSection] {
+        sections.compactMap { section in
+            let panels = section.panels.filter { !ToasttyCoordinatorFile.isShown(by: $0.panel, folder: folder) }
+            return panels.isEmpty ? nil : ToasttyConversationPanelSection(
+                workspaceID: section.workspaceID, workspaceTitle: section.workspaceTitle, panels: panels
+            )
+        }
+    }
+
     private static func section(
         for workspace: MobileWorkspace, including include: (RemoteWorkspacePanel) -> Bool
     ) -> ToasttyConversationPanelSection {

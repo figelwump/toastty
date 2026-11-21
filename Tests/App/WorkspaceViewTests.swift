@@ -7,12 +7,35 @@ import XCTest
 
 final class WorkspaceViewTests: XCTestCase {
     @MainActor
+    func testHeldTabSizeDoesNotWidenVisibleTab() {
+        struct Probe: NSViewRepresentable {
+            let view: NSView
+            func makeNSView(context: Context) -> NSView { view }
+            func updateNSView(_ nsView: NSView, context: Context) {}
+        }
+        let visible = NSView()
+        let background = NSView()
+        let host = NSHostingView(rootView: ZStack(alignment: .topLeading) {
+            Probe(view: visible).modifier(MountedTabViewport(heldWidth: nil))
+            Probe(view: background).modifier(MountedTabViewport(heldWidth: 800))
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 300),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(visible.frame.width, 640)
+        XCTAssertEqual(background.frame.width, 800)
+    }
+
+    @MainActor
     private struct WorkspaceHarness {
         let windowID: UUID
         let workspaceID: UUID
         let panelID: UUID
         let store: AppStore
         let sessionRuntimeStore: SessionRuntimeStore
+        let taskCoordinator: TaskCoordinator?
+        let taskBoard: TaskBoardStore?
         let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
         let terminalRuntimeRegistry: TerminalRuntimeRegistry
         let hostingView: NSView
@@ -216,6 +239,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(opacity, 0.01)
     }
 
+    @MainActor
     func testScratchpadBindingStatusShowsUnboundWithoutSessionLink() {
         XCTAssertEqual(
             PanelCardView.scratchpadBindingStatus(for: nil, sessionRegistry: SessionRegistry()),
@@ -223,6 +247,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadBindingStatusShowsUnboundForStaleSessionLink() {
         let sessionLink = ScratchpadSessionLink(
             sessionID: "stale-session",
@@ -239,6 +264,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadBindingStatusUsesActiveSessionTitle() {
         let panelID = UUID()
         let workspaceID = UUID()
@@ -272,6 +298,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorShowsLiveScratchpadBinding() throws {
         let panelID = UUID()
         let scratchpadPanelID = UUID()
@@ -316,6 +343,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(state.helpText, "Bound to Scratchpad: Agent Notes")
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorCountsPadsAndMarksDefaultIndependentlyOfSelection() throws {
         let panelID = UUID()
         let firstPadID = UUID()
@@ -391,6 +419,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(state.scratchpadPanelID, panelID)
     }
 
+    @MainActor
     func testScratchpadSessionHeaderIncludesRestoredMainSplitScratchpadsWithRightPanelPads() throws {
         let terminalPanelID = UUID()
         let mainPadID = UUID()
@@ -436,6 +465,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(withDefault.entries.map(\.isDefault), [true, false])
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorHidesStaleScratchpadBinding() {
         let panelID = UUID()
         let workspaceID = UUID()
@@ -462,6 +492,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorHidesOtherTerminalBindings() {
         let panelID = UUID()
         let otherPanelID = UUID()
@@ -501,6 +532,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testScratchpadTerminalBindingIndicatorShowsNeutralZeroStateForLiveManagedSession() throws {
         let panelID = UUID()
         let tab = makeTerminalWorkspaceTab(panelID: panelID)
@@ -531,6 +563,7 @@ final class WorkspaceViewTests: XCTestCase {
         ))
     }
 
+    @MainActor
     func testScratchpadSessionHeaderListsUnboundAndOtherLiveOwnersWithinSameTab() throws {
         let panelID = UUID()
         let otherPanelID = UUID()
@@ -658,7 +691,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.renderedRightAuxPanelWidth(
                 for: RightAuxPanelState(isVisible: true, width: 520, hasCustomWidth: true),
-                availableWidth: 1_200,
+                targetWidth: 520,
                 focusedPanelModeActive: false
             ),
             520
@@ -666,7 +699,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.renderedRightAuxPanelWidth(
                 for: RightAuxPanelState(isVisible: false, width: 520, hasCustomWidth: true),
-                availableWidth: 1_200,
+                targetWidth: 520,
                 focusedPanelModeActive: false
             ),
             0
@@ -674,13 +707,14 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.renderedRightAuxPanelWidth(
                 for: RightAuxPanelState(isVisible: true, width: 520, hasCustomWidth: true),
-                availableWidth: 1_200,
+                targetWidth: 520,
                 focusedPanelModeActive: true
             ),
             0
         )
     }
 
+    @MainActor
     func testPrimaryContentWidthSubtractsOnlyTheOwningTabRightPanelWidth() {
         XCTAssertEqual(
             WorkspaceView.primaryContentWidth(
@@ -698,6 +732,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testSplitDividerResizeHandleFrameExpandsHorizontalSplitVertically() {
         let placement = LayoutDividerPlacement(
             nodeID: UUID(),
@@ -713,6 +748,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testSplitDividerResizeHandleFrameExpandsVerticalSplitHorizontally() {
         let placement = LayoutDividerPlacement(
             nodeID: UUID(),
@@ -903,6 +939,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
     }
 
+    @MainActor
     func testRightAuxPanelVisibilityAnimationOnlyRunsForSelectedTabSurface() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
@@ -924,6 +961,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testRightAuxPanelBodyContentMountRequiresSelectedVisibleOwner() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelBodyContentMounted(
@@ -967,6 +1005,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testRightAuxPanelResizeHandleOnlyAppearsForVisibleSelectedTabSurface() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelResizeHandleVisible(
@@ -1024,6 +1063,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testRightAuxPanelResizeHandleSitsLeftOfRightPanelToAvoidWebKitCursorRace() {
         let primaryContentWidth: CGFloat = 840
         let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
@@ -1041,6 +1081,7 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maxX, primaryContentWidth)
     }
 
+    @MainActor
     func testRightAuxPanelResizeHandleNeverOverlapsRightPanelSurfaceAcrossWidths() {
         for primaryContentWidth in [CGFloat](stride(from: 200, through: 1600, by: 137)) {
             let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
@@ -1714,6 +1755,265 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(mergeRequests, [harness.workspaceID])
     }
 
+    /// The real header: stages before review offer Archive, whose alert
+    /// cancels; a review-ready task offers Complete Task, whose alert names
+    /// the kept worktree and cancels; a done task says Done; a pull request
+    /// brings the merge control.
+    @MainActor
+    func testTaskWithoutPullRequestHeaderCancelsArchiveCompleteAndShowsDone() throws {
+        let task = TaskRecord(
+            createdAt: Date(), text: "Investigate a question", title: "Investigate a question",
+            slug: "investigate-question", source: .quickEntry
+        )
+        var mergeRequests: [UUID] = []
+        let harness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            taskRecord: task,
+            configureState: { state, windowID, workspaceID in
+                let parent = WorkspaceState.bootstrap(title: "toastty")
+                state.workspacesByID[parent.id] = parent
+                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+                state.workspacesByID[workspaceID]?.parentWorkspaceID = parent.id
+                state.workspacesByID[workspaceID]?.title = task.title
+                let panelID = try XCTUnwrap(state.workspacesByID[workspaceID]?.focusedPanelID)
+                state.workspacesByID[workspaceID]?.unreadPanelIDs = [panelID]
+            },
+            requestWorkspaceMerge: { workspaceID, _ in mergeRequests.append(workspaceID) }
+        )
+        defer { harness.window.orderOut(nil) }
+        let coordinator = try XCTUnwrap(harness.sessionRuntimeStore.taskCoordinator)
+        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
+
+        let board = try XCTUnwrap(harness.taskBoard)
+        let runtime = harness.sessionRuntimeStore
+        let sessionID = "header-task-agent"
+        runtime.startSession(
+            sessionID: sessionID, agent: .codex, panelID: harness.panelID,
+            windowID: harness.windowID, workspaceID: harness.workspaceID,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        func stage() throws -> TaskStage {
+            try XCTUnwrap(board.items().first { $0.id == .task(task.id) }).stage
+        }
+        /// Clicks the subtitle slot and answers the alert it opens with
+        /// `response`. The timer also runs inside NSAlert's modal loop, so
+        /// the real confirmation runs instead of a replaced one. Returns the
+        /// alert's text.
+        func clickAnsweringAlert(_ response: NSApplication.ModalResponse) throws -> [String] {
+            var dialogText: [String] = []
+            let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let window = NSApp.modalWindow, let content = window.contentView else { return }
+                    dialogText = Self.textFields(in: content)
+                    NSApp.stopModal(withCode: response)
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            RunLoop.main.add(timer, forMode: .modalPanel)
+            defer { timer.invalidate() }
+            try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+            pumpMainRunLoop(duration: 0.2)
+            return dialogText
+        }
+        for state in ["idle", "working", "needs-input", "reply"] {
+            if state == "working" || state == "needs-input" {
+                runtime.updateStatus(
+                    sessionID: sessionID,
+                    status: SessionStatus(kind: state == "working" ? .working : .needsApproval, summary: state),
+                    at: Date()
+                )
+                // Mark ready during the active turn to retain a stale signal.
+                _ = try coordinator.readyForReview(taskID: task.id)
+                XCTAssertNotNil(coordinator.records.record(id: task.id)?.readyForReviewAt)
+                XCTAssertEqual(try stage(), state == "working" ? .running : .needsYou(.agentNeedsInput))
+            }
+            if state == "reply" {
+                runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Waiting"), at: Date())
+                _ = try coordinator.needsReply(taskID: task.id, question: "Which option?")
+                XCTAssertNotNil(coordinator.records.record(id: task.id)?.readyForReviewAt)
+                XCTAssertEqual(try stage(), .needsYou(.awaitingReply))
+            }
+            pumpMainRunLoop(duration: 0.05)
+            try writeTopBarEvidence(harness, name: "topbar-task-archive-\(state)")
+
+            let dialogText = try clickAnsweringAlert(.alertSecondButtonReturn)
+            XCTAssertTrue(dialogText.contains("Archive \(task.title)?"), "\(state): \(dialogText)")
+            XCTAssertNil(coordinator.records.record(id: task.id)?.archivedAt)
+            XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID])
+            XCTAssertTrue(mergeRequests.isEmpty)
+        }
+
+        // Ready for review, Complete Task asks first, naming the worktree it
+        // keeps. Cancel keeps the task and its task space.
+        _ = try coordinator.readyForReview(taskID: task.id)
+        pumpMainRunLoop(duration: 0.05)
+        XCTAssertEqual(try stage(), .needsYou(.readyForReview))
+        try writeTopBarEvidence(harness, name: "topbar-task-complete-ready")
+        let retainedWork = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: retainedWork, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: retainedWork) }
+        coordinator.records.update(id: task.id) {
+            $0.operation.worktree = .init(
+                path: retainedWork.path, branch: "test/header", checkoutRoot: retainedWork.path, added: true
+            )
+        }
+        let cancelled = try clickAnsweringAlert(.alertSecondButtonReturn)
+        XCTAssertTrue(cancelled.contains("Complete \u{201C}\(task.title)\u{201D}?"), "\(cancelled)")
+        XCTAssertTrue(cancelled.contains { $0.contains("Keeps the worktree at \(retainedWork.path).") }, "\(cancelled)")
+        XCTAssertNil(coordinator.records.record(id: task.id)?.doneAt)
+        XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID])
+        coordinator.records.update(id: task.id) { $0.operation.worktree = nil }
+
+        // A task an agent marked done keeps its task space, whose top bar
+        // says Done instead of offering a bare Archive.
+        _ = try coordinator.markDone(taskID: task.id)
+        pumpMainRunLoop(duration: 0.05)
+        XCTAssertEqual(try stage(), .done)
+        XCTAssertNotNil(harness.store.state.workspacesByID[harness.workspaceID])
+        try writeTopBarEvidence(harness, name: "topbar-task-done")
+        coordinator.records.update(id: task.id) { $0.doneAt = nil }
+
+        // Adding a PR replaces Archive with the existing merge control,
+        // even when the optional workspace-merge setting is disabled.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: harness.workspaceID, doneAt: nil))
+        _ = harness.store.send(.setWorkspaceAnnotation(
+            workspaceID: harness.workspaceID, key: "github-pr",
+            annotation: try XCTUnwrap(WorkspaceAnnotation.validated(
+                text: "PR #59", url: "https://github.com/example/toastty/pull/59"
+            ))
+        ))
+        pumpMainRunLoop(duration: 0.05)
+        try writeTopBarEvidence(harness, name: "topbar-task-archive-replaced-by-merge")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+    }
+
+    /// Complete Task, confirmed, marks the task done and closes its task space.
+    @MainActor
+    func testCompleteTaskInTheHeaderClosesTheTaskSpace() throws {
+        let task = TaskRecord(
+            createdAt: Date(), text: "Answer a question", title: "Answer a question",
+            slug: "answer-question", source: .quickEntry
+        )
+        let harness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            taskRecord: task,
+            configureState: { state, windowID, workspaceID in
+                let parent = WorkspaceState.bootstrap(title: "toastty")
+                state.workspacesByID[parent.id] = parent
+                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+                state.workspacesByID[workspaceID]?.parentWorkspaceID = parent.id
+                state.workspacesByID[workspaceID]?.title = task.title
+            }
+        )
+        defer { harness.window.orderOut(nil) }
+        let coordinator = try XCTUnwrap(harness.sessionRuntimeStore.taskCoordinator)
+        let board = try XCTUnwrap(harness.taskBoard)
+        _ = try coordinator.readyForReview(taskID: task.id)
+        pumpMainRunLoop(duration: 0.05)
+        XCTAssertEqual(board.items().first { $0.id == .task(task.id) }?.stage, .needsYou(.readyForReview))
+
+        // The timer also runs inside NSAlert's modal loop and confirms the
+        // real alert.
+        var answered = false
+        let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard NSApp.modalWindow != nil else { return }
+                answered = true
+                NSApp.stopModal(withCode: .alertFirstButtonReturn)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        defer { timer.invalidate() }
+        try click(atTopLeadingPoint: CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10), in: harness)
+        pumpMainRunLoop(duration: 0.2)
+
+        XCTAssertTrue(answered)
+        XCTAssertNotNil(coordinator.records.record(id: task.id)?.doneAt)
+        XCTAssertNil(coordinator.records.record(id: task.id)?.archivedAt)
+        XCTAssertNil(harness.store.state.workspacesByID[harness.workspaceID])
+    }
+
+    /// While GitHub says the pull request is not ready to merge, the button
+    /// reads Open PR in a neutral color and opens it instead of merging; it
+    /// turns back into Merge once GitHub says it is ready.
+    @MainActor
+    func testPullRequestSubspaceHeaderOpensAPullRequestThatIsNotReady() throws {
+        var mergeRequests: [UUID] = []
+        var openedURLs: [URL] = []
+        let pullRequestURL = "https://github.com/example/toastty/pull/59"
+        var observedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let cache = PullRequestStateCache(runner: OfflinePullRequestRunner(), now: { observedAt })
+        let link = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        func answer(_ state: TaskPullRequestState) {
+            observedAt = observedAt.addingTimeInterval(1)
+            cache.store(state, for: link, observedAt: observedAt)
+            pumpMainRunLoop(duration: 0.05)
+        }
+        let harness = try makeWorkspaceHarness(
+            hostWidth: 720,
+            isWorkspaceMergeEnabled: true,
+            configureState: { state, windowID, workspaceID in
+                let parent = WorkspaceState.bootstrap(title: "toastty")
+                state.workspacesByID[parent.id] = parent
+                let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
+                state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
+                var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+                workspace.title = "fix-claude-question-lifetime"
+                workspace.parentWorkspaceID = parent.id
+                workspace.annotations["github-pr"] = try XCTUnwrap(
+                    WorkspaceAnnotation.validated(text: "PR #59", url: pullRequestURL)
+                )
+                state.workspacesByID[workspaceID] = workspace
+            },
+            pullRequestStateCache: cache,
+            requestWorkspaceMerge: { workspaceID, _ in mergeRequests.append(workspaceID) },
+            openPullRequestURL: { openedURLs.append($0) }
+        )
+        defer { harness.window.orderOut(nil) }
+        let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
+
+        answer(TaskPullRequestState(state: .open, isDraft: true, mergeability: PullRequestMergeability(mergeState: .draft)))
+        try writeTopBarEvidence(harness, name: "topbar-open-pr-draft")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs, [URL(string: pullRequestURL)])
+        XCTAssertEqual(mergeRequests, [])
+
+        answer(TaskPullRequestState(
+            state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .blocked, checks: .failing)
+        ))
+        try writeTopBarEvidence(harness, name: "topbar-open-pr-checks-failing")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs.count, 2)
+        XCTAssertEqual(mergeRequests, [])
+
+        // GitHub still working it out keeps the last known state.
+        answer(TaskPullRequestState(state: .open, headSHA: "head1", mergeability: PullRequestMergeability(mergeState: .unknown)))
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs.count, 3)
+        XCTAssertEqual(mergeRequests, [])
+
+        // Repeated unknown replies cannot keep Open PR indefinitely.
+        observedAt = observedAt.addingTimeInterval(30)
+        answer(TaskPullRequestState(state: .open, headSHA: "head1", mergeability: PullRequestMergeability(mergeState: .unknown)))
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+        XCTAssertEqual(openedURLs.count, 3)
+
+        answer(TaskPullRequestState(
+            state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
+        ))
+        try writeTopBarEvidence(harness, name: "topbar-merge-ready-clean")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID, harness.workspaceID])
+        XCTAssertEqual(openedURLs.count, 3)
+    }
+
     func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: "1 unread"),
@@ -2039,6 +2339,7 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testFocusedPanelToggleTitleShowsUnfocusOnlyWhenActive() {
         XCTAssertEqual(WorkspaceView.focusedPanelToggleTitle(isActive: true), "Unfocus")
         XCTAssertNil(WorkspaceView.focusedPanelToggleTitle(isActive: false))
@@ -2901,8 +3202,11 @@ final class WorkspaceViewTests: XCTestCase {
         hostWidth: CGFloat = 900,
         appIsActive: Bool? = nil,
         isWorkspaceMergeEnabled: Bool = false,
+        taskRecord: TaskRecord? = nil,
         configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil,
-        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in }
+        pullRequestStateCache: PullRequestStateCache? = nil,
+        requestWorkspaceMerge: @escaping @MainActor (UUID, WorkspaceMergeMode) -> Void = { _, _ in },
+        openPullRequestURL: (@MainActor (URL) -> Void)? = nil
     ) throws -> WorkspaceHarness {
         XCTAssertGreaterThanOrEqual(tabCount, 1)
         var state = AppState.bootstrap()
@@ -2949,6 +3253,7 @@ final class WorkspaceViewTests: XCTestCase {
         registry.synchronize(with: store.state)
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
+        sessionRuntimeStore.pullRequestStateCache = pullRequestStateCache
         let tempHomeDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -2956,6 +3261,30 @@ final class WorkspaceViewTests: XCTestCase {
             withIntermediateDirectories: true,
             attributes: nil
         )
+        var taskCoordinator: TaskCoordinator?
+        if var taskRecord {
+            taskRecord.operation.taskSpace = .init(workspaceID: workspaceID, panelID: panelID)
+            taskRecord.setup = .started
+            let records = TaskRecordStore(fileURL: tempHomeDirectory.appendingPathComponent("tasks.json"))
+            try records.insert(taskRecord)
+            taskCoordinator = TaskCoordinator(
+                records: records, store: store, launcher: nil,
+                configLoader: { TasksConfig() },
+                attachmentsDirectoryURL: tempHomeDirectory.appendingPathComponent("attachments"),
+                hasActiveSession: { _ in false }, grantScope: { _, _ in }
+            )
+            sessionRuntimeStore.taskCoordinator = taskCoordinator
+            _ = store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: taskRecord.id))
+        }
+        let taskBoard = taskCoordinator.map { coordinator in
+            let board = TaskBoardStore(
+                coordinator: coordinator, store: store, sessionRuntimeStore: sessionRuntimeStore,
+                pullRequests: pullRequestStateCache ?? PullRequestStateCache(runner: OfflinePullRequestRunner()),
+                refreshInterval: nil, releaseCheckInterval: nil
+            )
+            coordinator.board = board
+            return board
+        }
         let agentCatalogStore = AgentCatalogStore(homeDirectoryPath: tempHomeDirectory.path)
         let terminalProfileStore = TerminalProfileStore(
             homeDirectoryPath: tempHomeDirectory.path,
@@ -2994,8 +3323,9 @@ final class WorkspaceViewTests: XCTestCase {
                 windowID: windowID,
                 runtimeRegistry: registry
             ),
-            sidebarVisible: true,
-            requestWorkspaceMerge: requestWorkspaceMerge
+            leftColumnVisible: true,
+            requestWorkspaceMerge: requestWorkspaceMerge,
+            openPullRequestURL: openPullRequestURL
         )
         let hostingView = NSHostingView(rootView: workspaceView.frame(width: hostWidth, height: 600))
         let window = NSWindow(
@@ -3014,6 +3344,8 @@ final class WorkspaceViewTests: XCTestCase {
             panelID: panelID,
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
+            taskCoordinator: taskCoordinator,
+            taskBoard: taskBoard,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             terminalRuntimeRegistry: registry,
             hostingView: hostingView,
@@ -3274,5 +3606,19 @@ final class WorkspaceViewTests: XCTestCase {
         }
 
         return false
+    }
+}
+
+/// `gh` that never answers; the hosted top bar test stores answers itself.
+private struct OfflinePullRequestRunner: WorkspaceMergeCommandRunning {
+    func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
+        WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
+    }
+}
+
+private extension WorkspaceViewTests {
+    @MainActor
+    static func textFields(in view: NSView) -> [String] {
+        (view as? NSTextField).map { [$0.stringValue] } ?? view.subviews.flatMap { textFields(in: $0) }
     }
 }

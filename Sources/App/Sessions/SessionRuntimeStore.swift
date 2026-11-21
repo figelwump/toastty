@@ -1,6 +1,7 @@
 import RemoteProtocol
 import AppKit
 import CodexReconciliation
+import Combine
 import CoreState
 import CryptoKit
 import Darwin
@@ -68,16 +69,45 @@ final class SessionRuntimeStore: ObservableObject {
     ) async -> Void
     typealias ApplicationActiveHandler = @MainActor () -> Bool
 
-    @Published private(set) var sessionRegistry = SessionRegistry()
+    @Published private(set) var sessionRegistry = SessionRegistry() {
+        // After the change, so a reader that the publisher calls before the
+        // change still gets answers for the registry it can read.
+        didSet {
+            statusReader = nil
+            workspaceStatusCache = nil
+        }
+    }
+    /// Reads statuses from the current registry; made at the first read.
+    private var statusReader: SessionRegistry.WorkspaceStatusReader?
+    /// `workspaceStatuses(for:at:)` answers for the current registry; see
+    /// `WorkspaceStatusCache`.
+    private var workspaceStatusCache: WorkspaceStatusCache?
+    private var workspaceStatusGenerationCount = 0
     @Published var programStatusRevision: UInt64 = 0
     var programStatusRuntime = TerminalProgramStatusRuntime()
     var programStatusPublicationTask: Task<Void, Never>?
-    @Published private(set) var providerConversationRevision: UInt64 = 0
+    /// Counts changes to the provider conversation feeds. Not `@Published`:
+    /// no view reads the feeds from this store, and a published count would
+    /// draw every view that observes the store again for each transcript
+    /// line. `providerConversationRevisions` sends each new count.
+    private(set) var providerConversationRevision: UInt64 = 0 {
+        didSet {
+            guard providerConversationRevision != oldValue else { return }
+            providerConversationRevisions.send(providerConversationRevision)
+        }
+    }
+    let providerConversationRevisions = PassthroughSubject<UInt64, Never>()
     /// What each subspace's Merge button is doing, by workspace, published
     /// for the button. `WorkspaceMergeCoordinator` owns and updates them.
     @Published private(set) var workspaceMergeRequests: [UUID: WorkspaceMergeRequest] = [:]
     /// Set once at launch; runs what the Merge button asks for.
     var workspaceMergeCoordinator: WorkspaceMergeCoordinator?
+    /// Set once at launch; GitHub's last answer for each pull request,
+    /// which tells the Merge button whether the pull request is ready.
+    var pullRequestStateCache: PullRequestStateCache?
+    /// Set once at launch; a task space's Merge button asks it first, so
+    /// the task's agent can check the pull request before it merges.
+    weak var taskCoordinator: TaskCoordinator?
     /// Set once at launch; exits an agent after its turn on request, and
     /// closes a phone-started session's pane after a clean agent exit.
     var sessionExitController: SessionExitController?
@@ -85,6 +115,12 @@ final class SessionRuntimeStore: ObservableObject {
     /// Receives accepted actionable transitions after deduplication and any
     /// child/resume delay. Delivery is independent of shell hooks and Mac focus.
     var onActionableEvent: (@MainActor (ManagedSessionActionableEvent) -> Void)?
+
+    /// Whether the turn of this session that ends now needs no reader: the
+    /// coordinator's wake turn that it marked quiet. Its end then marks
+    /// nothing unread, and sends no notification or push. The app sets it
+    /// from the coordinator.
+    var isQuietTurnEnd: (@MainActor (String) -> Bool)?
 
     var claudeQuestionBroker = ClaudeQuestionBroker()
     private var claudeQuestionWatchdog: Task<Void, Never>?
@@ -106,6 +142,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// lifecycle so no later status can follow its `session-stop` event.
     private var completedHookLifecycleSessionIDs: Set<String> = []
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
+    private var codexStatusBeforeComputerUseApprovalBySessionID: [String: SessionStatus] = [:]
     private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private struct CursorHookCorrelationState: Equatable {
@@ -140,6 +177,12 @@ final class SessionRuntimeStore: ObservableObject {
     static let managedLaunchCommandStartTimeout: TimeInterval = 30
     /// When someone last typed into each panel, with or without a session.
     private var lastLocalInputAtByPanelID: [UUID: Date] = [:]
+    /// When a person last typed, pasted or dropped a file into each panel.
+    /// Unlike `lastLocalInputAtByPanelID`, text that Toastty or the CLI
+    /// typed does not count.
+    private var lastUserInputAtByPanelID: [UUID: Date] = [:]
+    /// When each panel's input last asked the task system to save its time.
+    private var userInputSaveRequestedAtByPanelID: [UUID: Date] = [:]
     private struct ManagedProviderConversationFeedState {
         var snapshot: ManagedProviderConversationFeedSnapshot
         var seenFingerprints: Set<String>
@@ -174,6 +217,17 @@ final class SessionRuntimeStore: ObservableObject {
     private var backgroundActivityReaperTask: Task<Void, Never>?
     private var resumeGraceRepublishTask: Task<Void, Never>?
     private var resumeGraceRepublishExpiry: Date?
+    private let initialPromptTurnTimeoutNanoseconds: UInt64
+    /// Sessions launched with their first prompt whose agent has not
+    /// reported that turn yet, each with the timer that ends the wait.
+    private var initialPromptTurnTimeoutTasksBySessionID: [String: Task<Void, Never>] = [:]
+    /// Sessions whose wait for the first prompt's turn ran out with no
+    /// report from the agent, until the agent reports a status or the
+    /// session stops. Such an agent most likely waits for an answer in its
+    /// terminal, as a login or a folder-trust question comes before its
+    /// first report. Each change comes with a change of the session's
+    /// status or a stop, so readers that follow the registry see it.
+    private(set) var sessionIDsWithUnstartedFirstPrompt: Set<String> = []
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private var codexSubagentReconcilerBySessionID: [String: CodexSubagentReconciler] = [:]
     /// Teammate metadata outlives each active turn so a resumed teammate can
@@ -290,7 +344,8 @@ final class SessionRuntimeStore: ObservableObject {
         backgroundActivityReapIntervalNanoseconds: UInt64 = 10_000_000_000,
         maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60,
         providerSessionNameEnvironment: [String: String] = ProcessInfo.processInfo.environment,
-        providerSessionNamePollIntervalNanoseconds: UInt64 = 2_000_000_000
+        providerSessionNamePollIntervalNanoseconds: UInt64 = 2_000_000_000,
+        initialPromptTurnTimeoutNanoseconds: UInt64 = 60_000_000_000
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
@@ -300,6 +355,7 @@ final class SessionRuntimeStore: ObservableObject {
         self.maximumBackgroundActivityAge = maximumBackgroundActivityAge
         self.providerSessionNameEnvironment = providerSessionNameEnvironment
         self.providerSessionNamePollIntervalNanoseconds = providerSessionNamePollIntervalNanoseconds
+        self.initialPromptTurnTimeoutNanoseconds = initialPromptTurnTimeoutNanoseconds
     }
 
     func bind(store: AppStore) {
@@ -346,6 +402,7 @@ final class SessionRuntimeStore: ObservableObject {
         pendingHookReadyBySessionID = [:]
         completedHookLifecycleSessionIDs = []
         suppressedCodexVisibleErrorDetailBySessionID = [:]
+        codexStatusBeforeComputerUseApprovalBySessionID = [:]
         codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         nativeBindingConfirmationBySessionID = [:]
@@ -492,6 +549,26 @@ final class SessionRuntimeStore: ObservableObject {
         lastLocalInputAtByPanelID[panelID]
     }
 
+    func noteUserInput(panelID: UUID) {
+        let now = Date()
+        lastUserInputAtByPanelID[panelID] = now
+        // Typing changes nothing else that the task system follows, so ask
+        // it to save the time: once per save interval for each panel, and
+        // outside the key event.
+        guard taskCoordinator != nil,
+              now.timeIntervalSince(userInputSaveRequestedAtByPanelID[panelID] ?? .distantPast)
+              >= TaskStateTimes.userInputSaveInterval else { return }
+        userInputSaveRequestedAtByPanelID[panelID] = now
+        Task { @MainActor [weak self] in
+            self?.taskCoordinator?.recordStateTimes()
+        }
+    }
+
+    /// When a person last typed, pasted or dropped a file into `panelID`.
+    func lastUserInputAt(panelID: UUID) -> Date? {
+        lastUserInputAtByPanelID[panelID]
+    }
+
     /// A remote user released the Mac draft lock: they say the composer holds
     /// nothing typed locally, so the active binding counts as clean again.
     func clearLocalInputForActiveSession(panelID: UUID) {
@@ -567,6 +644,23 @@ final class SessionRuntimeStore: ObservableObject {
     func isNativeSessionBindingInputClean(
         _ confirmation: ManagedNativeSessionBindingConfirmation
     ) -> Bool {
+        isCurrentNativeSessionBinding(confirmation)
+            && nativeBindingSessionIDsWithLocalInput.contains(confirmation.managedSessionID) == false
+    }
+
+    /// The confirmation is the active session's own, and the one thing
+    /// against it is that keys reached the session's terminal: they answered
+    /// a question of the agent's start, or they wait in its prompt.
+    func nativeSessionBindingHasOnlyLocalInputAgainstIt(
+        _ confirmation: ManagedNativeSessionBindingConfirmation
+    ) -> Bool {
+        isCurrentNativeSessionBinding(confirmation)
+            && nativeBindingSessionIDsWithLocalInput.contains(confirmation.managedSessionID)
+    }
+
+    private func isCurrentNativeSessionBinding(
+        _ confirmation: ManagedNativeSessionBindingConfirmation
+    ) -> Bool {
         guard ProviderTranscriptSupport.isManagedProvider(confirmation.agent),
               nativeBindingConfirmationBySessionID[confirmation.managedSessionID] == confirmation,
               nativeBindingIDBySessionID[confirmation.managedSessionID] == confirmation.bindingID,
@@ -577,9 +671,7 @@ final class SessionRuntimeStore: ObservableObject {
               activeSession.panelID == confirmation.panelID else {
             return false
         }
-        return nativeBindingSessionIDsWithLocalInput.contains(
-            confirmation.managedSessionID
-        ) == false
+        return true
     }
 
     @discardableResult
@@ -741,6 +833,9 @@ final class SessionRuntimeStore: ObservableObject {
         let previousProgramRecords = programStatusRuntime.recordsByPanel
         programStatusRuntime.start(panelID: panelID, sessionID: sessionID)
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
+        let displayTitleOverride = displayTitleOverride ?? store.flatMap {
+            Self.coordinatorSessionTitle(agent: agent, panelID: panelID, coordinatorPanelID: $0.state.coordinator?.panelID)
+        }
         nextRegistry.startSession(
             sessionID: sessionID,
             agent: agent,
@@ -799,7 +894,6 @@ final class SessionRuntimeStore: ObservableObject {
         repoRoot: String?,
         at now: Date
     ) {
-        store?.recordSessionStatusSidebarExpansionEligibility()
         startSession(
             sessionID: sessionID,
             agent: .processWatch,
@@ -844,6 +938,16 @@ final class SessionRuntimeStore: ObservableObject {
         status: SessionStatus,
         at now: Date
     ) {
+        // Claude Code reports Ready again when its prompt has been idle for
+        // a minute. After a turn that an API error ended, that reminder is
+        // not a result: the failure stays until the next turn starts. Only
+        // Claude's StopFailure hook gives a Claude session this status.
+        if status.kind == .ready,
+           let record = sessionRegistry.activeSession(sessionID: sessionID),
+           record.agent == .claude,
+           record.status?.kind == .error {
+            return
+        }
         // A root event owns the status even when its payload and timestamp
         // match the last teammate approval. Later child events cannot restore
         // the status that preceded that root event.
@@ -857,6 +961,47 @@ final class SessionRuntimeStore: ObservableObject {
             codexHookEvent: nil,
             at: now
         )
+    }
+
+    /// A launch that carries the agent's first prompt starts that turn at
+    /// once, so the session shows working while the agent boots instead of
+    /// idle. Until the agent reports another status, an idle report does not
+    /// end the turn: pi and Grok report idle when they start, before they
+    /// read the prompt. An interrupt does end it. An agent that reports
+    /// nothing in time, for example because it stopped at a startup dialog,
+    /// falls back to idle.
+    func startInitialPromptTurn(sessionID: String, at now: Date) {
+        updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Starting"),
+            at: now
+        )
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else { return }
+        initialPromptTurnTimeoutTasksBySessionID[sessionID]?.cancel()
+        let timeout = initialPromptTurnTimeoutNanoseconds
+        initialPromptTurnTimeoutTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: timeout)
+            guard Task.isCancelled == false else { return }
+            self?.expireInitialPromptTurn(sessionID: sessionID)
+        }
+    }
+
+    private func expireInitialPromptTurn(sessionID: String) {
+        guard initialPromptTurnTimeoutTasksBySessionID.removeValue(forKey: sessionID) != nil,
+              let record = sessionRegistry.activeSession(sessionID: sessionID) else { return }
+        ToasttyLog.info(
+            "Agent did not start its first prompt in time",
+            category: .terminal,
+            metadata: ["session_id": sessionID, "agent": record.agent.rawValue]
+        )
+        // Before the status changes, so that a reader of the new status
+        // sees both.
+        sessionIDsWithUnstartedFirstPrompt.insert(sessionID)
+        updateSynthesizedStatus(sessionID: sessionID, status: Self.interruptedIdleStatus, at: Date())
+    }
+
+    private func endInitialPromptTurnWait(sessionID: String) {
+        initialPromptTurnTimeoutTasksBySessionID.removeValue(forKey: sessionID)?.cancel()
     }
 
     private enum StatusUpdateOrigin {
@@ -886,8 +1031,37 @@ final class SessionRuntimeStore: ObservableObject {
         codexHookEvent: CodexHookEvent?,
         at now: Date
     ) {
-        let previousRecord = sessionRegistry.sessionsByID[sessionID]
-        let previousProjectedStatus = previousRecord.flatMap { record in
+        // The agent's own report after the wait ran out: it started.
+        if origin == .provider {
+            sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
+        }
+        if initialPromptTurnTimeoutTasksBySessionID[sessionID] != nil {
+            guard status.kind != .idle else {
+                ToasttyLog.debug(
+                    "Kept the first prompt's turn working through an idle report",
+                    category: .terminal,
+                    metadata: ["session_id": sessionID, "status_update_source": statusUpdateSource]
+                )
+                return
+            }
+            // Only the agent's own report shows that its turn started; text
+            // seen on screen may be left over from before the launch.
+            if origin == .provider {
+                endInitialPromptTurnWait(sessionID: sessionID)
+            }
+        }
+        if codexStatusBeforeComputerUseApprovalBySessionID[sessionID] != nil, status.kind == .working {
+            // Other tool activity can report progress while the menu is open.
+            // Keep its latest detail for when the user closes the menu.
+            codexStatusBeforeComputerUseApprovalBySessionID[sessionID] = status
+            return
+        }
+        let priorWorkingStatus = codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
+        var previousRecord = sessionRegistry.sessionsByID[sessionID]
+        if let priorWorkingStatus {
+            previousRecord?.status = priorWorkingStatus
+        }
+        let previousProjectedStatus = priorWorkingStatus ?? previousRecord.flatMap { record in
             sessionRegistry.panelStatus(for: record.panelID, at: now)?.status
         }
         let storedStatus = normalizedStatusForStorage(
@@ -901,7 +1075,12 @@ final class SessionRuntimeStore: ObservableObject {
             nextStatus: storedStatus
         )
         var nextRegistry = sessionRegistry
-        nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
+        nextRegistry.updateStatus(
+            sessionID: sessionID,
+            status: storedStatus,
+            fromAgent: isUIOnlyReadyCollapse == false,
+            at: now
+        )
         if previousRecord?.turnStartedAt == nil, nextRegistry.sessionsByID[sessionID]?.turnStartedAt != nil {
             // Unread from an earlier turn must not be retired by this turn's exit.
             if let panelID = previousRecord?.panelID {
@@ -966,6 +1145,7 @@ final class SessionRuntimeStore: ObservableObject {
            let acceptedKind = acceptedRecord.status?.kind,
            Self.statusStartsNewWork(previousKind: previousRecord?.status?.kind, nextKind: acceptedKind) {
             reopenDoneWorkspaceIfNeeded(workspaceID: acceptedRecord.workspaceID, sessionID: sessionID, trigger: "turn_start")
+            taskCoordinator?.clearMarksForNewWork(taskSpaceWorkspaceID: acceptedRecord.workspaceID, sessionID: sessionID)
         }
         // Turn boundaries also catch later title changes after the short
         // first-turn polling window has ended.
@@ -1857,6 +2037,68 @@ final class SessionRuntimeStore: ObservableObject {
         return true
     }
 
+    /// Without hooks, `notify` reports a finished turn, but a Codex session
+    /// resumed after a relaunch may never run it, which left the session
+    /// working forever. The rollout's `task_complete` backs it up. It applies
+    /// only to the rollout's newest turn, only while the session is still in
+    /// a turn, and only when it was written after that turn started here: a
+    /// new watcher reads the rollout from its start, so older completions are
+    /// replayed while a newer turn may already be working.
+    /// Toastty sees a turn start a little after Codex writes it, so a short
+    /// turn can finish just before `turnStartedAt`.
+    static let codexRolloutCompletionClockTolerance: TimeInterval = 2
+
+    @discardableResult
+    func handleCodexRolloutTurnCompletion(
+        sessionID: String,
+        turnID: String?,
+        latestRolloutTurnID: String?,
+        completedAt: Date?,
+        detail: String,
+        turnError: String?,
+        at now: Date
+    ) -> Bool {
+        let ignoredReason: String?
+        let record = sessionRegistry.activeSession(sessionID: sessionID)
+        let usesSessionLogFallback: Bool
+        if case .sessionLogFallback? = codexStatusTrackingSourceBySessionID[sessionID] {
+            usesSessionLogFallback = true
+        } else {
+            usesSessionLogFallback = false
+        }
+        if record?.agent != .codex || record?.usesSessionStatusNotifications != true {
+            ignoredReason = "session_not_tracking_codex_status"
+        } else if usesSessionLogFallback == false {
+            ignoredReason = "status_source_not_session_log_fallback"
+        } else if turnID == nil || turnID != latestRolloutTurnID {
+            ignoredReason = "not_latest_rollout_turn"
+        } else if record?.status?.kind != .working, record?.status?.kind != .needsApproval {
+            ignoredReason = "not_in_turn"
+        } else if let turnStartedAt = record?.turnStartedAt,
+                  let completedAt,
+                  completedAt >= turnStartedAt.addingTimeInterval(-Self.codexRolloutCompletionClockTolerance) {
+            ignoredReason = nil
+        } else {
+            ignoredReason = "completed_before_turn_started"
+        }
+        let metadata = [
+            "session_id": sessionID,
+            "turn_id": turnID ?? "none",
+            "latest_rollout_turn_id": latestRolloutTurnID ?? "none",
+            "decision": ignoredReason == nil ? "accepted" : "ignored",
+            "reason": ignoredReason ?? "latest_rollout_turn",
+        ]
+        guard ignoredReason == nil else {
+            ToasttyLog.debug("Codex rollout turn completion decision", category: .terminal, metadata: metadata)
+            return false
+        }
+        ToasttyLog.info("Codex rollout turn completion decision", category: .terminal, metadata: metadata)
+        let status = turnError.map { SessionStatus(kind: .error, summary: "Error", detail: $0) }
+            ?? SessionStatus(kind: .ready, summary: "Ready", detail: detail)
+        updateStatus(sessionID: sessionID, status: status, at: now)
+        return true
+    }
+
     /// Codex fires neither `Stop` nor `notify` when a turn fails, for example
     /// when the model request is rejected, so a hook-tracked session would stay
     /// working. The rollout's `task_complete` records the error instead. It
@@ -2345,6 +2587,17 @@ final class SessionRuntimeStore: ObservableObject {
         case .toolUse, .toolCompleted:
             guard claudeTeammateTemplatesBySessionID[sessionID]?[event.agentID] != nil else {
                 guard event.phase == .toolUse else { return false }
+                // A tool call from an agent that Toastty does not track counts
+                // as work only inside the main agent's turn. Claude Code's side
+                // queries, such as the away summary (recap) and prompt
+                // suggestions, run tools under a new agent ID outside any turn,
+                // and no later hook ends them. Marking the session Working for
+                // one of them would leave it busy while the agent sits at its
+                // prompt. A tracked background sub-agent keeps its behavior.
+                guard record.turnStartedAt != nil
+                    || record.backgroundActivitiesByID[event.agentID] != nil else {
+                    return false
+                }
                 claudeTeammateApprovalsBySessionID.removeValue(forKey: sessionID)
                 updateStatus(
                     sessionID: sessionID,
@@ -2943,7 +3196,9 @@ final class SessionRuntimeStore: ObservableObject {
         observation: CodexRootProgressObservation,
         at now: Date
     ) -> Bool {
-        applyCodexRootProgressObservation(
+        // A logged turn start or abort is the agent's own report of its turn.
+        endInitialPromptTurnWait(sessionID: sessionID)
+        return applyCodexRootProgressObservation(
             sessionID: sessionID,
             observation: observation,
             at: now
@@ -3054,6 +3309,9 @@ final class SessionRuntimeStore: ObservableObject {
         programStatusRuntime.stop(record)
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         logSessionStop(record, reason: reason, at: now)
+        if let status = codexStatusBeforeComputerUseApprovalBySessionID[record.sessionID] {
+            registry.updateStatus(sessionID: record.sessionID, status: status, fromAgent: false, at: now)
+        }
         clearSessionRuntimeState(sessionID: record.sessionID)
         removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
         completeHookLifecycle(record: record, at: now)
@@ -3067,8 +3325,11 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func clearSessionRuntimeState(sessionID: String) {
+        endInitialPromptTurnWait(sessionID: sessionID)
+        sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
         invalidateClaudeQuestionBinding(sessionID: sessionID)
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+        codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
@@ -3089,12 +3350,49 @@ final class SessionRuntimeStore: ObservableObject {
         removePendingCodexHookApproval(sessionID: sessionID)
     }
 
+    /// One update of the window asks for the same workspace's statuses
+    /// several times: the sidebar, the task board and the menus each do. The
+    /// answers are kept until the registry changes or the time reaches the
+    /// next moment that changes an answer.
     func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
-        sessionRegistry.workspaceStatuses(for: workspaceID, at: now)
+        startWorkspaceStatusCacheIfNeeded(at: now)
+        if let statuses = workspaceStatusCache?.statusesByWorkspaceID[workspaceID] {
+            return statuses
+        }
+        let statuses = currentStatusReader().statuses(for: workspaceID, at: now)
+        workspaceStatusCache?.statusesByWorkspaceID[workspaceID] = statuses
+        return statuses
+    }
+
+    /// A number that changes whenever `sessionRegistry` changed, or
+    /// `workspaceStatuses(for:at:)` can give another answer than at the
+    /// last read of this number because a resume grace period ended. Equal
+    /// numbers mean an equal registry and equal statuses for every
+    /// workspace. A reader that keeps what it derived from them reads the
+    /// number at each use.
+    func workspaceStatusGeneration(at now: Date = Date()) -> Int {
+        startWorkspaceStatusCacheIfNeeded(at: now)
+        return workspaceStatusGenerationCount
+    }
+
+    private func startWorkspaceStatusCacheIfNeeded(at now: Date) {
+        guard workspaceStatusCache?.holds(at: now) != true else { return }
+        workspaceStatusGenerationCount &+= 1
+        workspaceStatusCache = WorkspaceStatusCache(
+            readAt: now,
+            changesAt: sessionRegistry.nextWorkspaceStatusChange(after: now)
+        )
+    }
+
+    private func currentStatusReader() -> SessionRegistry.WorkspaceStatusReader {
+        if let statusReader { return statusReader }
+        let reader = SessionRegistry.WorkspaceStatusReader(sessionRegistry)
+        statusReader = reader
+        return reader
     }
 
     func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
-        sessionRegistry.panelStatus(for: panelID, at: now)
+        currentStatusReader().panelStatus(for: panelID, at: now)
     }
 
     func isLaterFlagged(sessionID: String) -> Bool {
@@ -3205,7 +3503,7 @@ final class SessionRuntimeStore: ObservableObject {
             sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
                 guard let record = sessionRegistry.sessionsByID[sessionID],
                       record.isActive,
-                      let status = sessionRegistry.panelStatus(for: panelID)?.status,
+                      let status = panelStatus(for: panelID)?.status,
                       kinds.contains(status.kind) else {
                     return nil
                 }
@@ -3247,11 +3545,34 @@ final class SessionRuntimeStore: ObservableObject {
             .first?.panelID
     }
 
+    /// The coordinator's agent session is always named "Coordinator". The
+    /// name its provider generates comes from the first wake digest it
+    /// read, which says nothing about what the session is.
+    private static func coordinatorSessionTitle(agent: AgentKind, panelID: UUID, coordinatorPanelID: UUID?) -> String? {
+        guard agent != .processWatch, panelID == coordinatorPanelID else { return nil }
+        return AppState.coordinatorWorkspaceTitle
+    }
+
     private func synchronize(with state: AppState, now: Date = Date()) {
         let previousProgramRecords = programStatusRuntime.recordsByPanel
         var nextRegistry = sessionRegistry
+        let coordinatorPanelID = state.coordinator?.panelID
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
+            // A restart can start the coordinator's agent in a new terminal
+            // before that terminal becomes the coordinator's panel, and a
+            // panel moved out of the coordinator's workspace stops being it.
+            // Only process watches set their own name.
+            if record.agent != .processWatch {
+                let title = Self.coordinatorSessionTitle(
+                    agent: record.agent,
+                    panelID: record.panelID,
+                    coordinatorPanelID: coordinatorPanelID
+                )
+                if title != nil || record.displayTitleOverride == AppState.coordinatorWorkspaceTitle {
+                    nextRegistry.updateDisplayTitleOverride(sessionID: record.sessionID, displayTitleOverride: title, at: now)
+                }
+            }
             guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 tearDownActiveSession(
                     record,
@@ -3278,6 +3599,10 @@ final class SessionRuntimeStore: ObservableObject {
         )
         if lastLocalInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
             lastLocalInputAtByPanelID = lastLocalInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+        }
+        if lastUserInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
+            lastUserInputAtByPanelID = lastUserInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+            userInputSaveRequestedAtByPanelID = userInputSaveRequestedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         }
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         publish(nextRegistry, reason: "synchronize_app_state", at: now)
@@ -3443,7 +3768,8 @@ final class SessionRuntimeStore: ObservableObject {
         let actionableKind: ManagedSessionActionableEvent.Kind?
         switch kind {
         case .turnComplete:
-            actionableKind = .turnComplete
+            // A quiet coordinator turn sends no push to a phone either.
+            actionableKind = isQuietCoordinatorTurnEnd(record, kind: .ready) ? nil : .turnComplete
             sessionExitController?.handle(.turnCompleted(sessionID: record.sessionID))
         case .needsApproval:
             actionableKind = .needsApproval
@@ -3987,12 +4313,16 @@ final class SessionRuntimeStore: ObservableObject {
                 nextRegistry.sessionsByID.values.map(\.workspaceID)
         )
 
+        // One reader for each registry: this runs for every publish, and a
+        // status report changes one workspace of many.
+        let previousReader = SessionRegistry.WorkspaceStatusReader(previousRegistry)
+        let nextReader = SessionRegistry.WorkspaceStatusReader(nextRegistry)
         for workspaceID in workspaceIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             let previousRows = workspaceStatusDiagnosticRows(
-                previousRegistry.workspaceStatuses(for: workspaceID, at: now)
+                previousReader.statuses(for: workspaceID, at: now)
             )
             let nextRows = workspaceStatusDiagnosticRows(
-                nextRegistry.workspaceStatuses(for: workspaceID, at: now)
+                nextReader.statuses(for: workspaceID, at: now)
             )
             guard previousRows != nextRows else { continue }
 
@@ -4705,7 +5035,7 @@ final class SessionRuntimeStore: ObservableObject {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
-            await self?.expirePendingCodexHookApproval(sessionID: sessionID, token: token)
+            self?.expirePendingCodexHookApproval(sessionID: sessionID, token: token)
         }
     }
 
@@ -5181,7 +5511,8 @@ final class SessionRuntimeStore: ObservableObject {
               currentRecord.isActive else {
             return
         }
-        guard !isActionableStatusTransitionSuppressed(for: currentRecord, state: store.state) else {
+        guard !isActionableStatusTransitionSuppressed(for: currentRecord, state: store.state),
+              !isQuietCoordinatorTurnEnd(currentRecord, kind: status.kind) else {
             return
         }
 
@@ -5417,7 +5748,9 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func isPanelCurrentlyFocused(_ panelID: UUID, state: AppState) -> Bool {
-        guard let selection = state.selectedWorkspaceSelection() else {
+        // A workspace under the Tasks view is selected but not seen.
+        guard let selection = state.selectedWorkspaceSelection(),
+              selection.window.showsTasksView == false else {
             return false
         }
         guard selection.workspace.focusedPanelID == panelID else {
@@ -5433,6 +5766,14 @@ final class SessionRuntimeStore: ObservableObject {
         isApplicationActive() && isPanelCurrentlyFocused(record.panelID, state: state)
     }
 
+    /// The coordinator's agent ends a wake turn that it marked quiet
+    /// (`coordinator wake --quiet`): nothing needs the user, so the end of
+    /// the turn marks nothing unread and sends no notification. A question
+    /// or an error in that turn still does.
+    private func isQuietCoordinatorTurnEnd(_ record: SessionRecord, kind: SessionStatusKind) -> Bool {
+        kind == .ready && isQuietTurnEnd?(record.sessionID) == true
+    }
+
     private func normalizedStatusForStorage(
         requestedStatus: SessionStatus,
         previousRecord: SessionRecord?,
@@ -5441,7 +5782,8 @@ final class SessionRuntimeStore: ObservableObject {
         guard requestedStatus.kind == .ready,
               let previousRecord,
               let state,
-              isActionableStatusTransitionSuppressed(for: previousRecord, state: state) else {
+              isActionableStatusTransitionSuppressed(for: previousRecord, state: state)
+                || isQuietCoordinatorTurnEnd(previousRecord, kind: requestedStatus.kind) else {
             return requestedStatus
         }
 
@@ -5455,7 +5797,7 @@ final class SessionRuntimeStore: ObservableObject {
     /// A turn that starts from rest: working or waiting on approval after
     /// being idle, ready, errored, or new. Approval inside a turn and the
     /// ready at its end do not count, so the turn that marks a workspace done
-    /// (`worktree-done`, which is already working when it sets the mark)
+    /// (the merge skill's `task merge`, which runs while the agent works)
     /// does not reopen it.
     static func statusStartsNewWork(previousKind: SessionStatusKind?, nextKind: SessionStatusKind) -> Bool {
         func isBusy(_ kind: SessionStatusKind?) -> Bool {
@@ -5466,8 +5808,23 @@ final class SessionRuntimeStore: ObservableObject {
 
     /// A workspace marked done reopens when an agent in it starts new work,
     /// so a merged task that picks up more work stops reading as finished.
+    /// While a merge waits for checks, the mark is the user's acceptance of
+    /// one commit, and the merge script checks that commit and its target
+    /// branch on each run. A turn alone changes neither, so the mark stays.
     private func reopenDoneWorkspaceIfNeeded(workspaceID: UUID, sessionID: String, trigger: String) {
         guard let store, store.state.workspacesByID[workspaceID]?.doneAt != nil else { return }
+        if case .awaitingChecks? = workspaceMergeRequests[workspaceID]?.phase {
+            ToasttyLog.info(
+                "Kept workspace done mark for a merge waiting for checks",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "session_id": sessionID,
+                    "trigger": trigger,
+                ]
+            )
+            return
+        }
         guard store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil)) else { return }
         ToasttyLog.info(
             "Cleared workspace done mark for new work",
@@ -5629,6 +5986,22 @@ final class SessionRuntimeStore: ObservableObject {
     }
 }
 
+/// Workspace statuses read from one registry value. A status depends on the
+/// registry and, during a resume grace period, on the time: the answers
+/// hold from the time they were first read until the registry's next
+/// time-driven change.
+private struct WorkspaceStatusCache {
+    let readAt: Date
+    /// `nil` when no answer changes with the time alone.
+    let changesAt: Date?
+    var statusesByWorkspaceID: [UUID: [WorkspaceSessionStatus]] = [:]
+
+    func holds(at time: Date) -> Bool {
+        guard time >= readAt else { return false }
+        return changesAt.map { time < $0 } ?? true
+    }
+}
+
 private struct CodexSessionReconciliationRuntime {
     var rootTurn: CodexRootTurnReconciler
     var approval: CodexApprovalReconciler
@@ -5728,6 +6101,11 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        if promptState == .busy,
+           let changed = refreshCodexComputerUseApproval(record: record, status: currentStatus, screen: visibleText, at: now) {
+            return changed
+        }
+
         if let nextStatus = CodexVisibleTextStatusParser.fatalErrorStatus(from: visibleText) {
             guard currentStatus.kind == .working || currentStatus.kind == .error,
                   isSuppressedCodexVisibleError(nextStatus, sessionID: record.sessionID) == false,
@@ -5772,6 +6150,36 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         return true
     }
 
+    /// Codex's terminal receives the MCP elicitation directly. Neither its
+    /// status hooks nor its session recording report the incoming request.
+    /// Terminal text can drive the task's waiting state, but cannot attest
+    /// to a provider approval for hooks, notifications or remote answering.
+    private func refreshCodexComputerUseApproval(
+        record: SessionRecord,
+        status: SessionStatus,
+        screen: String,
+        at now: Date
+    ) -> Bool? {
+        let sessionID = record.sessionID
+        let priorStatus = codexStatusBeforeComputerUseApprovalBySessionID[sessionID]
+        guard status.kind == .working || priorStatus != nil else { return nil }
+        let waiting = CodexVisibleTextStatusParser.hasComputerUseApprovalPrompt(in: screen)
+        let nextStatus: SessionStatus
+        if let priorStatus {
+            guard !waiting, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
+            nextStatus = priorStatus
+        } else {
+            guard waiting else { return nil }
+            codexStatusBeforeComputerUseApprovalBySessionID[sessionID] = status
+            nextStatus = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Computer Use app access")
+        }
+        var nextRegistry = sessionRegistry
+        nextRegistry.updateStatus(sessionID: sessionID, status: nextStatus, at: now)
+        publish(nextRegistry, reason: "codex_computer_use_approval_prompt", at: now)
+        return true
+    }
+
     private func refreshedWorkingCodexStatus(
         currentStatus: SessionStatus,
         visibleText: String,
@@ -5803,6 +6211,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         if record.agent == .codex,
            codexSessionUsesFixedStatusAuthority(sessionID: record.sessionID) {
+            endInitialPromptTurnWait(sessionID: record.sessionID)
             let interrupt: CodexRootProgressInterrupt = switch kind {
             case .escape:
                 .escape
@@ -5826,6 +6235,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        endInitialPromptTurnWait(sessionID: record.sessionID)
         updateSynthesizedStatus(
             sessionID: record.sessionID,
             status: Self.interruptedIdleStatus,

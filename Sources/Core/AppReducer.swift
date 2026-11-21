@@ -1,11 +1,6 @@
 import Foundation
 
 public struct AppReducer {
-    private enum FocusGraphTarget: Equatable {
-        case mainPanel(UUID)
-        case rightAuxPanel(UUID)
-    }
-
     private enum EmptyWorkspaceTabDisposition {
         case bootstrapReplacementTab
         case removeWorkspace(EmptyWindowDisposition)
@@ -42,6 +37,7 @@ public struct AppReducer {
             guard state.windows[index].workspaceIDs.contains(workspaceID) else { return false }
             state.selectedWindowID = windowID
             state.windows[index].selectedWorkspaceID = workspaceID
+            state.windows[index].showsTasksView = false
             markWorkspaceScopedNotificationsRead(workspaceID: workspaceID, state: &state)
             markWorkspaceVisited(workspaceID: workspaceID, state: &state)
             return true
@@ -109,6 +105,26 @@ public struct AppReducer {
             }
             return true
 
+        case .reopenWorkspace(let windowID, let workspaceID, let panelID, let title, let rootDirectory):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.workspacesByID[workspaceID] == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil,
+                  let root = normalizedMetadataValue(rootDirectory),
+                  root.hasPrefix("/") else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: normalizedWorkspaceTitle(title)
+                    ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state),
+                initialTerminalCWD: root,
+                initialTerminalProfileBinding: state.defaultTerminalProfileBinding,
+                hasBeenVisited: false
+            )
+            workspace.rootDirectory = root
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
         case .createWorkspaceTab(let workspaceID, let seed, let activate):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let tab = WorkspaceTabState.bootstrap(
@@ -131,6 +147,91 @@ public struct AppReducer {
             )
             workspace.appendTab(tab, select: false)
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .createTaskSpace(
+            let windowID,
+            let workspaceID,
+            let panelID,
+            let parentWorkspaceID,
+            let spawningSessionID,
+            let taskID,
+            let title,
+            let terminalCWD
+        ):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.workspacesByID[workspaceID] == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil,
+                  let rootID = state.resolvedParentWorkspaceID(
+                      forNewWorkspaceIn: windowID,
+                      under: parentWorkspaceID
+                  ) else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: normalizedWorkspaceTitle(title)
+                    ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state),
+                initialTerminalCWD: terminalCWD,
+                initialTerminalProfileBinding: nil,
+                hasBeenVisited: false
+            )
+            workspace.parentWorkspaceID = rootID
+            workspace.spawningSessionID = normalizedMetadataValue(spawningSessionID)
+            workspace.taskID = taskID
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
+        case .createCoordinatorWorkspace(let windowID, let workspaceID, let panelID, let terminalCWD):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.coordinator == nil,
+                  state.workspacesByID[workspaceID] == nil,
+                  state.workspaceSelection(containingPanelID: panelID) == nil,
+                  terminalCWD.hasPrefix("/") else { return false }
+            var workspace = WorkspaceState.bootstrap(
+                id: workspaceID,
+                panelID: panelID,
+                title: AppState.coordinatorWorkspaceTitle,
+                initialTerminalCWD: terminalCWD,
+                initialTerminalProfileBinding: nil,
+                hasBeenVisited: false
+            )
+            workspace.isCoordinator = true
+            workspace.coordinatorPanelID = panelID
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            // Last in window order, as any new workspace, so the 1-based
+            // indexes that automation uses for the others do not move. The
+            // sidebar pins its row by the mark, not by this position.
+            state.windows[windowIndex].workspaceIDs.append(workspaceID)
+            return true
+
+        case .restoreCoordinatorWorkspace(let workspaceID, let panelID):
+            // The coordinator's rules: one coordinator, in a top-level
+            // workspace that is not a task space. A workspace that a
+            // subspace nests under is a project, so it is left alone.
+            guard state.coordinator == nil,
+                  var workspace = state.workspacesByID[workspaceID],
+                  workspace.parentWorkspaceID == nil,
+                  workspace.taskID == nil,
+                  state.windows.contains(where: { $0.workspaceIDs.contains(workspaceID) }),
+                  state.workspacesByID.values.contains(where: { $0.parentWorkspaceID == workspaceID }) == false
+            else { return false }
+            workspace.isCoordinator = true
+            workspace.spawningSessionID = nil
+            workspace.doneAt = nil
+            if let panelID, case .terminal? = workspace.panelState(for: panelID) {
+                workspace.coordinatorPanelID = panelID
+            }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .setCoordinatorPanel(let panelID):
+            guard let coordinator = state.coordinator,
+                  coordinator.panelID != panelID,
+                  var workspace = state.workspacesByID[coordinator.workspaceID],
+                  case .terminal? = workspace.panelState(for: panelID) else { return false }
+            workspace.coordinatorPanelID = panelID
+            commitWorkspace(workspace, workspaceID: coordinator.workspaceID, state: &state)
             return true
 
         case .createWindow(let seed, let initialFrame):
@@ -157,7 +258,8 @@ public struct AppReducer {
             return removeWindow(windowID, state: &state)
 
         case .renameWorkspace(let workspaceID, let title):
-            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            // The coordinator's workspace keeps its name.
+            guard var workspace = state.workspacesByID[workspaceID], workspace.isCoordinator == false else { return false }
             let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmedTitle.isEmpty == false else { return false }
             guard workspace.title != trimmedTitle else { return false }
@@ -212,11 +314,35 @@ public struct AppReducer {
         case .setWorkspaceDone(let workspaceID, let doneAt):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             // Only a subspace row shows the mark, so a top-level workspace
-            // cannot hold one.
-            guard doneAt == nil || workspace.parentWorkspaceID != nil else { return false }
+            // cannot hold one, unless it is a task space.
+            guard doneAt == nil || workspace.canHoldDoneMark else { return false }
             // Marking an already-done workspace keeps its original time.
             guard (workspace.doneAt == nil) != (doneAt == nil) else { return false }
             workspace.doneAt = doneAt
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .setWorkspaceRootDirectory(let workspaceID, let rootDirectory):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            let normalizedRoot = normalizedMetadataValue(rootDirectory)
+            // A subspace uses its parent's root; only top-level workspaces
+            // hold one.
+            guard normalizedRoot == nil || workspace.parentWorkspaceID == nil else { return false }
+            guard rootDirectory == nil || normalizedRoot?.hasPrefix("/") == true else { return false }
+            guard workspace.rootDirectory != normalizedRoot else { return false }
+            workspace.rootDirectory = normalizedRoot
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .setWorkspaceTaskID(let workspaceID, let taskID):
+            guard var workspace = state.workspacesByID[workspaceID],
+                  workspace.taskID != taskID,
+                  // The coordinator's workspace is never a task space.
+                  taskID == nil || workspace.isCoordinator == false else { return false }
+            workspace.taskID = taskID
+            if workspace.canHoldDoneMark == false {
+                workspace.doneAt = nil
+            }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -247,7 +373,7 @@ public struct AppReducer {
             let nestedWorkspaceIDs = resolvedParentID == nil ? [] : state.subspaceWorkspaceIDs(of: workspaceID)
             workspace.parentWorkspaceID = resolvedParentID
             workspace.spawningSessionID = resolvedSpawningSessionID
-            if resolvedParentID == nil {
+            if workspace.canHoldDoneMark == false {
                 workspace.doneAt = nil
             }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
@@ -1143,8 +1269,45 @@ public struct AppReducer {
             state.windows[windowIndex].sidebarVisible.toggle()
             return true
 
+        case .setSidebarSegment(let windowID, let segment):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.windows[windowIndex].sidebarSegment != segment else { return false }
+            state.windows[windowIndex].sidebarSegment = segment
+            return true
+
+        case .setSidebarWorkspaceCollapsed(let windowID, let workspaceID, let collapsed):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.windows[windowIndex].workspaceIDs.contains(workspaceID),
+                  state.windows[windowIndex].collapsedSidebarWorkspaceIDs.contains(workspaceID) != collapsed else { return false }
+            if collapsed {
+                state.windows[windowIndex].collapsedSidebarWorkspaceIDs.insert(workspaceID)
+            } else {
+                state.windows[windowIndex].collapsedSidebarWorkspaceIDs.remove(workspaceID)
+            }
+            return true
+
+        case .setTasksViewShown(let windowID, let shown):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.windows[windowIndex].showsTasksView != shown else { return false }
+            state.windows[windowIndex].showsTasksView = shown
+            return true
+
         case .setSidebarWidth(let windowID, let width, let defaultWidth):
             return setSidebarWidth(windowID: windowID, width: width, defaultWidth: defaultWidth, state: &state)
+
+        case .setCoordinatorDockVisible(let windowID, let visible):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }),
+                  state.windows[windowIndex].coordinatorDockVisible != visible else { return false }
+            state.windows[windowIndex].coordinatorDockVisible = visible
+            return true
+
+        case .setCoordinatorDockWidth(let windowID, let width):
+            guard width.isFinite,
+                  let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            let override = WindowState.normalizedCoordinatorDockWidthOverride(width)
+            guard state.windows[windowIndex].coordinatorDockWidthPointsOverride != override else { return false }
+            state.windows[windowIndex].coordinatorDockWidthPointsOverride = override
+            return true
         }
     }
 
@@ -1498,23 +1661,16 @@ public struct AppReducer {
             return false
         }
 
-        let rightAuxPanelID = focusableRightAuxPanelID(in: workspace)
+        let rightAuxPanelID = workspace.focusableRightAuxPanelID
         let rightAuxPanelIsFocused = rightAuxPanelID != nil &&
             workspace.rightAuxPanel.focusedPanelID == rightAuxPanelID
 
         switch direction {
         case .previous, .next:
-            let targets = focusGraphTargets(in: workspace, rightAuxPanelID: rightAuxPanelID)
-            guard targets.count > 1 else { return false }
-
-            let currentTarget: FocusGraphTarget
-            if rightAuxPanelIsFocused, let rightAuxPanelID {
-                currentTarget = .rightAuxPanel(rightAuxPanelID)
-            } else {
-                currentTarget = .mainPanel(focusResolution.panelID)
-            }
-
-            guard let currentIndex = targets.firstIndex(of: currentTarget) else {
+            let targets = workspace.panelFocusCycle
+            guard targets.count > 1,
+                  let currentTarget = workspace.currentPanelFocusCycleTarget,
+                  let currentIndex = targets.firstIndex(of: currentTarget) else {
                 return false
             }
 
@@ -1584,38 +1740,9 @@ public struct AppReducer {
         }
     }
 
-    private static func focusableRightAuxPanelID(in workspace: WorkspaceState) -> UUID? {
-        guard workspace.focusedPanelModeActive == false,
-              workspace.rightAuxPanel.isVisible,
-              let activePanelID = workspace.rightAuxPanel.activePanelID else {
-            return nil
-        }
-        return activePanelID
-    }
-
-    private static func focusGraphTargets(
-        in workspace: WorkspaceState,
-        rightAuxPanelID: UUID?
-    ) -> [FocusGraphTarget] {
-        let visibleRoot = workspace.focusModeSubtree?.root ?? workspace.layoutTree
-        var targets = visibleRoot.allSlotInfos.compactMap { slot -> FocusGraphTarget? in
-            guard workspace.panels[slot.panelID] != nil else {
-                return nil
-            }
-            return .mainPanel(slot.panelID)
-        }
-
-        if let rightAuxPanelID,
-           targets.contains(.rightAuxPanel(rightAuxPanelID)) == false {
-            targets.append(.rightAuxPanel(rightAuxPanelID))
-        }
-
-        return targets
-    }
-
     @discardableResult
     private static func focus(
-        _ target: FocusGraphTarget,
+        _ target: PanelFocusCycleTarget,
         workspaceID: UUID,
         workspace: inout WorkspaceState,
         state: inout AppState
@@ -1638,7 +1765,7 @@ public struct AppReducer {
             workspace.unreadWorkspaceNotificationCount = 0
 
         case .rightAuxPanel(let targetPanelID):
-            guard focusableRightAuxPanelID(in: workspace) == targetPanelID else {
+            guard workspace.focusableRightAuxPanelID == targetPanelID else {
                 return false
             }
             guard workspace.rightAuxPanel.focusedPanelID != targetPanelID else {
@@ -2128,10 +2255,13 @@ public struct AppReducer {
 
         // Closing a parent keeps its subspaces open as top-level workspaces
         // rather than closing work the user may still be running there.
+        // A task space keeps its done mark: a merge waiting there relies on it.
         for subspaceID in state.subspaceWorkspaceIDs(of: workspaceID) {
             state.workspacesByID[subspaceID]?.parentWorkspaceID = nil
             state.workspacesByID[subspaceID]?.spawningSessionID = nil
-            state.workspacesByID[subspaceID]?.doneAt = nil
+            if state.workspacesByID[subspaceID]?.canHoldDoneMark == false {
+                state.workspacesByID[subspaceID]?.doneAt = nil
+            }
         }
         state.workspacesByID.removeValue(forKey: workspaceID)
         window.workspaceIDs.remove(at: workspaceIndex)
@@ -2156,7 +2286,12 @@ public struct AppReducer {
 
         if window.selectedWorkspaceID == workspaceID {
             let nextIndex = min(workspaceIndex, window.workspaceIDs.count - 1)
-            window.selectedWorkspaceID = window.workspaceIDs[nextIndex]
+            // The neighbor after, else before. The coordinator's workspace
+            // is selected only when no other is left: its chat shows in the
+            // dock beside the others.
+            let neighbors = window.workspaceIDs[nextIndex...] + window.workspaceIDs[..<nextIndex].reversed()
+            let coordinatorWorkspaceID = state.coordinatorWorkspaceID
+            window.selectedWorkspaceID = neighbors.first { $0 != coordinatorWorkspaceID } ?? window.workspaceIDs[nextIndex]
         }
 
         state.windows[windowIndex] = window

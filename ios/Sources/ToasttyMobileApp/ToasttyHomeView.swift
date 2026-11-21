@@ -1,3 +1,4 @@
+import ConversationUI
 import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
@@ -46,7 +47,10 @@ enum ToasttyWorkspaceSessionFilter: String, CaseIterable {
             let conversations = conversations(in: workspace)
             let rows = subspaceRows(of: workspace.id, in: snapshot)
             let keepsPanelOnlyWorkspace = self == .all && !workspace.panels.isEmpty
-            guard !conversations.isEmpty || !rows.isEmpty || keepsPanelOnlyWorkspace else {
+            // A project whose tasks all finished still shows, for the
+            // footer that counts them.
+            let hasFinishedTasks = snapshot.taskBoard?.finished(projectID: workspace.id) != nil
+            guard !conversations.isEmpty || !rows.isEmpty || keepsPanelOnlyWorkspace || hasFinishedTasks else {
                 return nil
             }
             return ToasttyHomeSection(
@@ -191,15 +195,20 @@ struct ToasttyHomeView: View {
     let notificationError: String?
     /// Nil hides Retry, such as for advice that retrying cannot resolve.
     let retryNotifications: (() -> Void)?
+    /// Switches to the Tasks tab at a group, from a card's To ship line.
+    let showTasks: (ToasttyTasksTabTarget) -> Void
 
     @AppStorage private var storedWorkspaceSessionFilter: String
+    @AppStorage private var storedHomeSegment: String
     @AppStorage(ToasttyCollapsedSubspaceGroups.preferenceKey) private var storedCollapsedGroups = ""
-    @State private var isRetryingConnection = false
+    @AppStorage(ToasttyCollapsedSubspaceGroups.projectCardsPreferenceKey) private var storedCollapsedCards = ""
     /// The ⑂ chip whose subspaces its group is limited to.
     @State private var spawnerFilter: ToasttySpawnerChip?
     /// The session whose detail card the Info swipe opened.
     @State private var infoConversation: ToasttySessionInfoSelection?
     @State private var newSession: ToasttyNewSessionModel?
+    @State private var taskDetail: ToasttyTaskDetailSelection?
+    @State private var newTask: ToasttyNewTaskModel?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let defaults: UserDefaults
 
@@ -210,6 +219,7 @@ struct ToasttyHomeView: View {
         openWorkspace: @escaping (UUID) -> Void = { _ in },
         notificationError: String? = nil,
         retryNotifications: (() -> Void)? = nil,
+        showTasks: @escaping (ToasttyTasksTabTarget) -> Void = { _ in },
         defaults: UserDefaults = .standard
     ) {
         self.controller = controller
@@ -218,10 +228,16 @@ struct ToasttyHomeView: View {
         self.openWorkspace = openWorkspace
         self.notificationError = notificationError
         self.retryNotifications = retryNotifications
+        self.showTasks = showTasks
         self.defaults = defaults
         _storedWorkspaceSessionFilter = AppStorage(
             wrappedValue: ToasttyWorkspaceSessionFilter.defaultFilter.rawValue,
             ToasttyWorkspaceSessionFilter.preferenceKey,
+            store: defaults
+        )
+        _storedHomeSegment = AppStorage(
+            wrappedValue: ToasttyHomeSegment.defaultSegment.rawValue,
+            ToasttyHomeSegment.preferenceKey,
             store: defaults
         )
     }
@@ -249,6 +265,13 @@ struct ToasttyHomeView: View {
             ToasttySessionInfoSheet(conversationID: selection.id, controller: controller)
         }
         .toasttyNewSessionSheet($newSession, controller: controller)
+        .toasttyTaskDetailSheet($taskDetail, controller: controller, openWorkspace: openWorkspace)
+        .toasttyNewTaskSheet($newTask, controller: controller)
+        .onChange(of: controller.requestedTaskDetailID, initial: true) { _, taskID in
+            guard let taskID else { return }
+            controller.requestedTaskDetailID = nil
+            openTask(taskID)
+        }
         // The identifier must precede safeAreaInset: applied after it, it
         // stamps both the scroll view and the inset header, breaking UI-test
         // queries with ambiguous matches.
@@ -261,8 +284,12 @@ struct ToasttyHomeView: View {
                 if let notificationError {
                     ToasttyNotificationErrorBanner(message: notificationError, retry: retryNotifications)
                 }
-                connectionNotice
-                workspaceSessionFilterPicker
+                ToasttyConnectionNotice(controller: controller, refresh: refresh)
+                if controller.snapshot.taskBoard != nil {
+                    homeSegmentPicker
+                } else {
+                    workspaceSessionFilterPicker
+                }
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: 560)
@@ -272,6 +299,7 @@ struct ToasttyHomeView: View {
         }
         .background(ToasttyDesignTokens.background)
         .toasttySubspaceDoneNotice(controller)
+        .toasttyTaskActionPresenter(controller)
         .toolbar(.hidden, for: .navigationBar)
         .sensoryFeedback(.warning, trigger: needsApprovalCount) { old, new in
             new > old
@@ -284,14 +312,66 @@ struct ToasttyHomeView: View {
         }
     }
 
-    private var orderedRowIDs: [UUID] {
-        sections.flatMap { section in
+    private var orderedRowIDs: [AnyHashable] {
+        if controller.snapshot.taskBoard != nil {
+            switch selectedHomeSegment {
+            case .needsYou:
+                return cards.filter(\.listsInNeedsYou).flatMap { card in
+                    [AnyHashable(card.id)] + card.needsYouOrderedKeys.map(AnyHashable.init)
+                }
+            case .all:
+                return cards.flatMap { card in
+                    [AnyHashable(card.id)] + (isCardCollapsed(card) ? [] : card.orderedKeys.map(AnyHashable.init))
+                }
+            }
+        }
+        let ids: [UUID] = sections.flatMap { section in
             [section.id] + section.workspace.conversations.map(\.id) + section.subspaceRows.map(\.id)
         }
+        return ids.map(AnyHashable.init)
     }
 
+    /// With the Mac's task system, All lists every session in its project's
+    /// card; Needs you replaces Active.
     private var selectedWorkspaceSessionFilter: ToasttyWorkspaceSessionFilter {
-        ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) ?? .defaultFilter
+        guard controller.snapshot.taskBoard == nil else { return .all }
+        return ToasttyWorkspaceSessionFilter(rawValue: storedWorkspaceSessionFilter) ?? .defaultFilter
+    }
+
+    private var selectedHomeSegment: ToasttyHomeSegment {
+        ToasttyHomeSegment(rawValue: storedHomeSegment) ?? .defaultSegment
+    }
+
+    /// The switcher counts the rows the Needs you segment lists.
+    private var homeSegmentPicker: some View {
+        ToasttyHomeSegmentControl(
+            selection: Binding(
+                get: { selectedHomeSegment },
+                set: { storedHomeSegment = $0.rawValue }
+            ),
+            counts: MobileHomeNeedsYouCounts(cards)
+        )
+    }
+
+    /// The All segment's cards. The ⑂ filter leaves the other task spaces
+    /// of its project out of the card's buckets, but not out of its counts.
+    private var cards: [MobileHomeCard] {
+        var hidden: Set<MobileHomeRowKey> = []
+        if let filter = spawnerFilter {
+            let rows = controller.snapshot.subspaceRows(of: filter.parentWorkspaceID)
+            let shown = Set(ToasttySubspaceGroupPresentation.rows(rows, spawnedBy: filter.conversationID).rows.map(\.id))
+            hidden = Set(rows.map(\.id).filter { shown.contains($0) == false }.map(MobileHomeRowKey.workspace))
+        }
+        return MobileHomeBuckets.cards(in: controller.snapshot, hiding: hidden)
+    }
+
+    private func isCardCollapsed(_ card: MobileHomeCard) -> Bool {
+        card.isOtherTasks == false
+            && ToasttyCollapsedSubspaceGroups(storedValue: storedCollapsedCards).contains(card.id)
+    }
+
+    private func openTask(_ taskID: UUID) {
+        taskDetail = ToasttyTaskDetailSelection(id: taskID, fallback: controller.snapshot.taskBoard?.task(id: taskID))
     }
 
     private var workspaceSessionFilterSelection: Binding<ToasttyWorkspaceSessionFilter> {
@@ -313,6 +393,64 @@ struct ToasttyHomeView: View {
 
     @ViewBuilder
     private func workspaceContent(_ proxy: ScrollViewProxy) -> some View {
+        if controller.snapshot.taskBoard != nil {
+            switch selectedHomeSegment {
+            case .all:
+                cardContent(proxy)
+            case .needsYou:
+                ToasttyNeedsYouCards(
+                    cards: cards,
+                    controller: controller,
+                    infoConversation: $infoConversation,
+                    openWorkspace: openWorkspace,
+                    openTask: { openTask($0.id) }
+                )
+            }
+        } else {
+            projectContent(proxy)
+        }
+    }
+
+    @ViewBuilder
+    private func cardContent(_ proxy: ScrollViewProxy) -> some View {
+        let cards = self.cards
+        if cards.isEmpty {
+            workspaceEmptyState
+                .toasttyListRow()
+        } else {
+            ToasttyProjectCards(
+                cards: cards,
+                controller: controller,
+                spawnerFilter: $spawnerFilter,
+                infoConversation: $infoConversation,
+                openWorkspace: openWorkspace,
+                openTask: { openTask($0.id) },
+                showTasks: showTasks,
+                onSpawnerChip: { toggleSpawnerFilter($0, proxy: proxy) }
+            )
+        }
+        // The Coordinator tab shows once the coordinator's workspace exists;
+        // until then Home says where it starts.
+        if controller.snapshot.coordinator == nil {
+            ToasttyMacHintCard(
+                title: "Coordinator",
+                message: "Not started yet. It starts on your Mac: choose Open Coordinator in the Agent menu.",
+                identifier: "toastty-mobile-home-coordinator-hint"
+            ) {
+                ToastyIcon(
+                    style: .golden,
+                    size: 30,
+                    palette: .phone,
+                    badgeRingColor: ToasttyDesignTokens.raisedSurface
+                )
+            }
+            .padding(.top, 14)
+            .toasttyListRow()
+        }
+    }
+
+    @ViewBuilder
+    private func projectContent(_ proxy: ScrollViewProxy) -> some View {
         if sections.isEmpty {
             workspaceEmptyState
                 .toasttyListRow()
@@ -364,26 +502,48 @@ struct ToasttyHomeView: View {
         // much Active is hiding.
         hiddenSessionsFooter
             .toasttyListRow()
+        if controller.asksToUpdateMacForTasks {
+            ToasttyMacHintCard(
+                title: "Tasks and the coordinator",
+                message: "Update Toastty on your Mac to see them here.",
+                identifier: "toastty-mobile-home-update-mac-hint"
+            ) {
+                Image(systemName: "desktopcomputer")
+                    .font(.title3)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+            }
+            .padding(.top, 14)
+            .toasttyListRow()
+        }
     }
 
     private static func subspaceGroupID(_ parentID: UUID) -> String {
         "subspaces-\(parentID.uuidString)"
     }
 
-    /// The chip limits its group to the session's subspaces; tapping it
-    /// again shows them all. The group may sit under another workspace, so
-    /// it is opened and scrolled into view.
+    /// The chip limits its group, or with the task system its project's
+    /// card, to the session's subspaces; tapping it again shows them all.
+    /// The group may sit under another workspace, so it is opened and
+    /// scrolled into view.
     private func toggleSpawnerFilter(_ chip: ToasttySpawnerChip, proxy: ScrollViewProxy) {
         guard spawnerFilter?.conversationID != chip.conversationID else {
             spawnerFilter = nil
             return
         }
         spawnerFilter = chip
-        var groups = ToasttyCollapsedSubspaceGroups(storedValue: storedCollapsedGroups)
+        let usesCards = controller.snapshot.taskBoard != nil
+        var groups = ToasttyCollapsedSubspaceGroups(storedValue: usesCards ? storedCollapsedCards : storedCollapsedGroups)
         groups.set(chip.parentWorkspaceID, collapsed: false)
-        storedCollapsedGroups = groups.storedValue
+        if usesCards {
+            storedCollapsedCards = groups.storedValue
+        } else {
+            storedCollapsedGroups = groups.storedValue
+        }
         withAnimation(reduceMotion ? nil : .default) {
-            proxy.scrollTo(Self.subspaceGroupID(chip.parentWorkspaceID), anchor: .center)
+            proxy.scrollTo(
+                usesCards ? ToasttyProjectCards.cardScrollID(chip.parentWorkspaceID) : Self.subspaceGroupID(chip.parentWorkspaceID),
+                anchor: usesCards ? .top : .center
+            )
         }
     }
 
@@ -479,65 +639,6 @@ struct ToasttyHomeView: View {
         "\(count) \(count == 1 ? "session" : "sessions")"
     }
 
-    @ViewBuilder
-    private var connectionNotice: some View {
-        if let message = controller.connectionNoticeMessage {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 9) {
-                    connectionNoticeIndicator
-                    Text(message)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
-                .accessibilityValue(showsProgressIndicator ? "In progress" : "")
-                .accessibilityIdentifier("toastty-mobile-connection-notice")
-
-                if controller.freshness == .reconnecting {
-                    Button("Retry", action: retryConnection)
-                        .buttonStyle(.bordered)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .disabled(isRetryingConnection)
-                        .accessibilityLabel("Retry connection")
-                        .accessibilityIdentifier("toastty-mobile-connection-retry")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(controller.freshness == .unreachable
-                ? ToasttyDesignTokens.red
-                : ToasttyDesignTokens.amberText)
-            .toasttyCard()
-        }
-    }
-
-    private func retryConnection() {
-        guard isRetryingConnection == false else { return }
-        isRetryingConnection = true
-        Task { @MainActor in
-            await refresh()
-            isRetryingConnection = false
-        }
-    }
-
-    @ViewBuilder
-    private var connectionNoticeIndicator: some View {
-        if showsProgressIndicator {
-            ProgressView()
-                .controlSize(.small)
-                .tint(ToasttyDesignTokens.amber)
-        } else {
-            Image(systemName: controller.freshness == .unreachable
-                ? "wifi.slash"
-                : "arrow.trianglehead.2.clockwise.rotate.90")
-        }
-    }
-
-    private var showsProgressIndicator: Bool {
-        controller.freshness == .reconnecting || controller.freshness == .connecting
-    }
-
     private var header: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center) {
@@ -578,32 +679,14 @@ struct ToasttyHomeView: View {
         )
     }
 
-    /// Starts a session in the workspace of the last one started from this
-    /// phone, which the sheet lets the person change.
-    @ViewBuilder
     private var newSessionButton: some View {
-        if controller.canStartSessions,
-           let workspace = controller.defaultSessionStartWorkspace(
-               lastUsed: ToasttyNewSessionPreferences(defaults: defaults).lastWorkspaceID
-           ) {
-            Button {
-                newSession = ToasttyNewSessionModel(
-                    workspaceID: workspace.id,
-                    workspaceTitle: workspace.title,
-                    host: controller,
-                    preferences: ToasttyNewSessionPreferences(defaults: defaults)
-                )
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .background(ToasttyDesignTokens.amber, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(ToasttyDesignTokens.inkOnAmber)
-            .accessibilityLabel("New session")
-            .accessibilityIdentifier("toastty-mobile-home-new-session")
-        }
+        ToasttyNewWorkButton(
+            controller: controller,
+            identifierPrefix: "toastty-mobile-home",
+            newTask: $newTask,
+            newSession: $newSession,
+            defaults: defaults
+        )
     }
 
     private var settingsButton: some View {
@@ -620,5 +703,44 @@ struct ToasttyHomeView: View {
         .foregroundStyle(ToasttyDesignTokens.mutedText)
         .accessibilityLabel("Settings")
         .accessibilityIdentifier("toastty-mobile-settings-button")
+    }
+}
+
+/// A card at the end of Home that says what to do on the Mac for something
+/// the phone cannot show yet.
+private struct ToasttyMacHintCard<Icon: View>: View {
+    let title: String
+    let message: String
+    let identifier: String
+    @ViewBuilder let icon: Icon
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            icon
+                .frame(width: 30, height: 30)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(ToasttyDesignTokens.primaryText)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            ToasttyDesignTokens.raisedSurface,
+            in: RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ToasttyDesignTokens.cardCornerRadius)
+                .strokeBorder(ToasttyDesignTokens.border)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(identifier)
     }
 }
