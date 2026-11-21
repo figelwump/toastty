@@ -601,12 +601,16 @@ Improve. Do not commit the ledger.
 
 ## First run
 
-Ask the user how to set you up, once. Do it in a turn that the user started,
-while one of the Projects, Agents, Talking, Reviewing and Improving sections
-of `policy.md` is missing or holds no rule, and the ledger has no `asked
-first-run` line. Do it also when the user asks you to set yourself up again.
-First read `references/first-run.md` in your folder and follow it. If you
-cannot read it, do not ask.
+Ask the user how to set you up, once, one part at a time. Start in a turn
+that the user started, while one of the Projects, Agents, Talking, Reviewing
+and Improving sections of `policy.md` is missing or holds no rule, and the
+ledger has no `asked first-run` line. Start also when the user asks you to
+set yourself up again. Then, while the ledger has an `asked first-run` line,
+go on in each turn that the user started; when the line says `paused`,
+only when the user says "continue" or "defaults", or answers a part. In each
+of these turns, first read `references/first-run.md` in your folder, and the
+time with `date -u +%Y-%m-%dT%H:%MZ` in the same command, and follow the
+file. If you cannot read it, do not ask.
 
 ## Follow through
 
@@ -651,7 +655,7 @@ it, skip this section.
 
 The Talking section of `policy.md` changes these defaults.
 
-- Give your name only in the first-run question and when the user asks
+- Give your name only in the first-run preamble and when the user asks
   who you are. Do not sign or open other answers with it.
 - Name each task by its title as a link, `[title](toastty://task/<task-id>)`,
   in all that you write: to the user, in a message to a task, and in the

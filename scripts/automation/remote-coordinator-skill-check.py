@@ -813,15 +813,23 @@ class Run:
                 text = pasted.group(2).strip() if pasted else text
                 if text and not any(p.get('type') == 'tool_result' for p in parts) and not text.startswith('<'):
                     turns.append(dict(prompt=text, wake=text.startswith(WAKE), commands=[], edits=[], tools=[], texts=[],
-                                      messages=[], at=record.get('timestamp')))
+                                      messages=[], steps=[], at=record.get('timestamp')))
             elif record.get('type') == 'assistant' and turns:
                 turn = turns[-1]
+                # Seconds after the prompt, in the order the transcript wrote them.
+                at = (parse_time(record['timestamp']) - parse_time(turn['at'])
+                      if record.get('timestamp') and turn['at'] else None)
                 for part in parts:
                     if part.get('type') == 'text' and part.get('text', '').strip():
                         turn['texts'].append(part['text'].strip())
+                        # Toastty's chat shows a Claude text as an answer only with `end_turn`
+                        # (ClaudeTranscriptParser); any other text folds into the turn's work.
+                        turn['steps'].append(dict(kind='text', at=at, text=part['text'].strip()[:200],
+                                                  stop=(record.get('message') or {}).get('stop_reason')))
                     elif part.get('type') == 'tool_use':
                         tool, tool_input = part.get('name'), part.get('input') or {}
                         turn['tools'].append(tool)
+                        turn['steps'].append(dict(kind='tool', at=at, tool=tool))
                         if tool == 'Bash':
                             turn['commands'].append(tool_input.get('command', ''))
                         elif tool in ('Edit', 'Write', 'NotebookEdit', 'MultiEdit'):
@@ -1027,33 +1035,76 @@ def history(run, extra=()):
 FIRST_RUN_SECTIONS = ('Projects', 'Agents', 'Talking', 'Reviewing', 'Improving')
 
 
-def check_first_run_saved(run, commits_before):
-    """After the user's yes: each asked section holds a rule, in one commit of the policy."""
+def policy_commits(run):
+    return int(run.git('rev-list', '--count', 'HEAD') or 0)
+
+
+def holding(run):
+    """The first-run sections that hold a rule."""
+    return {name for name in FIRST_RUN_SECTIONS if run.section(name)}
+
+
+def check_saved_so_far(run, sections, commits_expected, label):
+    """In the middle of the first run: only the parts that the answers settled hold rules, all committed."""
+    run.check(f'{label}: only {", ".join(sections)} hold rules, after {commits_expected - 1} commit(s) of the policy',
+              holding(run) == set(sections) and policy_commits(run) == commits_expected
+              and run.git('status', '--porcelain', 'policy.md') == '',
+              [sorted(holding(run)), run.git('log', '--oneline'), run.git('status', '--porcelain', 'policy.md')])
+
+
+def check_first_run_saved(run, commits_before, answers):
+    """After the last answer: each asked section holds a rule, with one commit of the policy for each answer."""
     empty = [name for name in FIRST_RUN_SECTIONS if not run.section(name)]
-    run.check('after the yes, Projects, Agents, Talking, Reviewing and Improving hold rules', not empty, run.policy())
+    run.check('after the last answer, Projects, Agents, Talking, Reviewing and Improving hold rules', not empty, run.policy())
     run.check('the Improving rule says when the review runs, not only "defaults"',
               any(re.search(r'\d{1,2}[:.]\d{2}|\d ?(am|pm)|only when|ask', line.lower()) for line in run.section('Improving')),
               run.section('Improving'), required=False)
-    run.check('the rules are committed in one commit, so one undo removes them',
-              int(run.git('rev-list', '--count', 'HEAD') or 0) == commits_before + 1
-              and run.git('status', '--porcelain', 'policy.md') == '', run.git('log', '--oneline'))
-    run.check('the ledger no longer waits for the answer', 'asked first-run' not in run.ledger(), run.ledger(),
-              required=False)
+    run.check(f'each answer is one commit ({answers} here), so one undo removes it',
+              policy_commits(run) == commits_before + answers and run.git('status', '--porcelain', 'policy.md') == '',
+              run.git('log', '--oneline'))
+    run.check('the ledger no longer waits for an answer', 'asked first-run' not in run.ledger(), run.ledger())
 
 
-def asks_every_part(run, said):
-    """The one message asks about routing, answers and review. Wording only, so these are notes."""
+def first_answer(run, turns):
+    """The first answer: a preamble and one question, written after the commands, as the end of the turn.
+    Toastty's chat folds text that comes before a command into the turn's work, where the user does not see it."""
+    turns = [turn for turn in turns if not turn['wake']]
+    said = run.said(turns)
     lower = said.lower()
-    run.check('it asks about model and effort', 'effort' in lower and 'model' in lower, said, required=False)
-    run.check('it asks how it should answer (Talking)', re.search(r'talking|answer|questions', lower), said,
+    steps = [step for turn in turns for step in turn['steps']]
+    folded = [step for step in steps if step['kind'] == 'text' and step['stop'] != 'end_turn']
+    shown = [step for step in steps if step['kind'] == 'text' and step['stop'] == 'end_turn']
+    # A short note before a command, such as "Fixing the ledger line.", folds away harmlessly; the preamble and
+    # the question must be in the final message, which is the only text the chat shows.
+    run.check('the chat shows the answer: it is the final message, and folded text is at most a short note',
+              shown and sum(len(step['text']) for step in folded) < 200,
+              [f'{step["stop"]}: {step["text"]}' for step in folded] or said)
+    run.check('it writes nothing to the policy before an answer', not holding(run) and policy_commits(run) == 1,
+              [run.policy(), run.git('log', '--oneline')])
+    shown = [step for step in steps if step['kind'] == 'text' and step['stop'] == 'end_turn' and step['at'] is not None]
+    if shown:
+        timing = (f'first answer: first text shown after {shown[0]["at"]:.1f} s, end after {steps[-1]["at"]:.1f} s, '
+                  f'{len(said)} characters, {sum(step["kind"] == "tool" for step in steps)} tool calls')
+        run.notes.append(timing)
+        say(run.label, 'time', timing)
+    run.check('it introduces itself by name', 'toasty' in lower, said, required=False)
+    run.check('the preamble names the parts',
+              all(re.search(pattern, lower) for pattern in (r'agent|model', r'project', r'answer|talk', r'check|review',
+                                                            r'faster|improv|slow')), said, required=False)
+    run.check('the preamble says that it asks one at a time', re.search(r'one at a time|one by one|in turn', lower), said,
               required=False)
-    run.check('it asks how much it checks (Reviewing)', re.search(r'review|proof|ready|check', lower), said,
+    run.check('the preamble offers "defaults" for all', 'defaults' in lower, said, required=False)
+    run.check('it asks only about Agents now: no daily list time, no review explained',
+              not re.search(r'\b0?9:00\b|friction', lower), said, required=False)
+    run.check('the ledger line names the five parts', re.search(r'asked first-run:.*agents.*projects.*talking.*reviewing.*improving',
+                                                                run.ledger().lower()), run.ledger(), required=False)
+    return said
+
+
+def shows_saved(run, said):
+    run.check('after the last answer, it shows what it saved for each part',
+              all(word in said.lower() for word in ('agents', 'projects', 'talking', 'review', 'improving')), said,
               required=False)
-    run.check('it explains how it helps the work get faster (Improving)',
-              re.search(r'friction|slow|faster|bottleneck', lower) and re.search(r'once a day|17:00|5 ?pm|daily', lower),
-              said, required=False)
-    run.check('it asks the user to confirm or correct it',
-              re.search(r'\?|confirm|correct|"?yes|tell me what to change|let me know', lower), said, required=False)
 
 
 def offers_project_routes(run, said):
@@ -1069,26 +1120,29 @@ def offers_project_routes(run, said):
 
 
 def first_run(run):
-    """The first run drafts Projects and Agents from the task history, and asks about all five parts."""
+    """The first run asks one part at a time: Agents and then Projects drafted from the task history, each saved
+    at its answer, and "defaults" takes the rest."""
     history(run)
     run.open_coordinator()
     template = run.policy()
     run.check('Toastty made the policy with headings only, Talking among them',
               all(run.section(name) == [] for name in FIRST_RUN_SECTIONS) and '## Talking' in template, template)
-    turns = run.tell('Hi. I just turned you on.')
-    said = run.said(turns)
-    run.check('the draft names both projects', 'marketing' in said.lower() and re.search(r'\bapp\b', said.lower()), said)
-    run.check('the draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
-    asks_every_part(run, said)
+    said = first_answer(run, run.tell('Hi. I just turned you on.'))
+    run.check('the Agents draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
+    said = run.said(run.tell('Yes.'))
+    check_saved_so_far(run, ['Agents'], 2, 'the first yes saves its part at once')
+    run.check('Agents holds the drafted models', any('sonnet' in line.lower() for line in run.section('Agents')),
+              run.section('Agents'))
+    run.check('it asks about Projects next, with a draft that names both projects',
+              'marketing' in said.lower() and re.search(r'\bapp\b', said.lower()), said)
     offers_project_routes(run, said)
-    run.check('it writes nothing before the answer', run.policy() == template and run.git('rev-list', '--count', 'HEAD') == '1',
-              run.policy())
-    run.check('the ledger records that it asked', 'first-run' in run.ledger(), run.ledger(), required=False)
-    run.tell('Yes, that is right. Save it.')
-    check_first_run_saved(run, 1)
-    run.check('Projects and Agents hold the drafted rules',
-              any('marketing' in line.lower() for line in run.section('Projects'))
-              and any('sonnet' in line.lower() for line in run.section('Agents')), run.policy())
+    said = run.said(run.tell('Yes, that is right. Let the rules build up.'))
+    check_saved_so_far(run, ['Agents', 'Projects'], 3, 'the second yes saves its part at once')
+    run.check('Projects holds the drafted rules', any('marketing' in line.lower() for line in run.section('Projects')),
+              run.section('Projects'))
+    run.check('it asks about Talking next', re.search(r'talking|how i answer', said.lower()), said, required=False)
+    shows_saved(run, run.said(run.tell('Defaults for the rest.')))
+    check_first_run_saved(run, 1, answers=3)
 
 
 # A rule for choosing models, as a user keeps it in a global AGENTS.md. Claude
@@ -1112,20 +1166,19 @@ def created_since(run, before):
 
 
 def first_run_instructions(run):
-    """With no choices in the history, it suggests the model rule from the user's instruction files, and uses it."""
+    """With no choices in the history, it suggests the model rule from the user's instruction files. "defaults",
+    the answer to the preamble, saves all five parts in one commit, and new tasks use the rule."""
     for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
         run.create_task(title, done=True)
     (run.runtime_home / 'CLAUDE.md').write_text(INSTRUCTION_RULE)
     run.open_coordinator()
-    said = run.said(run.tell('Hi. I just turned you on.'))
+    said = first_answer(run, run.tell('Hi. I just turned you on.'))
     lower = said.lower()
     run.check("it suggests the instruction file's table", 'sonnet' in lower and 'xhigh' in lower, said)
     run.check('it says where the table comes from', re.search(r'claude\.md|agents\.md|instruction', lower), said,
               required=False)
-    asks_every_part(run, said)
-    commits = int(run.git('rev-list', '--count', 'HEAD') or 0)
-    run.tell('Yes.')
-    check_first_run_saved(run, commits)
+    shows_saved(run, run.said(run.tell('Defaults.')))
+    check_first_run_saved(run, 1, answers=1)
     agents = '\n'.join(run.section('Agents')).lower()
     run.check('Agents holds the three rows', 'sonnet' in agents and 'xhigh' in agents and 'medium' in agents, agents)
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
@@ -1139,21 +1192,20 @@ def first_run_instructions(run):
 
 
 def first_run_request(run):
-    """The first message is a request: it makes the task and asks; after the answer, new tasks follow the table."""
+    """The first message is a request: it makes the task, then asks the first part. One answer that settles
+    Agents and takes the suggestions for the rest saves all five; new tasks follow the table."""
     for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
         run.create_task(title, done=True)
     run.open_coordinator()
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
-    said = run.said(run.tell('Add a --verbose flag to the import command. It should print each file it reads.'))
+    said = first_answer(run, run.tell('Add a --verbose flag to the import command. It should print each file it reads.'))
     run.check('it makes the task at once', len(created_since(run, before)) == 1,
               [t['title'] for t in created_since(run, before)])
-    asks_every_part(run, said)
     run.check('it suggests a starter table with rising effort', re.search(r'medium|low', said.lower())
               and re.search(r'x?high', said.lower()), said)
-    commits = int(run.git('rev-list', '--count', 'HEAD') or 0)
     run.tell('Use claude-sonnet-5-5 at medium for small clear changes, claude-opus-5-5 at high for features, '
              'and claude-opus-5-5 at xhigh for hard or open work. The rest as you suggest.')
-    check_first_run_saved(run, commits)
+    check_first_run_saved(run, 1, answers=1)
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     run.tell('New task: find out why the importer sometimes skips files on network drives. Nobody knows the cause yet; '
              'it may need a redesign of how we watch folders.')
@@ -1165,20 +1217,17 @@ def first_run_request(run):
 
 def first_run_one_project(run):
     """One project is known: the first run does not limit work to it, and a task can go to a repository that
-    Toastty never opened."""
+    Toastty never opened. That request comes in place of the Projects answer: it pauses the setup, which
+    "continue" resumes."""
     for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
         run.create_task(title, done=True)
     # A repository on this Mac that Toastty has never opened.
     website = os.path.realpath(run.project('website'))
     run.open_coordinator()
-    said = run.said(run.tell('Hi. I just turned you on.'))
-    asks_every_part(run, said)
+    first_answer(run, run.tell('Hi. I just turned you on.'))
+    said = run.said(run.tell('Yes.'))
+    check_saved_so_far(run, ['Agents'], 2, 'the yes saves its part at once')
     offers_project_routes(run, said)
-    commits = int(run.git('rev-list', '--count', 'HEAD') or 0)
-    run.tell('Yes. Let the projects build up.')
-    check_first_run_saved(run, commits)
-    run.check('Projects keeps the drafted rule for app', any(re.search(r'\bapp\b', line) for line in run.section('Projects')),
-              run.section('Projects'))
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     said = run.said(run.tell(f'New task in {website}: the README says "teh site". Make it "the site".'))
     created = created_since(run, before)
@@ -1194,6 +1243,19 @@ def first_run_one_project(run):
         run.check('Toastty opened a workspace for the repository',
                   any(os.path.realpath(w.get('rootDirectory') or '') == website for w in opened),
                   [(w['title'], w.get('rootDirectory')) for w in opened])
+    check_saved_so_far(run, ['Agents'], 2, 'a request in place of the answer saves nothing')
+    run.check('it says that the setup paused, and how to go on', re.search(r'paus|continue', said.lower()), said,
+              required=False)
+    run.check('the ledger marks the pause', re.search(r'asked first-run.*paused', run.ledger()), run.ledger(),
+              required=False)
+    said = run.said(run.tell('Continue.'))
+    check_saved_so_far(run, ['Agents'], 2, '"continue" saves nothing')
+    run.check('"continue" asks the open part, Projects, again', re.search(r'project', said.lower()), said)
+    offers_project_routes(run, said)
+    run.tell('Let the projects build up. Your suggestions for the rest.')
+    check_first_run_saved(run, 2, answers=1)
+    run.check('Projects keeps the drafted rule for app', any(re.search(r'\bapp\b', line) for line in run.section('Projects')),
+              run.section('Projects'))
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     said = run.said(run.tell('New task in the billing service: invoice totals round down. Round them to the nearest cent.'))
     created = created_since(run, before)
