@@ -33,7 +33,9 @@ the turn.
      they are about;
    - that each question has a suggestion, which "yes" takes;
    - that "defaults" takes your suggestions for all of them, and that you
-     then show what you saved, which the user can change at any time.
+     then show what you saved, which the user can change at any time;
+   - that you save the user's preferences, from this setup and later, in
+     `policy.md`, which Open Policy in the coordinator panel's menu shows.
 
    Then ask the first part, headed with its place, such as
    **1 of 5 · Agents**. Ask no other part in this message. When you ask
@@ -71,6 +73,11 @@ choices in one line.
    - the rules build up: the user names the project in a request, you ask
      when you are not sure, and you learn from the answer as New tasks
      says.
+
+   When the user names a project without its directory, find the directory
+   as New tasks says, with `task workspace-choices --name`, before you ask
+   for it. Write its rule only with a directory the lookup gave from a
+   known source, or that the user confirmed or gave.
 3. **How you answer (Talking).** Suggest the defaults of your instructions: a
    task for every question and every piece of work, except questions about
    where the tasks stand; short answers; only what needs the user; and each

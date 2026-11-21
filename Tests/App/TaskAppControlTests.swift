@@ -364,6 +364,35 @@ struct TaskAppControlTests {
                 context: context(scopedSessionID)
             )
         }
+
+        // A name looks up project directories: the open one by its title,
+        // and a git repository next to it that Toastty never opened. A
+        // scoped session gets neither: one is outside its scope, the other
+        // is not open.
+        let sibling = fixture.root.appendingPathComponent("billing-service", isDirectory: true)
+        try FileManager.default.createDirectory(at: sibling.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let open = try executor.runQuery(id: "task.workspace-choices", args: ["name": .string("Toastty")])
+        #expect(open["matches"] == .array([.object([
+            "title": .string("toastty"),
+            "rootDirectory": .string(fixture.projectRoot),
+            "source": .string("open"),
+            "workspaceID": .string(fixture.workspaceID.uuidString),
+        ])]))
+        let guessed = try executor.runQuery(id: "task.workspace-choices", args: ["name": .string("billing service")])
+        #expect(guessed["matches"] == .array([.object([
+            "title": .string("billing-service"),
+            "rootDirectory": .string(sibling.path),
+            "source": .string("sibling"),
+        ])]))
+        for name in ["toastty", "billing service"] {
+            let scoped = try executor.runQuery(
+                id: "task.workspace-choices",
+                args: ["name": .string(name)],
+                context: context(scopedSessionID)
+            )
+            #expect(scoped["matches"] == .array([]))
+        }
+        #expect(try executor.runQuery(id: "task.workspace-choices", args: [:])["matches"] == nil)
     }
 
     /// An outside coordinator names the project by its directory and the

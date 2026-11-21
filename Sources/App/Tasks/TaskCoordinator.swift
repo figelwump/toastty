@@ -849,6 +849,75 @@ final class TaskCoordinator {
         return choices
     }
 
+    /// The project directories whose folder name, or workspace title,
+    /// matches `name`, ignoring case, `-`, `_`, `.` and spaces. First the
+    /// directories Toastty knows: open and recently closed workspaces, the
+    /// `[workspace."<root>"]` roots in tasks.toml, and the projects of
+    /// tasks. Then the git repositories next to those, in the same parent
+    /// directory, that Toastty never opened. A linked worktree, whose `.git`
+    /// is a file, is not a project. One entry per directory, each still a
+    /// directory. With `workspaceScope`, only the open workspaces it allows,
+    /// and nothing else.
+    func projectMatches(named name: String, workspaceScope: ((UUID) -> Bool)? = nil) -> [TaskProjectMatch] {
+        let key = TaskProjectMatch.key(name)
+        guard key.isEmpty == false else { return [] }
+        var known: [TaskProjectMatch] = []
+        func consider(_ match: TaskProjectMatch) {
+            var match = match
+            match.rootDirectory = TasksConfigFile.normalizedPath(match.rootDirectory, homeDirectoryPath: homeDirectoryPath)
+            known.append(match)
+        }
+        for workspace in topLevelWorkspaces() where workspaceScope?(workspace.id) ?? true {
+            guard let root = Self.rootDirectory(of: workspace, fileManager: fileManager) else { continue }
+            consider(TaskProjectMatch(title: workspace.title, rootDirectory: root, source: .open, workspaceID: workspace.id))
+        }
+        if workspaceScope == nil {
+            for item in recentWorkspaces?.items ?? [] {
+                consider(TaskProjectMatch(title: item.title, rootDirectory: item.rootDirectory, source: .recent, recentWorkspaceID: item.id))
+            }
+            for workspace in (try? configLoader())?.workspaces ?? [] {
+                consider(TaskProjectMatch(title: URL(filePath: workspace.path).lastPathComponent, rootDirectory: workspace.path, source: .config))
+            }
+            for record in records.records.reversed() {
+                guard let root = record.projectRoot else { continue }
+                consider(TaskProjectMatch(title: URL(filePath: root).lastPathComponent, rootDirectory: root, source: .history))
+            }
+        }
+
+        // Names first, then one entry per directory: a workspace whose title
+        // matches counts even when another workspace on its root came first.
+        var matches: [TaskProjectMatch] = []
+        var seen = Set<String>()
+        var parents: [String] = []
+        var checked = Set<String>()
+        for candidate in known {
+            guard checked.contains(candidate.rootDirectory) || isDirectory(candidate.rootDirectory) else { continue }
+            let folder = URL(filePath: candidate.rootDirectory)
+            if checked.insert(candidate.rootDirectory).inserted {
+                let parent = folder.deletingLastPathComponent().path(percentEncoded: false)
+                if parents.contains(parent) == false { parents.append(parent) }
+            }
+            guard TaskProjectMatch.key(folder.lastPathComponent) == key || TaskProjectMatch.key(candidate.title) == key,
+                  seen.insert(candidate.rootDirectory).inserted else { continue }
+            matches.append(candidate)
+        }
+        guard workspaceScope == nil else { return matches }
+        for parent in parents {
+            let children = (try? fileManager.contentsOfDirectory(atPath: parent)) ?? []
+            for child in children.sorted() where TaskProjectMatch.key(child) == key {
+                let path = URL(filePath: parent).appending(path: child).path(percentEncoded: false)
+                let normalized = TasksConfigFile.normalizedPath(path, homeDirectoryPath: homeDirectoryPath)
+                guard checked.contains(normalized) == false,
+                      seen.contains(normalized) == false,
+                      isDirectory(normalized),
+                      isDirectory(URL(filePath: normalized).appending(path: ".git").path(percentEncoded: false)) else { continue }
+                seen.insert(normalized)
+                matches.append(TaskProjectMatch(title: child, rootDirectory: normalized, source: .sibling))
+            }
+        }
+        return matches
+    }
+
     /// The title for a workspace opened on a project directory: the
     /// suggestion's, else the directory's name.
     static func projectTitle(rootDirectory: String, suggestion: TaskWorkspaceSuggestion?, homeDirectoryPath: String) -> String {

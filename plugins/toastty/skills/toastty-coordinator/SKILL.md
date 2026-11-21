@@ -437,9 +437,20 @@ COORDINATOR_MESSAGE_END
 - `--root` is the project's directory. `toastty task workspace-choices --json`
   lists the open and recent projects with their directories and workspace
   IDs. A project need not be on that list: `--root` takes any repository
-  directory on this Mac, and Toastty opens a workspace for it. When the user
-  names a project without its directory, and the list, policy and history
-  do not give one, ask for the directory.
+  directory on this Mac, and Toastty opens a workspace for it.
+- When the user names a project without its directory, and policy does not
+  give one, look it up before you ask:
+  `toastty task workspace-choices --name '<project>' --json`. Under
+  `matches`, each directory has a `source`:
+  - one match whose source is `open`, `recent`, `config` or `history`: the
+    user has worked there. Use it.
+  - one match whose source is `sibling`: a repository next to a known
+    project, which Toastty never opened. It is a guess. Confirm it in one
+    line, such as "emptyos is at `~/repos/emptyos`, right?", and create
+    nothing and write no rule until the user says yes.
+  - two or more matches: list them and ask which one. Never choose between
+    them.
+  - no match: ask for the directory.
 - Add `--start-work` when the request says clearly what to change, or when a
   rule says to start work at once. Leave it out for a question or an
   investigation, and when the work needs shaping first.

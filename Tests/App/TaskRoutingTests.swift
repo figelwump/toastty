@@ -275,6 +275,93 @@ struct TaskRoutingTests {
         #expect(started.resolved?.effort == nil)
     }
 
+    /// A project the user names is found among the directories Toastty
+    /// knows, then among the git repositories next to them. Each directory
+    /// shows once, under the first source that has it.
+    @Test func projectMatchesFindKnownDirectoriesThenTheirSiblings() async throws {
+        let fixture = try makeFixture(triage: false)
+        let fileManager = FileManager.default
+        func repository(_ path: String, linked: Bool = false) throws -> String {
+            let directory = fixture.root.appendingPathComponent(path, isDirectory: true)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let git = directory.appendingPathComponent(".git")
+            if linked {
+                fileManager.createFile(atPath: git.path, contents: Data("gitdir: /elsewhere\n".utf8))
+            } else {
+                try fileManager.createDirectory(at: git, withIntermediateDirectories: true)
+            }
+            return directory.path
+        }
+        // Next to the open project, fixture.root/project.
+        let billing = try repository("billing-service")
+        _ = try repository("project-fix-dot", linked: true)
+        try fileManager.createDirectory(at: fixture.root.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        let api = try repository("api")
+        // A recently closed project in another parent directory, with a
+        // repository of the same name as one above next to it.
+        let controlPlane = try repository("services/control-plane")
+        let otherAPI = try repository("services/api")
+        let recent = RecentWorkspace(id: UUID(), title: "Control Plane", rootDirectory: controlPlane, closedAt: Date())
+        fixture.recentWorkspaces.record(recent)
+        // A tasks.toml root, and the same directory again.
+        let infra = try repository("ops/infra")
+        fixture.config.workspaces = [
+            TasksConfig.Workspace(path: infra),
+            TasksConfig.Workspace(path: controlPlane),
+        ]
+
+        // The open project again: as recent, and as a second workspace
+        // under another title. Each title matches; the directory shows once.
+        fixture.recentWorkspaces.record(RecentWorkspace(id: UUID(), title: "toastty", rootDirectory: fixture.projectRoot, closedAt: Date()))
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        _ = fixture.store.send(.createWorkspace(windowID: windowID, title: "Payments", activate: false))
+        let payments = try #require(fixture.store.state.workspacesByID.values.first { $0.title == "Payments" })
+        _ = fixture.store.send(.setWorkspaceRootDirectory(workspaceID: payments.id, rootDirectory: fixture.projectRoot))
+        // A repository whose folder starts with a dot.
+        let dotfiles = try repository(".dotfiles")
+
+        let coordinator: TaskCoordinator = fixture.coordinator
+        #expect(coordinator.projectMatches(named: "toastty") == [TaskProjectMatch(
+            title: "toastty", rootDirectory: fixture.projectRoot, source: .open, workspaceID: fixture.workspaceID
+        )])
+        #expect(coordinator.projectMatches(named: "payments") == [TaskProjectMatch(
+            title: "Payments", rootDirectory: fixture.projectRoot, source: .open, workspaceID: payments.id
+        )])
+        #expect(coordinator.projectMatches(named: "dotfiles").map(\.rootDirectory) == [dotfiles])
+        // Within a scope, only its open workspaces, and no siblings.
+        #expect(coordinator.projectMatches(named: "toastty", workspaceScope: { $0 == payments.id }).isEmpty)
+        #expect(coordinator.projectMatches(named: "payments", workspaceScope: { $0 == payments.id }).map(\.workspaceID) == [payments.id])
+        #expect(coordinator.projectMatches(named: "billing service", workspaceScope: { _ in true }).isEmpty)
+        #expect(coordinator.projectMatches(named: "PROJECT").map(\.source) == [.open])
+        #expect(coordinator.projectMatches(named: "control_plane") == [TaskProjectMatch(
+            title: "Control Plane", rootDirectory: controlPlane, source: .recent, recentWorkspaceID: recent.id
+        )])
+        #expect(coordinator.projectMatches(named: "infra") == [TaskProjectMatch(
+            title: "infra", rootDirectory: infra, source: .config
+        )])
+        #expect(coordinator.projectMatches(named: "billing service") == [TaskProjectMatch(
+            title: "billing-service", rootDirectory: billing, source: .sibling
+        )])
+        // Two repositories of one name: both, never one picked.
+        #expect(Set(coordinator.projectMatches(named: "api").map(\.rootDirectory)) == [api, otherAPI])
+        // A linked worktree, a folder that is not a repository, and an
+        // unknown name match nothing.
+        for name in ["project-fix-dot", "notes", "emptyos", " "] {
+            #expect(coordinator.projectMatches(named: name).isEmpty, "\(name)")
+        }
+
+        // A project Toastty learns of later, here from a new task, makes
+        // the repositories next to it siblings too.
+        let elsewhere = try repository("clients/web")
+        let neighbour = try repository("clients/mobile")
+        #expect(coordinator.projectMatches(named: "mobile").isEmpty)
+        let created = try await coordinator.create(TaskCreateRequest(text: "Fix the header", rootDirectory: elsewhere))
+        await fixture.waitUntil("the task has its project") { fixture.record(created.id)?.projectRoot != nil }
+        #expect(coordinator.projectMatches(named: "mobile") == [TaskProjectMatch(
+            title: "mobile", rootDirectory: neighbour, source: .sibling
+        )])
+    }
+
     @Test func pickingARecentWorkspaceOpensItAgainAndStartsThere() async throws {
         let fixture = try makeFixture(triage: false)
         let closedProject = fixture.root.appendingPathComponent("control-plane", isDirectory: true)

@@ -481,6 +481,7 @@ toastty task list               # every task, oldest first
 toastty task retry <task-id>    # run setup, or a move into a worktree, again after it failed
 toastty task delete <task-id>   # delete the task and its attached files
 toastty task workspace-choices [<task-id>]  # open and recently closed workspaces
+toastty task workspace-choices --name <project>  # also the project directories with that name
 toastty task set-workspace <task-id> --workspace <id>   # place a waiting task
 toastty task set-workspace <task-id> --recent <id>      # reopen a closed one
 toastty task set-workspace <task-id> --root <dir>       # open a project directory

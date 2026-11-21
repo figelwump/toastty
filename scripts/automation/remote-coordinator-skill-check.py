@@ -1094,6 +1094,7 @@ def first_answer(run, turns):
     run.check('the preamble says that it asks one at a time', re.search(r'one at a time|one by one|in turn', lower), said,
               required=False)
     run.check('the preamble offers "defaults" for all', 'defaults' in lower, said, required=False)
+    run.check('the preamble says that the preferences are saved in policy.md', 'policy.md' in lower, said, required=False)
     run.check('it asks only about Agents now: no daily list time, no review explained',
               not re.search(r'\b0?9:00\b|friction', lower), said, required=False)
     run.check('the ledger line names the five parts', re.search(r'asked first-run:.*agents.*projects.*talking.*reviewing.*improving',
@@ -1218,11 +1219,16 @@ def first_run_request(run):
 def first_run_one_project(run):
     """One project is known: the first run does not limit work to it, and a task can go to a repository that
     Toastty never opened. That request comes in place of the Projects answer: it pauses the setup, which
-    "continue" resumes."""
+    "continue" resumes. A project named without its directory is looked up next to the known projects: one
+    repository there is confirmed before the task, two get a question, none gets a question for the path."""
     for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
         run.create_task(title, done=True)
     # A repository on this Mac that Toastty has never opened.
     website = os.path.realpath(run.project('website'))
+    # Repositories next to app and website, which nobody names by directory.
+    billing = os.path.realpath(run.project('billing-service'))
+    for name in ('billing-ui', 'billing_ui'):
+        run.project(name)
     run.open_coordinator()
     first_answer(run, run.tell('Hi. I just turned you on.'))
     said = run.said(run.tell('Yes.'))
@@ -1256,10 +1262,42 @@ def first_run_one_project(run):
     check_first_run_saved(run, 2, answers=1)
     run.check('Projects keeps the drafted rule for app', any(re.search(r'\bapp\b', line) for line in run.section('Projects')),
               run.section('Projects'))
+
+    def looked_up(turns, name):
+        return any(re.search(r'workspace-choices\b.*--name', command) and name in command.lower()
+                   for turn in turns for command in turn['commands'])
+
+    # One repository next to the known projects: a guess, confirmed before the task.
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
-    said = run.said(run.tell('New task in the billing service: invoice totals round down. Round them to the nearest cent.'))
+    turns = run.tell('New task in the billing service: invoice totals round down. Round them to the nearest cent.')
+    said = run.said(turns)
     created = created_since(run, before)
-    run.check('a named project with no known directory gets no task before the answer', created == [],
+    run.check('a guessed directory gets no task before the user confirms it', created == [],
+              [(t['title'], t.get('projectRoot')) for t in created])
+    run.check('it names the repository that it found and asks to confirm it', 'billing-service' in said and '?' in said, said)
+    run.check('it looks the project up by name', looked_up(turns, 'billing'), [t['commands'] for t in turns], required=False)
+    run.check('it writes no rule for the guess before the answer', 'billing-service' not in '\n'.join(run.section('Projects')),
+              run.section('Projects'))
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    run.tell('Yes.')
+    created = created_since(run, before)
+    run.check('after the yes, the task goes to the confirmed repository',
+              len(created) == 1 and os.path.realpath(created[0].get('projectRoot') or '') == billing,
+              [(t['title'], t.get('projectRoot')) for t in created])
+
+    # Two repositories match: it asks, and never picks one.
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell('New task in billing ui: the footer says 2025. Make it 2026.'))
+    created = created_since(run, before)
+    run.check('two matching repositories get no task before the answer', created == [],
+              [(t['title'], t.get('projectRoot')) for t in created])
+    run.check('it lists both repositories', 'billing-ui' in said and 'billing_ui' in said, said, required=False)
+
+    # No repository matches: it asks for the directory.
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    said = run.said(run.tell('New task in the payroll service: payslips show the wrong month. Fix the month.'))
+    created = created_since(run, before)
+    run.check('a named project with no directory found gets no task before the answer', created == [],
               [(t['title'], t.get('projectRoot')) for t in created])
     run.check('it asks where that project is', '?' in said and re.search(r'director|folder|path|where', said.lower()), said,
               required=False)

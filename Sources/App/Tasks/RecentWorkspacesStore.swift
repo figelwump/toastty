@@ -61,6 +61,33 @@ struct TaskWorkspaceChoices: Equatable {
     }
 }
 
+/// A project directory whose name matches a project the user named, for
+/// `task.workspace-choices` with `name`.
+struct TaskProjectMatch: Equatable, Sendable {
+    /// Where Toastty found the directory. Every source but `sibling` is a
+    /// directory the user has worked in.
+    enum Source: String, Sendable {
+        case open, recent, config, history
+        /// A git repository next to one of those directories, that Toastty
+        /// never opened: a guess.
+        case sibling
+    }
+
+    var title: String
+    var rootDirectory: String
+    var source: Source
+    /// The open workspace, for `open`.
+    var workspaceID: UUID? = nil
+    /// The recently closed workspace, for `recent`.
+    var recentWorkspaceID: UUID? = nil
+
+    /// The name lowercased, without `-`, `_`, `.` and spaces, so "billing
+    /// service" matches `billing-service`.
+    static func key(_ name: String) -> String {
+        String(name.lowercased().filter { $0 != "-" && $0 != "_" && $0 != "." && $0.isWhitespace == false })
+    }
+}
+
 /// The last closed top-level workspaces, newest first, one per root
 /// directory, saved to `recent-workspaces.json` in the runtime config
 /// directory. The task workspace picker lists them under "Recent", so a
