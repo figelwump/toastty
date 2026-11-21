@@ -756,11 +756,13 @@ A watch is saved with the record of the task it notifies, so it survives a
 relaunch, and it fires once. A watch whose task is deleted, or archived while
 it waits for something else, fires with that reason. So does a watch for
 `merged` or `to-ship` when Toastty's last merge of the task stopped without
-merging, until a new merge starts; see [Merge a task](#merge-a-task). If the notified task's
-agent is not running when a watch fires, the message goes out once it runs
-again. `toastty task watches` lists watches, with `--task` or `--notify` to
-filter them, and `toastty task unwatch <watch-id>` cancels one. Fired watches
-stay listed for up to a day.
+merging, until a new merge starts; see [Merge a task](#merge-a-task). A fired
+notification stays queued, including after a relaunch, until the receiving agent
+reports idle or ready at its prompt. Toastty waits while it detects a permission
+prompt, a question, or typing that may still be in the prompt. It submits one
+watch message per prompt. `toastty task watches` lists watches, with `--task` or
+`--notify` to filter them, and `toastty task unwatch <watch-id>` cancels one.
+Delivered watches stay listed for up to a day.
 
 Outside Toastty, where there is no task to tell, `toastty task watch <task-id>
 --until <condition> --wait` blocks until the watch fires, prints the outcome,

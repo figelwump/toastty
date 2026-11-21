@@ -632,7 +632,16 @@ struct TaskAppControlTests {
         #expect(watch.result?["notifyTaskID"] == .string(consumer.id.uuidString))
         #expect(watch.result?["state"] == .string("pending"))
         fixture.sessionRuntimeStore.updateStatus(
+            sessionID: consumerSession, status: SessionStatus(kind: .needsApproval, summary: "Waiting for approval"), at: Date()
+        )
+        fixture.sessionRuntimeStore.updateStatus(
             sessionID: producerSession, status: SessionStatus(kind: .ready, summary: "Ready"), at: Date().addingTimeInterval(1)
+        )
+        let previousDeliveryCount = typed.entries.count
+        fixture.coordinator.evaluateWatches()
+        #expect(typed.entries.count == previousDeliveryCount)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: consumerSession, status: SessionStatus(kind: .ready, summary: "Ready"), at: Date().addingTimeInterval(1)
         )
         fixture.coordinator.evaluateWatches()
         #expect(typed.entries.last?.panelID == consumerPanel)

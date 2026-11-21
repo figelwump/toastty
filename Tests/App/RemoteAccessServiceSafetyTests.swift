@@ -3529,6 +3529,7 @@ struct RemoteAccessServiceSafetyTests {
             Issue.record("Expected the Mac draft to hold the prompt, not \(settled.inputAvailability)")
             return
         }
+        #expect(fixture.service.inputAvailability(panelID: fixture.panelID, sessionID: fixture.sessionID) == settled.inputAvailability)
     }
 
     enum CodexStartedTurnOutcome: CaseIterable, Sendable {
@@ -4765,12 +4766,24 @@ extension RemoteAccessServiceSafetyTests {
             let awaitingApproval = try await Self.waitForSummary(fixture) {
                 $0.inputControl?.turnEpoch == nil
             }
+            guard case .pendingInteraction? = fixture.service.inputAvailability(
+                panelID: fixture.panelID, sessionID: fixture.sessionID
+            ) else {
+                Issue.record("Expected the pending interaction for the current session")
+                return
+            }
+            #expect(fixture.service.inputAvailability(panelID: fixture.panelID, sessionID: "previous-session") == nil)
             #expect(awaitingApproval.inputControl?.canSteer == false)
             #expect(fixture.service.performRemoteSend(.init(
                 conversationID: fixture.conversationID, clientRequestID: "steer-during-approval",
                 expectedInputEpoch: turnEpoch, text: "Use 300 ms", deliveryMode: .steer
             ), device: device) == .rejected(reason: .notWorking))
             #expect(delivered.isEmpty)
+            // Answering the modal from the keyboard does not mark the turn's
+            // composer as a draft. The turn's input epoch is closed here.
+            fixture.terminalRuntimeRegistry.bind(sessionLifecycleTracker: fixture.sessionRuntimeStore)
+            fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
+            #expect(fixture.sessionRuntimeStore.lastUserInputAt(panelID: fixture.panelID) != nil)
             observeClaude(.transcript(.toolFinished(.init(callID: "approval-1"))),
                           fingerprint: "approval-resolved", offset: 1.3)
             let resumed = try await Self.waitForSummary(fixture) {
