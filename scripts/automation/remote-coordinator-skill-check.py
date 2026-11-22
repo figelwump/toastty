@@ -1251,26 +1251,28 @@ def card_refusals(run):
 
 def first_run(run):
     """The first run asks one part at a time: Agents and then Projects drafted from the task history, each saved
-    at its answer, and "defaults" takes the rest."""
+    at its answer, and "defaults" takes the rest. Agents, the first part, comes in plain text; the later parts
+    come as question cards, which the user answers with a click."""
     history(run)
     run.open_coordinator()
     template = run.policy()
     run.check('Toastty made the policy with headings only, Talking among them',
               all(run.section(name) == [] for name in FIRST_RUN_SECTIONS) and '## Talking' in template, template)
     said = first_answer(run, run.tell('Hi. I just turned you on.'))
-    run.check('it asks the first part with a question card', run.open_card() is not None, said)
-    refusals = card_refusals(run)
-    run.check('coordinator.answer-question refuses a choice the card does not have, and an agent session',
-              all(not r.get('ok') for r in refusals.values()) and run.open_card() is not None, refusals)
+    run.check('it asks the first part in plain text, not with a card', run.open_card() is None, said)
     run.check('the Agents draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
-    # The user clicks the choices: the suggestion, the rules that build up, and the defaults for the rest.
-    said = run.said(run.choose())
+    said = run.said(run.tell('Yes.'))
     check_saved_so_far(run, ['Agents'], 2, 'the first yes saves its part at once')
     run.check('Agents holds the drafted models', any('sonnet' in line.lower() for line in run.section('Agents')),
               run.section('Agents'))
     run.check('it asks about Projects next, with a draft that names both projects',
               'marketing' in said.lower() and re.search(r'\bapp\b', said.lower()), said)
     offers_project_routes(run, said)
+    run.check('it asks the parts after the first with a question card', run.open_card() is not None, said)
+    refusals = card_refusals(run)
+    run.check('coordinator.answer-question refuses a choice the card does not have, and an agent session',
+              all(not r.get('ok') for r in refusals.values()) and run.open_card() is not None, refusals)
+    # The user clicks the choices: the rules that build up, and then the defaults for the rest.
     # The rules that build up are the suggestion; the card can name them, or offer them as "Yes (suggested)".
     said = run.said(run.choose(r'build|suggest'))
     check_saved_so_far(run, ['Agents', 'Projects'], 3, 'the second yes saves its part at once')
