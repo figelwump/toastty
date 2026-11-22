@@ -811,11 +811,15 @@ class Run:
         """Whether the coordinator waits for the user, at its prompt or at a question card. `None` while it
         waits at another prompt, such as a permission prompt."""
         current = self.coordinator()
-        card = self.open_card() if current.get('agentState') == 'running' else None
-        if current.get('status') == 'needs_approval' and card is None:
+        if current.get('agentState') != 'running':
+            return False
+        # Toastty types no message and no wake while a card is open, so a queued one does not end the rest.
+        if self.open_card() is not None:
+            return True
+        if current.get('status') == 'needs_approval':
             return None
-        return (current.get('agentState') == 'running' and (card is not None or current.get('status') in ('idle', 'ready'))
-                and current.get('queuedCount') == 0 and not self.waiting_wake())
+        return (current.get('status') in ('idle', 'ready') and current.get('queuedCount') == 0
+                and not self.waiting_wake())
 
     def wait_idle(self, timeout=TURN_TIMEOUT, quiet=6):
         """Waits until the coordinator rests, with nothing waiting to be typed, for `quiet` seconds. A

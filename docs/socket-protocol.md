@@ -840,8 +840,8 @@ and returns `replies`, oldest first, each with `id`, `messageID`, `from`,
 `text` and `repliedAt`, then `cursor` and `truncated`; see
 [Coordinator replies](tasks.md#coordinator-replies). `coordinator.answer-question`
 answers the question card that the coordinator's agent shows now, as the user
-does in the chat. It takes exactly one of `args.option` (a choice's label,
-ignoring case) and `args.text` (an answer in the user's own words), and
+does in the chat. It takes exactly one of `args.option` (a choice's label;
+one that differs only in case also matches when only one does) and `args.text` (an answer in the user's own words), and
 returns the card's `header`, `question`, `options` (the choice labels) and
 `chosenOption`. The card must ask one question. The answer counts as the
 user's, so it fails for a request that has a `callerSessionID`; an agent

@@ -2218,9 +2218,10 @@ final class CoordinatorController: ObservableObject {
         }
         var selected: [String] = []
         if let option {
-            guard let match = question.options.first(where: {
-                $0.label.compare(option, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-            }) else {
+            // The exact label first; else a label that differs only in case, when only one does.
+            let caseless = question.options.filter { $0.label.compare(option, options: .caseInsensitive) == .orderedSame }
+            guard let match = question.options.first(where: { $0.label == option })
+                ?? (caseless.count == 1 ? caseless.first : nil) else {
                 let labels = question.options.map { "\"\($0.label)\"" }.joined(separator: ", ")
                 throw CoordinatorError("The card has no choice \"\(option)\". Its choices: \(labels).")
             }
