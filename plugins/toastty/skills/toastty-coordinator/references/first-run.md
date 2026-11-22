@@ -62,9 +62,13 @@ the rest of this file says. Everything else in this file holds for both ways.
 
 ## The first answer
 
-When the message that starts the setup holds a request, handle the request
-first, as A request under The answers says. It can end the turn with a
-question to the user before the setup starts.
+When the message that starts the setup holds a request, or an answer to a
+question that you asked, handle that first, as A request under The answers
+says. When that ends with a question to the user, such as a project
+directory to confirm, a choice between directories or "Is that a rule?",
+ask only that question, so that one "yes" does not answer two questions.
+Write no `asked first-run` line and do not start the setup: it starts in the
+next turn that the user starts.
 
 1. Each step costs the user seconds, so do these two in one step, with both
    commands at once, and read nothing more before you write:
@@ -171,9 +175,9 @@ The open part is the first part on the `asked first-run` line. Write to
   `- Review once a day at 09:00. Proposals only.`, or
   `- Review only when I ask.` Follow steps 1 to 3 of Change the policy, with
   one commit for the answer, named after the parts it wrote, such as
-  `Policy: first run, Agents`. Then remove those parts from the `asked
-  first-run` line. When Improving got a time, set your next check as
-  `references/improving.md` says under "A time in Improving".
+  `Policy: first run, Agents`. Then remove those parts, and ` paused`,
+  from the `asked first-run` line. When Improving got a time, set your next
+  check as `references/improving.md` says under "A time in Improving".
 - **Then,** when parts remain on the line, say in a few words what you saved,
   and ask the next part with its place. When none remain, remove the line,
   and show what you saved: one short line for each part that you asked
@@ -183,12 +187,7 @@ The open part is the first part on the `asked first-run` line. Write to
 - **A request:** handle it first, as the turn says. Choose its project,
   agent, model and effort as New tasks says. Where that gives no model or
   effort, take them from your suggested Agents table, and say so. Then:
-  - in the message that starts the setup, ask as The first answer says.
-    But when the request ends with a question to the user, such as a
-    project directory to confirm or a choice between directories, ask only
-    that question, so that one "yes" does not answer two questions. Write
-    no `asked first-run` line and do not start the setup: it starts in the
-    next turn that the user starts, after you handle the answer;
+  - in the message that starts the setup, ask as The first answer says;
   - later, when the message does not answer the open part, end your answer
     with one line, such as "Setup paused at 2 of 5 (Projects). Say continue,
     or defaults." Add ` paused` to the end of the `asked first-run` line. Do
