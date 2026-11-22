@@ -218,6 +218,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// that nothing covers. The answer says whether the covering view took
     /// the keyboard. A covered terminal never takes the keyboard itself.
     var coveringInputFocus: ((UUID) -> (@MainActor () -> Bool)?)?
+    /// Receives each key press that a terminal's view handled, with the
+    /// panel. The coordinator sets it while it keeps a record of its
+    /// terminal's keys; `nil` at any other time.
+    var keyPressObserver: ((UUID, TerminalKeyPress) -> Void)?
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
         self.sessionLifecycleTracker = sessionLifecycleTracker
@@ -619,21 +623,71 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     private var answeredClaudeDialogPanelID: UUID?
+    /// The panels whose Claude showed a native dialog at the last look at
+    /// the bottom of its page.
+    private var claudeDialogPanelIDs: Set<UUID> = []
+    /// Claude puts these words in the last line of its page while the
+    /// person has scrolled its transcript away from the bottom. The line is
+    /// Claude's own: with the page at its bottom, the last line belongs to
+    /// the prompt or to a dialog, never to the transcript.
+    private static let claudeScrolledPageMark = "Jump to bottom (click) ↓"
+
+    /// Where a look at Claude's page finds a native dialog.
+    private enum ClaudeDialogPlace: String {
+        case onPage = "on_page"
+        /// The page is scrolled, and the last look at its bottom showed a dialog.
+        case outOfPage = "out_of_page"
+        case absent = "none"
+    }
+
+    /// Looks at Claude's page, or `nil` when the terminal has no text to
+    /// read. `remembering` keeps what the bottom of the page shows for the
+    /// next look at a scrolled page; a look for the log passes `false`, so
+    /// that it never changes what holds a message.
+    private func claudeDialogPlace(panelID: UUID, remembering: Bool) -> ClaudeDialogPlace? {
+        guard let screen = readVisibleText(panelID: panelID) else { return nil }
+        let lastLine = screen.split(whereSeparator: \.isNewline).last { $0.contains { !$0.isWhitespace } }
+        if lastLine?.contains(Self.claudeScrolledPageMark) == true {
+            // The wheel moves a dialog out of the page, and Claude still
+            // waits for its answer. Text typed now would go into that
+            // dialog. The last look at the bottom of the page stands.
+            return claudeDialogPanelIDs.contains(panelID) ? .outOfPage : .absent
+        }
+        let text = screen.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let onPage = Self.containsClaudeNativeDialog(text)
+        if remembering {
+            if onPage {
+                claudeDialogPanelIDs.insert(panelID)
+            } else {
+                claudeDialogPanelIDs.remove(panelID)
+            }
+        }
+        return onPage ? .onPage : .absent
+    }
 
     func claudeHasNativeDialog(panelID: UUID) -> Bool {
-        guard let screen = readVisibleText(panelID: panelID) else { return false }
-        let present = Self.containsClaudeNativeDialog(screen)
-        if !present, answeredClaudeDialogPanelID == panelID {
+        guard let place = claudeDialogPlace(panelID: panelID, remembering: true) else { return false }
+        if place == .absent, answeredClaudeDialogPanelID == panelID {
             answeredClaudeDialogPanelID = nil
         }
-        return present
+        return place != .absent
+    }
+
+    /// For the log: where a look finds Claude's dialog now. It changes
+    /// nothing that Toastty remembers about the dialog.
+    func claudeDialogPlaceForLog(panelID: UUID) -> String {
+        claudeDialogPlace(panelID: panelID, remembering: false)?.rawValue ?? "unreadable"
     }
 
     func isClaudeDialogInput(panelID: UUID, kind: TerminalLocalInputKind) -> Bool {
         guard kind == .dialogNavigation || kind == .dialogAnswer,
-              claudeHasNativeDialog(panelID: panelID),
-              answeredClaudeDialogPanelID != panelID else { return false }
-        if kind == .dialogAnswer {
+              let place = claudeDialogPlace(panelID: panelID, remembering: true) else { return false }
+        if place == .absent, answeredClaudeDialogPanelID == panelID {
+            answeredClaudeDialogPanelID = nil
+        }
+        guard place != .absent, answeredClaudeDialogPanelID != panelID else { return false }
+        // Only a dialog on the page takes the answer for certain.
+        if kind == .dialogAnswer, place == .onPage {
             // The terminal can still show the old dialog after Return or
             // Escape reached Claude. A following Up can already recall a draft.
             answeredClaudeDialogPanelID = panelID
@@ -644,8 +698,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// Claude does not emit a conversation interaction for these dialogs.
     /// Require both the dialog's body and its controls at the bottom of the
     /// active page. History and an ordinary prompt below the dialog do not count.
-    private static func containsClaudeNativeDialog(_ screen: String) -> Bool {
-        let text = screen.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    /// `text` is the page with each run of white space as one space.
+    private static func containsClaudeNativeDialog(_ text: String) -> Bool {
         if text.hasSuffix("choose · ←/→ change size · enter confirm · esc not now") {
             return text.contains("We recommend compacting earlier") &&
                 text.contains("Want to autocompact at")
@@ -862,6 +916,17 @@ final class TerminalRuntimeRegistry: ObservableObject {
                 focusHostViewIfNeeded: { controller.focusHostViewIfNeeded() }
             )
         }
+    }
+
+    /// Whether `responder` is the view that takes the keyboard for the
+    /// panel's terminal.
+    func isKeyboardFocusTarget(_ responder: NSResponder, panelID: UUID) -> Bool {
+        runtimeStore.existingController(for: panelID)?.isKeyboardFocusTarget(responder) ?? false
+    }
+
+    /// The window that shows the panel's terminal.
+    func terminalWindow(panelID: UUID) -> NSWindow? {
+        runtimeStore.existingController(for: panelID)?.hostWindow
     }
 
     func focusVisibleTerminalIfPossible(panelID: UUID) -> Bool {
@@ -1317,6 +1382,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     func handleLocalInput(for panelID: UUID, kind: TerminalLocalInputKind = .key) {
         noteLocalInput(panelID: panelID, kind: kind)
+    }
+
+    func reportKeyPress(_ press: TerminalKeyPress, for panelID: UUID) {
+        keyPressObserver?(panelID, press)
     }
 
     private func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .programmatic) {
