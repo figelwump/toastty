@@ -333,9 +333,13 @@ test('TestFlight builds a main commit with exact-source CI or a recorded overrid
   assert.equal(gate.if, undefined);
   assert.equal(gate['continue-on-error'], undefined);
   assert.equal(gate.env.GH_TOKEN, '${{ github.token }}');
+  assert.equal(gate.env.GATE_SHA, '${{ github.sha }}');
   assert.equal(gate.env.RELEASE_SHA, '${{ steps.source.outputs.sha }}');
   assert.equal(gate.env.CI_OVERRIDE_REASON, '${{ inputs.ci_override_reason }}');
-  assert.equal(gate.run, 'node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --override-reason "$CI_OVERRIDE_REASON" --output artifacts/ios-release/ci-evidence.json');
+  // The gate script and its job list come from the dispatched commit, not the checked-out source.
+  assert.match(gate.run, /git show "\$GATE_SHA:scripts\/ci\/require-ios-ci\.mjs" > "\$gate\/scripts\/ci\/require-ios-ci\.mjs"/);
+  assert.match(gate.run, /git show "\$GATE_SHA:\.github\/ios-release-ci-jobs\.json" > "\$gate\/\.github\/ios-release-ci-jobs\.json"/);
+  assert.match(gate.run, /node "\$gate\/scripts\/ci\/require-ios-ci\.mjs" --source "\$GITHUB_WORKSPACE" --sha "\$RELEASE_SHA" \\\n\s+--override-reason="\$CI_OVERRIDE_REASON" --output artifacts\/ios-release\/ci-evidence\.json/);
   // Inputs reach shell steps only through env, never through expression text in a script.
   for (const step of job.steps) assert.ok(!step.run?.includes('${{'), `${step.name} interpolates into its script`);
   const archive = job.steps[archiveIndex];

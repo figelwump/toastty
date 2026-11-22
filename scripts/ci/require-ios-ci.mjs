@@ -59,6 +59,7 @@ function writeResult(output, evidence, summary) {
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
 }
 // Emergency path: no CI evidence is read, so the record names who skipped the check and why.
+const escapeHTML = (text) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 function recordOverride(head, reason, output) {
   const runID = process.env.GITHUB_RUN_ID;
   const evidence = {
@@ -67,9 +68,9 @@ function recordOverride(head, reason, output) {
     workflow_run_url: runID ? `https://github.com/${repository}/actions/runs/${runID}` : null,
   };
   writeResult(output, evidence,
-    `### Full CI check skipped\n\nSource \`${head}\`. Reason, from ${evidence.actor}: ${reason}`);
+    `### Full CI check skipped\n\nSource \`${head}\`. Reason, from ${evidence.actor}: ${escapeHTML(reason)}`);
+  // The reason appears only as this command's data, so it cannot start another workflow command.
   console.log(`::warning title=Full CI check skipped::${reason.replaceAll('%', '%25')}`);
-  console.log(`CI evidence overridden for ${head}: ${reason}`);
 }
 function verifyFullCI(head, output) {
   const prefix = `repos/${repository}/actions`;
@@ -115,11 +116,13 @@ function verifyFullCI(head, output) {
 try {
   const { values } = parseArgs({ options: {
     sha: { type: 'string' }, output: { type: 'string' }, 'override-reason': { type: 'string' },
+    source: { type: 'string' },
   } });
   requireEvidence(/^[a-f0-9]{40}$/.test(values.sha ?? '') && values.output, 'Provide --sha COMMIT and --output PATH.');
   requireEvidence(process.env.GITHUB_REPOSITORY === repository, 'Unexpected release repository.');
   const reason = overrideReason(values['override-reason']);
-  const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  // The workflow runs this gate from the dispatched commit and passes the checkout it builds.
+  const head = execFileSync('git', ['-C', values.source ?? root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   requireEvidence(head === values.sha, 'Checked-out source differs from the release SHA.');
   if (reason) recordOverride(head, reason, values.output);
   else verifyFullCI(head, values.output);

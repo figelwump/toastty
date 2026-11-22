@@ -80,9 +80,19 @@ jobs:
         id: ci
         env:
           GH_TOKEN: ${{ github.token }}
+          GATE_SHA: ${{ github.sha }}
           RELEASE_SHA: ${{ steps.source.outputs.sha }}
           CI_OVERRIDE_REASON: ${{ inputs.ci_override_reason }}
-        run: node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --override-reason "$CI_OVERRIDE_REASON" --output artifacts/ios-release/ci-evidence.json
+        # Run the gate from the dispatched commit, not from the commit it checks:
+        # an earlier commit on main can carry an older or weaker gate.
+        run: |
+          gate="$RUNNER_TEMP/release-gate"
+          mkdir -p "$gate/scripts/ci" "$gate/.github"
+          git fetch --no-tags origin "$GATE_SHA"
+          git show "$GATE_SHA:scripts/ci/require-ios-ci.mjs" > "$gate/scripts/ci/require-ios-ci.mjs"
+          git show "$GATE_SHA:.github/ios-release-ci-jobs.json" > "$gate/.github/ios-release-ci-jobs.json"
+          node "$gate/scripts/ci/require-ios-ci.mjs" --source "$GITHUB_WORKSPACE" --sha "$RELEASE_SHA" \
+            --override-reason="$CI_OVERRIDE_REASON" --output artifacts/ios-release/ci-evidence.json
 
       - name: Select pinned iOS Xcode
         run: bash scripts/ci/select-ios-xcode.sh

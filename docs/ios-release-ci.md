@@ -234,10 +234,13 @@ empty to build the commit at the tip of that ref. Set it to a full 40-character
 SHA to build an earlier commit, such as a release commit that `main` moved past
 after a later merge. The workflow stops unless that commit is on `main`'s
 history. The CI evidence check then applies to that commit, so the full CI run
-on the release commit stays valid after `main` moves.
+on the release commit stays valid after `main` moves. The check itself, and its
+list of required jobs, always come from the commit the run starts from, not from
+the commit it builds. A commit inside a merged pull request is on `main`'s
+history too, and its own copy of the check can be older or weaker.
 
 The commit must contain this input. A commit from before it fails closed: its
-gate and archive scripts do not accept a source other than the event SHA. The
+archive script does not accept a source other than the event SHA. The
 build number comes from the TestFlight run number, so a build of an earlier
 commit still gets a higher build number than the last upload.
 

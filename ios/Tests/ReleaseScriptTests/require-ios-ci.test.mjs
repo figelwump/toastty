@@ -22,7 +22,7 @@ const fullJobs = requiredNames.map((name) => ({ ...gate, name }));
 
 function invoke({ runs = [run], current = run, final = current, jobs = fullJobs,
   total = runs.length, jobTotal = jobs.length, errorAt, malformedAt, source = sha,
-  repository = repo, overrideReason } = {}) {
+  repository = repo, overrideReason, script = helper, sourceRoot } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'toastty-ci-gate-'));
   try {
     const bin = path.join(dir, 'bin');
@@ -54,8 +54,10 @@ console.log(JSON.stringify(response.body));
     const evidence = path.join(dir, 'evidence.json');
     const output = path.join(dir, 'output');
     const summary = path.join(dir, 'summary');
-    const args = [helper, '--sha', source, '--output', evidence];
-    if (overrideReason !== undefined) args.push('--override-reason', overrideReason);
+    const args = [script, '--sha', source, '--output', evidence];
+    // Same form as the workflow, so a reason that starts with a dash stays a value.
+    if (overrideReason !== undefined) args.push(`--override-reason=${overrideReason}`);
+    if (sourceRoot !== undefined) args.push('--source', sourceRoot);
     const result = spawnSync(process.execPath, args, {
       cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`,
         CI_FIXTURE: path.join(dir, 'fixture.json'), GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: output,
@@ -181,10 +183,31 @@ test('override records the reason and reads no CI evidence', () => {
   assert.match(result.stdout, /^::warning title=Full CI check skipped::CI runner outage/m);
   assert.match(result.summary, /Full CI check skipped[\s\S]*release-owner: CI runner outage/);
 });
-test('override escapes workflow command data', () => {
-  const result = invoke({ overrideReason: '100% Mac-only' });
+test('override reason stays one warning and literal summary text', () => {
+  const result = invoke({ overrideReason: '- 100% Mac-only ##[error]quoted <!-- runner log -->' });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^::warning title=Full CI check skipped::100%25 Mac-only$/m);
+  assert.equal(result.evidence.override_reason, '- 100% Mac-only ##[error]quoted <!-- runner log -->');
+  const lines = result.stdout.split('\n').filter((line) => line.includes('Mac-only'));
+  assert.deepEqual(lines, ['::warning title=Full CI check skipped::- 100%25 Mac-only ##[error]quoted <!-- runner log -->']);
+  assert.match(result.summary, /- 100% Mac-only ##\[error\]quoted &lt;!-- runner log --&gt;/);
+});
+// The workflow runs the dispatched commit's gate against another checkout.
+test('a gate copy outside the source verifies the given source checkout', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'toastty-gate-copy-'));
+  try {
+    mkdirSync(path.join(dir, 'scripts/ci'), { recursive: true });
+    mkdirSync(path.join(dir, '.github'));
+    writeFileSync(path.join(dir, 'scripts/ci/require-ios-ci.mjs'), readFileSync(helper));
+    writeFileSync(path.join(dir, '.github/ios-release-ci-jobs.json'), JSON.stringify(requiredNames));
+    const script = path.join(dir, 'scripts/ci/require-ios-ci.mjs');
+    const result = invoke({ script, sourceRoot: root });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.evidence.head_sha, sha);
+    rejected({ script, sourceRoot: root, source: '0'.repeat(40) });
+    rejected({ script, sourceRoot: dir });
+    writeFileSync(path.join(dir, '.github/ios-release-ci-jobs.json'), JSON.stringify([...requiredNames, 'New job']));
+    rejected({ script, sourceRoot: root });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 test('an empty override reason runs the full CI check', () => {
   const result = invoke({ overrideReason: '' });
