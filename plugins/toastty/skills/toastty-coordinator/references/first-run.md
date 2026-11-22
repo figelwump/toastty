@@ -62,6 +62,10 @@ the rest of this file says. Everything else in this file holds for both ways.
 
 ## The first answer
 
+When the message that starts the setup holds a request, handle the request
+first, as A request under The answers says. It can end the turn with a
+question to the user before the setup starts.
+
 1. Each step costs the user seconds, so do these two in one step, with both
    commands at once, and read nothing more before you write:
    - add an `asked first-run` line to the ledger, in place of an earlier
@@ -174,11 +178,17 @@ The open part is the first part on the `asked first-run` line. Write to
   and ask the next part with its place. When none remain, remove the line,
   and show what you saved: one short line for each part that you asked
   about, and that the user can change each rule at any time.
-- **A question about the open part:** answer it, and ask the part again.
+- **A question about the open part:** when the line says `paused`, remove
+  ` paused` from it. Answer the question, and ask the part again.
 - **A request:** handle it first, as the turn says. Choose its project,
   agent, model and effort as New tasks says. Where that gives no model or
   effort, take them from your suggested Agents table, and say so. Then:
-  - in the message that starts the setup, ask as The first answer says;
+  - in the message that starts the setup, ask as The first answer says.
+    But when the request ends with a question to the user, such as a
+    project directory to confirm or a choice between directories, ask only
+    that question, so that one "yes" does not answer two questions. Write
+    no `asked first-run` line and do not start the setup: it starts in the
+    next turn that the user starts, after you handle the answer;
   - later, when the message does not answer the open part, end your answer
     with one line, such as "Setup paused at 2 of 5 (Projects). Say continue,
     or defaults." Add ` paused` to the end of the `asked first-run` line. Do
