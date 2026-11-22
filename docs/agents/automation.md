@@ -638,6 +638,47 @@ on the screen until a person answers it. `--window-frame` puts the app's
 window where nothing else on the screen covers it, and `--claude` runs another
 Claude CLI than the one on the `PATH`.
 
+### Coordinator compact offer
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-compact-offer-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac; the installed production app is not touched. It makes the
+real Claude CLI show its "We recommend compacting earlier" offer, which shows
+only in the terminal: a first turn, synthetic text added to that turn's
+transcript, a relaunch that resumes it, and one more real turn. The run uses
+subscription usage: the second turn has about 230k input tokens. It needs the
+remote Mac's screen unlocked, and takes about four minutes after the build.
+
+It checks that a message sent in the chat waits for the answer in the
+terminal, that arrow keys move the offer's choice one second after **Show
+Terminal**, that the message still waits while the wheel has moved the offer
+out of Claude's page, and that Claude gets the message once after Escape.
+`--host dock` uses the dock's **Show Terminal**, which opens the full view.
+
+Escape leaves a count in the account's `~/.claude.json`
+(`autoCompactOffer`). The check puts that record back as it was, under Claude
+Code's lock. Do not answer the offer with Return or a click in a check: that
+changes the account's setting or ends the offer for the account.
+
+`--record-bytes` puts `scripts/automation/pty-recorder.py` between the
+terminal and Claude, and writes every byte that Claude receives, with its
+time, to `remote-coordinator-compact-offer-check-bytes-to-claude.jsonl`. Use
+it to tell a key that Toastty or Ghostty did not send from a key that Claude
+received and did not act on. The app log of the run is at the debug level; it
+has Toastty's own record of the key presses after **Show Terminal** (see
+[The coordinator](../tasks.md#the-coordinator)).
+
+`ax-drive`'s `key up|down|left|right` send an arrow key as a keyboard does,
+with the numeric-pad and function flags. Do not send an arrow key with
+Control: macOS takes it for Mission Control, and the app gets no more keys.
+
+It writes `remote-coordinator-compact-offer-check.json`, the app log, Claude's
+transcript and still pictures under the run's artifacts directory.
+
 `ax-drive` makes no click at a place that a system prompt covers, such as a
 permission question or a crash report, and exits with code 4: that prompt is
 the user's to answer.

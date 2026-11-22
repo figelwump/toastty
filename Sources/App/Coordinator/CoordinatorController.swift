@@ -309,7 +309,53 @@ final class CoordinatorController: ObservableObject {
             ToasttyLog.info("Changed what the coordinator's panel shows", category: .tasks, metadata: [
                 "shows": newValue ? "terminal" : "chat",
             ])
+            if newValue {
+                terminalKeyLog.start()
+            } else {
+                terminalKeyLog.stop()
+            }
+            logKeyboardOwnerAfterPanelChange()
         }
+    }
+
+    /// The record of the key presses that follow Show Terminal.
+    private let terminalKeyLog = CoordinatorTerminalKeyLog()
+    private var keyboardOwnerLog: Task<Void, Never>?
+
+    /// Says in the log which view has the keyboard once the panel's change
+    /// has settled. Show Terminal tries for about 0.2 seconds to give the
+    /// terminal the keyboard, and says nothing when that does not work.
+    private func logKeyboardOwnerAfterPanelChange() {
+        keyboardOwnerLog?.cancel()
+        keyboardOwnerLog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let self, Task.isCancelled == false else { return }
+            var metadata = self.terminalLogFacts()
+            metadata["keyboard_owner"] = self.terminalKeyLog.keyboardOwner()
+            metadata["app_active"] = NSApp.isActive ? "true" : "false"
+            ToasttyLog.info("The keyboard's owner after the coordinator's panel changed", category: .tasks, metadata: metadata)
+        }
+    }
+
+    /// The coordinator's state that explains a key press or a hold in the log.
+    private func terminalLogFacts() -> [String: String] {
+        var facts = [
+            "shows": showsTerminal ? "terminal" : "chat",
+            "hold": hold?.rawValue ?? "none",
+            "queued": String(queuedCount),
+        ]
+        if let summary = conversationSubscription?.snapshot(at: now())?.summary {
+            facts["input"] = switch summary.inputAvailability {
+            case .openPrompt: "open_prompt"
+            case .localDraft: "local_draft"
+            case .pendingInteraction(let ids): "pending_interaction:\(ids.count)"
+            case .unavailable(let reason): "unavailable:\(reason.rawValue)"
+            }
+        }
+        if let session, session.agent == .claude, let terminals {
+            facts["claude_dialog"] = terminals.claudeDialogPlaceForLog(panelID: session.panelID)
+        }
+        return facts
     }
 
     /// The chat needs the shared transcript view, which needs macOS 15.
@@ -346,6 +392,19 @@ final class CoordinatorController: ObservableObject {
             guard let self, self.coversTerminal(panelID: panelID) else { return nil }
             return { [weak self] in self?.chat?.focusComposer() ?? false }
         }
+        terminals.keyPressObserver = { [weak self] panelID, press in
+            guard let self, self.location?.panelID == panelID else { return }
+            self.terminalKeyLog.record(press)
+        }
+        terminalKeyLog.isCoordinatorTerminal = { [weak self, weak terminals] responder in
+            guard let panelID = self?.location?.panelID else { return false }
+            return terminals?.isKeyboardFocusTarget(responder, panelID: panelID) ?? false
+        }
+        terminalKeyLog.terminalWindow = { [weak self, weak terminals] in
+            guard let panelID = self?.location?.panelID else { return nil }
+            return terminals?.terminalWindow(panelID: panelID)
+        }
+        terminalKeyLog.context = { [weak self] in self?.terminalLogFacts() ?? [:] }
     }
 
     /// Show Terminal, in the chat's notice or in the panel's header: give
@@ -2258,7 +2317,15 @@ final class CoordinatorController: ObservableObject {
     }
 
     private func setHold(_ next: CoordinatorSendHold?) {
-        if hold != next { hold = next }
+        guard hold != next else { return }
+        let previous = hold
+        hold = next
+        var metadata = terminalLogFacts()
+        metadata["previous_hold"] = previous?.rawValue ?? "none"
+        ToasttyLog.info("Changed why the coordinator's waiting message waits", category: .tasks, metadata: metadata)
+        // A new reason while the terminal shows is the moment that a later
+        // report asks about: record the next key presses again.
+        if showsTerminal { terminalKeyLog.start() }
     }
 
     private func scheduleRecheck(at date: Date, from moment: Date) {

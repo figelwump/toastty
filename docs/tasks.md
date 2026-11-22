@@ -1229,10 +1229,19 @@ relaunch resumes does not show it.
   it the keyboard. After Claude Code's folder-trust question closes, messages
   go through when Claude is ready.
 - **A Claude Code compaction offer.** When Claude Code offers to compact
-  earlier, messages wait while the offer is open. Choose **Show Terminal**
-  to answer the offer, or press Escape there to defer it. Messages go
-  through when Claude returns to its prompt, unless a terminal draft is
-  still waiting.
+  earlier, messages wait while the offer is open, also while the wheel has
+  moved the offer out of Claude's page. Choose **Show Terminal** to answer
+  the offer: the arrow keys choose and Return confirms, a click on a choice
+  takes it, and Escape defers it. Messages go through when Claude returns
+  to its prompt, unless a terminal draft is still waiting. Any other key at
+  the offer, such as a letter or an arrow key with Shift, counts as a draft.
+- **A record of the keys after Show Terminal.** Toastty's log keeps the next
+  40 key presses after **Show Terminal** or **Terminal**, and after each
+  change of the reason why a message waits. Each line has the kind of key
+  and its modifiers, never a typed character, the view that had the
+  keyboard, what the terminal's view sent to Ghostty, and whether unfinished
+  composed text was in the way. The log also says which view has the
+  keyboard after the panel changed, and each change of why a message waits.
 - **A draft in the terminal.** When you typed in the terminal and did not
   send that text, messages and digests wait, and the chat says why. **Send
   Anyway** tells Toastty that the terminal's prompt is empty: the next

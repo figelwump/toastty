@@ -150,6 +150,8 @@ func click(at point: CGPoint) {
     }
 }
 
+let arrowKeyFlags: CGEventFlags = [.maskNumericPad, .maskSecondaryFn]
+
 func press(keyCode: CGKeyCode, flags: CGEventFlags = []) {
     let source = CGEventSource(stateID: .hidSystemState)
     func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) {
@@ -453,6 +455,22 @@ case "click-at":
     guard arguments.count > 4, let x = Double(arguments[3]), let y = Double(arguments[4]) else { exit(64) }
     click(at: CGPoint(x: x, y: y))
     print("clicked at \(Int(x)),\(Int(y))")
+case "move-at":
+    guard arguments.count > 4, let x = Double(arguments[3]), let y = Double(arguments[4]) else { exit(64) }
+    move(to: CGPoint(x: x, y: y))
+    print("moved to \(Int(x)),\(Int(y))")
+case "scroll-at":
+    // Lines of wheel movement at a point: a positive count scrolls up.
+    guard arguments.count > 5, let x = Double(arguments[3]), let y = Double(arguments[4]),
+          let lines = Int32(arguments[5]) else { exit(64) }
+    move(to: CGPoint(x: x, y: y))
+    let step: Int32 = lines > 0 ? 1 : -1
+    for _ in 0..<abs(lines) {
+        CGEvent(scrollWheelEvent2Source: CGEventSource(stateID: .hidSystemState), units: .line,
+                wheelCount: 1, wheel1: step, wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
+        usleep(40_000)
+    }
+    print("scrolled \(lines) lines at \(Int(x)),\(Int(y))")
 case "drag":
     let numbers = arguments.dropFirst(3).compactMap(Double.init)
     guard numbers.count == 4 else { exit(64) }
@@ -467,8 +485,27 @@ case "key":
     case "shift-return": press(keyCode: 36, flags: .maskShift)
     case "cmd-return": press(keyCode: 36, flags: .maskCommand)
     case "escape": press(keyCode: 53)
-    case "up": press(keyCode: 126)
-    case "down": press(keyCode: 125)
+    // A keyboard's arrow keys carry these two flags, and AppKit reports
+    // them as `.numericPad` and `.function`. An arrow without them is a key
+    // that no keyboard sends: `-plain` keeps it for a comparison.
+    case "up": press(keyCode: 126, flags: arrowKeyFlags)
+    case "down": press(keyCode: 125, flags: arrowKeyFlags)
+    case "left": press(keyCode: 123, flags: arrowKeyFlags)
+    case "right": press(keyCode: 124, flags: arrowKeyFlags)
+    // Keys that a person can take for a plain arrow key. Never Control with
+    // an arrow: macOS takes it for Mission Control, and the app gets no more keys.
+    case "shift-down": press(keyCode: 125, flags: arrowKeyFlags.union(.maskShift))
+    case "option-down": press(keyCode: 125, flags: arrowKeyFlags.union(.maskAlternate))
+    case "command-down": press(keyCode: 125, flags: arrowKeyFlags.union(.maskCommand))
+    case "capslock-down": press(keyCode: 125, flags: arrowKeyFlags.union(.maskAlphaShift))
+    case "page-up": press(keyCode: 116, flags: .maskSecondaryFn)
+    case "page-down": press(keyCode: 121, flags: .maskSecondaryFn)
+    case "home": press(keyCode: 115, flags: .maskSecondaryFn)
+    case "end": press(keyCode: 119, flags: .maskSecondaryFn)
+    case "up-plain": press(keyCode: 126)
+    case "down-plain": press(keyCode: 125)
+    case "left-plain": press(keyCode: 123)
+    case "right-plain": press(keyCode: 124)
     case "tab": press(keyCode: 48)
     case "delete": press(keyCode: 51)
     case "cmd-a": press(keyCode: 0, flags: .maskCommand)
