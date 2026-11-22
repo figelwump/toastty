@@ -218,6 +218,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// that nothing covers. The answer says whether the covering view took
     /// the keyboard. A covered terminal never takes the keyboard itself.
     var coveringInputFocus: ((UUID) -> (@MainActor () -> Bool)?)?
+    var isClaudeCoordinatorTerminal: ((UUID) -> Bool)?
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
         self.sessionLifecycleTracker = sessionLifecycleTracker
@@ -618,43 +619,60 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return automationReadVisibleText(panelID: panelID, includeScrollback: includeScrollback)
     }
 
-    private var answeredClaudeDialogPanelID: UUID?
+    private var answeredClaudeDialog: (panelID: UUID, dialog: ClaudeNativeDialog)?
+    private enum ClaudeNativeDialog {
+        case compactionOffer
+        case folderTrust
+    }
 
     func claudeHasNativeDialog(panelID: UUID) -> Bool {
-        guard let screen = readVisibleText(panelID: panelID) else { return false }
-        let present = Self.containsClaudeNativeDialog(screen)
-        if !present, answeredClaudeDialogPanelID == panelID {
-            answeredClaudeDialogPanelID = nil
+        activeClaudeDialog(panelID: panelID) != nil
+    }
+
+    private func activeClaudeDialog(panelID: UUID) -> ClaudeNativeDialog? {
+        guard let screen = readVisibleText(panelID: panelID) else { return nil }
+        let dialog = Self.claudeNativeDialog(in: screen)
+        if let answeredClaudeDialog, answeredClaudeDialog.panelID == panelID, answeredClaudeDialog.dialog != dialog {
+            self.answeredClaudeDialog = nil
         }
-        return present
+        return dialog
     }
 
     func isClaudeDialogInput(panelID: UUID, kind: TerminalLocalInputKind) -> Bool {
         guard kind == .dialogNavigation || kind == .dialogAnswer,
-              claudeHasNativeDialog(panelID: panelID),
-              answeredClaudeDialogPanelID != panelID else { return false }
+              let dialog = activeClaudeDialog(panelID: panelID),
+              answeredClaudeDialog?.panelID != panelID else { return false }
         if kind == .dialogAnswer {
             // The terminal can still show the old dialog after Return or
             // Escape reached Claude. A following Up can already recall a draft.
-            answeredClaudeDialogPanelID = panelID
+            answeredClaudeDialog = (panelID, dialog)
         }
         return true
+    }
+
+    func shouldSuppressPrintableInput(for panelID: UUID) -> Bool {
+        guard isClaudeCoordinatorTerminal?(panelID) == true else { return false }
+        // Printable input temporarily disables the offer's controls in
+        // Claude. Let typing through after a possible answer.
+        return activeClaudeDialog(panelID: panelID) == .compactionOffer && answeredClaudeDialog?.panelID != panelID
     }
 
     /// Claude does not emit a conversation interaction for these dialogs.
     /// Require both the dialog's body and its controls at the bottom of the
     /// active page. History and an ordinary prompt below the dialog do not count.
-    private static func containsClaudeNativeDialog(_ screen: String) -> Bool {
+    private static func claudeNativeDialog(in screen: String) -> ClaudeNativeDialog? {
         let text = screen.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        if text.hasSuffix("choose · ←/→ change size · enter confirm · esc not now") {
-            return text.contains("We recommend compacting earlier") &&
-                text.contains("Want to autocompact at")
+        if text.hasSuffix("choose · ←/→ change size · enter confirm · esc not now"),
+           text.contains("We recommend compacting earlier"),
+           text.contains("Want to autocompact at") {
+            return .compactionOffer
         }
-        if text.hasSuffix("Enter to confirm · Esc to cancel") {
-            return text.contains("Accessing workspace:") &&
-                text.contains("Yes, I trust this folder") && text.contains("No, exit")
+        if text.hasSuffix("Enter to confirm · Esc to cancel"),
+           text.contains("Accessing workspace:"),
+           text.contains("Yes, I trust this folder"), text.contains("No, exit") {
+            return .folderTrust
         }
-        return false
+        return nil
     }
 
     func promptState(panelID: UUID) -> TerminalPromptState {

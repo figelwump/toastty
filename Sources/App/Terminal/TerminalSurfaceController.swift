@@ -244,6 +244,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return }
             self.delegate?.handleLocalInput(for: self.panelID, kind: kind)
         }
+        terminalHostView.shouldSuppressPrintableInput = { [weak self] in
+            guard let self else { return false }
+            return self.delegate?.shouldSuppressPrintableInput(for: self.panelID) == true
+        }
         #else
         hostedView = fallbackView
         #endif

@@ -26,6 +26,7 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     /// Local keyboard/paste input reached the panel's surface. Used by
     /// remote-access to invalidate an open remote-send epoch. Must be cheap.
     func handleLocalInput(for panelID: UUID, kind: TerminalLocalInputKind)
+    func shouldSuppressPrintableInput(for panelID: UUID) -> Bool
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState
@@ -49,6 +50,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
 }
 
 extension TerminalSurfaceControllerDelegate {
+    func shouldSuppressPrintableInput(for panelID: UUID) -> Bool { false }
+
     @discardableResult
     func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
         _ = panelID

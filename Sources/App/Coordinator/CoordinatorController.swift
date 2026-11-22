@@ -346,6 +346,10 @@ final class CoordinatorController: ObservableObject {
             guard let self, self.coversTerminal(panelID: panelID) else { return nil }
             return { [weak self] in self?.chat?.focusComposer() ?? false }
         }
+        terminals.isClaudeCoordinatorTerminal = { [weak self] panelID in
+            guard let self, self.location?.panelID == panelID else { return false }
+            return self.sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .claude
+        }
     }
 
     /// Show Terminal, in the chat's notice or in the panel's header: give

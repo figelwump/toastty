@@ -35,6 +35,7 @@ final class TerminalHostView: NSView {
     /// invalidate an open remote-send epoch. Must stay O(1): the owning
     /// controller forwards a bare panel identity, no per-keystroke work here.
     var handleLocalInput: ((TerminalLocalInputKind) -> Void)?
+    var shouldSuppressPrintableInput: (() -> Bool)?
     private var pendingFileDrop: PreparedFileDrop?
     private var pendingVisibilitySyncGeneration = 0
     private var mouseTrackingArea: NSTrackingArea?
@@ -42,6 +43,7 @@ final class TerminalHostView: NSView {
     private var windowOcclusionObserver: NSObjectProtocol?
     private var lastKnownSurfaceVisibility: Bool?
     private var trackedPressedModifierKeyCodes: [UInt16] = []
+    private var suppressedPrintableKeyCodes: Set<UInt16> = []
     private var markedText = NSMutableAttributedString(string: "")
     private var keyTextAccumulator: [String]?
     private var pendingCommandClickLinkOpen: PendingCommandClickLinkOpen?
@@ -1075,6 +1077,25 @@ final class TerminalHostView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
+        if event.isARepeat {
+            if suppressedPrintableKeyCodes.contains(event.keyCode) { return }
+        } else {
+            // The key-up may have gone to another responder.
+            suppressedPrintableKeyCodes.remove(event.keyCode)
+        }
+        if markedText.length == 0,
+           event.modifierFlags.intersection([.command, .control]).isEmpty,
+           let characters = Self.ghosttyText(for: event),
+           characters.unicodeScalars.contains(where: { !CharacterSet.controlCharacters.contains($0) }),
+           shouldSuppressPrintableInput?() == true,
+           let ghosttySurface,
+           !event.modifierFlags.contains(.option) ||
+               translatedKeyEvent(for: event, on: ghosttySurface).modifierFlags.contains(.option),
+           isUnboundKey(event, action: action) {
+            // A repeat can arrive for a key that went down before the offer.
+            if !event.isARepeat { suppressedPrintableKeyCodes.insert(event.keyCode) }
+            return
+        }
         // Repeats count too: a held key keeps changing the composer, and each
         // change must advance the remote draft epoch.
         let isPlainControlC = markedText.length == 0
@@ -1142,6 +1163,7 @@ final class TerminalHostView: NSView {
     }
 
     override func keyUp(with event: NSEvent) {
+        if suppressedPrintableKeyCodes.remove(event.keyCode) != nil { return }
         guard handleKeyEvent(event, action: GHOSTTY_ACTION_RELEASE) else {
             super.keyUp(with: event)
             return

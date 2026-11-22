@@ -284,6 +284,49 @@ final class TerminalHostViewGhosttyBridgeTests: TerminalHostViewTestCase {
         XCTAssertEqual(localInputs, 3)
     }
 
+    func testSuppressingPrintableKeysLeavesEscapeAndLaterTypingAvailable() throws {
+        let host = TerminalHostView()
+        let recorder = GhosttyKeyEventRecorder()
+        host.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in }, setOcclusion: { _, _ in }, refresh: { _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, event in recorder.record(event); return true },
+            keyIsBinding: { _, _ in false }
+        )
+        host.setGhosttySurface(fakeSurfaceHandle(0x1251))
+        host.shouldSuppressPrintableInput = { true }
+        var kinds: [TerminalLocalInputKind] = []
+        host.handleLocalInput = { kinds.append($0) }
+
+        let letter = try makeKeyEvent(type: .keyDown, keyCode: 0, modifierFlags: [],
+                                      characters: "a", charactersIgnoringModifiers: "a")
+        let release = try makeKeyEvent(type: .keyUp, keyCode: 0, modifierFlags: [],
+                                       characters: "a", charactersIgnoringModifiers: "a")
+        host.keyDown(with: letter)
+        host.keyUp(with: release)
+        host.keyDown(with: try makeKeyEvent(type: .keyDown, keyCode: 37, modifierFlags: .option,
+                                          characters: "@", charactersIgnoringModifiers: "l"))
+        host.keyUp(with: try makeKeyEvent(type: .keyUp, keyCode: 37, modifierFlags: .option,
+                                        characters: "@", charactersIgnoringModifiers: "l"))
+        XCTAssertTrue(recorder.events.isEmpty)
+        XCTAssertTrue(kinds.isEmpty)
+
+        host.keyDown(with: try makeKeyEvent(type: .keyDown, keyCode: 53, modifierFlags: [],
+                                           characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}"))
+        host.shouldSuppressPrintableInput = { false }
+        host.keyDown(with: letter)
+        host.shouldSuppressPrintableInput = { true }
+        host.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "a", charactersIgnoringModifiers: "a",
+            isARepeat: true, keyCode: 0
+        )))
+        host.keyUp(with: release)
+        XCTAssertEqual(recorder.events.map(\.keyCode), [53, 0, 0])
+        XCTAssertEqual(recorder.events.last?.actionRawValue, GHOSTTY_ACTION_RELEASE.rawValue)
+        XCTAssertEqual(kinds, [.dialogAnswer, .key])
+    }
+
     func testControlCRecordsInputBeforeInterruptCanChangeSessionStatus() throws {
         let host = TerminalHostView()
         host.ghosttySurfaceHooks = .init(

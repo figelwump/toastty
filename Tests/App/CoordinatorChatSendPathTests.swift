@@ -502,7 +502,7 @@ struct CoordinatorChatSendPathTests {
     // MARK: - The user's text in the terminal
 
     @MainActor
-    @Test(arguments: [.none, .beforeDialog, .afterAnswer] as [CompactionDraft])
+    @Test(arguments: [.none, .beforeDialog, .afterAnswer, .followingFolderTrust] as [CompactionDraft])
     func compactionDialogHoldsMessagesAndKeepsRealDraftsProtected(draft: CompactionDraft) async throws {
         let fixture = try CoordinatorChatFixture(agent: .claude)
         defer { fixture.tearDown() }
@@ -515,6 +515,15 @@ struct CoordinatorChatSendPathTests {
         }
         defer { registry.setAutomationReadVisibleTextHandlerForTesting(nil) }
         if draft == .beforeDialog { registry.handleLocalInput(for: fixture.panelID, kind: .key) }
+        if draft == .followingFolderTrust {
+            screen = """
+            Accessing workspace: /tmp/coordinator
+            Yes, I trust this folder
+            No, exit
+            Enter to confirm · Esc to cancel
+            """
+            registry.handleLocalInput(for: fixture.panelID, kind: .dialogAnswer)
+        }
         screen = """
         We recommend compacting earlier
         Want to autocompact at 400k tokens instead?
@@ -529,8 +538,10 @@ struct CoordinatorChatSendPathTests {
         try await fixture.waitUntil("the reason the message waits") { fixture.chat.notice == notice }
         #expect(fixture.delivered.texts.isEmpty)
 
+        #expect(registry.shouldSuppressPrintableInput(for: fixture.panelID))
         registry.handleLocalInput(for: fixture.panelID, kind: .dialogNavigation)
         registry.handleLocalInput(for: fixture.panelID, kind: .dialogAnswer)
+        #expect(!registry.shouldSuppressPrintableInput(for: fixture.panelID))
         if draft == .afterAnswer {
             // The last frame still shows the dialog. Up can already recall
             // a message into Claude's composer while the terminal redraws.
@@ -538,7 +549,8 @@ struct CoordinatorChatSendPathTests {
         }
         // The dialog may still be on the active page above the current prompt.
         screen += "\n❯ "
-        if draft != .none {
+        #expect(!registry.shouldSuppressPrintableInput(for: fixture.panelID))
+        if draft == .beforeDialog || draft == .afterAnswer {
             try await fixture.waitUntil("the terminal draft notice") { fixture.chat.notice == .terminalDraft }
             #expect(fixture.controller.hold == .userDraft)
             #expect(fixture.delivered.texts.isEmpty)
@@ -549,7 +561,7 @@ struct CoordinatorChatSendPathTests {
     }
 
     enum CompactionDraft: Sendable {
-        case none, beforeDialog, afterAnswer
+        case none, beforeDialog, afterAnswer, followingFolderTrust
     }
 
     @MainActor
