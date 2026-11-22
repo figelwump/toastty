@@ -451,7 +451,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
 | `--root <dir>` | The project's directory, instead of `--workspace`. Toastty uses the open workspace on it, or opens the project once every other check passed, so a request that fails opens nothing. |
 | `--external-ref <id>`, `--external-url <url>` | The issue or report the task came from, such as `github:owner/repo#123`, and its http or https page. The Tasks view shows it as **Source**. |
-| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. With no profile there, as on a fresh install, the installed built-in agents are offered: Claude Code, Codex, Cursor, Grok Build and Pi. `[defaults]` in `tasks.toml` fills what you leave out; with no agent there, the task takes the first offered agent that is installed. |
+| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml`, a provider model ID such as `gpt-6.2-sol`, and the effort. With no profile there, as on a fresh install, the installed built-in agents are offered: Claude Code, Codex, Cursor, Grok Build and Pi. `[defaults]` in `tasks.toml` fills what you leave out; with no agent there, the task takes the first offered agent that is installed. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
 | `--title`, `--slug` | The task's title and the task space's name. They start from the first line of the text. An explicit title stays fixed. Otherwise, the task uses its agent session's title when available. The slug stays fixed. |
 | `--request-id <id>` | The caller's key for this request. A repeat from the same agent session, or from the CLI outside one, with the same key returns the first task instead of making another. |
@@ -1766,6 +1766,8 @@ text.
   table. It suggests a rule for choosing a model that your own agent
   instruction files hold, such as a global `AGENTS.md`, then the history of
   your tasks, then a starter table that keeps the agent's default model.
+  It looks up model names in imported rules and chat before it saves a rule
+  or launches a task. If the match is unclear, it asks which model to use.
 - **Projects:** which work goes to which project, drafted from the history
   and your open projects. It asks only when that is unclear.
 - **Talking:** whether it answers questions itself or makes a task for each

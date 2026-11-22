@@ -1156,9 +1156,9 @@ When you hand work to another agent or task, pick its model and effort by this t
 
 | Work | Model / effort |
 | --- | --- |
-| Small change with clear requirements | claude-sonnet-5-5 / medium |
-| Feature with clear requirements | claude-opus-5-5 / high |
-| Open decisions, or hard to verify | claude-opus-5-5 / xhigh |
+| Small change with clear requirements | Sonnet 5.5 / medium |
+| Feature with clear requirements | Opus 5.5 / high |
+| Open decisions, or hard to verify | Opus 5.5 / xhigh |
 """
 
 
@@ -1167,10 +1167,9 @@ def created_since(run, before):
 
 
 def first_run_instructions(run):
-    """With no choices in the history, it suggests the model rule from the user's instruction files. "defaults",
-    the answer to the preamble, saves all five parts in one commit, and new tasks use the rule."""
-    for title in ('Fix the unread dot in the sidebar', 'Crash when the last tab closes'):
-        run.create_task(title, done=True)
+    """Instruction-file labels resolve through history, and a model named in chat overrides the saved rule."""
+    run.create_task('Fix the unread dot in the sidebar', model='claude-sonnet-5-5', done=True)
+    run.create_task('Crash when the last tab closes', model='claude-opus-5-5', done=True)
     (run.runtime_home / 'CLAUDE.md').write_text(INSTRUCTION_RULE)
     run.open_coordinator()
     said = first_answer(run, run.tell('Hi. I just turned you on.'))
@@ -1181,7 +1180,9 @@ def first_run_instructions(run):
     shows_saved(run, run.said(run.tell('Defaults.')))
     check_first_run_saved(run, 1, answers=1)
     agents = '\n'.join(run.section('Agents')).lower()
-    run.check('Agents holds the three rows', 'sonnet' in agents and 'xhigh' in agents and 'medium' in agents, agents)
+    run.check('Agents holds provider IDs for the imported rows',
+              'claude-sonnet-5-5' in agents and 'claude-opus-5-5' in agents
+              and 'xhigh' in agents and 'medium' in agents, agents)
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     said = run.said(run.tell('New task: the README says "teh app". Make it "the app".'))
     created = created_since(run, before)
@@ -1190,6 +1191,12 @@ def first_run_instructions(run):
               [(t['title'], t.get('model'), t.get('effort')) for t in created])
     run.check('it names the model and effort it chose', 'sonnet' in said.lower() and 'medium' in said.lower(), said,
               required=False)
+    before.update(t['taskID'] for t in created)
+    run.tell('New task in app: fix "instalation" in the README. Use Claude Code with Opus 5.5 at high.')
+    created = created_since(run, before)
+    run.check('a name in chat overrides the saved rule with a provider ID', len(created) == 1
+              and created[0].get('model') == 'claude-opus-5-5' and created[0].get('effort') == 'high',
+              [(t['title'], t.get('model'), t.get('effort')) for t in created])
 
 
 def first_run_request(run):
