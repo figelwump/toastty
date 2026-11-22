@@ -57,8 +57,8 @@ no-port QR codes and saved credentials keep working without re-pairing. The
 updated client preserves the selected port in pairing, requests, and reconnects.
 Your tailnet policy must also allow the selected port.
 
-Avoid editing Serve configuration from another app or terminal while Toastty
-is setting it up. Toastty checks the authenticated node before and after setup.
+Avoid editing Serve configuration from another app, another Toastty
+instance, or a terminal while Toastty is setting it up. Toastty checks the authenticated node before and after setup.
 The Tailscale command cannot atomically prevent concurrent profile switches or
 external configuration changes.
 
@@ -72,17 +72,25 @@ missing Serve configuration, setup failure, and setup timeout separately. Use
 
 Each Toastty instance has its own local port, so several instances can run
 Remote Access at the same time. Your own Toastty, which uses `~/.toastty`,
-always uses port 42871. A runtime-isolated instance, such as a worktree, dev,
-or test run, uses a port from 42872 through 43871. Toastty computes that port
-from the instance's runtime home path, so it is the same at every launch.
-An isolated instance never uses 42871, so it cannot receive requests that
-Tailscale Serve sends to your own Toastty.
+uses port 42871. A runtime-isolated instance, such as a worktree, dev, or test
+run, uses a port from 42872 through 43871. Toastty computes that port from the
+instance's runtime home path, so it is the same at every launch. Without a
+port override, an isolated instance never uses 42871, so it cannot receive
+requests that Tailscale Serve sends to your own Toastty. To see an instance's
+port, run `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` with the PID from its
+`instance.json`.
 
 Each instance also has its own paired devices and its own **Tailnet origin**.
 Because your own Toastty already uses HTTPS port 443, Tailscale setup in a
 second instance selects a fallback port, such as 8443. A phone keeps one
 pairing. Pairing it with a dev instance replaces its pairing with your own
 Toastty.
+
+An isolated instance that ran Remote Access before it had its own port can
+still have a saved **Tailnet origin** that forwards to 42871. Its setup then
+reports that the HTTPS port has a different setup. Revoke its paired devices,
+clear **Tailnet origin**, choose **Retry Setup**, and pair again. Do not change
+the mapping to 42871, because your own Toastty uses it.
 
 A fallback HTTPS port stays mapped after you delete the worktree. When setup
 reports that no Tailscale HTTPS port is available, remove a mapping that you
@@ -113,6 +121,10 @@ tailscale serve status
 tailscale serve --bg --https=443 http://127.0.0.1:42871
 tailscale serve status
 ```
+
+These commands are for your own Toastty. For a runtime-isolated instance, use
+its local port in place of 42871. See
+[Several Toastty instances](#several-toastty-instances).
 
 The status command reads your Mac's existing Tailscale configuration. The
 `--bg` command changes it. Inspect the current mapping first and do not replace

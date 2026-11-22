@@ -407,7 +407,24 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         }
 
         let expandedPath = (rawValue as NSString).expandingTildeInPath
-        return URL(filePath: expandedPath).standardizedFileURL
+        return fileSystemIndependentURL(URL(filePath: expandedPath).standardizedFileURL)
+    }
+
+    /// `standardizedFileURL` drops a leading `/private` only when the shorter
+    /// path exists, so a runtime home would get one path before Toastty
+    /// creates it and another one afterwards. Its defaults suite and Remote
+    /// Access port come from that path and must not change between launches.
+    /// `/tmp`, `/var`, and `/etc` link into `/private` on macOS, so drop the
+    /// prefix for them whether or not the folder exists yet.
+    private static func fileSystemIndependentURL(_ url: URL) -> URL {
+        let path = url.path
+        for linkedRoot in ["/tmp", "/var", "/etc"] {
+            let privateRoot = "/private" + linkedRoot
+            if path == privateRoot || path.hasPrefix(privateRoot + "/") {
+                return URL(filePath: String(path.dropFirst("/private".count)))
+            }
+        }
+        return url
     }
 
     private static func normalizedWorktreeRootURL(environment: [String: String]) -> URL? {
