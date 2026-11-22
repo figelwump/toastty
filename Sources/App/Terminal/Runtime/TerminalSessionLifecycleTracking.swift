@@ -4,6 +4,8 @@ import Foundation
 enum TerminalLocalInputKind: String {
     case key
     case controlC
+    case dialogNavigation
+    case dialogAnswer
     case paste
     case programmatic
 }

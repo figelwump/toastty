@@ -1217,15 +1217,20 @@ relaunch resumes does not show it.
   runs and the agent has not reported its session, the chat says that the
   agent is starting, and a message you send shows as **Queued · waits for the
   agent to start**. After 8 seconds the chat says that the agent may wait for
-  your answer in the terminal. **Show Terminal** shows the terminal. After
-  your answer there, the chat shows the notice for a draft in the terminal,
-  and **Send Anyway** types the waiting message.
+  your answer in the terminal. **Show Terminal** shows the terminal and gives
+  it the keyboard. After Claude Code's folder-trust question closes, messages
+  go through when Claude is ready.
+- **A Claude Code compaction offer.** When Claude Code offers to compact
+  earlier, messages wait while the offer is open. Choose **Show Terminal**
+  to answer the offer, or press Escape there to defer it. Messages go
+  through when Claude returns to its prompt, unless a terminal draft is
+  still waiting.
 - **A draft in the terminal.** When you typed in the terminal and did not
   send that text, messages and digests wait, and the chat says why. **Send
   Anyway** tells Toastty that the terminal's prompt is empty: the next
-  message is then typed there. The same holds after you answered a login or
-  a folder-trust question in the terminal before the agent started: Toastty
-  cannot tell those keys from a draft, so choose **Send Anyway**.
+  message is then typed there. A login or other terminal dialog can also
+  leave this notice. Check that the prompt is empty before choosing
+  **Send Anyway**.
 - **Copy and Reply.** Copy under your message or the coordinator's copies
   the whole message, and Reply under the coordinator's answers it. Both show
   while the pointer is over the message. After Reply the field shows

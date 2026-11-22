@@ -24,10 +24,9 @@ Claude's config file that:
 - not-now: Not Now starts nothing; a relaunch does not ask again; Open
   Coordinator in the command palette and in the Agent menu each open it, and
   Restart Coordinator is offered only while it is open;
-- notice: with a folder that Claude does not trust, the chat says that the
-  agent may wait in the terminal and offers Show Terminal; after the answer in
-  the terminal, the chat says that the user typed there and offers Send
-  Anyway, and one click types the waiting message, which Claude answers. The
+- notice: with a folder that Claude does not trust, the dock says that the
+  agent may wait in the terminal and offers Show Terminal; the first keys
+  reach the dialog and the waiting message goes through when Claude is ready. The
   app cannot tell this profile's config file, so it writes no trust for it.
 
 '--expect-notice no' checks the notice scenario against a build from before
@@ -524,6 +523,11 @@ def notice(check, claude, _host_environment, expect_notice=True):
             run.ui.run('click-label', 'Dismiss', check=False)
             time.sleep(0.5)
 
+        if expect_notice:
+            run.ui.run('click', 'coordinator.panel.dock')
+            wait_for('the dock with the chat', lambda: run.ui.exists('coordinator.dock')
+                     and not run.ui.exists('coordinator.panel.mode-toggle'), timeout=30)
+
         # The user's message waits.
         run.ui.send('Reply with exactly this one word and nothing else: NOTICE-ONE')
         waiting = wait_for('the message to wait', lambda: (s := run.status())['queuedCount'] == 1 and s, timeout=30)
@@ -576,7 +580,6 @@ def notice(check, claude, _host_environment, expect_notice=True):
         # Show Terminal gave the terminal the keyboard: nothing else moves it
         # there, as a user does nothing else. Real keys choose "Yes, I trust
         # this folder": which choice Claude selects first differs by version.
-        run.ui.run('activate')
         choices = [line.strip() for line in run.screen().splitlines() if 'trust this folder' in line or 'No, exit' in line]
         selected = next((index for index, line in enumerate(choices) if line.startswith('\u276f')), None)
         yes = next((index for index, line in enumerate(choices) if TRUST_QUESTION in line), None)
@@ -592,29 +595,14 @@ def notice(check, claude, _host_environment, expect_notice=True):
         run.ui.run('click', 'coordinator.panel.mode-toggle')
         wait_for('the chat again', lambda: run.ui.exists('coordinator.chat'), timeout=30)
 
-        # The agent reported its start. Toastty cannot tell the keys that
-        # answered the question from a draft in Claude's prompt, so nothing
-        # is typed: the chat says so and offers Send Anyway.
-        wait_for('the notice about the keys in the terminal',
-                 lambda: 'Send Anyway' in run.ui.texts('coordinator.chat.notice'), timeout=30)
-        draft_notice = run.ui.texts('coordinator.chat.notice')
-        require('answered a question' in draft_notice and 'has not started' not in draft_notice,
-                f'The notice after the answer: {draft_notice}')
-        time.sleep(3)
-        held = run.status()
-        require(held['queuedCount'] == 1 and held.get('hold') == 'userDraft' and not run.replied('NOTICE-ONE'),
-                f'The message did not wait for the user\'s release: {held}')
-        run.capture('send-anyway-notice')
-        step('after the answer in the terminal the chat offered Send Anyway', started=started, held=held,
-             notice=draft_notice)
-
-        # One click types the waiting message, and Claude answers it.
-        run.ui.run('click', 'coordinator.chat.notice.send-anyway')
+        require('Send Anyway' not in run.ui.texts('coordinator.chat.notice'),
+                'The dialog keys were mistaken for a draft')
         run.wait_for_reply('NOTICE-ONE')
         wait_for('the queue to empty', lambda: run.status()['queuedCount'] == 0, timeout=60)
         wait_for('the notice to go', lambda: not run.ui.exists('coordinator.chat.notice'), timeout=60)
         run.capture('answered')
-        step('Send Anyway typed the waiting message and Claude answered it', chat=run.ui.texts()[-400:])
+        step('the waiting message went through when Claude was ready', started=started,
+             chat=run.ui.texts()[-400:])
 
 
 # MARK: - The check

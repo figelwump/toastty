@@ -618,6 +618,45 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return automationReadVisibleText(panelID: panelID, includeScrollback: includeScrollback)
     }
 
+    private var answeredClaudeDialogPanelID: UUID?
+
+    func claudeHasNativeDialog(panelID: UUID) -> Bool {
+        guard let screen = readVisibleText(panelID: panelID) else { return false }
+        let present = Self.containsClaudeNativeDialog(screen)
+        if !present, answeredClaudeDialogPanelID == panelID {
+            answeredClaudeDialogPanelID = nil
+        }
+        return present
+    }
+
+    func isClaudeDialogInput(panelID: UUID, kind: TerminalLocalInputKind) -> Bool {
+        guard kind == .dialogNavigation || kind == .dialogAnswer,
+              claudeHasNativeDialog(panelID: panelID),
+              answeredClaudeDialogPanelID != panelID else { return false }
+        if kind == .dialogAnswer {
+            // The terminal can still show the old dialog after Return or
+            // Escape reached Claude. A following Up can already recall a draft.
+            answeredClaudeDialogPanelID = panelID
+        }
+        return true
+    }
+
+    /// Claude does not emit a conversation interaction for these dialogs.
+    /// Require both the dialog's body and its controls at the bottom of the
+    /// active page. History and an ordinary prompt below the dialog do not count.
+    private static func containsClaudeNativeDialog(_ screen: String) -> Bool {
+        let text = screen.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if text.hasSuffix("choose · ←/→ change size · enter confirm · esc not now") {
+            return text.contains("We recommend compacting earlier") &&
+                text.contains("Want to autocompact at")
+        }
+        if text.hasSuffix("Enter to confirm · Esc to cancel") {
+            return text.contains("Accessing workspace:") &&
+                text.contains("Yes, I trust this folder") && text.contains("No, exit")
+        }
+        return false
+    }
+
     func promptState(panelID: UUID) -> TerminalPromptState {
         if let automationPromptStateHandlerForTesting {
             return automationPromptStateHandlerForTesting(panelID)

@@ -645,6 +645,8 @@ final class CoordinatorChatModel: ObservableObject {
             "Queued \(position) · waits for the agent to start"
         case .userDraft:
             "Queued \(position) · waits for the text in the terminal"
+        case .terminalDialog:
+            "Queued \(position) · waits for your answer in the terminal"
         case .terminalUnavailable, .promptNotOpen:
             "Queued \(position) · waits for the prompt"
         case .notSaved:
@@ -686,6 +688,7 @@ final class CoordinatorChatModel: ObservableObject {
         case .running:
             break
         }
+        if status.hold == .terminalDialog { return .awaitingAnswerInTerminal }
         if status.session?.status?.kind == .needsApproval {
             return needsTerminalForPendingAnswer ? .awaitingAnswerInTerminal : nil
         }

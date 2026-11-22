@@ -265,7 +265,7 @@ final class RemoteCoordinatorSender {
         case .agentStarting: .starting
         case .userDraft: .userDraft
         case .busy, .awaitingTurn, .settling: .working
-        case .terminalUnavailable, .promptNotOpen: .promptNotOpen
+        case .terminalUnavailable, .terminalDialog, .promptNotOpen: .promptNotOpen
         case .notSaved: .notSaved
         }
     }
