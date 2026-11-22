@@ -19,8 +19,10 @@ the turn, or put all of it in the question, as the next section says.
 
 Ask the first part in plain text, after the preamble, in the message that
 starts the setup, as The first answer says. That message ends the turn, and
-the user's answer comes as their next message. When you ask that part again,
-such as after a question about it, ask it in plain text too.
+the user's answer comes as their next message. The first part is the part at
+place 1, such as "1 of 5 · Agents", or the only part that you ask about.
+When you ask it again, such as after a question about it or after
+"continue", ask it in plain text too.
 
 When your agent program has a tool that asks the user a question with
 choices, such as Claude Code's question tool, ask each part after the first

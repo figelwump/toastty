@@ -1756,7 +1756,8 @@ by asking you:
 of Projects, Agents, Talking, Reviewing and Improving holds no rule, it asks
 you how to set it up, one part at a time, with a suggested answer for each part. "Yes"
 takes the suggestion, and "defaults" takes the suggestions for all remaining parts. It
-asks the first part in plain text, after a short introduction. When its agent program can
+asks the first part in plain text, after a short introduction when it asks about more
+than one part. When its agent program can
 ask a question with choices, such as Claude Code, the chat shows each later part as a
 short card that you answer with a click or in your own words; otherwise it asks in plain
 text.
