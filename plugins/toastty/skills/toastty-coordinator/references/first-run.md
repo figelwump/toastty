@@ -96,15 +96,17 @@ choices in one line.
    is, with an agent, a model and an effort. Take the suggestion from the
    first of these that has one:
    - a rule for choosing the model and effort of handed-off work in the
-     user's instruction files that your agent program loaded. Name the file,
-     and say that the policy will hold a copy of its rule;
+     user's instruction files that your agent program loaded. Name the file
+     and say that the policy will hold a copy with resolved IDs. Use Model
+     IDs under New tasks with the history you already read. For any
+     unresolved row, say which name still needs a lookup before you save
+     the table. Let the user give an ID if they know it;
    - the task history: which agent, model and effort the user chose for which
      kind of work;
    - a starter table with three rows: a small, clear change; a feature with
      clear requirements; work with open decisions or that is hard to check.
      Keep the agent's default model, give the rows a rising effort, and ask
-     whether the user wants another model for a row. Toastty has no list of
-     models: use a model ID exactly as the user or the history gives it.
+     whether the user wants another model for a row.
 2. **Which project for which work (Projects).** First read the projects with
    `toastty task workspace-choices --json`. Say that you can create a
    task in any repository on this Mac, also one that is not open in
@@ -160,6 +162,11 @@ The open part is the first part on the `asked first-run` line. Write to
   suggest", and "defaults" settles every part on the line. A part that the
   user did not change gets your suggestion. Before you write Projects, read
   the projects, as its part says.
+- **For Agents,** before saving the accepted rows, use Model IDs to resolve
+  names left open in the suggestion or added in the answer. If a choice
+  is still unclear, ask once for the ID or permission to use the default.
+  Keep the row and question on the `asked first-run` line until the user
+  settles it.
 - **Write the answer at once.** Write each part that the answer settles in
   its section. Where that is the default of your instructions, write the line
   `- The coordinator's defaults.`, so that you do not ask again. Improving

@@ -44,7 +44,8 @@ stops, so nothing else keeps that work.
 3. **After the merge,** find the task that holds the remaining work: an open
    task that the reply names, or one whose text has that work. If none
    exists, create it now. Do not wait for a yes: the user's request covers
-   the rest of its work.
+   the rest of its work. If a named model still needs a choice, follow Model
+   IDs under New tasks and keep the `followup` line until the task exists.
    - Create it in the same project, as New tasks says, without
      `--start-work`.
    - Its text is yours, not the user's. Say that it continues the user's
