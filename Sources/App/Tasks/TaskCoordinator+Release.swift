@@ -5,6 +5,36 @@ import Foundation
 extension TaskCoordinator {
     static let releaseCheckInterval: Duration = .seconds(15 * 60)
 
+    /// Older Toastty versions could copy a PR from a release's task space.
+    /// Remove the chip and its saved merge state before polling or watches run.
+    func clearReleasePullRequests() {
+        let key = SidebarSubspacePresentation.annotationKeyPullRequest
+        for record in records.records where record.release != nil {
+            guard let workspaceID = record.taskSpaceWorkspaceID,
+                  let workspace = store.state.workspacesByID[workspaceID],
+                  workspace.taskID == record.id else { continue }
+            if record.doneAt == nil, record.cleanup?.kind == .merge || merges?.request(workspaceID: workspaceID) != nil {
+                // The workspace's mark was the merge's acceptance.
+                _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
+            }
+            if workspace.annotations[key] != nil {
+                _ = store.send(.clearWorkspaceAnnotation(workspaceID: workspaceID, key: key))
+            }
+        }
+        records.updateEach { record in
+            guard record.release != nil else { return }
+            record.pullRequestURL = nil
+            record.mergedAt = nil
+            record.mergeCommit = nil
+            record.mergeTarget = nil
+            record.mergeRequestedAt = nil
+            record.mergeCancelledAt = nil
+            record.mergeFailure = nil
+            record.droppedMergeCleanupPullRequestURL = nil
+            if record.cleanup?.kind == .merge { record.cleanup = nil }
+        }
+    }
+
     // MARK: - Release
 
     /// `task.release`: makes a release task for a project. Its agent starts

@@ -240,12 +240,12 @@ final class AppControlExecutor {
             return try runSetWorkspaceAnnotation(args: args)
 
         case .workspaceClearAnnotation:
-            let workspaceID = try resolveWorkspaceID(args: args)
             guard let key = WorkspaceAnnotation.canonicalKey(try requireTextParameter("key", args: args)) else {
                 throw AutomationSocketError.invalidPayload(
                     "key must be 1-\(WorkspaceAnnotation.maximumKeyLength) ASCII letters, digits, '.', '_', or '-'"
                 )
             }
+            let workspaceID = try resolveAnnotationWorkspaceID(key: key, args: args)
             return .init(
                 didMutateState: try requiredStore().send(
                     .clearWorkspaceAnnotation(workspaceID: workspaceID, key: key)
@@ -2627,6 +2627,13 @@ private extension AppControlExecutor {
         return .object(result)
     }
 
+    private func resolveAnnotationWorkspaceID(key: String, args: [String: AutomationJSONValue]) throws -> UUID {
+        if key == SidebarSubspacePresentation.annotationKeyPullRequest, args.stringValue("workspaceID") == nil {
+            throw AutomationSocketError.invalidPayload("workspaceID is required for a github-pr annotation")
+        }
+        return try resolveWorkspaceID(args: args)
+    }
+
     /// Validates the whole request, claims or verifies the key's global color,
     /// then mutates the workspace. A live key's claim cannot be replaced; a
     /// key becomes replaceable only after its usage reaches zero across the
@@ -2635,14 +2642,18 @@ private extension AppControlExecutor {
         args: [String: AutomationJSONValue]
     ) throws -> AppControlActionOutcome {
         let store = try requiredStore()
-        let workspaceID = try resolveWorkspaceID(args: args)
-        guard let workspace = store.state.workspacesByID[workspaceID] else {
-            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
-        }
         guard let key = WorkspaceAnnotation.canonicalKey(try requireTextParameter("key", args: args)) else {
             throw AutomationSocketError.invalidPayload(
                 "key must be 1-\(WorkspaceAnnotation.maximumKeyLength) ASCII letters, digits, '.', '_', or '-'"
             )
+        }
+        let workspaceID = try resolveAnnotationWorkspaceID(key: key, args: args)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+        if key == SidebarSubspacePresentation.annotationKeyPullRequest,
+           taskCoordinator?.records.record(taskSpaceWorkspaceID: workspaceID)?.release != nil {
+            throw AutomationSocketError.invalidPayload("A release task cannot track a pull request")
         }
         guard let text = WorkspaceAnnotation.normalizedText(try requireTextParameter("text", args: args)) else {
             throw AutomationSocketError.invalidPayload(

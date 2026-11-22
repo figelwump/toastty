@@ -363,8 +363,7 @@ enum TaskBoard {
         let taskSpaceID = record.taskSpaceWorkspaceID.flatMap { state.workspacesByID[$0] == nil ? nil : $0 }
         let taskSpace = taskSpaceID.flatMap { state.workspacesByID[$0] }
         let statuses = taskSpaceID.map(inputs.statuses) ?? []
-        let annotationLink = taskSpace.flatMap(pullRequestLink)
-        let link = annotationLink ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL)
+        let link = pullRequestLink(for: record, in: taskSpace)
         let pullRequestState = link.flatMap(inputs.pullRequestState)
         let agent = agentActivity(statuses, in: taskSpace)
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
@@ -530,6 +529,11 @@ enum TaskBoard {
 
     static func pullRequestLink(_ workspace: WorkspaceState) -> WorkspacePullRequestLink? {
         WorkspacePullRequestLink(annotationURL: workspace.annotations[SidebarSubspacePresentation.annotationKeyPullRequest]?.url)
+    }
+
+    static func pullRequestLink(for record: TaskRecord, in workspace: WorkspaceState?) -> WorkspacePullRequestLink? {
+        guard record.release == nil else { return nil }
+        return workspace.flatMap(pullRequestLink) ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL)
     }
 
     /// Whether tasks.toml sets `release_tags` for a project root, for one
@@ -988,11 +992,12 @@ final class TaskBoardStore: ObservableObject {
     }
 
     private func refreshAfterTurnsEnded() {
-        guard let pullRequests, let store, let sessionRuntimeStore else { return }
+        guard let pullRequests, let store, let sessionRuntimeStore, let coordinator else { return }
         var working: Set<UUID> = []
         var links: [UUID: WorkspacePullRequestLink] = [:]
         for workspaceID in store.state.subspaceParentIDsByWorkspaceID().keys {
             guard let workspace = store.state.workspacesByID[workspaceID],
+                  workspace.taskID.flatMap(coordinator.records.record(id:))?.release == nil,
                   let link = TaskBoard.pullRequestLink(workspace) else { continue }
             links[workspaceID] = link
             if TaskBoard.agentActivity(sessionRuntimeStore.workspaceStatuses(for: workspaceID), in: workspace) == .working {
@@ -1017,7 +1022,8 @@ final class TaskBoardStore: ObservableObject {
             var next = record
             if let workspaceID = record.taskSpaceWorkspaceID,
                let workspace = state.workspacesByID[workspaceID] {
-                if let link = TaskBoard.pullRequestLink(workspace), next.pullRequestURL != link.url {
+                if record.release == nil,
+                   let link = TaskBoard.pullRequestLink(workspace), next.pullRequestURL != link.url {
                     next.pullRequestURL = link.url
                     next.mergedAt = nil
                     next.mergeCommit = nil
@@ -1030,17 +1036,16 @@ final class TaskBoardStore: ObservableObject {
                     next.doneAt = workspace.doneAt
                 }
             }
-            if next.mergedAt == nil,
-               let link = WorkspacePullRequestLink(annotationURL: next.pullRequestURL),
+            if let link = TaskBoard.pullRequestLink(for: next, in: nil),
                let answer = pullRequests?.state(for: link), answer.state == .merged {
-                next.mergedAt = now()
-                next.mergeCommit = answer.mergeCommit
-                next.mergeFailure = nil
-            }
-            if let link = WorkspacePullRequestLink(annotationURL: next.pullRequestURL),
-               let answer = pullRequests?.state(for: link), answer.state == .merged,
-               let target = answer.mergeTarget {
-                next.mergeTarget = target
+                if next.mergedAt == nil {
+                    next.mergedAt = now()
+                    next.mergeCommit = answer.mergeCommit
+                    next.mergeFailure = nil
+                }
+                if let target = answer.mergeTarget {
+                    next.mergeTarget = target
+                }
             }
             if next != record {
                 _ = records.update(id: record.id) { $0 = next }
@@ -1076,7 +1081,7 @@ final class TaskBoardStore: ObservableObject {
         guard state.state == .merged, let store, let coordinator else { return }
         syncRecords(state: store.state)
         let merged = coordinator.records.records
-            .filter { $0.pullRequestURL == link.url }
+            .filter { $0.release == nil && $0.pullRequestURL == link.url }
             .map(\.id)
         coordinator.cleanUpMergedTasks(merged)
     }

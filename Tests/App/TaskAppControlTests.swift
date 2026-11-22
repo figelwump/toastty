@@ -22,6 +22,12 @@ struct TaskAppControlTests {
                 slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
             ),
             agentLaunchService: fixture.launcher,
+            annotationStyleStore: AnnotationStyleStore(
+                runtimePaths: ToasttyRuntimePaths.resolve(
+                    homeDirectoryPath: fixture.root.path,
+                    environment: [ToasttyRuntimePaths.environmentKey: fixture.root.path]
+                )
+            ),
             taskCoordinator: coordinator,
             reloadConfigurationAction: nil
         )
@@ -52,6 +58,56 @@ struct TaskAppControlTests {
     private func setupState(_ result: [String: AutomationJSONValue]) -> String? {
         guard case .object(let setup)? = result["setup"], case .string(let state)? = setup["state"] else { return nil }
         return state
+    }
+
+    @Test func pullRequestAnnotationRequiresAnExplicitWorkspaceAndRefusesARelease() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
+            refreshInterval: nil, releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let request = TaskCreateRequest(text: "Task for PR", workspaceID: fixture.workspaceID, agent: "codex")
+        let task = try await fixture.coordinator.create(request)
+        await fixture.waitForSetup(task.id)
+        let release = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Release", workspaceID: fixture.workspaceID, agent: "codex"
+        ))
+        await fixture.waitForSetup(release.id)
+        try fixture.coordinator.records.save(id: release.id) { $0.release = TaskRelease(childTaskIDs: []) }
+        let releaseSpace = try #require(fixture.record(release.id)?.taskSpaceWorkspaceID)
+        let taskSpace = try #require(fixture.record(task.id)?.taskSpaceWorkspaceID)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        _ = fixture.store.send(.selectWorkspace(windowID: windowID, workspaceID: releaseSpace))
+        #expect(fixture.store.state.selectedWorkspaceSelection()?.workspaceID == releaseSpace)
+
+        let url = "https://github.com/example/toastty/pull/124"
+        var args: [String: AutomationJSONValue] = [
+            "key": .string("GitHub-PR"), "text": .string("PR #124"), "url": .string(url)
+        ]
+        let caller = context(try #require(fixture.record(task.id)?.currentSessionID))
+        await expectInvalidPayload("workspaceID is required for a github-pr annotation") {
+            _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        }
+        args["windowID"] = .string(windowID.uuidString)
+        await expectInvalidPayload("workspaceID is required for a github-pr annotation") {
+            _ = try executor.runAction(id: "workspace.clear-annotation", args: args, context: caller)
+        }
+        args["workspaceID"] = .string(releaseSpace.uuidString)
+        await expectInvalidPayload("A release task cannot track a pull request") {
+            _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        }
+
+        args["workspaceID"] = .string(taskSpace.uuidString)
+        let result = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        #expect(result.result?["workspaceID"] == .string(taskSpace.uuidString))
+        #expect(fixture.record(task.id)?.pullRequestURL == url)
+        #expect(fixture.record(release.id)?.pullRequestURL == nil)
+        #expect(fixture.store.state.workspacesByID[releaseSpace]?.annotations["github-pr"] == nil)
+        #expect(fixture.store.state.selectedWorkspaceSelection()?.workspaceID == releaseSpace)
+        #expect(try executor.runAction(id: "workspace.clear-annotation", args: args, context: caller).didMutateState)
     }
 
     @Test func createReturnsAtOnceAndGetReportsTheStartedTask() async throws {

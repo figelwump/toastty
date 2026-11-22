@@ -390,7 +390,7 @@ extension TaskCoordinator {
 
     /// What the merge coordinator reports about a task space's cleanup.
     func mergeCleanupEvent(workspaceID: UUID, event: WorkspaceMergeCoordinator.CleanupEvent) {
-        guard let record = records.record(taskSpaceWorkspaceID: workspaceID) else { return }
+        guard let record = records.record(taskSpaceWorkspaceID: workspaceID), record.release == nil else { return }
         switch event {
         case .mergeFailed(let reason, let cause, let head, let base):
             // The acceptance ends with the merge, as with Cancel Merge, so
@@ -598,6 +598,9 @@ extension TaskCoordinator {
 
     /// `afterMerge` is for the cleanup that follows a merge made on GitHub.
     func mergeTarget(_ record: TaskRecord, afterMerge: Bool = false) throws -> MergeTarget {
+        guard record.release == nil else {
+            throw TaskError("Task \(record.title) is a release task, so it cannot merge a pull request.")
+        }
         guard record.archivedAt == nil else {
             throw TaskError("Task \(record.title) is archived.")
         }
@@ -608,8 +611,7 @@ extension TaskCoordinator {
               let workspace = store.state.workspacesByID[taskSpaceID] else {
             throw TaskError("The task space of \(record.title) is closed.")
         }
-        guard let pullRequest = TaskBoard.pullRequestLink(workspace)
-            ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL) else {
+        guard let pullRequest = TaskBoard.pullRequestLink(for: record, in: workspace) else {
             throw TaskError("Task \(record.title) has no pull request. Its task space needs a github-pr annotation with the pull request URL.")
         }
         let repoPath: String

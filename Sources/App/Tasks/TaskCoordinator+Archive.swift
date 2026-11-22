@@ -40,7 +40,7 @@ extension TaskCoordinator {
             branch: nil,
             uncommittedFiles: 0,
             unpushedCommits: 0,
-            pullRequest: taskSpace.flatMap(TaskBoard.pullRequestLink) ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL),
+            pullRequest: TaskBoard.pullRequestLink(for: record, in: taskSpace),
             agentSessions: taskSpace.map { sessions?.activeSessions(workspaceID: $0.id).count ?? 0 } ?? 0,
             unsavedDocuments: taskSpace.map { unsavedDocumentCount($0.id) } ?? 0
         )
@@ -222,9 +222,9 @@ extension TaskCoordinator {
 
         // 1. The pull request, only when the user chose to close it.
         let closedPullRequestStep = "closed the pull request"
+        let taskSpace = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0] }
         if kind == .archive, options.closePullRequest, cleanup.stepsDone.contains(closedPullRequestStep) == false,
-           let link = (record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0] }.flatMap(TaskBoard.pullRequestLink))
-            ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL) {
+           let link = TaskBoard.pullRequestLink(for: record, in: taskSpace) {
             do {
                 try await closePullRequest(link)
                 finish(closedPullRequestStep)
