@@ -20,6 +20,12 @@ extension TaskCoordinator {
             if workspace.annotations[key] != nil {
                 _ = store.send(.clearWorkspaceAnnotation(workspaceID: workspaceID, key: key))
             }
+            // Dropping a wait can clear the workspace's done mark. Keep a
+            // completion the user explicitly saved to the release record.
+            if let doneAt = record.doneAt, workspace.doneAt != nil,
+               store.state.workspacesByID[workspaceID]?.doneAt == nil {
+                _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: doneAt))
+            }
         }
         records.updateEach { record in
             guard record.release != nil else { return }

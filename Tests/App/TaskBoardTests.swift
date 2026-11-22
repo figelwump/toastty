@@ -954,8 +954,8 @@ struct TaskBoardTests {
         await waitUntil { gitHub.calls.count > callsBefore }
     }
 
-    @Test(arguments: [false, true])
-    func aRestoredReleaseIgnoresAPullRequestThatMerges(shipped: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func aRestoredReleaseIgnoresAPullRequestThatMerges(shipped: Bool, markedDone: Bool) async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let release = try await startTask(fixture, text: "Release")
         let task = try await startTask(fixture, text: "Fix the unread dot")
@@ -965,7 +965,8 @@ struct TaskBoardTests {
         _ = fixture.store.send(.setWorkspaceAnnotation(workspaceID: releaseSpace, key: "github-pr", annotation: chip))
         _ = fixture.store.send(.setWorkspaceAnnotation(workspaceID: taskSpace, key: "github-pr", annotation: chip))
         let shippedAt = shipped ? Date(timeIntervalSince1970: 100) : nil
-        _ = fixture.store.send(.setWorkspaceDone(workspaceID: releaseSpace, doneAt: Date()))
+        let doneAt = markedDone ? Date(timeIntervalSince1970: 200) : nil
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: releaseSpace, doneAt: doneAt ?? Date()))
         try fixture.coordinator.records.save(id: release.id) {
             $0.release = TaskRelease(childTaskIDs: [])
             $0.pullRequestURL = pullRequestURL
@@ -974,14 +975,31 @@ struct TaskBoardTests {
             $0.cleanup = TaskCleanup(kind: .merge, problem: "Stopped")
             $0.shippedAt = shippedAt
             $0.releaseTag = shipped ? "v1.0.0" : nil
+            $0.doneAt = doneAt
         }
         fixture.replaceCoordinator(fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile)))
-        fixture.coordinator.reconcileAfterLaunch()
-
         let gitHub = FakeGitHub()
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        let defaultsSuite = "ReleasePRRestore.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let oldRequest = WorkspaceMergeRequest(
+            pullRequest: link, repoPath: fixture.projectRoot,
+            phase: .awaitingChecks(acceptedHead: "abc123", thenCleanUp: true)
+        )
+        let savedRequests = try JSONEncoder().encode([releaseSpace.uuidString: oldRequest])
+        defaults.set(savedRequests, forKey: "toastty.workspaceMergeRequests")
+        let merges = WorkspaceMergeCoordinator(
+            store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            runner: gitHub, userDefaults: defaults, notify: { _, _ in }
+        )
+        fixture.coordinator.merges = merges
+        #expect(merges.request(workspaceID: releaseSpace) == oldRequest)
+        fixture.coordinator.reconcileAfterLaunch()
+        #expect(merges.request(workspaceID: releaseSpace) == nil)
+
         let board = makeBoard(fixture, gitHub: gitHub)
         fixture.coordinator.board = board
-        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
         gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "abc123")
         await board.pullRequests?.refresh(link).value
 
@@ -991,11 +1009,11 @@ struct TaskBoardTests {
         #expect(restored.mergedAt == nil)
         #expect(restored.mergeCommit == nil)
         #expect(restored.cleanup == nil)
-        #expect(restored.doneAt == nil)
+        #expect(restored.doneAt == doneAt)
         #expect(restored.shippedAt == shippedAt)
         #expect(restored.releaseTag == (shipped ? "v1.0.0" : nil))
         let item = try #require(board.items().first { $0.taskID == release.id })
-        #expect(item.stage.group == (shipped ? .done : .running))
+        #expect(item.stage.group == (shipped || markedDone ? .done : .running))
         #expect(item.pullRequest == nil)
         #expect(!TaskBoardPresentation.detailActions(item).contains(.merge))
         #expect(try await fixture.coordinator.archiveCheck(taskID: release.id).pullRequest == nil)
