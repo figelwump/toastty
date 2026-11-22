@@ -3970,12 +3970,12 @@ private struct SlotPlacementView: View {
     let tab: WorkspaceTabState
     let isWorkspaceSelected: Bool
     let isTabSelected: Bool
-    @ObservedObject var store: AppStore
-    @ObservedObject var terminalProfileStore: TerminalProfileStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let store: AppStore
+    let terminalProfileStore: TerminalProfileStore
+    let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalLiveTitleStore: TerminalLiveTitleStore
-    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
-    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    let sessionRuntimeStore: SessionRuntimeStore
+    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
@@ -4070,7 +4070,12 @@ struct PanelCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader
+            if isWorkspaceSelected && isTabSelected {
+                panelHeader
+            } else {
+                // Preserve the PTY's viewport without laying out offscreen controls.
+                Color.clear.frame(height: PanelHeaderSearchLayout.headerHeight)
+            }
 
             switch panelState {
             case .terminal(let terminalState):
