@@ -755,11 +755,13 @@ enum ToasttySendPresentationAdapter {
     /// On a row whose typing a quit of Toastty on the Mac interrupted, as
     /// the Mac chat says it above its composer.
     static let typingInterruptedWarning = "Toastty on the Mac quit while it typed this message, so the coordinator "
-        + "may have it already. Check the conversation, then choose Resume or Remove."
+        + "may have it already. Check the conversation. If the message is there, choose Remove. "
+        + "If it is not, choose Resume to send it."
     /// The same, for a phone that cannot change the queue: the row has no
     /// Resume or Remove.
     static let typingInterruptedWarningForTheMac = "Toastty on the Mac quit while it typed this message, so the "
-        + "coordinator may have it already. Check the conversation, then choose Send next or Remove in the Mac's chat."
+        + "coordinator may have it already. Check the conversation. Then, in the Mac's chat, "
+        + "choose Remove if the message is there, or Send next if it is not."
     /// On a row that the Mac could not remove.
     static let removeFailedNotice = "The Mac could not remove this message. It still waits."
 

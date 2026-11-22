@@ -314,6 +314,13 @@ struct CoordinatorDockTests {
         let taskWorkspaceID = try #require(store.state.topLevelWorkspaceIDs(in: windowID).first)
         let host = try HostedCoordinatorWindow(fixture, windowID: windowID)
         defer { host.close() }
+        // Show Terminal hands off the keyboard in the active window. XCTest
+        // can host this experience without activating the app on its own.
+        NSApp.activate(ignoringOtherApps: true)
+        host.window.makeKeyAndOrderFront(nil)
+        try await fixture.waitUntil("the focus test window to become active") {
+            NSApp.isActive && host.window.isKeyWindow
+        }
         let terminal = fixture.conversations.terminalRuntimeRegistry.controller(
             for: fixture.panelID, workspaceID: location.workspaceID, windowID: windowID
         )
@@ -360,11 +367,19 @@ struct CoordinatorDockTests {
         try await Task.sleep(for: .milliseconds(300))
         #expect(host.window.makeFirstResponder(dockField))
         controller.openFullView(showingTerminal: true)
+        fixture.conversations.terminalRuntimeRegistry.scheduleWorkspaceFocusRestore(workspaceID: location.workspaceID)
         try await fixture.waitUntil("the terminal to take the keyboard from the dock's field") { terminal.hasKeyboardFocus }
         #expect(store.selectedWorkspaceID(in: windowID) == location.workspaceID)
         #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID == fixture.panelID)
         try await Task.sleep(for: .milliseconds(300))
         #expect(terminal.hasKeyboardFocus)
+
+        controller.showsTerminal = false
+        try await fixture.waitUntil("the chat to take the keyboard again") { chatFieldHasTheKeyboard() }
+        controller.showTerminal()
+        controller.showsTerminal = false
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(chatFieldHasTheKeyboard())
     }
 
     /// A file dropped on the chat, perhaps from Finder, gives that view's

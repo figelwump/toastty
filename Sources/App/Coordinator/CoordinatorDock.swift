@@ -134,6 +134,7 @@ struct CoordinatorDockView: View {
     let chat: CoordinatorChatModel
     let board: TaskBoardStore
     let location: CoordinatorLocation
+    let settledWidth: CGFloat
     /// Room on the header's left for the titlebar's buttons, when the dock
     /// is at the window's left edge.
     let headerLeadingInset: CGFloat
@@ -173,7 +174,8 @@ struct CoordinatorDockView: View {
                     windowID: location.windowID,
                     isOnScreen: true,
                     hasPanelFocus: false,
-                    host: .dock
+                    host: .dock,
+                    settledDockWidth: settledWidth
                 )
             } else {
                 missingTerminal

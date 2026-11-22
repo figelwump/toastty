@@ -72,23 +72,138 @@ struct TaskLifecycleTests {
             == "Use the my-merge skill.\n\nWait for CI.\n\nThe user accepted \(pullRequestURL) for merging.")
     }
 
-    @Test func mergeWaitsForABusyAgentsTurnThenSendsTheDefaultPrompt() async throws {
+    @Test(arguments: [false, true])
+    func mergeWaitsForAnOpenPromptThenSendsOnce(initiallyBusy: Bool) async throws {
         let fixture = try Fixture()
         let task = try await taskInWorktree(fixture)
         let session = try #require(task.operation.agentLaunch?.sessionID)
-        fixture.sessions.report(session, .working)
+        let panel = try #require(task.operation.taskSpace?.panelID)
+        fixture.sessions.sessionsWithPendingInput.insert(session)
+        if initiallyBusy { fixture.sessions.report(session, .working) }
 
         try fixture.coordinator.requestMerge(taskID: task.id)
-        try await Task.sleep(for: .milliseconds(300))
         #expect(fixture.sessions.delivered.isEmpty)
         let accepted = try #require(fixture.record(task.id)?.mergeRequestedAt)
+        let queued = try #require(fixture.coordinator.mergeDeliveryTasks[task.id])
+        defer { queued.cancel() }
 
+        // The polling path must check for occupied input after the agent
+        // leaves its turn, even when its hooks now say ready.
         fixture.sessions.report(session, .ready)
-        await fixture.waitUntil("the prompt is sent") { fixture.sessions.delivered.isEmpty == false }
+        let checks = fixture.sessions.pendingInputChecks[session, default: 0]
+        await fixture.waitUntil("merge polls with a tracked interaction") {
+            fixture.sessions.pendingInputChecks[session, default: 0] > checks
+        }
+        #expect(fixture.sessions.delivered.isEmpty)
+        #expect(fixture.record(task.id)?.mergeRequestedAt == accepted)
+
+        fixture.sessions.userInputAt[panel] = Date()
+        fixture.sessions.sessionsWithPendingInput.remove(session)
+        let draftChecks = fixture.sessions.pendingInputChecks[session, default: 0]
+        await fixture.waitUntil("merge polls with an unsubmitted draft") {
+            fixture.sessions.pendingInputChecks[session, default: 0] > draftChecks
+        }
+        #expect(fixture.sessions.delivered.isEmpty)
+        #expect(fixture.record(task.id)?.mergeRequestedAt == accepted)
+
+        fixture.sessions.report(session, .working)
+        fixture.sessions.report(session, .ready)
+        await fixture.waitUntil("the merge prompt is sent", timeout: .seconds(5)) { fixture.sessions.delivered.count == 1 }
         #expect(fixture.sessions.delivered.last?.text.hasPrefix("Use the toastty-task-merge skill.\n\n") == true)
+        #expect(fixture.coordinator.mergeDeliveryTasks[task.id] == nil)
         // The request restarts when the agent can read it, so the status it
         // reported before does not count as its answer.
         #expect(try #require(fixture.record(task.id)?.mergeRequestedAt) > accepted)
+    }
+
+    @Test func cancellingAQueuedMergeLeavesThePromptUntouchedAndAllowsANewRequest() async throws {
+        let fixture = try Fixture()
+        let task = try await taskInWorktree(fixture)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        fixture.sessions.sessionsWithPendingInput.insert(session)
+        try fixture.coordinator.requestMerge(taskID: task.id)
+        let queued = try #require(fixture.coordinator.mergeDeliveryTasks[task.id])
+
+        try fixture.coordinator.cancelMerge(taskID: task.id)
+        fixture.sessions.sessionsWithPendingInput.remove(session)
+        await queued.value
+        #expect(fixture.sessions.delivered.isEmpty)
+        #expect(fixture.record(task.id)?.mergeRequestedAt == nil)
+        #expect(fixture.record(task.id)?.mergeCancelledAt != nil)
+        #expect(fixture.coordinator.mergeDeliveryTasks[task.id] == nil)
+
+        try fixture.coordinator.requestMerge(taskID: task.id)
+        #expect(fixture.sessions.delivered.count == 1)
+        #expect(fixture.record(task.id)?.mergeCancelledAt == nil)
+    }
+
+    @Test func aQueuedMergeTimesOutWhileThePromptIsOccupied() async throws {
+        let fixture = try Fixture(mergePromptTurnTimeout: .milliseconds(40))
+        let task = try await taskInWorktree(fixture)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        fixture.sessions.sessionsWithPendingInput.insert(session)
+        try fixture.coordinator.requestMerge(taskID: task.id)
+        let queued = try #require(fixture.coordinator.mergeDeliveryTasks[task.id])
+        defer { queued.cancel() }
+
+        await fixture.waitUntil("the queued merge times out", timeout: .seconds(5)) {
+            fixture.record(task.id)?.mergeRequestedAt == nil
+        }
+        #expect(fixture.sessions.delivered.isEmpty)
+        #expect(fixture.record(task.id)?.mergeCancelledAt == nil)
+        #expect(fixture.coordinator.mergeDeliveryTasks[task.id] == nil)
+    }
+
+    enum AutomaticMessage: String, CaseIterable, Sendable {
+        case watch, wake, merge
+    }
+
+    @Test(arguments: AutomaticMessage.allCases, [false, true])
+    func automaticMessagesShareOnePrompt(first: AutomaticMessage, submissionUncertain: Bool) async throws {
+        let fixture = try Fixture()
+        let task = try await taskInWorktree(fixture)
+        let target = try await fixture.startedTask()
+        let targetSession = try #require(target.operation.agentLaunch?.sessionID)
+        let coordinator = fixture.coordinator!
+        let watch = try coordinator.addWatch(targetTaskID: target.id, condition: .waiting, notifyTaskID: task.id)
+        _ = try coordinator.setWaiting(taskID: task.id, reason: "the fixture clock", wakeAt: Date().addingTimeInterval(60))
+        try coordinator.records.save(id: task.id) { $0.waiting?.wakeAt = Date().addingTimeInterval(-1) }
+        fixture.sessions.report(targetSession, .needsApproval)
+        fixture.sessions.deliveryResult = submissionUncertain ? .uncertain : .delivered
+
+        // Each path gets to go first. The agent still reports the same
+        // completed turn while the other two paths try to submit.
+        for message in [first] + AutomaticMessage.allCases.filter({ $0 != first }) {
+            switch message {
+            case .watch:
+                coordinator.evaluateWatches()
+            case .wake:
+                coordinator.evaluateWakes()
+            case .merge:
+                if first == .merge, submissionUncertain {
+                    #expect(throws: TaskError.self) { try coordinator.requestMerge(taskID: task.id) }
+                    #expect(fixture.record(task.id)?.mergeRequestedAt == nil)
+                } else {
+                    try coordinator.requestMerge(taskID: task.id)
+                }
+            }
+        }
+        defer { coordinator.mergeDeliveryTasks[task.id]?.cancel() }
+
+        #expect(fixture.sessions.delivered.count == 1)
+        let text = try #require(fixture.sessions.delivered.first?.text)
+        switch first {
+        case .watch: #expect(text.hasPrefix("[Toastty watch "))
+        case .wake: #expect(text.hasPrefix("[Toastty wake] "))
+        case .merge: #expect(text.hasPrefix("Use the toastty-task-merge skill."))
+        }
+        guard case .fired(_, _, false, let watchDelivered)? = coordinator.watch(id: watch.id)?.watch.state else {
+            Issue.record("expected the watch to fire")
+            return
+        }
+        #expect(watchDelivered == (first == .watch))
+        #expect((fixture.record(task.id)?.waiting?.wokenAt != nil) == (first == .wake))
+        #expect((coordinator.mergeDeliveryTasks[task.id] != nil) == (first != .merge))
     }
 
     @Test func mergeStartsAnAgentWhenNoneRuns() async throws {

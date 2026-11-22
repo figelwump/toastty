@@ -308,6 +308,9 @@ struct CoordinatorMentionPickerView: View {
     @ObservedObject var picker: CoordinatorMentionPicker
     var textScale: Double = 1
 
+    /// The list grows up over the chat from the composer. In the smallest
+    /// window, with attachments and a full editor, this is the most room
+    /// above the composer.
     static let maximumHeight: CGFloat = 280
     static let width: CGFloat = 420
 
@@ -372,17 +375,34 @@ struct CoordinatorMentionPickerView: View {
             Circle()
                 .fill(Color(red: candidate.markColor.red, green: candidate.markColor.green, blue: candidate.markColor.blue))
                 .frame(width: 8, height: 8)
-            Text(candidate.title)
-                .font(.system(size: 13 * textScale))
-                .foregroundStyle(ToastyTheme.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(Self.detail(candidate))
-                .font(.system(size: 11.5 * textScale))
-                .foregroundStyle(ToastyTheme.inactiveText)
-                .lineLimit(1)
-                .layoutPriority(1)
+            // The title has the row's whole width; the project and the
+            // pull request go under it, as on the iPhone.
+            VStack(alignment: .leading, spacing: 1) {
+                Text(candidate.title)
+                    .font(.system(size: 13 * textScale))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if candidate.projectTitle != nil || candidate.pullRequestNumber != nil {
+                    // A long project name shortens; the pull request number
+                    // always shows.
+                    HStack(spacing: 0) {
+                        if let project = candidate.projectTitle {
+                            Text(project)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        if let number = candidate.pullRequestNumber {
+                            Text(verbatim: candidate.projectTitle == nil ? "#\(number)" : " · #\(number)")
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
+                    .font(.system(size: 11.5 * textScale))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -406,11 +426,5 @@ struct CoordinatorMentionPickerView: View {
             .overlay(alignment: .top) {
                 Rectangle().fill(ToastyTheme.hairline).frame(height: 1)
             }
-    }
-
-    static func detail(_ candidate: CoordinatorMentionCandidate) -> String {
-        [candidate.projectTitle, candidate.pullRequestNumber.map { "#\($0)" }]
-            .compactMap { $0 }
-            .joined(separator: " · ")
     }
 }

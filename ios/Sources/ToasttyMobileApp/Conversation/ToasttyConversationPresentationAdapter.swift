@@ -58,7 +58,7 @@ enum ToasttyConversationPresentationAdapter {
         showsAttachedImages: Bool = false
     ) -> CoordinatorChatTranscript.Messages {
         CoordinatorChatTranscript.Messages(
-            timeText: { $0.formatted(date: .omitted, time: .shortened) },
+            timeText: CoordinatorChatTranscript.timeText,
             attachedFiles: showsAttachedImages ? .apart : .byName,
             isQuietDigest: { ToasttyCoordinatorQuietDigests.isQuiet($0, keys: quietDigestKeys) }
         )

@@ -333,6 +333,9 @@ final class CoordinatorController: ObservableObject {
     /// The app's terminals, which give the coordinator's terminal the
     /// keyboard. Set by `connectKeyboard(to:)`.
     private weak var terminals: TerminalRuntimeRegistry?
+    // Workspace and window changes can schedule an automatic focus restore
+    // during the switch. Keep the user's explicit request independent of it.
+    private let showTerminalFocus = TerminalFocusCoordinator()
 
     /// Connects the keyboard of the chat and the terminal under it:
     /// keyboard focus meant for the covered terminal goes to the chat's
@@ -346,19 +349,22 @@ final class CoordinatorController: ObservableObject {
     }
 
     /// Show Terminal, in the chat's notice or in the panel's header: the
-    /// panel shows the terminal in place of the chat, and the terminal
-    /// takes the keyboard, so that the user can answer a login or a
-    /// folder-trust question with the keys at once. The chat's field had
-    /// the keyboard and leaves the window with the chat. A terminal that
-    /// shows does not take the keyboard from that field by itself (see
-    /// `TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus`), so
-    /// without this the keys reach nothing until the user clicks.
+    /// panel shows the terminal in place of the chat. Give the visible
+    /// terminal the keyboard after the chat and its field leave the window.
     func showTerminal() {
         showsTerminal = true
         guard let location, let panelID = location.panelID else { return }
         // policy.md beside it can have the focus.
         _ = store.send(.focusPanel(workspaceID: location.workspaceID, panelID: panelID))
-        terminals?.takeKeyboardFocus(panelID: panelID)
+        showTerminalFocus.scheduleFocusRestore(avoidStealingKeyboardFocus: false) { [weak self] in
+            guard let self, self.showsTerminal, self.location == location,
+                  self.store.state.selectedWindowID == location.windowID,
+                  let workspace = self.store.selectedWorkspace(in: location.windowID),
+                  workspace.id == location.workspaceID, workspace.focusedPanelID == panelID,
+                  let terminals = self.terminals else { return true }
+            guard self.chat?.activeHost == nil else { return false }
+            return terminals.focusVisibleTerminalIfPossible(panelID: panelID)
+        }
     }
 
     /// Reads and sends to agent conversations inside the app. Set once the

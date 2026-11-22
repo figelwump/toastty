@@ -290,6 +290,10 @@ private struct ToasttyTranscriptOptionsKey: EnvironmentKey {
     static let defaultValue = ToasttyTranscriptOptions()
 }
 
+private struct ShowQuestionTerminalKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable () -> Void)? = nil
+}
+
 extension EnvironmentValues {
     /// The host's link presenter. `nil`, the default, draws every link as
     /// link text.
@@ -301,6 +305,12 @@ extension EnvironmentValues {
     var toasttyTranscriptOptions: ToasttyTranscriptOptions {
         get { self[ToasttyTranscriptOptionsKey.self] }
         set { self[ToasttyTranscriptOptionsKey.self] = newValue }
+    }
+
+    /// A host with a local terminal can open it from an answerable question.
+    public var showQuestionTerminal: (@MainActor @Sendable () -> Void)? {
+        get { self[ShowQuestionTerminalKey.self] }
+        set { self[ShowQuestionTerminalKey.self] = newValue }
     }
 }
 

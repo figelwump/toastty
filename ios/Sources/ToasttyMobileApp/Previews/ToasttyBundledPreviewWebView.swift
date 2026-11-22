@@ -49,8 +49,11 @@ struct ToasttyBundledPreviewWebView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: content.bridgeName)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
+        // Scratchpad frames need WebKit's default canvas for plain HTML.
+        if case .document = content {
+            webView.isOpaque = false
+            webView.backgroundColor = .clear
+        }
         webView.accessibilityIdentifier = "toastty-preview-web-content"
         let viewport = ToasttyPreviewViewport(webView: webView, usesCanvas: content.directory == "scratchpad-panel")
         context.coordinator.viewport = viewport

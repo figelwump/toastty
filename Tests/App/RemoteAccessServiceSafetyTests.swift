@@ -3529,6 +3529,7 @@ struct RemoteAccessServiceSafetyTests {
             Issue.record("Expected the Mac draft to hold the prompt, not \(settled.inputAvailability)")
             return
         }
+        #expect(fixture.service.inputAvailability(panelID: fixture.panelID, sessionID: fixture.sessionID) == settled.inputAvailability)
     }
 
     enum CodexStartedTurnOutcome: CaseIterable, Sendable {
@@ -4110,6 +4111,56 @@ private struct ReleasedWorkspaceDoneResponse: Decodable {
 }
 
 extension RemoteAccessServiceSafetyTests {
+    @MainActor
+    @Test func localClaudeQuestionUsesTheLiveSubscriptionWithRemoteAccessOff() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working)
+        defer { fixture.removeRuntimeFiles(); fixture.sessionRuntimeStore.reset() }
+        let subscription = fixture.service.subscribeToConversation(inPanel: fixture.panelID)
+        defer { subscription.cancel() }
+        fixture.service.setEnabled(false, persist: false)
+        #expect(fixture.confirmCurrentLaunchBinding())
+
+        let questions = [RemoteInteractionQuestion(id: "q0", header: "Color", question: "Choose a color",
+            options: [.init(id: "blue", label: "Blue"), .init(id: "green", label: "Green")])]
+        let responseID = UUID().uuidString
+        let now = Date()
+        func hook(_ phase: ClaudeQuestionHookRequest.Phase, _ event: ClaudeQuestionHookEvent.EventName) -> ClaudeQuestionHookRequest {
+            .init(phase: phase, sessionID: fixture.sessionID, panelID: fixture.panelID,
+                  event: .init(eventName: event, nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                               promptID: "prompt", transcriptPath: fixture.resumeRecord.sessionFilePath,
+                               providerCallID: phase == .observe ? "color-call" : nil, questions: questions),
+                  responseID: phase == .begin ? responseID : nil)
+        }
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.observe, .preToolUse), at: now).status == .observed)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(hook(.begin, .permissionRequest), at: now).status == .pending)
+        let snapshot = try #require(subscription.snapshot(at: now))
+        let interaction = try #require(snapshot.pendingInteractions.first)
+        let request = RemoteQuestionAnswerRequest(
+            conversationID: snapshot.summary.conversationID, interactionID: interaction.id,
+            responseID: responseID, expectedInputEpoch: interaction.inputEpoch,
+            clientRequestID: "mac", answers: [.init(questionID: "q0", text: "Purple")]
+        )
+
+        var wrongConversation = request
+        wrongConversation.conversationID = RemoteConversationID()
+        #expect(subscription.answerQuestion(wrongConversation) == .rejected(reason: .notBound))
+        var stale = request
+        stale.expectedInputEpoch = .init(bindingID: UUID(), counter: 1)
+        #expect(subscription.answerQuestion(stale) == .rejected(reason: .epochMismatch))
+        fixture.service.setSessionWriteEnabled(false, for: snapshot.summary.conversationID)
+        #expect(fixture.service.isEnabled == false)
+        #expect(subscription.answerQuestion(request) == .submitted)
+        #expect(subscription.answerQuestion(request) == .duplicate)
+        var differentAnswer = request
+        differentAnswer.answers = [.init(questionID: "q0", selectedOptionIDs: ["blue"])]
+        #expect(subscription.answerQuestion(differentAnswer) == .rejected(reason: .alreadySubmitted))
+        let poll = ClaudeQuestionHookRequest(phase: .poll, sessionID: fixture.sessionID,
+                                             panelID: fixture.panelID, responseID: responseID)
+        #expect(fixture.sessionRuntimeStore.handleClaudeQuestion(poll, at: now).answers == request.answers)
+        subscription.cancel()
+        #expect(subscription.answerQuestion(request) == .rejected(reason: .notBound))
+    }
+
     @MainActor
     @Test func cursorHookHistoryAndRemoteSendWorkWithoutAResumeRecord() throws {
         let fixture = try Self.cursorFixtureWithoutResumeRecord()
@@ -4765,12 +4816,24 @@ extension RemoteAccessServiceSafetyTests {
             let awaitingApproval = try await Self.waitForSummary(fixture) {
                 $0.inputControl?.turnEpoch == nil
             }
+            guard case .pendingInteraction? = fixture.service.inputAvailability(
+                panelID: fixture.panelID, sessionID: fixture.sessionID
+            ) else {
+                Issue.record("Expected the pending interaction for the current session")
+                return
+            }
+            #expect(fixture.service.inputAvailability(panelID: fixture.panelID, sessionID: "previous-session") == nil)
             #expect(awaitingApproval.inputControl?.canSteer == false)
             #expect(fixture.service.performRemoteSend(.init(
                 conversationID: fixture.conversationID, clientRequestID: "steer-during-approval",
                 expectedInputEpoch: turnEpoch, text: "Use 300 ms", deliveryMode: .steer
             ), device: device) == .rejected(reason: .notWorking))
             #expect(delivered.isEmpty)
+            // Answering the modal from the keyboard does not mark the turn's
+            // composer as a draft. The turn's input epoch is closed here.
+            fixture.terminalRuntimeRegistry.bind(sessionLifecycleTracker: fixture.sessionRuntimeStore)
+            fixture.terminalRuntimeRegistry.handleLocalInput(for: fixture.panelID, kind: .key)
+            #expect(fixture.sessionRuntimeStore.lastUserInputAt(panelID: fixture.panelID) != nil)
             observeClaude(.transcript(.toolFinished(.init(callID: "approval-1"))),
                           fingerprint: "approval-resolved", offset: 1.3)
             let resumed = try await Self.waitForSummary(fixture) {

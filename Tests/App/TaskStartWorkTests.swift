@@ -163,10 +163,17 @@ struct TaskStartWorkTests {
         /// When a person last typed into each panel, or a phone message
         /// reached it.
         var userInputAt: [UUID: Date] = [:]
+        var sessionsWithPendingInput: Set<String> = []
+        private(set) var pendingInputChecks: [String: Int] = [:]
 
         func lastOutputAt(sessionID: String) -> Date? { outputAt[sessionID] }
 
         func lastUserInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
+
+        func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool {
+            pendingInputChecks[session.sessionID, default: 0] += 1
+            return sessionsWithPendingInput.contains(session.sessionID)
+        }
 
         /// Reports a status, as the agent's hooks do.
         /// A turn that was running ends at `.idle`, `.ready` or `.error`.
@@ -198,7 +205,7 @@ struct TaskStartWorkTests {
         let recentWorkspaces = RecentWorkspacesStore.inMemory()
         private(set) var coordinator: TaskCoordinator!
 
-        init() throws {
+        init(mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout) throws {
             repository = try TaskGitTestRepository()
             recordsFile = repository.root.appendingPathComponent("task-records.json")
             let workspace = try #require(store.selectedWorkspace)
@@ -209,12 +216,15 @@ struct TaskStartWorkTests {
                 cwd: repository.project
             ))
             launcher.sessions = sessions
-            coordinator = makeCoordinator(records: TaskRecordStore(fileURL: recordsFile))
+            coordinator = makeCoordinator(
+                records: TaskRecordStore(fileURL: recordsFile), mergePromptTurnTimeout: mergePromptTurnTimeout
+            )
         }
 
         func makeCoordinator(
             records: TaskRecordStore,
-            worktreeCreator: TaskWorktreeCreator = TaskGitTestRepository.creator()
+            worktreeCreator: TaskWorktreeCreator = TaskGitTestRepository.creator(),
+            mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout
         ) -> TaskCoordinator {
             let coordinator = TaskCoordinator(
                 records: records,
@@ -226,6 +236,7 @@ struct TaskStartWorkTests {
                 grantScope: { _, _ in },
                 worktreeCreator: worktreeCreator,
                 terminalReadinessTimeout: .seconds(1),
+                mergePromptTurnTimeout: mergePromptTurnTimeout,
                 timing: .init(
                     sourceTurnTimeout: .seconds(3),
                     forkConfirmationTimeout: .milliseconds(600),

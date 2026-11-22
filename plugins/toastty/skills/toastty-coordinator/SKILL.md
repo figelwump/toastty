@@ -436,7 +436,21 @@ COORDINATOR_MESSAGE_END
 
 - `--root` is the project's directory. `toastty task workspace-choices --json`
   lists the open and recent projects with their directories and workspace
-  IDs.
+  IDs. A project need not be on that list: `--root` takes any repository
+  directory on this Mac, and Toastty opens a workspace for it.
+- When the user names a project without its directory, and policy does not
+  give one, look it up before you ask:
+  `toastty task workspace-choices --name '<project>' --json`. Under
+  `matches`, each directory has a `source`:
+  - one match whose source is `open`, `recent`, `config` or `history`: the
+    user has worked there. Use it.
+  - one match whose source is `sibling`: a repository next to a known
+    project, which Toastty never opened. It is a guess. Confirm it in one
+    line, such as "emptyos is at `~/repos/emptyos`, right?", and create
+    nothing and write no rule until the user says yes.
+  - two or more matches: list them and ask which one. Never choose between
+    them.
+  - no match: ask for the directory.
 - Add `--start-work` when the request says clearly what to change, or when a
   rule says to start work at once. Leave it out for a question or an
   investigation, and when the work needs shaping first.
@@ -598,12 +612,16 @@ Improve. Do not commit the ledger.
 
 ## First run
 
-Ask the user how to set you up, once. Do it in a turn that the user started,
-while one of the Projects, Agents, Talking, Reviewing and Improving sections
-of `policy.md` is missing or holds no rule, and the ledger has no `asked
-first-run` line. Do it also when the user asks you to set yourself up again.
-First read `references/first-run.md` in your folder and follow it. If you
-cannot read it, do not ask.
+Ask the user how to set you up, once, one part at a time. Start in a turn
+that the user started, while one of the Projects, Agents, Talking, Reviewing
+and Improving sections of `policy.md` is missing or holds no rule, and the
+ledger has no `asked first-run` line. Start also when the user asks you to
+set yourself up again. Then, while the ledger has an `asked first-run` line,
+go on in each turn that the user started; when the line says `paused`,
+only when the user says "continue" or "defaults", or answers a part. In each
+of these turns, first read `references/first-run.md` in your folder, and the
+time with `date -u +%Y-%m-%dT%H:%MZ` in the same command, and follow the
+file. If you cannot read it, do not ask.
 
 ## Follow through
 
@@ -615,8 +633,8 @@ and when the user asks what waits for them, read
 
 - **After a merge,** you create the task for work that remains.
 - **Each day,** at 09:00 unless Talking says otherwise, you bring one list
-  of what waits for the user: a short message, and your Scratchpad "Waiting
-  on you".
+  of what waits for the user, as one message in your chat. Each list,
+  also one with nothing on it, writes the ledger's `list` line.
 - **Finished work with no pull request,** such as an answer, an
   investigation or a parent whose child tasks ended, goes once on that list.
   At the next list, you mark it Done when the user said nothing about it. A
@@ -648,7 +666,7 @@ it, skip this section.
 
 The Talking section of `policy.md` changes these defaults.
 
-- Give your name only in the first-run question and when the user asks
+- Give your name only in the first-run preamble and when the user asks
   who you are. Do not sign or open other answers with it.
 - Name each task by its title as a link, `[title](toastty://task/<task-id>)`,
   in all that you write: to the user, in a message to a task, and in the

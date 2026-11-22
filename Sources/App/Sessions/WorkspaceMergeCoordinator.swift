@@ -210,9 +210,9 @@ final class WorkspaceMergeCoordinator {
         case merged(TaskPullRequestState?)
         case cleaned(detail: String)
         case stopped(reason: String)
-        /// The request ended without a cleanup: new work, a closed
-        /// workspace, a refused waiting merge, or Don't Clean Up.
-        case dropped
+        /// The request ended without a cleanup. Include the pull request
+        /// when clearing the done mark canceled its cleanup.
+        case dropped(canceledPullRequest: WorkspacePullRequestLink?)
     }
 
     static let pollInterval: Duration = .seconds(30)
@@ -377,7 +377,7 @@ final class WorkspaceMergeCoordinator {
     func cancelCleanup(workspaceID: UUID) {
         guard let request = requests[workspaceID], case .failed = request.phase else { return }
         update(workspaceID, nil)
-        report(workspaceID, .dropped)
+        report(workspaceID, .dropped(canceledPullRequest: nil))
     }
 
     /// Closes the pull request without merging it, then closes the workspace,
@@ -481,7 +481,7 @@ final class WorkspaceMergeCoordinator {
             ]
         )
         guard case .awaitingChecks(let acceptedHead, _) = request.phase else {
-            report(workspaceID, .dropped)
+            report(workspaceID, .dropped(canceledPullRequest: reason == .doneMarkCleared ? request.pullRequest : nil))
             return
         }
         // The merge set the done mark as the acceptance. Left in place, it

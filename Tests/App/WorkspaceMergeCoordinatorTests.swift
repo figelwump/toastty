@@ -443,7 +443,7 @@ struct WorkspaceMergeCoordinatorTests {
         #expect(fixture.notifications.map(\.title) == ["PR #59 was not merged"])
         #expect(fixture.mergeFailures.count == 1)
         #expect(fixture.mergeFailures.first?.contains("done mark was cleared") == true)
-        #expect(fixture.events.contains(.dropped) == false)
+        #expect(fixture.events.contains { if case .dropped = $0 { true } else { false } } == false)
     }
 
     /// The script run may merge after the done mark cleared, past its own

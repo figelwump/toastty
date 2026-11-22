@@ -210,6 +210,7 @@ struct AppWindowView: View {
                         chat: chat,
                         board: taskBoard,
                         location: location,
+                        settledWidth: dockWidth,
                         headerLeadingInset: sidebarVisible
                             ? 14
                             : ToastyTheme.topBarLeadingPadding(titlebarButtonCount: titlebarButtonCount),

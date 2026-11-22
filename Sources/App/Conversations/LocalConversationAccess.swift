@@ -13,6 +13,12 @@ protocol LocalConversationAccess: AnyObject {
     /// Starts tracking the panel's conversation. The panel does not need an
     /// agent yet; the subscription reports the conversation when one starts.
     func subscribeToConversation(inPanel panelID: UUID) -> any LocalConversationSubscription
+    /// Reads input availability if the conversation is already tracked for this session.
+    func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability?
+}
+
+extension LocalConversationAccess {
+    func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability? { nil }
 }
 
 /// One in-app reader and sender of a panel's conversation.
@@ -72,6 +78,9 @@ protocol LocalConversationSubscription: AnyObject {
     /// from a chat composer. Other senders must not count as the user's
     /// input.
     func send(_ request: RemoteMessageSendRequest, byUser: Bool) -> RemoteMessageSendResult
+
+    /// Answers a live question in this panel. Permission prompts use the terminal.
+    func answerQuestion(_ request: RemoteQuestionAnswerRequest) -> RemoteQuestionAnswerResult
 
     /// Stops the turn the request names by sending the agent's interrupt
     /// key, under the turn check of a phone's Stop. A person asked for it,

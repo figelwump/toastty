@@ -135,7 +135,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         attachScreenshot(named: "coordinator-top-bar", of: app)
 
         menu.tap()
-        let entries = ["Policy", "Ledger", "Friction Notes", "Waiting on you"].map { menuItem($0, in: app) }
+        let entries = ["Policy", "Ledger", "Friction Notes", "Release plan"].map { menuItem($0, in: app) }
         XCTAssertTrue(entries[0].waitForExistence(timeout: 5))
         XCTAssertTrue(entries.allSatisfy { $0.exists })
         let tops = entries.map { $0.frame.minY }
@@ -178,7 +178,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         closeSheet(in: app)
 
         menu.tap()
-        menuItem("Waiting on you", in: app).tap()
+        menuItem("Release plan", in: app).tap()
         XCTAssertTrue(app.buttons["toastty-scratchpad-fit"].waitForExistence(timeout: 10))
         closeSheet(in: app)
     }
@@ -198,7 +198,7 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
 
         let older = openCoordinatorChat(environment: ["TOASTTY_MOBILE_FIXTURE_FILE_PREVIEW": "unsupported"])
         older.buttons["toastty-coordinator-menu"].tap()
-        XCTAssertTrue(menuItem("Waiting on you", in: older).waitForExistence(timeout: 5))
+        XCTAssertTrue(menuItem("Release plan", in: older).waitForExistence(timeout: 5))
         XCTAssertTrue(menuItem("policy.md", in: older).exists)
         XCTAssertFalse(menuItem("Ledger", in: older).exists)
         XCTAssertFalse(menuItem("Policy", in: older).exists)
@@ -764,7 +764,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         let warning = queuedNote("warning", "fixture-own-1", in: app)
         XCTAssertTrue(warning.exists)
         XCTAssertTrue(warning.label.contains("Toastty on the Mac quit while it typed this message"), warning.label)
-        XCTAssertTrue(warning.label.contains("choose Resume or Remove"), warning.label)
+        XCTAssertTrue(warning.label.contains("If the message is there, choose Remove"), warning.label)
+        XCTAssertTrue(warning.label.contains("If it is not, choose Resume to send it"), warning.label)
         for id in ["fixture-chat-1", "fixture-chat-2", "fixture-own-2", "fixture-own-3"] {
             XCTAssertFalse(queuedNote("warning", id, in: app).exists, id)
         }
@@ -929,20 +930,23 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
     /// The chat of the user's report: two wake turns in which the
     /// coordinator found nothing for the user. With a Mac that shares which
     /// turns are quiet, each folds whole under its digest's line, as on the
-    /// Mac: no work strip and no answer. The line opens the digest, the work
-    /// and the answer, and closes them again.
+    /// Mac: no work strip and no answer. The two quiet turns in a row show
+    /// as one line, "Toastty · 2 quiet checks · …", that opens into the two
+    /// digests' lines. A digest's line opens the digest, the work and the
+    /// answer, and closes them again. The row's line closes it all.
     func testAQuietWakeTurnFoldsWholeUnderItsDigestsLine() {
         let app = launch(coordinator: "quiet", environment: ["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS": "1"])
         app.tabBars.buttons["Coordinator"].tap()
         XCTAssertTrue(app.staticTexts["toastty-mobile-coordinator-title"].waitForExistence(timeout: 5))
-        // The row's identifier covers the line's own, so the line is found
-        // by what it says.
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Toastty · 2 quiet checks · ")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "The two quiet turns show as one line")
+        XCTAssertTrue(waitUntilHittable(row))
+        XCTAssertEqual(row.value as? String, "Collapsed")
+        XCTAssertEqual(row.identifier.hasPrefix("toastty-mobile-transcript-quiet-checks-"), true, row.identifier)
+        // The row's identifier covers the line's own, so a digest's line is
+        // found by what it says.
         let lines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Toastty · 1 update · "))
-        XCTAssertTrue(lines.element(boundBy: 1).waitForExistence(timeout: 5), "Both quiet digests show their line")
-        let last = lines.element(boundBy: 1)
-        XCTAssertTrue(waitUntilHittable(last))
-        XCTAssertEqual(last.value as? String, "Collapsed")
-        XCTAssertEqual(lines.element(boundBy: 0).value as? String, "Collapsed")
+        XCTAssertEqual(lines.count, 0, "A closed row shows no digest's line")
         for answer in ToasttyQuietTurnText.answers {
             XCTAssertFalse(textView(containing: answer, in: app).exists, "\(answer) shows while its turn is folded")
         }
@@ -950,6 +954,18 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         // The answer before the quiet turns still shows.
         XCTAssertTrue(textView(containing: "I made a task for it", in: app).exists)
         attachScreenshot(named: "coordinator-quiet-turns-folded", of: app)
+
+        row.tap()
+        XCTAssertTrue(waitForValue("Expanded", of: row))
+        XCTAssertTrue(lines.element(boundBy: 1).waitForExistence(timeout: 5), "The open row shows both digests' lines")
+        let last = lines.element(boundBy: 1)
+        XCTAssertTrue(waitUntilHittable(last))
+        XCTAssertEqual(last.value as? String, "Collapsed")
+        XCTAssertEqual(lines.element(boundBy: 0).value as? String, "Collapsed")
+        for answer in ToasttyQuietTurnText.answers {
+            XCTAssertFalse(textView(containing: answer, in: app).exists, "Opening the row opened a turn: \(answer)")
+        }
+        attachScreenshot(named: "coordinator-quiet-checks-open", of: app)
 
         last.tap()
         XCTAssertTrue(waitForValue("Expanded", of: last))
@@ -961,6 +977,10 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         tapTheLine(of: last)
         XCTAssertTrue(waitForValue("Collapsed", of: last))
         XCTAssertTrue(textView(containing: "Nothing needs you.", in: app).waitForNonExistence(timeout: 5))
+
+        row.tap()
+        XCTAssertTrue(waitForValue("Collapsed", of: row))
+        XCTAssertTrue(lines.firstMatch.waitForNonExistence(timeout: 5), "A closed row hides the digests' lines")
     }
 
     /// An older Mac does not share which turns are quiet: their answers
@@ -975,6 +995,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         }
         XCTAssertFalse(workStrips(in: app).firstMatch.exists, "A digest's line is its turn's line")
         XCTAssertFalse(textView(containing: "[Toastty] Wake", in: app).exists, "A digest shows open")
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "quiet checks"))
+        XCTAssertEqual(rows.count, 0, "Turns that are not known to be quiet do not join into a row")
         attachScreenshot(named: "coordinator-quiet-turns-older-mac", of: app)
     }
 

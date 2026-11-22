@@ -177,9 +177,8 @@ the files in its folder with no question, also add this rule:
 ```
 
 The rule also lets it edit `policy.md` with no question. The coordinator
-still asks before it writes its daily list
-(`action run panel.scratchpad.set-content`), before it commits a change to
-its policy (`git commit` in its folder), and before `task request-merge`.
+still asks before it commits a change to its policy (`git commit` in its
+folder), and before `task request-merge`.
 
 Tested in Claude Code's default permission mode:
 
@@ -482,6 +481,7 @@ toastty task list               # every task, oldest first
 toastty task retry <task-id>    # run setup, or a move into a worktree, again after it failed
 toastty task delete <task-id>   # delete the task and its attached files
 toastty task workspace-choices [<task-id>]  # open and recently closed workspaces
+toastty task workspace-choices --name <project>  # also the project directories with that name
 toastty task set-workspace <task-id> --workspace <id>   # place a waiting task
 toastty task set-workspace <task-id> --recent <id>      # reopen a closed one
 toastty task set-workspace <task-id> --root <dir>       # open a project directory
@@ -757,11 +757,14 @@ A watch is saved with the record of the task it notifies, so it survives a
 relaunch, and it fires once. A watch whose task is deleted, or archived while
 it waits for something else, fires with that reason. So does a watch for
 `merged` or `to-ship` when Toastty's last merge of the task stopped without
-merging, until a new merge starts; see [Merge a task](#merge-a-task). If the notified task's
-agent is not running when a watch fires, the message goes out once it runs
-again. `toastty task watches` lists watches, with `--task` or `--notify` to
-filter them, and `toastty task unwatch <watch-id>` cancels one. Fired watches
-stay listed for up to a day.
+merging, until a new merge starts; see [Merge a task](#merge-a-task). A fired
+notification stays queued, including after a relaunch, until the receiving agent
+reports idle or ready at its prompt. Toastty waits while it detects a permission
+prompt, a question, or typing that may still be in the prompt. Watches, scheduled
+wakes, and merge messages share one automatic submission per prompt.
+`toastty task watches` lists watches, with `--task` or
+`--notify` to filter them, and `toastty task unwatch <watch-id>` cancels one.
+Delivered watches stay listed for up to a day.
 
 Outside Toastty, where there is no task to tell, `toastty task watch <task-id>
 --until <condition> --wait` blocks until the watch fires, prints the outcome,
@@ -1067,10 +1070,12 @@ you when it is not sure, and creates the task.
 - **Typed once.** Toastty saves that it starts to type a message before the
   text goes to the terminal. If Toastty quits in that moment, the message is
   not typed again after the relaunch: it shows as **Paused**, and the chat
-  asks you to check the conversation and to choose **Send next** or
-  **Remove**. A paired iPhone shows the same warning on the message's row,
-  where you choose **Resume** or **Remove**. The same holds for a message
-  that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
+  asks you to check the conversation. If the message is there, choose
+  **Remove**. If it is not, choose **Send next** to send it. A paired iPhone
+  shows the same warning on the message's row, where **Resume** sends the
+  message (**Resume all** when several messages are paused). A phone
+  without send access tells you to choose in the Mac's chat. The same holds
+  for a message that **Steer now** was typing. While Toastty cannot write `coordinator-queue.json`, it does
   not type a message that the file lists as waiting, because a relaunch
   could then type it a second time: the message waits, the chat says that
   Toastty could not save it, and Toastty tries again every 5 seconds.
@@ -1198,11 +1203,15 @@ relaunch resumes does not show it.
   messages. **Stop** in the coordinator's chat on a paired iPhone does the
   same: the messages that waited show here as Paused. The phone does not
   list them, so **Send next** is on the Mac.
+- **Structured questions.** Supported Claude Code questions show choices and
+  **Submit answer** in the full chat and the dock. Complete each question in
+  the form, then submit. The card shows the answer when Claude confirms it.
+  **Show Terminal** opens Claude's own prompt and gives it the keyboard.
 - **Terminal.** The **Terminal** button in the full view's panel header
-  shows the terminal in place of the chat, and **Chat** switches back. Use the terminal
-  for a login, a folder-trust or a permission prompt, and to answer a
-  question: the chat shows such a prompt but cannot answer it, and it says so
-  above the field. The choice is not saved: a relaunch shows the chat.
+  shows the terminal in place of the chat, and **Chat** switches back. Use the
+  terminal for logins, folder trust, permissions, and unsupported questions.
+  The chat tells you above the field when the coordinator waits in the terminal.
+  A relaunch shows the chat.
 - **An agent that has not started.** A login or a folder-trust question comes
   before the agent reports anything to Toastty. While the agent's process
   runs and the agent has not reported its session, the chat says that the
@@ -1238,6 +1247,13 @@ relaunch resumes does not show it.
   Toastty's line for that wake: a click opens the digest, the coordinator's
   work and its answer. The end of a quiet turn marks nothing unread and
   sends no notification to the Mac or the phone.
+- **Quiet checks in a row.** Two or more quiet wakes in a row show as one
+  line, such as "Toastty · 3 quiet checks · 1:40 – 2:01 PM": the times of
+  the first and the last digest. A click opens it into each wake's own
+  line. A row holds only quiet wakes that nothing shows between: your
+  message, an answer that is not quiet, a message from an agent or a
+  question card ends it. A wake that runs keeps its own line, which shows
+  that the coordinator works, and joins the row above when it ends quiet.
 - **Messages from agents.** A message that `coordinator send` brought shows
   in a neutral card with its sender, time and message text. A long message
   shows its opening text and **Show full message**; **Show less** returns to
@@ -1512,10 +1528,11 @@ you. A release, a deployment or another production step still needs your
 approval.
 
 **The daily list.** Once a day, at 09:00 by default, the coordinator brings
-one list of everything that waits for you: a short message in its chat, and
-its Scratchpad "Waiting on you" beside the chat. Items that waited longest
-come first. The list marks an item that was on 2 lists or more, or a task in
-which you typed nothing since it began to wait. The groups:
+one list of everything that waits for you, as one message in its chat. Each
+item is one line, with its number, its task as a link and the answer the
+coordinator suggests. Items that waited longest come first. The list marks
+an item that was on 2 lists or more, or a task in which you typed nothing
+since it began to wait. The groups:
 
 - **Blocks work you started:** a review, a question, a failed merge, merged
   tasks that wait for a release. Such an item stays on the list until you
@@ -1535,11 +1552,10 @@ which you typed nothing since it began to wait. The groups:
 Answer in the chat with the number, such as "2 yes". Ask "what waits for
 me?" for the list at any time. Outside the list, the coordinator tells you
 each thing once. The Talking section of [your policy](#the-policy-file)
-changes the time, turns the list off, or changes what its Scratchpad shows,
-such as `- Waiting on you list at 08:30 on weekdays; group it by project.`
+changes the time, turns the list off, or changes its form, such as
+`- Daily list at 08:30 on weekdays; group it by project.`
 A [review](#how-the-coordinator-improves-the-work) can propose such a line
-when you overlooked items on the list. Links do not open from a Scratchpad:
-the task links are in the chat message.
+when you overlooked items on the list.
 
 ### How the coordinator improves the work
 
@@ -1710,7 +1726,7 @@ by asking you:
 ## Talking
 - Answer short questions about code yourself; make a task for the rest.
 - Tell me only what blocks a task.
-- Waiting on you list at 08:30 on weekdays.
+- Daily list at 08:30 on weekdays.
 
 ## Reviewing
 - Good proof = a scenario list, each checked through the real UI or CLI;
@@ -1738,8 +1754,13 @@ by asking you:
 
 **The first run.** The first time you write to the coordinator while one
 of Projects, Agents, Talking, Reviewing and Improving holds no rule, it asks
-you how to set it up, in one message with a suggested answer for each part. "Yes" takes
-all the suggestions.
+you how to set it up, one part at a time, with a suggested answer for each part. "Yes"
+takes the suggestion, and "defaults" takes the suggestions for all remaining parts. It
+asks the first part in plain text, after a short introduction when it asks about more
+than one part. When its agent program can
+ask a question with choices, such as Claude Code, the chat shows each later part as a
+short card that you answer with a click or in your own words; otherwise it asks in plain
+text.
 
 - **Agents:** which agent, model and effort for which kind of work, as a
   table. It suggests a rule for choosing a model that your own agent
@@ -1959,7 +1980,9 @@ toastty coordinator wake --clear --quiet
   a quiet turn, a later call without `--quiet` cannot remove the mark.
 - The chat folds a quiet turn under Toastty's line for its digest. A click
   on the line opens the digest, the coordinator's work and its answer. A
-  question or an approval prompt in the turn stays visible. The
+  question or an approval prompt in the turn stays visible. Quiet turns in
+  a row, with nothing shown between them, show as one line that opens into
+  their own lines (see [The coordinator's chat](#the-coordinators-chat)). The
   coordinator's chat on a paired iPhone folds it the same way, and its New
   line does not count it (see
   [The Coordinator tab](remote-access.md#the-coordinator-tab)).
@@ -2207,11 +2230,10 @@ toastty task waiting --on "email replies; step 4 work on Dec 1" --wake 2026-12-0
 - `--wake` is optional. It takes an ISO 8601 time in the future. At that
   time, Toastty types one line into the terminal of the task's own agent,
   starting `[Toastty wake]`, that names the time and what the task waited
-  for. It types the line only while the agent's own report says that it
-  waits at its prompt, so never into a permission prompt; while no question
-  from `task needs-reply` waits for you; and while nobody typed in that
-  terminal since the agent's last turn ended, since that text can still be in
-  its prompt. Otherwise it tries again 30 seconds later. If Toastty was not
+  for. Toastty waits for the agent to report idle or ready and for the prompt
+  to be free of a tracked interaction or typing that may still be there.
+  A question from `task needs-reply` also holds the wake. Toastty tries again
+  30 seconds later when the wake has to wait. If Toastty was not
   running at that time, it sends the line after the next launch, once the
   agent runs. The mark clears when the turn that the line starts begins, so
   the agent runs `task waiting` again if the task still waits.
@@ -2432,9 +2454,10 @@ menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
 1. Toastty sends the task's agent `Use the <merge_skill> skill.` when a
    `merge_skill` is set, then `merge_prompt` if one is set, then the pull
    request you accepted. With neither set, the skill is `toastty-task-merge`,
-   which Toastty ships. A busy
-   agent gets the message once its turn ends; with no agent in the task
-   space, Toastty starts the task's agent in a new tab there. The task shows "Merging…".
+   which Toastty ships. Toastty waits up to 30 minutes for the agent's prompt
+   to be ready and free of a tracked interaction or draft. With no agent in
+   the task space, Toastty starts the task's agent in a new tab there. The task
+   shows "Merging…".
 2. The skill checks what you cannot see at a glance: unresolved review threads,
    merge prerequisites in the description, tasks that must land first, and CI.
    If something blocks, it says why and ends its turn, and the task is back in

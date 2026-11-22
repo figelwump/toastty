@@ -936,8 +936,16 @@ delivered and is not sent again. It takes optional `watchID`, `taskID`, and `not
 `task.set-workspace`. With `taskID`, it also returns `suggested` when triage
 suggested a project that is not open: its `title` and `rootDirectory`, and the
 `task.set-workspace` argument that places the task there (`workspace`,
-`recentWorkspace` or `rootDirectory`). A workspace-scoped session sees only
-open workspaces in its scope.
+`recentWorkspace` or `rootDirectory`). With `name`, it also returns
+`matches`: the project directories whose folder name or workspace title is
+`name`, ignoring case, `-`, `_`, `.` and spaces. Each has `title`,
+`rootDirectory` and `source`, and `workspaceID` or `recentWorkspace` when it
+is open or recently closed. The source is `open`, `recent`, `config` (a
+`[workspace."<root>"]` root in tasks.toml) or `history` (a task's project):
+a directory the user has worked in, listed first. Or it is `sibling`: a git
+repository in the same parent directory as one of those, which Toastty never
+opened. A linked worktree is not a match. A workspace-scoped session sees only
+open workspaces in its scope, also under `matches`.
 
 `agent.profile.state` requires `args.profileID` and takes no selectors. It
 returns the executable that profile would run in Toastty's launch environment,

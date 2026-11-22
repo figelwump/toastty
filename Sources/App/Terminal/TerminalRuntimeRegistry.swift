@@ -605,7 +605,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func readVisibleText(panelID: UUID) -> String? {
-        readVisibleText(panelID: panelID, includeScrollback: false)
+        if let automationReadVisibleTextHandlerForTesting {
+            return automationReadVisibleTextHandlerForTesting(panelID, false)
+        }
+        return runtimeStore.existingController(for: panelID)?.readActiveScreenText()
     }
 
     func readVisibleText(panelID: UUID, includeScrollback: Bool) -> String? {
@@ -820,6 +823,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
                 focusHostViewIfNeeded: { controller.focusHostViewIfNeeded() }
             )
         }
+    }
+
+    func focusVisibleTerminalIfPossible(panelID: UUID) -> Bool {
+        guard !isCoveredByTasksView(panelID: panelID),
+              let controller = runtimeStore.existingController(for: panelID),
+              controller.lifecycleState.isReadyForFocus else { return false }
+        return controller.focusVisibleHostViewIfNeeded()
     }
 
     /// Retries first-responder restoration for a specific panel host view. This

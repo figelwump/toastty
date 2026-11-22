@@ -191,7 +191,7 @@ public enum ToasttyMobileFixture {
 
     public static let coordinatorWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000090")!
     public static let coordinatorConversationID = UUID(uuidString: "B1000000-0000-0000-0000-000000000090")!
-    public static let coordinatorWaitingPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000090")!
+    public static let coordinatorScratchpadPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000090")!
     /// The Mac's Open Policy shows the policy as a panel in the coordinator's
     /// workspace. The tab's … menu lists Policy once, not this panel too.
     public static let coordinatorPolicyPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000091")!
@@ -226,7 +226,7 @@ public enum ToasttyMobileFixture {
             title: "Coordinator",
             conversations: conversations,
             panels: [
-                previewPanel(90, panelID: coordinatorWaitingPanelID, kind: "scratchpad", title: "Waiting on you",
+                previewPanel(90, panelID: coordinatorScratchpadPanelID, kind: "scratchpad", title: "Release plan",
                              tabNumber: 90, tabTitle: "Coordinator", revision: 1),
                 previewPanel(91, panelID: coordinatorPolicyPanelID, kind: "localDocument", title: "policy.md",
                              tabNumber: 90, tabTitle: "Coordinator",

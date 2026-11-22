@@ -28,6 +28,7 @@ struct CoordinatorChatView: View {
     let hasPanelFocus: Bool
     /// Where this view of the chat is.
     var host: CoordinatorChatModel.Host = .panel
+    var settledDockWidth: CGFloat?
     @StateObject private var linkOpener = CoordinatorChatLinkOpener()
 
     /// The size of the notice's text before the text scale: the caption
@@ -59,9 +60,11 @@ struct CoordinatorChatView: View {
                 sessionStatus: model.sessionStatus,
                 workingIndicator: model.workingIndicator,
                 jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest,
-                newMessages: model.newMessages
+                newMessages: model.newMessages,
+                answerStates: model.interactionAnswerStates
             )
             .equatable()
+            .modifier(TranscriptViewport(settledDockWidth: settledDockWidth))
             .overlay {
                 if model.showsIntroduction {
                     introduction
@@ -79,6 +82,9 @@ struct CoordinatorChatView: View {
         .environment(\.conversationLinkPresenter, chips.presenter)
         .environment(\.conversationTextScale, model.textScale)
         .environment(\.openURL, linkOpener.action)
+        .environment(\.showQuestionTerminal, { [controller, host] in
+            Self.showTerminal(using: controller, from: host)
+        })
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("coordinator.chat")
         // Read the conversation only while the chat is on screen.
@@ -96,6 +102,23 @@ struct CoordinatorChatView: View {
         .onDisappear { model.hide(panelID: panelID, host: host) }
         .onChange(of: isOnScreen && hasPanelFocus, initial: true) { _, takesKeyboard in
             if takesKeyboard { model.requestComposerFocus() }
+        }
+    }
+
+    private struct TranscriptViewport: ViewModifier {
+        let settledDockWidth: CGFloat?
+
+        func body(content: Content) -> some View {
+            if let settledDockWidth {
+                // Move the dock edge and composer live, without asking every
+                // message to wrap at each intermediate width.
+                content.frame(width: settledDockWidth)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .clipped()
+                    .contentShape(Rectangle())
+            } else {
+                content
+            }
         }
     }
 
@@ -209,10 +232,14 @@ struct CoordinatorChatView: View {
     /// the full view with its terminal.
     private var showTerminalButton: some View {
         noticeButton("Show Terminal", identifier: "coordinator.chat.notice.show-terminal") {
-            switch host {
-            case .panel: controller.showTerminal()
-            case .dock: controller.openFullView(showingTerminal: true)
-            }
+            Self.showTerminal(using: controller, from: host)
+        }
+    }
+
+    private static func showTerminal(using controller: CoordinatorController, from host: CoordinatorChatModel.Host) {
+        switch host {
+        case .panel: controller.showTerminal()
+        case .dock: controller.openFullView(showingTerminal: true)
         }
     }
 
@@ -254,7 +281,7 @@ struct CoordinatorChatView: View {
         case .deliveryNotConfirmed:
             "Toastty typed your message, but the conversation did not show it. Check the terminal before you send it again."
         case .typingInterrupted:
-            "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation, then choose Send next or Remove on the paused message."
+            "Toastty quit while it typed a message, so the coordinator may have it already. Check the conversation. If the message is there, choose Remove on the paused message. If it is not, choose Send next to send it."
         case .instructionsMayBeCut:
             "Codex may read only the first 32 KiB of the coordinator's instructions: Toastty cannot add project_doc_max_bytes to the arguments of your codex profile. "
                 + "Use a codex profile in ~/.toastty/agents.toml that runs codex itself, or set project_doc_max_bytes = \(CoordinatorFolder.codexProjectDocMaxBytes) in Codex's config.toml, then restart the coordinator."
@@ -339,6 +366,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
     let workingIndicator: ToasttyTranscriptWorkingIndicator?
     let jumpToLiveEdgeRequest: UInt64
     let newMessages: ToasttyNewMessagesMarker?
+    let answerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -347,6 +375,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             && lhs.workingIndicator == rhs.workingIndicator
             && lhs.jumpToLiveEdgeRequest == rhs.jumpToLiveEdgeRequest
             && lhs.newMessages == rhs.newMessages
+            && lhs.answerStates == rhs.answerStates
     }
 
     var body: some View {
@@ -355,6 +384,9 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             isSubmitting: false,
             loadOlder: { model.loadOlder() },
             queuedMessageAction: { model.perform($0) },
+            interactionAnswerStates: answerStates,
+            editInteractionAnswer: { model.editQuestionAnswer($0, $1) },
+            submitInteractionAnswer: { model.submitQuestionAnswer($0) },
             readAcknowledgementEpoch: sessionStatus,
             workingIndicator: workingIndicator,
             jumpToLiveEdgeRequest: Binding(

@@ -1182,7 +1182,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
       toastty [--json] [--socket-path <path>] task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
       toastty [--json] [--socket-path <path>] task release-complete --text-file <report.json>
-      toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>]
+      toastty [--json] [--socket-path <path>] task workspace-choices [<task-id>] [--name <project>]
       toastty [--json] [--socket-path <path>] task send <task-id> (<text> | --text-file <path>) [--steer] [--from <name>]
       toastty [--json] [--socket-path <path>] task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task unwatch <watch-id>
@@ -2573,11 +2573,17 @@ public enum ToasttyCLI {
             return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.list", args: args))
 
         case "workspace-choices":
-            let parsed = try parseCommandArguments(remaining, valueOptions: [])
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--name"])
             guard parsed.positionals.count <= 1 else {
                 throw ToasttyCLIError.usage("task workspace-choices takes at most one task ID\n\n\(usage)")
             }
             var args: [String: AutomationJSONValue] = [:]
+            if let name = parsed.singleValue("--name") {
+                guard name.trimmingCharacters(in: .whitespaces).isEmpty == false else {
+                    throw ToasttyCLIError.usage("--name takes a project name\n\n\(usage)")
+                }
+                args["name"] = .string(name)
+            }
             if let taskID = parsed.positionals.first {
                 guard UUID(uuidString: taskID) != nil else {
                     throw ToasttyCLIError.usage("task workspace-choices takes a task ID\n\n\(usage)")

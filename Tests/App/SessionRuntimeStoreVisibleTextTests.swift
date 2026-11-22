@@ -5,6 +5,82 @@ import Testing
 
 @MainActor
 struct SessionRuntimeStoreVisibleTextTests {
+    @Test(arguments: [CodexStatusTrackingSource.hooks, .sessionLogFallback(reason: "test")])
+    func computerUseMenuProjectsWaitingUntilItClosesWithoutANotification(source: CodexStatusTrackingSource) throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let panelID = try #require(selection.workspace.allTerminalPanelIDs.first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let sessionStore = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
+        sessionStore.bind(store: appStore)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let working = SessionStatus(kind: .working, summary: "Working", detail: "Using computer")
+        let laterProgress = SessionStatus(kind: .working, summary: "Working", detail: "Another tool is running")
+        var actionableEvents: [ManagedSessionActionableEvent] = []
+        sessionStore.onActionableEvent = { actionableEvents.append($0) }
+        sessionStore.startSession(
+            sessionID: "cua-approval",
+            agent: .codex,
+            panelID: panelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: source,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        sessionStore.updateStatus(sessionID: "cua-approval", status: working, at: now)
+        let prompt = """
+        Field 1/1
+        Allow Computer Use to use "Safari"?
+        App: Safari
+        › 1. Allow
+          2. Allow for this session
+          3. Always allow
+          4. Cancel
+        enter to submit | esc to cancel
+        """
+
+        func refresh(_ screen: String, elapsed: TimeInterval) -> Bool {
+            sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+                panelID: panelID, visibleText: screen, promptState: .busy, at: now.addingTimeInterval(elapsed)
+            )
+        }
+
+        #expect(refresh(prompt, elapsed: 1))
+        #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .needsApproval)
+        #expect(appStore.state.workspacesByID[selection.workspaceID]?.unreadPanelIDs.isEmpty == true)
+        #expect(refresh(prompt, elapsed: 2) == false)
+        #expect(refresh("", elapsed: 3) == false)
+        sessionStore.updateStatus(sessionID: "cua-approval", status: laterProgress, at: now.addingTimeInterval(3))
+        #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .needsApproval)
+        #expect(refresh("Working (10s • esc to interrupt)", elapsed: 4))
+        #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status == laterProgress)
+        #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.turnStartedAt == now)
+        #expect(actionableEvents.isEmpty)
+
+        // A real approval can arrive while the visible menu is active.
+        #expect(refresh(prompt, elapsed: 5))
+        let providerApproval = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Run pwd?")
+        sessionStore.updateStatus(sessionID: "cua-approval", status: providerApproval, at: now.addingTimeInterval(6))
+        #expect(refresh("Working (12s • esc to interrupt)", elapsed: 7) == false)
+        #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status == providerApproval)
+        #expect(appStore.state.workspacesByID[selection.workspaceID]?.unreadPanelIDs == [panelID])
+
+        if source == .hooks {
+            sessionStore.updateStatus(sessionID: "cua-approval", status: working, at: now.addingTimeInterval(8))
+            #expect(refresh(prompt, elapsed: 9))
+            // An interrupt can arrive after the menu closed but before the next poll.
+            #expect(sessionStore.handleLocalInterruptForPanelIfActive(
+                panelID: panelID, kind: .escape, at: now.addingTimeInterval(10)
+            ))
+            #expect(refresh("› Ask Codex to do anything", elapsed: 11) == false)
+            #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .idle)
+        }
+    }
+
     @Test
     func refreshManagedSessionStatusFromVisibleTextUpdatesWorkingCodexDetail() {
         let sessionStore = SessionRuntimeStore()

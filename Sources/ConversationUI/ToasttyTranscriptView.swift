@@ -35,6 +35,7 @@ public struct ToasttyTranscriptView: View {
 
     @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
     @State private var turnFold = ToasttyTurnFoldState()
+    @State private var quietCheckFold = ToasttyQuietCheckFoldState()
     @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
     @State private var isAtLiveEdge = true
     @State private var hasReachedPhysicalLiveEdge = true
@@ -486,6 +487,9 @@ public struct ToasttyTranscriptView: View {
                         previousBoundarySequence: old.firstSequence,
                         opensRunningTurns: options.foldsRunningWork == false
                     )
+                    quietCheckFold.reconcile(
+                        runs: quietCheckRuns, revision: new.revision, expandedTurnIDs: turnFold.expandedIDs
+                    )
                 }
                 // Animate only live transitions; initial, rebuilt, and
                 // prepended reconciles must land instantly so opening or
@@ -652,6 +656,16 @@ public struct ToasttyTranscriptView: View {
                 turnForWorkBlock[blockID] = turn.id
             }
         }
+        // A row of quiet checks shows its line before its first turn's
+        // line. Closed, it hides its turns' lines and work.
+        var quietRunAtFirstLine: [ToasttyTranscriptBlockID: ToasttyQuietCheckRun] = [:]
+        var closedQuietTurnIDs: Set<ToasttyTranscriptRowID> = []
+        for run in quietCheckRuns {
+            quietRunAtFirstLine[ToasttyTranscriptBlockID(rowID: run.id)] = run
+            if quietCheckFold.isOpen(run) == false {
+                closedQuietTurnIDs.formUnion(run.turnIDs)
+            }
+        }
         // The running turn's strip shows that the agent works from the
         // turn's start, under its message, before any work comes.
         var stripAfterAnchor: ToasttyTranscriptTurn?
@@ -664,6 +678,13 @@ public struct ToasttyTranscriptView: View {
         var items: [ToasttyTranscriptDisplayItem] = []
         items.reserveCapacity(state.blocks.count + state.turns.count)
         for block in state.blocks {
+            if let run = quietRunAtFirstLine[block.id] {
+                items.append(.quietChecks(run))
+            }
+            if closedQuietTurnIDs.isEmpty == false,
+               closedQuietTurnIDs.contains(turnForWorkBlock[block.id] ?? block.id.rowID) {
+                continue
+            }
             // A turn whose host message's line opens it has no strip.
             if let turn = turnAtFirstWorkBlock[block.id],
                turn.opensFromAnchorLine(foldsRunningWork: options.foldsRunningWork) == false {
@@ -689,6 +710,16 @@ public struct ToasttyTranscriptView: View {
         workingLine: ToasttyTranscriptWorkingLine
     ) -> some View {
         switch item {
+        case .quietChecks(let run):
+            ToasttyQuietChecksLine(
+                run: run,
+                isExpanded: quietCheckFold.isOpen(run),
+                toggle: {
+                    withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
+                        quietCheckFold.toggle(run)
+                    }
+                }
+            )
         case .workStrip(let turn):
             ToasttyTurnWorkStrip(
                 turn: turn,
@@ -727,6 +758,25 @@ public struct ToasttyTranscriptView: View {
     private var liveTurnID: ToasttyTranscriptRowID? {
         guard let last = state.turns.last else { return nil }
         return settledTurnIDs.contains(last.id) ? nil : last.id
+    }
+
+    /// The rows of quiet checks. The turn that runs and has no answer yet
+    /// keeps its own line, which shows that the agent works. Once its answer
+    /// comes it joins, also while the agent still works: then the agent may
+    /// already work on the next message, such as a digest that another
+    /// device sees typed before its row comes.
+    private var quietCheckRuns: [ToasttyQuietCheckRun] {
+        let runningTurnID = state.turns.last.flatMap { turn in
+            turn.id == liveTurnID && turn.hasResponse == false ? turn.id : nil
+        }
+        return state.quietCheckRuns(runningTurnID: runningTurnID)
+    }
+
+    /// The closed row of quiet checks that hides this block: its turn's
+    /// line or work.
+    private func closedQuietCheckRun(hiding blockID: ToasttyTranscriptBlockID) -> ToasttyQuietCheckRun? {
+        let turnID = state.turns.first { $0.workBlockIDs.contains(blockID) }?.id ?? blockID.rowID
+        return quietCheckRuns.first { $0.contains(turnID: turnID) && quietCheckFold.isOpen($0) == false }
     }
 
     private var turnFoldKey: TurnFoldKey {
@@ -980,7 +1030,9 @@ public struct ToasttyTranscriptView: View {
             target = .liveEdge
             anchor = .bottom
         case .transcript(let blockID):
-            target = .transcript(blockID)
+            // A row that a closed row of quiet checks hides, such as the
+            // first row before older history loaded, is at that row's line.
+            target = closedQuietCheckRun(hiding: blockID).map { .quietChecks($0.id) } ?? .transcript(blockID)
             anchor = .top
         case .responseStart(let blockID):
             target = responseContext?.target ?? .transcript(blockID)
@@ -1047,9 +1099,16 @@ public struct ToasttyTranscriptView: View {
         entryScrollPosition.cancelForInteraction()
         scrollCoordinator.cancelForInteraction()
         let target = ToasttyConversationScrollTarget.transcript(blockID)
-        if let turn = state.turns.first(where: { $0.workBlockIDs.contains(blockID) }),
-           turnFold.isExpanded(turn.id) == false {
-            turnFold.toggle(turn.id)
+        let closedRun = closedQuietCheckRun(hiding: blockID)
+        if let closedRun {
+            quietCheckFold.open(closedRun)
+        }
+        let foldedTurn = state.turns.first(where: { $0.workBlockIDs.contains(blockID) })
+            .flatMap { turnFold.isExpanded($0.id) ? nil : $0 }
+        if let foldedTurn {
+            turnFold.toggle(foldedTurn.id)
+        }
+        if closedRun != nil || foldedTurn != nil {
             // The row is laid out on the next pass.
             DispatchQueue.main.async {
                 markRowTopMove()
@@ -1791,6 +1850,8 @@ enum ToasttyConversationScrollTarget: Hashable {
     case transcript(ToasttyTranscriptBlockID)
     case responseContext(ToasttyTranscriptBlockID)
     case turnWork(ToasttyTranscriptRowID)
+    /// A row of quiet checks' line, by the row's ID.
+    case quietChecks(ToasttyTranscriptRowID)
     case send(String)
     case liveEdge
 }
@@ -1798,11 +1859,13 @@ enum ToasttyConversationScrollTarget: Hashable {
 enum ToasttyTranscriptDisplayItem: Identifiable {
     case block(ToasttyTranscriptBlock, isWork: Bool)
     case workStrip(ToasttyTranscriptTurn)
+    case quietChecks(ToasttyQuietCheckRun)
 
     var id: ToasttyConversationScrollTarget {
         switch self {
         case .block(let block, _): .transcript(block.id)
         case .workStrip(let turn): .turnWork(turn.id)
+        case .quietChecks(let run): .quietChecks(run.id)
         }
     }
 
@@ -1811,6 +1874,7 @@ enum ToasttyTranscriptDisplayItem: Identifiable {
         switch self {
         case .block(let block, _): block.id.rowID
         case .workStrip(let turn): turn.workBlockIDs.first?.rowID
+        case .quietChecks(let run): run.id
         }
     }
 }
@@ -1842,6 +1906,8 @@ struct TranscriptResponseEntryContext: Equatable {
         switch preceding {
         case .workStrip:
             isCard = true
+        case .quietChecks:
+            isCard = false
         case .block(let block, _):
             if case .toolBatch = block.content {
                 // Expanded tool output can fill the viewport. Keep the answer
@@ -2365,22 +2431,7 @@ private struct ToasttyHostMessageLine: View {
     }
 
     private func line(text: String) -> some View {
-        HStack(spacing: 6) {
-            if workingIndicator != nil {
-                ToasttySpinner(size: 9)
-            }
-            Text(text)
-                .monospacedDigit()
-            if workingIndicator == nil {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .conversationFont(.caption2, weight: .semibold)
-            }
-        }
-        .conversationFont(.caption)
-        .foregroundStyle(ConversationDesignTokens.mutedText)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
+        ToasttyDisclosureLineLabel(text: text, isExpanded: isExpanded, showsSpinner: workingIndicator != nil)
     }
 
     private func workingText(elapsed: String?) -> String {

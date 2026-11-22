@@ -131,6 +131,8 @@ protocol TaskSessionProviding: AnyObject {
     /// or sent it a message from Toastty Mobile. Text that Toastty or the
     /// CLI typed, such as `task send`, does not count.
     func lastUserInputAt(panelID: UUID) -> Date?
+    /// Whether the tracked conversation reports an interaction or a user draft.
+    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool
 }
 
 extension TaskSessionProviding {
@@ -143,6 +145,7 @@ extension TaskSessionProviding {
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }
     func lastUserInputAt(panelID: UUID) -> Date? { nil }
+    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool { false }
 }
 
 /// What a caller asked for in `task.create`. Every field except the text is
@@ -248,6 +251,9 @@ final class TaskCoordinator {
     let fileManager: FileManager
     let now: () -> Date
     let terminalReadinessTimeout: Duration
+    static let defaultMergePromptTurnTimeout: Duration = .seconds(30 * 60)
+    /// How long an agent-routed merge waits for an open prompt.
+    let mergePromptTurnTimeout: Duration
     let timing: StartWorkTiming
 
     /// How long a move into a worktree waits; shorter in tests.
@@ -300,7 +306,7 @@ final class TaskCoordinator {
     /// focus to the next active panel. Without it, the close selects the
     /// neighboring workspace.
     var closeFinishedTaskSpace: ((UUID) -> Bool)?
-    /// Merge prompts waiting for a busy agent's turn to end.
+    /// Merge prompts waiting for an agent's input to be ready.
     var mergeDeliveryTasks: [UUID: Task<Void, Never>] = [:]
     /// Archives and release cleanups running in the background.
     var cleanupTasks: [UUID: Task<Void, Never>] = [:]
@@ -308,6 +314,9 @@ final class TaskCoordinator {
     /// `toastty task watch --wait` watches, which only last while the app runs.
     var waitWatches: [UUID: TaskWaitWatch] = [:]
     var watchMonitor: Task<Void, Never>?
+    /// By session ID, the completed turn whose prompt an automatic message
+    /// or uncertain send used. Automatic messages wait for a new prompt.
+    var automaticPromptDeliveryTurnEnds: [String: Date] = [:]
     /// Sends the wakes of `task waiting` marks when their time comes.
     var wakeMonitor: Task<Void, Never>?
     /// When to try a due wake again after its agent could not take it.
@@ -335,6 +344,7 @@ final class TaskCoordinator {
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         terminalReadinessTimeout: Duration = .seconds(10),
+        mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout,
         timing: StartWorkTiming = StartWorkTiming(),
         triageRunner: (any TaskTriageRunning)? = nil,
         recentWorkspaces: RecentWorkspacesStore? = nil,
@@ -351,6 +361,7 @@ final class TaskCoordinator {
         self.fileManager = fileManager
         self.now = now
         self.terminalReadinessTimeout = terminalReadinessTimeout
+        self.mergePromptTurnTimeout = mergePromptTurnTimeout
         self.timing = timing
         self.triageRunner = triageRunner
         self.recentWorkspaces = recentWorkspaces
@@ -842,6 +853,75 @@ final class TaskCoordinator {
             )
         }
         return choices
+    }
+
+    /// The project directories whose folder name, or workspace title,
+    /// matches `name`, ignoring case, `-`, `_`, `.` and spaces. First the
+    /// directories Toastty knows: open and recently closed workspaces, the
+    /// `[workspace."<root>"]` roots in tasks.toml, and the projects of
+    /// tasks. Then the git repositories next to those, in the same parent
+    /// directory, that Toastty never opened. A linked worktree, whose `.git`
+    /// is a file, is not a project. One entry per directory, each still a
+    /// directory. With `workspaceScope`, only the open workspaces it allows,
+    /// and nothing else.
+    func projectMatches(named name: String, workspaceScope: ((UUID) -> Bool)? = nil) -> [TaskProjectMatch] {
+        let key = TaskProjectMatch.key(name)
+        guard key.isEmpty == false else { return [] }
+        var known: [TaskProjectMatch] = []
+        func consider(_ match: TaskProjectMatch) {
+            var match = match
+            match.rootDirectory = TasksConfigFile.normalizedPath(match.rootDirectory, homeDirectoryPath: homeDirectoryPath)
+            known.append(match)
+        }
+        for workspace in topLevelWorkspaces() where workspaceScope?(workspace.id) ?? true {
+            guard let root = Self.rootDirectory(of: workspace, fileManager: fileManager) else { continue }
+            consider(TaskProjectMatch(title: workspace.title, rootDirectory: root, source: .open, workspaceID: workspace.id))
+        }
+        if workspaceScope == nil {
+            for item in recentWorkspaces?.items ?? [] {
+                consider(TaskProjectMatch(title: item.title, rootDirectory: item.rootDirectory, source: .recent, recentWorkspaceID: item.id))
+            }
+            for workspace in (try? configLoader())?.workspaces ?? [] {
+                consider(TaskProjectMatch(title: URL(filePath: workspace.path).lastPathComponent, rootDirectory: workspace.path, source: .config))
+            }
+            for record in records.records.reversed() {
+                guard let root = record.projectRoot else { continue }
+                consider(TaskProjectMatch(title: URL(filePath: root).lastPathComponent, rootDirectory: root, source: .history))
+            }
+        }
+
+        // Names first, then one entry per directory: a workspace whose title
+        // matches counts even when another workspace on its root came first.
+        var matches: [TaskProjectMatch] = []
+        var seen = Set<String>()
+        var parents: [String] = []
+        var checked = Set<String>()
+        for candidate in known {
+            guard checked.contains(candidate.rootDirectory) || isDirectory(candidate.rootDirectory) else { continue }
+            let folder = URL(filePath: candidate.rootDirectory)
+            if checked.insert(candidate.rootDirectory).inserted {
+                let parent = folder.deletingLastPathComponent().path(percentEncoded: false)
+                if parents.contains(parent) == false { parents.append(parent) }
+            }
+            guard TaskProjectMatch.key(folder.lastPathComponent) == key || TaskProjectMatch.key(candidate.title) == key,
+                  seen.insert(candidate.rootDirectory).inserted else { continue }
+            matches.append(candidate)
+        }
+        guard workspaceScope == nil else { return matches }
+        for parent in parents {
+            let children = (try? fileManager.contentsOfDirectory(atPath: parent)) ?? []
+            for child in children.sorted() where TaskProjectMatch.key(child) == key {
+                let path = URL(filePath: parent).appending(path: child).path(percentEncoded: false)
+                let normalized = TasksConfigFile.normalizedPath(path, homeDirectoryPath: homeDirectoryPath)
+                guard checked.contains(normalized) == false,
+                      seen.contains(normalized) == false,
+                      isDirectory(normalized),
+                      isDirectory(URL(filePath: normalized).appending(path: ".git").path(percentEncoded: false)) else { continue }
+                seen.insert(normalized)
+                matches.append(TaskProjectMatch(title: child, rootDirectory: normalized, source: .sibling))
+            }
+        }
+        return matches
     }
 
     /// The title for a workspace opened on a project directory: the

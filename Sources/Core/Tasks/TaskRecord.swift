@@ -113,6 +113,9 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// The steps that closed the task space and removed its worktree after
     /// a merge, an archive, or a release, and why they stopped if they did.
     public var cleanup: TaskCleanup?
+    /// The lowercased URL of a pull request whose cleanup was canceled
+    /// before there was a cleanup record. Later answers still record the merge.
+    public var droppedMergeCleanupPullRequestURL: String?
     /// Set on a release task: the tasks it releases.
     public var release: TaskRelease?
     /// The user's request to release this task's work right after it

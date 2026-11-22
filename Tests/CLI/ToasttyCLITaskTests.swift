@@ -208,6 +208,8 @@ struct ToasttyCLITaskTests {
         #expect(choices.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: [:]))
         let forTask = try ToasttyCLI.parse(arguments: ["task", "workspace-choices", taskID], environment: [:])
         #expect(forTask.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: ["taskID": .string(taskID)]))
+        let named = try ToasttyCLI.parse(arguments: ["task", "workspace-choices", "--name", "billing service"], environment: [:])
+        #expect(named.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: ["name": .string("billing service")]))
 
         for arguments in [
             ["task", "set-workspace", taskID],
@@ -215,6 +217,8 @@ struct ToasttyCLITaskTests {
             ["task", "set-workspace", taskID, "--workspace", workspaceID, "--root", "/tmp"],
             ["task", "set-workspace", taskID, "--workspace", "toastty"],
             ["task", "workspace-choices", "toastty"],
+            ["task", "workspace-choices", "--name", " "],
+            ["task", "workspace-choices", "--name"],
         ] {
             #expect(throws: ToasttyCLIError.self) {
                 _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
