@@ -3108,7 +3108,7 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testRightPanelsKeepTwoRecentAttachmentsAcrossWorkspaceTabSwitches() throws {
+    func testRightPanelsKeepTwoRecentAttachmentsAcrossWorkspaceTabSwitches() async throws {
         let firstPanelID = UUID()
         let secondPanelID = UUID()
         let thirdPanelID = UUID()
@@ -3131,48 +3131,67 @@ final class WorkspaceViewTests: XCTestCase {
         }
         defer { harness.window.orderOut(nil) }
 
-        func settleLayout() {
-            pumpMainRunLoop(duration: 0.1)
+        func waitForLayout(timeout: Duration = .seconds(5), until condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now + timeout
             harness.hostingView.layoutSubtreeIfNeeded()
+            // Scratchpad teardown runs in a deferred main-actor task after SwiftUI
+            // removes its host. Suspend the test until the lifecycle has caught up.
+            while !condition() && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+                harness.hostingView.layoutSubtreeIfNeeded()
+            }
+        }
+
+        func readyAttachment(for panelID: UUID) async throws -> (ScratchpadPanelRuntime, PanelHostAttachmentToken) {
+            let registry = harness.webPanelRuntimeRegistry
+            try await waitForLayout {
+                registry.loadedScratchpadRuntime(for: panelID)?.lifecycleState.isReadyForFocus == true
+            }
+            let runtime = try XCTUnwrap(registry.loadedScratchpadRuntime(for: panelID))
+            let attachment = try XCTUnwrap(runtime.lifecycleState.attachmentToken)
+            XCTAssertEqual(runtime.lifecycleState, .ready(attachment))
+            return (runtime, attachment)
         }
 
         let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
         func selectTab(at index: Int) {
-            _ = harness.store.send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: workspace.tabIDs[index]))
-            settleLayout()
+            XCTAssertTrue(harness.store.send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: workspace.tabIDs[index])))
         }
 
-        settleLayout()
-        let first = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: firstPanelID))
-        let firstAttachment = try XCTUnwrap(first.lifecycleState.attachmentToken)
-        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+        let (first, firstAttachment) = try await readyAttachment(for: firstPanelID)
+        let firstWebView = try XCTUnwrap(findDescendantView(in: harness.hostingView, ofType: FocusAwareWKWebView.self))
         XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: secondPanelID))
         XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: thirdPanelID))
         XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: alternatePanelID))
 
         selectTab(at: 1)
-        let second = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: secondPanelID))
-        let secondAttachment = try XCTUnwrap(second.lifecycleState.attachmentToken)
+        let (second, _) = try await readyAttachment(for: secondPanelID)
         XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
-        XCTAssertEqual(second.lifecycleState, .ready(secondAttachment))
 
         let secondTab = try XCTUnwrap(workspace.tabsByID[workspace.tabIDs[1]])
         let alternateTabID = try XCTUnwrap(secondTab.rightAuxPanel.tabID(containingPanelID: alternatePanelID))
-        _ = harness.store.send(.selectRightAuxPanelTab(workspaceID: workspace.id, tabID: alternateTabID, focus: false))
-        settleLayout()
-        let alternate = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: alternatePanelID))
-        let alternateAttachment = try XCTUnwrap(alternate.lifecycleState.attachmentToken)
+        XCTAssertTrue(harness.store.send(.selectRightAuxPanelTab(workspaceID: workspace.id, tabID: alternateTabID, focus: false)))
+        let (alternate, alternateAttachment) = try await readyAttachment(for: alternatePanelID)
+        try await waitForLayout { second.lifecycleState == .detached }
         XCTAssertEqual(second.lifecycleState, .detached)
         XCTAssertEqual(alternate.lifecycleState, .ready(alternateAttachment))
         XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
 
+        XCTAssertTrue(firstWebView.isHidden)
         selectTab(at: 0)
+        try await waitForLayout { !firstWebView.isHidden }
+        XCTAssertFalse(firstWebView.isHidden)
+        // Showing the selected panel can precede the render that applies the
+        // retention update. Check that both hosts stay ready before visiting tab 3.
+        try await waitForLayout(timeout: .milliseconds(300)) {
+            first.lifecycleState != .ready(firstAttachment) || alternate.lifecycleState != .ready(alternateAttachment)
+        }
         XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
         XCTAssertEqual(alternate.lifecycleState, .ready(alternateAttachment))
 
         selectTab(at: 2)
-        let third = try XCTUnwrap(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: thirdPanelID))
-        let thirdAttachment = try XCTUnwrap(third.lifecycleState.attachmentToken)
+        let (third, thirdAttachment) = try await readyAttachment(for: thirdPanelID)
+        try await waitForLayout { alternate.lifecycleState == .detached }
         XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
         XCTAssertEqual(alternate.lifecycleState, .detached)
         XCTAssertEqual(third.lifecycleState, .ready(thirdAttachment))
