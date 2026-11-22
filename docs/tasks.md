@@ -162,6 +162,14 @@ rules that you already have:
 The rules in a project's own `.claude/settings.json` apply only after you
 trusted that folder in Claude Code.
 
+For model lookup, add `"WebSearch"` to `permissions.allow` in
+`~/.toastty/coordinator/.claude/settings.local.json` to allow searches
+without a prompt in the Coordinator only. Keep your other rules in that
+file. With no standing approval, Claude may ask before searching. On Mac,
+choose **Show Terminal** to answer. A paired iPhone with **Approve
+requests** enabled can answer supported Claude prompts in Coordinator
+chat. Toastty leaves these permissions to you.
+
 On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
 sends to them (`task send --text-file message.md`), answers a sender
 outside Toastty (`coordinator reply <id> --text-file message.md`), sets its next check
@@ -1767,7 +1775,8 @@ text.
   instruction files hold, such as a global `AGENTS.md`, then the history of
   your tasks, then a starter table that keeps the agent's default model.
   It checks task history for the IDs of models named in imported rules or
-  chat. If the match is unclear, it asks which model to use.
+  chat. In a user turn it can also check official provider documentation
+  with its agent's web tool before it asks which model to use.
 - **Projects:** which work goes to which project, drafted from the history
   and your open projects. It asks only when that is unclear.
 - **Talking:** whether it answers questions itself or makes a task for each

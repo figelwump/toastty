@@ -1198,7 +1198,8 @@ def first_run_instructions(run):
               and created[0].get('model') == 'claude-opus-5-5' and created[0].get('effort') == 'high',
               [(t['title'], t.get('model'), t.get('effort')) for t in created])
     before.update(t['taskID'] for t in created)
-    said = run.said(run.tell('New task in app: document the format flag. Use the Claude model "Fixture Reserved 9.3".'))
+    said = run.said(run.tell('New task in app: document the format flag. Use the private Claude model "Fixture Reserved 9.3". '
+                            'This private model has no public listing.'))
     created = created_since(run, before)
     run.check('an unresolved model needs a choice before the task is created',
               created == [] and '?' in said and 'default' in said.lower(), [created, said])
@@ -1207,6 +1208,32 @@ def first_run_instructions(run):
     run.check('the answer creates one task with the exact ID', len(created) == 1
               and created[0].get('model') == 'claude-opus-5-5[1m]',
               [(t['title'], t.get('model'), t.get('effort')) for t in created])
+
+
+def web_model_lookup(run):
+    """A real Claude search with a coordinator-local permission and no matching history."""
+    run.create_task('Fix the unread dot in the sidebar', model='claude-sonnet-5-5', done=True)
+    run.seed_policy()
+    run.open_coordinator()
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    turns = run.tell('New task in app: fix the README typo "instalation". Use Claude Code with Fable 5.2 at high.')
+    created = created_since(run, before)
+    tools = [tool for turn in turns for tool in turn['tools']]
+    run.check('it uses Claude WebSearch to find the provider ID', 'WebSearch' in tools, tools)
+    run.check('it creates one task with the documented ID', len(created) == 1
+              and created[0].get('model') == 'claude-fable-5-2' and created[0].get('effort') == 'high',
+              [(t['title'], t.get('model'), t.get('effort')) for t in created])
+
+
+def prepare_web_model_lookup(run):
+    # The dispatcher loads project settings. Keep this rule in the throwaway
+    # coordinator's project, separate from the harness's CLI tool grants.
+    settings = run.folder / '.claude/settings.json'
+    settings.parent.mkdir(exist_ok=True)
+    settings.write_text(json.dumps({'permissions': {'allow': ['WebSearch']}}))
+
+
+web_model_lookup.prepare = prepare_web_model_lookup
 
 
 def first_run_request(run):
@@ -3141,6 +3168,7 @@ def merge_error_new_commit(run):
 SCENARIOS = {
     'first-run': first_run,
     'first-run-instructions': first_run_instructions,
+    'web-model-lookup': web_model_lookup,
     'first-run-request': first_run_request,
     'first-run-one-project': first_run_one_project,
     'first-run-upgrade': first_run_upgrade,
