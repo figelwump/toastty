@@ -29,7 +29,12 @@ key in its own instance, which needs an unlocked screen.
   something.
 
 A scenario sets up tasks, opens the coordinator, and then changes a task or
-sends a message as the user. It reads what the coordinator did from Claude's
+sends a message as the user. The user's message is typed into the
+coordinator's terminal. When the coordinator asks with Claude Code's question
+tool, Toastty's chat shows a card: the check then answers it through
+`coordinator.answer-question`, the card's own path, with a choice or with the
+user's words. `first-run-request` runs Claude without the question tool, as
+Codex and pi run, so the plain-text questions stay covered. It reads what the coordinator did from Claude's
 transcript, from the messages the tasks' agents received, from the `gh` log
 and from `policy.md`, `ledger.md` and the folder's git history. Each
 scenario lists its checks; a check on what the coordinator must do or must
@@ -52,12 +57,14 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import traceback
+import uuid
 
 HERE = Path(__file__).parent
 
@@ -76,6 +83,11 @@ require, wait_for, Instance = base.require, base.wait_for, base.Instance
 
 SLUG = 'toastty-check/app'
 WAKE = '[Toastty] Wake'
+# Claude Code's question tool. The coordinator asks the first-run parts with it, and Toastty's chat shows each
+# question as a card that the user answers with a click or in their own words.
+QUESTION_TOOL = 'AskUserQuestion'
+# Scenarios whose coordinator runs without the question tool, as Codex and pi do: it asks in plain text.
+WITHOUT_QUESTION_TOOL = ('first-run-request',)
 # Toastty counts a stage that an agent's status decides after 3 seconds.
 SETTLE = 4
 TURN_TIMEOUT = 480
@@ -135,7 +147,7 @@ case "$1" in
 esac
 if [ "$(pwd -P)" = "__COORDINATOR__" ]; then
   export PATH="__BIN__:$PATH"
-  exec "__CLAUDE__" --setting-sources=project --strict-mcp-config __PERMISSION_MODE__ \
+  exec "__CLAUDE__" --setting-sources=project --strict-mcp-config __PERMISSION_MODE__ __QUESTION_TOOL__ \
     --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Skill,TodoWrite" "$@"
 fi
 exec "__PYTHON__" "__BIN__/fake-agent.py" "$@"
@@ -442,6 +454,16 @@ def asks_merge(command):
     to ask for a merge itself, is not a command."""
     return re.search(REQUEST_MERGE, HEREDOC.sub('', command))
 
+def card_text(card):
+    """A question card as the chat shows it: each question, then each choice with its description and preview."""
+    lines = []
+    for question in card.get('questions') or []:
+        lines += [question.get('header', ''), question.get('question', '')]
+        for choice in question.get('options') or []:
+            lines += [f"- {choice.get('label', '')}: {choice.get('description', '')}", choice.get('preview') or '']
+    return '\n'.join(line for line in lines if line).strip()
+
+
 def typed_text(text):
     """What the coordinator typed: a message to a task without Toastty's sender line."""
     return SENDER_LINE.sub('', text.lstrip(), count=1)
@@ -495,6 +517,7 @@ class Run:
         # The IDs of the messages that `coordinator send` gave this run's
         # outside sender. Every `coordinator reply` must name one of them.
         self.message_ids = []
+        self.cards_answered = 0
         self.write_tools()
 
     # MARK: Setup
@@ -507,7 +530,9 @@ class Run:
         mode = getattr(self.options, 'permission_mode', None)
         dispatcher.write_text(DISPATCHER.replace('__CLAUDE__', self.claude).replace('__PYTHON__', python)
                               .replace('__COORDINATOR__', str(self.folder)).replace('__BIN__', str(self.bin))
-                              .replace('__PERMISSION_MODE__', f'--permission-mode {mode}' if mode else ''))
+                              .replace('__PERMISSION_MODE__', f'--permission-mode {mode}' if mode else '')
+                              .replace('__QUESTION_TOOL__', f'--disallowedTools {QUESTION_TOOL}'
+                                       if self.name in WITHOUT_QUESTION_TOOL else ''))
         gh = self.bin / 'gh'
         gh.write_text(FAKE_GH.replace('__PYTHON__', python))
         for tool in (dispatcher, gh):
@@ -766,18 +791,44 @@ class Run:
             return False
         return any(change.get('wakes') or change.get('newAlerts') for change in saved.get('changes') or [])
 
+    def open_card(self):
+        """The question card that the coordinator shows now: the input of its last question tool call, which
+        has no result yet. A card holds the turn open until the user answers it."""
+        asked, answered = {}, set()
+        for record in self.records():
+            content = (record.get('message') or {}).get('content')
+            for part in content if isinstance(content, list) else []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get('type') == 'tool_use' and part.get('name') == QUESTION_TOOL:
+                    asked[part.get('id')] = part.get('input') or {}
+                elif part.get('type') == 'tool_result':
+                    answered.add(part.get('tool_use_id'))
+        waiting = [card for call, card in asked.items() if call not in answered]
+        return waiting[-1] if waiting else None
+
     def at_rest(self):
+        """Whether the coordinator waits for the user, at its prompt or at a question card. `None` while it
+        waits at another prompt, such as a permission prompt."""
         current = self.coordinator()
-        require(current.get('status') != 'needs_approval',
-                f'The coordinator stopped at a permission prompt:\n{self.screen()[-1500:]}')
-        return (current.get('agentState') == 'running' and current.get('status') in ('idle', 'ready')
+        card = self.open_card() if current.get('agentState') == 'running' else None
+        if current.get('status') == 'needs_approval' and card is None:
+            return None
+        return (current.get('agentState') == 'running' and (card is not None or current.get('status') in ('idle', 'ready'))
                 and current.get('queuedCount') == 0 and not self.waiting_wake())
 
     def wait_idle(self, timeout=TURN_TIMEOUT, quiet=6):
-        """Waits until the coordinator rests, with nothing waiting to be typed, for `quiet` seconds."""
-        deadline, since = time.time() + timeout, None
+        """Waits until the coordinator rests, with nothing waiting to be typed, for `quiet` seconds. A
+        question card counts as rest: the coordinator waits for the user's answer."""
+        deadline, since, prompt_since = time.time() + timeout, None, None
         while time.time() < deadline:
-            if self.at_rest():
+            rest = self.at_rest()
+            # Toastty reports an open card as a wait for approval. Right after an answer, the status can still
+            # say so for a moment while the transcript already has the answer.
+            prompt_since = (prompt_since or time.time()) if rest is None else None
+            require(prompt_since is None or time.time() - prompt_since < 20,
+                    f'The coordinator stopped at a permission prompt:\n{self.screen()[-1500:]}')
+            if rest:
                 since = since or time.time()
                 if time.time() - since >= quiet:
                     return
@@ -798,8 +849,10 @@ class Run:
         return records
 
     def turns(self):
-        """Each prompt the coordinator got, with the commands it ran and what it wrote."""
-        turns, seen = [], set()
+        """Each prompt the coordinator got, with the commands it ran and what it wrote. The answer to a question
+        card starts a turn too (`answer` is set), though Claude goes on in the same turn: for the user, the card
+        is the coordinator's answer, and their answer to it is their next message."""
+        turns, seen, cards = [], set(), set()
         for record in self.records():
             if record.get('uuid') in seen or record.get('isMeta') or record.get('isSidechain'):
                 continue
@@ -807,13 +860,21 @@ class Run:
             content = (record.get('message') or {}).get('content')
             parts = [dict(type='text', text=content)] if isinstance(content, str) else [p for p in content or [] if isinstance(p, dict)]
             if record.get('type') == 'user':
+                answers = [p for p in parts if p.get('type') == 'tool_result' and p.get('tool_use_id') in cards]
+                if answers:
+                    result = answers[0].get('content')
+                    text = result if isinstance(result, str) else '\n'.join(
+                        p.get('text', '') for p in result or [] if isinstance(p, dict))
+                    turns.append(dict(prompt=text.strip(), wake=False, answer=True, commands=[], edits=[], tools=[],
+                                      texts=[], messages=[], steps=[], cards=[], at=record.get('timestamp')))
+                    continue
                 text = '\n'.join(p.get('text', '') for p in parts if p.get('type') == 'text').strip()
                 # Claude Code records a long message, such as a digest of four lines, inside one wrapper.
                 pasted = PASTED.match(text)
                 text = pasted.group(2).strip() if pasted else text
                 if text and not any(p.get('type') == 'tool_result' for p in parts) and not text.startswith('<'):
-                    turns.append(dict(prompt=text, wake=text.startswith(WAKE), commands=[], edits=[], tools=[], texts=[],
-                                      messages=[], steps=[], at=record.get('timestamp')))
+                    turns.append(dict(prompt=text, wake=text.startswith(WAKE), answer=False, commands=[], edits=[], tools=[],
+                                      texts=[], messages=[], steps=[], cards=[], at=record.get('timestamp')))
             elif record.get('type') == 'assistant' and turns:
                 turn = turns[-1]
                 # Seconds after the prompt, in the order the transcript wrote them.
@@ -830,7 +891,14 @@ class Run:
                         tool, tool_input = part.get('name'), part.get('input') or {}
                         turn['tools'].append(tool)
                         turn['steps'].append(dict(kind='tool', at=at, tool=tool))
-                        if tool == 'Bash':
+                        if tool == QUESTION_TOOL:
+                            # The card is what the chat shows the user, with the question as plain text.
+                            cards.add(part.get('id'))
+                            card = card_text(tool_input)
+                            turn['cards'].append(tool_input)
+                            turn['texts'].append(card)
+                            turn['steps'][-1] = dict(kind='card', at=at, text=card[:200], stop='card')
+                        elif tool == 'Bash':
                             turn['commands'].append(tool_input.get('command', ''))
                         elif tool in ('Edit', 'Write', 'NotebookEdit', 'MultiEdit'):
                             turn['edits'].append(tool_input.get('file_path', ''))
@@ -857,13 +925,44 @@ class Run:
         Typed into the coordinator's terminal, as a person types there.
         `coordinator send` is not the user's voice: Toastty puts a first
         line before its text that names the sender, and the coordinator
-        reads such a message as data.
+        reads such a message as data. While a question card is open, the
+        user's words go into the card, as its typed answer.
         """
         self.wait_idle()
+        if self.open_card() is not None:
+            return self.answer_card(text=text)
         time.sleep(1.5)
         answer = self.instance.request('app_control.run_action', dict(id='terminal.send-text', args=dict(
             panelID=self.coordinator()['panelID'], text=text, submit=True)))
         require(answer.get('ok'), f'The message was not typed: {answer}')
+        return self.new_turns(wake=False)
+
+    def choose(self, pattern=None):
+        """The user picks a choice on the open question card: the first whose label matches `pattern` (ignoring
+        case), or the first, which the coordinator suggests. Without a card, or with no such choice, the check
+        fails."""
+        self.wait_idle()
+        card = self.open_card()
+        require(card is not None, 'The coordinator shows no question card to choose on.')
+        labels = [o.get('label', '') for q in card.get('questions') or [] for o in q.get('options') or []]
+        chosen = next((label for label in labels if pattern is None or re.search(pattern, label, re.I)), None)
+        require(chosen, f'The card has no choice that matches {pattern!r}: {labels}')
+        return self.answer_card(option=chosen)
+
+    def answer_card(self, option=None, text=None):
+        """Answers the open card through `coordinator.answer-question`, the path of the chat's card, and waits
+        for what the coordinator does next. The app can present the card a moment after the transcript has it."""
+        self.cards_answered += 1
+        say(self.label, 'card', f'option {option!r}' if option else f'text {text[:80]!r}')
+
+        def answered():
+            response = self.instance.request('app_control.run_action', dict(
+                id='coordinator.answer-question', args=dict(option=option) if option else dict(text=text)))
+            if response.get('ok'):
+                return response
+            require('no question card' in json.dumps(response), f'The card was not answered: {response}')
+            return None
+        wait_for('the card to be answered', answered, timeout=30, interval=1)
         return self.new_turns(wake=False)
 
     def timer_wake(self):
@@ -975,7 +1074,7 @@ class Run:
         return calls
 
     def finish(self, failure=None):
-        evidence = dict(scenario=self.name, run=self.index, notes=self.notes, failure=failure)
+        evidence = dict(scenario=self.name, run=self.index, notes=self.notes, failure=failure, cardsAnswered=self.cards_answered)
         try:
             if self.instance and self.coordinator().get('exists'):
                 # Also after a scenario that stopped: what it did still counts.
@@ -1073,15 +1172,16 @@ def first_answer(run, turns):
     lower = said.lower()
     steps = [step for turn in turns for step in turn['steps']]
     folded = [step for step in steps if step['kind'] == 'text' and step['stop'] != 'end_turn']
-    shown = [step for step in steps if step['kind'] == 'text' and step['stop'] == 'end_turn']
+    # A question card is shown too: the chat draws it with its question.
+    shown = [step for step in steps if step['kind'] == 'card' or (step['kind'] == 'text' and step['stop'] == 'end_turn')]
     # A short note before a command, such as "Fixing the ledger line.", folds away harmlessly; the preamble and
     # the question must be in the final message, which is the only text the chat shows.
-    run.check('the chat shows the answer: it is the final message, and folded text is at most a short note',
+    run.check('the chat shows the answer: it is the final message or a question card, and folded text is at most a short note',
               shown and sum(len(step['text']) for step in folded) < 200,
               [f'{step["stop"]}: {step["text"]}' for step in folded] or said)
     run.check('it writes nothing to the policy before an answer', not holding(run) and policy_commits(run) == 1,
               [run.policy(), run.git('log', '--oneline')])
-    shown = [step for step in steps if step['kind'] == 'text' and step['stop'] == 'end_turn' and step['at'] is not None]
+    shown = [step for step in shown if step['at'] is not None]
     if shown:
         timing = (f'first answer: first text shown after {shown[0]["at"]:.1f} s, end after {steps[-1]["at"]:.1f} s, '
                   f'{len(said)} characters, {sum(step["kind"] == "tool" for step in steps)} tool calls')
@@ -1120,6 +1220,31 @@ def offers_project_routes(run, said):
               said, required=False)
 
 
+def card_refusals(run):
+    """Two answers that coordinator.answer-question must refuse, leaving the card open: a choice the card does
+    not have, and a caller that is an agent session, which must use coordinator.send."""
+    def request(args, caller=None):
+        envelope = dict(protocolVersion='1.0', kind='request', requestID=str(uuid.uuid4()), command='app_control.run_action',
+                        payload=dict(id='coordinator.answer-question', args=args))
+        if caller:
+            envelope['callerSessionID'] = caller
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(15)
+            connection.connect(run.instance.socket_path)
+            connection.sendall(json.dumps(envelope).encode() + b'\n')
+            data = b''
+            while b'\n' not in data:
+                chunk = connection.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+        return json.loads(data)
+    wait_for('the app to present the card', lambda: 'no choice' in json.dumps(request(dict(option='No such choice'))),
+             timeout=30, interval=1)
+    return dict(unknown_choice=request(dict(option='No such choice')),
+                agent_session=request(dict(text='Yes.'), caller=run.coordinator()['sessionID']))
+
+
 def first_run(run):
     """The first run asks one part at a time: Agents and then Projects drafted from the task history, each saved
     at its answer, and "defaults" takes the rest."""
@@ -1129,21 +1254,29 @@ def first_run(run):
     run.check('Toastty made the policy with headings only, Talking among them',
               all(run.section(name) == [] for name in FIRST_RUN_SECTIONS) and '## Talking' in template, template)
     said = first_answer(run, run.tell('Hi. I just turned you on.'))
+    run.check('it asks the first part with a question card', run.open_card() is not None, said)
+    refusals = card_refusals(run)
+    run.check('coordinator.answer-question refuses a choice the card does not have, and an agent session',
+              all(not r.get('ok') for r in refusals.values()) and run.open_card() is not None, refusals)
     run.check('the Agents draft names the models the user chose', 'sonnet' in said.lower() and 'opus' in said.lower(), said)
-    said = run.said(run.tell('Yes.'))
+    # The user clicks the choices: the suggestion, the rules that build up, and the defaults for the rest.
+    said = run.said(run.choose())
     check_saved_so_far(run, ['Agents'], 2, 'the first yes saves its part at once')
     run.check('Agents holds the drafted models', any('sonnet' in line.lower() for line in run.section('Agents')),
               run.section('Agents'))
     run.check('it asks about Projects next, with a draft that names both projects',
               'marketing' in said.lower() and re.search(r'\bapp\b', said.lower()), said)
     offers_project_routes(run, said)
-    said = run.said(run.tell('Yes, that is right. Let the rules build up.'))
+    # The rules that build up are the suggestion; the card can name them, or offer them as "Yes (suggested)".
+    said = run.said(run.choose(r'build|suggest'))
     check_saved_so_far(run, ['Agents', 'Projects'], 3, 'the second yes saves its part at once')
     run.check('Projects holds the drafted rules', any('marketing' in line.lower() for line in run.section('Projects')),
               run.section('Projects'))
     run.check('it asks about Talking next', re.search(r'talking|how i answer', said.lower()), said, required=False)
-    shows_saved(run, run.said(run.tell('Defaults for the rest.')))
+    # "Defaults for the rest", not a part's own defaults, such as "Defaults (suggested)" for Talking.
+    shows_saved(run, run.said(run.choose(r'default.*\b(rest|all)\b')))
     check_first_run_saved(run, 1, answers=3)
+    run.check('the setup ends with no card open', run.open_card() is None, run.open_card())
 
 
 # A rule for choosing models, as a user keeps it in a global AGENTS.md. Claude
@@ -1200,6 +1333,8 @@ def first_run_request(run):
     run.open_coordinator()
     before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
     said = first_answer(run, run.tell('Add a --verbose flag to the import command. It should print each file it reads.'))
+    run.check('without a question tool, it asks in plain text: no card', run.open_card() is None
+              and not any(turn['cards'] for turn in run.turns()), said)
     run.check('it makes the task at once', len(created_since(run, before)) == 1,
               [t['title'] for t in created_since(run, before)])
     run.check('it suggests a starter table with rising effort', re.search(r'medium|low', said.lower())

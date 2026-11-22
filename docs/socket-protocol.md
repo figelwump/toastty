@@ -268,6 +268,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `coordinator.restart`
 - `coordinator.send`
 - `coordinator.reply`
+- `coordinator.answer-question`
 - `coordinator.wake`
 - `coordinator.watch`
 - `webhook.add`
@@ -837,7 +838,15 @@ number of `coordinator.reply` events queued. `coordinator.replies` takes
 optional `args.messageID` and `args.since` (a cursor from an earlier answer)
 and returns `replies`, oldest first, each with `id`, `messageID`, `from`,
 `text` and `repliedAt`, then `cursor` and `truncated`; see
-[Coordinator replies](tasks.md#coordinator-replies). `coordinator.wake` takes exactly one of
+[Coordinator replies](tasks.md#coordinator-replies). `coordinator.answer-question`
+answers the question card that the coordinator's agent shows now, as the user
+does in the chat. It takes exactly one of `args.option` (a choice's label,
+ignoring case) and `args.text` (an answer in the user's own words), and
+returns the card's `header`, `question`, `options` (the choice labels) and
+`chosenOption`. The card must ask one question. The answer counts as the
+user's, so it fails for a request that has a `callerSessionID`; an agent
+uses `coordinator.send`. It also fails with no open card or no choice with
+that label. `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
 fields. With `args.quiet` it also marks the wake turn that runs now as one

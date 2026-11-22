@@ -98,6 +98,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorRestart = "coordinator.restart"
     case coordinatorSend = "coordinator.send"
     case coordinatorReply = "coordinator.reply"
+    case coordinatorAnswerQuestion = "coordinator.answer-question"
     case coordinatorWake = "coordinator.wake"
     case coordinatorWatch = "coordinator.watch"
     case webhookAdd = "webhook.add"
@@ -637,6 +638,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 parameters: [
                     .init(name: "messageID", summary: "The ID at the end of the message's first line.", valueType: .string, required: true),
                     .init(name: "text", summary: "The reply, for the sender. It leaves Toastty: the sender and any program on this Mac that runs toastty can read it.", valueType: .string, required: true),
+                ]
+            )
+        case .coordinatorAnswerQuestion:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Answer the question card that the coordinator's agent shows now, as the user does in the coordinator's chat: pick a choice by its label, or answer in your own words. The answer goes to the agent through the same path as the chat's card, and its turn goes on. Pass exactly one of option and text. The card must ask one question; a permission prompt is not answered here. The answer counts as the user's, so a caller that is an agent session is refused: an agent gives the coordinator a message with coordinator.send, which names the sender. Returns the card's header, question and choices, and chosenOption. Fails when there is no coordinator, no open card, or no choice with that label.",
+                selectors: [],
+                parameters: [
+                    .init(name: "option", summary: "The label of the choice to pick, ignoring case.", valueType: .string, required: false),
+                    .init(name: "text", summary: "An answer in your own words, in place of a choice.", valueType: .string, required: false),
                 ]
             )
         case .coordinatorWake:

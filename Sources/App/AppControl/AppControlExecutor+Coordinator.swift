@@ -5,7 +5,8 @@ import RemoteProtocol
 extension AppControlActionID {
     var isCoordinatorAction: Bool {
         switch self {
-        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorReply, .coordinatorWake, .coordinatorWatch: true
+        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorReply, .coordinatorAnswerQuestion,
+             .coordinatorWake, .coordinatorWatch: true
         default: false
         }
     }
@@ -177,6 +178,31 @@ extension AppControlExecutor {
             )
         }
         return name
+    }
+
+    /// Answers the coordinator's open question card as the user. An agent
+    /// session cannot: its words reach the coordinator through
+    /// `coordinator.send`, which names the sender.
+    func runCoordinatorAnswerQuestion(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        guard requestContext().callerSessionID == nil else {
+            throw AutomationSocketError.invalidPayload(
+                "An agent session cannot answer the user's question. Send the coordinator a message with coordinator send."
+            )
+        }
+        let answer: CoordinatorController.QuestionAnswer
+        do {
+            answer = try controller.answerOpenQuestion(option: args.coordinatorString("option"), text: args.coordinatorString("text"))
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        return .init(didMutateState: false, result: [
+            "header": .string(answer.header),
+            "question": .string(answer.question),
+            "options": .array(answer.options.map { .string($0) }),
+            "chosenOption": answer.chosenOption.map { .string($0) } ?? .null,
+        ])
     }
 
     /// Keeps the coordinator's reply to a message from outside a task. Only

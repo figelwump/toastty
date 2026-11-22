@@ -857,6 +857,9 @@ final class AppControlExecutor {
         case .coordinatorReply:
             return try runCoordinatorReply(args: args)
 
+        case .coordinatorAnswerQuestion:
+            return try runCoordinatorAnswerQuestion(args: args)
+
         case .coordinatorWake:
             return try runCoordinatorWake(args: args)
 

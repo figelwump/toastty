@@ -687,6 +687,14 @@ session, where the Claude login is readable.
 - The user's messages are typed into the coordinator's terminal
   (`terminal.send-text`). `coordinator send` would not do: Toastty marks its
   text with the sender, and the coordinator reads such a message as data.
+- When the coordinator asks with Claude Code's question tool, as the first-run
+  setup does, Toastty's chat shows a card, and the coordinator's status is
+  `needs_approval` until it is answered. The check answers the card through
+  `coordinator.answer-question`, as the chat does: `first-run` picks choices,
+  and the other first-run scenarios give the user's words. `first-run-request`
+  runs Claude with `--disallowedTools AskUserQuestion`, so the coordinator asks
+  in plain text, as it does with Codex or pi. The result counts the cards that
+  each run answered (`cardsAnswered`).
 - GitHub is a fake `gh`, first on the PATH of the app and of the
   coordinator. It serves pull requests from a state file, records each call
   with the calling session, and refuses every call that changes something.

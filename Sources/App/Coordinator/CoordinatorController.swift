@@ -2182,6 +2182,71 @@ final class CoordinatorController: ObservableObject {
         pausedEntries.contains(where: \.typingWasInterrupted)
     }
 
+    // MARK: - Answering the agent's question
+
+    /// The answer that `answerOpenQuestion` gave, with the card it answered.
+    struct QuestionAnswer: Equatable {
+        var header: String
+        var question: String
+        var options: [String]
+        var chosenOption: String?
+    }
+
+    /// Answers the question card that the coordinator's agent shows now, as
+    /// the user does with a click or in their own words in the chat. Pass
+    /// exactly one of `option`, a choice's label, and `text`. The card must
+    /// ask one question; permission prompts are not answered here.
+    func answerOpenQuestion(option: String?, text: String?) throws -> QuestionAnswer {
+        let trimmed = { (value: String?) -> String? in
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? value : nil
+        }
+        let option = trimmed(option), text = trimmed(text)
+        guard (option == nil) != (text == nil) else {
+            throw CoordinatorError("Pass exactly one of option and text.")
+        }
+        guard let subscription = syncConversationSubscription(), let conversationID = subscription.conversationID else {
+            throw CoordinatorError("The coordinator has no agent conversation.")
+        }
+        let cards = (subscription.snapshot(at: Date())?.pendingInteractions ?? []).filter {
+            $0.kind == .question && $0.state == .pending && $0.responseID?.isEmpty == false
+        }
+        guard let card = cards.first, let responseID = card.responseID, let questions = card.questions else {
+            throw CoordinatorError("The coordinator shows no question card.")
+        }
+        guard cards.count == 1, questions.count == 1, let question = questions.first else {
+            throw CoordinatorError("The card asks more than one question; answer it in the coordinator's chat.")
+        }
+        var selected: [String] = []
+        if let option {
+            guard let match = question.options.first(where: {
+                $0.label.compare(option, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }) else {
+                let labels = question.options.map { "\"\($0.label)\"" }.joined(separator: ", ")
+                throw CoordinatorError("The card has no choice \"\(option)\". Its choices: \(labels).")
+            }
+            selected = [match.id]
+        }
+        let request = RemoteQuestionAnswerRequest(
+            conversationID: conversationID,
+            interactionID: card.id,
+            responseID: responseID,
+            expectedInputEpoch: card.inputEpoch,
+            clientRequestID: UUID().uuidString.lowercased(),
+            answers: [RemoteInteractionAnswer(questionID: question.id, selectedOptionIDs: selected, text: text)]
+        )
+        switch subscription.answerQuestion(request) {
+        case .submitted, .duplicate:
+            return QuestionAnswer(
+                header: question.header,
+                question: question.question,
+                options: question.options.map(\.label),
+                chosenOption: question.options.first { selected.contains($0.id) }?.label
+            )
+        case .rejected(let reason):
+            throw CoordinatorError("The answer was refused: \(reason.rawValue).")
+        }
+    }
+
     // MARK: - The conversation the controller sends through
 
     /// Holds one subscription to the conversation in the coordinator's
