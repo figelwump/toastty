@@ -43,12 +43,35 @@ function requireSuccess(result) {
     'The latest full CI run and its required jobs must be completed/success.');
 }
 
-try {
-  const { values } = parseArgs({ options: { sha: { type: 'string' }, output: { type: 'string' } } });
-  requireEvidence(/^[a-f0-9]{40}$/.test(values.sha ?? '') && values.output, 'Provide --sha COMMIT and --output PATH.');
-  requireEvidence(process.env.GITHUB_REPOSITORY === repository, 'Unexpected release repository.');
-  const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  requireEvidence(head === values.sha, 'Checked-out source differs from the release SHA.');
+function overrideReason(value) {
+  if (value === undefined || value === '') return null;
+  const reason = value.trim();
+  requireEvidence(reason.length > 0 && reason.length <= 300 && !/[\u0000-\u001f\u007f]/.test(value),
+    'An override reason must be one line of 1 to 300 characters.');
+  return reason;
+}
+function writeResult(output, evidence, summary) {
+  mkdirSync(path.dirname(output), { recursive: true });
+  writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`);
+  if (process.env.GITHUB_OUTPUT) {
+    appendFileSync(process.env.GITHUB_OUTPUT, `verified_sha=${evidence.head_sha}\ngate=${evidence.gate}\n`);
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+}
+// Emergency path: no CI evidence is read, so the record names who skipped the check and why.
+function recordOverride(head, reason, output) {
+  const runID = process.env.GITHUB_RUN_ID;
+  const evidence = {
+    repository, gate: 'override', head_sha: head, override_reason: reason,
+    actor: process.env.GITHUB_ACTOR || 'unknown',
+    workflow_run_url: runID ? `https://github.com/${repository}/actions/runs/${runID}` : null,
+  };
+  writeResult(output, evidence,
+    `### Full CI check skipped\n\nSource \`${head}\`. Reason, from ${evidence.actor}: ${reason}`);
+  console.log(`::warning title=Full CI check skipped::${reason.replaceAll('%', '%25')}`);
+  console.log(`CI evidence overridden for ${head}: ${reason}`);
+}
+function verifyFullCI(head, output) {
   const prefix = `repos/${repository}/actions`;
   // Never filter by success: a newer failed/pending run must block older green evidence.
   const runs = completeList(api(`${prefix}/workflows/${workflowID}/runs?branch=main&head_sha=${head}&event=workflow_dispatch&per_page=100`), 'workflow_runs')
@@ -78,17 +101,28 @@ try {
     'CI was rerun while checking evidence; retry after it finishes.');
   requireSuccess(latest);
   const evidence = {
-    repository, workflow_id: workflowID, workflow_path: workflowPath,
+    repository, gate: 'full-ci', workflow_id: workflowID, workflow_path: workflowPath,
     run_id: current.id,
     run_url: `https://github.com/${repository}/actions/runs/${current.id}/attempts/${current.run_attempt}`,
     run_attempt: current.run_attempt, head_sha: head, head_branch: current.head_branch,
     event: current.event, status: current.status, conclusion: current.conclusion,
     required_jobs: requiredJobs,
   };
-  mkdirSync(path.dirname(values.output), { recursive: true });
-  writeFileSync(values.output, `${JSON.stringify(evidence, null, 2)}\n`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `verified_sha=${head}\n`);
+  writeResult(output, evidence, `### Full CI verified\n\nSource \`${head}\`, run ${evidence.run_url}`);
   console.log(`Trusted CI verified: ${evidence.run_url} at ${head}`);
+}
+
+try {
+  const { values } = parseArgs({ options: {
+    sha: { type: 'string' }, output: { type: 'string' }, 'override-reason': { type: 'string' },
+  } });
+  requireEvidence(/^[a-f0-9]{40}$/.test(values.sha ?? '') && values.output, 'Provide --sha COMMIT and --output PATH.');
+  requireEvidence(process.env.GITHUB_REPOSITORY === repository, 'Unexpected release repository.');
+  const reason = overrideReason(values['override-reason']);
+  const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  requireEvidence(head === values.sha, 'Checked-out source differs from the release SHA.');
+  if (reason) recordOverride(head, reason, values.output);
+  else verifyFullCI(head, values.output);
 } catch (error) {
   console.error(`CI evidence rejected: ${error.message}\nRun full Toastty CI manually on this exact main commit, wait for success, then retry TestFlight. No tests were dispatched.`);
   process.exitCode = 1;

@@ -134,12 +134,14 @@ push. The former `TOASTTY_IOS_TESTFLIGHT_ON_PUSH` variable has no effect.
    for every job to pass, and confirm its source SHA matches the release commit.
    Complete the disposable-host validation below.
 2. In GitHub Actions, open `iOS TestFlight` and run it from `main` with
-   `upload=false`.
+   `upload=false`. Set `source_sha` to the full release commit SHA when `main`
+   has moved past it (see [Choose the source commit](#choose-the-source-commit)).
 3. Inspect the retained release metadata and validation log. Confirm the bundle
    ID, version, build number, signing team, production relay URL and ID,
    production push environment, IPA SHA-256, privacy manifest, and encryption
    declaration.
-4. Run the workflow again from `main` with `upload=true`.
+4. Run the workflow again from `main` with `upload=true` and the same
+   `source_sha`.
 5. After App Store Connect finishes processing, limit initial distribution to
    the release test device. Check production notification delivery on that real
    device with the compatible Mac configuration. Then assign the build to the
@@ -202,7 +204,8 @@ The release script fails before upload unless it can prove:
 - App Store Connect accepts the exported IPA during validation.
 
 Before archiving, the workflow checks GitHub Actions for a successful full manual
-`Toastty CI` run on the exact checked-out release SHA. It accepts only
+`Toastty CI` run on the exact checked-out release SHA, unless the run uses the
+[emergency override](#emergency-override). It accepts only
 `workflow_dispatch` runs from `main` in `figelwump/toastty`, with workflow ID
 `340799440` and path `.github/workflows/mobile-ios.yml`. PR gates and legacy
 push runs do not qualify.
@@ -223,6 +226,38 @@ and four Debug smoke UI tests. The release task checks for existing green full
 evidence on the exact main SHA before dispatching another run. TestFlight
 does not repeat simulator tests or download CI build artifacts.
 
+## Choose the source commit
+
+The workflow file always comes from the ref you run it from, and uploads run
+only from `main`. The `source_sha` input selects the commit to build. Leave it
+empty to build the commit at the tip of that ref. Set it to a full 40-character
+SHA to build an earlier commit, such as a release commit that `main` moved past
+after a later merge. The workflow stops unless that commit is on `main`'s
+history. The CI evidence check then applies to that commit, so the full CI run
+on the release commit stays valid after `main` moves.
+
+The commit must contain this input. A commit from before it fails closed: its
+gate and archive scripts do not accept a source other than the event SHA. The
+build number comes from the TestFlight run number, so a build of an earlier
+commit still gets a higher build number than the last upload.
+
+## Emergency override
+
+The `ci_override_reason` input skips the full CI evidence check for one run.
+Use it only when full CI cannot give evidence for a commit that you have other
+reasons to trust, for example a CI outage. Leave it empty for normal releases.
+The reason must be one line of 1 to 300 characters.
+
+The override does not skip anything else. Uploads still run only from `main`,
+the source must still be on `main`, and every signing, profile, push and App
+Store Connect check still runs. The run shows a warning and a job summary with
+the reason and the GitHub user who started it. `ci-evidence.json` records
+`gate: "override"`, the reason, that user and the run URL, and
+`release-metadata.txt` records `CI_GATE=override`. Record the reason in the
+release record too.
+
+## Full CI evidence
+
 Run full validation explicitly before signed validation or upload:
 
 ```bash
@@ -233,17 +268,17 @@ gh run watch <run-id> --repo figelwump/toastty --exit-status
 
 These commands dispatch tests on disposable GitHub runners and read their status;
 they do not publish an app. Confirm the selected run's SHA is the intended release
-commit. Keep `main` unchanged from full CI dispatch through TestFlight dispatch.
-If `main` advances, validate the new release source before TestFlight. After a
+commit. If `main` advances after that run, set `source_sha` to the release
+commit; you do not need a new full run. After a
 failed run, dispatch a fresh full run or use **Re-run all jobs**; a partial rerun
 is not sufficient when required jobs belong to an older attempt.
 Then dispatch `iOS TestFlight` from `main` with the desired `upload` value.
 
-The archive checkout uses the workflow event SHA. The release script verifies
-that source still matches the evidence SHA and has no tracked changes, including
-after generation. Neither validation-only runs nor uploads can bypass the full
-CI evidence. A branch-only commit without trusted main evidence cannot run signed
-workflow validation. Environment approval, when configured, still applies to the
+The archive checkout uses `source_sha`, or the workflow event SHA when it is
+empty. The release script verifies that the source matches the evidence SHA and
+the requested source, and has no tracked changes, including after generation.
+Only `ci_override_reason` skips the full CI evidence, and the override is
+recorded. A commit that is not on `main` cannot run signed workflow validation. Environment approval, when configured, still applies to the
 archive job.
 
 `ci-evidence.json` records the trusted CI run URL, ID, attempt, source SHA,

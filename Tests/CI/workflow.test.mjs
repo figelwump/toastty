@@ -301,26 +301,49 @@ test('Mac artifacts include result bundles without uploading DerivedData', () =>
 });
 
 const releaseWorkflow = parse(read('.github/workflows/ios-testflight.yml'));
-test('TestFlight requires exact-source CI before signed archive and has no test bypass', () => {
+test('TestFlight builds a main commit with exact-source CI or a recorded override', () => {
   const job = releaseWorkflow.jobs.testflight;
   assert.deepEqual(Object.keys(releaseWorkflow.jobs), ['testflight']);
-  assert.deepEqual(Object.keys(releaseWorkflow.on.workflow_dispatch.inputs), ['upload']);
+  const inputs = releaseWorkflow.on.workflow_dispatch.inputs;
+  assert.deepEqual(Object.keys(inputs), ['upload', 'source_sha', 'ci_override_reason']);
+  for (const name of ['source_sha', 'ci_override_reason']) {
+    assert.equal(inputs[name].required, false);
+    assert.equal(inputs[name].default, '');
+  }
   assert.deepEqual(job.permissions, { contents: 'read', actions: 'read' });
   assert.deepEqual(Object.keys(releaseWorkflow.on), ['workflow_dispatch']);
   assert.equal(job.if, undefined);
-  const checkout = job.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
-  assert.equal(checkout.with.ref, '${{ github.sha }}');
-  const gateIndex = job.steps.findIndex((step) => step.id === 'ci');
-  const archiveIndex = job.steps.findIndex((step) => step.name === 'Archive and validate TestFlight build');
-  assert.ok(gateIndex > 0 && archiveIndex > gateIndex);
+  const index = (predicate) => job.steps.findIndex(predicate);
+  const sourceIndex = index((step) => step.id === 'source');
+  const checkoutIndex = index((step) => step.uses?.startsWith('actions/checkout@'));
+  const onMainIndex = index((step) => step.name === 'Require release source on main');
+  const gateIndex = index((step) => step.id === 'ci');
+  const archiveIndex = index((step) => step.name === 'Archive and validate TestFlight build');
+  assert.ok(sourceIndex === 0 && checkoutIndex > sourceIndex && onMainIndex > checkoutIndex
+    && gateIndex > onMainIndex && archiveIndex > gateIndex);
+  const source = job.steps[sourceIndex];
+  assert.deepEqual(source.env, { REQUESTED_SHA: '${{ inputs.source_sha }}', EVENT_SHA: '${{ github.sha }}' });
+  const checkout = job.steps[checkoutIndex];
+  assert.equal(checkout.with.ref, '${{ steps.source.outputs.sha }}');
+  assert.equal(checkout.with['fetch-depth'], 0);
+  const onMain = job.steps[onMainIndex];
+  assert.equal(onMain.if, undefined);
+  assert.match(onMain.run, /git merge-base --is-ancestor "\$SOURCE_SHA" refs\/remotes\/origin\/main/);
   const gate = job.steps[gateIndex];
   assert.equal(gate.if, undefined);
   assert.equal(gate['continue-on-error'], undefined);
   assert.equal(gate.env.GH_TOKEN, '${{ github.token }}');
-  assert.equal(gate.env.RELEASE_SHA, '${{ github.sha }}');
-  assert.equal(gate.run, 'node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --output artifacts/ios-release/ci-evidence.json');
+  assert.equal(gate.env.RELEASE_SHA, '${{ steps.source.outputs.sha }}');
+  assert.equal(gate.env.CI_OVERRIDE_REASON, '${{ inputs.ci_override_reason }}');
+  assert.equal(gate.run, 'node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --override-reason "$CI_OVERRIDE_REASON" --output artifacts/ios-release/ci-evidence.json');
+  // Inputs reach shell steps only through env, never through expression text in a script.
+  for (const step of job.steps) assert.ok(!step.run?.includes('${{'), `${step.name} interpolates into its script`);
   const archive = job.steps[archiveIndex];
   assert.equal(archive.env.TOASTTY_IOS_VERIFIED_SHA, '${{ steps.ci.outputs.verified_sha }}');
+  assert.equal(archive.env.TOASTTY_IOS_SOURCE_SHA, '${{ steps.source.outputs.sha }}');
+  assert.equal(archive.env.TOASTTY_IOS_CI_GATE, '${{ steps.ci.outputs.gate }}');
+  assert.equal(archive.env.TOASTTY_IOS_UPLOAD,
+    "${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.upload == true && '1' || '0' }}");
   assert.equal(archive.if, undefined);
   assert.ok(!job.steps.some((step) => step.run?.includes('toastty-ios.mjs test')));
   const upload = job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
