@@ -62,7 +62,7 @@ the rest of this file says. Everything else in this file holds for both ways.
 
 ## The first answer
 
-1. Start with these two steps in one tool call:
+1. Start with these two steps together:
    - add an `asked first-run` line to the ledger, in place of an earlier
      one, with the time that you read with this file. It names the parts
      that you ask about, in order:
@@ -95,10 +95,12 @@ choices in one line.
    is, with an agent, a model and an effort. Take the suggestion from the
    first of these that has one:
    - a rule for choosing the model and effort of handed-off work in the
-     user's instruction files that your agent program loaded. Name the file.
-     Use Model IDs under New tasks to resolve each named model before
-     suggesting the table. If a row is unresolved, ask which ID to use or
-     whether to use the default in the Agents question;
+     user's instruction files that your agent program loaded. Name the file
+     and say that the policy will hold a copy with resolved IDs. Use Model
+     IDs under New tasks to resolve the names. For any unresolved row, say
+     which name you could not resolve, suggest the profile's default for
+     that row, and let the user give an ID. "Yes" and "defaults" accept the
+     defaults you showed for those rows;
    - the task history: which agent, model and effort the user chose for which
      kind of work;
    - a starter table with three rows: a small, clear change; a feature with
@@ -160,10 +162,10 @@ The open part is the first part on the `asked first-run` line. Write to
   suggest", and "defaults" settles every part on the line. A part that the
   user did not change gets your suggestion. Before you write Projects, read
   the projects, as its part says.
-- **For Agents,** resolve any model name the user adds in their answer. If a
-  row still needs a model choice, ask once for that choice. If the user
-  accepts the other rows only, save those and say which row still needs an
-  answer.
+- **For Agents,** resolve any model name the user adds in their answer. If
+  that choice is still unclear, ask once for the ID or permission to use the
+  default. Keep the row and question on the `asked first-run` line until the
+  user settles it.
 - **Write the answer at once.** Write each part that the answer settles in
   its section. Where that is the default of your instructions, write the line
   `- The coordinator's defaults.`, so that you do not ask again. Improving

@@ -1197,6 +1197,17 @@ def first_run_instructions(run):
     run.check('a name in chat overrides the saved rule with a provider ID', len(created) == 1
               and created[0].get('model') == 'claude-opus-5-5' and created[0].get('effort') == 'high',
               [(t['title'], t.get('model'), t.get('effort')) for t in created])
+    before.update(t['taskID'] for t in created)
+    said = run.said(run.tell('New task in app: document the format flag. Use the private Claude model "Fixture Reserved 9.3". '
+                            'This private model has no public listing.'))
+    created = created_since(run, before)
+    run.check('an unresolved model needs a choice before the task is created',
+              created == [] and '?' in said and 'default' in said.lower(), [created, said])
+    run.tell('The exact model ID for that task is claude-opus-5-5[1m].')
+    created = created_since(run, before)
+    run.check('the answer creates one task with the exact ID', len(created) == 1
+              and created[0].get('model') == 'claude-opus-5-5[1m]',
+              [(t['title'], t.get('model'), t.get('effort')) for t in created])
 
 
 def first_run_request(run):
