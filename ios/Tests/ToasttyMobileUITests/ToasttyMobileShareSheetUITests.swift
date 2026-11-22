@@ -1,14 +1,14 @@
 import XCTest
 
 /// Drives the system share sheet: Safari shares a page to the Toastty share
-/// extension, which must open Toastty's new-session sheet with the link.
+/// extension, which must open Toastty's New Task sheet with the link.
 @MainActor
 final class ToasttyMobileShareSheetUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
     }
 
-    func testSharingAPageFromSafariOpensThePrefilledNewSessionSheet() throws {
+    func testSharingAPageFromSafariOpensThePrefilledNewTaskSheet() throws {
         let toastty = XCUIApplication()
         toastty.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         toastty.launch()
@@ -30,41 +30,67 @@ final class ToasttyMobileShareSheetUITests: XCTestCase {
         attachScreenshot(named: "share-sheet", of: safari)
         extensionCell.tap()
 
-        let start = toastty.buttons["toastty-mobile-new-session-start"]
+        let create = toastty.buttons["toastty-mobile-new-task-create"]
         if toastty.wait(for: .runningForeground, timeout: 20) == false {
             attachScreenshot(named: "extension-did-not-open-app", of: safari)
             XCTFail("The extension did not open Toastty. \(dump(safari, "extension"))")
             return
         }
-        XCTAssertTrue(start.waitForExistence(timeout: 15), dump(toastty, "toastty"))
-        let message = toastty.textViews["toastty-mobile-new-session-message"]
-        XCTAssertTrue(message.waitForExistence(timeout: 5))
-        let text = message.value as? String ?? ""
+        XCTAssertTrue(create.waitForExistence(timeout: 15), dump(toastty, "toastty"))
+        let taskText = toastty.textViews["toastty-mobile-new-task-text"]
+        XCTAssertTrue(taskText.waitForExistence(timeout: 5))
+        let text = taskText.value as? String ?? ""
         XCTAssertTrue(text.contains("https://example.com/"), text)
-        attachScreenshot(named: "shared-new-session-sheet", of: toastty)
+        attachScreenshot(named: "shared-new-task-sheet", of: toastty)
     }
 
     /// Safari keeps Share in its toolbar on some layouts and in its More
     /// menu on others.
     private func openShareSheet(in safari: XCUIApplication) throws {
-        for identifier in ["ShareButton", "Share"] {
-            let share = safari.buttons[identifier].firstMatch
-            if share.waitForExistence(timeout: 2), share.isHittable {
-                share.tap()
-                return
-            }
+        let shareButtons = ["ShareButton", "Share"].map { safari.buttons[$0].firstMatch }
+        let moreButtons = ["MoreMenuButton", "MoreButton", "More"].map { safari.buttons[$0].firstMatch }
+        let controls = shareButtons + moreButtons
+        let toolbarTip = safari.otherElements["TipView"].firstMatch
+        let closeTip = toolbarTip.buttons["Close"].firstMatch
+        // A fresh Safari can cover More with its toolbar introduction. That
+        // popover needs dismissal; waiting for the covered button cannot help.
+        let toolbarOrTipReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (closeTip.exists && closeTip.isHittable) || controls.contains { $0.exists && $0.isHittable }
+        }, object: nil)
+        guard XCTWaiter.wait(for: [toolbarOrTipReady], timeout: 10) == .completed else {
+            attachScreenshot(named: "toolbar-not-ready", of: safari)
+            XCTFail("Safari has no hittable Share, More, or toolbar tip Close control. \(dump(safari, "toolbar"))")
+            return
         }
-        for identifier in ["MoreMenuButton", "MoreButton", "More"] {
-            let more = safari.buttons[identifier].firstMatch
-            if more.exists, more.isHittable {
-                more.tap()
-                let share = safari.descendants(matching: .any)
-                    .matching(NSPredicate(format: "label == %@", "Share")).firstMatch
-                if share.waitForExistence(timeout: 5) {
-                    share.tap()
-                    return
-                }
-            }
+        if closeTip.exists && closeTip.isHittable {
+            attachScreenshot(named: "safari-toolbar-tip", of: safari)
+            closeTip.tap()
+            XCTAssertTrue(toolbarTip.waitForNonExistence(timeout: 5), dump(safari, "toolbar-tip"))
+        }
+        // Page content can appear before Safari's toolbar finishes appearing.
+        // Wait for an actionable control, not just an accessibility element.
+        let toolbarReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            controls.contains { $0.exists && $0.isHittable }
+        }, object: nil)
+        guard XCTWaiter.wait(for: [toolbarReady], timeout: 10) == .completed else {
+            attachScreenshot(named: "toolbar-not-ready", of: safari)
+            XCTFail("Safari has no hittable Share or More control. \(dump(safari, "toolbar"))")
+            return
+        }
+        if let share = shareButtons.first(where: { $0.exists && $0.isHittable }) {
+            share.tap()
+            return
+        }
+        if let more = moreButtons.first(where: { $0.exists && $0.isHittable }) {
+            more.tap()
+            let share = safari.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", "Share")).firstMatch
+            let shareReady = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND hittable == true"), object: share
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [shareReady], timeout: 5), .completed, dump(safari, "more-menu"))
+            share.tap()
+            return
         }
         XCTFail("Safari has no Share control. \(dump(safari, "toolbar"))")
     }

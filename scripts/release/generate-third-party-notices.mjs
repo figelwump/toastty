@@ -21,6 +21,9 @@ const sparkleCheckoutDirectory = path.join(
 );
 const sparkleResolvedPath = path.join(rootDirectory, "Tuist/Package.resolved");
 const defaultGhosttySourceDirectory = path.resolve(rootDirectory, "../ghostty");
+// A package that ships no license file needs an entry here that names the exact
+// package version, its license and where the license text comes from.
+const licenseOverridesPath = path.join(scriptDirectory, "third-party-license-overrides.json");
 
 const checkOnly = process.argv.includes("--check");
 const unknownArguments = process.argv.slice(2).filter((argument) => argument !== "--check");
@@ -79,8 +82,28 @@ function packageLicenseFiles(packageDirectory) {
     );
 }
 
+function licenseOverrides() {
+  if (!fs.existsSync(licenseOverridesPath)) {
+    return new Map();
+  }
+  const entries = JSON.parse(readRequiredFile(licenseOverridesPath, "third-party license overrides"));
+  const overrides = new Map();
+  for (const [packageLabel, entry] of Object.entries(entries)) {
+    for (const field of ["license", "file", "source", "reason"]) {
+      if (typeof entry?.[field] !== "string" || entry[field].trim().length === 0) {
+        console.error(`error: license override for ${packageLabel} needs a "${field}" in ${licenseOverridesPath}`);
+        process.exit(1);
+      }
+    }
+    overrides.set(packageLabel, path.join(scriptDirectory, entry.file));
+  }
+  return overrides;
+}
+
 function productionPackageNotices() {
   const packageLock = JSON.parse(readRequiredFile(packageLockPath, "WebPanel package lock"));
+  const overrides = licenseOverrides();
+  const usedOverrides = new Set();
   const noticeGroups = new Map();
   const packages = [];
 
@@ -95,22 +118,45 @@ function productionPackageNotices() {
       `package metadata for ${relativePackagePath}`,
     ));
     const packageLabel = `${packageJSON.name}@${packageJSON.version}`;
-    const noticeFiles = packageLicenseFiles(packageDirectory);
-    if (noticeFiles.length === 0) {
+    let noticePaths = packageLicenseFiles(packageDirectory)
+      .map((fileName) => path.join(packageDirectory, fileName));
+    if (overrides.has(packageLabel)) {
+      if (noticePaths.length > 0) {
+        console.error(
+          `error: ${packageLabel} ships a license file; remove its entry from ${licenseOverridesPath}`,
+        );
+        process.exit(1);
+      }
+      noticePaths = [overrides.get(packageLabel)];
+      usedOverrides.add(packageLabel);
+    }
+    if (noticePaths.length === 0) {
       console.error(`error: no license or notice file found for ${packageLabel}`);
+      console.error(
+        `If the license is established elsewhere, add an entry for ${packageLabel} to ${licenseOverridesPath}.`,
+      );
       process.exit(1);
     }
 
     packages.push(packageLabel);
-    for (const noticeFile of noticeFiles) {
+    for (const noticePath of noticePaths) {
       const noticeText = normalizedText(readRequiredFile(
-        path.join(packageDirectory, noticeFile),
-        `${noticeFile} for ${packageLabel}`,
+        noticePath,
+        `${path.basename(noticePath)} for ${packageLabel}`,
       ));
       const digest = crypto.createHash("sha256").update(noticeText).digest("hex");
       const existing = noticeGroups.get(digest) ?? { text: noticeText, packages: [] };
       existing.packages.push(packageLabel);
       noticeGroups.set(digest, existing);
+    }
+  }
+
+  for (const packageLabel of overrides.keys()) {
+    if (!usedOverrides.has(packageLabel)) {
+      console.error(
+        `error: ${packageLabel} is not a production WebPanel package; remove or update its entry in ${licenseOverridesPath}`,
+      );
+      process.exit(1);
     }
   }
 

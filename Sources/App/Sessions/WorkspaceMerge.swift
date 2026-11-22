@@ -23,12 +23,15 @@ enum WorkspaceMergeMode: String, CaseIterable, Sendable {
 /// What a subspace with a pull request shows for merging it: the Merge
 /// button, its in-progress form, the cleanup that follows a Merge and Clean,
 /// or the done label. The button reads the same in both modes; its menu shows
-/// the mode. Top-level workspaces and
+/// the mode. While GitHub says the pull request is not ready to merge, the
+/// button opens it instead, and its menu still merges. Top-level workspaces and
 /// subspaces whose `github-pr` annotation has no GitHub pull request URL show
 /// nothing. The label comes from that URL, never from the annotation's text,
 /// so it always names the pull request the button acts on.
 enum WorkspaceMergePresentation: Equatable {
-    case ready(pullRequest: String, mode: WorkspaceMergeMode)
+    /// Nothing is under way, so the user can merge. `blocker` is why GitHub
+    /// would not merge the pull request yet, if it said.
+    case ready(pullRequest: String, mode: WorkspaceMergeMode, blocker: PullRequestMergeBlocker? = nil)
     /// The merge runs, or a Merge and Clean waits for the pull request to
     /// merge before its cleanup starts.
     case merging(pullRequest: String)
@@ -38,12 +41,19 @@ enum WorkspaceMergePresentation: Equatable {
     /// Close Without Merging is running.
     case closing(pullRequest: String)
 
-    /// The done mark records a finished merge, and only a subspace can hold
-    /// one, so a top-level workspace gets no button.
+    /// The done mark records a finished merge, and only a subspace row shows
+    /// one, so a top-level workspace gets no button. `isCheckingMerge` is a
+    /// task whose agent checks the pull request before it merges.
+    /// `isTaskMerged` is a task whose merge is recorded, which shows as done
+    /// like the done mark. `pullRequestState` is GitHub's last answer;
+    /// without one the button offers Merge.
     static func make(
         workspace: WorkspaceState,
         request: WorkspaceMergeRequest?,
-        mode: WorkspaceMergeMode = .mergeAndCleanUp
+        mode: WorkspaceMergeMode = .mergeAndCleanUp,
+        isCheckingMerge: Bool = false,
+        isTaskMerged: Bool = false,
+        pullRequestState: TaskPullRequestState? = nil
     ) -> Self? {
         guard workspace.parentWorkspaceID != nil,
               let link = pullRequestLink(in: workspace) else {
@@ -61,21 +71,32 @@ enum WorkspaceMergePresentation: Equatable {
             return .cleaningUp(pullRequest: pullRequest)
         case .failed(let reason):
             return .cleanupFailed(pullRequest: pullRequest, reason: reason)
+        case .holdingCleanup:
+            // Merged; the task space stays open for a while before cleanup.
+            return .done(pullRequest: pullRequest)
         case .awaitingMerge, .awaitingChecks, nil:
             // A Merge Only that waits for checks shows as done: the user has
             // accepted the version, and Toastty merges it when it can.
             break
         }
-        if workspace.doneAt != nil {
+        if isCheckingMerge {
+            return .merging(pullRequest: pullRequest)
+        }
+        // A task's merge stays recorded while its task space is open: the
+        // agent was working when GitHub merged it, the cleanup stopped, or
+        // the user kept the task space.
+        if workspace.doneAt != nil || isTaskMerged {
             return .done(pullRequest: pullRequest)
         }
-        return .ready(pullRequest: pullRequest, mode: mode)
+        return .ready(pullRequest: pullRequest, mode: mode, blocker: pullRequestState?.mergeBlocker)
     }
 
     var title: String {
         switch self {
-        case .ready(let pullRequest, _):
+        case .ready(let pullRequest, _, nil):
             return "Merge \(pullRequest)"
+        case .ready(let pullRequest, _, _?):
+            return "Open \(pullRequest)"
         case .merging(let pullRequest):
             return "Merging \(pullRequest)…"
         case .cleaningUp(let pullRequest):
@@ -116,7 +137,7 @@ enum WorkspaceMergePresentation: Equatable {
 
     var pullRequest: String {
         switch self {
-        case .ready(let pullRequest, _),
+        case .ready(let pullRequest, _, _),
              .merging(let pullRequest),
              .cleaningUp(let pullRequest),
              .cleanupFailed(let pullRequest, _),
@@ -141,6 +162,9 @@ struct WorkspaceMergeController {
 
     let store: AppStore
     let sessionRuntimeStore: SessionRuntimeStore
+    /// Merges a task space's task the task's way: through its agent, or at
+    /// once with `.direct`. `nil` when the workspace is not a task's.
+    var mergeTask: @MainActor (_ workspaceID: UUID, _ route: TaskMergeRoute?) -> Result<Void, TaskError>? = { _, _ in nil }
     var merge: @MainActor (
         _ workspaceID: UUID,
         _ pullRequest: WorkspacePullRequestLink,
@@ -154,6 +178,7 @@ struct WorkspaceMergeController {
     ) -> Void
     var presentProblem: @MainActor (_ problem: Problem, _ title: String, _ pullRequest: String) -> Void =
         WorkspaceMergeController.presentAlert
+    var presentTaskProblem: @MainActor (_ title: String, _ message: String) -> Void = WorkspaceMergeCoordinator.presentAlert
     /// Asks the user to confirm Close Without Merging.
     var confirmClose: @MainActor (_ pullRequest: WorkspacePullRequestLink) -> Bool =
         WorkspaceMergeController.confirmCloseAlert
@@ -162,6 +187,19 @@ struct WorkspaceMergeController {
         Self(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
+            mergeTask: { [weak sessionRuntimeStore, weak store] workspaceID, route in
+                guard let coordinator = sessionRuntimeStore?.taskCoordinator,
+                      let taskID = store?.state.workspacesByID[workspaceID]?.taskID,
+                      coordinator.records.record(id: taskID) != nil else { return nil }
+                do {
+                    try coordinator.requestMerge(taskID: taskID, route: route)
+                    return .success(())
+                } catch let error as TaskError {
+                    return .failure(error)
+                } catch {
+                    return .failure(TaskError(error.localizedDescription))
+                }
+            },
             merge: { workspaceID, pullRequest, repoPath, thenCleanUp in
                 sessionRuntimeStore.workspaceMergeCoordinator?.merge(
                     workspaceID: workspaceID,
@@ -180,9 +218,19 @@ struct WorkspaceMergeController {
         )
     }
 
-    func requestMerge(workspaceID: UUID, mode: WorkspaceMergeMode) {
+    /// A task space merges its task's way, which always cleans up after;
+    /// `mode` applies to other subspaces. `route` picks the task's way.
+    func requestMerge(workspaceID: UUID, mode: WorkspaceMergeMode, route: TaskMergeRoute? = nil) {
         guard let target = readyTarget(workspaceID: workspaceID, problemTitle: "Unable to Merge") else { return }
-        merge(workspaceID, target.link, target.repoPath, mode == .mergeAndCleanUp)
+        switch mergeTask(workspaceID, route) {
+        case .success?:
+            return
+        case .failure(let error)?:
+            presentTaskProblem("Unable to Merge \(target.pullRequest)", error.message)
+            return
+        case nil:
+            merge(workspaceID, target.link, target.repoPath, mode == .mergeAndCleanUp)
+        }
     }
 
     /// Runs Close Without Merging after the user confirms it. It is offered
@@ -202,9 +250,11 @@ struct WorkspaceMergeController {
         problemTitle: String
     ) -> (pullRequest: String, link: WorkspacePullRequestLink, repoPath: String)? {
         guard let workspace = store.state.workspacesByID[workspaceID],
-              case .ready(let pullRequest, _)? = WorkspaceMergePresentation.make(
+              case .ready(let pullRequest, _, _)? = WorkspaceMergePresentation.make(
                 workspace: workspace,
-                request: sessionRuntimeStore.workspaceMergeRequests[workspaceID]
+                request: sessionRuntimeStore.workspaceMergeRequests[workspaceID],
+                isCheckingMerge: sessionRuntimeStore.isCheckingTaskMerge(workspaceID: workspaceID),
+                isTaskMerged: sessionRuntimeStore.isTaskMerged(workspaceID: workspaceID)
               ),
               let link = WorkspaceMergePresentation.pullRequestLink(in: workspace) else {
             return nil

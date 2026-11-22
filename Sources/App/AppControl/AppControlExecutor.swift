@@ -17,6 +17,7 @@ final class AppControlExecutor {
     private let agentLaunchService: AgentLaunchService
     private let annotationStyleStore: AnnotationStyleStore?
     private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
+    let taskCoordinator: TaskCoordinator?
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
     private var currentRequestContext: AutomationRequestContext?
@@ -30,6 +31,7 @@ final class AppControlExecutor {
         agentLaunchService: AgentLaunchService,
         annotationStyleStore: AnnotationStyleStore? = nil,
         inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
+        taskCoordinator: TaskCoordinator? = nil,
         reloadConfigurationAction: (@MainActor () -> Void)?,
         scratchpadDocumentStore: ScratchpadDocumentStore? = nil
     ) {
@@ -41,6 +43,7 @@ final class AppControlExecutor {
         self.agentLaunchService = agentLaunchService
         self.annotationStyleStore = annotationStyleStore
         self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
+        self.taskCoordinator = taskCoordinator
         self.reloadConfigurationAction = reloadConfigurationAction
         self.scratchpadDocumentStore = scratchpadDocumentStore ?? webPanelRuntimeRegistry.scratchpadDocumentStore
     }
@@ -50,12 +53,22 @@ final class AppControlExecutor {
             if action == .configReload, reloadConfigurationAction == nil {
                 return nil
             }
+            if action.isTaskAction, taskCoordinator == nil {
+                return nil
+            }
+            if action.isCoordinatorAction, coordinatorController == nil {
+                return nil
+            }
             return action.descriptor
         }
     }
 
     func listQueryDescriptors() -> [AppControlCommandDescriptor] {
-        AppControlQueryID.allCases.map(\.descriptor)
+        AppControlQueryID.allCases.compactMap { query in
+            if query.isTaskQuery, taskCoordinator == nil { return nil }
+            if query == .coordinatorGet || query == .coordinatorReplies, coordinatorController == nil { return nil }
+            return query.descriptor
+        }
     }
 
     func runAction(
@@ -242,11 +255,21 @@ final class AppControlExecutor {
 
         case .workspaceSetDone, .workspaceClearDone:
             let workspaceID = try resolveWorkspaceIDDefaultingToCallerSession(args: args)
-            if action == .workspaceSetDone,
-               try requiredStore().state.workspacesByID[workspaceID]?.parentWorkspaceID == nil {
-                throw AutomationSocketError.invalidPayload(
-                    "workspace.set-done applies to task spaces; this workspace is top-level"
-                )
+            if action == .workspaceSetDone, let workspace = try requiredStore().state.workspacesByID[workspaceID] {
+                if workspace.canHoldDoneMark == false {
+                    throw AutomationSocketError.invalidPayload(
+                        "workspace.set-done applies to task spaces; this workspace is top-level"
+                    )
+                }
+                // The rule of the done checkbox, on the Mac and on a phone:
+                // a task with an open pull request or a merge under way
+                // finishes through Merge or Archive. A mark it already has
+                // stays as it is.
+                if workspace.doneAt == nil, sessionRuntimeStore.taskSpaceAcceptsDoneMark(workspaceID: workspaceID) == false {
+                    throw AutomationSocketError.invalidPayload(
+                        "workspace.set-done does not finish a task with an open pull request or a merge under way; the task finishes when the user merges or archives it"
+                    )
+                }
             }
             let doneAt: Date? = action == .workspaceSetDone ? Date() : nil
             return .init(
@@ -294,9 +317,30 @@ final class AppControlExecutor {
             )
 
         case .workspaceClose:
+            let workspaceID = try resolveWorkspaceID(args: args)
+            let store = try requiredStore()
+            // Checked here, in the same main-actor step as the close, so a
+            // turn that starts after a caller's last read still stops it.
+            if args.boolValue("requireDone") == true, store.state.workspacesByID[workspaceID]?.doneAt == nil {
+                throw AutomationSocketError.invalidPayload("the workspace is no longer marked done")
+            }
+            if let url = args.stringValue("requirePullRequest") {
+                guard let workspace = store.state.workspacesByID[workspaceID],
+                      let expected = WorkspacePullRequestLink(annotationURL: url),
+                      let current = TaskBoard.pullRequestLink(workspace),
+                      current.url.lowercased() == expected.url.lowercased() else {
+                    throw AutomationSocketError.invalidPayload("the workspace's pull request link changed")
+                }
+                let documents = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
+                    panelIDs: workspace.allPanelsByID.keys
+                )
+                if documents.dirtyDraftCount + documents.saveInProgressCount > 0 {
+                    throw AutomationSocketError.invalidPayload("the workspace has unsaved document changes")
+                }
+            }
             return .init(
-                didMutateState: try requiredStore().send(
-                    .closeWorkspace(workspaceID: try resolveWorkspaceID(args: args)),
+                didMutateState: store.send(
+                    .closeWorkspace(workspaceID: workspaceID),
                     source: .appControl(actionID: action.rawValue)
                 ),
                 result: nil
@@ -795,6 +839,59 @@ final class AppControlExecutor {
                 }
                 throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
             }
+
+        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch,
+             .taskUnwatch, .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply,
+             .taskWaiting, .taskMarkDone, .taskArchive:
+            return try runTaskAction(action, args: args)
+
+        case .webhookAdd, .webhookSet, .webhookRemove, .webhookTest:
+            return try runWebhookAction(action, args: args)
+
+        case .coordinatorOpen, .coordinatorRestart:
+            throw AutomationSocketError.invalidPayload("\(action.rawValue) waits for the agent to start; send it through app_control.run_action")
+
+        case .coordinatorSend:
+            return try runCoordinatorSend(args: args)
+
+        case .coordinatorReply:
+            return try runCoordinatorReply(args: args)
+
+        case .coordinatorWake:
+            return try runCoordinatorWake(args: args)
+
+        case .coordinatorWatch:
+            return try runCoordinatorWatch(args: args)
+
+        case .taskRelease:
+            return try runTaskRelease(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args), args: args)
+
+        case .taskAdopt:
+            return try runTaskAdopt(workspaceID: try resolveWorkspaceIDDefaultingToCallerSession(args: args))
+
+        case .windowTasksShow, .windowTasksHide:
+            guard taskCoordinator != nil else {
+                throw AutomationSocketError.invalidPayload("\(action.rawValue) needs the task system")
+            }
+            return .init(
+                didMutateState: try requiredStore().send(.setTasksViewShown(
+                    windowID: try resolveWindowID(args: args),
+                    shown: action == .windowTasksShow
+                )),
+                result: nil
+            )
+
+        case .windowSidebarSetSegment:
+            guard taskCoordinator != nil else {
+                throw AutomationSocketError.invalidPayload("\(action.rawValue) needs the task system")
+            }
+            guard let rawSegment = args.stringValue("segment"), let segment = SidebarSegment(name: rawSegment) else {
+                throw AutomationSocketError.invalidPayload("segment must be all or needsYou")
+            }
+            return .init(
+                didMutateState: try requiredStore().send(.setSidebarSegment(windowID: try resolveWindowID(args: args), segment: segment)),
+                result: nil
+            )
         }
         }
     }
@@ -807,6 +904,46 @@ final class AppControlExecutor {
             commandName: "app_control.run_action"
         )
     ) async throws -> AppControlActionOutcome {
+        if AppControlActionID.resolve(rawID) == .taskCreate {
+            let (coordinator, preparation) = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskCreate.descriptor)
+                return try prepareTaskCreate(args: args)
+            }
+            return try await finishTaskCreate(coordinator, preparation)
+        }
+        if AppControlActionID.resolve(rawID) == .webhookTest {
+            let (service, name) = try withRequestContext(context) { try prepareWebhookTest(args: args) }
+            return try await runWebhookTest(service: service, name: name)
+        }
+        if AppControlActionID.resolve(rawID) == .taskSend {
+            let preparation = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskSend.descriptor)
+                return try prepareTaskSteerSend(args: args)
+            }
+            if let (coordinator, taskID, text) = preparation {
+                return try await finishTaskSteerSend(coordinator, taskID: taskID, text: text)
+            }
+        }
+        if AppControlActionID.resolve(rawID) == .taskArchive {
+            let (coordinator, taskID, options, dryRun) = try withRequestContext(context) {
+                try prepareTaskArchive(args: args)
+            }
+            return try await finishTaskArchive(coordinator, taskID: taskID, options: options, dryRun: dryRun)
+        }
+        if AppControlActionID.resolve(rawID) == .taskMerge {
+            let preparation = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskMerge.descriptor)
+                return try prepareTaskMerge(args: args)
+            }
+            return try await finishTaskMerge(preparation)
+        }
+        if let action = AppControlActionID.resolve(rawID), action == .coordinatorOpen || action == .coordinatorRestart {
+            let preparation = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: action.descriptor)
+                return try prepareCoordinatorStart(action, args: args)
+            }
+            return try await finishCoordinatorStart(action, preparation: preparation)
+        }
         guard AppControlActionID.resolve(rawID) == .agentLaunch else {
             return try runAction(id: rawID, args: args, context: context)
         }
@@ -973,6 +1110,18 @@ final class AppControlExecutor {
             return agentProfileStateSnapshot(
                 try agentLaunchService.profileExecutableState(profileID: profileID)
             )
+
+        case .taskGet, .taskList, .taskWorkspaceChoices, .taskWatches:
+            return try runTaskQuery(query, args: args)
+
+        case .coordinatorGet:
+            return try coordinatorQuery()
+
+        case .coordinatorReplies:
+            return try coordinatorRepliesQuery(args: args)
+
+        case .webhookList:
+            return try runWebhookList(args: args)
         }
         }
     }
@@ -1030,6 +1179,17 @@ extension AppControlExecutor {
             )
             throw AutomationSocketError.scopeDenied(workspaceID: workspaceID)
         }
+    }
+
+    func callerIsWorkspaceScoped(sessionID: String) -> Bool {
+        sessionRuntimeStore.isWorkspaceScoped(sessionID: sessionID)
+    }
+
+    func callerMayAutomateWorkspace(_ workspaceID: UUID) -> Bool {
+        sessionRuntimeStore.allowsWorkspaceAutomation(
+            callerSessionID: requestContext().callerSessionID,
+            of: workspaceID
+        )
     }
 
     func callerManagedSession() -> SessionRecord? {

@@ -74,6 +74,7 @@ final class FocusedPanelCommandController {
     private let runningTerminalCloseConfirmationPresenter: @MainActor (TerminalCloseConfirmationAssessment) -> Bool
     private let discardLocalDocumentDraftConfirmationPresenter: @MainActor (String) -> Bool
     private let localDocumentSaveInProgressPresenter: @MainActor (String) -> Void
+    private let taskSpaceCloseAsker: TaskSpaceCloseAsker
 
     init(
         store: AppStore,
@@ -85,7 +86,8 @@ final class FocusedPanelCommandController {
         localDocumentCloseConfirmationStateProvider: (@MainActor (UUID) -> LocalDocumentCloseConfirmationState?)? = nil,
         runningTerminalCloseConfirmationPresenter: (@MainActor (TerminalCloseConfirmationAssessment) -> Bool)? = nil,
         discardLocalDocumentDraftConfirmationPresenter: (@MainActor (String) -> Bool)? = nil,
-        localDocumentSaveInProgressPresenter: (@MainActor (String) -> Void)? = nil
+        localDocumentSaveInProgressPresenter: (@MainActor (String) -> Void)? = nil,
+        taskSpaceCloseAsker: TaskSpaceCloseAsker = .never
     ) {
         self.store = store
         self.runtimeRegistry = runtimeRegistry
@@ -107,7 +109,8 @@ final class FocusedPanelCommandController {
             ?? Self.presentDiscardLocalDocumentDraftConfirmation
         self.localDocumentSaveInProgressPresenter = localDocumentSaveInProgressPresenter
             ?? Self.presentLocalDocumentSaveInProgressAlert
-        runtimeRegistry.setGhosttyCloseSurfaceHandler { [weak self] panelID, _ in
+        self.taskSpaceCloseAsker = taskSpaceCloseAsker
+        runtimeRegistry.setGhosttyCloseSurfaceHandler { [weak self] panelID, processAlive in
             guard let self else { return false }
             // Route Ghostty close requests through the same close path as Cmd+W
             // so exited panes skip confirmation while live panes keep prompts.
@@ -115,11 +118,15 @@ final class FocusedPanelCommandController {
             // per-panel close confirmation assessment.
             // The callback identifies a specific surface, so close that panel
             // directly rather than whichever panel is focused after the async
-            // main-actor hop completes.
+            // main-actor hop completes. Ghostty reports a live process only
+            // for a person's close_surface key binding; a shell that exited
+            // reports none and does not ask about the task.
             return self.closePanel(
                 panelID: panelID,
+                preferredWorkspaceID: nil,
                 source: .ui("ghostty_close_surface"),
-                confirmationPolicy: .interactive
+                confirmationPolicy: .interactive,
+                asksAboutTask: processAlive
             ).consumesShortcut
         }
     }
@@ -145,7 +152,8 @@ final class FocusedPanelCommandController {
             panelID: focusedPanelID,
             preferredWorkspaceID: workspace.id,
             source: source,
-            confirmationPolicy: confirmationPolicy
+            confirmationPolicy: confirmationPolicy,
+            asksAboutTask: true
         )
     }
 
@@ -164,16 +172,21 @@ final class FocusedPanelCommandController {
             preferredWorkspaceID: nil,
             source: source,
             confirmationPolicy: confirmationPolicy,
+            asksAboutTask: true,
             preservesTabSelection: preservesTabSelection
         )
     }
 
+    /// `asksAboutTask` lets an interactive close of a task space's last
+    /// panel ask what happens to its task, in place of the panel's own
+    /// confirmation.
     @discardableResult
     private func closePanel(
         panelID: UUID,
         preferredWorkspaceID: UUID?,
         source: AppActionSource,
         confirmationPolicy: CloseConfirmationPolicy,
+        asksAboutTask: Bool,
         preservesTabSelection: Bool = false
     ) -> CloseResult {
         guard let store else { return .notHandled }
@@ -185,8 +198,16 @@ final class FocusedPanelCommandController {
         let resolvedWorkspaceID = workspace.id
         let closedPanelWasFocused = workspace.focusedPanelID == panelID
         let panelState = workspace.panelState(for: panelID)
-        var didPromptForConfirmation = false
-        switch panelState {
+        let taskSpaceAnswer = asksAboutTask && confirmationPolicy == .interactive
+            ? taskSpaceCloseAnswer(panelID: panelID, panelState: panelState, workspace: workspace)
+            : nil
+        if let taskSpaceAnswer, taskSpaceAnswer.choice == nil {
+            return .canceled
+        }
+        var didPromptForConfirmation = taskSpaceAnswer != nil
+        // An answered task question already covered the panel's own
+        // confirmation.
+        switch taskSpaceAnswer == nil ? panelState : nil {
         case .some(.terminal):
             if shouldConfirmClose {
                 if let closeAssessment = terminalCloseAssessmentProvider(panelID) {
@@ -269,6 +290,9 @@ final class FocusedPanelCommandController {
         guard didClosePanel else {
             return didPromptForConfirmation ? .canceled : .notHandled
         }
+        if let taskSpaceAnswer {
+            taskSpaceCloseAsker.taskSpaceClosed(taskSpaceAnswer)
+        }
 
         // Only restore AppKit focus when the close removed the currently
         // focused panel from the visible workspace.
@@ -317,6 +341,36 @@ final class FocusedPanelCommandController {
         return nil
     }
 
+    /// Asks about the task when closing `panelID` closes its task space: the
+    /// panel is the only one in the workspace's only tab. The panel's own
+    /// confirmation becomes the question's warning; a document that is still
+    /// saving keeps its usual refusal instead.
+    private func taskSpaceCloseAnswer(
+        panelID: UUID,
+        panelState: PanelState?,
+        workspace: WorkspaceState
+    ) -> TaskSpaceCloseAsker.Answer? {
+        guard shouldConfirmClose,
+              workspace.tabIDs.count <= 1,
+              workspace.rightAuxPanelTabLocation(containingPanelID: panelID) == nil,
+              let tabID = workspace.tabID(containingPanelID: panelID),
+              let tab = workspace.tab(id: tabID), tab.panels.count <= 1 else { return nil }
+        var documentState: LocalDocumentCloseConfirmationState?
+        if case .web(let webState)? = panelState, webState.definition == .localDocument {
+            documentState = localDocumentCloseConfirmationStateProvider(panelID)
+            if documentState?.kind == .saveInProgress { return nil }
+        }
+        return taskSpaceCloseAsker.ask(closingWorkspaceID: workspace.id) {
+            if let documentState {
+                return Self.discardLocalDocumentDraftMessage(displayName: documentState.displayName)
+            }
+            guard case .terminal? = panelState,
+                  let assessment = terminalCloseAssessmentProvider(panelID),
+                  assessment.requiresConfirmation else { return nil }
+            return Self.runningTerminalCloseMessage(assessment)
+        }
+    }
+
     private func focusedPanelID(in workspace: WorkspaceState) -> UUID? {
         workspace.rightAuxPanel.focusedPanelID ?? workspace.focusedPanelID
     }
@@ -324,12 +378,7 @@ final class FocusedPanelCommandController {
     private static func presentRunningTerminalCloseConfirmation(_ assessment: TerminalCloseConfirmationAssessment) -> Bool {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Close this terminal?"
-
-        var informativeText = "A process is still running in this terminal. Closing the panel will terminate it."
-        if let runningCommand = assessment.runningCommand {
-            informativeText += "\n\nDetected command: \(runningCommand)"
-        }
-        confirmationAlert.informativeText = informativeText
+        confirmationAlert.informativeText = runningTerminalCloseMessage(assessment)
         confirmationAlert.alertStyle = .warning
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
         confirmationAlert.addConfiguredButton(
@@ -341,10 +390,22 @@ final class FocusedPanelCommandController {
         return response == .alertSecondButtonReturn
     }
 
+    private static func runningTerminalCloseMessage(_ assessment: TerminalCloseConfirmationAssessment) -> String {
+        var message = "A process is still running in this terminal. Closing the panel will terminate it."
+        if let runningCommand = assessment.runningCommand {
+            message += "\n\nDetected command: \(runningCommand)"
+        }
+        return message
+    }
+
+    private static func discardLocalDocumentDraftMessage(displayName: String) -> String {
+        "\"\(displayName)\" has unsaved changes. Closing the panel will discard them."
+    }
+
     private static func presentDiscardLocalDocumentDraftConfirmation(displayName: String) -> Bool {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Discard document draft?"
-        confirmationAlert.informativeText = "\"\(displayName)\" has unsaved changes. Closing the panel will discard them."
+        confirmationAlert.informativeText = discardLocalDocumentDraftMessage(displayName: displayName)
         confirmationAlert.alertStyle = .warning
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
         confirmationAlert.addConfiguredButton(

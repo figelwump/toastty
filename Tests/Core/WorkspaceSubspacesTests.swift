@@ -231,31 +231,55 @@ struct WorkspaceSubspacesTests {
         #expect(fixture.state.workspacesByID[subspaceID]?.doneAt == nil)
     }
 
-    /// Only a subspace row shows the mark, so a top-level workspace never
-    /// holds a hidden one.
+    /// Only a subspace row shows the mark, so a plain top-level workspace
+    /// never holds a hidden one. A task space keeps its mark at top level,
+    /// because a merge waiting there relies on it.
     @Test
-    func doneMarkBelongsToSubspacesAndDropsWhenOneMovesToTopLevel() {
-        var fixture = Fixture(workspaceCount: 3)
+    func doneMarkBelongsToSubspacesAndTaskSpaces() throws {
+        var fixture = Fixture(workspaceCount: 5)
         let markedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let ids = fixture.workspaceIDs
         #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[0], doneAt: markedAt), state: &fixture.state) == false)
 
         let didNestFirst = fixture.nest(1, under: 0)
         let didNestSecond = fixture.nest(2, under: 0)
-        #expect(didNestFirst && didNestSecond)
-        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[1], doneAt: markedAt), state: &fixture.state))
-        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[2], doneAt: markedAt), state: &fixture.state))
+        let didNestTasks = fixture.nest(3, under: 0) && fixture.nest(4, under: 0)
+        #expect(didNestFirst && didNestSecond && didNestTasks)
+        for taskSpaceID in [ids[3], ids[4]] {
+            #expect(AppReducer.reduce(action: .setWorkspaceTaskID(workspaceID: taskSpaceID, taskID: UUID()), state: &fixture.state))
+        }
+        for id in ids.dropFirst() {
+            #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: id, doneAt: markedAt), state: &fixture.state))
+        }
 
         // Moved to top level by hand.
-        #expect(AppReducer.reduce(
-            action: .setWorkspaceParent(workspaceID: ids[1], parentWorkspaceID: nil, spawningSessionID: nil),
-            state: &fixture.state
-        ))
+        for id in [ids[1], ids[3]] {
+            #expect(AppReducer.reduce(
+                action: .setWorkspaceParent(workspaceID: id, parentWorkspaceID: nil, spawningSessionID: nil),
+                state: &fixture.state
+            ))
+        }
         #expect(fixture.state.workspacesByID[ids[1]]?.doneAt == nil)
+        #expect(fixture.state.workspacesByID[ids[3]]?.doneAt == markedAt)
 
         // Promoted when its parent closes.
         #expect(AppReducer.reduce(action: .closeWorkspace(workspaceID: ids[0]), state: &fixture.state))
         #expect(fixture.state.workspacesByID[ids[2]]?.doneAt == nil)
+        #expect(fixture.state.workspacesByID[ids[4]]?.parentWorkspaceID == nil)
+        #expect(fixture.state.workspacesByID[ids[4]]?.doneAt == markedAt)
+
+        // A top-level task space keeps its mark across a relaunch, and can
+        // be marked again after new work cleared it.
+        let encoded = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: fixture.state))
+        let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: encoded).makeAppState()
+        #expect(restored.workspacesByID[ids[4]]?.doneAt == markedAt)
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[4], doneAt: nil), state: &fixture.state))
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[4], doneAt: markedAt), state: &fixture.state))
+        #expect(AppReducer.reduce(action: .setWorkspaceDone(workspaceID: ids[2], doneAt: markedAt), state: &fixture.state) == false)
+
+        // Without its task, it is a plain top-level workspace again.
+        #expect(AppReducer.reduce(action: .setWorkspaceTaskID(workspaceID: ids[4], taskID: nil), state: &fixture.state))
+        #expect(fixture.state.workspacesByID[ids[4]]?.doneAt == nil)
     }
 
     @Test

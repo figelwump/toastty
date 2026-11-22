@@ -1,0 +1,2213 @@
+import CoreState
+import Darwin
+import Foundation
+import RemoteProtocol
+
+/// The part of the agent launcher a task start uses. A protocol so tests
+/// can run setup without terminals.
+@MainActor
+protocol TaskAgentLaunching: AnyObject {
+    func launchProfileSummaries() -> [AgentLaunchProfileSummary]
+    /// Launches into the given terminal without moving focus. The session
+    /// gets `scopedWorkspaceIDs` as its workspace scope; `nil` leaves it
+    /// unscoped. With `forkFromSessionID`, the new session continues a copy
+    /// of that session's conversation.
+    /// `beforeDispatch` runs directly before the command is sent; a throw
+    /// there cancels the launch. `initialPromptWithoutSkills` replaces
+    /// `initialPrompt` when Toastty knows that the launch does not give the
+    /// agent its skills.
+    func launchTask(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        model: String?,
+        reasoningEffort: String?,
+        initialPrompt: String,
+        initialPromptWithoutSkills: String?,
+        parentSessionID: String?,
+        forkFromSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?,
+        beforeDispatch: @escaping @MainActor () throws -> Void
+    ) async throws -> AgentLaunchResult
+    /// Toastty knows that the session's launch did not give the agent its
+    /// skills.
+    func lacksShippedSkills(sessionID: String) -> Bool
+}
+
+extension AgentLaunchService: TaskAgentLaunching {
+    func launchTask(
+        profileID: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        cwd: String,
+        model: String?,
+        reasoningEffort: String?,
+        initialPrompt: String,
+        initialPromptWithoutSkills: String?,
+        parentSessionID: String?,
+        forkFromSessionID: String?,
+        scopedWorkspaceIDs: Set<UUID>?,
+        beforeDispatch: @escaping @MainActor () throws -> Void
+    ) async throws -> AgentLaunchResult {
+        try await launchAsync(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            initialPrompt: initialPrompt,
+            initialPromptWithoutSkills: initialPromptWithoutSkills,
+            forkFromSessionID: forkFromSessionID,
+            inheritedScopedWorkspaceIDs: scopedWorkspaceIDs,
+            parentSessionID: parentSessionID,
+            focusPolicy: .preserveFirstResponder,
+            beforeDispatch: beforeDispatch
+        )
+    }
+}
+
+/// What a task needs to know about a managed agent session.
+struct TaskSessionInfo: Equatable {
+    var sessionID: String
+    var agent: AgentKind
+    var panelID: UUID
+    var workspaceID: UUID
+    var cwd: String?
+    var isActive: Bool
+    /// Working, or waiting for an approval.
+    var isInTurn: Bool
+    /// The provider conversation Toastty confirmed for the session.
+    var nativeConversationID: String?
+    var title: String?
+    var status: SessionStatus? = nil
+    var statusUpdatedAt: Date? = nil
+    /// When the session entered its current state (busy, waiting, idle or
+    /// error). A report that repeats the state does not move it.
+    var stateChangedAt: Date? = nil
+    var lastTurnEndedAt: Date? = nil
+    /// When the current turn started, while the session works.
+    var turnStartedAt: Date? = nil
+    /// The provider transcript Toastty confirmed for the session.
+    var transcriptPath: String? = nil
+}
+
+/// The session side of moving a task into its worktree. A protocol so tests
+/// can move tasks without agents.
+@MainActor
+protocol TaskSessionProviding: AnyObject {
+    func session(_ sessionID: String) -> TaskSessionInfo?
+    /// The managed session running in the panel now, if any.
+    func activeSession(panelID: UUID) -> TaskSessionInfo?
+    /// Whether a person typed into the panel, or a phone message reached
+    /// it, after `date`.
+    func hasInput(panelID: UUID, since date: Date) -> Bool
+    /// Closes the pane of a session whose conversation moved. When the pane
+    /// is its workspace's last, types the agent's native exit instead, so
+    /// the workspace and its shell stay.
+    func closeMovedSessionPane(panelID: UUID, agent: AgentKind) -> TaskOperation.SourceOutcome
+    /// The managed agent sessions running in a workspace now.
+    func activeSessions(workspaceID: UUID) -> [TaskSessionInfo]
+    /// Types `text` into the panel and submits it, as `terminal.send-text`
+    /// does. A busy agent queues it as typed input.
+    func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult
+    /// Gives `text` to the agent in the panel under Toastty's input checks,
+    /// for `task send --steer`: typed at an open prompt, typed into a
+    /// running turn that can read it, or held for the next open prompt.
+    /// Nothing is typed into a permission prompt or a question.
+    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure>
+    /// The session's latest agent message, read from its transcript.
+    func lastReply(sessionID: String) -> TaskAgentReply?
+    /// The managed session's workspace scope; `nil` when it is unscoped or
+    /// not a running managed session.
+    func scope(sessionID: String) -> Set<UUID>?
+    /// When the session's transcript last changed: the transcript file's
+    /// modification time, or the newest entry of an agent that publishes
+    /// its history through Toastty's extension.
+    func lastOutputAt(sessionID: String) -> Date?
+    /// When a person last typed, pasted or dropped a file into the panel,
+    /// or sent it a message from Toastty Mobile. Text that Toastty or the
+    /// CLI typed, such as `task send`, does not count.
+    func lastUserInputAt(panelID: UUID) -> Date?
+    /// Whether the tracked conversation reports an interaction or a user draft.
+    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool
+}
+
+extension TaskSessionProviding {
+    func activeSessions(workspaceID: UUID) -> [TaskSessionInfo] { [] }
+    func deliver(_ text: String, panelID: UUID) -> TerminalInputDeliveryResult { .unavailable }
+    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+        .failure(.stateUnknown)
+    }
+    func lastReply(sessionID: String) -> TaskAgentReply? { nil }
+    func scope(sessionID: String) -> Set<UUID>? { nil }
+    func lastOutputAt(sessionID: String) -> Date? { nil }
+    func lastUserInputAt(panelID: UUID) -> Date? { nil }
+    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool { false }
+}
+
+/// What a caller asked for in `task.create`. Every field except the text is
+/// optional; the coordinator fills the rest.
+struct TaskCreateRequest: Equatable {
+    var text: String
+    /// Absolute paths of files to attach.
+    var files: [String] = []
+    /// Names to show for `files`, in the same order, when the files' own
+    /// names are not meaningful, as for an upload Remote Access stored
+    /// under a random name. The copies keep the files' own names.
+    var fileDisplayNames: [String]?
+    var clientRequestID: String?
+    var title: String?
+    var slug: String?
+    var workspaceID: UUID?
+    /// A project directory, instead of `workspaceID`: the open top-level
+    /// workspace on it, or a new one that Toastty opens once every other
+    /// check passed.
+    var rootDirectory: String?
+    /// The issue or report the task came from. Its URL needs its ID.
+    var externalRefID: String?
+    var externalRefURL: String?
+    var agent: String?
+    var model: String?
+    var effort: String?
+    var prompt: String?
+    /// Make a git worktree during setup and start the agent there.
+    var startWork = false
+    /// For `startWork`: the branch or commit to start from.
+    var base: String?
+    /// For `startWork`: the first part of the branch name.
+    var branchPrefix: String?
+    /// Start the agent as a fork of the calling session's conversation,
+    /// after that session's turn ends.
+    var fork = false
+}
+
+/// Who sent a `task.create`, captured before any asynchronous step.
+struct TaskCaller: Equatable {
+    /// The calling managed agent session, if any.
+    var sessionID: String?
+    /// That session's workspace.
+    var workspaceID: UUID?
+    /// The quick entry panel, rather than the CLI.
+    var isQuickEntry = false
+    /// A paired device, through Remote Access. Its request IDs are its own.
+    var remoteDeviceID: UUID?
+
+    static let unmanaged = TaskCaller()
+    static let quickEntry = TaskCaller(isQuickEntry: true)
+
+    static func remoteDevice(_ deviceID: UUID) -> TaskCaller {
+        TaskCaller(remoteDeviceID: deviceID)
+    }
+
+    var source: TaskSource {
+        if let remoteDeviceID { return .remoteDevice(deviceID: remoteDeviceID) }
+        if let sessionID { return .agent(sessionID: sessionID) }
+        return isQuickEntry ? .quickEntry : .cli
+    }
+}
+
+/// A checked `task.create` request, ready for its files to be copied.
+struct TaskCreatePreparation {
+    fileprivate var record: TaskRecord
+    /// Source file (symbolic links resolved) to destination path.
+    fileprivate var copies: [(source: String, destination: String)]
+    fileprivate var saveRootDirectory: Bool
+    /// A repeated request: the task it already made.
+    fileprivate var existing: TaskRecord?
+}
+
+struct TaskError: LocalizedError, Equatable {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+
+    var errorDescription: String? { message }
+}
+
+/// Creates tasks, runs their setup, and recovers them after a restart.
+///
+/// Setup makes the task space and starts the agent in it. Each step is
+/// saved in the record's operation before and after it changes anything
+/// outside the record, so Retry continues from the last finished step.
+@MainActor
+final class TaskCoordinator {
+    nonisolated static let maximumAttachmentBytes = 50 * 1024 * 1024
+
+    let records: TaskRecordStore
+    let store: AppStore
+    weak var launcher: (any TaskAgentLaunching)?
+    let configLoader: () throws -> TasksConfig
+    private let attachmentsDirectoryURL: URL
+    private let hasActiveSession: (UUID) -> Bool
+    /// Adds a task space to a session's workspace scope when that session
+    /// is scoped; does nothing for an unscoped session.
+    private let grantScope: (String, UUID) -> Void
+    let worktreeCreator: TaskWorktreeCreator
+    let fileManager: FileManager
+    let now: () -> Date
+    let terminalReadinessTimeout: Duration
+    static let defaultMergePromptTurnTimeout: Duration = .seconds(30 * 60)
+    /// How long an agent-routed merge waits for an open prompt.
+    let mergePromptTurnTimeout: Duration
+    let timing: StartWorkTiming
+
+    /// How long a move into a worktree waits; shorter in tests.
+    struct StartWorkTiming {
+        /// For the moving session to finish the turn that asked for it.
+        var sourceTurnTimeout: Duration = .seconds(600)
+        /// For the forked agent to report its new conversation.
+        var forkConfirmationTimeout: Duration = .seconds(60)
+        /// For Toastty to identify the moving session's conversation, which
+        /// a fork needs. A move asked for in a session's first seconds can
+        /// arrive before that.
+        var sourceDiscoveryTimeout: Duration = .seconds(60)
+        var pollInterval: Duration = .milliseconds(250)
+    }
+    /// Runs `[triage] command`; `nil` turns triage off.
+    let triageRunner: (any TaskTriageRunning)?
+    /// The closed workspaces a task can reopen.
+    let recentWorkspaces: RecentWorkspacesStore?
+    let homeDirectoryPath: String
+
+    /// One per running setup; a newer attempt or a delete makes an older
+    /// one stop at its next check.
+    var setupAttempts: [UUID: UUID] = [:]
+    var setupTasks: [UUID: Task<Void, Never>] = [:]
+    /// The same for moves into a worktree.
+    var startWorkAttempts: [UUID: UUID] = [:]
+    var startWorkTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// Saves the workspace layout at once. Setup calls it after it makes or
+    /// unlinks a task space, so the layout on disk never lags a record that
+    /// depends on it. Set once layout persistence exists.
+    var flushLayout: () -> Void = {}
+    /// Set once the session store exists. Without it, tasks cannot move.
+    var sessions: (any TaskSessionProviding)?
+    /// The live view of every task's stage, for queries that report it and
+    /// for stage watches.
+    weak var board: TaskBoardStore?
+    /// The coordinator: the agent session that follows the tasks. It is not
+    /// a task itself; it hangs here so the views and app control that get
+    /// the task system get it too.
+    var coordinatorController: CoordinatorController?
+    /// Sends task events to approved webhooks, and holds the webhooks
+    /// waiting for approval. Set once it exists.
+    weak var webhooks: TaskWebhookService?
+    /// The one owner of merges and their cleanup. Set once it exists.
+    weak var merges: WorkspaceMergeCoordinator?
+    /// Unsaved local documents in a workspace, which closing it would lose.
+    var unsavedDocumentCount: (UUID) -> Int = { _ in 0 }
+    /// Closes a task space that Complete or Archive finished, and moves
+    /// focus to the next active panel. Without it, the close selects the
+    /// neighboring workspace.
+    var closeFinishedTaskSpace: ((UUID) -> Bool)?
+    /// Merge prompts waiting for an agent's input to be ready.
+    var mergeDeliveryTasks: [UUID: Task<Void, Never>] = [:]
+    /// Archives and release cleanups running in the background.
+    var cleanupTasks: [UUID: Task<Void, Never>] = [:]
+    var isCheckingReleases = false
+    /// `toastty task watch --wait` watches, which only last while the app runs.
+    var waitWatches: [UUID: TaskWaitWatch] = [:]
+    var watchMonitor: Task<Void, Never>?
+    /// By session ID, the completed turn whose prompt an automatic message
+    /// or uncertain send used. Automatic messages wait for a new prompt.
+    var automaticPromptDeliveryTurnEnds: [String: Date] = [:]
+    /// Sends the wakes of `task waiting` marks when their time comes.
+    var wakeMonitor: Task<Void, Never>?
+    /// When to try a due wake again after its agent could not take it.
+    var wakeRetryAt: [UUID: Date] = [:]
+    /// The change cursor behind `task.list changedSince`.
+    let changeFeed = TaskChangeFeed()
+    /// Names this app launch in the turn marks `recordStateTimes` saves. A
+    /// mark with another ID is from a launch that ended during the turn.
+    let launchID = UUID().uuidString
+    /// Set when the app quits. Sessions that stop while it quits must not
+    /// remove the turn marks that tell the next launch what was cut off.
+    var isTerminating = false
+    /// The tasks whose stage `recordStateTimes` has seen in this launch.
+    var stageSeenTaskIDs: Set<UUID> = []
+
+    init(
+        records: TaskRecordStore,
+        store: AppStore,
+        launcher: (any TaskAgentLaunching)?,
+        configLoader: @escaping () throws -> TasksConfig,
+        attachmentsDirectoryURL: URL,
+        hasActiveSession: @escaping (UUID) -> Bool,
+        grantScope: @escaping (String, UUID) -> Void,
+        worktreeCreator: TaskWorktreeCreator = TaskWorktreeCreator(),
+        fileManager: FileManager = .default,
+        now: @escaping () -> Date = Date.init,
+        terminalReadinessTimeout: Duration = .seconds(10),
+        mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout,
+        timing: StartWorkTiming = StartWorkTiming(),
+        triageRunner: (any TaskTriageRunning)? = nil,
+        recentWorkspaces: RecentWorkspacesStore? = nil,
+        homeDirectoryPath: String = NSHomeDirectory()
+    ) {
+        self.records = records
+        self.store = store
+        self.launcher = launcher
+        self.configLoader = configLoader
+        self.attachmentsDirectoryURL = attachmentsDirectoryURL
+        self.hasActiveSession = hasActiveSession
+        self.grantScope = grantScope
+        self.worktreeCreator = worktreeCreator
+        self.fileManager = fileManager
+        self.now = now
+        self.terminalReadinessTimeout = terminalReadinessTimeout
+        self.mergePromptTurnTimeout = mergePromptTurnTimeout
+        self.timing = timing
+        self.triageRunner = triageRunner
+        self.recentWorkspaces = recentWorkspaces
+        self.homeDirectoryPath = homeDirectoryPath
+    }
+
+    // MARK: - Create
+
+    /// Checks the request, copies the files, saves the record and starts
+    /// setup. Returns as soon as the record is saved; setup continues in the
+    /// background.
+    /// `beforeSave` runs after the files are copied, directly before the
+    /// record is saved; a throw there saves nothing and removes the copies.
+    @discardableResult
+    func create(
+        _ request: TaskCreateRequest,
+        caller: TaskCaller = .unmanaged,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
+        try await finishCreate(try prepareCreate(request, caller: caller), beforeSave: beforeSave)
+    }
+
+    /// Every check that needs app state, done before any file is copied.
+    func prepareCreate(_ request: TaskCreateRequest, caller: TaskCaller = .unmanaged) throws -> TaskCreatePreparation {
+        let source = caller.source
+        let clientRequestID = try validatedClientRequestID(request.clientRequestID)
+        // Request IDs belong to their caller, so one caller cannot read
+        // another's task by reusing its ID.
+        if let clientRequestID, let existing = records.record(clientRequestID: clientRequestID, source: source) {
+            return TaskCreatePreparation(record: existing, copies: [], saveRootDirectory: false, existing: existing)
+        }
+
+        // The text is kept exactly as written; only the checks trim it.
+        let text = request.text
+        let prompt = request.prompt.flatMap(taskNonEmpty)
+        guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || prompt != nil else {
+            throw TaskError("A task needs text or a prompt.")
+        }
+        guard request.files.count <= TaskRecord.maximumAttachmentCount else {
+            throw TaskError("Attach at most \(TaskRecord.maximumAttachmentCount) files.")
+        }
+        guard request.fileDisplayNames.map({ $0.count == request.files.count }) ?? true else {
+            throw TaskError("Give one display name for each attached file.")
+        }
+        let sources = try request.files.map(attachableFile)
+        let forkSource = request.fork ? try forkSourceSession(request, caller: caller) : nil
+        let externalRef = try validatedExternalRef(id: request.externalRefID, url: request.externalRefURL)
+
+        // A project directory resolves to its open workspace now. A project
+        // that is not open gets its workspace ID now and opens last, after
+        // every other check, so a request that fails opens nothing.
+        var projectToOpen: (workspaceID: UUID, rootDirectory: String)?
+        let workspaceID: UUID?
+        let projectRoot: (path: String, isNew: Bool)?
+        if let rawRoot = request.rootDirectory {
+            guard request.workspaceID == nil else {
+                throw TaskError("Pass a workspace or a root directory, not both.")
+            }
+            let root = TasksConfigFile.normalizedPath(rawRoot, homeDirectoryPath: homeDirectoryPath)
+            if let open = openWorkspace(onProjectRoot: root) {
+                workspaceID = open.workspaceID
+                projectRoot = open.projectRoot
+            } else {
+                guard isDirectory(root) else {
+                    throw TaskError("The directory \(root) does not exist.")
+                }
+                let reservedID = UUID()
+                projectToOpen = (reservedID, root)
+                workspaceID = reservedID
+                projectRoot = (root, false)
+            }
+        } else {
+            workspaceID = try resolvedWorkspaceID(request.workspaceID, caller: caller)
+            projectRoot = try workspaceID.map(resolvedProjectRoot)
+        }
+        let config: TasksConfig
+        do {
+            config = try configLoader()
+        } catch {
+            throw TaskError(error.localizedDescription)
+        }
+        let pinnedTitle = request.title.flatMap(taskNonEmpty)
+        let pinnedSlug = request.slug.flatMap(taskNonEmpty)
+        let pinned = TaskFields(
+            // A root directory names the workspace as surely as its ID does.
+            workspaceID: request.rootDirectory == nil ? request.workspaceID : workspaceID,
+            agent: request.agent.flatMap(taskNonEmpty),
+            model: request.model.flatMap(taskNonEmpty),
+            effort: request.effort.flatMap(taskNonEmpty),
+            prompt: prompt,
+            title: pinnedTitle,
+            slug: pinnedSlug
+        )
+        // A value the caller set that cannot work fails the request now,
+        // whether or not triage runs.
+        let pinnedProfile = try checkedPinnedFields(pinned)
+
+        // Triage runs only for what the caller left out. Without triage,
+        // `[defaults]` fills the agent, and a task with no workspace waits
+        // for the user to pick one. A fork uses neither.
+        let setup: TaskSetupState
+        var resolved: TaskFields?
+        let missing = TaskTriage.missingFields(
+            pinned: pinned,
+            workspaceID: workspaceID,
+            pinnedAgent: pinnedProfile.map(Self.triageAgent)
+        )
+        let parentTaskID = caller.workspaceID.flatMap { store.state.workspacesByID[$0]?.taskID }
+        let startSkill = projectRoot.flatMap { config.startSkill(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
+        let startPrompt = projectRoot.flatMap { config.startPrompt(forProjectRoot: $0.path, homeDirectoryPath: homeDirectoryPath) }
+        if let forkSource {
+            guard let workspaceID else {
+                throw TaskError("--fork needs the calling session's workspace, and it has closed.")
+            }
+            resolved = try forkFields(
+                pinned: pinned,
+                agent: forkSource.agent.rawValue,
+                workspaceID: workspaceID,
+                parentTask: parentTaskID.flatMap { records.record(id: $0) },
+                skill: startSkill,
+                startPrompt: startPrompt
+            )
+            setup = .settingUp
+        } else if missing.isEmpty == false, isTriageEnabled(config) {
+            setup = .routing
+        } else if let workspaceID {
+            resolved = try resolvedFields(
+                pinned: pinned,
+                workspaceID: workspaceID,
+                defaults: config.defaults,
+                skill: startSkill,
+                startPrompt: startPrompt
+            )
+            setup = .settingUp
+        } else {
+            // The agent and its settings are known now, so they are checked
+            // now rather than after the user picks a workspace.
+            _ = try resolvedFields(pinned: pinned, workspaceID: nil, defaults: config.defaults)
+            setup = .needsWorkspace(reason: Self.noWorkspaceReason)
+        }
+
+        var startWork: TaskStartWork?
+        if request.startWork {
+            // The worktree belongs to the project, so it needs the workspace
+            // now; an agent caller always has its own.
+            guard let projectRoot else {
+                throw TaskError("--start-work needs a workspace: pass --workspace, or create the task from an agent session.")
+            }
+            startWork = try newStartWork(
+                branchPrefix: request.branchPrefix,
+                base: request.base,
+                source: nil,
+                projectRoot: projectRoot.path,
+                config: config
+            )
+        } else if request.base != nil || request.branchPrefix != nil {
+            throw TaskError("--base and --branch-prefix need --start-work.")
+        }
+
+        let (title, slug) = try titleAndSlug(
+            pinnedTitle: pinnedTitle,
+            pinnedSlug: pinnedSlug,
+            fallbacks: [text, prompt ?? ""]
+        )
+
+        let taskID = UUID()
+        let directoryURL = attachmentsDirectoryURL.appending(path: taskID.uuidString, directoryHint: .isDirectory)
+        var usedNames: Set<String> = []
+        var copies: [(source: String, destination: String)] = []
+        var attachments: [TaskAttachment] = []
+        for (index, (requestedPath, resolvedPath)) in zip(request.files, sources).enumerated() {
+            let originalName = (requestedPath as NSString).lastPathComponent
+            let name = Self.uniqueFileName(originalName, taken: usedNames)
+            usedNames.insert(name)
+            let destination = directoryURL.appending(path: name, directoryHint: .notDirectory).path(percentEncoded: false)
+            copies.append((resolvedPath, destination))
+            attachments.append(TaskAttachment(
+                path: destination,
+                displayName: request.fileDisplayNames?[index] ?? originalName
+            ))
+        }
+
+        var record = TaskRecord(
+            id: taskID,
+            clientRequestID: clientRequestID,
+            createdAt: now(),
+            text: text,
+            attachments: attachments,
+            title: title,
+            slug: slug,
+            titleSetByUser: pinnedTitle != nil,
+            source: source,
+            pinned: pinned,
+            resolved: resolved,
+            workspaceID: workspaceID,
+            projectRoot: projectRoot?.path,
+            setup: setup,
+            parentTaskID: parentTaskID,
+            startWork: startWork
+        )
+        record.externalRef = externalRef
+        record.creatorScope = caller.sessionID.flatMap { sessions?.scope(sessionID: $0) }
+        record.forkSource = forkSource.map {
+            TaskStartWork.Source(
+                sessionID: $0.sessionID,
+                panelID: $0.panelID,
+                agent: $0.agent.rawValue,
+                conversationID: $0.nativeConversationID
+            )
+        }
+        // The launcher refuses a first message it cannot pass, and every
+        // retry would fail the same way, so the request fails now. A fork's
+        // message names its task space, which setup makes later. While triage
+        // routes the task, `resolved` is empty, so the check uses the
+        // project's start skill and prompt, which setup adds later.
+        let firstMessage = record.forkSource == nil
+            ? TaskPrompt.compose(
+                skill: resolved?.skill ?? pinned.skill ?? startSkill,
+                startPrompt: resolved?.startPrompt ?? startPrompt,
+                firstPrompt: prompt,
+                text: text,
+                attachmentPaths: attachments.map(\.path),
+                parent: parentTask(id: parentTaskID)
+            )
+            : TaskPrompt.forkedTask(
+                record: record,
+                taskSpaceWorkspaceID: UUID(),
+                sourceWorkspaceID: forkSource?.workspaceID,
+                worktree: nil,
+                base: nil,
+                parent: parentTask(id: parentTaskID)
+            )
+        guard firstMessage.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else {
+            throw TaskError("The task, prompt and file paths are too long for an agent's first message (at most \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB).")
+        }
+        guard firstMessage.contains("\u{0}") == false else {
+            throw TaskError("The task or prompt contains a NUL character.")
+        }
+        if let projectToOpen {
+            let opened = try openProject(
+                title: Self.projectTitle(rootDirectory: projectToOpen.rootDirectory, suggestion: nil, homeDirectoryPath: homeDirectoryPath),
+                rootDirectory: projectToOpen.rootDirectory,
+                workspaceID: projectToOpen.workspaceID,
+                reusingOpenWorkspace: false
+            )
+            guard opened == projectToOpen.workspaceID else {
+                throw TaskError("Toastty opened \(projectToOpen.rootDirectory) in another workspace; try again.")
+            }
+        }
+        return TaskCreatePreparation(
+            record: record,
+            copies: copies,
+            saveRootDirectory: projectRoot?.isNew == true,
+            existing: nil
+        )
+    }
+
+    /// Copies the files off the main thread, then saves the record and
+    /// starts setup.
+    func finishCreate(
+        _ preparation: TaskCreatePreparation,
+        beforeSave: (@MainActor () throws -> Void)? = nil
+    ) async throws -> TaskRecord {
+        if let existing = preparation.existing {
+            return existing
+        }
+        var record = preparation.record
+        let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
+        if preparation.copies.isEmpty == false {
+            let copies = preparation.copies
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let fileManager = FileManager.default
+                    try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+                    for copy in copies {
+                        try fileManager.copyItem(at: URL(filePath: copy.source), to: URL(filePath: copy.destination))
+                    }
+                }.value
+            } catch {
+                try? fileManager.removeItem(at: directoryURL)
+                throw TaskError("Toastty could not copy an attachment: \(error.localizedDescription)")
+            }
+        }
+        // A repeat of this request may have finished while the files copied.
+        if let clientRequestID = record.clientRequestID,
+           let existing = records.record(clientRequestID: clientRequestID, source: record.source) {
+            try? fileManager.removeItem(at: directoryURL)
+            return existing
+        }
+        if let workspaceID = record.workspaceID, store.state.workspacesByID[workspaceID] == nil {
+            try? fileManager.removeItem(at: directoryURL)
+            throw TaskError("The task's workspace closed before the task was saved.")
+        }
+        do {
+            try beforeSave?()
+        } catch {
+            try? fileManager.removeItem(at: directoryURL)
+            throw error
+        }
+        record.createdAt = now()
+        do {
+            try records.insert(record)
+        } catch {
+            try? fileManager.removeItem(at: directoryURL)
+            throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
+        }
+        if preparation.saveRootDirectory, let workspaceID = record.workspaceID, let projectRoot = record.projectRoot {
+            _ = store.send(.setWorkspaceRootDirectory(workspaceID: workspaceID, rootDirectory: projectRoot))
+        }
+        ToasttyLog.info("Created a task", category: .tasks, metadata: [
+            "task_id": record.id.uuidString,
+            "workspace_id": record.workspaceID?.uuidString ?? "",
+            "agent": record.resolved?.agent ?? "",
+            "attachments": String(record.attachments.count),
+            "routing": String(record.setup == .routing),
+        ])
+        switch record.setup {
+        case .routing:
+            startRouting(taskID: record.id)
+        case .settingUp:
+            startSetup(taskID: record.id)
+        case .needsWorkspace, .setupFailed, .started:
+            break
+        }
+        return record
+    }
+
+    // MARK: - Retry, delete
+
+    /// Runs setup again for a task whose setup failed, or a move into a
+    /// worktree that failed, from the last step it finished. A task that
+    /// has no workspace or agent yet fills them again, from triage when it
+    /// is on.
+    func retry(taskID: UUID) throws {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        // The agent's first message names the attached files.
+        guard record.attachmentsRemovedAt == nil else {
+            throw TaskError("This task's attached files were removed a week after it finished. Create a new task instead.")
+        }
+        switch record.setup {
+        case .setupFailed, .needsWorkspace:
+            break
+        case .routing, .settingUp:
+            throw TaskError("This task is still setting up.")
+        case .started:
+            guard case .failed? = record.startWork?.state else {
+                throw TaskError("This task has already started.")
+            }
+            do {
+                try records.save(id: taskID) { $0.startWork?.state = .running }
+            } catch {
+                throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
+            }
+            startStartWork(taskID: taskID)
+            return
+        }
+        let needsRouting = record.resolved == nil || record.workspaceID == nil
+        do {
+            try records.save(id: taskID) {
+                $0.setup = needsRouting ? .routing : .settingUp
+                if $0.startWork != nil { $0.startWork?.state = .running }
+            }
+        } catch {
+            throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
+        }
+        if needsRouting {
+            startRouting(taskID: taskID)
+        } else {
+            startSetup(taskID: taskID)
+        }
+    }
+
+    /// Places a task that has not started in a workspace the user chose:
+    /// an open one, or a recently closed one or a project directory, which
+    /// Toastty opens.
+    /// Triage then runs for anything else still missing, with the
+    /// workspace fixed.
+    func setWorkspace(taskID: UUID, choice: TaskWorkspaceChoice) throws {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        switch record.setup {
+        case .routing, .needsWorkspace, .setupFailed:
+            break
+        case .settingUp:
+            throw TaskError("This task is still setting up.")
+        case .started:
+            throw TaskError("This task has already started.")
+        }
+        guard record.operation.taskSpace == nil else {
+            throw TaskError("This task already has a task space. Retry it, or delete it and create it again.")
+        }
+        let workspaceID: UUID
+        switch choice {
+        case .open(let requestedID):
+            guard store.state.workspacesByID[requestedID] != nil else {
+                throw TaskError("No open workspace has ID \(requestedID.uuidString).")
+            }
+            workspaceID = store.state.subspaceParentIDsByWorkspaceID()[requestedID] ?? requestedID
+            guard store.state.isCoordinatorWorkspace(workspaceID) == false else {
+                throw TaskError("The coordinator's workspace is not a project. Pass the task's project workspace or root directory.")
+            }
+            let root = store.state.workspacesByID[workspaceID].flatMap { Self.rootDirectory(of: $0, fileManager: fileManager) }
+            try checkProjectUnchanged(record, newRoot: root)
+        case .recent(let recentID):
+            try checkProjectUnchanged(record, newRoot: recentWorkspaces?.item(id: recentID)?.rootDirectory)
+            guard let recent = recentWorkspaces?.item(id: recentID) else {
+                throw TaskError("No recently closed workspace has ID \(recentID.uuidString).")
+            }
+            workspaceID = try openProject(title: recent.title, rootDirectory: recent.rootDirectory)
+        case .directory(let path):
+            let rootDirectory = TasksConfigFile.normalizedPath(path, homeDirectoryPath: homeDirectoryPath)
+            try checkProjectUnchanged(record, newRoot: rootDirectory)
+            workspaceID = try openProject(
+                title: Self.projectTitle(rootDirectory: rootDirectory, suggestion: record.suggestedWorkspace, homeDirectoryPath: homeDirectoryPath),
+                rootDirectory: rootDirectory
+            )
+        }
+        do {
+            try records.save(id: taskID) {
+                $0.pinned.workspaceID = workspaceID
+                $0.workspaceID = workspaceID
+                $0.projectRoot = nil
+                $0.resolved = nil
+                $0.suggestedWorkspace = nil
+                $0.setup = .routing
+            }
+        } catch {
+            throw TaskError("Toastty could not save the task: \(error.localizedDescription)")
+        }
+        ToasttyLog.info("Placed a task in a chosen workspace", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "workspace_id": workspaceID.uuidString,
+        ])
+        startRouting(taskID: taskID)
+    }
+
+    /// A move into a worktree pins its base commit and reserves its
+    /// worktree in the task's project; another project cannot reuse them.
+    /// The same project, open again, is fine.
+    private func checkProjectUnchanged(_ record: TaskRecord, newRoot: String?) throws {
+        guard record.operation.base != nil || record.operation.worktree != nil,
+              let projectRoot = record.projectRoot else { return }
+        let same = newRoot.map {
+            TasksConfigFile.normalizedPath($0, homeDirectoryPath: homeDirectoryPath)
+                == TasksConfigFile.normalizedPath(projectRoot, homeDirectoryPath: homeDirectoryPath)
+        } ?? false
+        guard same else {
+            throw TaskError("This task already has a worktree in \(projectRoot), so it stays in that project. Retry it there, or delete it and create it again.")
+        }
+    }
+
+    /// The workspaces a task can be placed in, for the picker: the open
+    /// top-level ones, then recently closed ones whose project is not open,
+    /// and the project triage suggested for `taskID`, if any.
+    func workspaceChoices(taskID: UUID? = nil) -> TaskWorkspaceChoices {
+        let recent = (recentWorkspaces?.items ?? []).filter { openWorkspace(onRoot: $0.rootDirectory) == nil }
+        var choices = TaskWorkspaceChoices(
+            open: topLevelWorkspaces().map {
+                TaskWorkspaceChoices.Open(id: $0.id, title: $0.title, rootDirectory: Self.rootDirectory(of: $0, fileManager: fileManager))
+            },
+            recent: recent
+        )
+        if let taskID, let record = records.record(id: taskID), case .needsWorkspace = record.setup,
+           let suggestion = record.suggestedWorkspace {
+            let target = TasksConfigFile.normalizedPath(suggestion.rootDirectory, homeDirectoryPath: homeDirectoryPath)
+            let choice: TaskWorkspaceChoice
+            if let open = openWorkspace(onRoot: suggestion.rootDirectory) {
+                choice = .open(open.id)
+            } else if let item = recent.first(where: { TasksConfigFile.normalizedPath($0.rootDirectory, homeDirectoryPath: homeDirectoryPath) == target }) {
+                choice = .recent(item.id)
+            } else {
+                choice = .directory(suggestion.rootDirectory)
+            }
+            // A reopened or open workspace keeps its own title; a directory
+            // opens under the suggestion's, as `projectTitle` names it.
+            let title: String
+            if case .directory = choice {
+                title = suggestion.title
+            } else {
+                title = choices.title(of: choice) ?? suggestion.title
+            }
+            choices.suggested = TaskWorkspaceChoices.Suggested(
+                title: title,
+                rootDirectory: suggestion.rootDirectory,
+                choice: choice
+            )
+        }
+        return choices
+    }
+
+    /// The project directories whose folder name, or workspace title,
+    /// matches `name`, ignoring case, `-`, `_`, `.` and spaces. First the
+    /// directories Toastty knows: open and recently closed workspaces, the
+    /// `[workspace."<root>"]` roots in tasks.toml, and the projects of
+    /// tasks. Then the git repositories next to those, in the same parent
+    /// directory, that Toastty never opened. A linked worktree, whose `.git`
+    /// is a file, is not a project. One entry per directory, each still a
+    /// directory. With `workspaceScope`, only the open workspaces it allows,
+    /// and nothing else.
+    func projectMatches(named name: String, workspaceScope: ((UUID) -> Bool)? = nil) -> [TaskProjectMatch] {
+        let key = TaskProjectMatch.key(name)
+        guard key.isEmpty == false else { return [] }
+        var known: [TaskProjectMatch] = []
+        func consider(_ match: TaskProjectMatch) {
+            var match = match
+            match.rootDirectory = TasksConfigFile.normalizedPath(match.rootDirectory, homeDirectoryPath: homeDirectoryPath)
+            known.append(match)
+        }
+        for workspace in topLevelWorkspaces() where workspaceScope?(workspace.id) ?? true {
+            guard let root = Self.rootDirectory(of: workspace, fileManager: fileManager) else { continue }
+            consider(TaskProjectMatch(title: workspace.title, rootDirectory: root, source: .open, workspaceID: workspace.id))
+        }
+        if workspaceScope == nil {
+            for item in recentWorkspaces?.items ?? [] {
+                consider(TaskProjectMatch(title: item.title, rootDirectory: item.rootDirectory, source: .recent, recentWorkspaceID: item.id))
+            }
+            for workspace in (try? configLoader())?.workspaces ?? [] {
+                consider(TaskProjectMatch(title: URL(filePath: workspace.path).lastPathComponent, rootDirectory: workspace.path, source: .config))
+            }
+            for record in records.records.reversed() {
+                guard let root = record.projectRoot else { continue }
+                consider(TaskProjectMatch(title: URL(filePath: root).lastPathComponent, rootDirectory: root, source: .history))
+            }
+        }
+
+        // Names first, then one entry per directory: a workspace whose title
+        // matches counts even when another workspace on its root came first.
+        var matches: [TaskProjectMatch] = []
+        var seen = Set<String>()
+        var parents: [String] = []
+        var checked = Set<String>()
+        for candidate in known {
+            guard checked.contains(candidate.rootDirectory) || isDirectory(candidate.rootDirectory) else { continue }
+            let folder = URL(filePath: candidate.rootDirectory)
+            if checked.insert(candidate.rootDirectory).inserted {
+                let parent = folder.deletingLastPathComponent().path(percentEncoded: false)
+                if parents.contains(parent) == false { parents.append(parent) }
+            }
+            guard TaskProjectMatch.key(folder.lastPathComponent) == key || TaskProjectMatch.key(candidate.title) == key,
+                  seen.insert(candidate.rootDirectory).inserted else { continue }
+            matches.append(candidate)
+        }
+        guard workspaceScope == nil else { return matches }
+        for parent in parents {
+            let children = (try? fileManager.contentsOfDirectory(atPath: parent)) ?? []
+            for child in children.sorted() where TaskProjectMatch.key(child) == key {
+                let path = URL(filePath: parent).appending(path: child).path(percentEncoded: false)
+                let normalized = TasksConfigFile.normalizedPath(path, homeDirectoryPath: homeDirectoryPath)
+                guard checked.contains(normalized) == false,
+                      seen.contains(normalized) == false,
+                      isDirectory(normalized),
+                      isDirectory(URL(filePath: normalized).appending(path: ".git").path(percentEncoded: false)) else { continue }
+                seen.insert(normalized)
+                matches.append(TaskProjectMatch(title: child, rootDirectory: normalized, source: .sibling))
+            }
+        }
+        return matches
+    }
+
+    /// The title for a workspace opened on a project directory: the
+    /// suggestion's, else the directory's name.
+    static func projectTitle(rootDirectory: String, suggestion: TaskWorkspaceSuggestion?, homeDirectoryPath: String) -> String {
+        if let suggestion,
+           TasksConfigFile.normalizedPath(suggestion.rootDirectory, homeDirectoryPath: homeDirectoryPath) == rootDirectory {
+            return suggestion.title
+        }
+        return URL(filePath: rootDirectory).lastPathComponent
+    }
+
+    /// The projects that are not open, for triage to suggest: recently
+    /// closed workspaces, then the `[workspace."<root>"]` roots in
+    /// tasks.toml, one per root directory, each still a directory. `open`
+    /// holds the open workspaces' git roots, so a terminal inside a nested
+    /// repository does not hide the project around it.
+    private func closedWorkspaces(config: TasksConfig, open: [TaskTriage.Workspace]) -> [TaskTriage.ClosedWorkspace] {
+        var seen = Set(open.map { TasksConfigFile.normalizedPath($0.rootDirectory, homeDirectoryPath: homeDirectoryPath) })
+        var result: [TaskTriage.ClosedWorkspace] = []
+        func add(title: String?, root: String) {
+            let normalized = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
+            guard seen.insert(normalized).inserted, isDirectory(normalized) else { return }
+            result.append(TaskTriage.ClosedWorkspace(
+                title: title ?? URL(filePath: normalized).lastPathComponent,
+                rootDirectory: normalized,
+                guidelines: config.workspace(forProjectRoot: normalized, homeDirectoryPath: homeDirectoryPath)?.guidelines
+            ))
+        }
+        for item in recentWorkspaces?.items ?? [] {
+            add(title: item.title, root: item.rootDirectory)
+        }
+        for workspace in config.workspaces {
+            add(title: nil, root: workspace.path)
+        }
+        return result
+    }
+
+    /// Opens a project that is not open as a new top-level workspace, or
+    /// finds it open already, and returns its workspace.
+    /// `reusingOpenWorkspace: false` opens a new workspace even when one has
+    /// a terminal inside the directory, for a caller that already found
+    /// that workspace on another repository.
+    private func openProject(
+        title: String,
+        rootDirectory: String,
+        workspaceID: UUID = UUID(),
+        reusingOpenWorkspace: Bool = true
+    ) throws -> UUID {
+        if reusingOpenWorkspace, let open = openWorkspace(onRoot: rootDirectory) {
+            return open.id
+        }
+        guard isDirectory(rootDirectory) else {
+            throw TaskError("The directory \(rootDirectory) no longer exists.")
+        }
+        guard let windowID = store.state.windows.first?.id else {
+            throw TaskError("Open a Toastty window, then try again.")
+        }
+        guard store.send(.reopenWorkspace(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: UUID(),
+            title: title,
+            rootDirectory: rootDirectory
+        )) else {
+            throw TaskError("Toastty could not open \(title).")
+        }
+        flushLayout()
+        ToasttyLog.info("Opened a project workspace for a task", category: .tasks, metadata: [
+            "workspace_id": workspaceID.uuidString,
+            "root": rootDirectory,
+        ])
+        return workspaceID
+    }
+
+    /// Removes a task and its attachments, and stops its setup. A task
+    /// space that setup made is closed while nothing has used it; one that
+    /// was used stays, without its task link.
+    func delete(taskID: UUID) throws {
+        guard let record = records.record(id: taskID) else {
+            throw TaskError("No task has ID \(taskID.uuidString).")
+        }
+        setupAttempts[taskID] = nil
+        setupTasks.removeValue(forKey: taskID)?.cancel()
+        startWorkAttempts[taskID] = nil
+        startWorkTasks.removeValue(forKey: taskID)?.cancel()
+        if let taskSpace = record.operation.taskSpace,
+           store.state.workspacesByID[taskSpace.workspaceID] != nil {
+            if closeTaskSpaceIfUnused(taskSpace, record: record) == false {
+                _ = store.send(.setWorkspaceTaskID(workspaceID: taskSpace.workspaceID, taskID: nil))
+            }
+            // Saved before the record goes, so a crash cannot leave a task
+            // link that brings the deleted task back on the next launch.
+            flushLayout()
+        }
+        do {
+            try records.remove(id: taskID)
+        } catch {
+            throw TaskError("Toastty could not delete the task: \(error.localizedDescription)")
+        }
+        try? fileManager.removeItem(at: attachmentsDirectoryURL.appending(path: taskID.uuidString, directoryHint: .isDirectory))
+        ToasttyLog.info("Deleted a task", category: .tasks, metadata: ["task_id": taskID.uuidString])
+    }
+
+    /// Removes the attached files of tasks that have been Done or Archived
+    /// for a week; see `TaskAttachmentRetention`. Runs at launch and with
+    /// the release monitor. Skipped while tasks.toml cannot be read, since
+    /// `release_tags` decides whether a merged task is finished.
+    func removeExpiredAttachments() {
+        guard let config = try? configLoader() else { return }
+        let date = now()
+        // A task that is Done through its child tasks shows it only on the
+        // board, which is built once and only when a parent task needs it.
+        var doneThroughChildren: Set<UUID>?
+        func isDoneThroughChildren(_ record: TaskRecord) -> Bool {
+            guard records.records.contains(where: { $0.parentTaskID == record.id }) else { return false }
+            if doneThroughChildren == nil {
+                doneThroughChildren = Set((board?.items() ?? []).filter { $0.finishedThroughChildren && $0.stage == .done }.compactMap(\.taskID))
+            }
+            return doneThroughChildren?.contains(record.id) == true
+        }
+        for record in records.records {
+            let directoryURL = attachmentsDirectoryURL.appending(path: record.id.uuidString, directoryHint: .isDirectory)
+            // Until the repository has been identified, do not use the
+            // previous directory-only rule to delete files.
+            if record.mergedAt != nil && record.doneAt == nil && record.shippedAt == nil && record.archivedAt == nil {
+                if let root = record.projectRoot, board != nil,
+                   record.operation.worktree == nil, board?.repositoryRoots[root] == nil { continue }
+            }
+            let releaseTagsConfigured = record.projectRoot.flatMap {
+                config.releaseWorkspace(forProjectRoot: $0, repositoryRoot: releaseRepositoryRoot(projectRoot: $0, record: record), homeDirectoryPath: homeDirectoryPath)?.releaseTags
+            } != nil
+            let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
+            let hasFiles = fileManager.fileExists(atPath: directoryURL.path)
+            let step = TaskAttachmentRetention.step(
+                record,
+                hasFiles: hasFiles,
+                releaseTagsConfigured: releaseTagsConfigured,
+                taskSpaceOpen: taskSpaceOpen,
+                doneThroughChildren: hasFiles && taskSpaceOpen == false && record.attachmentsRemovedAt == nil
+                    && isDoneThroughChildren(record),
+                now: date
+            )
+            switch step {
+            case .none:
+                continue
+            case .startClock:
+                records.update(id: record.id) { $0.attachmentsFinishedSeenAt = date }
+            case .resetClock:
+                records.update(id: record.id) { $0.attachmentsFinishedSeenAt = nil }
+            case .remove:
+                do {
+                    try fileManager.removeItem(at: directoryURL)
+                } catch {
+                    ToasttyLog.warning(
+                        "Could not remove a finished task's attachments",
+                        category: .tasks,
+                        metadata: ["task_id": record.id.uuidString, "error": error.localizedDescription]
+                    )
+                    continue
+                }
+                records.update(id: record.id) { $0.attachmentsRemovedAt = date }
+                ToasttyLog.info("Removed a finished task's attachments", category: .tasks, metadata: ["task_id": record.id.uuidString])
+            }
+        }
+    }
+
+    // MARK: - Launch reconciliation
+
+    /// Brings records and workspaces back in line after a launch: a setup
+    /// that the last run did not finish is marked failed, unless its agent
+    /// had already started, a task space that lost its link to its record
+    /// gets it back, and a task space whose record is missing gets one
+    /// rebuilt from what the workspace shows.
+    func reconcileAfterLaunch() {
+        // An archive or a release cleanup that a quit interrupted shows as
+        // stopped, so Clean Up continues it from what is still there. So
+        // does a merge's cleanup whose task space is gone while its worktree
+        // is still there, or one Toastty ran itself: no merge request is
+        // left to finish it.
+        for record in records.records {
+            guard let cleanup = record.cleanup,
+                  cleanup.finishedAt == nil, cleanup.problem == nil else { continue }
+            if cleanup.kind == .merge, cleanup.removesWorktreeDirectly != true {
+                let taskSpaceClosed = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] == nil } ?? true
+                guard taskSpaceClosed, let worktree = record.worktree, worktree.isDetached == false,
+                      isDirectory(worktree.path) else { continue }
+            }
+            records.update(id: record.id) {
+                $0.cleanup?.problem = "Toastty quit before the cleanup finished. Clean Up continues it."
+            }
+        }
+        // Triage changes nothing outside the record, so a triage the last
+        // run did not finish simply runs again.
+        for record in records.records where record.setup == .routing && setupAttempts[record.id] == nil {
+            startRouting(taskID: record.id)
+        }
+        for record in records.records where record.setup == .settingUp && setupAttempts[record.id] == nil {
+            // A fork counts once it reported a conversation of its own.
+            if let launch = record.operation.agentLaunch, record.forkSource == nil || launch.forkConversationID != nil {
+                saveOrDefer(taskID: record.id) {
+                    $0.setup = .started
+                    if $0.startWork != nil { $0.startWork?.state = .finished }
+                }
+            } else {
+                let reason = "Toastty quit before setup finished. Retry to continue."
+                saveOrDefer(taskID: record.id) {
+                    $0.setup = .setupFailed(reason: reason)
+                    if $0.startWork != nil { $0.startWork?.state = .failed(reason: reason) }
+                }
+            }
+        }
+        for record in records.records
+        where record.setup == .started && record.startWork?.state == .running && startWorkAttempts[record.id] == nil {
+            if record.operation.worktreeSession?.nativeConversationID != nil || record.operation.sourceOutcome != nil {
+                // The agent already works in the worktree; only closing the
+                // old session was left.
+                saveOrDefer(taskID: record.id) {
+                    if $0.operation.sourceOutcome == nil {
+                        $0.operation.sourceOutcome = .kept(reason: "Toastty quit before it closed this session.")
+                    }
+                    $0.startWork?.state = .finished
+                }
+            } else {
+                saveOrDefer(taskID: record.id) {
+                    $0.startWork?.state = .failed(reason: "Toastty quit before the move into the worktree finished. Retry to continue.")
+                }
+            }
+        }
+        relinkTaskSpaces()
+        for workspace in store.state.workspacesByID.values {
+            guard let taskID = workspace.taskID, records.record(id: taskID) == nil else { continue }
+            let parent = workspace.parentWorkspaceID.flatMap { store.state.workspacesByID[$0] }
+            let panelID = workspace.orderedTabs.first?.panels.keys.sorted { $0.uuidString < $1.uuidString }.first
+            let rebuilt = TaskRecord(
+                id: taskID,
+                createdAt: now(),
+                text: workspace.title,
+                title: workspace.title,
+                slug: TaskRecord.sanitizedSlug(workspace.title) ?? "task",
+                source: .recovered,
+                workspaceID: parent?.id,
+                projectRoot: parent?.rootDirectory,
+                setup: .started,
+                operation: TaskOperation(
+                    taskSpace: panelID.map { TaskOperation.TaskSpace(workspaceID: workspace.id, panelID: $0) }
+                )
+            )
+            do {
+                try records.insert(rebuilt)
+            } catch {
+                ToasttyLog.warning("Failed saving a rebuilt task record", category: .tasks, metadata: [
+                    "task_id": taskID.uuidString,
+                    "error": error.localizedDescription,
+                ])
+                continue
+            }
+            ToasttyLog.warning("Rebuilt a missing task record from its task space", category: .tasks, metadata: [
+                "task_id": taskID.uuidString,
+                "workspace_id": workspace.id.uuidString,
+            ])
+        }
+        // Saved watches keep waiting across a relaunch; old fired ones go.
+        evaluateWatches()
+        startWatchMonitorIfNeeded()
+        // So do the wakes of waiting tasks, including ones whose time came
+        // while Toastty was not running.
+        startWakeMonitorIfNeeded()
+    }
+
+    /// Links each open task space to its task again when the layout lost
+    /// the link: a Toastty that does not know tasks, such as v0.9.2, saved
+    /// the layout last. The record keeps its side of the link. Without this
+    /// the board lists the task twice, once as a task space without one. A
+    /// workspace that more than one record names, or a task that another
+    /// workspace already holds, is left as it is.
+    private func relinkTaskSpaces() {
+        let linkedTaskIDs = Set(store.state.workspacesByID.values.compactMap(\.taskID))
+        let recordsByTaskSpace = Dictionary(grouping: records.records.filter { $0.taskSpaceWorkspaceID != nil }) {
+            $0.taskSpaceWorkspaceID!
+        }
+        var relinked = false
+        for (workspaceID, named) in recordsByTaskSpace {
+            guard named.count == 1, let record = named.first,
+                  linkedTaskIDs.contains(record.id) == false,
+                  let workspace = store.state.workspacesByID[workspaceID],
+                  workspace.taskID == nil, workspace.isCoordinator == false,
+                  store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: record.id)) else { continue }
+            relinked = true
+            ToasttyLog.warning("Linked a task space to its task again", category: .tasks, metadata: [
+                "task_id": record.id.uuidString,
+                "workspace_id": workspaceID.uuidString,
+            ])
+        }
+        if relinked { flushLayout() }
+    }
+
+    // MARK: - Setup
+
+    func startSetup(taskID: UUID) {
+        let attempt = UUID()
+        setupAttempts[taskID] = attempt
+        setupTasks.removeValue(forKey: taskID)?.cancel()
+        setupTasks[taskID] = Task { [weak self] in
+            await self?.runSetup(taskID: taskID, attempt: attempt)
+        }
+    }
+
+    /// Saves a change at once; if the disk refuses it, keeps it in memory
+    /// and saves it with the next delayed write. For bookkeeping after the
+    /// fact, where stopping would not undo anything.
+    func saveOrDefer(taskID: UUID, _ body: (inout TaskRecord) -> Void) {
+        do {
+            try records.save(id: taskID, body)
+        } catch {
+            ToasttyLog.warning("Failed saving a task record at once", category: .tasks, metadata: [
+                "task_id": taskID.uuidString,
+                "error": error.localizedDescription,
+            ])
+            records.update(id: taskID, body)
+        }
+    }
+
+    func isCurrent(taskID: UUID, attempt: UUID) -> Bool {
+        setupAttempts[taskID] == attempt
+            && records.record(id: taskID)?.setup == .settingUp
+            && Task.isCancelled == false
+    }
+
+    private func runSetup(taskID: UUID, attempt: UUID) async {
+        guard isCurrent(taskID: taskID, attempt: attempt),
+              let record = records.record(id: taskID),
+              let resolved = record.resolved,
+              let profileID = resolved.agent else {
+            setupFailed(taskID: taskID, attempt: attempt, reason: "The task has no agent. Delete it and create it again.")
+            return
+        }
+        guard let workspaceID = record.workspaceID,
+              let windowID = store.state.workspaceSelection(containingWorkspaceID: workspaceID)?.windowID else {
+            setupFailed(taskID: taskID, attempt: attempt, reason: "The task's workspace is closed. Open it, then retry.")
+            return
+        }
+        guard let projectRoot = record.projectRoot, isDirectory(projectRoot) else {
+            setupFailed(
+                taskID: taskID,
+                attempt: attempt,
+                reason: "The project directory \(record.projectRoot ?? "") no longer exists."
+            )
+            return
+        }
+
+        // 0. With --start-work, the worktree, which the task space's terminal
+        // and the agent then use.
+        var directory = projectRoot
+        var worktree: TaskOperation.Worktree?
+        if record.startWork != nil {
+            guard let prepared = await prepareWorktree(taskID: taskID, job: .setup(attempt)) else { return }
+            worktree = prepared
+            directory = prepared.path
+        }
+
+        // 1. The task space. One that an earlier attempt made is reused,
+        // and if an agent already runs there, the task has started.
+        let taskSpace: TaskOperation.TaskSpace
+        if let existing = record.operation.taskSpace, store.state.workspacesByID[existing.workspaceID] != nil {
+            // A fork that an earlier attempt launched is checked in step 2.
+            if record.forkSource == nil, record.operation.agentLaunch != nil || hasActiveSession(existing.workspaceID) {
+                finishStarted(taskID: taskID, attempt: attempt)
+                return
+            }
+            guard let panelID = reusablePanel(in: existing.workspaceID, preferred: existing.panelID, directory: directory) else {
+                setupFailed(taskID: taskID, attempt: attempt, reason: "Toastty could not open a terminal in the task space.")
+                return
+            }
+            taskSpace = TaskOperation.TaskSpace(workspaceID: existing.workspaceID, panelID: panelID)
+            saveOrDefer(taskID: taskID) { $0.operation.taskSpace = taskSpace }
+        } else {
+            taskSpace = TaskOperation.TaskSpace(workspaceID: UUID(), panelID: UUID())
+            // Saved first: after a crash, a retry finds this task space
+            // instead of making a second one. Nothing is made if the save
+            // fails.
+            do {
+                try records.save(id: taskID) {
+                    $0.operation.taskSpace = taskSpace
+                    $0.operation.agentLaunch = nil
+                }
+            } catch {
+                setupFailed(taskID: taskID, attempt: attempt, reason: "Toastty could not save the task: \(error.localizedDescription)")
+                return
+            }
+            guard store.send(.createTaskSpace(
+                windowID: windowID,
+                workspaceID: taskSpace.workspaceID,
+                panelID: taskSpace.panelID,
+                parentWorkspaceID: workspaceID,
+                spawningSessionID: creatorSessionID(of: record),
+                taskID: taskID,
+                title: record.slug,
+                terminalCWD: directory
+            )) else {
+                saveOrDefer(taskID: taskID) { $0.operation.taskSpace = nil }
+                setupFailed(taskID: taskID, attempt: attempt, reason: "Toastty could not create the task space.")
+                return
+            }
+            flushLayout()
+            if let creator = creatorSessionID(of: record) {
+                grantScope(creator, taskSpace.workspaceID)
+            }
+        }
+
+        // 2. The agent.
+        guard let launcher else {
+            setupFailed(taskID: taskID, attempt: attempt, reason: "The agent launcher is not available.")
+            return
+        }
+        if record.forkSource != nil {
+            guard await launchFork(
+                taskID: taskID,
+                attempt: attempt,
+                taskSpace: taskSpace,
+                directory: directory,
+                worktree: worktree,
+                launcher: launcher
+            ) else { return }
+            finishStarted(taskID: taskID, attempt: attempt)
+            return
+        }
+        let base = records.record(id: taskID)?.operation.base
+        var firstPrompt = resolved.prompt
+        var prompt = TaskPrompt.compose(
+            skill: resolved.skill,
+            startPrompt: resolved.startPrompt,
+            firstPrompt: firstPrompt,
+            text: record.text,
+            attachmentPaths: record.attachments.map(\.path),
+            worktree: worktree,
+            base: base,
+            parent: parentTask(of: record)
+        )
+        // Routing checked the message without the worktree line, which is
+        // known only now. Triage's own prompt is the part that can go; the
+        // caller's message was checked when the task was made.
+        if prompt.utf8.count > AgentLaunchService.maximumInitialPromptUTF8Count,
+           firstPrompt != nil, record.pinned.prompt == nil {
+            firstPrompt = nil
+            prompt = TaskPrompt.compose(
+                skill: resolved.skill,
+                startPrompt: resolved.startPrompt,
+                firstPrompt: nil,
+                text: record.text,
+                attachmentPaths: record.attachments.map(\.path),
+                worktree: worktree,
+                base: base,
+                parent: parentTask(of: record)
+            )
+            let dropped = "Toastty left out triage's first prompt, which made the agent's first message longer than \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB."
+            saveOrDefer(taskID: taskID) {
+                $0.resolved?.prompt = nil
+                $0.triageNote = [$0.triageNote, dropped].compactMap { $0 }.joined(separator: " ")
+            }
+        }
+        let promptWithoutSkills = Self.promptWithoutSkills(prompt, TaskPrompt.compose(
+            skill: resolved.skill,
+            startPrompt: resolved.startPrompt,
+            firstPrompt: firstPrompt,
+            text: record.text,
+            attachmentPaths: record.attachments.map(\.path),
+            worktree: worktree,
+            base: base,
+            parent: parentTask(of: record),
+            skills: Self.skillsMissing()
+        ))
+        let parentSessionID = creatorSessionID(of: record)
+        let result: AgentLaunchResult
+        do {
+            result = try await Self.launchWhenTerminalIsReady(timeout: terminalReadinessTimeout) {
+                try await launcher.launchTask(
+                    profileID: profileID,
+                    workspaceID: taskSpace.workspaceID,
+                    panelID: taskSpace.panelID,
+                    cwd: directory,
+                    model: resolved.model,
+                    reasoningEffort: resolved.effort,
+                    initialPrompt: prompt,
+                    initialPromptWithoutSkills: promptWithoutSkills,
+                    parentSessionID: parentSessionID,
+                    forkFromSessionID: nil,
+                    // A task session is unscoped unless the session that
+                    // made the task was scoped; then it keeps that scope,
+                    // with this task space added.
+                    scopedWorkspaceIDs: record.creatorScope.map { $0.union([taskSpace.workspaceID]) },
+                    beforeDispatch: { [weak self] in
+                        guard let self, self.isCurrent(taskID: taskID, attempt: attempt) else {
+                            throw CancellationError()
+                        }
+                    }
+                )
+            }
+        } catch {
+            if error is CancellationError || Task.isCancelled { return }
+            if case .commandDeliveryUncertain? = error as? AgentLaunchError {
+                setupFailed(
+                    taskID: taskID,
+                    attempt: attempt,
+                    reason: "The agent command may not have reached the terminal. Check the task space before you retry."
+                )
+                return
+            }
+            setupFailed(taskID: taskID, attempt: attempt, reason: Self.launchFailureReason(for: error))
+            return
+        }
+        saveOrDefer(taskID: taskID) {
+            $0.operation.agentLaunch = TaskOperation.AgentLaunch(sessionID: result.sessionID, at: now())
+        }
+        finishStarted(taskID: taskID, attempt: attempt)
+    }
+
+    /// The task that created `record`, for the first message's parent line.
+    /// `nil` when it has no parent, or the parent no longer exists.
+    func parentTask(of record: TaskRecord) -> TaskPrompt.ParentTask? {
+        guard record.parentTaskID != record.id else { return nil }
+        return parentTask(id: record.parentTaskID)
+    }
+
+    func parentTask(id: UUID?) -> TaskPrompt.ParentTask? {
+        guard let id, let parent = records.record(id: id) else { return nil }
+        return TaskPrompt.ParentTask(id: parent.id, title: parent.title)
+    }
+
+    private func creatorSessionID(of record: TaskRecord) -> String? {
+        if case .agent(let sessionID) = record.source { return sessionID }
+        return nil
+    }
+
+    private func finishStarted(taskID: UUID, attempt: UUID) {
+        guard setupAttempts[taskID] == attempt else { return }
+        setupAttempts[taskID] = nil
+        setupTasks[taskID] = nil
+        saveOrDefer(taskID: taskID) {
+            $0.setup = .started
+            if $0.startWork != nil { $0.startWork?.state = .finished }
+        }
+        ToasttyLog.info("Started a task", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "workspace_id": records.record(id: taskID)?.taskSpaceWorkspaceID?.uuidString ?? "",
+        ])
+    }
+
+    func setupFailed(taskID: UUID, attempt: UUID, reason: String) {
+        guard setupAttempts[taskID] == attempt else { return }
+        setupAttempts[taskID] = nil
+        setupTasks[taskID] = nil
+        saveOrDefer(taskID: taskID) {
+            $0.setup = .setupFailed(reason: reason)
+            if $0.startWork != nil { $0.startWork?.state = .failed(reason: reason) }
+        }
+        ToasttyLog.info("Task setup failed", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "reason": reason,
+        ])
+    }
+
+    // MARK: - Routing
+
+    /// Triage needs a command to run.
+    private func isTriageEnabled(_ config: TasksConfig) -> Bool {
+        triageRunner != nil && config.triage?.command != nil
+    }
+
+    /// Whether triage is on now, for the setup card's Retry Triage. False when
+    /// tasks.toml cannot be read.
+    var isTriageConfigured: Bool {
+        (try? configLoader()).map(isTriageEnabled) ?? false
+    }
+
+    /// Why a task waits when no workspace was named and triage is off.
+    static let noWorkspaceReason = "No workspace was named. Pick a workspace for this task."
+
+    private func startRouting(taskID: UUID) {
+        let attempt = UUID()
+        setupAttempts[taskID] = attempt
+        setupTasks.removeValue(forKey: taskID)?.cancel()
+        setupTasks[taskID] = Task { [weak self] in
+            await self?.route(taskID: taskID, attempt: attempt)
+        }
+    }
+
+    private func isRouting(taskID: UUID, attempt: UUID) -> Bool {
+        setupAttempts[taskID] == attempt
+            && records.record(id: taskID)?.setup == .routing
+            && Task.isCancelled == false
+    }
+
+    /// Fills what the caller left out, with triage when it is on and
+    /// `[defaults]` after it, then starts setup. Without a workspace, the
+    /// task waits for the user to pick one.
+    private func route(taskID: UUID, attempt: UUID) async {
+        guard isRouting(taskID: taskID, attempt: attempt), let record = records.record(id: taskID) else { return }
+        let config: TasksConfig
+        do {
+            config = try configLoader()
+        } catch {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.setup = .setupFailed(reason: "\(error.localizedDescription) Fix the file, then retry.")
+            }
+            return
+        }
+
+        // A workspace the caller or the user chose that has closed sends the
+        // task back to the user; triage never moves it somewhere else.
+        if let chosenID = record.workspaceID, store.state.workspacesByID[chosenID] == nil {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.setup = .needsWorkspace(reason: "The task's workspace closed. Pick a workspace.")
+            }
+            return
+        }
+        let fixedID = record.workspaceID
+        // Triage may choose only agents that take the model and effort the
+        // caller set.
+        let agents = triageAgents().filter {
+            (record.pinned.model == nil || $0.acceptsModel) && (record.pinned.effort == nil || $0.acceptsEffort)
+        }
+        var workspaces = await openWorkspaces(config: config)
+        guard isRouting(taskID: taskID, attempt: attempt) else { return }
+        var closed = fixedID == nil ? closedWorkspaces(config: config, open: workspaces) : []
+        let pinnedAgent = record.pinned.agent.flatMap { id in agents.first { $0.id == id } }
+        let missing = TaskTriage.missingFields(pinned: record.pinned, workspaceID: fixedID, pinnedAgent: pinnedAgent)
+
+        var answer: TaskTriage.Answer?
+        var triageFailure: String?
+        if missing.isEmpty == false, isTriageEnabled(config), let triage = config.triage, let triageRunner {
+            do {
+                let input = TaskTriage.Input(
+                    text: record.text,
+                    fileNames: record.attachments.map(\.displayName),
+                    fixed: record.pinned,
+                    fixedWorkspace: fixedID.flatMap { id in workspaces.first { $0.id == id } },
+                    workspaces: workspaces,
+                    closedWorkspaces: closed,
+                    agents: agents,
+                    guidelines: try triageGuidelines(triage)
+                )
+                ToasttyLog.info("Running triage", category: .tasks, metadata: [
+                    "task_id": taskID.uuidString,
+                    "missing": missing.map(\.rawValue).joined(separator: ","),
+                ])
+                switch await triageRunner.run(prompt: TaskTriage.prompt(for: input), triage: triage) {
+                case .success(let triageAnswer):
+                    answer = triageAnswer
+                case .failure(.cancelled):
+                    return
+                case .failure(let failure):
+                    triageFailure = failure.message
+                }
+            } catch {
+                triageFailure = "Triage failed: \(error.localizedDescription)"
+            }
+            guard isRouting(taskID: taskID, attempt: attempt) else { return }
+            // A workspace may have closed, or opened, while triage ran.
+            workspaces = await openWorkspaces(config: config)
+            guard isRouting(taskID: taskID, attempt: attempt) else { return }
+            if fixedID == nil {
+                closed = closedWorkspaces(config: config, open: workspaces)
+            }
+        }
+        guard let current = records.record(id: taskID) else { return }
+        let stillFixedID = fixedID.flatMap { store.state.workspacesByID[$0] == nil ? nil : $0 }
+        let resolution = TaskTriage.resolve(
+            pinned: current.pinned,
+            workspaceID: stillFixedID,
+            answer: answer,
+            workspaces: workspaces,
+            closedWorkspaces: closed,
+            agents: agents,
+            homeDirectoryPath: homeDirectoryPath
+        )
+        var notes = triageFailure.map { [$0] } ?? []
+        if resolution.rejected.isEmpty == false {
+            notes.append("Toastty ignored triage's " + resolution.rejected.joined(separator: "; ") + ".")
+        }
+        let triageNote = notes.isEmpty ? nil : notes.joined(separator: " ")
+        if let triageNote {
+            ToasttyLog.info("Triage did not answer in full", category: .tasks, metadata: [
+                "task_id": taskID.uuidString,
+                "note": triageNote,
+            ])
+        }
+        let title = current.titleSetByUser ? current.title : resolution.title ?? current.title
+        var slug = current.slug
+        if current.pinned.slug == nil, let triageSlug = resolution.slug, triageSlug != current.slug {
+            let taken = Set(records.records.lazy.filter { $0.id != taskID }.map(\.slug))
+            slug = TaskRecord.uniqueSlug(triageSlug, taken: taken)
+        }
+
+        let fixedClosed = fixedID != nil && stillFixedID == nil
+        guard fixedClosed == false, let workspaceID = resolution.workspaceID, store.state.workspacesByID[workspaceID] != nil else {
+            let reason: String
+            if fixedClosed {
+                reason = "The task's workspace closed. Pick a workspace."
+            } else if let triageFailure {
+                reason = "\(triageFailure) Pick a workspace."
+            } else if isTriageEnabled(config) {
+                reason = resolution.workspaceReason ?? "Triage did not choose an open workspace."
+            } else {
+                reason = Self.noWorkspaceReason
+            }
+            let suggestion = fixedClosed ? nil : resolution.suggestedWorkspace.map {
+                TaskWorkspaceSuggestion(title: $0.title, rootDirectory: $0.rootDirectory)
+            }
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.title = title
+                $0.slug = slug
+                $0.triageNote = triageNote
+                $0.suggestedWorkspace = suggestion
+                $0.setup = .needsWorkspace(reason: reason)
+            }
+            return
+        }
+
+        let projectRoot: (path: String, isNew: Bool)
+        var resolved: TaskFields
+        var finalNote = triageNote
+        do {
+            projectRoot = try resolvedProjectRoot(workspaceID: workspaceID)
+            // A worktree needs a git repository at the project root the task
+            // now has.
+            if let startWork = current.startWork {
+                _ = try newStartWork(
+                    branchPrefix: startWork.branchPrefix,
+                    base: startWork.base,
+                    source: startWork.source,
+                    projectRoot: projectRoot.path,
+                    config: config
+                )
+            }
+            resolved = try resolvedFields(
+                pinned: TaskFields(
+                    workspaceID: current.pinned.workspaceID,
+                    agent: resolution.agent,
+                    model: resolution.model,
+                    effort: resolution.effort,
+                    prompt: resolution.prompt,
+                    skill: current.pinned.skill
+                ),
+                workspaceID: workspaceID,
+                defaults: config.defaults,
+                // A release that comes back here keeps to its release skill.
+                skill: current.release == nil
+                    ? config.startSkill(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
+                    : nil,
+                startPrompt: current.release == nil
+                    ? config.startPrompt(forProjectRoot: projectRoot.path, homeDirectoryPath: homeDirectoryPath)
+                    : nil
+            )
+            let firstMessage = TaskPrompt.compose(
+                skill: resolved.skill,
+                startPrompt: resolved.startPrompt,
+                firstPrompt: resolved.prompt,
+                text: current.text,
+                attachmentPaths: current.attachments.map(\.path),
+                parent: parentTask(of: current)
+            )
+            // The caller's own message was checked when the task was made, so
+            // only triage's prompt can push it over; the task starts without it.
+            if firstMessage.utf8.count > AgentLaunchService.maximumInitialPromptUTF8Count, current.pinned.prompt == nil {
+                resolved.prompt = nil
+                let dropped = "Toastty left out triage's first prompt, which made the agent's first message longer than \(AgentLaunchService.maximumInitialPromptUTF8Count / 1024) KB."
+                finalNote = [triageNote, dropped].compactMap { $0 }.joined(separator: " ")
+            }
+        } catch {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.title = title
+                $0.slug = slug
+                $0.triageNote = triageNote
+                $0.setup = .setupFailed(reason: error.localizedDescription)
+            }
+            return
+        }
+
+        do {
+            // Saved at once: setup reads these fields, and a crash after
+            // this point must not run triage a second time.
+            try records.save(id: taskID) {
+                $0.workspaceID = workspaceID
+                $0.projectRoot = projectRoot.path
+                $0.resolved = resolved
+                $0.title = title
+                $0.slug = slug
+                $0.triageNote = finalNote
+                $0.suggestedWorkspace = nil
+                $0.setup = .settingUp
+            }
+        } catch {
+            routingEnded(taskID: taskID, attempt: attempt) {
+                $0.setup = .setupFailed(reason: "Toastty could not save the task: \(error.localizedDescription)")
+            }
+            return
+        }
+        if projectRoot.isNew {
+            _ = store.send(.setWorkspaceRootDirectory(workspaceID: workspaceID, rootDirectory: projectRoot.path))
+        }
+        ToasttyLog.info("Routed a task", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "workspace_id": workspaceID.uuidString,
+            "agent": resolved.agent ?? "",
+            "triage": String(answer != nil),
+        ])
+        startSetup(taskID: taskID)
+    }
+
+    private func routingEnded(taskID: UUID, attempt: UUID, _ body: (inout TaskRecord) -> Void) {
+        guard setupAttempts[taskID] == attempt else { return }
+        setupAttempts[taskID] = nil
+        setupTasks[taskID] = nil
+        saveOrDefer(taskID: taskID, body)
+    }
+
+    /// The installed agents that can take a task as their first message.
+    private func triageAgents() -> [TaskTriage.Agent] {
+        (launcher?.launchProfileSummaries() ?? [])
+            .filter { $0.isInstalled && $0.acceptsInitialPrompt }
+            .map(Self.triageAgent)
+    }
+
+    private static func triageAgent(_ profile: AgentLaunchProfileSummary) -> TaskTriage.Agent {
+        TaskTriage.Agent(
+            id: profile.profileID,
+            name: profile.displayName,
+            acceptsModel: profile.supportsModel,
+            acceptsEffort: profile.supportsReasoningEffort
+        )
+    }
+
+    /// The open top-level workspaces with a known directory, in window
+    /// order, each with the guidelines from its tasks.toml section. A root
+    /// that is not saved is looked up off the main actor; a workspace that
+    /// closed meanwhile is left out.
+    private func openWorkspaces(config: TasksConfig) async -> [TaskTriage.Workspace] {
+        let candidates = topLevelWorkspaces().map { workspace in
+            (
+                id: workspace.id,
+                title: workspace.title,
+                savedRoot: workspace.rootDirectory,
+                terminalDirectory: workspace.rootDirectory == nil
+                    ? Self.firstTerminalDirectory(in: workspace, fileManager: fileManager)
+                    : nil
+            )
+        }
+        let roots = await Task.detached(priority: .userInitiated) {
+            candidates.map { candidate -> String? in
+                if let saved = candidate.savedRoot { return saved }
+                guard let directory = candidate.terminalDirectory else { return nil }
+                return RepositoryRootLocator.inferRepoRoot(from: directory) ?? directory
+            }
+        }.value
+        return zip(candidates, roots).compactMap { candidate, root in
+            guard let root, store.state.workspacesByID[candidate.id] != nil else { return nil }
+            return TaskTriage.Workspace(
+                id: candidate.id,
+                title: candidate.title,
+                rootDirectory: root,
+                guidelines: config.workspace(forProjectRoot: root, homeDirectoryPath: homeDirectoryPath)?.guidelines
+            )
+        }
+    }
+
+    /// Whether an open top-level workspace is on `root`: its saved root, or
+    /// a first terminal at or inside it. No git lookup, so it is cheap
+    /// enough for the picker on the main actor.
+    private func openWorkspace(onRoot root: String) -> WorkspaceState? {
+        let target = TasksConfigFile.normalizedPath(root, homeDirectoryPath: homeDirectoryPath)
+        return topLevelWorkspaces().first { workspace in
+            guard let directory = workspace.rootDirectory ?? Self.firstTerminalDirectory(in: workspace, fileManager: fileManager) else {
+                return false
+            }
+            let normalized = TasksConfigFile.normalizedPath(directory, homeDirectoryPath: homeDirectoryPath)
+            if workspace.rootDirectory != nil { return normalized == target }
+            return normalized == target || normalized.hasPrefix(target + "/")
+        }
+    }
+
+    /// The open top-level workspace whose project root is exactly `root`. A
+    /// workspace with a terminal inside `root` but on a nested repository,
+    /// or in a subdirectory outside any repository, is another project.
+    private func openWorkspace(onProjectRoot root: String) -> (workspaceID: UUID, projectRoot: (path: String, isNew: Bool))? {
+        for workspace in topLevelWorkspaces() {
+            guard let directory = workspace.rootDirectory ?? Self.firstTerminalDirectory(in: workspace, fileManager: fileManager) else {
+                continue
+            }
+            let normalized = TasksConfigFile.normalizedPath(directory, homeDirectoryPath: homeDirectoryPath)
+            guard normalized == root || normalized.hasPrefix(root + "/") else { continue }
+            guard let projectRoot = try? resolvedProjectRoot(workspaceID: workspace.id),
+                  TasksConfigFile.normalizedPath(projectRoot.path, homeDirectoryPath: homeDirectoryPath) == root else {
+                continue
+            }
+            return (workspace.id, projectRoot)
+        }
+        return nil
+    }
+
+    private func topLevelWorkspaces() -> [WorkspaceState] {
+        store.state.windows
+            .flatMap(\.workspaceIDs)
+            .compactMap { store.state.workspacesByID[$0] }
+            // The coordinator's workspace is not a project.
+            .filter { $0.parentWorkspaceID == nil && $0.isCoordinator == false }
+    }
+
+    /// A workspace's saved root, else its first terminal's git root, else
+    /// that terminal's directory.
+    static func rootDirectory(of workspace: WorkspaceState, fileManager: FileManager = .default) -> String? {
+        if let root = workspace.rootDirectory { return root }
+        guard let directory = firstTerminalDirectory(in: workspace, fileManager: fileManager) else { return nil }
+        return RepositoryRootLocator.inferRepoRootBestEffort(from: directory).repoRoot ?? directory
+    }
+
+    /// `[triage] guidelines`, or the file `guidelines_file` names: an
+    /// absolute path, one under `~`, or one relative to `~/.toastty`.
+    private func triageGuidelines(_ triage: TasksConfig.Triage) throws -> String? {
+        if let guidelines = triage.guidelines { return guidelines }
+        guard let file = triage.guidelinesFile else { return nil }
+        var path = file
+        if path == "~" || path.hasPrefix("~/") {
+            path = homeDirectoryPath + path.dropFirst()
+        } else if path.hasPrefix("/") == false {
+            path = TasksConfigFile.fileURL(homeDirectoryPath: homeDirectoryPath)
+                .deletingLastPathComponent()
+                .appending(path: path)
+                .path(percentEncoded: false)
+        }
+        do {
+            let text = try String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        } catch {
+            throw TaskError("could not read guidelines_file \(path)")
+        }
+    }
+
+    // MARK: - Resolution
+
+    func validatedClientRequestID(_ raw: String?) throws -> String? {
+        guard let value = raw.flatMap(taskNonEmpty) else { return nil }
+        guard value.count <= TaskRecord.maximumClientRequestIDLength,
+              value.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value < 0x7F }) else {
+            throw TaskError("A request ID must be printable ASCII with no spaces, at most \(TaskRecord.maximumClientRequestIDLength) characters.")
+        }
+        return value
+    }
+
+    /// An external reference follows the request-ID rules, so a caller can
+    /// use the same value for both; its page must be http or https.
+    private func validatedExternalRef(id rawID: String?, url rawURL: String?) throws -> TaskExternalRef? {
+        let url = rawURL.flatMap(taskNonEmpty)
+        guard let id = rawID.flatMap(taskNonEmpty) else {
+            if url != nil { throw TaskError("An external URL needs an external reference.") }
+            return nil
+        }
+        guard id.count <= TaskExternalRef.maximumIDLength,
+              id.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 0x20 && $0.value < 0x7F }) else {
+            throw TaskError("An external reference must be printable ASCII with no spaces, at most \(TaskExternalRef.maximumIDLength) characters.")
+        }
+        if let url {
+            guard let scheme = URL(string: url)?.scheme?.lowercased(), scheme == "http" || scheme == "https",
+                  URL(string: url)?.host?.isEmpty == false else {
+                throw TaskError("An external URL must be an http or https address.")
+            }
+        }
+        return TaskExternalRef(id: id, url: url)
+    }
+
+    /// The top-level workspace a task belongs to: the one asked for, or the
+    /// calling agent's own. A subspace resolves to its parent. `nil` when
+    /// neither is known; triage or the user chooses it later.
+    private func resolvedWorkspaceID(_ requested: UUID?, caller: TaskCaller) throws -> UUID? {
+        guard let candidate = requested ?? caller.workspaceID else {
+            return nil
+        }
+        guard let workspace = store.state.workspacesByID[candidate] else {
+            throw TaskError("No open workspace has ID \(candidate.uuidString).")
+        }
+        // The coordinator's workspace is not a project. A task the
+        // coordinator creates without naming one has no workspace yet, like
+        // a task from quick entry: triage places it, or it waits for one.
+        if workspace.isCoordinator {
+            guard requested == nil else {
+                throw TaskError("The coordinator's workspace is not a project. Pass the task's project workspace or root directory.")
+            }
+            return nil
+        }
+        let rootID = store.state.subspaceParentIDsByWorkspaceID()[candidate] ?? workspace.id
+        guard store.state.workspacesByID[rootID] != nil else {
+            throw TaskError("No open workspace has ID \(rootID.uuidString).")
+        }
+        return rootID
+    }
+
+    /// The workspace's root directory. When it has none yet, it comes from
+    /// its first terminal's git root, or that terminal's directory outside a
+    /// repository; `isNew` tells the caller to save it on the workspace once
+    /// the task is saved.
+    func resolvedProjectRoot(workspaceID: UUID) throws -> (path: String, isNew: Bool) {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw TaskError("No open workspace has ID \(workspaceID.uuidString).")
+        }
+        if let rootDirectory = workspace.rootDirectory {
+            return (rootDirectory, false)
+        }
+        guard let directory = Self.firstTerminalDirectory(in: workspace, fileManager: fileManager) else {
+            throw TaskError("Toastty could not find the directory of workspace \(workspace.title). Open a terminal there, then try again.")
+        }
+        let resolution = RepositoryRootLocator.inferRepoRootBestEffort(from: directory, timeout: 0.5)
+        // A timed-out lookup is not saved, so the next task tries again.
+        return (resolution.repoRoot ?? directory, resolution.timedOut == false)
+    }
+
+    /// The pinned fields, completed from `[defaults]`. A pinned value that
+    /// cannot work fails the request; a default that does not fit the
+    /// chosen agent is left out. With no agent in either, the task takes
+    /// the first installed agent that can take a task, without the default
+    /// model and effort.
+    /// `skill` is the project's start skill, used when `pinned` names none,
+    /// and `startPrompt` its `start_prompt`.
+    func resolvedFields(
+        pinned: TaskFields,
+        workspaceID: UUID?,
+        defaults: TasksConfig.Defaults,
+        skill: String? = nil,
+        startPrompt: String? = nil
+    ) throws -> TaskFields {
+        guard let agent = pinned.agent ?? defaults.agent ?? triageAgents().first?.id else {
+            throw TaskError("Toastty found no installed agent that can take a task. \(Self.installAgentAdvice)")
+        }
+        let profile = try checkedProfile(agent)
+        var fields = TaskFields(
+            workspaceID: workspaceID,
+            agent: agent,
+            prompt: pinned.prompt,
+            skill: pinned.skill ?? skill,
+            startPrompt: startPrompt
+        )
+        if let model = pinned.model {
+            try checkModel(model, profile: profile)
+            fields.model = model
+        } else if profile.supportsModel, agent == defaults.agent {
+            fields.model = defaults.model
+        }
+        if let effort = pinned.effort {
+            try checkEffort(effort, profile: profile)
+            fields.effort = effort
+        } else if profile.supportsReasoningEffort, agent == defaults.agent {
+            fields.effort = defaults.effort
+        }
+        return fields
+    }
+
+    static let installAgentAdvice = "Install Claude Code or Codex, or add a profile to ~/.toastty/agents.toml."
+
+    /// Checks the agent, model and effort a caller set, before triage or
+    /// `[defaults]` add anything, and returns the agent's profile.
+    private func checkedPinnedFields(_ pinned: TaskFields) throws -> AgentLaunchProfileSummary? {
+        let profile = try pinned.agent.map(checkedProfile)
+        if let model = pinned.model { try checkModel(model, profile: profile) }
+        if let effort = pinned.effort { try checkEffort(effort, profile: profile) }
+        return profile
+    }
+
+    func checkedProfile(_ agent: String) throws -> AgentLaunchProfileSummary {
+        let profiles = launcher?.launchProfileSummaries() ?? []
+        guard let profile = profiles.first(where: { $0.profileID == agent }) else {
+            // With no profile, the list holds the installed built-in agents.
+            guard profiles.isEmpty == false else {
+                throw TaskError("Agent \(agent) is not installed, and agents.toml has no profile. \(Self.installAgentAdvice)")
+            }
+            let available = profiles.map(\.profileID).joined(separator: ", ")
+            throw TaskError("Agent \(agent) is not a profile in agents.toml\(available.isEmpty ? "" : " (available: \(available))").")
+        }
+        guard profile.acceptsInitialPrompt else {
+            throw TaskError("Agent \(agent) cannot take the task as its first message.")
+        }
+        return profile
+    }
+
+    /// `profile` is `nil` when triage will choose the agent; then only the
+    /// value's form is checked.
+    func checkModel(_ model: String, profile: AgentLaunchProfileSummary?) throws {
+        if let profile, profile.supportsModel == false {
+            throw TaskError("Agent \(profile.profileID) does not accept a model.")
+        }
+        guard RemoteSessionStartPolicy.isValidSelectionValue(model, maximumLength: RemoteSessionStartPolicy.maximumModelLength) else {
+            throw TaskError("A model must be one word with no spaces that does not start with a dash.")
+        }
+    }
+
+    func checkEffort(_ effort: String, profile: AgentLaunchProfileSummary?) throws {
+        if let profile, profile.supportsReasoningEffort == false {
+            throw TaskError("Agent \(profile.profileID) does not accept an effort.")
+        }
+        guard RemoteSessionStartPolicy.isValidSelectionValue(effort, maximumLength: RemoteSessionStartPolicy.maximumReasoningEffortLength) else {
+            throw TaskError("An effort must be one word with no spaces that does not start with a dash.")
+        }
+    }
+
+    /// The pinned title, checked, or the first line of the first fallback
+    /// that has one; and the pinned slug, checked, or one made from the
+    /// title that no other task uses.
+    func titleAndSlug(pinnedTitle: String?, pinnedSlug: String?, fallbacks: [String]) throws -> (title: String, slug: String) {
+        let title: String
+        if let pinnedTitle {
+            guard let cleaned = TaskRecord.defaultTitle(for: pinnedTitle), cleaned == pinnedTitle else {
+                throw TaskError("A title must be one line of at most \(TaskRecord.maximumTitleLength) characters.")
+            }
+            title = cleaned
+        } else {
+            title = fallbacks.lazy.compactMap(TaskRecord.defaultTitle(for:)).first ?? "Untitled task"
+        }
+        let takenSlugs = Set(records.records.map(\.slug))
+        let slug: String
+        if let pinnedSlug = pinnedSlug.flatMap(taskNonEmpty) {
+            guard TaskRecord.sanitizedSlug(pinnedSlug) == pinnedSlug else {
+                throw TaskError("A slug must be lowercase letters, digits and single hyphens, at most \(TaskRecord.maximumSlugLength) characters.")
+            }
+            guard takenSlugs.contains(pinnedSlug) == false else {
+                throw TaskError("Another task already uses the slug \(pinnedSlug).")
+            }
+            slug = pinnedSlug
+        } else {
+            slug = TaskRecord.uniqueSlug(TaskRecord.sanitizedSlug(title) ?? "task", taken: takenSlugs)
+        }
+        return (title, slug)
+    }
+
+    // MARK: - Attachments
+
+    /// The file a requested path names, with symbolic links resolved so
+    /// Toastty copies the file itself, after checking that it is a regular
+    /// file within the size limit. Opening without following it into a FIFO
+    /// or device keeps a bad path from blocking the app.
+    private func attachableFile(_ path: String) throws -> String {
+        let name = (path as NSString).lastPathComponent
+        guard path.hasPrefix("/") else {
+            throw TaskError("\(path): attachments need an absolute path.")
+        }
+        let resolved = URL(filePath: path).resolvingSymlinksInPath().path(percentEncoded: false)
+        let descriptor = open(resolved, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw TaskError("\(name): \(String(cString: strerror(errno))).")
+        }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            throw TaskError("\(name) is not a regular file.")
+        }
+        guard info.st_size <= Self.maximumAttachmentBytes else {
+            throw TaskError("\(name) is larger than \(Self.maximumAttachmentBytes / 1024 / 1024) MB.")
+        }
+        return resolved
+    }
+
+    private static func uniqueFileName(_ name: String, taken: Set<String>) -> String {
+        guard taken.contains(name) else { return name }
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        var number = 2
+        while true {
+            let candidate = ext.isEmpty ? "\(base)-\(number)" : "\(base)-\(number).\(ext)"
+            if taken.contains(candidate) == false { return candidate }
+            number += 1
+        }
+    }
+
+    // MARK: - Task space helpers
+
+    func isDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    /// The task space's terminal when it is still there, else a new
+    /// background terminal tab in the project directory.
+    func reusablePanel(in workspaceID: UUID, preferred panelID: UUID, directory: String) -> UUID? {
+        if let workspace = store.state.workspacesByID[workspaceID],
+           case .terminal? = workspace.panelState(for: panelID) {
+            return panelID
+        }
+        let newPanelID = UUID()
+        guard store.send(.createBackgroundTerminalTab(
+            workspaceID: workspaceID,
+            tabID: UUID(),
+            panelID: newPanelID,
+            terminalCWD: directory
+        )) else { return nil }
+        return newPanelID
+    }
+
+    /// Closes a task space setup made, but only while it is still what setup
+    /// made: never visited, one tab with its one terminal, and no agent ever
+    /// started there, since an agent that exited may have left output.
+    private func closeTaskSpaceIfUnused(_ taskSpace: TaskOperation.TaskSpace, record: TaskRecord) -> Bool {
+        guard record.operation.agentLaunch == nil,
+              let workspace = store.state.workspacesByID[taskSpace.workspaceID],
+              workspace.hasBeenVisited == false,
+              workspace.tabIDs.count == 1,
+              let tab = workspace.orderedTabs.first,
+              tab.panels.count == 1,
+              tab.panels[taskSpace.panelID] != nil,
+              hasActiveSession(taskSpace.workspaceID) == false else { return false }
+        return store.send(.closeWorkspace(workspaceID: taskSpace.workspaceID))
+    }
+
+    /// The first terminal, in tab order, whose directory is known and still
+    /// exists. This does not follow focus, so the answer stays the same.
+    static func firstTerminalDirectory(in workspace: WorkspaceState, fileManager: FileManager = .default) -> String? {
+        firstExistingDirectory(terminalDirectories(in: workspace), fileManager: fileManager)
+    }
+
+    /// The workspace's terminal folders in layout order, read from the
+    /// state alone, without the file system.
+    static func terminalDirectories(in workspace: WorkspaceState) -> [String] {
+        workspace.orderedTabs.flatMap { tab in
+            tab.layoutTree.allSlotInfos.compactMap { slot -> String? in
+                guard case .terminal(let terminal) = tab.panels[slot.panelID] else { return nil }
+                return terminal.agentLaunchWorkingDirectory
+            }
+        }
+    }
+
+    nonisolated static func firstExistingDirectory(_ directories: [String], fileManager: FileManager = .default) -> String? {
+        directories.first { directory in
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: directory, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
+    }
+
+    /// A new terminal is not ready at once: it reports itself busy until its
+    /// shell prints the first prompt, and its surface can refuse input for a
+    /// moment after that. Both refusals happen before any text is sent, so
+    /// they are retried until `timeout` passes. A delivery the terminal did
+    /// not confirm is never retried.
+    /// What a message says for an agent that Toastty knows did not get its
+    /// skills: the path of a skill that Toastty ships.
+    static func skillsMissing() -> TaskPrompt.SkillDelivery {
+        .missing(shippedSkillFiles: ToasttyAgentPluginBundle.skillFiles())
+    }
+
+    /// `withoutSkills`, the same message for an agent without its skills,
+    /// when it says more than `prompt` and still fits a first message.
+    static func promptWithoutSkills(_ prompt: String, _ withoutSkills: String) -> String? {
+        guard withoutSkills != prompt,
+              withoutSkills.utf8.count <= AgentLaunchService.maximumInitialPromptUTF8Count else { return nil }
+        return withoutSkills
+    }
+
+    static func launchWhenTerminalIsReady(
+        timeout: Duration,
+        attempt: @MainActor () async throws -> AgentLaunchResult
+    ) async throws -> AgentLaunchResult {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while true {
+            do {
+                return try await attempt()
+            } catch let error as AgentLaunchError {
+                switch error {
+                case .panelBusy, .terminalUnavailable:
+                    guard clock.now < deadline else { throw error }
+                    try await Task.sleep(for: .milliseconds(250))
+                default:
+                    throw error
+                }
+            }
+        }
+    }
+
+    static func launchFailureReason(for error: any Error) -> String {
+        guard let launchError = error as? AgentLaunchError else {
+            return "The agent did not start: \(error.localizedDescription)"
+        }
+        switch launchError {
+        case .panelBusy, .terminalUnavailable:
+            return "The task space's terminal did not get ready in time. Retry to try again."
+        default:
+            return "The agent did not start: \(launchError.localizedDescription)"
+        }
+    }
+}
+
+func taskNonEmpty(_ value: String) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}

@@ -10,6 +10,9 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
     public let preflightPolicy: ManagedAgentLaunchPreflightPolicy
     public let parentSessionID: String?
     public let codexCapabilityHint: ManagedCodexCapabilityHint?
+    /// Whether `argv` carries the agent's first prompt, so the agent starts
+    /// a turn as soon as it boots. Older clients omit this field.
+    public let startsWithPrompt: Bool
 
     private enum CodingKeys: String, CodingKey {
         case agent
@@ -20,6 +23,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         case preflightPolicy
         case parentSessionID
         case codexCapabilityHint
+        case startsWithPrompt
     }
 
     public init(
@@ -30,7 +34,8 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         environment: [String: String] = [:],
         preflightPolicy: ManagedAgentLaunchPreflightPolicy = .skip,
         parentSessionID: String? = nil,
-        codexCapabilityHint: ManagedCodexCapabilityHint? = nil
+        codexCapabilityHint: ManagedCodexCapabilityHint? = nil,
+        startsWithPrompt: Bool = false
     ) {
         self.agent = agent
         self.panelID = panelID
@@ -40,6 +45,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         self.preflightPolicy = preflightPolicy
         self.parentSessionID = Self.normalizedOptionalText(parentSessionID)
         self.codexCapabilityHint = codexCapabilityHint
+        self.startsWithPrompt = startsWithPrompt
     }
 
     public init(from decoder: any Decoder) throws {
@@ -60,6 +66,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
             ManagedCodexCapabilityHint.self,
             forKey: .codexCapabilityHint
         )
+        startsWithPrompt = try container.decodeIfPresent(Bool.self, forKey: .startsWithPrompt) ?? false
     }
 }
 

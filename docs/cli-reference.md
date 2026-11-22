@@ -4,6 +4,8 @@ Toastty bundles a `toastty` CLI that communicates with the running app over its 
 
 When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, pointing at that app instance's executable copy. Runtime-isolated builds stage an immutable per-instance copy; ordinary installed builds use the bundled executable directly. All examples below assume you invoke the CLI through that path.
 
+In a terminal or agent session that Toastty manages, the same CLI is also on `PATH` as `toastty`: Toastty puts its helper directory on `PATH` (unless `enable-agent-command-shims = false`), and the shipped skills run `toastty …` so that one allow rule covers them (see [Approval prompts](tasks.md#approval-prompts)). `--json` and `--socket-path` work anywhere after `toastty`; the skills write `--json` after the command words, such as `toastty task get --json`.
+
 ## Global options
 
 | Option | Description |
@@ -61,11 +63,9 @@ toastty setup guide [--topic onboarding|workflows] [--format text|md]
 
 The default `onboarding` topic is the agent-guided Getting Started guide. The
 `workflows` topic explains how to turn a user's way of working into a workflow
-skill: the Toastty building blocks, example workflows, and rules for writing
-one. It also prints the absolute path of the example skills bundled with the
-app (`Contents/Resources/WorkflowExamples/skills`, copied from this
-repository's `examples/skills`), which the agent copies and adapts into the
-user skills directory. The onboarding guide's "Pick a workflow" step reads it.
+skill: the Toastty building blocks, example workflows, how the built-in task
+lifecycle starts and merges tasks, and rules for writing one. The onboarding
+guide's "Pick a workflow" step reads it.
 
 The default `text` format is optimized for terminal reading. Use `--format md`
 when another agent or tool should preserve Markdown headings and code fences.
@@ -85,7 +85,7 @@ List the skills Toastty can make available to new supported managed agent launch
 toastty setup skills list
 ```
 
-The read-only inventory includes Toastty's five shipped skills and accepted
+The read-only inventory includes Toastty's eight shipped skills and accepted
 user-authored packages under `~/.toastty/skills`. Invalid user packages appear
 in an excluded section with the same diagnostic used by `Toastty > Manage
 Toastty Skills…`. A missing user-skills directory is an empty catalog and is
@@ -312,17 +312,12 @@ under the caller's workspace as a **task space** and records the caller as its
 spawning session. Pass `parent=none` for a top-level workspace, or
 `parent=<workspaceID>` to nest under a specific workspace in the same window.
 Task spaces do not appear as their own sidebar cards; they render as compact rows
-in a Task Spaces group inside the parent card, sorted ready, needs approval,
-error, working, idle, then done. Working task spaces keep workspace order as
-progress reports arrive. Idle task spaces sort by their latest session status
-update, newest first. Done task spaces use the later of their latest session
-status update and the time they were marked done. Ready, needs approval, and
-error task spaces sort by the latest update from a session that sets that row's
-status; updates from sessions in other states do not move the row. Equal or
-missing times use workspace order; rows with no time follow rows with a time.
-Hovering over the list holds its order, and the selected row keeps its slot
-until selection changes. The spawning session's row shows a ⑂ chip that filters
-the group to its task spaces. Nesting stays one level deep, so a parent that is
+in a Task Spaces group inside the parent card, in the window's workspace order.
+A task space started by another task's agent draws right under that task's
+row. Status shows in each row's mark and badge and never moves a row: rows
+move only when a task space opens or leaves the group. Jump to Next Active
+visits task spaces in the same order. The spawning
+session's row shows a ⑂ chip that filters the group to its task spaces. Nesting stays one level deep, so a parent that is
 itself a task space resolves to its root. Closing a parent keeps its
 task spaces open as top-level workspaces.
 
@@ -346,14 +341,19 @@ the parent ID does not grant automation access to that workspace.
 `workspace.set-done` marks a task space's task done, and `workspace.clear-done`
 clears the mark. With no `workspaceID` or `windowID`, a managed agent's call
 targets its own workspace rather than the selected one; a caller whose session
-Toastty no longer runs must name the workspace. Only task spaces hold the mark:
-`workspace.set-done` rejects a top-level workspace, and moving a task space to top
-level drops it. The sidebar shows a done task space with a check in place of its
-idle box and sorts it last; the box also toggles the mark by click. The mark
+Toastty no longer runs must name the workspace. Only subspaces and a task's
+task space hold the mark: `workspace.set-done` rejects any other top-level
+workspace, and moving a subspace that is not a task's task space to top level
+drops it. It also rejects a task with an open pull request, or one GitHub has
+not answered for yet, and a task with a merge under way: such a task finishes
+when you merge or archive it, as the sidebar's box and Toastty Mobile already
+require. The sidebar shows a done task space with a check in place of its
+idle box and keeps its place; the box also toggles the mark by click. The mark
 clears itself when an agent in the workspace starts new work: a newly launched
 agent, or a turn that begins from idle, ready, or error. The rest of the turn
 that set the mark, including its end, keeps it, and restored sessions and
-process watches do not count. `workspace.list` and `workspace.snapshot` report
+process watches do not count. While a merge waits for checks, new work keeps
+the mark, because the merge is of the commit that was accepted. `workspace.list` and `workspace.snapshot` report
 it as `done`.
 
 ```bash
@@ -505,6 +505,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `terminal.send-text`
 - `session.exit-after-turn`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
+- `task.create`, `task.start-work`, `task.retry`, `task.delete`, `task.set-workspace` (see [`task`](#task))
 
 Explicit foreground navigation through workspace/tab selection and
 `workspace.focus-panel` participates in Toastty's session navigation history.
@@ -712,6 +713,7 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+- `task.get`, `task.list`, `task.workspace-choices`, `task.watches` (see [`task`](#task))
 
 `agent.profile.state` requires `profileID` and reports the executable that
 profile would run in Toastty's launch environment, skipping Toastty's command
@@ -858,6 +860,307 @@ When interactive preflight is required, the response reports
 `kind: "preflightRequired"` with a token. The shim then calls
 `agent managed-launch-preflight-decision --token <id>` and either continues with
 the returned decision or exits before starting the real agent command.
+
+### `task`
+
+Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
+`~/.toastty/tasks.toml`.
+
+```
+toastty task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
+toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
+toastty task get [<task-id>]
+toastty task retry|delete <task-id>
+toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
+toastty task set-release [<task-id>] (--after-merge | --clear)
+toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
+toastty task workspace-choices [<task-id>] [--name <project>]
+toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer] [--from <name>]
+toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
+toastty task unwatch <watch-id>
+toastty task watches [--task <task-id>] [--notify <task-id>]
+toastty task adopt [--workspace <id>]
+toastty task merge [<task-id>] [--head <commit>]
+toastty task request-merge <task-id>
+toastty task cancel-merge [<task-id>]
+toastty task clean-up <task-id>
+toastty task ready-for-review [<task-id>]
+toastty task needs-reply [<task-id>] [--question <text>]
+toastty task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
+toastty task mark-done <task-id>
+toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
+toastty task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
+```
+
+`task create` returns once the task is saved; `--wait` polls `task.get` until
+the agent has started (exit 0), or setup failed, the task waits for a
+workspace, or the wait timed out (exit 1). Relative `--file` and
+`--prompt-file` paths resolve against the current directory, and the CLI reads
+`--prompt-file` itself. With `--start-work`, setup makes a git worktree and
+starts the agent there; it needs a workspace. With `--fork`, from a Claude Code
+or Codex session, the agent starts as a fork of that session's conversation
+after its current turn ends, and the calling session keeps running; `--wait`
+cannot be used with it. See
+[Fork the conversation into new tasks](tasks.md#fork-the-conversation-into-new-tasks).
+
+`--root <dir>` names the project by its directory instead of `--workspace`:
+Toastty uses the open workspace on it, or opens the project once every other
+check passed. A relative path resolves against the current directory.
+`--external-ref` names the issue or report the task came from, such as
+`github:owner/repo#123` (printable ASCII, no spaces, at most 128
+characters), and `--external-url` gives its page; `task get` and `task list`
+return them as `externalRef`.
+
+Without `--workspace` or `--root`, and outside an agent session, the task
+waits in Needs you for a workspace. `[defaults]` in `tasks.toml` fills an agent, model or
+effort you leave out; optional [triage](tasks.md#optional-triage) fills them
+first when `[triage]` is set up.
+`task set-workspace` places a task that waits for a workspace, in an open one,
+in a recently closed one from `task workspace-choices`, which Toastty reopens,
+or in a project directory (`--root`), which Toastty opens as a new workspace.
+With triage on, `task workspace-choices <task-id>` also shows the project
+triage suggested for that task, if any. `--name <project>` also lists the
+project directories with that name under `matches`: the ones Toastty knows
+(open, recent, in tasks.toml or in a task), then git repositories next to
+them that Toastty never opened, as `source: "sibling"`. See
+[`task.workspace-choices`](socket-protocol.md) for the fields.
+
+`task start-work` runs from an agent session and moves its task into a git
+worktree; see [Work in a git worktree](tasks.md#work-in-a-git-worktree). It
+returns once the move is saved, and the agent should then end its turn: the
+move forks the conversation after the turn ends. `task get` reports the move
+under `worktree`, and `task retry` continues a move that failed.
+
+`task get` and `task list` report each task's `stage`: its `group`
+(`needsYou`, `running`, `idle`, `toShip`, `done` or `archived`), `needsUser`, and for
+Needs you the `attention` and `reason`. A task that is starting reports
+`running`; its `setup` and `worktree` say how far it got. A task that reached
+`toShip` or `done` because its child tasks finished also reports
+`finishedThroughChildren: true`; its record has no merge or done time of its
+own. See [Stages](tasks.md#stages).
+They also report how long the task has been in its state: `stage.changedAt`,
+`agentState.changedAt`, `agentState.interruptedAtQuit` (the agent was in a turn
+when Toastty quit or crashed, and has not started one since),
+`agentState.lastOutputAt`, `lastUserInputAt`, and `pullRequest` with `checks`
+(`pending`, `failing` or `passing`), `checksPendingSince` and
+`mergeStateStatus`. While GitHub has not answered about the pull request
+because the request failed, `pullRequestLookupError` gives the `problem`
+(`ghMissing`, `notSignedIn` or `other`) and a `message` that says what to do. `task list --changed-since` does not list a task when only
+`lastOutputAt` or `lastUserInputAt` changed. See
+[How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state).
+`task adopt` gives a task space without a record one; it defaults to the
+calling agent's task space.
+
+`task send`, `task watch` and `task list --changed-since` let an agent follow
+and talk to other tasks by task ID; see
+[Coordinate tasks](tasks.md#coordinate-tasks). `task send` and
+`coordinator send` take the message in exactly one way: as one argument, with
+`--text`, or from a UTF-8 file with `--text-file`. Both put a first line
+before the message that names the sender; see `send` under
+[`coordinator`](#coordinator). `task send` types its message
+whatever the agent does. With `--steer`, it checks the agent first: the message
+goes to the agent's open prompt or into its running turn, or Toastty holds it
+for the next open prompt, and nothing is typed into a permission prompt.
+`task watch` tells the calling
+agent's own task, or the `--notify` task, once with a one-line message when the
+condition holds. With `--wait`, it blocks instead and exits 0 when the condition
+held, or 1 when it can never hold or `--timeout` ran out. `--until to-ship` or
+`--until done` on a parent task also holds when the parent finishes through
+its child tasks.
+
+`task merge` is what a merge skill runs once its checks pass; without a task
+ID it merges the calling agent's own task. It runs only from an agent session
+in the task's task space or its parent task's; elsewhere, including a shell,
+it refuses and names `task request-merge`. It waits up to 8 seconds for
+Toastty's first answer. When Toastty refuses the merge, for example because
+the worktree has uncommitted or untracked files, or the merge fails, the
+command fails with the reason. Otherwise `merge` in its answer is
+`waitingForChecks`, `cleaningUp` (merged), or `merging` when no answer came
+in time; `task get` reads it again.
+`task request-merge <task-id>` accepts the merge from outside the task, as
+the Merge button does: the task's agent checks the pull request and then
+merges it, also in a project with `merge = "direct"`. It refuses where the
+Merge button is not offered. Toastty merges at the checkout's
+commit, refuses with `--head` when the checkout moved past the checked commit,
+waits for checks that still run, and cleans up 24 hours after the merge,
+once the agent's turn has ended; `task get` reports that time as
+`cleanup.taskSpaceClosesAt` while the task space waits.
+`task cancel-merge` stops a merge the user accepted. `task archive` closes a
+task without merging; it refuses with the reason, and `--close-pr`,
+`--delete-unpushed` and `--discard-changes` allow what it would otherwise
+refuse or leave. With `--dry-run` it changes nothing and prints `summary`,
+what the archive would close, remove and keep, and `refusal`, the reason it
+would refuse or `null`. `task clean-up` retries a cleanup that stopped.
+`task needs-reply` is what an agent runs just before it ends a turn with a
+question: the task stays in Needs you, showing `--question`, after the user
+reads the turn, until the task's agent starts its next turn. A later
+`task ready-for-review` replaces it.
+`task waiting --on` is what an agent runs before it ends a turn to wait on
+something outside Toastty, such as an email reply or a date: the task rests in
+Idle with a clock and the `--on` text, and a task with child tasks does not
+finish through them. The mark stays across turns. At `--wake`, an ISO 8601
+time in the future such as `2026-12-01T17:00:00Z`, Toastty sends the task's
+agent one `[Toastty wake]` line at its open prompt, and the mark clears when
+that turn starts. `--clear`, a new `--on`, `task ready-for-review`, Done and
+Archive end it. See [Wait outside Toastty](tasks.md#wait-outside-toastty).
+`task ready-for-review` marks work without a pull request ready, and
+`task mark-done` finishes it. `task release` starts a release task for a
+project with `release_skill` or `release_prompt`. `--agent`, `--model` and
+`--effort` choose its agent as for `task create`; `[defaults]` fills what
+they leave out. See [Merge a task](tasks.md#merge-a-task),
+[Archive a task](tasks.md#archive-a-task) and [Release](tasks.md#release).
+`task set-release --after-merge` saves the user's request to release one task
+right after it merges; `--clear` removes it. Without a task ID, it applies to
+the calling agent's own task. Toastty starts no release because of it:
+`task get` and `task list` report it as `releaseAfterMerge` with `requestedAt`,
+for the agent that starts releases. Toastty refuses the request on a Done or
+archived task and on a release task. See
+[Release one task right after it merges](tasks.md#release-one-task-right-after-it-merges).
+`task list --parent` lists the tasks one task started.
+
+These commands are short forms of
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.set-release|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.waiting|task.mark-done|task.archive|task.release`
+and `query run task.get|task.list|task.workspace-choices|task.watches`. The
+Tasks view and the sidebar segment have actions too: `window.tasks.show`,
+`window.tasks.hide`, and `window.sidebar.set-segment segment=all|needsYou`
+(the earlier names `projects` and `status` still work).
+
+```bash
+"$TOASTTY_CLI_PATH" task create "Fix the unread dot" --agent codex --effort high --wait
+```
+
+### `coordinator`
+
+```text
+toastty coordinator open [--window <id>] [--no-select]
+toastty coordinator restart [--window <id>]
+toastty coordinator status
+toastty coordinator send (<text> | --text <text> | --text-file <path>) [--from <name>]
+toastty coordinator reply <message-id> (<text> | --text <text> | --text-file <path>)
+toastty coordinator replies [--message <message-id>] [--since <cursor>]
+toastty coordinator wake (--in <duration> | --at <ISO time> | --clear) [--quiet]
+toastty coordinator watch (--task <task-id> | --workspace <id>) [--remove]
+```
+
+The coordinator is one long-lived agent session in its own pinned workspace;
+see [The coordinator](tasks.md#the-coordinator). It is not a task.
+
+- `open` creates the workspace on first use, selects it unless `--no-select`
+  is given, and starts the agent when none runs. It returns after the start
+  attempt, with the `status` fields, `createdWorkspace` and `startedAgent`.
+  `--window` names the window that gets a new coordinator; without it, the
+  selected window does. Before the agent starts, `open` and `restart` make
+  sure that the coordinator's folder holds its instruction files, `policy.md`,
+  `ledger.md`, `friction.md` and `decisions.md`, in a git repository; see
+  [The coordinator's folder](tasks.md#the-coordinators-folder). They fail
+  when Toastty cannot write the instructions.
+- `restart` starts a fresh agent session in the same workspace, without
+  selecting it. An agent that still runs is ended once the new one started;
+  a start that fails leaves it alone.
+- `status` prints `exists`, and for an open coordinator its `windowID`,
+  `workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
+  `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`
+  after a start that did not work, and `queuedCount` and `hold` for messages
+  that wait. `wake` holds what Toastty will type on its own:
+  `pendingTaskCount`, the tasks whose stage changes or alerts wait for the
+  next digest, also the changes that wake nothing on their own, such as a
+  task that only started running; `nextWakeAt`, the time that `wake`
+  set (`null` when no time is set: then no timer runs); `lastWakeAt`; and
+  `watchedTaskIDs` and `watchedProjectRoots`, what `watch` watches.
+- `send` puts a first line before the message that names the sender, which
+  Toastty takes from the caller and not from the text: the task whose space
+  the calling session is in, else that session, else the name that
+  `--from` gives, else "a terminal command". `--from` is for a program
+  outside Toastty, such as Grok Bot, that runs the command from its own
+  shell: the line then says `From "Grok Bot" (named by the caller)`.
+  Toastty does not check that name, and a caller in a Toastty session is
+  named by its session instead. The name must be one line of at most 60
+  characters, without `"`, `|` or repeated spaces. The coordinator reads such a message as
+  data from that sender, not as your instruction, unless its policy names
+  the sender under Senders; see "Who a message is from" in
+  [The coordinator](tasks.md#the-coordinator). It
+  then types the message at the agent's open prompt and returns
+  `delivery: sent`, or holds it and returns `delivery: queued` with
+  `position` and `hold` (`busy`, `userDraft`, `noSession`, `agentStarting`,
+  `settling`, `awaitingTurn`, `terminalUnavailable`, `promptNotOpen` or `notSaved`). `sentUnconfirmed`
+  means the terminal did not confirm the Return key; Toastty does not type the
+  text again, and holds later messages until a turn runs. A message from
+  outside a task also returns `messageID`, which its first line ends with
+  (`Message ID <uuid>.`); it is null for a message from a task or from the
+  coordinator itself. It fails when there is no coordinator.
+- `reply` answers a message from outside a task, named by its `messageID`.
+  Only the coordinator's own agent can run it. Toastty keeps the reply for 7
+  days and queues a `coordinator.reply` event for each approved webhook whose
+  events include `coordinator_reply`. It returns `replyID`, `messageID`,
+  `repliedAt` and `webhookEvents`, the number of events queued. It fails for
+  a message with no ID or whose ID is gone, and for an empty text or one
+  over 16 KB. See [Coordinator replies](tasks.md#coordinator-replies).
+- `replies` prints the kept replies, oldest first, each with `id`,
+  `messageID`, `from`, `text` and `repliedAt`, and a `cursor`. `--message`
+  keeps the replies to one message; `--since` keeps the replies after an
+  earlier answer's cursor. `truncated` is true when replies after that
+  cursor are gone.
+- `wake` sets the coordinator's next check: the time when Toastty wakes it if
+  no task change or alert does first. `--in` takes a duration with units `s`, `m`, `h` and
+  `d`, such as `90s`, `20m`, `2h` or `1h30m`; `--at` takes an ISO 8601 time
+  such as `2026-11-09T18:30:00Z`. The time must be at least 1 minute from
+  now. `--clear` removes the time. Toastty has no timer of its own: with no
+  time set, only a task change that may need the coordinator, or an alert,
+  wakes it. Every
+  digest that Toastty types removes the time, so the coordinator sets or
+  clears it in each turn that a digest starts. `--quiet` also marks the wake
+  turn that runs now as one that needs nothing from you: the chat folds it
+  under Toastty's line, and its end marks nothing unread and sends no
+  notification. Only the coordinator's own agent can pass `--quiet`, in a
+  turn that Toastty's last digest started and that no other message came
+  into; otherwise the command fails and changes nothing. A later call
+  without `--quiet` in the same turn removes the mark. It returns the
+  `status` fields and fails when there is no coordinator. See
+  [When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator)
+  and [Quiet turns](tasks.md#quiet-turns).
+- `watch` makes a merge wake the coordinator. With `--task`, the task's merge,
+  or its end without a merge (Done, archived or deleted), wakes it once, and
+  the watch ends. With `--workspace`, every merge in that project wakes it,
+  until `--remove`. `--remove` ends a watch. It returns the `status` fields
+  and fails when there is no coordinator. See
+  [The coordinator's watches](tasks.md#the-coordinators-watches).
+
+A workspace-scoped session can use these commands only when the coordinator's
+workspace is in its scope, and it cannot create the coordinator.
+
+These commands are short forms of
+`action run coordinator.open|coordinator.restart|coordinator.send|coordinator.reply|coordinator.wake|coordinator.watch`
+and `query run coordinator.get|coordinator.replies`. `coordinator.reply` takes
+`messageID` and `text`; `coordinator.replies` takes optional `messageID` and
+`since`. `coordinator.wake` takes exactly one of
+`inSeconds`, `at` and `clear`, and optional `quiet`. `coordinator.watch`
+takes exactly one of `taskID` and `workspaceID`, and optional `remove`.
+
+### `webhook`
+
+```text
+toastty webhook add <name> <url> [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth bearer|header:<Name>|hmac|none] [--secret-stdin | --secret-hint <text>] [--wait [--timeout <seconds>]]
+toastty webhook set <name> [--url <url>] [--events <e,...>] [--root <dir> ...] [--external-ref-prefix <p>] [--auth <mode>] [--secret-stdin] [--secret-hint <text>]
+toastty webhook rotate-secret <name> --secret-stdin
+toastty webhook list [<name>]
+toastty webhook test|remove <name>
+```
+
+Webhooks receive task events over HTTPS; see
+[Webhooks for task events](tasks.md#webhooks-for-task-events). A new webhook,
+or one whose address, events, filters or auth changed, waits for approval in
+the Tasks view; no command approves it. `add --wait` exits 0 when it is
+approved, 3 when it is denied, and 4 when `--timeout` (default 600) runs out.
+`test` sends a `task.test` event to an approved webhook and prints the HTTP
+status. Events are `needs_you`, `merged`, `done`, `archived`, `deleted`
+(the default), `running` and `idle`, and `coordinator_reply`, which adds the
+coordinator's [replies](tasks.md#coordinator-replies) to at least one task
+event; an empty `--external-ref-prefix` clears that filter. The secret only comes from stdin. Without one, the user pastes
+it in the approval sheet; `--secret-hint` (one line, up to 300 characters)
+tells them where to find it, and an empty hint clears it.
+
+These commands are short forms of `action run webhook.add|webhook.set|webhook.remove|webhook.test`
+and `query run webhook.list`.
 
 ### `notify`
 

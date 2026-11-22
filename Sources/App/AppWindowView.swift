@@ -11,6 +11,7 @@ struct AppWindowView: View {
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let annotationStyleStore: AnnotationStyleStore
+    var taskCoordinator: TaskCoordinator? = nil
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
@@ -23,11 +24,14 @@ struct AppWindowView: View {
     @State private var showsSkillsManagementSheet = false
     @State private var skillsProvisionedNotice: ManagedAgentSkillsProvisionedNotice?
     @State private var queuedSkillsProvisionedNotices: [ManagedAgentSkillsProvisionedNotice] = []
-    @State private var codexSkillsUnavailableNotice: ManagedCodexSkillsUnavailableNotice?
-    @State private var lastCodexSkillsUnavailableReasonCode: String?
+    @State private var skillsUnavailableNotice: ManagedAgentSkillsUnavailableNotice?
+    /// The agent and reason of the last banner, so that each launch with
+    /// the same cause does not show it again.
+    @State private var lastSkillsUnavailableReason: String?
     @State private var appIsActive = true
-    // Handle only the first appearance so later runs keep the user's resize.
-    @State private var hasHandledProgramStatusSidebarExpansion = false
+    /// The width of the window's content, which limits the dock's width.
+    @State private var windowContentWidth: CGFloat = 0
+    @State private var columnResize = LiveColumnResize()
     @Environment(\.openWindow) private var openWindow
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -35,6 +39,106 @@ struct AppWindowView: View {
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
+    }
+
+    private var showsTasksView: Bool {
+        store.window(id: windowID)?.showsTasksView ?? false
+    }
+
+    private var taskBoard: TaskBoardStore {
+        taskCoordinator?.board ?? .disabled
+    }
+
+    private var coordinatorController: CoordinatorController? {
+        taskCoordinator?.coordinatorController
+    }
+
+    /// The coordinator's dock shows in this window now.
+    private var dockShows: Bool {
+        coordinatorController?.dockShows(in: windowID) == true
+    }
+
+    /// The dock's toggle shows in the toolbar of the coordinator's window.
+    private var showsDockToggle: Bool {
+        guard let coordinatorController else { return false }
+        return CoordinatorDockPresentation.showsToggle(
+            windowID: windowID,
+            coordinator: coordinatorController.location,
+            chatAvailable: coordinatorController.chatIsAvailable
+        )
+    }
+
+    /// The buttons at the titlebar's left, after the traffic lights.
+    private var titlebarButtonCount: Int {
+        showsDockToggle ? 4 : 3
+    }
+
+    /// The window's content width, or its saved frame width before the
+    /// first layout reports one.
+    private var dockLimitWindowWidth: Double {
+        windowContentWidth > 0
+            ? Double(windowContentWidth)
+            : store.window(id: windowID)?.frame.width ?? 0
+    }
+
+    private var dockWidth: CGFloat {
+        let width = dockLimitWindowWidth
+        guard let window = store.window(id: windowID) else {
+            return CGFloat(min(
+                WindowState.defaultCoordinatorDockWidth,
+                WindowState.maxCoordinatorDockWidth(windowWidth: width)
+            ))
+        }
+        return CGFloat(window.coordinatorDockWidth(windowWidth: width))
+    }
+
+    private var columnResizeEdges: [ResizableColumnEdge] {
+        var edges: [ResizableColumnEdge] = []
+        var dividerX: CGFloat = 0
+        if sidebarVisible {
+            let sidebarWidth = columnResize.width(for: .sidebar) ?? effectiveSidebarWidth
+            dividerX = sidebarWidth
+            edges.append(ResizableColumnEdge(
+                id: "sidebar.resize.\(windowID.uuidString)",
+                column: .sidebar,
+                dividerX: dividerX,
+                columnWidth: sidebarWidth,
+                accessibilityLabel: "Resize Sidebar",
+                accessibilityIdentifier: "sidebar.resize",
+                metadata: [
+                    "windowID": windowID.uuidString,
+                    "sidebarWidth": String(format: "%.1f", sidebarWidth),
+                ],
+                setWidth: { [store, windowID] width in
+                    _ = store.send(.setSidebarWidth(
+                        windowID: windowID,
+                        width: width,
+                        defaultWidth: Double(ToastyTheme.sidebarWidth)
+                    ))
+                }
+            ))
+            dividerX += Self.sidebarDividerWidth
+        }
+        if dockShows {
+            let dockWidth = columnResize.width(for: .dock) ?? dockWidth
+            dividerX += dockWidth
+            edges.append(ResizableColumnEdge(
+                id: "coordinator-dock.resize.\(windowID.uuidString)",
+                column: .dock,
+                dividerX: dividerX,
+                columnWidth: dockWidth,
+                accessibilityLabel: "Resize Coordinator Dock",
+                accessibilityIdentifier: "coordinator.dock.resize",
+                metadata: [
+                    "windowID": windowID.uuidString,
+                    "dockWidth": String(format: "%.1f", dockWidth),
+                ],
+                setWidth: { [store, windowID] width in
+                    _ = store.send(.setCoordinatorDockWidth(windowID: windowID, width: width))
+                }
+            ))
+        }
+        return edges
     }
 
     private func requestWorkspaceMerge(workspaceID: UUID, mode: WorkspaceMergeMode) {
@@ -55,7 +159,8 @@ struct AppWindowView: View {
             },
             localDocumentCloseConfirmationState: { [webPanelRuntimeRegistry] panelID in
                 webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
-            }
+            },
+            taskSpaceCloseAsker: .live(sessionRuntimeStore: sessionRuntimeStore)
         ).closeSessionInteractively(panelID: panelID, sessionTitle: sessionTitle)
     }
 
@@ -80,12 +185,39 @@ struct AppWindowView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         sessionRuntimeStore: sessionRuntimeStore,
                         annotationStyleStore: annotationStyleStore,
+                        taskCoordinator: taskCoordinator,
+                        taskBoard: taskBoard,
+                        newTask: taskBoard.newTask,
                         terminalRuntimeContext: terminalRuntimeContext,
                         requestWorkspaceMerge: requestWorkspaceMerge,
                         requestWorkspaceClose: requestWorkspaceClose,
                         requestSessionClose: requestSessionClose
                     )
-                    .frame(width: effectiveSidebarWidth)
+                    .modifier(ResizableColumnFrame(column: .sidebar, savedWidth: effectiveSidebarWidth, resize: columnResize))
+
+                    Rectangle()
+                        .fill(ToastyTheme.hairline)
+                        .frame(width: Self.sidebarDividerWidth)
+                }
+
+                if #available(macOS 15.0, *), dockShows,
+                   let coordinatorController, let chat = coordinatorController.chat,
+                   let location = coordinatorController.location {
+                    CoordinatorDockView(
+                        controller: coordinatorController,
+                        sessionRuntimeStore: sessionRuntimeStore,
+                        store: store,
+                        chat: chat,
+                        board: taskBoard,
+                        location: location,
+                        settledWidth: dockWidth,
+                        headerLeadingInset: sidebarVisible
+                            ? 14
+                            : ToastyTheme.topBarLeadingPadding(titlebarButtonCount: titlebarButtonCount),
+                        appIsActive: appIsActive
+                    )
+                    .modifier(ResizableColumnFrame(column: .dock, savedWidth: dockWidth, resize: columnResize))
+                    .transition(.move(edge: .leading).combined(with: .opacity))
 
                     Rectangle()
                         .fill(ToastyTheme.hairline)
@@ -111,22 +243,43 @@ struct AppWindowView: View {
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
-                    sidebarVisible: sidebarVisible,
+                    leftColumnVisible: sidebarVisible || dockShows,
+                    columnResize: columnResize,
+                    titlebarButtonCount: titlebarButtonCount,
                     requestWorkspaceMerge: requestWorkspaceMerge,
-                    requestWorkspaceClose: requestWorkspaceClose
+                    requestWorkspaceClose: requestWorkspaceClose,
+                    taskBoard: taskBoard
                 )
+                // The Tasks view covers the workspace instead of replacing
+                // it, so terminals stay attached while it shows. The dock
+                // stays beside it.
+                .overlay {
+                    if showsTasksView, taskBoard.isEnabled {
+                        TasksView(
+                            windowID: windowID,
+                            store: store,
+                            board: taskBoard,
+                            sessionRuntimeStore: sessionRuntimeStore,
+                            newTask: taskBoard.newTask.map { action in { action() } }
+                        )
+                    }
+                }
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
+            .animation(.easeInOut(duration: 0.15), value: dockShows)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                windowContentWidth = width
+            }
             .overlay(alignment: .topLeading) {
                 GeometryReader { geometry in
-                    if sidebarVisible {
-                        SidebarResizeLayer(
-                            windowID: windowID,
-                            sidebarWidth: effectiveSidebarWidth,
-                            defaultSidebarWidth: defaultSidebarWidth,
+                    let edges = columnResizeEdges
+                    if edges.isEmpty == false {
+                        ColumnResizeLayer(
+                            edges: edges,
+                            resize: columnResize,
+                            windowWidth: geometry.size.width,
                             height: geometry.size.height,
-                            appIsActive: appIsActive,
-                            store: store
+                            appIsActive: appIsActive
                         )
                         .frame(
                             width: geometry.size.width,
@@ -161,16 +314,16 @@ struct AppWindowView: View {
                 .zIndex(20)
             }
 
-            if let codexSkillsUnavailableNotice {
-                ManagedCodexSkillsUnavailableBanner(
-                    notice: codexSkillsUnavailableNotice,
+            if let skillsUnavailableNotice {
+                ManagedAgentSkillsUnavailableBanner(
+                    notice: skillsUnavailableNotice,
                     manage: {
-                        self.codexSkillsUnavailableNotice = nil
+                        self.skillsUnavailableNotice = nil
                         showsSkillsManagementSheet = true
                     },
                     dismiss: {
                         withAnimation(.easeOut(duration: 0.15)) {
-                            self.codexSkillsUnavailableNotice = nil
+                            self.skillsUnavailableNotice = nil
                         }
                     }
                 )
@@ -222,13 +375,19 @@ struct AppWindowView: View {
         .onChange(of: slotFocusSignature) { _, _ in
             handleSlotFocusSignatureChange()
         }
-        .onChange(of: windowHasProgramStatusRows, initial: true) { _, hasRows in
-            guard hasRows else { return }
-            Self.expandSidebarForProgramStatusIfNeeded(
-                store: store,
-                windowID: windowID,
-                hasHandledAppearance: &hasHandledProgramStatusSidebarExpansion
-            )
+        .onChange(of: dockShows) { _, shows in
+            // A hidden dock takes its field, and maybe the keyboard, with
+            // it: the keyboard goes back to the workspace's panel.
+            if shows == false {
+                scheduleWindowFocusRestore(avoidStealingKeyboardFocus: false)
+            }
+        }
+        .onChange(of: showsTasksView) { _, isShown in
+            // While shown, the Tasks view holds focus in this window and
+            // focus restores skip the covered terminals.
+            if isShown == false {
+                scheduleWindowFocusRestore(avoidStealingKeyboardFocus: false)
+            }
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             if let pendingWorkspaceClose,
@@ -249,7 +408,7 @@ struct AppWindowView: View {
             } else {
                 closeConfirmationSummary = .none
             }
-            pendingWorkspaceClose = PendingWorkspaceClose(
+            let closeTarget = PendingWorkspaceClose(
                 windowID: request.windowID,
                 workspaceID: request.workspaceID,
                 source: request.source,
@@ -258,6 +417,16 @@ struct AppWindowView: View {
                 localDocumentSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
                 firstLocalDocumentSaveInProgressDisplayName: closeConfirmationSummary.firstSaveInProgressDisplayName
             )
+            // A task space whose task asks the close question asks it in
+            // place of this confirmation. A save in progress still refuses.
+            if closeTarget.allowsDestructiveConfirmation,
+               sessionRuntimeStore.taskSpaceCloseQuestion(workspaceID: request.workspaceID) != nil {
+                Task { @MainActor in
+                    askTaskSpaceCloseQuestion(closeTarget)
+                }
+                return
+            }
+            pendingWorkspaceClose = closeTarget
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
             guard let request = notification.object as? GettingStartedPanelRequest else { return }
@@ -288,9 +457,10 @@ struct AppWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
             if let notice = notification.object as? ManagedAgentSkillsProvisionedNotice,
                notice.windowID == windowID,
-               notice.agent == .codex {
-                codexSkillsUnavailableNotice = nil
-                lastCodexSkillsUnavailableReasonCode = nil
+               // A later launch of the same agent got its skills.
+               lastSkillsUnavailableReason?.hasPrefix("\(notice.agent.rawValue)/") == true {
+                skillsUnavailableNotice = nil
+                lastSkillsUnavailableReason = nil
             }
             guard let notice = ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: windowID,
@@ -304,13 +474,13 @@ struct AppWindowView: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedCodexSkillsUnavailable)) { notification in
-            guard let notice = notification.object as? ManagedCodexSkillsUnavailableNotice,
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsUnavailable)) { notification in
+            guard let notice = notification.object as? ManagedAgentSkillsUnavailableNotice,
                   notice.windowID == windowID,
-                  notice.reasonCode != lastCodexSkillsUnavailableReasonCode else { return }
-            lastCodexSkillsUnavailableReasonCode = notice.reasonCode
+                  "\(notice.agent.rawValue)/\(notice.reasonCode)" != lastSkillsUnavailableReason else { return }
+            lastSkillsUnavailableReason = "\(notice.agent.rawValue)/\(notice.reasonCode)"
             withAnimation(.easeOut(duration: 0.15)) {
-                codexSkillsUnavailableNotice = notice
+                skillsUnavailableNotice = notice
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -333,55 +503,27 @@ struct AppWindowView: View {
         }
     }
 
-    static func effectiveSidebarWidth(
-        hasEverLaunchedAgent: Bool
-    ) -> CGFloat {
-        effectiveSidebarWidth(
-            hasEverLaunchedAgent: hasEverLaunchedAgent,
-            sidebarWidthPointsOverride: nil
-        )
-    }
-
-    static func effectiveSidebarWidth(
-        hasEverLaunchedAgent: Bool,
-        sidebarWidthPointsOverride: Double?
-    ) -> CGFloat {
+    /// A window's sidebar width: the user's resized width, or the default.
+    static func effectiveSidebarWidth(sidebarWidthPointsOverride: Double?) -> CGFloat {
         if let override = WindowState.normalizedSidebarWidthOverride(sidebarWidthPointsOverride) {
             return CGFloat(override)
         }
-
-        return defaultSidebarWidth(hasEverLaunchedAgent: hasEverLaunchedAgent)
-    }
-
-    static func defaultSidebarWidth(hasEverLaunchedAgent: Bool) -> CGFloat {
-        hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
-    }
-
-    static func expandSidebarForProgramStatusIfNeeded(
-        store: AppStore,
-        windowID: UUID,
-        hasHandledAppearance: inout Bool
-    ) {
-        guard !hasHandledAppearance, let window = store.window(id: windowID) else { return }
-        hasHandledAppearance = true
-        let currentWidth = effectiveSidebarWidth(
-            hasEverLaunchedAgent: store.hasEverLaunchedAgent,
-            sidebarWidthPointsOverride: window.sidebarWidthPointsOverride
-        )
-        store.recordSessionStatusSidebarExpansionEligibility()
-        guard currentWidth < ToastyTheme.sidebarWidth else { return }
-        _ = store.send(.setSidebarWidth(
-            windowID: windowID,
-            width: Double(ToastyTheme.sidebarWidth),
-            defaultWidth: Double(ToastyTheme.sidebarWidth)
-        ))
+        return ToastyTheme.sidebarWidth
     }
 
     static func sidebarResizeHandleFrame(
         sidebarWidth: CGFloat,
         height: CGFloat
     ) -> CGRect {
-        let dividerCenterX = sidebarWidth + (Self.sidebarDividerWidth / 2)
+        columnResizeHandleFrame(dividerX: sidebarWidth, height: height)
+    }
+
+    /// The area that takes a drag on a column's divider, centered on it.
+    static func columnResizeHandleFrame(
+        dividerX: CGFloat,
+        height: CGFloat
+    ) -> CGRect {
+        let dividerCenterX = dividerX + (Self.sidebarDividerWidth / 2)
         return CGRect(
             x: dividerCenterX - (Self.sidebarResizeHandleHitWidth / 2),
             y: 0,
@@ -408,6 +550,14 @@ struct AppWindowView: View {
     private var titlebarControls: some View {
         HStack(spacing: ToastyTheme.titlebarControlSpacing) {
             sidebarToggleButton
+            if showsDockToggle, let coordinatorController {
+                CoordinatorDockToggleButton(
+                    controller: coordinatorController,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    store: store,
+                    windowID: windowID
+                )
+            }
             navigationButton(
                 symbol: "chevron.left",
                 label: "Go Back",
@@ -490,21 +640,8 @@ struct AppWindowView: View {
 
     private var effectiveSidebarWidth: CGFloat {
         Self.effectiveSidebarWidth(
-            hasEverLaunchedAgent: store.hasEverLaunchedAgent,
             sidebarWidthPointsOverride: store.window(id: windowID)?.sidebarWidthPointsOverride
         )
-    }
-
-    private var defaultSidebarWidth: CGFloat {
-        Self.defaultSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent)
-    }
-
-    private var windowHasProgramStatusRows: Bool {
-        let workspaceIDs = store.window(id: windowID)?.workspaceIDs ?? []
-        return workspaceIDs.contains { workspaceID in
-            guard let workspace = store.state.workspacesByID[workspaceID] else { return false }
-            return !sessionRuntimeStore.programStatusRows(in: workspace).isEmpty
-        }
     }
 
     @MainActor
@@ -518,6 +655,14 @@ struct AppWindowView: View {
             result = .success(())
         case .openShortcutReference:
             result = openKeyboardShortcutsReferenceResult()
+        case .openCoordinator:
+            // The same open as Agent ▸ Open Coordinator, failures included.
+            if let coordinatorController {
+                coordinatorController.perform(.open, windowID: windowID)
+                result = .success(())
+            } else {
+                result = .failure(ToasttyMenuActionError(message: "This Toastty has no coordinator."))
+            }
         }
 
         if case .failure(let error) = result {
@@ -560,6 +705,18 @@ struct AppWindowView: View {
         )
     }
 
+    private func askTaskSpaceCloseQuestion(_ closeTarget: PendingWorkspaceClose) {
+        let asker = TaskSpaceCloseAsker.live(sessionRuntimeStore: sessionRuntimeStore)
+        guard let answer = asker.ask(closingWorkspaceID: closeTarget.workspaceID, warning: { closeTarget.confirmationMessage }),
+              answer.choice != nil,
+              store.confirmWorkspaceClose(
+                  windowID: closeTarget.windowID,
+                  workspaceID: closeTarget.workspaceID,
+                  source: closeTarget.source
+              ) else { return }
+        asker.taskSpaceClosed(answer)
+    }
+
     private func confirmWorkspaceClose(_ closeTarget: PendingWorkspaceClose) {
         pendingWorkspaceClose = nil
         _ = store.confirmWorkspaceClose(
@@ -576,34 +733,49 @@ private struct WindowSlotFocusSignature: Equatable {
     let focusedPanelID: UUID?
 }
 
-private struct SidebarResizeLayer: View {
-    let windowID: UUID
-    let sidebarWidth: CGFloat
-    let defaultSidebarWidth: CGFloat
+/// A column whose right edge the user drags to set its width: the sidebar
+/// or the coordinator's dock.
+struct ResizableColumnEdge: Identifiable {
+    let id: String
+    let column: ResizingColumn
+    /// Where the column's divider starts, in the window's content.
+    let dividerX: CGFloat
+    let columnWidth: CGFloat
+    let accessibilityLabel: String
+    let accessibilityIdentifier: String
+    let metadata: [String: String]
+    let setWidth: (Double) -> Void
+}
+
+/// The resize edges of the window's columns, in one overlay.
+private struct ColumnResizeLayer: View {
+    let edges: [ResizableColumnEdge]
+    let resize: LiveColumnResize
+    let windowWidth: CGFloat
     let height: CGFloat
     let appIsActive: Bool
-    @ObservedObject var store: AppStore
 
-    @State private var resizeStartWidth: Double?
-    @State private var hovered = false
-    @State private var dragging = false
+    @State private var hoveredEdgeID: String?
+    @State private var draggingEdgeID: String?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            BoundaryResizeHandleVisual(
-                highlighted: highlighted,
-                appIsActive: appIsActive,
-                width: AppWindowView.sidebarDividerWidth
-            )
-            .frame(
-                width: AppWindowView.sidebarResizeHandleHitWidth,
-                height: height,
-                alignment: .topLeading
-            )
-            .position(x: sidebarWidth + (AppWindowView.sidebarDividerWidth / 2), y: height / 2)
-            .allowsHitTesting(false)
+            ForEach(edges) { edge in
+                BoundaryResizeHandleVisual(
+                    highlighted: hoveredEdgeID == edge.id || draggingEdgeID == edge.id,
+                    appIsActive: appIsActive,
+                    width: AppWindowView.sidebarDividerWidth
+                )
+                .frame(
+                    width: AppWindowView.sidebarResizeHandleHitWidth,
+                    height: height,
+                    alignment: .topLeading
+                )
+                .position(x: edge.dividerX + (AppWindowView.sidebarDividerWidth / 2), y: height / 2)
+                .allowsHitTesting(false)
+            }
 
-            BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
+            BoundaryInteractionOverlay(descriptors: edges.map(boundaryDescriptor))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onDisappear {
@@ -611,77 +783,56 @@ private struct SidebarResizeLayer: View {
         }
     }
 
-    private var boundaryDescriptor: BoundaryInteractionDescriptor {
+    private func boundaryDescriptor(_ edge: ResizableColumnEdge) -> BoundaryInteractionDescriptor {
         BoundaryInteractionDescriptor(
-            id: boundaryID,
-            hitFrame: AppWindowView.sidebarResizeHandleFrame(
-                sidebarWidth: sidebarWidth,
-                height: height
-            ),
+            id: edge.id,
+            hitFrame: AppWindowView.columnResizeHandleFrame(dividerX: edge.dividerX, height: height),
             visualFrame: CGRect(
-                x: sidebarWidth,
+                x: edge.dividerX,
                 y: 0,
                 width: AppWindowView.sidebarDividerWidth,
                 height: height
             ),
             axis: .vertical,
             cursor: .resizeLeftRight,
-            accessibilityLabel: "Resize Sidebar",
-            accessibilityIdentifier: "sidebar.resize",
-            metadata: [
-                "windowID": windowID.uuidString,
-                "sidebarWidth": String(format: "%.1f", sidebarWidth),
-            ],
+            accessibilityLabel: edge.accessibilityLabel,
+            accessibilityIdentifier: edge.accessibilityIdentifier,
+            metadata: edge.metadata,
+            coalescesDragUpdates: true,
             onBegan: { _ in
-                resizeStartWidth = Double(sidebarWidth)
-                updateInteraction(dragging: true)
+                let columnsWidth = (edges.last?.dividerX ?? 0) + AppWindowView.sidebarDividerWidth
+                resize.begin(edge.column, width: edge.columnWidth, holdingWorkspaceAt: max(0, windowWidth - columnsWidth))
+                draggingEdgeID = edge.id
             },
             onChanged: { value in
-                guard let startingWidth = resizeStartWidth else { return }
-                let nextWidth = startingWidth + Double(value.translation.width)
-                _ = store.send(
-                    .setSidebarWidth(
-                        windowID: windowID,
-                        width: nextWidth,
-                        defaultWidth: Double(defaultSidebarWidth)
-                    )
-                )
+                resize.update(edge.column, translation: value.translation.width, availableWidth: windowWidth)
             },
-            onEnded: { _ in
-                resizeStartWidth = nil
-                updateInteraction(dragging: false)
+            onEnded: { value in
+                if let width = resize.finish(edge.column, translation: value.translation.width, availableWidth: windowWidth) {
+                    edge.setWidth(width)
+                }
+                draggingEdgeID = nil
+            },
+            onCancelled: { _ in
+                resize.cancel(edge.column)
+                draggingEdgeID = nil
             },
             onHoverChanged: { hovering in
-                updateInteraction(hovered: hovering)
+                if hovering {
+                    hoveredEdgeID = edge.id
+                } else if hoveredEdgeID == edge.id {
+                    hoveredEdgeID = nil
+                }
             }
         )
     }
 
-    private var boundaryID: String {
-        "sidebar.resize.\(windowID.uuidString)"
-    }
-
-    private var highlighted: Bool {
-        hovered || dragging
-    }
-}
-
-private extension SidebarResizeLayer {
-    func updateInteraction(
-        hovered: Bool? = nil,
-        dragging: Bool? = nil
-    ) {
-        self.hovered = hovered ?? self.hovered
-        self.dragging = dragging ?? self.dragging
-    }
-
-    func releaseInteraction() {
-        resizeStartWidth = nil
-        guard hovered || dragging else { return }
+    private func releaseInteraction() {
+        guard hoveredEdgeID != nil || draggingEdgeID != nil else { return }
 
         DispatchQueue.main.async {
-            hovered = false
-            dragging = false
+            hoveredEdgeID = nil
+            draggingEdgeID = nil
         }
     }
 }

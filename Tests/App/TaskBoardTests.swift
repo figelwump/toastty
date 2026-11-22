@@ -1,0 +1,2490 @@
+import Combine
+import CoreState
+import RemoteProtocol
+import Foundation
+import Testing
+@testable import ToasttyApp
+
+/// The task board through the real store, reducer and task coordinator,
+/// with a fake `gh` in place of GitHub.
+@MainActor
+struct TaskBoardTests {
+    /// Answers `gh pr view <url> --json …` from `answers`, optionally
+    /// holding each answer until the test releases it.
+    final class FakeGitHub: WorkspaceMergeCommandRunning, @unchecked Sendable {
+        private let lock = NSLock()
+        private var answersByURL: [String: String] = [:]
+        private var recorded: [[String]] = []
+        private var held: [CheckedContinuation<Void, Never>] = []
+        var holdsAnswers = false
+        /// Fails requests for `readinessViewFields`, like a token that
+        /// cannot read checks.
+        var rejectsReadinessFields = false
+        var failsRequests = false
+        /// Every request ends this way, as without `gh` or its login.
+        var failure: WorkspaceMergeCommandResult?
+        var defaultBranch: String? = "main"
+
+        /// `checks` is the `statusCheckRollup` array as JSON.
+        func answer(
+            _ url: String,
+            state: String,
+            isDraft: Bool = false,
+            mergeCommit: String? = nil,
+            baseBranch: String? = nil,
+            mergeStateStatus: String? = nil,
+            reviewDecision: String = "",
+            checks: String = "[]"
+        ) {
+            let commit = mergeCommit.map { #"{"oid":"\#($0)"}"# } ?? "null"
+            let mergeability = mergeStateStatus.map {
+                #","mergeStateStatus":"\#($0)","reviewDecision":"\#(reviewDecision)","statusCheckRollup":\#(checks)"#
+            } ?? ""
+            let base = baseBranch.map { #","baseRefName":"\#($0)""# } ?? ""
+            lock.withLock {
+                answersByURL[url] = #"{"state":"\#(state)","isDraft":\#(isDraft),"headRefOid":"head1","mergeCommit":\#(commit)\#(mergeability)\#(base)}"#
+            }
+        }
+
+        var calls: [[String]] { lock.withLock { recorded } }
+        var heldCount: Int { lock.withLock { held.count } }
+
+        func release() {
+            let waiting = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+                defer { held = [] }
+                return held
+            }
+            waiting.forEach { $0.resume() }
+        }
+
+        func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
+            let (url, holds) = lock.withLock { () -> (String, Bool) in
+                recorded.append(arguments)
+                return (arguments.count > 3 ? arguments[3] : "", holdsAnswers)
+            }
+            if holds {
+                await withCheckedContinuation { continuation in
+                    lock.withLock { held.append(continuation) }
+                }
+            }
+            if let failure = lock.withLock({ self.failure }) {
+                return failure
+            }
+            if lock.withLock({ failsRequests }) {
+                return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "gh: offline", failure: nil)
+            }
+            if lock.withLock({ rejectsReadinessFields }), arguments.last == PullRequestStateCache.readinessViewFields {
+                return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "checks: forbidden", failure: nil)
+            }
+            if arguments.prefix(3) == ["gh", "repo", "view"] {
+                guard let defaultBranch else {
+                    return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "repository unavailable", failure: nil)
+                }
+                return WorkspaceMergeCommandResult(exitCode: 0, stdout: #"{"defaultBranchRef":{"name":"\#(defaultBranch)"}}"#, stderr: "", failure: nil)
+            }
+            guard let stdout = lock.withLock({ answersByURL[url] }) else {
+                return WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "gh: not found", failure: nil)
+            }
+            return WorkspaceMergeCommandResult(exitCode: 0, stdout: stdout, stderr: "", failure: nil)
+        }
+    }
+
+    private let pullRequestURL = "https://github.com/example/toastty/pull/124"
+
+    private func makeBoard(_ fixture: TaskCoordinatorTests.Fixture, gitHub: FakeGitHub) -> TaskBoardStore {
+        TaskBoardStore(
+            coordinator: fixture.coordinator,
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: gitHub),
+            refreshInterval: nil,
+            releaseCheckInterval: nil
+        )
+    }
+
+    /// A task space made the way an agent's `workspace.create` makes one,
+    /// with no task record.
+    private func makeUntrackedTaskSpace(_ fixture: TaskCoordinatorTests.Fixture, title: String) throws -> UUID {
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        let before = Set(fixture.store.state.workspacesByID.keys)
+        _ = fixture.store.send(.createWorkspace(windowID: windowID, title: title, activate: false))
+        let created = try #require(Set(fixture.store.state.workspacesByID.keys).subtracting(before).first)
+        _ = fixture.store.send(.setWorkspaceParent(workspaceID: created, parentWorkspaceID: fixture.workspaceID, spawningSessionID: nil))
+        return created
+    }
+
+    private func startTask(_ fixture: TaskCoordinatorTests.Fixture, text: String) async throws -> TaskRecord {
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: text,
+            workspaceID: fixture.workspaceID,
+            agent: "codex",
+            model: "gpt-6.1-sol",
+            effort: "high",
+            prompt: "Fix it."
+        ))
+        await fixture.waitForSetup(created.id)
+        return try #require(fixture.record(created.id))
+    }
+
+    @Test func theBoardListsTasksAndUntrackedTaskSpacesWithTheirStages() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let untracked = try makeUntrackedTaskSpace(fixture, title: "qa-mobile-navigation")
+        let task = try await startTask(fixture, text: "The unread dot stays on")
+
+        var items = board.items()
+        let watched = try #require(items.first { $0.id == .taskSpace(untracked) })
+        #expect(watched.record == nil)
+        #expect(watched.projectTitle == "toastty")
+        #expect(watched.stage == .idle)
+        let tracked = try #require(items.first { $0.id == .task(task.id) })
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        #expect(tracked.taskSpaceWorkspaceID == taskSpace)
+        // The agent launched with its first prompt, so its turn has begun.
+        #expect(tracked.stage.group == .running)
+        // A task space with a record is listed once, as its task.
+        #expect(items.contains { $0.id == .taskSpace(taskSpace) } == false)
+
+        // Without an answer from GitHub, a linked pull request and an idle
+        // task space wait for review.
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: untracked,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        items = board.items()
+        #expect(items.first { $0.id == .taskSpace(untracked) }?.stage == .needsYou(.review))
+
+        // Its done mark finishes it; the mark clears when work starts again.
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: untracked, doneAt: Date()))
+        #expect(board.items().first { $0.id == .taskSpace(untracked) }?.stage == .done)
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: untracked, panelID: try #require(fixture.store.state.workspacesByID[untracked]?.focusedPanelID)))
+        #expect(fixture.store.nextUnreadOrActivePanelTargetFromCommand(
+            preferredWindowID: fixture.store.state.windows.first?.id, sessionRuntimeStore: fixture.sessionRuntimeStore
+        )?.workspaceID != untracked)
+
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(Set(board.items(windowID: windowID).map(\.id)) == Set(board.items().map(\.id)))
+    }
+
+    @Test(arguments: [true, false])
+    func jumpCyclesReviewTaskSpacesAlongsideWorkingAgents(hasWorkingAgent: Bool) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let windowID = try #require(store.state.windows.first?.id)
+        let workingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        if hasWorkingAgent {
+            runtime.startSession(
+                sessionID: "working", agent: .codex, panelID: workingPanelID,
+                windowID: windowID, workspaceID: fixture.workspaceID,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+            )
+            runtime.updateStatus(sessionID: "working", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        }
+
+        // A tracked task explicitly ready for review, with its answer read.
+        let task = try await startTask(fixture, text: "Review the fix")
+        let trackedPanelID = try #require(task.operation.taskSpace?.panelID)
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
+        try fixture.coordinator.readyForReview(taskID: task.id)
+
+        // An older task space with a linked PR and no live agent also needs review.
+        let observedID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
+        let observedPanelID = try #require(store.state.workspacesByID[observedID]?.focusedPanelID)
+        _ = store.send(.setWorkspaceAnnotation(
+            workspaceID: observedID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .needsYou(.readyForReview))
+        #expect(board.items().first { $0.id == .taskSpace(observedID) }?.stage == .needsYou(.review))
+
+        #expect(store.selectedWorkspace?.focusedPanelID == workingPanelID)
+        // Repeated jumps visit both review spaces and the working agent, then wrap.
+        let expectedCycle = hasWorkingAgent
+            ? [trackedPanelID, observedPanelID, workingPanelID, trackedPanelID]
+            : [trackedPanelID, observedPanelID, trackedPanelID]
+        for expectedPanelID in expectedCycle {
+            #expect(store.nextUnreadOrActivePanelTargetFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            )?.panelID == expectedPanelID)
+            #expect(store.canFocusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+
+        // Resuming work removes the task from the review segment immediately.
+        let sessionID = try #require(task.currentSessionID)
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .running)
+        for expectedPanelID in [observedPanelID, hasWorkingAgent ? workingPanelID : trackedPanelID] {
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: try #require(task.taskSpaceWorkspaceID)))
+
+        // A completed review leaves the cycle. Its workspace remains open.
+        try fixture.coordinator.markDone(taskID: task.id)
+        #expect(store.state.workspacesByID[try #require(task.taskSpaceWorkspaceID)] != nil)
+        #expect(store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ))
+        #expect(store.selectedWorkspace?.focusedPanelID == observedPanelID)
+        _ = store.send(.setWorkspaceDone(workspaceID: observedID, doneAt: Date()))
+        #expect(store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ) == hasWorkingAgent)
+        #expect(store.selectedWorkspace?.focusedPanelID == (hasWorkingAgent ? workingPanelID : observedPanelID))
+    }
+
+    /// The jump visits what the window's sidebar segment lists: Needs you
+    /// leaves out working sessions and programs, also with an unread turn,
+    /// and later-flagged sessions. All includes them.
+    @Test func jumpFollowsTheSidebarSegment() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let windowID = try #require(store.state.windows.first?.id)
+        let workingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        runtime.startSession(
+            sessionID: "working", agent: .codex, panelID: workingPanelID,
+            windowID: windowID, workspaceID: fixture.workspaceID,
+            codexStatusTrackingSource: .externallyReported,
+            cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+        )
+        runtime.updateStatus(sessionID: "working", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+
+        let reviewTask = try await startTask(fixture, text: "Review the fix")
+        let reviewPanelID = try #require(reviewTask.operation.taskSpace?.panelID)
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(reviewTask.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
+        try fixture.coordinator.readyForReview(taskID: reviewTask.id)
+
+        // A second task's agent works with its last turn unread, and a
+        // third is flagged for later. Needs you lists neither.
+        let busyTask = try await startTask(fixture, text: "Keep working")
+        let busyPanelID = try #require(busyTask.operation.taskSpace?.panelID)
+        let busySessionID = try #require(busyTask.currentSessionID)
+        let busyWorkspaceID = try #require(busyTask.taskSpaceWorkspaceID)
+        runtime.updateStatus(sessionID: busySessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        _ = store.send(.recordDesktopNotification(workspaceID: busyWorkspaceID, panelID: busyPanelID))
+        #expect(store.state.workspacesByID[busyWorkspaceID]?.unreadPanelIDs.contains(busyPanelID) == true)
+        let laterTask = try await startTask(fixture, text: "Look at this later")
+        let laterPanelID = try #require(laterTask.operation.taskSpace?.panelID)
+        let laterSessionID = try #require(laterTask.currentSessionID)
+        runtime.updateStatus(sessionID: laterSessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        runtime.setLaterFlag(sessionID: laterSessionID, isFlagged: true)
+        // A program in another project finished unread, then started again.
+        let before = Set(store.state.workspacesByID.keys)
+        _ = store.send(.createWorkspace(windowID: windowID, title: "builds", activate: false))
+        let programWorkspaceID = try #require(Set(store.state.workspacesByID.keys).subtracting(before).first)
+        let programPanelID = try #require(store.state.workspacesByID[programWorkspaceID]?.focusedPanelID)
+        runtime.handleProgramStatusEvent(.report(.init(state: .done, title: "Build")), panelID: programPanelID)
+        runtime.handleProgramStatusEvent(.report(.init(state: .working, title: "Build")), panelID: programPanelID)
+        let programWorkspace = try #require(store.state.workspacesByID[programWorkspaceID])
+        #expect(runtime.programStatusRows(in: programWorkspace).map(\.status.kind) == [.working])
+        #expect(programWorkspace.unreadPanelIDs.contains(programPanelID))
+
+        _ = store.send(.focusPanel(workspaceID: fixture.workspaceID, panelID: workingPanelID))
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: fixture.workspaceID))
+        #expect(store.selectedWorkspace?.focusedPanelID == workingPanelID)
+
+        // A jump to the panel that already has the focus does nothing, so
+        // each press records where the focus is.
+        func jumps(_ count: Int) throws -> Set<UUID> {
+            var visited = Set<UUID>()
+            for _ in 0..<count {
+                _ = store.focusNextUnreadOrActivePanelFromCommand(
+                    preferredWindowID: windowID, sessionRuntimeStore: runtime
+                )
+                visited.insert(try #require(store.selectedWorkspace?.focusedPanelID))
+            }
+            return visited
+        }
+        func select(_ segment: SidebarSegment) {
+            _ = store.send(.setSidebarSegment(windowID: windowID, segment: segment), source: .ui("sidebar_segment"))
+        }
+
+        // Needs you, then All, then Needs you again, as the user switches.
+        select(.needsYou)
+        #expect(try jumps(4) == [reviewPanelID])
+        select(.all)
+        #expect(try jumps(7) == [reviewPanelID, workingPanelID, busyPanelID, laterPanelID, programPanelID])
+        select(.needsYou)
+        #expect(try jumps(4) == [reviewPanelID])
+
+        // With only working and later-flagged sessions, Needs you has no
+        // target, and the command is unavailable.
+        try fixture.coordinator.markDone(taskID: reviewTask.id)
+        #expect(store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ) == false)
+        select(.all)
+        #expect(store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: runtime
+        ))
+    }
+
+    /// A saved jump cycle from a window that shows All does not carry its
+    /// working sessions into a window that shows Needs you.
+    @Test func jumpUsesTheSegmentOfTheWindowItRunsIn() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let firstWindowID = try #require(store.state.windows.first?.id)
+        let firstWorkingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        func startWorking(_ sessionID: String, panelID: UUID, windowID: UUID, workspaceID: UUID) {
+            runtime.startSession(
+                sessionID: sessionID, agent: .codex, panelID: panelID,
+                windowID: windowID, workspaceID: workspaceID,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+            )
+            runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        }
+        startWorking("first", panelID: firstWorkingPanelID, windowID: firstWindowID, workspaceID: fixture.workspaceID)
+
+        let reviewTask = try await startTask(fixture, text: "Review the fix")
+        let reviewPanelID = try #require(reviewTask.operation.taskSpace?.panelID)
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(reviewTask.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
+        try fixture.coordinator.readyForReview(taskID: reviewTask.id)
+
+        #expect(store.send(.createWindow(seed: nil, initialFrame: nil)))
+        let secondWindow = try #require(store.state.windows.last)
+        let secondWorkspaceID = try #require(secondWindow.selectedWorkspaceID)
+        let secondWorkingPanelID = try #require(store.state.workspacesByID[secondWorkspaceID]?.focusedPanelID)
+        startWorking("second", panelID: secondWorkingPanelID, windowID: secondWindow.id, workspaceID: secondWorkspaceID)
+        _ = store.send(.setSidebarSegment(windowID: secondWindow.id, segment: .needsYou))
+        _ = store.send(.selectWindow(windowID: firstWindowID))
+        _ = store.send(.focusPanel(workspaceID: fixture.workspaceID, panelID: firstWorkingPanelID))
+        _ = store.send(.selectWorkspace(windowID: firstWindowID, workspaceID: fixture.workspaceID))
+
+        func jump() -> UUID? {
+            _ = store.focusNextUnreadOrActivePanelFromCommand(preferredWindowID: nil, sessionRuntimeStore: runtime)
+            return store.state.selectedWindowID.flatMap { store.selectedWorkspace(in: $0)?.focusedPanelID }
+        }
+        // All in the first window visits the review and the second
+        // window's working session.
+        #expect(jump() == reviewPanelID)
+        #expect(jump() == secondWorkingPanelID)
+        #expect(store.state.selectedWindowID == secondWindow.id)
+        // The second window shows Needs you: the next press goes to the
+        // review, not on to the first window's working session.
+        #expect(jump() == reviewPanelID)
+    }
+
+    @Test(arguments: [TaskStage.done, .archived, .toShip])
+    func jumpSkipsQuietUnreadInCompletedTasks(stage: TaskStage) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        if stage == .toShip {
+            fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        }
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let task = try await startTask(fixture, text: "Finish the work")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let panelID = try #require(task.operation.taskSpace?.panelID)
+        let sessionID = try #require(task.currentSessionID)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Finished"), at: Date()
+        )
+        try fixture.coordinator.records.save(id: task.id) {
+            if stage == .archived { $0.archivedAt = Date() } else { Self.merge(&$0) }
+        }
+        #expect(board.items().first { $0.taskID == task.id }?.stage == stage)
+        // The task's completion is authoritative even before its workspace
+        // has a done mark or cleanup has closed it.
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.doneAt == nil)
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.unreadPanelIDs.contains(panelID) == true)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            store: fixture.store, preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ) == false)
+        #expect(fixture.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ) == false)
+        #expect(fixture.store.selectedWorkspace?.id == fixture.workspaceID)
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.unreadPanelIDs.contains(panelID) == true)
+
+        // A stopped cleanup needs attention, even after work finished.
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.cleanup = TaskCleanup(kind: stage == .archived ? .archive : .merge, problem: "Cleanup stopped")
+        }
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .needsYou(.cleanupStopped(reason: "Cleanup stopped")))
+        #expect(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            store: fixture.store, preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.selectedWorkspace?.id == workspaceID)
+    }
+
+    @Test(arguments: [false, true])
+    func jumpUsesSavedMergeAcceptanceWithoutARestoredMergeRequest(skillStopped: Bool) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let task = try await startTask(fixture, text: "Merge the work")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let panelID = try #require(task.operation.taskSpace?.panelID)
+        let readyAt = Date().addingTimeInterval(1)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: .ready, summary: "Ready"), at: readyAt
+        )
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.pullRequestURL = pullRequestURL
+            $0.mergeRequestedAt = readyAt.addingTimeInterval(skillStopped ? -1 : 1)
+        }
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: Date()))
+        let restored = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(restored)
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        restored.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = restored
+        #expect(fixture.sessionRuntimeStore.workspaceMergeRequests.isEmpty)
+        #expect(board.items().first { $0.taskID == task.id }?.stage == (skillStopped ? .needsYou(.review) : .running))
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        #expect(ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+            store: fixture.store, preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: windowID, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ))
+        #expect(fixture.store.selectedWorkspace?.focusedPanelID == panelID)
+        #expect(fixture.store.state.workspacesByID[workspaceID]?.doneAt != nil)
+    }
+
+    /// Complete and Archive both move focus on. An unread panel in another
+    /// window outranks a review, but focus stays in the window that showed
+    /// the task space.
+    @Test(arguments: [false, true], [false, true])
+    func finishingTheShownTaskMovesFocusToTheNextActiveTaskSpace(unreadInAnotherWindow: Bool, archive: Bool) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID in
+            store.closeTaskSpaceFocusingNextActive(workspaceID: workspaceID, sessionRuntimeStore: runtime)
+        }
+        let windowID = try #require(store.state.windows.first?.id)
+
+        let task = try await startTask(fixture, text: "Answer the question")
+        let taskSpaceID = try #require(task.taskSpaceWorkspaceID)
+        for kind in [SessionStatusKind.working, .idle] {
+            runtime.updateStatus(
+                sessionID: try #require(task.currentSessionID), status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date()
+            )
+        }
+        try fixture.coordinator.readyForReview(taskID: task.id)
+        // The workspace after the task space has nothing to do; the one
+        // after that waits for review.
+        let quietID = try makeUntrackedTaskSpace(fixture, title: "Nothing to do")
+        let reviewID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
+        let reviewPanelID = try #require(store.state.workspacesByID[reviewID]?.focusedPanelID)
+        _ = store.send(.setWorkspaceAnnotation(
+            workspaceID: reviewID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: quietID)
+            == store.state.window(id: windowID)?.workspaceIDs.firstIndex(of: taskSpaceID).map { $0 + 1 })
+        if unreadInAnotherWindow {
+            #expect(store.send(.createWindow(seed: nil, initialFrame: nil)))
+            let otherWindow = try #require(store.state.windows.first { $0.id != windowID })
+            let otherWorkspaceID = try #require(otherWindow.selectedWorkspaceID)
+            let otherPanelID = try #require(store.state.workspacesByID[otherWorkspaceID]?.focusedPanelID)
+            #expect(store.send(.recordDesktopNotification(workspaceID: otherWorkspaceID, panelID: otherPanelID)))
+            #expect(store.nextUnreadOrActivePanelTargetFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            )?.panelID == otherPanelID)
+        }
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: taskSpaceID))
+        #expect(store.state.selectedWindowID == windowID)
+
+        if archive {
+            try await fixture.coordinator.archive(taskID: task.id, options: TaskArchiveOptions())
+            await fixture.waitUntil("the archive finishes") { fixture.record(task.id)?.cleanup?.finishedAt != nil }
+            #expect(fixture.record(task.id)?.archivedAt != nil)
+        } else {
+            try fixture.coordinator.complete(taskID: task.id)
+            #expect(fixture.record(task.id)?.doneAt != nil)
+        }
+
+        #expect(store.state.workspacesByID[taskSpaceID] == nil)
+        // A plain close would select the quiet neighbor.
+        #expect(store.selectedWorkspace?.id == reviewID)
+        #expect(store.selectedWorkspace?.focusedPanelID == reviewPanelID)
+    }
+
+    @Test func completingATaskThatIsNotShownLeavesTheSelectionAlone() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        fixture.coordinator.closeFinishedTaskSpace = { [unowned store, unowned runtime] workspaceID in
+            store.closeTaskSpaceFocusingNextActive(workspaceID: workspaceID, sessionRuntimeStore: runtime)
+        }
+        let windowID = try #require(store.state.windows.first?.id)
+        let task = try await startTask(fixture, text: "Answer the question")
+        let taskSpaceID = try #require(task.taskSpaceWorkspaceID)
+        let reviewID = try makeUntrackedTaskSpace(fixture, title: "Review the linked PR")
+        _ = store.send(.setWorkspaceAnnotation(
+            workspaceID: reviewID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: fixture.workspaceID))
+
+        try fixture.coordinator.complete(taskID: task.id)
+
+        #expect(store.state.workspacesByID[taskSpaceID] == nil)
+        #expect(store.selectedWorkspace?.id == fixture.workspaceID)
+    }
+
+    @Test func jumpKeepsReviewCycleStableWithLaterPaneAndPreservesUnreadAndApprovalPriority() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let store = fixture.store
+        let runtime = fixture.sessionRuntimeStore
+        let windowID = try #require(store.state.windows.first?.id)
+        let workingPanelID = try #require(store.selectedWorkspace?.focusedPanelID)
+        let laterSpaceID = try makeUntrackedTaskSpace(fixture, title: "Review with later pane")
+        let reviewSpaceID = try makeUntrackedTaskSpace(fixture, title: "Another review")
+        let reviewPanelID = try #require(store.state.workspacesByID[reviewSpaceID]?.focusedPanelID)
+        for workspaceID in [laterSpaceID, reviewSpaceID] {
+            _ = store.send(.setWorkspaceAnnotation(
+                workspaceID: workspaceID, key: "github-pr",
+                annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+            ))
+        }
+        let laterPanelID = UUID()
+        _ = store.send(.createBackgroundTerminalTab(
+            workspaceID: laterSpaceID, tabID: UUID(), panelID: laterPanelID, terminalCWD: fixture.projectRoot
+        ))
+        for (sessionID, workspaceID, panelID, kind) in [
+            ("working", fixture.workspaceID, workingPanelID, SessionStatusKind.working),
+            ("later", laterSpaceID, laterPanelID, SessionStatusKind.idle),
+        ] {
+            runtime.startSession(
+                sessionID: sessionID, agent: .codex, panelID: panelID,
+                windowID: windowID, workspaceID: workspaceID,
+                codexStatusTrackingSource: .externallyReported,
+                cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+            )
+            runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: kind, summary: kind.rawValue), at: Date())
+        }
+        runtime.setLaterFlag(sessionID: "later", isFlagged: true)
+        #expect(board.items().first { $0.id == .taskSpace(laterSpaceID) }?.stage == .needsYou(.review))
+        // The review space with a later pane is already reachable. Changing
+        // its selected tab through the jump must not reset the saved cycle.
+        for expectedPanelID in [reviewPanelID, laterPanelID, workingPanelID, reviewPanelID] {
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+
+        runtime.updateStatus(sessionID: "working", status: SessionStatus(kind: .needsApproval, summary: "Approve"), at: Date())
+        // Read the approval notice so the next cycle tests approval status,
+        // independently of the unread notification created by that transition.
+        _ = store.send(.markPanelNotificationsRead(workspaceID: fixture.workspaceID, panelID: workingPanelID))
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: laterSpaceID))
+        _ = store.send(.recordDesktopNotification(workspaceID: reviewSpaceID, panelID: reviewPanelID))
+        #expect(store.state.workspacesByID[reviewSpaceID]?.unreadPanelIDs.contains(reviewPanelID) == true)
+        // Unread preempts approval. Starting at that review then visits
+        // approval, later, and the starting review panel, without repeats.
+        for expectedPanelID in [reviewPanelID, workingPanelID, laterPanelID, reviewPanelID] {
+            #expect(store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID, sessionRuntimeStore: runtime
+            ))
+            #expect(store.selectedWorkspace?.focusedPanelID == expectedPanelID)
+        }
+    }
+
+    private func startNamedSession(
+        _ fixture: TaskCoordinatorTests.Fixture, workspaceID: UUID, panelID: UUID, sessionID: String,
+        override: String? = nil
+    ) throws {
+        let runtime = fixture.sessionRuntimeStore
+        let date = Date()
+        runtime.startSession(
+            sessionID: sessionID, agent: .opencode, panelID: panelID,
+            windowID: try #require(fixture.store.state.windows.first?.id), workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported, displayTitleOverride: override,
+            cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: date
+        )
+        #expect(runtime.confirmNativeSessionBinding(
+            managedSessionID: sessionID, panelID: panelID,
+            record: ManagedAgentResumeRecord(
+                agent: .opencode, nativeSessionID: sessionID,
+                sessionFilePath: fixture.root.appendingPathComponent("\(sessionID).json").path,
+                cwd: fixture.projectRoot, capturedAt: date
+            )
+        ))
+    }
+
+    private func reportTitle(_ title: String, sessionID: String, fixture: TaskCoordinatorTests.Fixture) -> Bool {
+        fixture.sessionRuntimeStore.applyReportedProviderSessionName(
+            sessionID: sessionID, agent: .opencode, nativeSessionID: sessionID, name: title
+        )
+    }
+
+    @Test func providerTitlesReachTheBoardAndSidebarAndSurviveClosingTheTaskSpace() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        let task = try await startTask(fixture, text: "Fix the unread dot")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let panelID = try #require(task.operation.taskSpace?.panelID)
+        let launchedID = try #require(task.currentSessionID)
+        let launched = try #require(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[launchedID])
+        #expect(launched.displayTitleOverride == nil, "Task launch must not mask provider names")
+        #expect(board.items().first { $0.taskID == task.id }?.title == task.title)
+        // The top bar shows the task's title, not the task space's slug,
+        // and the project's own name for the project.
+        func headerTitle(_ id: UUID) throws -> String {
+            WorkspaceView.workspaceHeaderTitle(
+                for: try #require(fixture.store.state.workspacesByID[id]), taskBoard: board,
+                registry: fixture.sessionRuntimeStore.sessionRegistry
+            )
+        }
+        #expect(task.title != task.slug)
+        #expect(try headerTitle(workspaceID) == task.title)
+        let projectID = try #require(fixture.store.state.workspacesByID[workspaceID]?.parentWorkspaceID)
+        #expect(try headerTitle(projectID) == fixture.store.state.workspacesByID[projectID]?.title)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: panelID, sessionID: "restored-owner")
+        #expect(reportTitle("Unread dot repair", sessionID: "restored-owner", fixture: fixture))
+        await waitUntil { fixture.record(task.id)?.title == "Unread dot repair" }
+        #expect(board.items().first { $0.taskID == task.id }?.title == "Unread dot repair")
+        let runtime = TerminalRuntimeRegistry()
+        let sidebar = SidebarView(
+            windowID: try #require(fixture.store.state.windows.first?.id), store: fixture.store,
+            terminalRuntimeRegistry: runtime, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(), taskBoard: board,
+            terminalRuntimeContext: TerminalWindowRuntimeContext(windowID: try #require(fixture.store.state.windows.first?.id), runtimeRegistry: runtime)
+        )
+        let workspace = try #require(fixture.store.state.workspacesByID[workspaceID])
+        #expect(sidebar.subspaceRowModel(workspace: workspace, spawner: nil).title == "Unread dot repair")
+        #expect(try headerTitle(workspaceID) == "Unread dot repair")
+        #expect(workspace.title == task.slug)
+        #expect(fixture.record(task.id)?.slug == task.slug)
+
+        // A title and exit in one publication burst must still be saved.
+        #expect(reportTitle("Unread dot fixed", sessionID: "restored-owner", fixture: fixture))
+        fixture.sessionRuntimeStore.stopSession(sessionID: "restored-owner", at: Date())
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "monitor", agent: .processWatch, panelID: panelID,
+            windowID: try #require(fixture.store.state.windows.first?.id), workspaceID: workspaceID,
+            codexStatusTrackingSource: .externallyReported, displayTitleOverride: "Watching a process",
+            cwd: fixture.projectRoot, repoRoot: fixture.projectRoot, at: Date()
+        )
+        _ = fixture.store.send(.closeWorkspace(workspaceID: workspaceID))
+        await waitUntil { fixture.record(task.id)?.title == "Unread dot fixed" }
+        try fixture.coordinator.records.flush()
+        #expect(fixture.savedRecord(task.id)?.title == "Unread dot fixed")
+        #expect(board.items().first { $0.taskID == task.id }?.title == "Unread dot fixed")
+        #expect(gitHub.calls.isEmpty, "A title change does not query GitHub")
+    }
+
+    @Test func aMovedTaskUsesItsOwnerAndKeepsExplicitTitles() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "Fix the unread dot")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let originalPanel = try #require(task.operation.taskSpace?.panelID)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: originalPanel, sessionID: "original")
+        #expect(reportTitle("Original work", sessionID: "original", fixture: fixture))
+        _ = fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil))
+        let movedPanel = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        #expect(movedPanel != originalPanel)
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.operation.worktreeSession = TaskOperation.WorktreeSession(
+                workspaceID: workspaceID, panelID: movedPanel, sessionID: "old-moved-id", forked: true
+            )
+        }
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: movedPanel, sessionID: "restored-moved")
+        #expect(reportTitle("Worktree repair", sessionID: "restored-moved", fixture: fixture))
+        await waitUntil { fixture.record(task.id)?.title == "Worktree repair" }
+        #expect(reportTitle("Unrelated work", sessionID: "original", fixture: fixture))
+        #expect(board.items().first { $0.taskID == task.id }?.title == "Worktree repair")
+
+        try fixture.coordinator.records.save(id: task.id) { $0.title = "My title"; $0.titleSetByUser = true }
+        #expect(reportTitle("Another provider title", sessionID: "restored-moved", fixture: fixture))
+        #expect(board.items().first { $0.taskID == task.id }?.title == "My title")
+        // Wait for the deferred observer by doing another observable change.
+        let other = try await startTask(fixture, text: "Other task")
+        await waitUntil { fixture.record(other.id)?.setup == .started }
+        #expect(fixture.record(task.id)?.title == "My title")
+
+        // Closing the project keeps the task space open as a top-level
+        // workspace, which the sidebar still lists by its task: the top bar
+        // keeps the task's title too.
+        _ = fixture.store.send(.closeWorkspace(workspaceID: fixture.workspaceID))
+        let topLevel = try #require(fixture.store.state.workspacesByID[workspaceID])
+        #expect(topLevel.parentWorkspaceID == nil)
+        #expect(WorkspaceView.workspaceHeaderTitle(
+            for: topLevel, taskBoard: board, registry: fixture.sessionRuntimeStore.sessionRegistry
+        ) == "My title")
+    }
+
+    @Test func olderTaskSpacesUseTheFirstNamedAgentAcrossStopsAndRestores() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let workspaceID = try makeUntrackedTaskSpace(fixture, title: "temporary-task-name")
+        let panelID = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: panelID, sessionID: "first")
+        // Construct the board after the sessions, as happens on startup.
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        func title() -> String? { board.items().first { $0.id == .taskSpace(workspaceID) }?.title }
+        func headerTitle() throws -> String {
+            WorkspaceView.workspaceHeaderTitle(
+                for: try #require(fixture.store.state.workspacesByID[workspaceID]), taskBoard: board,
+                registry: fixture.sessionRuntimeStore.sessionRegistry
+            )
+        }
+        #expect(title() == "temporary-task-name")
+        // A task space without a task record shows the same title in the top bar.
+        #expect(try headerTitle() == "temporary-task-name")
+        _ = fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil))
+        let secondPanel = try #require(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: secondPanel, sessionID: "second")
+        #expect(reportTitle("Second task", sessionID: "second", fixture: fixture))
+        #expect(title() == "Second task", "An unnamed first session must not hide an available title")
+        #expect(try headerTitle() == "Second task")
+        #expect(reportTitle("Older task repair", sessionID: "first", fixture: fixture))
+        #expect(title() == "Older task repair")
+        fixture.sessionRuntimeStore.stopSession(sessionID: "first", at: Date())
+        #expect(title() == "Older task repair")
+        try startNamedSession(fixture, workspaceID: workspaceID, panelID: panelID, sessionID: "first-restored", override: "Chosen session title")
+        #expect(reportTitle("Provider title", sessionID: "first-restored", fixture: fixture))
+        #expect(title() == "Chosen session title")
+    }
+
+    @Test func aMergeSeenOnGitHubStaysOnTheTaskAfterItsTaskSpaceCloses() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        let task = try await startTask(fixture, text: "The unread dot stays on")
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+
+        // The task keeps its task space's pull request link.
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL + "/files")
+        ))
+        #expect(fixture.record(task.id)?.pullRequestURL == pullRequestURL)
+
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        board.refreshOpenPullRequests()
+        await waitUntil { board.items().first { $0.id == .task(task.id) }?.pullRequestState?.state == .open }
+        #expect(board.items().first { $0.id == .task(task.id) }?.stage.group != .done)
+
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "abc123")
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        await board.pullRequests?.refresh(link).value
+        let merged = try #require(fixture.record(task.id))
+        #expect(merged.mergedAt != nil)
+        #expect(merged.mergeCommit == "abc123")
+        #expect(board.items().first { $0.id == .task(task.id) }?.stage == .done)
+
+        // With release tags, a merge waits to ship.
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        board.reloadConfig()
+        #expect(board.items().first { $0.id == .task(task.id) }?.stage == .toShip)
+
+        // The record carries it once the task space is gone.
+        _ = fixture.store.send(.closeWorkspace(workspaceID: taskSpace))
+        let closed = try #require(board.items().first { $0.id == .task(task.id) })
+        #expect(closed.taskSpaceWorkspaceID == nil)
+        #expect(closed.stage == .toShip)
+        #expect(gitHub.calls.allSatisfy { $0.suffix(2) == ["--json", PullRequestStateCache.readinessViewFields] })
+    }
+
+    @Test(arguments: ["main", "feature/coordinator"])
+    func oldMergedTasksUseTheActualDestinationAcrossWorktreesAndRestore(base: String) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*", releasePrompt: "Release.")])
+        var task = TaskRecord(createdAt: Date(), text: "Merged", title: "Merged", slug: "merged", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: fixture.projectRoot + "-coordinator", setup: .started)
+        task.pullRequestURL = pullRequestURL
+        task.mergedAt = Date()
+        task.mergeCommit = "merged"
+        // The source branch does not decide the final PR destination.
+        task.operation.base = TaskOperation.Base(sha: "old", ref: "origin/another-feature", fetched: true)
+        task.operation.worktree = TaskOperation.Worktree(path: "/removed/worktree", branch: "fix/task", checkoutRoot: fixture.projectRoot, added: true)
+        task.cleanup = TaskCleanup(kind: .merge, finishedAt: Date())
+        try fixture.coordinator.records.insert(task)
+        let gitHub = FakeGitHub()
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "merged", baseBranch: base)
+        gitHub.defaultBranch = nil
+        let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        // Missing metadata keeps the existing release wait; the saved start base is no substitute.
+        await board.pullRequests?.refresh(link).value
+        #expect(fixture.record(task.id)?.mergeTarget == nil)
+        #expect(board.items().first { $0.taskID == task.id }?.stage == .toShip)
+        gitHub.defaultBranch = "main"
+        board.refreshOpenPullRequests()
+        await waitUntil { fixture.record(task.id)?.mergeTarget != nil }
+        let expected: TaskStage = base == "main" ? .toShip : .done
+        let item = try #require(board.items().first { $0.taskID == task.id })
+        #expect(item.stage == expected)
+        #expect(fixture.coordinator.toShipTasks(projectRoot: fixture.projectRoot).map(\.id) == (base == "main" ? [task.id] : []))
+        // The same board drives task.get, not only the sidebar.
+        let executor = TaskAppControlTests().makeExecutor(fixture, coordinator: fixture.coordinator)
+        let result = try executor.runQuery(id: "task.get", args: ["taskID": .string(task.id.uuidString)])
+        guard case .object(let stage)? = result["stage"] else { Issue.record("missing stage"); return }
+        #expect(stage["group"] == .string(base == "main" ? "toShip" : "done"))
+        fixture.coordinator.records.flushForTesting()
+        let restored = try #require(fixture.savedRecord(task.id))
+        #expect(restored.mergeTarget == TaskMergeTarget(baseBranch: base, releaseBranch: "main"))
+        let restoredItems = TaskBoard.items(TaskBoard.Inputs(state: fixture.store.state, records: [restored],
+            statuses: { _ in [] }, pullRequestState: { _ in nil }, config: fixture.config))
+        #expect(restoredItems.first?.stage == expected)
+        #expect(restored.shippedAt == nil)
+        let calls = gitHub.calls.count
+        board.refreshOpenPullRequests()
+        #expect(gitHub.calls.count == calls, "a migrated merged record does not need another GitHub request")
+    }
+
+    @Test func aProjectWithoutSavedWorktreeMetadataDiscoversItsRepositoryForReleaseSettings() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let repository = try TaskGitTestRepository()
+        let related = repository.root.appendingPathComponent("coordinator").path
+        try TaskGitTestRepository.git(["worktree", "add", "--quiet", "-b", "feature/coordinator", related], in: repository.project)
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: repository.project, releaseTags: "v*", releasePrompt: "Release.")])
+        var task = TaskRecord(createdAt: Date(), text: "Merged", title: "Merged", slug: "merged", source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: related, setup: .started)
+        task.mergedAt = Date()
+        task.mergeTarget = TaskMergeTarget(baseBranch: "main", releaseBranch: "main")
+        try fixture.coordinator.records.insert(task)
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        await waitUntil { board.repositoryRoots[related] != nil }
+        #expect(board.repositoryRoots[related] == repository.project)
+        let item = try #require(board.items().first { $0.taskID == task.id })
+        #expect(item.stage == .toShip)
+        // `task release` finds the project's release settings through the
+        // same repository.
+        fixture.coordinator.board = board
+        #expect(fixture.coordinator.releaseRepositoryRoot(projectRoot: related) == repository.project)
+        #expect(fixture.config.canRelease(projectRoot: related, repositoryRoot: repository.project))
+    }
+
+    @Test func theRecordKeepsTheDoneMarkAndTheRightPullRequestsMerge() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        let task = try await startTask(fixture, text: "The unread dot stays on")
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+
+        // The task space's done mark counts while it is open, and stays on
+        // the record after it closes.
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: Date()))
+        #expect(fixture.record(task.id)?.doneAt != nil)
+        #expect(board.items().first { $0.id == .task(task.id) }?.stage == .done)
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: taskSpace, doneAt: nil))
+        #expect(fixture.record(task.id)?.doneAt == nil)
+
+        // A merge GitHub reported is recorded as soon as the task has the link.
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "abc123")
+        await board.pullRequests?.refresh(link).value
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(fixture.record(task.id)?.mergeCommit == "abc123")
+
+        // A new pull request drops the old one's merge.
+        let replacement = "https://github.com/example/toastty/pull/131"
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #131", url: replacement)
+        ))
+        let replaced = try #require(fixture.record(task.id))
+        #expect(replaced.pullRequestURL == replacement)
+        #expect(replaced.mergedAt == nil)
+        #expect(replaced.mergeCommit == nil)
+
+        // A closed pull request is checked again, since it can reopen.
+        gitHub.answer(replacement, state: "CLOSED")
+        let replacementLink = try #require(WorkspacePullRequestLink(annotationURL: replacement))
+        await board.pullRequests?.refresh(replacementLink).value
+        let callsBefore = gitHub.calls.count
+        board.refreshOpenPullRequests()
+        await waitUntil { gitHub.calls.count > callsBefore }
+    }
+
+    @Test func adoptingATaskSpaceRecordsAMergeSeenBefore() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        let untracked = try makeUntrackedTaskSpace(fixture, title: "qa-private-app-verification")
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: untracked,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "abc123")
+        await board.pullRequests?.refresh(try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))).value
+
+        let adopted = try fixture.coordinator.adopt(workspaceID: untracked)
+        #expect(fixture.record(adopted.id)?.mergeCommit == "abc123")
+        _ = fixture.store.send(.closeWorkspace(workspaceID: untracked))
+        #expect(board.items().first { $0.id == .task(adopted.id) }?.stage == .done)
+    }
+
+    @Test func pullRequestRequestsAreMergedAndOlderAnswersDropped() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 5)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        gitHub.holdsAnswers = true
+
+        let first = cache.refresh(link)
+        let second = cache.refresh(link)
+        await waitUntil { gitHub.calls.count == 1 }
+        // A newer answer arrives from elsewhere while the request runs.
+        cache.store(TaskPullRequestState(state: .merged, mergeCommit: "abc123"), for: link, observedAt: Date(timeIntervalSince1970: 10))
+        gitHub.release()
+        await first.value
+        await second.value
+        #expect(gitHub.calls.count == 1)
+        #expect(cache.state(for: link)?.state == .merged)
+
+        // A failed request keeps the last good answer.
+        gitHub.holdsAnswers = false
+        clock = Date(timeIntervalSince1970: 20)
+        let other = try #require(WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/125"))
+        await cache.refresh(other).value
+        #expect(cache.state(for: other) == nil)
+        #expect(cache.entries[other.url]?.lastError == "gh: not found")
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.state == .open)
+    }
+
+    /// What `/usr/bin/env gh` gives without `gh`, and `gh` without a login.
+    static let ghMissing = WorkspaceMergeCommandResult(
+        exitCode: 127, stdout: "", stderr: "env: gh: No such file or directory", failure: nil)
+    static let ghSignedOut = WorkspaceMergeCommandResult(
+        exitCode: 4, stdout: "",
+        stderr: "To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.",
+        failure: nil)
+
+    /// The bug this guards: without `gh`, or with `gh` signed out, every
+    /// lookup failed, and the task only said "Ready for your review".
+    @Test func aFailedPullRequestLookupShowsOnTheTaskWithTheNextStep() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        let task = try await startTask(fixture, text: "Fix the unread dot")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        for kind in [SessionStatusKind.working, .idle] {
+            fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date())
+        }
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+        func lookup(_ result: WorkspaceMergeCommandResult?) async {
+            gitHub.failure = result
+            await board.pullRequests?.refresh(link).value
+        }
+
+        // No gh: one request, no second one with fewer fields.
+        let callsBefore = gitHub.calls.count
+        await lookup(Self.ghMissing)
+        #expect(gitHub.calls.count == callsBefore + 1)
+        var current = try item()
+        #expect(current.stage == .needsYou(.review))
+        #expect(current.pullRequestLookupProblem == .ghMissing)
+        #expect(TaskBoardPresentation.statusLine(current) == "⚠ install gh to check the PR")
+        #expect(TaskBoardPresentation.stageDescription(current).why.contains("brew install gh"))
+
+        await lookup(Self.ghSignedOut)
+        current = try item()
+        #expect(current.pullRequestLookupProblem == .notSignedIn)
+        #expect(TaskBoardPresentation.statusLine(current) == "⚠ run gh auth login to check the PR")
+
+        await lookup(WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "HTTP 502: Bad Gateway", failure: nil))
+        current = try item()
+        #expect(current.pullRequestLookupProblem == .other("HTTP 502: Bad Gateway"))
+        #expect(TaskBoardPresentation.statusLine(current) == "⚠ PR check failed")
+        #expect(TaskBoardPresentation.stageDescription(current).why == "gh could not read the PR: HTTP 502: Bad Gateway")
+
+        // GitHub answers: the task waits for review, with nothing to fix.
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        await lookup(nil)
+        current = try item()
+        #expect(current.pullRequestLookupProblem == nil)
+        #expect(TaskBoardPresentation.statusLine(current) == "Ready for your review")
+        // A later failure keeps GitHub's answer and shows none.
+        await lookup(Self.ghSignedOut)
+        #expect(try item().pullRequestLookupProblem == nil)
+        #expect(try item().pullRequestState?.state == .open)
+    }
+
+    /// Without `gh` or its login every request fails at once, so a failing
+    /// pull request is asked about less often, up to the settled interval,
+    /// until GitHub answers.
+    @Test func failedLookupsAskLessOftenUntilGitHubAnswers() async throws {
+        let gitHub = FakeGitHub()
+        gitHub.failure = Self.ghMissing
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        await cache.refresh(link).value
+        for wait: TimeInterval in [15, 30, 60, 120, 120] {
+            let calls = gitHub.calls.count
+            clock = clock.addingTimeInterval(wait - 1)
+            #expect(cache.refreshIfNeeded(link) == nil)
+            clock = clock.addingTimeInterval(1)
+            await cache.refreshIfNeeded(link)?.value
+            #expect(gitHub.calls.count == calls + 1)
+        }
+
+        // An answer ends the back-off; a new failure starts it again.
+        gitHub.failure = nil
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        clock = clock.addingTimeInterval(120)
+        await cache.refreshIfNeeded(link)?.value
+        #expect(cache.state(for: link)?.state == .open)
+        gitHub.failure = Self.ghSignedOut
+        await cache.refresh(link).value
+        let calls = gitHub.calls.count
+        clock = clock.addingTimeInterval(15)
+        await cache.refreshIfNeeded(link)?.value
+        #expect(gitHub.calls.count == calls + 1)
+    }
+
+    /// The bug this guards: a task whose agent stopped at a login or a
+    /// folder-trust question before its first report showed Idle once
+    /// Toastty stopped waiting for that report, and nothing told the user.
+    @Test func aTaskWhoseAgentNeverBeginsItsFirstPromptNeedsTheUser() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture(initialPromptTurnTimeoutNanoseconds: 300_000_000)
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        let task = try await startTask(fixture, text: "Fix the trust prompt")
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+        // The launch carries the first prompt, as for an agent that reports
+        // its own status, and the agent never reports.
+        fixture.sessionRuntimeStore.startInitialPromptTurn(sessionID: session, at: Date())
+        #expect(try item().stage == .running)
+        await waitUntil { (try? item().stage) == .needsYou(.startWaitsInTerminal) }
+        let waiting = try item()
+        #expect(waiting.stage.needsUser)
+        #expect(TaskBoardPresentation.statusLine(waiting) == "Codex may be waiting in its terminal")
+        #expect(TaskBoardPresentation.stageDescription(waiting).why.contains("folder-trust question"))
+        #expect(SidebarSubspacePresentation.rowStatus(sessionStatus: .idle, isDone: false, stage: waiting.stage) == .needsApproval)
+        let executor = TaskAppControlTests().makeExecutor(fixture, coordinator: fixture.coordinator)
+        let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(task.id.uuidString)])
+        guard case .object(let stage)? = got["stage"] else {
+            Issue.record("task get has no stage")
+            return
+        }
+        #expect(stage["attention"] == .string("startWaitsInTerminal"))
+        // The phone gets values it knows: the Needs you group, no mark of
+        // its own, and the words. The attention itself is not on the wire.
+        let summary = RemoteTaskBoardProjection.summary(
+            waiting, context: RemoteTaskBoardProjection.Context(state: fixture.store.state))
+        #expect(summary.group == .needsYou)
+        #expect(summary.mark == nil)
+        #expect(summary.rowSummary == "Codex may be waiting in its terminal")
+        let wire = try JSONEncoder().encode(summary)
+        #expect(String(decoding: wire, as: UTF8.self).contains("startWaitsInTerminal") == false)
+        #expect(try JSONDecoder().decode(RemoteTaskSummary.self, from: wire) == summary)
+
+        // The user answers in the terminal and the agent reports its turn;
+        // after it, an idle agent is only idle.
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(try item().stage == .running)
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .idle, summary: "Waiting"), at: Date())
+        #expect(try item().stage == .idle)
+    }
+
+    @Test func pendingChecksRefreshSoonerThanSettledPullRequests() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let task = try await startTask(fixture, text: "Refresh completed checks")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        let gitHub = FakeGitHub()
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN")
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore, pullRequests: cache,
+            releaseCheckInterval: nil
+        )
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        // A restored PR is fetched immediately, before the first periodic tick.
+        await waitUntil { cache.answer(for: link) != nil }
+        let initialCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(119)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        #expect(gitHub.calls.count == initialCalls)
+
+        clock = clock.addingTimeInterval(1)
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "UNSTABLE",
+                      checks: #"[{"status":"IN_PROGRESS"}]"#)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        let pendingCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(14)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        #expect(gitHub.calls.count == pendingCalls)
+
+        clock = clock.addingTimeInterval(1)
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN",
+                      checks: #"[{"status":"COMPLETED","conclusion":"SUCCESS"}]"#)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        await waitUntil { cache.state(for: link)?.mergeability?.checks == .passing }
+        #expect(gitHub.calls.count == pendingCalls + 1)
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
+        let settledCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(15)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        #expect(gitHub.calls.count == settledCalls)
+
+        // Inherited passing checks do not make a field-limited answer settled.
+        cache.store(TaskPullRequestState(state: .open, headSHA: "head1"), for: link, observedAt: clock)
+        clock = clock.addingTimeInterval(15)
+        board.refreshOpenPullRequests(onlyIfDue: true)
+        await waitUntil { gitHub.calls.count == settledCalls + 1 && !cache.isRefreshing(link) }
+    }
+
+    @Test func unknownAndFailedAnswersDoNotKeepReadinessForever() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        func store(_ head: String, _ mergeState: PullRequestMergeability.MergeState) {
+            cache.store(TaskPullRequestState(
+                state: .open, headSHA: head,
+                mergeability: PullRequestMergeability(mergeState: mergeState, checks: .running)
+            ), for: link, observedAt: clock)
+        }
+        store("aaa", .unstable)
+        clock = clock.addingTimeInterval(15)
+        store("aaa", .unknown)
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        #expect(cache.answer(for: link)?.mergeability?.mergeState == .unknown)
+        // Repeated unknown answers do not restart the 30 second grace period.
+        clock = clock.addingTimeInterval(15)
+        store("aaa", .unknown)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .unknown)
+        store("aaa", .clean)
+        store("bbb", .unknown)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .unknown)
+        #expect(cache.state(for: link)?.mergeability?.checks == .running)
+
+        store("bbb", .unstable)
+        gitHub.failsRequests = true
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        let failedCalls = gitHub.calls.count
+        clock = clock.addingTimeInterval(14)
+        cache.refreshIfNeeded(link)
+        #expect(gitHub.calls.count == failedCalls)
+        clock = clock.addingTimeInterval(1)
+        cache.refreshIfNeeded(link)
+        await waitUntil { gitHub.calls.count == failedCalls + 2 && !cache.isRefreshing(link) }
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.answer(for: link)?.mergeability?.checks == .running)
+
+        // Readiness-field fallback has the same expiry and cannot extend it.
+        gitHub.failsRequests = false
+        gitHub.rejectsReadinessFields = true
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        store("head1", .unstable)
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.answer(for: link)?.mergeability?.checks == .running)
+
+        // A first failure after the known answer is already old gets no
+        // extra grace, and still keeps check history for task alerts.
+        store("head1", .unstable)
+        clock = clock.addingTimeInterval(45)
+        gitHub.failsRequests = true
+        await cache.refresh(link).value
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.answer(for: link)?.mergeability?.checks == .running)
+    }
+
+    @Test func anOlderFailedRequestDoesNotReplaceANewerGoodAnswer() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.holdsAnswers = true
+        gitHub.failsRequests = true
+        let request = cache.refresh(link)
+        await waitUntil { gitHub.heldCount == 1 }
+        clock = clock.addingTimeInterval(60)
+        cache.store(TaskPullRequestState(
+            state: .open, headSHA: "new",
+            mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
+        ), for: link, observedAt: clock)
+        gitHub.holdsAnswers = false
+        gitHub.release()
+        await request.value
+        #expect(cache.entries[link.url]?.lastError == nil)
+        #expect(cache.state(for: link)?.mergeability?.checks == .passing)
+    }
+
+    @Test func readinessExpiresWhileARefreshIsStillRunning() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        cache.store(TaskPullRequestState(
+            state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .unstable, checks: .running)
+        ), for: link, observedAt: clock)
+        clock = clock.addingTimeInterval(15)
+        cache.store(TaskPullRequestState(
+            state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .unknown)
+        ), for: link, observedAt: clock)
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "UNKNOWN")
+        gitHub.holdsAnswers = true
+        let request = cache.refresh(link)
+        await waitUntil { gitHub.heldCount == 1 }
+        var publications = 0
+        let observation = cache.objectWillChange.sink { publications += 1 }
+        defer { observation.cancel() }
+        clock = clock.addingTimeInterval(15)
+        cache.refreshIfNeeded(link)
+        #expect(publications == 1, "The header must redraw when grace expires, even while a request is held")
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .unknown)
+        #expect(gitHub.calls.count == 1)
+        gitHub.release()
+        await request.value
+    }
+
+    @Test func mergeabilityComesFromGitHubAndSurvivesAnUnknownAnswer() async throws {
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 5)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        func answer(_ mergeStateStatus: String, state: String = "OPEN", review: String = "", checks: String = "[]") async {
+            clock = clock.addingTimeInterval(1)
+            gitHub.answer(pullRequestURL, state: state, mergeStateStatus: mergeStateStatus, reviewDecision: review, checks: checks)
+            await cache.refresh(link).value
+        }
+        let passed = #"{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}"#
+        let running = #"{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}"#
+        let failedStatus = #"{"__typename":"StatusContext","state":"FAILURE"}"#
+
+        // With no earlier answer, a merge state GitHub has not worked out
+        // reads as ready.
+        await answer("UNKNOWN", checks: "[\(running)]")
+        #expect(gitHub.calls.last?.last == PullRequestStateCache.readinessViewFields)
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
+
+        await answer("BLOCKED", checks: "[\(passed),\(running)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .checksRunning)
+        await answer("BLOCKED", review: "REVIEW_REQUIRED", checks: "[\(passed)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .reviewRequired)
+        await answer("BLOCKED", checks: "[\(failedStatus),\(running)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .checksFailing)
+        // A finished check that did not pass, such as a stale one, fails.
+        await answer("BLOCKED", checks: #"[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"STALE"}]"#)
+        #expect(cache.state(for: link)?.mergeBlocker == .checksFailing)
+
+        // An unknown answer keeps the last known one instead of flickering
+        // back to Merge.
+        await answer("UNKNOWN", checks: "[\(running)]")
+        #expect(cache.state(for: link)?.mergeBlocker == .checksFailing)
+
+        await answer("CLEAN", review: "APPROVED", checks: "[\(passed)]")
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
+        // A value this build does not know reads as unknown, so it keeps
+        // the last known state.
+        await answer("SOMETHING_NEW")
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .clean)
+        await answer("DIRTY")
+        #expect(cache.state(for: link)?.mergeBlocker == .conflicts)
+        // A token that cannot read checks still learns of the merge.
+        gitHub.rejectsReadinessFields = true
+        let callsBefore = gitHub.calls.count
+        await answer("UNKNOWN", state: "MERGED")
+        #expect(gitHub.calls.count == callsBefore + 2)
+        #expect(gitHub.calls.last?.last == PullRequestStateCache.viewFields)
+        #expect(cache.state(for: link)?.state == .merged)
+        #expect(cache.state(for: link)?.mergeBlocker == nil)
+    }
+
+    @Test func anUnreadFinishedTurnNeedsTheUserUnlessTheAgentWaitsOnAnotherTask() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "The unread dot stays on")
+        let other = try await startTask(fixture, text: "Define the API")
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        let panel = try #require(task.operation.taskSpace?.panelID)
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+
+        // The agent launched with its first prompt: that turn has begun even
+        // before the agent reports it.
+        #expect(try item().stage == .running)
+
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(try item().stage == .running)
+        #expect(try item().agent == .working)
+
+        // The turn ends with an unread answer: the next step is the user's.
+        let endedAt = Date().addingTimeInterval(1)
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: endedAt)
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+        let finished = try item()
+        #expect(finished.stage == .needsYou(.agentFinished))
+        #expect(finished.stage.group == .needsYou)
+        #expect(finished.hasUnreadTurn)
+        #expect(TaskBoardPresentation.statusLine(finished) == "Codex finished · waiting for you")
+
+        // Once the user reads it, the task is idle.
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        let read = try item()
+        #expect(read.stage == .idle)
+        #expect(read.stage.group == .idle)
+        #expect(read.agent == .idle)
+        #expect(read.hasUnreadTurn == false)
+        #expect(TaskBoardPresentation.statusLine(read) == "Codex · idle")
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .idle, summary: "Waiting"), at: endedAt.addingTimeInterval(1)
+        )
+        #expect(try item().stage == .idle)
+
+        // After a relaunch the restored session starts idle under a new
+        // session ID: it does not need the user.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        fixture.sessionRuntimeStore.stopSession(sessionID: session, at: endedAt.addingTimeInterval(2))
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "restored-\(session)", agent: .codex, panelID: panel, windowID: windowID, workspaceID: taskSpace,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, launchReason: .restore, at: endedAt.addingTimeInterval(3)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .idle, summary: "Waiting"), at: endedAt.addingTimeInterval(3)
+        )
+        #expect(try item().stage == .idle)
+
+        // An agent that ended its turn to wait on another task is running,
+        // even with the turn unread.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .ready, summary: "Ready"), at: endedAt.addingTimeInterval(4)
+        )
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: "restored-\(session)"))
+        #expect(try item().stage == .needsYou(.agentFinished))
+        _ = try fixture.coordinator.addWatch(targetTaskID: other.id, condition: .idle, notifyTaskID: task.id)
+        let waiting = try item()
+        #expect(waiting.stage == .running)
+        #expect(TaskBoardPresentation.statusLine(waiting) == "Codex · waiting for \(other.title)")
+
+        // The Tasks view lists it as the sidebar lists its task space's row:
+        // in Needs you with the ready square while the turn is unread, and
+        // back in Running once it is read. The stage stays Running.
+        #expect(waiting.taskSpaceStatus == .ready)
+        #expect(TaskBoardPresentation.showsUnreadTurnOverStage(waiting))
+        #expect(TaskBoardPresentation.tasksViewStatusLine(waiting) == "Codex finished · waiting for you")
+        let unreadView = TasksViewSections.make(board.items())
+        #expect(unreadView.needsYou.map(\.id) == [.task(task.id)])
+        #expect(unreadView.running.map(\.id).contains(.task(task.id)) == false)
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        let waitingRead = try item()
+        #expect(waitingRead.stage == .running)
+        #expect(TaskBoardPresentation.showsUnreadTurnOverStage(waitingRead) == false)
+        #expect(TaskBoardPresentation.tasksViewStatusLine(waitingRead) == "Codex · waiting for \(other.title)")
+        let readView = TasksViewSections.make(board.items())
+        #expect(readView.needsYou.isEmpty)
+        #expect(readView.running.map(\.id).contains(.task(task.id)))
+
+        // Once its project closes, the task space is a top-level workspace
+        // with no row under a project, and the sidebar lists the task by its
+        // stage alone. So does the Tasks view, even with a new unread turn.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .working, summary: "Working"), at: endedAt.addingTimeInterval(5)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: "restored-\(session)", status: SessionStatus(kind: .ready, summary: "Ready"), at: endedAt.addingTimeInterval(6)
+        )
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: "restored-\(session)"))
+        #expect(TasksViewSections.make(board.items()).needsYou.map(\.id) == [.task(task.id)])
+        #expect(fixture.store.send(.closeWorkspace(workspaceID: fixture.workspaceID)))
+        let topLevel = try item()
+        #expect(topLevel.stage == .running)
+        #expect(topLevel.hasUnreadTurn)
+        #expect(topLevel.taskSpaceStatus == nil)
+        #expect(TasksViewSections.make(board.items()).running.map(\.id).contains(.task(task.id)))
+    }
+
+    @Test func aQuestionWaitsInNeedsYouUntilTheTasksAgentStartsNewWork() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        // The coordinator finds the task's agent through the live sessions,
+        // as in the app.
+        fixture.coordinator.sessions = LiveTaskSessions(
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            closeController: SessionCloseController(
+                store: fixture.store,
+                sessionRuntimeStore: fixture.sessionRuntimeStore,
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: fixture.store,
+                    runtimeRegistry: TerminalRuntimeRegistry(),
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+                ),
+                terminalCloseAssessment: { _ in nil },
+                localDocumentCloseConfirmationState: { _ in nil },
+                shouldBypassConfirmation: true
+            ),
+            exitController: nil,
+            sendText: { _, _ in true }
+        )
+        let task = try await startTask(fixture, text: "Which hostname option?")
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        let panel = try #require(task.operation.taskSpace?.panelID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(task.id) }) }
+        let start = Date()
+
+        // The agent marks its question while it works, then ends its turn.
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start)
+        _ = try fixture.coordinator.needsReply(taskID: task.id, question: "Pick a hostname option")
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: start.addingTimeInterval(1))
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+        #expect(try item().stage == .needsYou(.awaitingReply))
+        #expect(TaskBoardPresentation.statusLine(try item()) == "Asks: Pick a hostname option")
+
+        // Reading the turn does not answer it.
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .idle, summary: "Waiting"), at: start.addingTimeInterval(2))
+        #expect(try item().stage == .needsYou(.awaitingReply))
+
+        // Another agent in the task space does not answer it either.
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        runtime.startSession(
+            sessionID: "helper", agent: .claude, panelID: UUID(), windowID: windowID, workspaceID: taskSpace,
+            codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: start.addingTimeInterval(3)
+        )
+        runtime.updateStatus(sessionID: "helper", status: SessionStatus(kind: .working, summary: "Working"), at: start.addingTimeInterval(3))
+        #expect(fixture.record(task.id)?.replyRequest != nil)
+        runtime.stopSession(sessionID: "helper", at: start.addingTimeInterval(4))
+
+        // The user's answer starts the agent's next turn and clears it.
+        runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start.addingTimeInterval(5))
+        #expect(fixture.record(task.id)?.replyRequest == nil)
+        #expect(try item().stage == .running)
+
+        // A later ready mark replaces a question.
+        _ = try fixture.coordinator.needsReply(taskID: task.id, question: nil)
+        #expect(fixture.record(task.id)?.replyRequest?.question == nil)
+        _ = try fixture.coordinator.readyForReview(taskID: task.id)
+        #expect(fixture.record(task.id)?.replyRequest == nil)
+    }
+
+    /// The reported case: a parent task that owns work for months after its
+    /// child tasks merged, waiting on email replies and dated work, could
+    /// only sit in Needs you with a question for nobody, or finish through
+    /// its children.
+    @Test func aTaskThatWaitsOutsideToasttyRestsInIdleWithItsReasonAndStaysOpen() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        // The coordinator finds the task's agent through the live sessions,
+        // as in the app, so the agent's turns clear its turn marks.
+        fixture.coordinator.sessions = LiveTaskSessions(
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            closeController: SessionCloseController(
+                store: fixture.store,
+                sessionRuntimeStore: fixture.sessionRuntimeStore,
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: fixture.store,
+                    runtimeRegistry: TerminalRuntimeRegistry(),
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+                ),
+                terminalCloseAssessment: { _ in nil },
+                localDocumentCloseConfirmationState: { _ in nil },
+                shouldBypassConfirmation: true
+            ),
+            exitController: nil,
+            sendText: { _, _ in true }
+        )
+        let parent = try await startTask(fixture, text: "Own steps 4 and 5 until February")
+        let session = try #require(parent.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(parent.taskSpaceWorkspaceID)
+        let panel = try #require(parent.operation.taskSpace?.panelID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(parent.id) }) }
+        /// One turn of the parent's agent, which the user reads.
+        var clock = Date().addingTimeInterval(1)
+        func turn(_ work: () throws -> Void) throws {
+            runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: clock)
+            try work()
+            runtime.updateStatus(sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: clock.addingTimeInterval(0.5))
+            _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+            clock = clock.addingTimeInterval(1)
+        }
+        func read() { _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel)) }
+        try insertTask(fixture, "step-4-change", parent: parent.id, change: Self.merge)
+        let wake = Date().addingTimeInterval(14 * 86_400)
+
+        // The agent marks the wait and ends its turn. Until the user reads
+        // the turn it waits in Needs you, as any finished turn does.
+        try turn { _ = try fixture.coordinator.setWaiting(taskID: parent.id, reason: "email replies", wakeAt: wake) }
+        #expect(try item().stage == .needsYou(.agentFinished))
+        read()
+        let resting = try item()
+        #expect(resting.stage == .idle, "\(resting.stage)")
+        #expect(resting.finishedThroughChildren == false)
+        let agent = TaskBoardPresentation.agentName(resting)
+        let wakes = TaskBoardPresentation.wakePhrase(wake, now: Date())
+        #expect(TaskBoardPresentation.statusLine(resting) == "\(agent) · waiting for email replies · wakes \(wakes)")
+        #expect(resting.taskSpaceStatus == .waiting)
+        #expect(RemoteTaskBoardProjection.rowSummary(resting) == "Waiting for email replies · wakes \(wakes)")
+        #expect(TaskBoardPresentation.stageDescription(resting).why.hasPrefix("waiting for email replies; Toastty wakes the agent on "))
+
+        // A child's report starts another turn: the mark stays.
+        try turn {}
+        read()
+        #expect(fixture.record(parent.id)?.waiting?.on == "email replies")
+        #expect(try item().stage == .idle)
+
+        // A real question comes first. After the answer, the task returns to
+        // its wait.
+        try turn { _ = try fixture.coordinator.needsReply(taskID: parent.id, question: "Send the draft?") }
+        read()
+        #expect(try item().stage == .needsYou(.awaitingReply))
+        try turn {}
+        read()
+        #expect(fixture.record(parent.id)?.replyRequest == nil)
+        #expect(try item().stage == .idle)
+        #expect(try item().taskSpaceStatus == .waiting)
+
+        // The latest mark wins: ready for review ends the wait, and a new
+        // wait, here without a wake, ends a ready mark.
+        _ = try fixture.coordinator.readyForReview(taskID: parent.id)
+        #expect(fixture.record(parent.id)?.waiting == nil)
+        #expect(try item().stage == .needsYou(.readyForReview))
+        _ = try fixture.coordinator.setWaiting(taskID: parent.id, reason: "the vendor's\nanswer", wakeAt: nil)
+        #expect(fixture.record(parent.id)?.readyForReviewAt == nil)
+        #expect(TaskBoardPresentation.statusLine(try item()) == "\(agent) · waiting for the vendor's answer")
+        #expect(throws: TaskError("The wake time has passed. Give a time in the future, or leave the wake out.")) {
+            try fixture.coordinator.setWaiting(taskID: parent.id, reason: "later", wakeAt: Date().addingTimeInterval(-60))
+        }
+        #expect(throws: TaskError("Say what the task waits for.")) {
+            try fixture.coordinator.setWaiting(taskID: parent.id, reason: " \n ", wakeAt: nil)
+        }
+
+        // Without the mark, the parent finishes through its merged child.
+        _ = try fixture.coordinator.clearWaiting(taskID: parent.id)
+        let finished = try item()
+        #expect(finished.stage == .done, "\(finished.stage)")
+        #expect(finished.finishedThroughChildren)
+    }
+
+    // MARK: - Tasks that coordinate child tasks
+
+    /// A task as `task create` records it, here without a task space. A
+    /// child names the task that started it.
+    @discardableResult
+    private func insertTask(
+        _ fixture: TaskCoordinatorTests.Fixture,
+        _ title: String,
+        id: UUID = UUID(),
+        parent: UUID? = nil,
+        change: (inout TaskRecord) -> Void = { _ in }
+    ) throws -> TaskRecord {
+        var record = TaskRecord(
+            id: id, createdAt: Date(), text: title, title: title, slug: title, source: .cli,
+            workspaceID: fixture.workspaceID, projectRoot: fixture.projectRoot, setup: .started, parentTaskID: parent
+        )
+        change(&record)
+        try fixture.coordinator.records.insert(record)
+        return record
+    }
+
+    private static func merge(_ record: inout TaskRecord) {
+        record.pullRequestURL = "https://github.com/example/toastty/pull/\(abs(record.id.hashValue) % 1000 + 200)"
+        record.mergedAt = Date()
+        record.mergeCommit = String(record.id.uuidString.prefix(12))
+    }
+
+    /// The observed case: a task whose agent split the work into child
+    /// tasks stayed Idle after they merged, until the user archived it.
+    @Test func aCoordinatingTaskFinishesThroughItsChildrenOnceItsLastTurnIsRead() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        fixture.config = TasksConfig(workspaces: [TasksConfig.Workspace(path: fixture.projectRoot, releaseTags: "v*")])
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        fixture.coordinator.board = board
+        fixture.sessionRuntimeStore.taskCoordinator = fixture.coordinator
+        let parent = try await startTask(fixture, text: "Act on the signup feedback")
+        let session = try #require(parent.operation.agentLaunch?.sessionID)
+        let taskSpace = try #require(parent.taskSpaceWorkspaceID)
+        let panel = try #require(parent.operation.taskSpace?.panelID)
+        func item(_ id: UUID) throws -> TaskBoardItem { try #require(board.items().first { $0.id == .task(id) }) }
+        func rowItem() throws -> TaskBoardItem? {
+            let workspace = try #require(fixture.store.state.workspacesByID[taskSpace])
+            return board.item(taskSpace: workspace, statuses: fixture.sessionRuntimeStore.workspaceStatuses(for: taskSpace))
+        }
+
+        let copy = try insertTask(fixture, "signup-copy", parent: parent.id, change: Self.merge)
+        let email = try insertTask(fixture, "signup-email", parent: parent.id)
+        // The parent's agent started them and is at its prompt; one child is
+        // still open, so the parent is Idle.
+        let start = Date().addingTimeInterval(1)
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: start.addingTimeInterval(0.5)
+        )
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        let idle = try item(parent.id)
+        #expect(idle.stage == .idle, "\(idle.stage), agent \(idle.agent)")
+        #expect(idle.finishedThroughChildren == false)
+
+        // The last child merges, and the parent's agent reports on it. The
+        // user has not read that turn, so the parent waits in Needs you.
+        _ = fixture.coordinator.records.update(id: email.id, Self.merge)
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: start.addingTimeInterval(1)
+        )
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: session, status: SessionStatus(kind: .ready, summary: "Ready"), at: start.addingTimeInterval(1.5)
+        )
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel, sessionID: session))
+        let unread = try item(parent.id)
+        #expect(unread.stage == .needsYou(.agentFinished), "\(unread.stage)")
+        #expect(try rowItem()?.stage == .needsYou(.agentFinished))
+
+        // Once read, the parent waits to ship with its children. Nothing is
+        // stored on it, and its task space stays open.
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+        let shipping = try item(parent.id)
+        #expect(shipping.stage == .toShip, "\(shipping.stage)")
+        #expect(shipping.finishedThroughChildren)
+        #expect(TaskBoardPresentation.statusLine(shipping) == "Child tasks merged · waiting for a release")
+        #expect(TaskBoardPresentation.detailActions(shipping).isEmpty)
+        let record = try #require(fixture.record(parent.id))
+        #expect(record.mergedAt == nil && record.doneAt == nil && record.shippedAt == nil && record.archivedAt == nil)
+        #expect(fixture.store.state.workspacesByID[taskSpace] != nil)
+        // The task space's own row, the top bar and the close question read
+        // the same stage.
+        #expect(try rowItem()?.stage == .toShip)
+        #expect(try rowItem()?.finishedThroughChildren == true)
+        // Release lists the children's merges, not the parent.
+        #expect(Set(fixture.coordinator.toShipTasks(projectRoot: fixture.projectRoot).map(\.id)) == [copy.id, email.id])
+        // A watch on the parent sees the stage, with the children's merge.
+        #expect(fixture.coordinator.stageConditionsByTaskID()[parent.id] == [.readyForReview, .merged, .toShip])
+
+        // The children ship: the parent is Done.
+        for child in [copy, email] {
+            _ = fixture.coordinator.records.update(id: child.id) {
+                $0.shippedAt = Date()
+                $0.releaseTag = "v1.0.0"
+            }
+        }
+        let done = try item(parent.id)
+        #expect(done.stage == .done)
+        #expect(done.finishedThroughChildren)
+        #expect(TaskBoardPresentation.stageDescription(done).why == "child tasks finished")
+        #expect(fixture.coordinator.stageConditionsByTaskID()[parent.id] == [.readyForReview, .merged, .toShip, .done])
+        _ = fixture.store.send(.recordDesktopNotification(workspaceID: taskSpace, panelID: panel))
+        #expect(fixture.store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: fixture.store.state.windows.first?.id, sessionRuntimeStore: fixture.sessionRuntimeStore
+        ) == false)
+        _ = fixture.store.send(.markPanelNotificationsRead(workspaceID: taskSpace, panelID: panel))
+
+        // A new child opens the parent's work again, until it finishes too.
+        let followUp = try insertTask(fixture, "signup-follow-up", parent: parent.id)
+        #expect(try item(parent.id).stage == .idle)
+        _ = fixture.coordinator.records.update(id: followUp.id) { $0.archivedAt = Date() }
+        #expect(try item(parent.id).stage == .done)
+
+        // Closing the task space does not send a finished parent back to
+        // Needs you.
+        _ = fixture.store.send(.closeWorkspace(workspaceID: taskSpace))
+        #expect(try item(parent.id).stage == .done)
+    }
+
+    /// The observed case: the parent's agent marked its first answer ready
+    /// for review, then started a child task when the user replied. The old
+    /// mark kept the parent open after the child merged.
+    @Test func aReadyMarkFromBeforeTheChildrenDoesNotKeepAFinishedParentOpen() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        func stage(_ id: UUID) -> TaskStage? { board.items().first { $0.id == .task(id) }?.stage }
+        let marked = Date()
+        let parent = try insertTask(fixture, "rebuild-ios-workspace") { $0.readyForReviewAt = marked }
+        let fix = try insertTask(fixture, "fix-destination-check", parent: parent.id) {
+            $0.createdAt = marked.addingTimeInterval(60)
+        }
+        #expect(stage(parent.id) == .needsYou(.readyForReview))
+
+        _ = fixture.coordinator.records.update(id: fix.id, Self.merge)
+        #expect(stage(parent.id) == .done)
+        #expect(board.items().first { $0.id == .task(parent.id) }?.finishedThroughChildren == true)
+
+        // Marked ready again after its child, the parent still owns work.
+        _ = fixture.coordinator.records.update(id: parent.id) { $0.readyForReviewAt = marked.addingTimeInterval(120) }
+        #expect(stage(parent.id) == .needsYou(.readyForReview))
+    }
+
+    @Test func onlyMergedWorkFinishesAParentAndNestedParentsFollow() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        func stage(_ id: UUID) -> TaskStage? { board.items().first { $0.id == .task(id) }?.stage }
+        let plan = try insertTask(fixture, "plan-onboarding")
+        let parent = try insertTask(fixture, "coordinate-signup", parent: plan.id)
+        // Children closed without a merge finish nothing.
+        try insertTask(fixture, "investigate-drop-off", parent: parent.id) { $0.doneAt = Date() }
+        try insertTask(fixture, "abandoned-redesign", parent: parent.id) { $0.archivedAt = Date() }
+        #expect(stage(parent.id) == .idle)
+        #expect(stage(plan.id) == .idle)
+
+        // One merged child finishes the parent, without release tags as
+        // Done, and the parent finishes the task above it.
+        try insertTask(fixture, "fix-signup", parent: parent.id, change: Self.merge)
+        #expect(stage(parent.id) == .done)
+        #expect(stage(plan.id) == .done)
+        #expect(board.items().first { $0.id == .task(plan.id) }?.finishedThroughChildren == true)
+
+        // A parent with a pull request of its own keeps the usual rules.
+        _ = fixture.coordinator.records.update(id: parent.id) { $0.pullRequestURL = "https://github.com/example/toastty/pull/301" }
+        #expect(stage(parent.id) == .needsYou(.review))
+        #expect(stage(plan.id) == .idle)
+    }
+
+    @Test func tasksWhoseParentsLoopDoNotFinishThroughEachOther() throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let first = UUID(), second = UUID(), itself = UUID()
+        try insertTask(fixture, "first", id: first, parent: second)
+        try insertTask(fixture, "second", id: second, parent: first)
+        try insertTask(fixture, "merged-under-first", parent: first, change: Self.merge)
+        try insertTask(fixture, "its-own-parent", id: itself, parent: itself)
+        try insertTask(fixture, "merged-under-itself", parent: itself, change: Self.merge)
+        let items = board.items()
+        for id in [first, second, itself] {
+            #expect(items.first { $0.id == .task(id) }?.stage == .idle)
+        }
+    }
+
+    @Test func aParentInToShipCountsInItsLane() {
+        let parentID = UUID()
+        var parent = statusItem("act-on-signup-feedback", taskID: parentID, stage: .toShip, project: "emptyos")
+        parent.finishedThroughChildren = true
+        parent.projectWorkspaceID = UUID()
+        var child = statusItem("signup-copy", parent: parentID, stage: .toShip, project: "emptyos")
+        child.projectWorkspaceID = UUID()
+        // The family leaves Idle; the parent counts as a task to ship.
+        let sections = SidebarStatusSections.make([parent, child])
+        #expect(sections.idle.isEmpty && sections.needsYou.isEmpty)
+        #expect(sections.toShip.map(\.count) == [2])
+        #expect(sections.toShipLabel(isExpanded: false) == "To ship, 2 tasks, collapsed, emptyos 2")
+        // With its children in another project, the parent's lane counts
+        // only the parent.
+        let alone = SidebarStatusSections.make([parent])
+        #expect(alone.toShip.map(\.count) == [1])
+        // In the Tasks view, a child lists under its parent in the parent's
+        // lane, and apart from it in another project's lane.
+        let elsewhere = statusItem("toastty-copy", parent: parentID, stage: .toShip, project: "toastty")
+        let lanes = TasksViewSections.make([parent, child, elsewhere]).toShip
+        #expect(lanes.map(\.projectTitle) == ["emptyos", "toastty"])
+        #expect(lanes.map { $0.entries.map(\.isLinkedChild) } == [[false, true], [false]])
+    }
+
+    @Test func childrenListUnderTheTaskThatStartedThem() {
+        func item(_ title: String, taskID: UUID, parent: UUID? = nil, stage: TaskStage) -> TaskBoardItem {
+            let record = TaskRecord(
+                id: taskID, createdAt: Date(), text: title, title: title, slug: title,
+                source: .cli, setup: .started, parentTaskID: parent
+            )
+            return TaskBoardItem(
+                id: .task(taskID), record: record, title: title, taskSpaceWorkspaceID: UUID(), projectWorkspaceID: nil,
+                projectTitle: "toastty", stage: stage, agent: .working, pullRequest: nil, pullRequestState: nil,
+                branch: nil, parentTaskID: parent, activityAt: Date()
+            )
+        }
+        let parentID = UUID()
+        let parent = item("task-inbox", taskID: parentID, stage: .running)
+        let firstChild = item("hotkey-capture", taskID: UUID(), parent: parentID, stage: .running)
+        let secondChild = item("ios-outbox", taskID: UUID(), parent: parentID, stage: .running)
+        var mergedChild = item("store-sidebar", taskID: UUID(), parent: parentID, stage: .toShip)
+        mergedChild.record?.mergedAt = Date()
+        let other = item("pricing-page", taskID: UUID(), stage: .running)
+        let quiet = item("coordinator-brainstorm", taskID: UUID(), stage: .idle)
+        let idleChild = item("composer-blank-line", taskID: UUID(), parent: parentID, stage: .idle)
+
+        let sections = SidebarStatusSections.make([firstChild, quiet, other, parent, idleChild, secondChild, mergedChild])
+        // A family lists together in its most urgent group, in the order
+        // given: the idle child stays under its running parent, dimmed, and
+        // is not counted there.
+        #expect(sections.running.map(\.item.title) == [
+            "pricing-page", "task-inbox", "hotkey-capture", "composer-blank-line", "ios-outbox",
+        ])
+        #expect(sections.running.map(\.isLinkedChild) == [false, false, true, true, true])
+        #expect(sections.running.map(\.isContext) == [false, false, false, true, false])
+        #expect(sections.count(.running) == 4)
+        #expect(sections.idle.map(\.item.title) == ["coordinator-brainstorm"])
+        #expect(sections.count(.idle) == 1)
+        let tasksView = TasksViewSections.make([firstChild, quiet, other, parent, idleChild, secondChild, mergedChild])
+        #expect(tasksView.idle.map(\.item.title) == ["coordinator-brainstorm", "composer-blank-line"])
+        // The Tasks view lists Idle after Running and before To ship.
+        #expect(tasksView.all.map(\.item.title).suffix(3) == ["coordinator-brainstorm", "composer-blank-line", "store-sidebar"])
+        #expect(sections.toShip.map(\.count) == [1])
+        let progress = TaskBoard.childProgress(of: parentID, items: [parent, firstChild, secondChild, mergedChild, other])
+        #expect(progress?.merged == 1)
+        #expect(progress?.total == 3)
+    }
+
+    @Test func aDoneMarkIsNotAMergeInChildProgress() {
+        let parent = UUID()
+        var done = statusItem("Investigate", parent: parent, stage: .done)
+        done.record?.doneAt = Date()
+        var merged = statusItem("Fix", parent: parent, stage: .toShip)
+        merged.pullRequestState = TaskPullRequestState(state: .merged)
+        let open = statusItem("Review", parent: parent, stage: .running)
+        let archived = statusItem("Dropped", parent: parent, stage: .archived)
+
+        func progress(_ children: [TaskBoardItem]) -> TaskBoard.ChildProgress? {
+            TaskBoard.childProgress(of: parent, items: children)
+        }
+        #expect(progress([done])?.label == "1/1 finished")
+        #expect(progress([done])?.merged == 0)
+        #expect(progress([merged, archived])?.label == "1/1 merged")
+        #expect(progress([done, merged, open, archived])?.label == "2/3 finished")
+        #expect(progress([archived]) == nil)
+    }
+
+    private func statusItem(
+        _ title: String,
+        taskID: UUID = UUID(),
+        parent: UUID? = nil,
+        stage: TaskStage,
+        project: String = "toastty"
+    ) -> TaskBoardItem {
+        let record = TaskRecord(
+            id: taskID, createdAt: Date(), text: title, title: title, slug: title,
+            source: .cli, setup: .started, parentTaskID: parent
+        )
+        return TaskBoardItem(
+            id: .task(taskID), record: record, title: title, taskSpaceWorkspaceID: UUID(), projectWorkspaceID: nil,
+            projectTitle: project, stage: stage, agent: .idle, pullRequest: nil, pullRequestState: nil,
+            branch: nil, parentTaskID: parent, activityAt: Date()
+        )
+    }
+
+    /// The Tasks view splits Needs you as the sidebar does, and keeps a
+    /// family together in its most urgent section.
+    @Test func tasksViewListsReviewsApartAndKeepsFamiliesTogether() {
+        let parentID = UUID()
+        let parent = statusItem("review-parent", taskID: parentID, stage: .needsYou(.review))
+        let child = statusItem("asking-child", parent: parentID, stage: .needsYou(.awaitingReply))
+        let marked = statusItem("marked-ready", stage: .needsYou(.readyForReview))
+        let failed = statusItem("setup-failed", stage: .needsYou(.setupFailed(reason: "x")))
+        let view = TasksViewSections.make([parent, child, marked, failed])
+        #expect(view.needsYou.map(\.item.title) == ["review-parent", "asking-child", "setup-failed"])
+        #expect(view.needsYou.map(\.isLinkedChild) == [false, true, false])
+        #expect(view.readyToReview.map(\.item.title) == ["marked-ready"])
+        // Needs you, then Ready to review, in the list and for arrow keys.
+        #expect(view.all.map(\.item.title) == ["review-parent", "asking-child", "setup-failed", "marked-ready"])
+    }
+
+    /// A task whose agent ended its turn to wait on another task lists in
+    /// Needs you while that turn is unread, as the sidebar lists its task
+    /// space's row, and its family follows it there. Read, it lists in
+    /// Running again.
+    @Test func tasksViewListsAWaitingTaskWithAnUnreadTurnInNeedsYou() {
+        let parentID = UUID()
+        func waitingParent(unread: Bool) -> TaskBoardItem {
+            var parent = statusItem("waiting-parent", taskID: parentID, stage: .running)
+            parent.waitingOnTitle = "working-child"
+            parent.hasUnreadTurn = unread
+            parent.taskSpaceStatus = unread ? .ready : .idle
+            return parent
+        }
+        var working = statusItem("working-child", parent: parentID, stage: .running)
+        working.agent = .working
+        working.taskSpaceStatus = .working
+        let reviewing = statusItem("review-child", parent: parentID, stage: .needsYou(.review))
+        let other = statusItem("other-running", stage: .running)
+
+        let unread = TasksViewSections.make([waitingParent(unread: true), working, reviewing, other])
+        // The parent's unread turn puts its family in Needs you; the child
+        // that waits for review lists under it, dimmed. A child whose own
+        // row is running stays in Running.
+        #expect(unread.needsYou.map(\.item.title) == ["waiting-parent", "review-child"])
+        #expect(unread.needsYou.map(\.isLinkedChild) == [false, true])
+        #expect(unread.needsYou.map(\.isContext) == [false, true])
+        #expect(unread.readyToReview.isEmpty)
+        #expect(unread.running.map(\.item.title) == ["working-child", "other-running"])
+        #expect(TaskBoardPresentation.tasksViewStatusLine(unread.needsYou[0].item) == "The agent finished · waiting for you")
+        // Arrow keys and the first-row selection follow the new order.
+        #expect(unread.all.first?.item.title == "waiting-parent")
+
+        let read = TasksViewSections.make([waitingParent(unread: false), working, reviewing, other])
+        #expect(read.needsYou.isEmpty)
+        #expect(read.readyToReview.map(\.item.title) == ["review-child"])
+        #expect(read.running.map(\.item.title) == ["waiting-parent", "working-child", "other-running"])
+        #expect(read.running.map(\.isLinkedChild) == [false, true, false])
+        #expect(TaskBoardPresentation.tasksViewStatusLine(read.running[0].item) == "The agent · waiting for working-child")
+
+        // A merge under way keeps its line while its unread turn lists it
+        // in Needs you.
+        var merging = statusItem("merging", stage: .running)
+        merging.merge = .waitingForChecks
+        merging.hasUnreadTurn = true
+        merging.taskSpaceStatus = .ready
+        #expect(TasksViewSections.make([merging]).needsYou.map(\.item.title) == ["merging"])
+        #expect(TaskBoardPresentation.tasksViewStatusLine(merging) == "Waiting for checks")
+    }
+
+    /// Status lists tasks in the order of the project cards: by project,
+    /// then by task space in window order, whatever the board's activity
+    /// order. Tasks with no task space follow their project's, oldest first.
+    @Test func statusListsTasksInTheSidebarOrder() {
+        let projectA = UUID(), projectB = UUID(), spaceA1 = UUID(), spaceB1 = UUID(), spaceA2 = UUID()
+        func item(_ title: String, project: UUID?, space: UUID?, createdAt: TimeInterval) -> TaskBoardItem {
+            var item = statusItem(title, stage: .needsYou(.review))
+            item.projectWorkspaceID = project
+            item.taskSpaceWorkspaceID = space
+            item.record?.createdAt = Date(timeIntervalSince1970: createdAt)
+            return item
+        }
+        // Newest activity first, as the board gives them.
+        let board = [
+            item("a2", project: projectA, space: spaceA2, createdAt: 1),
+            item("b1", project: projectB, space: spaceB1, createdAt: 2),
+            item("a-unplaced-new", project: projectA, space: nil, createdAt: 9),
+            item("no-project", project: nil, space: nil, createdAt: 0),
+            item("a-unplaced-old", project: projectA, space: nil, createdAt: 3),
+            item("a1", project: projectA, space: spaceA1, createdAt: 4),
+        ]
+        let ordered = SidebarStatusSections.sidebarOrder(
+            board, workspaceIDs: [projectA, projectB, spaceA1, spaceB1, spaceA2]
+        )
+        let expected = ["a1", "a2", "a-unplaced-old", "a-unplaced-new", "b1", "no-project"]
+        #expect(ordered.map(\.title) == expected)
+        #expect(SidebarStatusSections.make(ordered).needsYou.map(\.item.title) == expected)
+    }
+
+    /// The case from the report: an idle parent whose child waits for a
+    /// review lists with the child in Needs you, instead of apart in Idle.
+    @Test func aFamilyListsInTheGroupOfItsMostUrgentTask() {
+        let parentID = UUID()
+        let thumbnail = statusItem("thumbnail", stage: .needsYou(.review))
+        let child = statusItem("mcp-page-tools", parent: parentID, stage: .needsYou(.review), project: "emptyos")
+        let space = statusItem("task-space-after-ship", stage: .needsYou(.agentFinished))
+        let parent = statusItem("chatgpt-public-url", taskID: parentID, stage: .idle, project: "emptyos")
+        let brainstorm = statusItem("coordinator-brainstorm", stage: .idle)
+
+        // A family lists at its root's place in the sidebar order.
+        let sections = SidebarStatusSections.make([thumbnail, child, space, parent, brainstorm])
+        #expect(sections.needsYou.map(\.item.title) == [
+            "thumbnail", "task-space-after-ship", "chatgpt-public-url", "mcp-page-tools",
+        ])
+        #expect(sections.needsYou.map(\.isLinkedChild) == [false, false, false, true])
+        #expect(sections.needsYou.map(\.isContext) == [false, false, true, false])
+        #expect(sections.count(.needsYou) == 3)
+        #expect(sections.idle.map(\.item.title) == ["coordinator-brainstorm"])
+
+        // Once nothing in the family needs the user, it lists in Idle.
+        var answered = child
+        answered.stage = .idle
+        let calm = SidebarStatusSections.make([thumbnail, answered, space, parent, brainstorm])
+        #expect(calm.idle.map(\.item.title) == ["chatgpt-public-url", "mcp-page-tools", "coordinator-brainstorm"])
+        #expect(calm.idle.map(\.isContext) == [false, false, false])
+    }
+
+    /// Reading a child holds its whole family in the group, in place.
+    @Test func aSelectedChildHoldsItsFamilyInItsGroup() {
+        let parentID = UUID()
+        let parent = statusItem("parent", taskID: parentID, stage: .idle)
+        let zulu = statusItem("zulu", parent: parentID, stage: .needsYou(.agentFinished))
+        let alpha = statusItem("alpha", parent: parentID, stage: .idle)
+        let before = SidebarStatusSections.make([zulu, parent, alpha])
+        #expect(before.needsYou.map(\.item.title) == ["parent", "zulu", "alpha"])
+
+        let pin = SidebarStatusSections.pin(previous: nil, selected: zulu.id, displayed: before.groups)
+        var read = zulu
+        read.stage = .idle
+        let held = SidebarStatusSections.make([read, parent, alpha], pin: pin)
+        #expect(held.needsYou.map(\.item.title) == ["parent", "zulu", "alpha"])
+        #expect(held.needsYou.map(\.isContext) == [true, true, true])
+        #expect(held.idle.isEmpty)
+
+        read.stage = .running
+        let resumed = SidebarStatusSections.make([read, parent, alpha], pin: held.pin)
+        #expect(resumed.needsYou.isEmpty)
+        #expect(resumed.running.map(\.item.title) == ["parent", "zulu", "alpha"])
+        #expect(resumed.running.map(\.isContext) == [true, false, true])
+        #expect(resumed.count(.running) == 1)
+
+        var asking = alpha
+        asking.stage = .needsYou(.agentNeedsInput)
+        let needsInput = SidebarStatusSections.make([read, parent, asking], pin: resumed.pin)
+        #expect(needsInput.needsYou.map(\.item.title) == ["parent", "zulu", "alpha"])
+        #expect(needsInput.count(.needsYou) == 1)
+        #expect(needsInput.running.isEmpty)
+    }
+
+    @Test func everyTaskListsOnceWhateverItsParents() {
+        let aID = UUID(), bID = UUID(), cID = UUID(), loopA = UUID(), loopB = UUID()
+        let items = [
+            statusItem("a", taskID: aID, stage: .idle),
+            statusItem("b", taskID: bID, parent: aID, stage: .running),
+            // A grandchild lists on its own: one level only.
+            statusItem("c", taskID: cID, parent: bID, stage: .needsYou(.agentFinished)),
+            // A parent that is finished, or missing, leaves its child on its own.
+            statusItem("d", parent: UUID(), stage: .running),
+            statusItem("loop-a", taskID: loopA, parent: loopB, stage: .idle),
+            statusItem("loop-b", taskID: loopB, parent: loopA, stage: .idle),
+        ]
+        let sections = SidebarStatusSections.make(items)
+        let listed = (sections.needsYou + sections.running + sections.idle).map(\.item.title)
+        #expect(listed.sorted() == ["a", "b", "c", "d", "loop-a", "loop-b"])
+        #expect(sections.needsYou.map(\.item.title) == ["c"])
+        #expect(sections.running.map(\.item.title) == ["a", "b", "d"])
+    }
+
+    /// Selecting a task reads its turn. Its family keeps the group it had on
+    /// screen until the selection moves or work resumes, and moves at once
+    /// when it becomes more urgent. Inside a group, rows keep the sidebar order.
+    @Test func theSelectedTaskHoldsItsGroupUntilTheSelectionMoves() {
+        let first = statusItem("first", stage: .needsYou(.agentFinished))
+        let clicked = statusItem("clicked", stage: .needsYou(.agentFinished))
+        let last = statusItem("last", stage: .needsYou(.review))
+        let quiet = statusItem("quiet", stage: .idle)
+        let before = SidebarStatusSections.make([first, clicked, last, quiet])
+        #expect(before.needsYou.map(\.item.title) == ["first", "clicked", "last"])
+
+        let pin = SidebarStatusSections.pin(previous: nil, selected: clicked.id, displayed: before.groups)
+        #expect(pin == SidebarStatusSections.Pin(subject: clicked.id, group: .needsYou))
+        var read = clicked
+        read.stage = .idle
+        let held = SidebarStatusSections.make([first, read, last, quiet], pin: pin)
+        #expect(held.needsYou.map(\.item.title) == ["first", "clicked", "last"])
+        // Dimmed: the user read it, and it no longer needs them.
+        #expect(held.needsYou.map(\.isContext) == [false, true, false])
+        // The count says what really needs the user.
+        #expect(held.count(.needsYou) == 2)
+        #expect(held.idle.map(\.item.title) == ["quiet"])
+        #expect(held.pin == pin)
+        // The same selection keeps the pin; another selection lets it go.
+        #expect(SidebarStatusSections.pin(previous: held.pin, selected: clicked.id, displayed: held.groups) == pin)
+        let released = SidebarStatusSections.make(
+            [first, read, last, quiet],
+            pin: SidebarStatusSections.pin(previous: held.pin, selected: first.id, displayed: held.groups)
+        )
+        #expect(released.needsYou.map(\.item.title) == ["first", "last"])
+        #expect(released.idle.map(\.item.title) == ["clicked", "quiet"])
+
+        // A selected idle task that starts to need the user moves at once,
+        // and holds in its new place from then on.
+        let quietPin = SidebarStatusSections.pin(previous: nil, selected: quiet.id, displayed: before.groups)
+        var asks = quiet
+        asks.stage = .needsYou(.agentNeedsInput)
+        let urgent = SidebarStatusSections.make([first, clicked, last, asks], pin: quietPin)
+        #expect(urgent.needsYou.map(\.item.title).contains("quiet"))
+        #expect(urgent.idle.isEmpty)
+        #expect(urgent.pin?.group == .needsYou)
+
+        // Selecting another task releases the one held before it, which
+        // leaves the group at the same time. The rest keep their order.
+        let parentID = UUID()
+        let parent = statusItem("parent", taskID: parentID, stage: .idle)
+        let child = statusItem("child", parent: parentID, stage: .needsYou(.review))
+        var answered = first
+        answered.stage = .idle
+        let previousPin = SidebarStatusSections.Pin(subject: first.id, group: .needsYou)
+        let shown = SidebarStatusSections.make([answered, clicked, parent, child], pin: previousPin)
+        #expect(shown.needsYou.map(\.item.title) == ["first", "clicked", "parent", "child"])
+        let next = SidebarStatusSections.pin(previous: shown.pin, selected: clicked.id, displayed: shown.groups)
+        let switched = SidebarStatusSections.make([answered, read, parent, child], pin: next)
+        #expect(switched.needsYou.map(\.item.title) == ["clicked", "parent", "child"])
+        #expect(switched.idle.map(\.item.title) == ["first"])
+    }
+
+    @Test(arguments: [true, false])
+    func readingASelectedTaskHoldsItsGroupWhenARelativeRuns(selectedChild: Bool) {
+        let parentID = UUID()
+        var parent = statusItem("parent", taskID: parentID, stage: selectedChild ? .running : .needsYou(.agentFinished))
+        var child = statusItem("child", parent: parentID, stage: selectedChild ? .needsYou(.agentFinished) : .running)
+        let selected = selectedChild ? child.id : parent.id
+        let before = SidebarStatusSections.make([parent, child])
+        let pin = SidebarStatusSections.pin(previous: nil, selected: selected, displayed: before.groups)
+        if selectedChild { child.stage = .idle } else { parent.stage = .idle }
+        let held = SidebarStatusSections.make([parent, child], pin: pin)
+        #expect(held.needsYou.map(\.item.title) == ["parent", "child"])
+        #expect(held.needsYou.map(\.isContext) == [true, true])
+        #expect(held.count(.needsYou) == 0)
+        #expect(held.running.isEmpty)
+
+        if selectedChild { child.stage = .running } else { parent.stage = .running }
+        let resumed = SidebarStatusSections.make([parent, child], pin: held.pin)
+        #expect(resumed.needsYou.isEmpty)
+        #expect(resumed.running.map(\.item.title) == ["parent", "child"])
+        #expect(resumed.running.map(\.isContext) == [false, false])
+        #expect(resumed.count(.running) == 2)
+    }
+
+    @Test(arguments: [TaskStage.starting, .running])
+    func aSelectedTaskMovesToRunningWhenWorkResumes(stage: TaskStage) {
+        let waiting = statusItem("waiting", stage: .needsYou(.review))
+        let selected = statusItem("selected", stage: .needsYou(.agentFinished))
+        let before = SidebarStatusSections.make([waiting, selected])
+        let pin = SidebarStatusSections.pin(previous: nil, selected: selected.id, displayed: before.groups)
+
+        // Reading the turn keeps the row in place. Resuming work releases it,
+        // both directly from Needs you and after the user has read the turn.
+        var read = selected
+        read.stage = .idle
+        let held = SidebarStatusSections.make([waiting, read], pin: pin)
+        for previous in [before, held] {
+            var resumed = selected
+            resumed.stage = stage
+            let running = SidebarStatusSections.make([waiting, resumed], pin: previous.pin ?? pin)
+            #expect(running.needsYou.map(\.item.title) == ["waiting"])
+            #expect(running.running.map(\.item.title) == ["selected"])
+            #expect(running.running.map(\.isContext) == [false])
+            #expect(running.count(.running) == 1)
+            #expect(running.count(.needsYou) == 1)
+
+            // Repeated refreshes cannot restore the old Needs you hold.
+            let refreshed = SidebarStatusSections.make([waiting, resumed], pin: running.pin)
+            #expect(refreshed == running)
+            resumed.stage = .idle
+            let quiet = SidebarStatusSections.make([waiting, resumed], pin: refreshed.pin)
+            #expect(quiet.running.map(\.isContext) == [true])
+            for attention in [TaskStage.Attention.agentNeedsInput, .agentFinished] {
+                resumed.stage = .needsYou(attention)
+                let asking = SidebarStatusSections.make([waiting, resumed], pin: quiet.pin)
+                #expect(asking.needsYou.map(\.item.title) == ["waiting", "selected"])
+                #expect(asking.running.isEmpty)
+            }
+        }
+    }
+
+    private func makeBoard(
+        _ fixture: TaskCoordinatorTests.Fixture, pullRequests: PullRequestStateCache
+    ) -> TaskBoardStore {
+        TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore, pullRequests: pullRequests,
+            refreshInterval: nil, releaseCheckInterval: nil
+        )
+    }
+
+    /// The board keeps its items while its sources stay equal. Each source
+    /// publishes before it changes, so a reader that a publisher calls, as
+    /// SwiftUI and the board's own sinks are, still reads the old values.
+    /// The next read after the change must give the new items.
+    @Test func itemsFollowEachSourceAlsoAfterAReadFromItsPublisher() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        let cache = PullRequestStateCache(runner: gitHub)
+        let board = makeBoard(fixture, pullRequests: cache)
+        let task = try await startTask(fixture, text: "Keep the board current")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() -> TaskBoardItem? { board.items().first { $0.taskID == task.id } }
+
+        var cancellables: Set<AnyCancellable> = []
+        runtime.$sessionRegistry.sink { _ in _ = board.items() }.store(in: &cancellables)
+        runtime.$workspaceMergeRequests.sink { _ in _ = board.items() }.store(in: &cancellables)
+        fixture.coordinator.records.objectWillChange.sink { _ in _ = board.items() }.store(in: &cancellables)
+        cache.objectWillChange.sink { _ in _ = board.items() }.store(in: &cancellables)
+        fixture.store.$state.sink { _ in _ = board.items() }.store(in: &cancellables)
+
+        // The session registry.
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        #expect(item()?.agent == .working)
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        #expect(item()?.agent == .idle)
+
+        // The task records.
+        _ = fixture.coordinator.records.update(id: task.id) { $0.readyForReviewAt = Date() }
+        #expect(item()?.stage == .needsYou(.readyForReview))
+        _ = fixture.coordinator.records.update(id: task.id) { $0.readyForReviewAt = nil }
+        #expect(item()?.stage == .idle)
+
+        // The workspaces.
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        #expect(item()?.pullRequest?.url == pullRequestURL)
+        #expect(item()?.pullRequestState == nil)
+
+        // The pull request answers.
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.answer(pullRequestURL, state: "OPEN", isDraft: true)
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.isDraft == true)
+        gitHub.answer(pullRequestURL, state: "OPEN")
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.isDraft == false)
+        #expect(item()?.stage == .needsYou(.review))
+
+        // The merges that Toastty runs.
+        runtime.setWorkspaceMergeRequests([
+            workspaceID: WorkspaceMergeRequest(pullRequest: link, repoPath: fixture.projectRoot, phase: .merging(thenCleanUp: false)),
+        ])
+        #expect(item()?.merge == .merging)
+        runtime.setWorkspaceMergeRequests([:])
+        #expect(item()?.merge == nil)
+    }
+
+    /// Two answers change with the time alone, with no change of a source:
+    /// the readiness of a pull request that GitHub stopped answering for
+    /// ends after a grace period, and so does a session's "resuming" state.
+    /// The kept board must not outlive either.
+    @Test func itemsFollowAGracePeriodThatEndsWithoutAChange() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let gitHub = FakeGitHub()
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let board = makeBoard(fixture, pullRequests: cache)
+        let task = try await startTask(fixture, text: "Follow the grace periods")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        func item() -> TaskBoardItem? { board.items().first { $0.taskID == task.id } }
+
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: workspaceID, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        ))
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN")
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.mergeability?.isKnown == true)
+        // GitHub stops answering: the last readiness shows for 30 seconds.
+        gitHub.failsRequests = true
+        clock = clock.addingTimeInterval(10)
+        await cache.refresh(link).value
+        #expect(item()?.pullRequestState?.mergeability?.isKnown == true)
+        var publishes = 0
+        let subscription = cache.objectWillChange.sink { publishes += 1 }
+        clock = clock.addingTimeInterval(PullRequestStateCache.mergeabilityGracePeriod)
+        #expect(item()?.pullRequestState?.mergeability == nil)
+        #expect(publishes == 0)
+        subscription.cancel()
+
+        // A session whose last background activity finished 12 seconds ago
+        // shows as resuming, and so as working, for 3 more seconds.
+        let finishedAt = Date().addingTimeInterval(3 - SessionRegistry.resumeProjectionGraceInterval)
+        runtime.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"),
+            at: finishedAt.addingTimeInterval(-3)
+        )
+        runtime.updateStatus(
+            sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Idle"),
+            at: finishedAt.addingTimeInterval(-2)
+        )
+        _ = runtime.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: "helper", kind: .subagent,
+                startedAt: finishedAt.addingTimeInterval(-1), lastUpdatedAt: finishedAt.addingTimeInterval(-1)
+            ),
+            at: finishedAt.addingTimeInterval(-1)
+        )
+        _ = runtime.finishBackgroundActivity(sessionID: sessionID, activityID: "helper", at: finishedAt)
+        #expect(runtime.workspaceStatuses(for: workspaceID).first?.projection == .resuming)
+        #expect(item()?.agent == .working)
+        // Let the check that these reports scheduled run, so the board's
+        // views have drawn the working agent.
+        for _ in 0..<5 { await Task.yield() }
+        var boardPublishes = 0
+        let boardSubscription = board.objectWillChange.sink { boardPublishes += 1 }
+        defer { boardSubscription.cancel() }
+        await waitUntil(timeout: .seconds(20)) { item()?.agent != .working }
+        #expect(item()?.agent == .idle)
+        // A view that observes only the board, such as the header's task
+        // control, hears of the end too.
+        await waitUntil(timeout: .seconds(20)) { boardPublishes > 0 }
+    }
+
+    /// A row asks for its task space's item with the statuses it read. That
+    /// is the board's own item when the statuses are the store's, in any
+    /// order, and an item for the caller's statuses when they differ.
+    @Test func aTaskSpaceItemIsTheBoardsItemForTheCallersStatuses() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "Read one task space")
+        let workspaceID = try #require(task.taskSpaceWorkspaceID)
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        let workspace = try #require(fixture.store.state.workspacesByID[workspaceID])
+        runtime.startSession(
+            sessionID: "helper", agent: .claude, panelID: UUID(), windowID: fixture.store.state.windows[0].id,
+            workspaceID: workspaceID, codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        runtime.updateStatus(sessionID: "helper", status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+
+        let statuses = runtime.workspaceStatuses(for: workspaceID)
+        #expect(statuses.count == 2)
+        let item = try #require(board.items().first { $0.taskID == task.id })
+        #expect(item.agent == .working)
+        #expect(board.item(taskSpace: workspace, statuses: statuses) == item)
+        #expect(board.item(taskSpace: workspace, statuses: statuses.reversed()) == item)
+        // The caller's own statuses decide, also when the store has others.
+        let idle = statuses.filter { $0.sessionID == "helper" }
+        #expect(board.item(taskSpace: workspace, statuses: idle)?.agent == .idle)
+        #expect(board.item(taskSpace: workspace, statuses: [])?.agent == TaskAgentActivity.none)
+    }
+
+    /// The board tells its views about a session change only when the
+    /// change moved an item: views that show sessions observe the session
+    /// store themselves, and a second publish draws the sidebar and the
+    /// Coordinator chat again for nothing.
+    @Test func aSessionChangePublishesTheBoardOnlyWhenAnItemChanged() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = makeBoard(fixture, gitHub: FakeGitHub())
+        let task = try await startTask(fixture, text: "Publish what changed")
+        let sessionID = try #require(task.currentSessionID)
+        let runtime = fixture.sessionRuntimeStore
+        // Let the checks that the launch scheduled finish.
+        for _ in 0..<5 { await Task.yield() }
+        var publishes = 0
+        let subscription = board.objectWillChange.sink { publishes += 1 }
+        defer { subscription.cancel() }
+
+        // A session in the project's own workspace is on no task's row.
+        runtime.startSession(
+            sessionID: "project-shell", agent: .claude, panelID: UUID(), windowID: fixture.store.state.windows[0].id,
+            workspaceID: fixture.workspaceID, codexStatusTrackingSource: .externallyReported, cwd: nil, repoRoot: nil, at: Date()
+        )
+        runtime.updateStatus(sessionID: "project-shell", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        for _ in 0..<5 { await Task.yield() }
+        #expect(publishes == 0)
+
+        runtime.updateStatus(sessionID: sessionID, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        await waitUntil { publishes > 0 }
+        #expect(board.items().first { $0.taskID == task.id }?.agent == .working)
+    }
+
+    /// GitHub is asked again every 15 seconds to two minutes for each pull
+    /// request. An answer that repeats the last one changes nothing a view
+    /// shows and publishes nothing; the time of the request still moves.
+    @Test func aRepeatedPullRequestAnswerDoesNotPublish() async throws {
+        let gitHub = FakeGitHub()
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "CLEAN")
+        var clock = Date(timeIntervalSince1970: 1000)
+        let cache = PullRequestStateCache(runner: gitHub, now: { clock })
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        var publishes = 0
+        let subscription = cache.objectWillChange.sink { publishes += 1 }
+        defer { subscription.cancel() }
+
+        await cache.refresh(link).value
+        #expect(publishes == 1)
+        let revision = cache.stateRevision
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(publishes == 1)
+        #expect(cache.stateRevision == revision)
+        #expect(cache.entries[link.url]?.answeredAt == clock)
+
+        gitHub.answer(pullRequestURL, state: "OPEN", mergeStateStatus: "BLOCKED")
+        clock = clock.addingTimeInterval(15)
+        await cache.refresh(link).value
+        #expect(publishes == 2)
+        #expect(cache.stateRevision != revision)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .blocked)
+
+        // A request that fails the same way again publishes nothing, while
+        // the last readiness still shows.
+        gitHub.failsRequests = true
+        clock = clock.addingTimeInterval(5)
+        await cache.refresh(link).value
+        #expect(publishes == 3)
+        clock = clock.addingTimeInterval(5)
+        await cache.refresh(link).value
+        #expect(publishes == 3)
+        #expect(cache.entries[link.url]?.requestedAt == clock)
+        #expect(cache.state(for: link)?.mergeability?.mergeState == .blocked)
+        let duringGrace = cache.stateRevision
+
+        // After the grace period the readiness no longer shows. Views drew
+        // it, so the next answer publishes once, also when it repeats.
+        clock = clock.addingTimeInterval(PullRequestStateCache.mergeabilityGracePeriod)
+        #expect(cache.state(for: link)?.mergeability == nil)
+        #expect(cache.stateRevision != duringGrace)
+        await cache.refresh(link).value
+        #expect(publishes == 4)
+        clock = clock.addingTimeInterval(5)
+        await cache.refresh(link).value
+        #expect(publishes == 4)
+    }
+
+    private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while condition() == false {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("Timed out")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+}

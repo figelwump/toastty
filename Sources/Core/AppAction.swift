@@ -43,12 +43,46 @@ public enum AppAction: Equatable, Sendable {
     case moveWorkspaceTab(workspaceID: UUID, fromIndex: Int, toIndex: Int)
     case moveSidebarSession(workspaceID: UUID, panelID: UUID, targetPanelID: UUID, placeAfter: Bool, visiblePanelIDs: [UUID])
     case createWorkspace(windowID: UUID, title: String?, activate: Bool)
+    /// Opens a top-level workspace again for a closed project: one terminal
+    /// in `rootDirectory`, which it keeps as its root, without selecting it.
+    /// The caller chooses the IDs so it can place a task there next.
+    case reopenWorkspace(windowID: UUID, workspaceID: UUID, panelID: UUID, title: String, rootDirectory: String)
     case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?, activate: Bool = true)
     /// Appends a tab holding one plain terminal, without selecting it. The
     /// caller chooses the IDs so it can address the terminal afterward. The
     /// terminal takes no profile binding: a profile's startup command would
     /// occupy the shell that the caller is about to use.
     case createBackgroundTerminalTab(workspaceID: UUID, tabID: UUID, panelID: UUID, terminalCWD: String)
+    /// Creates a task's task space nested under `parentWorkspaceID`'s root,
+    /// without selecting it, in one step so no half-made workspace is ever
+    /// visible. The caller chooses the IDs and saves them first, so a retry
+    /// after a crash finds this workspace. The one terminal starts in
+    /// `terminalCWD` with no profile binding, for the same reason as
+    /// `createBackgroundTerminalTab`.
+    case createTaskSpace(
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID,
+        parentWorkspaceID: UUID,
+        spawningSessionID: String?,
+        taskID: UUID,
+        title: String,
+        terminalCWD: String
+    )
+    /// Creates the coordinator's workspace in `windowID`, without
+    /// selecting it: one terminal in `terminalCWD` with no profile binding,
+    /// for the same reason as `createBackgroundTerminalTab`. Refused while
+    /// another coordinator workspace is open. The caller chooses the IDs so
+    /// it can start the agent in that terminal next.
+    case createCoordinatorWorkspace(windowID: UUID, workspaceID: UUID, panelID: UUID, terminalCWD: String)
+    /// Names the terminal panel in the coordinator's workspace that its
+    /// agent runs in, after a restart moved the agent to a new terminal.
+    case setCoordinatorPanel(panelID: UUID)
+    /// Marks an open workspace as the coordinator's again, with the terminal
+    /// panel its agent runs in, while there is no coordinator. A Toastty
+    /// that does not know the coordinator, such as v0.9.2, saves the layout
+    /// without the mark.
+    case restoreCoordinatorWorkspace(workspaceID: UUID, panelID: UUID?)
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
@@ -62,6 +96,11 @@ public enum AppAction: Equatable, Sendable {
     case setWorkspaceParent(workspaceID: UUID, parentWorkspaceID: UUID?, spawningSessionID: String?)
     /// Marks a workspace done at `doneAt`, or clears the mark when it is `nil`.
     case setWorkspaceDone(workspaceID: UUID, doneAt: Date?)
+    /// Sets or clears a top-level workspace's project root directory.
+    case setWorkspaceRootDirectory(workspaceID: UUID, rootDirectory: String?)
+    /// Links a workspace to the task it is the task space of, or clears the
+    /// link.
+    case setWorkspaceTaskID(workspaceID: UUID, taskID: UUID?)
     case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
@@ -143,7 +182,17 @@ public enum AppAction: Equatable, Sendable {
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?, sessionID: String? = nil)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
     case toggleSidebar(windowID: UUID)
+    case setSidebarSegment(windowID: UUID, segment: SidebarSegment)
+    /// Collapses a project card in the All segment to its name line, or
+    /// expands it again.
+    case setSidebarWorkspaceCollapsed(windowID: UUID, workspaceID: UUID, collapsed: Bool)
+    /// Shows or hides the Tasks view. Selecting a workspace hides it.
+    case setTasksViewShown(windowID: UUID, shown: Bool)
     case setSidebarWidth(windowID: UUID, width: Double, defaultWidth: Double)
+    /// Opens or hides the coordinator's dock in a window.
+    case setCoordinatorDockVisible(windowID: UUID, visible: Bool)
+    /// Sets the dock's width. It is kept within the dock's limits.
+    case setCoordinatorDockWidth(windowID: UUID, width: Double)
 }
 
 public extension AppAction {
@@ -165,10 +214,20 @@ public extension AppAction {
             return "moveWorkspaceTab"
         case .createWorkspace:
             return "createWorkspace"
+        case .reopenWorkspace:
+            return "reopenWorkspace"
         case .createWorkspaceTab:
             return "createWorkspaceTab"
         case .createBackgroundTerminalTab:
             return "createBackgroundTerminalTab"
+        case .createTaskSpace:
+            return "createTaskSpace"
+        case .createCoordinatorWorkspace:
+            return "createCoordinatorWorkspace"
+        case .setCoordinatorPanel:
+            return "setCoordinatorPanel"
+        case .restoreCoordinatorWorkspace:
+            return "restoreCoordinatorWorkspace"
         case .createWindow:
             return "createWindow"
         case .closeWindow:
@@ -183,6 +242,10 @@ public extension AppAction {
             return "setWorkspaceParent"
         case .setWorkspaceDone:
             return "setWorkspaceDone"
+        case .setWorkspaceRootDirectory:
+            return "setWorkspaceRootDirectory"
+        case .setWorkspaceTaskID:
+            return "setWorkspaceTaskID"
         case .setWorkspaceTabCustomTitle:
             return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:
@@ -293,6 +356,16 @@ public extension AppAction {
             return "markPanelNotificationsRead"
         case .toggleSidebar:
             return "toggleSidebar"
+        case .setSidebarSegment:
+            return "setSidebarSegment"
+        case .setSidebarWorkspaceCollapsed:
+            return "setSidebarWorkspaceCollapsed"
+        case .setTasksViewShown:
+            return "setTasksViewShown"
+        case .setCoordinatorDockVisible:
+            return "setCoordinatorDockVisible"
+        case .setCoordinatorDockWidth:
+            return "setCoordinatorDockWidth"
         case .setSidebarWidth:
             return "setSidebarWidth"
         }

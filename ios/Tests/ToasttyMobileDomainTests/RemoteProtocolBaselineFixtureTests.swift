@@ -17,7 +17,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
         XCTAssertEqual(
             fixtureURLs.count,
-            54,
+            67,
             "Adding or removing canonical v1 fixtures requires an intentional iOS harness update."
         )
 
@@ -35,7 +35,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
         let hello = try fixtureObject(named: "hello-response")
         XCTAssertEqual(hello["protocolVersion"] as? String, "1.0")
         XCTAssertEqual(hello["minimumSupportedProtocolVersion"] as? String, "1.0")
-        XCTAssertNotNil(hello["capabilities"] as? [String])
+        XCTAssertTrue(try XCTUnwrap(hello["capabilities"] as? [String]).contains("task_actions"))
 
         let sessionList = try fixtureObject(named: "session-list-response")
         XCTAssertEqual(sessionList["protocolVersion"] as? String, "1.0")
@@ -58,6 +58,11 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
             "events-response-resnapshot-required": decode(RemoteGatewayEventsResponse.self),
             "hello-response": decode(RemoteGatewayHelloResponse.self),
             "input-availability-unavailable-session_writes_disabled": decode(RemoteInputAvailability.self),
+            "coordinator-quiet-digests-response": decode(RemoteCoordinatorQuietDigests.self),
+            "finished-tasks-response": decode(RemoteFinishedTasks.self),
+            "coordinator-attachment-image-request": decode(RemoteCoordinatorAttachmentImageRequest.self),
+            "coordinator-attachment-image-response": decode(RemoteCoordinatorAttachmentImageResponse.self),
+            "coordinator-attachment-image-refusal": decode(RemoteCoordinatorAttachmentImageResponse.self),
             "current-device-response": decode(RemoteGatewayCurrentDeviceResponse.self),
             "native-pairing-exchange-fallback-request": decode(RemoteGatewayNativePairingExchangeRequest.self),
             "native-pairing-exchange-qr-request": decode(RemoteGatewayNativePairingExchangeRequest.self),
@@ -86,11 +91,17 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
             "stream-conversation-events": decode(RemoteGatewayStreamMessage.self),
             "stream-resnapshot-required": decode(RemoteGatewayStreamMessage.self),
             "stream-session-list": decode(RemoteGatewayStreamMessage.self),
+            "task-action-request": decode(RemoteTaskActionRequest.self),
+            "task-action-response-rejected": decode(RemoteTaskActionResponse.self),
+            "task-archive-check-response": decode(RemoteTaskArchiveCheckResponse.self),
+            "workspace-done-request": decode(RemoteWorkspaceDoneRequest.self),
+            "workspace-done-request-knows-open-pull-request": decode(RemoteWorkspaceDoneRequest.self),
+            "workspace-done-response-work_in_progress": decode(RemoteWorkspaceDoneResponse.self),
         ]
 
         // APNs session and verification fixtures have an outer aps envelope;
         // PushPayloadFixtureTests decodes their nested strict push model.
-        XCTAssertEqual(decoders.count, 40)
+        XCTAssertEqual(decoders.count, 51)
         for (name, decoder) in decoders {
             try decoder(fixtureData(named: name))
         }

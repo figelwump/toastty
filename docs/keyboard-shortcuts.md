@@ -17,7 +17,11 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+W` | Close focused panel |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
-| `Option+Shift+M` | Run the selected task space's Merge button, in the mode it shows: Merge and Clean or Merge Only. Off by default; see [Merging a task's pull request](running-agents.md#merging-a-tasks-pull-request) |
+| `Option+Shift+T` | Open the quick entry panel to create a task, from any app. Set it with `[quick_entry] shortcut` in `~/.toastty/tasks.toml`; see [Quick entry](tasks.md#quick-entry) |
+| `Cmd+Shift+T` | Show the Tasks view, or hide it and return to the workspace it covered. **View > Show Tasks** does the same |
+| `Cmd+Shift+K` | Put the keyboard in the coordinator's message field. When the dock is hidden, show it with the keyboard in its field. When the dock shows and you type somewhere else, move the keyboard to its field. When its field has the keyboard, hide the dock. In the coordinator's own workspace, move the keyboard to the chat's field; if it is there already, go back to the last workspace with the dock open. The **View** menu item (**Show Coordinator Dock**, **Focus Coordinator Chat** or **Hide Coordinator Dock**) does the same. In the window that holds the Coordinator workspace |
+| `Cmd+1`, `Cmd+2` | In the quick entry panel: open the Workspace or the Agent list. Type to filter, `Return` chooses, `Esc` closes the list. In the Agent list, `1`–`5` pick a Frequent preset while the search is empty |
+| `Option+Shift+M` | Run the selected task space's Merge button. For a task, this is the task's **Merge**; see [Merge a task](tasks.md#merge-a-task). For a subspace without a task record, it runs in the mode the button shows, Merge and Clean or Merge Only, and is off by default; see [Merging a task's pull request](running-agents.md#merging-a-tasks-pull-request) |
 
 `Option+Shift+W` and the tab's close button ask before closing a tab only when something in it is still running. A managed agent that has finished its turn does not count as running; one that is working or waiting on approval does. Closing a workspace's last tab also closes the workspace.
 
@@ -41,7 +45,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Opt+Up Arrow` | Focus pane above |
 | `Cmd+Opt+Down Arrow` | Focus pane below |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels. Each group follows sidebar order downward before wrapping. |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors and open task spaces ready for review; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels. Each group follows the Projects sidebar order downward before wrapping. The coordinator is left out: the toolbar's toast button shows when it needs you. |
 | `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Ctrl+Left Arrow` | Resize split left |
 | `Cmd+Ctrl+Right Arrow` | Resize split right |
@@ -93,6 +97,8 @@ order. Pane shortcuts and keyboard navigation still follow the pane layout.
 |---|---|
 | `Cmd+Shift+P` | Open the command palette |
 
+The palette also acts on tasks. Commands named `Task: <action>` act on the current task: the row selected in the Tasks view while it shows, otherwise the task whose task space is selected. They are the actions of the Tasks view's detail pane that apply now, and each row names the task. See [Tasks](tasks.md#the-command-palette).
+
 ## Search
 
 | Shortcut | Action |
@@ -108,6 +114,7 @@ These shortcuts target the focused panel type:
 - focused terminal: adjust the window's terminal font size
 - focused local document panel: adjust the window's local-document text size
 - focused browser panel: zoom the current browser panel
+- the coordinator's chat, in its panel or while the dock's field has the keyboard: adjust the chat's text size
 
 | Shortcut | Action |
 |---|---|

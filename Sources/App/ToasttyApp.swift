@@ -1,5 +1,6 @@
 import AppKit
 import CoreState
+import RemoteProtocol
 import SwiftUI
 
 struct ToasttyMenuActionError: LocalizedError, Equatable, Sendable {
@@ -170,6 +171,26 @@ enum ToasttyMenuActions {
                 )
             },
             fileURL: AgentProfilesFile.fileURL(homeDirectoryPath: homeDirectoryPath),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        )
+    }
+
+    static func openTasksConfigurationResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, ToasttyMenuActionError> {
+        openConfigurationFile(
+            prepareFile: {
+                try TasksConfigFile.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath
+                )
+            },
+            fileURL: TasksConfigFile.fileURL(homeDirectoryPath: homeDirectoryPath),
             fileFormat: .toml,
             openManagedLocalDocument: openManagedLocalDocument,
             openExternally: openExternally
@@ -484,6 +505,9 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         _ = notification
+        // A create_hook or git command must not outlive the app: a retry
+        // after relaunch would run beside it in the same worktree.
+        TaskLiveCommandRunner.stopAllRunningCommands()
         #if TOASTTY_HAS_GHOSTTY_KIT
         GhosttyClipboardBridge.releaseSelectionPasteboardIfNeeded()
         #endif
@@ -659,7 +683,13 @@ struct ToasttyApp: App {
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
-    @StateObject private var remoteAccessService: RemoteAccessService
+    /// Held, not observed. `body` only hands this service to the Settings
+    /// view, which observes it. No view of the main window reads what it
+    /// publishes, and while the gateway is on it publishes its list of
+    /// sessions 150 ms after each agent status line. As a `@StateObject`,
+    /// each of those publishes made SwiftUI work out the app's scenes and
+    /// menus again and, with them, update the whole window a second time.
+    private let remoteAccessService: RemoteAccessService
     @StateObject private var annotationStyleStore: AnnotationStyleStore
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
@@ -680,6 +710,11 @@ struct ToasttyApp: App {
     private let scratchpadSessionLinkCleanupCoordinator: ScratchpadSessionLinkCleanupCoordinator
     private let terminalReadActivityCleanupCoordinator: TerminalReadActivityCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
+    private let taskCoordinator: TaskCoordinator
+    private let taskTerminationObserver: AppTerminationObserver
+    private let taskBoard: TaskBoardStore
+    private let taskWebhooks: TaskWebhookService
+    private let quickEntryController: QuickEntryController
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
     private let fileCloseMenuBridge: FileCloseMenuBridge
@@ -770,7 +805,6 @@ struct ToasttyApp: App {
         let store = AppStore(
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
-            initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
             initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             isWorkspaceMergeEnabled: initialToasttySettings.isWorkspaceMergeEnabled,
@@ -816,7 +850,8 @@ struct ToasttyApp: App {
                 enabled: initialToasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
                 agentProfiles: agentCatalogStore.catalog,
-                helperExecutablePath: agentShimExecutablePath
+                helperExecutablePath: agentShimExecutablePath,
+                cliExecutablePath: cliExecutablePath
             )
         } catch {
             shimDirectoryPath = nil
@@ -897,7 +932,8 @@ struct ToasttyApp: App {
                 socketPath: socketPath,
                 cliExecutablePath: cliExecutablePath
             ),
-            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            userDefaults: persistUserSettings ? ToasttyAppDefaults.current : nil,
+            taskSpaceCleanupHold: WorkspaceMergeCoordinator.taskSpaceCleanupHold
         )
         let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
@@ -936,6 +972,9 @@ struct ToasttyApp: App {
             restoredTerminalPanelIDs: bootstrap.restoredTerminalPanelIDs
         )
         terminalRuntimeRegistry.setAgentCatalogProvider(agentCatalogStore)
+        terminalRuntimeRegistry.setCoordinatorLaunchEnvironment(
+            CoordinatorFolder.gitEnvironment(for: runtimePaths.coordinatorDirectoryURL)
+        )
         terminalRuntimeRegistry.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
         terminalRuntimeRegistry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
@@ -972,10 +1011,17 @@ struct ToasttyApp: App {
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator,
-            webPanelRuntimeRegistry: webPanelRuntimeRegistry
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            taskSpaceCloseAsker: .live(sessionRuntimeStore: sessionRuntimeStore)
         )
         self.focusedPanelCommandController = focusedPanelCommandController
-        let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let splitLayoutCommandController = SplitLayoutCommandController(
+            store: store,
+            focusPanelKeyboard: { [weak terminalRuntimeRegistry, weak webPanelRuntimeRegistry] panelID in
+                if webPanelRuntimeRegistry?.focusWebView(panelID: panelID) == true { return }
+                terminalRuntimeRegistry?.takeKeyboardFocus(panelID: panelID)
+            }
+        )
         terminalProfilesMenuController = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1040,6 +1086,112 @@ struct ToasttyApp: App {
             managedAgentLaunchArtifactStore: managedAgentLaunchArtifactStore
         )
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
+        let recentWorkspaces = RecentWorkspacesStore(runtimePaths: runtimePaths)
+        recentWorkspaces.observe(store)
+        let taskCoordinator = TaskCoordinator(
+            records: TaskRecordStore(runtimePaths: runtimePaths),
+            store: store,
+            launcher: agentLaunchService,
+            configLoader: { try TasksConfigFile.load() },
+            attachmentsDirectoryURL: runtimePaths.taskAttachmentsDirectoryURL,
+            hasActiveSession: { [weak sessionRuntimeStore] workspaceID in
+                guard let registry = sessionRuntimeStore?.sessionRegistry else { return false }
+                return registry.activeSessionIDByPanelID.values.contains { sessionID in
+                    registry.sessionsByID[sessionID]?.workspaceID == workspaceID
+                }
+            },
+            grantScope: { [weak sessionRuntimeStore] sessionID, workspaceID in
+                guard let sessionRuntimeStore, sessionRuntimeStore.isWorkspaceScoped(sessionID: sessionID) else { return }
+                _ = sessionRuntimeStore.addScope(sessionID: sessionID, workspaceIDs: [workspaceID])
+            },
+            triageRunner: TaskLiveTriageRunner(),
+            recentWorkspaces: recentWorkspaces
+        )
+        taskCoordinator.reconcileAfterLaunch()
+        self.taskCoordinator = taskCoordinator
+        // A quit must leave the marks of turns it cuts off; see
+        // `TaskCoordinator.recordStateTimes`.
+        taskTerminationObserver = AppTerminationObserver { [weak taskCoordinator] in
+            MainActor.assumeIsolated { taskCoordinator?.prepareForTermination() }
+        }
+        let pullRequestStateCache = PullRequestStateCache(
+            runner: WorkspaceMergeLiveCommandRunner(socketPath: socketPath, cliExecutablePath: cliExecutablePath)
+        )
+        sessionRuntimeStore.workspaceMergeCoordinator?.pullRequestStateCache = pullRequestStateCache
+        sessionRuntimeStore.pullRequestStateCache = pullRequestStateCache
+        let taskBoard = TaskBoardStore(
+            coordinator: taskCoordinator,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            pullRequests: pullRequestStateCache
+        )
+        taskCoordinator.board = taskBoard
+        self.taskBoard = taskBoard
+        let taskWebhooks = TaskWebhookService(runtimePaths: runtimePaths)
+        taskWebhooks.taskStates = { [weak taskBoard] in
+            TaskWebhookService.taskStates(taskBoard?.items() ?? [])
+        }
+        taskWebhooks.taskAlertFacts = { [weak taskCoordinator] taskIDs in
+            taskCoordinator?.alertFacts(for: taskIDs) ?? [:]
+        }
+        taskCoordinator.webhooks = taskWebhooks
+        self.taskWebhooks = taskWebhooks
+        taskWebhooks.start()
+        taskCoordinator.merges = sessionRuntimeStore.workspaceMergeCoordinator
+        sessionRuntimeStore.workspaceMergeCoordinator?.cleanupObserver = { [weak taskCoordinator] workspaceID, event in
+            taskCoordinator?.mergeCleanupEvent(workspaceID: workspaceID, event: event)
+        }
+        sessionRuntimeStore.taskCoordinator = taskCoordinator
+        taskCoordinator.unsavedDocumentCount = { [weak store, weak webPanelRuntimeRegistry] workspaceID in
+            guard let panelIDs = store?.state.workspacesByID[workspaceID]?.allPanelsByID.keys,
+                  let summary = webPanelRuntimeRegistry?.localDocumentCloseConfirmationSummary(panelIDs: panelIDs) else { return 0 }
+            return summary.dirtyDraftCount + summary.saveInProgressCount
+        }
+        let quickEntryController = QuickEntryController(
+            store: store,
+            agentProfiles: { [weak agentLaunchService] in agentLaunchService?.launchProfileSummaries() ?? [] },
+            presetUsage: QuickEntryPresetUsage(runtimePaths: runtimePaths),
+            create: { [weak taskCoordinator] request in
+                guard let taskCoordinator else { throw TaskError("Toastty is quitting.") }
+                return try await taskCoordinator.create(request, caller: .quickEntry)
+            },
+            configLoader: { try TasksConfigFile.load() },
+            // A smoke run or a test host must not take the user's shortcut
+            // from the Toastty they are using.
+            registersGlobalHotKey: automationConfig == nil
+                && Self.isRunningUnderXCTest(processInfo.environment) == false
+        )
+        quickEntryController.loadCodexModels = { [weak agentLaunchService] in
+            guard let executable = try agentLaunchService?.profileExecutableState(profileID: AgentKind.codex.rawValue),
+                  // As with launch argument support, only a direct provider
+                  // command is known to accept provider subcommands.
+                  ["codex", "cdx"].contains(URL(fileURLWithPath: executable.command).lastPathComponent),
+                  let executablePath = executable.executablePath else {
+                return []
+            }
+            let processPath = codexProcessPathStore.currentPath()
+            let models = try await Task.detached(priority: .userInitiated) {
+                let runtime = try CodexIntegrationRuntimeLocator.resolve(
+                    preferredProcessPath: processPath,
+                    executableURL: URL(fileURLWithPath: executablePath)
+                )
+                return try CodexModelCatalog().load(runtime: runtime, deadline: Date().addingTimeInterval(5))
+            }.value
+            // A configuration reload can replace the CLI while it runs.
+            guard let currentExecutable = try agentLaunchService?.profileExecutableState(profileID: AgentKind.codex.rawValue).executablePath,
+                  currentExecutable == executablePath, codexProcessPathStore.currentPath() == processPath else { return [] }
+            return models
+        }
+        // The shortcut is read once the coordinator's question exists, below:
+        // until the user answers it, Toastty takes no key from other apps.
+        self.quickEntryController = quickEntryController
+        taskBoard.newTask = { [weak quickEntryController] in
+            quickEntryController?.present(prefill: .empty)
+        }
+        taskBoard.showShortcut(of: quickEntryController)
+        terminalRuntimeRegistry.presentQuickEntryFromSelection = { [weak quickEntryController] text, panelID in
+            quickEntryController?.presentFromSelection(text, panelID: panelID)
+        }
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1070,7 +1222,8 @@ struct ToasttyApp: App {
                     codexProcessPathStore: codexProcessPathStore,
                     managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    agentHookDispatcher: agentHookDispatcher
+                    agentHookDispatcher: agentHookDispatcher,
+                    quickEntryController: quickEntryController
                 )
             },
             openLocalDocumentAction: { preferredWindowID, placement in
@@ -1093,6 +1246,16 @@ struct ToasttyApp: App {
                     sessionRuntimeStore: sessionRuntimeStore,
                     documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
                 )
+            },
+            createTaskAction: { [weak quickEntryController] in
+                // After the palette closes and gives focus back, so the
+                // panel opens as the key window.
+                DispatchQueue.main.async {
+                    quickEntryController?.present(prefill: .empty)
+                }
+            },
+            newTaskShortcutProvider: { [weak quickEntryController] in
+                quickEntryController?.shortcut
             },
             openManageConfigAction: { [store] originWindowID in
                 Self.openManageConfig(store: store, preferredWindowID: originWindowID)
@@ -1175,8 +1338,8 @@ struct ToasttyApp: App {
                 url,
                 preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
                 appStore: store,
-                requestLocalDocumentReveal: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
-                    webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                requestLocalDocumentReveal: { panelID, lineNumber in
+                    webPanelRuntimeRegistry.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber)
                 }
             )
         }
@@ -1194,6 +1357,7 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             processWatchCommandController: processWatchCommandController,
+            splitLayoutCommandController: splitLayoutCommandController,
             isCommandPalettePresented: { [weak commandPaletteController] in
                 commandPaletteController?.isPresented ?? false
             },
@@ -1242,16 +1406,181 @@ struct ToasttyApp: App {
             }
         )
         sessionRuntimeStore.sessionExitController = sessionExitController
-        _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
+        taskCoordinator.closeFinishedTaskSpace = { [weak store, weak sessionRuntimeStore] workspaceID in
+            store?.closeTaskSpaceFocusingNextActive(
+                workspaceID: workspaceID,
+                sessionRuntimeStore: sessionRuntimeStore
+            ) ?? false
+        }
+        let taskSessions = LiveTaskSessions(
+            sessionRuntimeStore: sessionRuntimeStore,
+            closeController: remoteSessionCloseController,
+            exitController: sessionExitController,
+            sendText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendText(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? false
+            },
+            deliverText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendTextResult(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? .unavailable
+            }
+        )
+        taskCoordinator.sessions = taskSessions
+        taskCoordinator.coordinatorController = CoordinatorController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            launcher: agentLaunchService,
+            directoryURL: runtimePaths.coordinatorDirectoryURL,
+            queueFileURL: runtimePaths.coordinatorQueueFileURL,
+            workspaceFileURL: runtimePaths.coordinatorWorkspaceFileURL,
+            configLoader: { try TasksConfigFile.load() },
+            // The agent's terminal inherits this process's environment.
+            trustFolder: { [weak agentCatalogStore] profileID, directory in
+                await ClaudeFolderTrust.trustCoordinatorFolder(
+                    directory,
+                    profileID: profileID,
+                    profileArgv: agentCatalogStore?.catalog.profile(id: profileID)?.argv ?? [],
+                    environment: processEnvironment
+                )
+            },
+            // The call `task send` uses: programmatic input, which closes a
+            // prompt the iPhone holds open but is not the user's typing.
+            deliverText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendTextResult(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? .unavailable
+            },
+            promptState: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
+            },
+            revealDocumentLine: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
+                webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+            },
+            defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+        )
+        // Task changes and the coordinator's timer wake it from here on.
+        if let coordinatorController = taskCoordinator.coordinatorController {
+            taskWebhooks.attach(coordinator: coordinatorController)
+            // When wake turns keep failing, a click on the notice opens
+            // the coordinator.
+            taskWebhooks.notifyUser = { [weak coordinatorController] title, body in
+                let location = coordinatorController?.location
+                Task {
+                    await SystemNotificationSender.send(
+                        title: title,
+                        body: body,
+                        workspaceID: location?.workspaceID,
+                        panelID: location?.panelID
+                    )
+                }
+            }
+            // A wake turn the coordinator marked quiet ends without an
+            // unread mark, a notification or a push.
+            sessionRuntimeStore.isQuietTurnEnd = { [weak coordinatorController] sessionID in
+                coordinatorController?.turnEndsQuietly(sessionID: sessionID) ?? false
+            }
+        }
+        splitLayoutCommandController.coordinatorDock = taskCoordinator.coordinatorController
+        // While a coordinator exists, quick entry sends to it.
+        quickEntryController.coordinatorController = taskCoordinator.coordinatorController
+        // A run without saved preferences, such as an automation run, asks
+        // nothing.
+        // The question is the What's new sheet, which also names tasks and
+        // quick entry, and asks before Toastty takes the quick entry key.
+        let whatsNewActions = WhatsNewSheetActions()
+        let userDefaults = persistUserSettings ? ToasttyAppDefaults.current : nil
+        if let coordinatorController = taskCoordinator.coordinatorController {
+            coordinatorController.startOffer = CoordinatorStartOffer(
+                controller: coordinatorController,
+                store: store,
+                defaults: userDefaults,
+                coordinatorDirectoryURL: runtimePaths.coordinatorDirectoryURL,
+                present: WhatsNewSheet.presenter(actions: whatsNewActions)
+            )
+        }
+        QuickEntryShortcutAnswer.connect(
+            quickEntryController,
+            to: taskCoordinator.coordinatorController?.startOffer,
+            defaults: userDefaults
+        ) { [weak quickEntryController] in
+            // As at launch, over the window in front. A window that cannot
+            // show it now leaves it for the next window that gets the
+            // keyboard.
+            guard let windowID = currentToasttyWorkspaceCommandWindowID(in: store) else { return }
+            quickEntryController?.presentLaunchMessageIfNeeded(
+                windowID: windowID,
+                present: Self.presentLaunchConfigurationWarning
+            )
+        }
+        quickEntryController.loadShortcutAtLaunch()
+        whatsNewActions.chooseDefaultShortcut = { allowed in
+            QuickEntryShortcutAnswer.save(allowed, in: userDefaults)
+        }
+        // The sheet blocks its window, so the file opens in the user's text
+        // editor, not in a panel behind the sheet. The key is read again
+        // when the sheet gets its answer.
+        whatsNewActions.openTasksConfiguration = { _ in
+            if case .failure(let error) = ToasttyMenuActions.openTasksConfigurationResult(openExternally: Self.openInTextEditor) {
+                TaskActions.presentFailure("Unable to Open tasks.toml", error.localizedDescription)
+            }
+        }
+        let remoteAccessService = RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
+            taskBoard: taskBoard,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
             sessionLauncher: remoteSessionLauncher,
             sessionCloseController: remoteSessionCloseController,
-            sessionExitController: sessionExitController
-        ))
+            sessionExitController: sessionExitController,
+            taskCoordinator: taskCoordinator,
+            quickEntryController: quickEntryController
+        )
+        self.remoteAccessService = remoteAccessService
+        whatsNewActions.facts = { [weak taskBoard, weak remoteAccessService] in
+            let quickEntry = (try? TasksConfigFile.load())?.quickEntry ?? TasksConfig.QuickEntry()
+            return WhatsNewFacts(
+                shortcut: quickEntry.isShortcutSet
+                    ? .written(label: quickEntry.shortcut?.symbolLabel)
+                    : .askForDefault(label: QuickEntryShortcut.default.symbolLabel),
+                allowsDefaultShortcut: QuickEntryShortcutAnswer.saved(in: userDefaults) ?? true,
+                hasTaskSpacesFromBefore: taskBoard?.items().contains { $0.record == nil } ?? false,
+                hasPhoneWithTaskActions: remoteAccessService?.devices.contains(where: \.canActOnTasks) ?? false,
+                oldExampleSkills: OldExampleSkills.included(in: userSkillCatalog.scan())
+            )
+        }
+        // `task send --steer` types through the same path.
+        taskSessions.conversationAccess = remoteAccessService
+        // The coordinator types through its agent's conversation, the path
+        // a paired phone uses, so one prompt check covers every sender.
+        if let coordinatorController = taskCoordinator.coordinatorController {
+            coordinatorController.conversationAccess = remoteAccessService
+            coordinatorController.chat = CoordinatorChatModel(
+                controller: coordinatorController,
+                access: remoteAccessService,
+                defaults: persistUserSettings ? ToasttyAppDefaults.current : nil
+            )
+            // Keyboard focus meant for the terminal under the chat goes to
+            // the chat's composer, and Show Terminal gives it back.
+            coordinatorController.connectKeyboard(to: terminalRuntimeRegistry)
+        }
+        // The quick entry Agent picker offers the models the iPhone's
+        // start-session screen offers.
+        quickEntryController.recentModels = { [weak remoteAccessService] provider in
+            remoteAccessService?.recentModels(for: provider) ?? []
+        }
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
@@ -1277,6 +1606,10 @@ struct ToasttyApp: App {
                 )
             }
             workspaceLayoutPersistenceCoordinator = coordinator
+            taskCoordinator.flushLayout = { [weak store, weak coordinator] in
+                guard let store else { return }
+                coordinator?.flushCurrentState(store.state, reason: "task_setup")
+            }
             workspaceLayoutDisplayDiagnosticsObserver = WorkspaceLayoutDisplayDiagnosticsObserver(
                 persistenceProfileID: layoutPersistenceContext.profileID
             )
@@ -1315,6 +1648,7 @@ struct ToasttyApp: App {
                 agentLaunchService: agentLaunchService,
                 annotationStyleStore: annotationStyleStore,
                 inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
+                taskCoordinator: taskCoordinator,
                 reloadConfigurationAction: {
                     Self.reloadConfiguration(
                         store: store,
@@ -1327,7 +1661,8 @@ struct ToasttyApp: App {
                         codexProcessPathStore: codexProcessPathStore,
                         managedAgentResolutionContextStore: managedAgentResolutionContextStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        agentHookDispatcher: agentHookDispatcher
+                        agentHookDispatcher: agentHookDispatcher,
+                        quickEntryController: quickEntryController
                     )
                 }
             )
@@ -1431,17 +1766,22 @@ struct ToasttyApp: App {
         enabled: Bool,
         runtimePaths: ToasttyRuntimePaths,
         agentProfiles: AgentCatalog,
-        helperExecutablePath: String?
+        helperExecutablePath: String?,
+        cliExecutablePath: String?
     ) throws -> String? {
         let managedDirectoryURL = managedAgentCommandShimDirectoryURL(
             runtimePaths: runtimePaths,
             helperExecutablePath: helperExecutablePath
         )
+        // Terminals get this directory first on PATH, so `toastty` there is
+        // the CLI that the shipped skills run. A runtime-isolated instance
+        // directory already holds its own copy of the CLI.
         let installation = try AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
             installationDirectoryURL: managedDirectoryURL,
             managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles),
-            helperExecutablePathProvider: { helperExecutablePath }
+            helperExecutablePathProvider: { helperExecutablePath },
+            cliExecutablePathProvider: { cliExecutablePath }
         )
             .syncInstallation(enabled: enabled)
         let compatibilityDirectoryURL = runtimePaths.agentShimDirectoryURL.standardizedFileURL
@@ -1628,22 +1968,29 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 annotationStyleStore: annotationStyleStore,
+                taskCoordinator: taskCoordinator,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                 openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
-                toggleCommandPalette: { [weak commandPaletteController] originWindowID in
-                    _ = commandPaletteController?.toggle(originWindowID: originWindowID)
+                toggleCommandPalette: { originWindowID in
+                    _ = commandPaletteController.toggle(originWindowID: originWindowID)
                 },
-                presentCommandPalette: { [weak commandPaletteController] originWindowID, initialQuery in
-                    _ = commandPaletteController?.present(originWindowID: originWindowID, initialQuery: initialQuery)
+                presentCommandPalette: { originWindowID, initialQuery in
+                    _ = commandPaletteController.present(originWindowID: originWindowID, initialQuery: initialQuery)
                 },
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
-                disableAnimations: disableAnimations
+                disableAnimations: disableAnimations,
+                presentLaunchMessages: { [quickEntryController] windowID in
+                    quickEntryController.presentLaunchMessageIfNeeded(
+                        windowID: windowID,
+                        present: Self.presentLaunchConfigurationWarning
+                    )
+                }
             )
             .frame(minWidth: 980, minHeight: 620)
             .onAppear {
@@ -1659,6 +2006,7 @@ struct ToasttyApp: App {
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
+                quickEntryController: quickEntryController,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 processWatchCommandController: processWatchCommandController,
@@ -1716,11 +2064,18 @@ struct ToasttyApp: App {
             codexProcessPathStore: codexProcessPathStore,
             managedAgentResolutionContextStore: managedAgentResolutionContextStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            agentHookDispatcher: agentHookDispatcher
+            agentHookDispatcher: agentHookDispatcher,
+            quickEntryController: quickEntryController
         )
     }
 
     @MainActor
+    private static func isRunningUnderXCTest(_ environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+    }
+
     private static func reloadConfiguration(
         store: AppStore,
         agentCatalogStore: AgentCatalogStore,
@@ -1732,10 +2087,15 @@ struct ToasttyApp: App {
         codexProcessPathStore: CodexProcessPathStore,
         managedAgentResolutionContextStore: ManagedAgentResolutionContextStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
-        agentHookDispatcher: AgentHookDispatcher
+        agentHookDispatcher: AgentHookDispatcher,
+        quickEntryController: QuickEntryController
     ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
+
+        if let quickEntryMessage = quickEntryController.reloadShortcut() {
+            warningMessages.append(quickEntryMessage)
+        }
 
         switch agentCatalogStore.reload() {
         case .success:
@@ -1773,12 +2133,14 @@ struct ToasttyApp: App {
                 excludedDirectoryPaths: [runtimePaths.agentShimDirectoryURL.path]
             )
         )
+        quickEntryController.invalidateCodexModels()
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
                 agentProfiles: agentCatalogStore.catalog,
-                helperExecutablePath: agentLaunchShimExecutablePath
+                helperExecutablePath: agentLaunchShimExecutablePath,
+                cliExecutablePath: agentLaunchCLIExecutablePath
             )
             managedAgentResolutionContextStore.update(
                 Self.makeManagedAgentResolutionContext(
@@ -1854,17 +2216,41 @@ struct ToasttyApp: App {
 
         guard failureMessages.isEmpty == false || warningMessages.isEmpty == false else { return }
 
-        let alert = NSAlert()
-        alert.messageText = failureMessages.isEmpty
-            ? "Configuration Reload Warnings"
-            : "Unable to Reload Configuration"
-        alert.informativeText = (failureMessages + warningMessages).joined(separator: "\n")
-        alert.alertStyle = failureMessages.isEmpty ? .informational : .warning
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        makeConfigurationAlert(
+            title: failureMessages.isEmpty ? "Configuration Reload Warnings" : "Unable to Reload Configuration",
+            messages: failureMessages + warningMessages,
+            style: failureMessages.isEmpty ? .informational : .warning
+        ).runModal()
     }
 
-    private static func resolveCodexProcessPath(
+    /// The alert that lists what reading the configuration found, after
+    /// Reload Configuration and at launch.
+    private static func makeConfigurationAlert(
+        title: String,
+        messages: [String],
+        style: NSAlert.Style
+    ) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = messages.joined(separator: "\n")
+        alert.alertStyle = style
+        alert.addButton(withTitle: "OK")
+        return alert
+    }
+
+    /// Shows what reading the configuration at launch found, as a sheet
+    /// over the window, so restored terminals and agents carry on while it
+    /// shows. Returns false when the window cannot show a sheet now.
+    @MainActor
+    static func presentLaunchConfigurationWarning(windowID: UUID, message: String) -> Bool {
+        guard let window = AgentLaunchUI.window(for: windowID), window.attachedSheet == nil else { return false }
+        let alert = makeConfigurationAlert(title: "Configuration Warnings", messages: [message], style: .informational)
+        alert.window.setAccessibilityIdentifier("configuration.launch-warnings")
+        alert.beginSheetModal(for: window)
+        return true
+    }
+
+    nonisolated private static func resolveCodexProcessPath(
         environment: [String: String],
         agentShimDirectoryPath: String
     ) -> String? {
@@ -1889,6 +2275,16 @@ struct ToasttyApp: App {
 
     @MainActor
     @discardableResult
+    /// Opens a file in the app macOS uses for it, or in TextEdit when no
+    /// app is set for its type, such as `.toml`.
+    private static func openInTextEditor(_ url: URL) -> Bool {
+        let workspace = NSWorkspace.shared
+        guard let editor = workspace.urlForApplication(toOpen: url)
+            ?? workspace.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") else { return false }
+        workspace.open([url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
+        return true
+    }
+
     private static func openAgentProfilesConfiguration(
         store: AppStore,
         preferredWindowID: UUID?

@@ -11,6 +11,7 @@ private struct NextActiveCycleAnchor: Equatable {
 
 private enum NextActiveCycleSegment: String, Equatable {
     case actionRequired = "fallback_attention"
+    case review = "fallback_review"
     case workingForward = "fallback_working"
     case later = "fallback_later"
     case workingWrapped = "fallback_working_wrapped"
@@ -78,11 +79,6 @@ final class AppStore: ObservableObject {
     private var navigationOriginPanelID: UUID?
 
     @Published private(set) var state: AppState
-    /// Persisted compatibility flag that switches windows into the wider
-    /// sidebar layout once managed session-status UI has been used at least
-    /// once. It originally tracked agent launches, but process-watch rows
-    /// should opt into the same expanded session-status treatment.
-    @Published private(set) var hasEverLaunchedAgent: Bool
     @Published private(set) var hasAutoOpenedGettingStartedPanelThisLaunch = false
     @Published private(set) var askBeforeQuitting: Bool
     /// What a subspace's Merge button and shortcut do; the user picks it from
@@ -101,6 +97,11 @@ final class AppStore: ObservableObject {
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
     @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
+
+    /// The coordinator's panel shows its terminal in place of the chat. The
+    /// user sets it for a login, a folder-trust or a permission prompt. It
+    /// is not saved: a relaunch shows the chat again.
+    @Published var coordinatorShowsTerminal = false
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
@@ -131,9 +132,6 @@ final class AppStore: ObservableObject {
     private let recentRightPanelItemsStore: RightPanelRecentItemsStore
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
     private var nextActiveCycleState: NextActiveCycleState?
-    // The sidebar can pin or freeze subspace rows. Keep its last displayed
-    // order for navigation without publishing another view update.
-    private var sidebarSubspaceOrderByParentID: [UUID: [UUID]] = [:]
     private var browserRecentItemIDByPanelID: [UUID: RecentRightPanelItemID] = [:]
     // Defaults belong to exact live sessions, not the selected panel or window.
     @Published private var defaultScratchpadDocumentIDsBySessionID: [String: UUID] = [:]
@@ -141,7 +139,6 @@ final class AppStore: ObservableObject {
     init(
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
-        initialHasEverLaunchedAgent: Bool = false,
         initialAskBeforeQuitting: Bool = true,
         initialWorkspaceMergeMode: WorkspaceMergeMode = .mergeAndCleanUp,
         isWorkspaceMergeEnabled: Bool = false,
@@ -153,7 +150,6 @@ final class AppStore: ObservableObject {
         recentRightPanelItemsStore: RightPanelRecentItemsStore = .inMemory()
     ) {
         self.state = state
-        hasEverLaunchedAgent = initialHasEverLaunchedAgent
         askBeforeQuitting = initialAskBeforeQuitting
         workspaceMergeMode = initialWorkspaceMergeMode
         self.isWorkspaceMergeEnabled = isWorkspaceMergeEnabled
@@ -234,7 +230,6 @@ final class AppStore: ObservableObject {
         self.state = state
         defaultScratchpadDocumentIDsBySessionID.removeAll()
         nextActiveCycleState = nil
-        sidebarSubspaceOrderByParentID.removeAll()
         navigationGeneration &+= 1
         navigationHistory.clear()
         navigationOriginPanelID = resolvedNavigationPanelID
@@ -529,16 +524,33 @@ final class AppStore: ObservableObject {
         )
     }
 
+    /// `coordinatorChatCovers` says whether the coordinator's chat covers a
+    /// terminal panel. Text size commands then change the chat's text, not
+    /// the hidden terminal's font. `coordinatorDockHasKeyboard` says whether
+    /// the field of the coordinator's dock has a window's keyboard: the
+    /// commands then change the chat's text, not the focused panel's.
+    /// While the Tasks view covers the workspace, the commands have no
+    /// target, so they do not change a panel the user cannot see. The dock
+    /// stays visible beside the Tasks view, so its chat keeps its target.
     func focusedScaleCommandTarget(
-        preferredWindowID: UUID?
+        preferredWindowID: UUID?,
+        coordinatorChatCovers: (UUID) -> Bool = { _ in false },
+        coordinatorDockHasKeyboard: (UUID) -> Bool = { _ in false }
     ) -> FocusedScaleCommandTarget? {
-        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return nil }
+        if coordinatorDockHasKeyboard(selection.windowID) {
+            return .coordinatorChat(windowID: selection.windowID)
+        }
+        guard selection.window.showsTasksView == false,
               let focusedPanel = Self.focusedCommandPanel(in: selection.workspace) else {
             return nil
         }
 
         switch focusedPanel.panelState {
         case .terminal:
+            if coordinatorChatCovers(focusedPanel.panelID) {
+                return .coordinatorChat(windowID: selection.windowID)
+            }
             return .terminal(windowID: selection.windowID)
         case .web(let webState):
             switch webState.definition {
@@ -1553,6 +1565,34 @@ final class AppStore: ObservableObject {
         return focusPanelTarget(target, flashPanelOnSuccess: true)
     }
 
+    /// Closes a task space the user finished. When the front window shows
+    /// it, focus moves in that window to what Jump to Next Active would pick
+    /// from the task space, instead of the neighboring workspace. Without
+    /// such a target, the close keeps its usual selection.
+    @discardableResult
+    func closeTaskSpaceFocusingNextActive(
+        workspaceID: UUID,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) -> Bool {
+        var target: PanelNavigationTarget?
+        if let windowID = state.selectedWindowID,
+           let window = state.window(id: windowID),
+           window.selectedWorkspaceID == workspaceID,
+           window.showsTasksView == false {
+            target = nextUnreadOrActivePanelTarget(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionRuntimeStore,
+                updatingCycleState: false,
+                allowing: { $0.windowID == windowID && $0.workspaceID != workspaceID }
+            )
+        }
+        guard send(.closeWorkspace(workspaceID: workspaceID)) else { return false }
+        if let target {
+            _ = focusPanelTarget(target)
+        }
+        return true
+    }
+
     @discardableResult
     func selectWorkspaceTabFromCommand(preferredWindowID: UUID?, shortcutNumber: Int) -> Bool {
         guard shortcutNumber > 0 else { return false }
@@ -2007,17 +2047,6 @@ final class AppStore: ObservableObject {
         actionAppliedObservers.removeValue(forKey: token)
     }
 
-    func recordSessionStatusSidebarExpansionEligibility() {
-        guard hasEverLaunchedAgent == false else { return }
-        hasEverLaunchedAgent = true
-        guard persistUserSettings else { return }
-        ToasttySettingsStore.persistHasEverLaunchedAgent(true)
-    }
-
-    func recordSuccessfulAgentLaunch() {
-        recordSessionStatusSidebarExpansionEligibility()
-    }
-
     @discardableResult
     func autoOpenGettingStartedPanelIfNeeded(workspaceID: UUID) -> Bool {
         return performNavigation(intent: .restoration) {
@@ -2099,45 +2128,72 @@ final class AppStore: ObservableObject {
         return .newWindow
     }
 
-    func recordSidebarSubspaceOrder(_ workspaceIDs: [UUID], parentWorkspaceID: UUID) {
-        sidebarSubspaceOrderByParentID[parentWorkspaceID] = workspaceIDs
+    /// Which task space the sidebar draws each task space under; see
+    /// `TaskRecordStore.linkedParentTaskSpaceID(of:in:)`.
+    private func sidebarLinkedParentID(sessionRuntimeStore: SessionRuntimeStore?) -> (UUID) -> UUID? {
+        guard let records = sessionRuntimeStore?.taskCoordinator?.records else { return { _ in nil } }
+        let state = state
+        return { workspaceID in
+            state.workspacesByID[workspaceID].flatMap { records.linkedParentTaskSpaceID(of: $0, in: state) }
+        }
     }
 
-    func clearSidebarSubspaceOrder(parentWorkspaceID: UUID) {
-        sidebarSubspaceOrderByParentID.removeValue(forKey: parentWorkspaceID)
-    }
-
+    /// `allowing` limits the pick to the targets it accepts and ignores the
+    /// saved cycle, for a pick made just before a workspace closes.
     private func nextUnreadOrActivePanelTarget(
         preferredWindowID: UUID?,
         sessionRuntimeStore: SessionRuntimeStore?,
-        updatingCycleState: Bool = true
+        updatingCycleState: Bool = true,
+        allowing: ((PanelNavigationTarget) -> Bool)? = nil
     ) -> PanelNavigationTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let selectedTabID = selection.workspace.resolvedSelectedTabID else {
             return nil
         }
 
+        let listsOnlyNeedsYou = sidebarListsOnlyNeedsYou(
+            windowID: selection.windowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
         let livePanelIDs = sessionRuntimeStore?.activePanelIDs(
             matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
                 .union(Self.nextUnreadOrWorkingFallbackStatusKinds)
         ) ?? []
+        // Needs you lists a running row under Running, also when its last
+        // turn is unread.
+        let hiddenRunningPanelIDs = listsOnlyNeedsYou
+            ? sessionRuntimeStore.map(Self.runningPanelIDsHiddenFromNeedsYou) ?? []
+            : []
+        let taskStages = (sessionRuntimeStore?.taskCoordinator?.board?.items() ?? [])
+            .reduce(into: [UUID: TaskStage]()) { stages, item in
+                if let workspaceID = item.taskSpaceWorkspaceID {
+                    stages[workspaceID] = item.stage
+                }
+            }
         let navigationOrder = SidebarPanelNavigationOrder(
             state: state,
             sessionRegistry: sessionRuntimeStore?.sessionRegistry,
-            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            linkedParentID: sidebarLinkedParentID(sessionRuntimeStore: sessionRuntimeStore),
             windowID: selection.windowID,
             workspaceID: selection.workspace.id,
             focusedPanelID: selection.workspace.focusedPanelID
         )
         if let unreadTarget = navigationOrder.all.first(where: { target in
-            guard let workspace = state.workspacesByID[target.workspaceID],
+            guard allowing?(target) != false,
+                  !hiddenRunningPanelIDs.contains(target.panelID),
+                  let workspace = state.workspacesByID[target.workspaceID],
                   workspace.tab(id: target.tabID)?.unreadPanelIDs.contains(target.panelID) == true else {
                 return false
             }
             guard sessionRuntimeStore?.skipsUnreadForNextActive(
                 panelID: target.panelID, workspaceID: target.workspaceID
             ) != true else { return false }
-            return workspace.doneAt == nil || livePanelIDs.contains(target.panelID)
+            // A merge marks its workspace done to record acceptance while
+            // checks still run. The task's stage says whether work finished.
+            let skipsQuietUnread = taskStages[target.workspaceID].map {
+                $0 == .toShip || $0 == .done || $0 == .archived
+            } ?? (workspace.doneAt != nil)
+            return !skipsQuietUnread || livePanelIDs.contains(target.panelID)
         }) {
             if updatingCycleState {
                 nextActiveCycleState = nil
@@ -2168,9 +2224,35 @@ final class AppStore: ObservableObject {
             return nil
         }
 
+        if let allowing {
+            let entries = buildNextActiveCycleEntries(
+                anchor: NextActiveCycleAnchor(
+                    windowID: selection.windowID,
+                    workspaceID: selection.workspace.id,
+                    selectedTabID: selectedTabID,
+                    focusedPanelID: selection.workspace.focusedPanelID
+                ),
+                listsOnlyNeedsYou: listsOnlyNeedsYou,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+            let match = entries.lazy.compactMap { entry in
+                self.panelNavigationTarget(for: entry.panelID).map { (entry, $0) }
+            }.first { allowing($0.1) }
+            logNextUnreadOrActivePanelResolution(
+                selection: selection,
+                selectedTabID: selectedTabID,
+                resolution: match?.0.segment.rawValue ?? "none",
+                target: match?.1,
+                sessionRuntimeStore: sessionRuntimeStore,
+                cycleResetReason: nil
+            )
+            return match?.1
+        }
+
         let activeCycleResolution = nextUnreadOrActiveCycleTarget(
             selection: selection,
             selectedTabID: selectedTabID,
+            listsOnlyNeedsYou: listsOnlyNeedsYou,
             sessionRuntimeStore: sessionRuntimeStore,
             updatingCycleState: updatingCycleState
         )
@@ -2185,9 +2267,13 @@ final class AppStore: ObservableObject {
         return activeCycleResolution.target
     }
 
+    /// `listsOnlyNeedsYou` comes from the window the command runs in, also
+    /// when the saved cycle started in another window, so a cycle built for
+    /// the other segment no longer matches and restarts.
     private func nextUnreadOrActiveCycleTarget(
         selection: WindowCommandSelection,
         selectedTabID: UUID,
+        listsOnlyNeedsYou: Bool,
         sessionRuntimeStore: SessionRuntimeStore,
         updatingCycleState: Bool
     ) -> (target: PanelNavigationTarget?, resolution: String, cycleResetReason: String?) {
@@ -2207,6 +2293,7 @@ final class AppStore: ObservableObject {
                expectedCurrentTarget.panelID == selection.workspace.focusedPanelID {
                 let rebuiltEntries = buildNextActiveCycleEntries(
                     anchor: cycleState.anchor,
+                    listsOnlyNeedsYou: listsOnlyNeedsYou,
                     sessionRuntimeStore: sessionRuntimeStore
                 )
                 if rebuiltEntries == cycleState.entries {
@@ -2238,6 +2325,7 @@ final class AppStore: ObservableObject {
 
         let entries = buildNextActiveCycleEntries(
             anchor: currentAnchor,
+            listsOnlyNeedsYou: listsOnlyNeedsYou,
             sessionRuntimeStore: sessionRuntimeStore
         )
         guard let firstEntry = entries.first,
@@ -2257,23 +2345,49 @@ final class AppStore: ObservableObject {
 
     private func buildNextActiveCycleEntries(
         anchor: NextActiveCycleAnchor,
+        listsOnlyNeedsYou: Bool,
         sessionRuntimeStore: SessionRuntimeStore
     ) -> [NextActiveCycleEntry] {
         let actionRequiredPanelIDs = sessionRuntimeStore.activePanelIDs(
             matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
         )
-        let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
+        // The Needs you segment lists neither working sessions nor a flag
+        // for later, so the jump does not visit them either.
+        let workingPanelIDs = listsOnlyNeedsYou ? [] : sessionRuntimeStore.activePanelIDs(
             matching: Self.nextUnreadOrWorkingFallbackStatusKinds
         )
-        let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
+        let laterPanelIDs = listsOnlyNeedsYou ? [] : sessionRuntimeStore.activeLaterPanelIDs()
         let navigationOrder = SidebarPanelNavigationOrder(
             state: state,
             sessionRegistry: sessionRuntimeStore.sessionRegistry,
-            displayedSubspaceOrderByParentID: sidebarSubspaceOrderByParentID,
+            linkedParentID: sidebarLinkedParentID(sessionRuntimeStore: sessionRuntimeStore),
             windowID: anchor.windowID,
             workspaceID: anchor.workspaceID,
             focusedPanelID: anchor.focusedPanelID
         )
+        // A task space already reached through an agent or later flag needs
+        // no second target. Jumping between its panes must not remap a review
+        // entry and restart the cycle.
+        let representedWorkspaceIDs = Set(actionRequiredPanelIDs.union(workingPanelIDs).union(laterPanelIDs).compactMap {
+            state.workspaceSelection(containingPanelID: $0)?.workspaceID
+        })
+        // Review and a pending question are task stages, not agent statuses.
+        // Use the board's cached stage so a read answer or an exited agent
+        // does not hide the task.
+        let reviewPanelIDs = Set((sessionRuntimeStore.taskCoordinator?.board?.items() ?? []).compactMap { item -> UUID? in
+            switch item.stage {
+            case .needsYou(.review), .needsYou(.readyForReview), .needsYou(.awaitingReply): break
+            default: return nil
+            }
+            guard let workspaceID = item.taskSpaceWorkspaceID,
+                  !representedWorkspaceIDs.contains(workspaceID),
+                  let workspace = state.workspacesByID[workspaceID] else { return nil }
+            if let panelID = workspace.focusedPanelID,
+               workspace.tabID(containingPanelID: panelID) != nil {
+                return panelID
+            }
+            return navigationOrder.all.first { $0.workspaceID == workspaceID }?.panelID
+        })
         var entries: [NextActiveCycleEntry] = []
         var seenPanelIDs = Set<UUID>()
 
@@ -2283,6 +2397,14 @@ final class AppStore: ObservableObject {
         entries.append(contentsOf: actionRequiredTargets.map { target in
             seenPanelIDs.insert(target.panelID)
             return NextActiveCycleEntry(panelID: target.panelID, segment: .actionRequired)
+        })
+
+        let reviewTargets = navigationOrder.all.filter {
+            reviewPanelIDs.contains($0.panelID) && !seenPanelIDs.contains($0.panelID)
+        }
+        entries.append(contentsOf: reviewTargets.map { target in
+            seenPanelIDs.insert(target.panelID)
+            return NextActiveCycleEntry(panelID: target.panelID, segment: .review)
         })
 
         let forwardWorkingTargets = navigationOrder.forward.filter {
@@ -2309,11 +2431,15 @@ final class AppStore: ObservableObject {
             return NextActiveCycleEntry(panelID: target.panelID, segment: .workingWrapped)
         })
 
+        // The coordinator is not a jump target, also when it has the focus.
         if entries.isEmpty == false,
            let focusedPanelID = anchor.focusedPanelID,
-           seenPanelIDs.contains(focusedPanelID) == false {
+           seenPanelIDs.contains(focusedPanelID) == false,
+           anchor.workspaceID != state.coordinatorWorkspaceID {
             if actionRequiredPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .actionRequired))
+            } else if reviewPanelIDs.contains(focusedPanelID) {
+                entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .review))
             } else if workingPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .workingWrapped))
             } else if laterPanelIDs.contains(focusedPanelID) {
@@ -2322,6 +2448,23 @@ final class AppStore: ObservableObject {
         }
 
         return entries
+    }
+
+    /// Jump to Next Active follows the sidebar segment of the window it runs
+    /// in. The segments show only with the task system; without it the
+    /// sidebar lists everything.
+    private func sidebarListsOnlyNeedsYou(windowID: UUID, sessionRuntimeStore: SessionRuntimeStore?) -> Bool {
+        sessionRuntimeStore?.taskCoordinator != nil
+            && state.window(id: windowID)?.sidebarSegment == .needsYou
+    }
+
+    /// Panels whose sidebar row is Running, which the Needs you segment does
+    /// not list, also when the panel is unread: a working session or a
+    /// working program. A working session that lists there because a child
+    /// session needs the user is not a target: the child's own panel is.
+    private static func runningPanelIDsHiddenFromNeedsYou(_ sessionRuntimeStore: SessionRuntimeStore) -> Set<UUID> {
+        sessionRuntimeStore.activePanelIDs(matching: nextUnreadOrWorkingFallbackStatusKinds)
+            .union(sessionRuntimeStore.workingProgramPanelIDs())
     }
 
     private func panelNavigationTarget(for panelID: UUID) -> PanelNavigationTarget? {

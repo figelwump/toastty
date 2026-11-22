@@ -110,7 +110,9 @@ def main():
         evidence['gatewayPort'] = port
         log = open(artifacts / 'claude-permission-check-app.log', 'w')
         app = subprocess.Popen(
-            [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port)],
+            [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port),
+             # This run is not about the question at a first launch.
+             '-toastty.coordinator.startOfferAnswered', 'YES'],
             env=environment, stdout=log, stderr=subprocess.STDOUT)
         run(app, Gateway(port), App(bundle, socket_path), runtime_home, work, evidence)
         evidence['status'] = 'passed'

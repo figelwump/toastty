@@ -1,3 +1,4 @@
+@testable import ConversationUI
 import Foundation
 import XCTest
 @testable import ToasttyMobileApp

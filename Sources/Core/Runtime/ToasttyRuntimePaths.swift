@@ -30,6 +30,15 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let workspaceLayoutsFileName = "workspace-layout-profiles.json"
     private static let terminalProfilesFileName = "terminal-profiles.toml"
     private static let recentRightPanelItemsFileName = "recent-right-panel-items.json"
+    private static let recentWorkspacesFileName = "recent-workspaces.json"
+    private static let taskRecordsFileName = "task-records.json"
+    private static let taskAttachmentsDirectoryName = "task-attachments"
+    private static let taskWebhooksFileName = "task-webhooks.json"
+    private static let coordinatorDirectoryName = "coordinator"
+    private static let taskWebhookOutboxFileName = "task-webhook-outbox.json"
+    private static let coordinatorQueueFileName = "coordinator-queue.json"
+    private static let coordinatorWorkspaceFileName = "coordinator-workspace.json"
+    private static let coordinatorRepliesFileName = "coordinator-replies.json"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
     private static let runtimeVersionFileName = "runtime-version.txt"
@@ -87,6 +96,60 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     public var recentRightPanelItemsFileURL: URL {
         configDirectoryURL.appending(path: Self.recentRightPanelItemsFileName, directoryHint: .notDirectory)
+    }
+
+    /// The last closed top-level workspaces, for reopening one for a task.
+    public var recentWorkspacesFileURL: URL {
+        configDirectoryURL.appending(path: Self.recentWorkspacesFileName, directoryHint: .notDirectory)
+    }
+
+    /// Every task record. Runtime-isolated dev and test runs get their own
+    /// copy, so they never see or change real tasks.
+    public var taskRecordsFileURL: URL {
+        configDirectoryURL.appending(path: Self.taskRecordsFileName, directoryHint: .notDirectory)
+    }
+
+    /// Toastty's copies of task attachments, in one folder per task.
+    public var taskAttachmentsDirectoryURL: URL {
+        configDirectoryURL.appending(path: Self.taskAttachmentsDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// The coordinator agent's working directory, where its policy and
+    /// ledger files live. Runtime-isolated dev and test runs get their own,
+    /// so they never read or change the real coordinator's files.
+    public var coordinatorDirectoryURL: URL {
+        configDirectoryURL.appending(path: Self.coordinatorDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// The user's messages that wait for the coordinator's prompt, kept
+    /// across an app quit.
+    public var coordinatorQueueFileURL: URL {
+        configDirectoryURL.appending(path: Self.coordinatorQueueFileName, directoryHint: .notDirectory)
+    }
+
+    /// Which workspace and terminal the coordinator lives in, kept beside
+    /// the layout, so that its mark comes back after an older Toastty
+    /// saved the layout without it.
+    public var coordinatorWorkspaceFileURL: URL {
+        configDirectoryURL.appending(path: Self.coordinatorWorkspaceFileName, directoryHint: .notDirectory)
+    }
+
+    /// The coordinator's replies to messages from outside a task, the IDs
+    /// of those messages, and the reply events waiting to send.
+    public var coordinatorRepliesFileURL: URL {
+        configDirectoryURL.appending(path: Self.coordinatorRepliesFileName, directoryHint: .notDirectory)
+    }
+
+    /// Webhooks that receive task events. Runtime-isolated runs get their
+    /// own, so a dev run never sends to a real coordinator.
+    public var taskWebhooksFileURL: URL {
+        configDirectoryURL.appending(path: Self.taskWebhooksFileName, directoryHint: .notDirectory)
+    }
+
+    /// Task webhook events waiting to send, and the task states they were
+    /// worked out from.
+    public var taskWebhookOutboxFileURL: URL {
+        configDirectoryURL.appending(path: Self.taskWebhookOutboxFileName, directoryHint: .notDirectory)
     }
 
     public var defaultLogFileURL: URL {

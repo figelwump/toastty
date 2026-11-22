@@ -1,0 +1,372 @@
+import CoreState
+import Foundation
+import Testing
+@testable import ToasttyCLIKit
+
+struct ToasttyCLITaskTests {
+    @Test
+    func taskCreateMapsFlagsToTheActionAndResolvesPaths() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-cli-task-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "Fix it.\nThen test it.".write(to: directory.appendingPathComponent("brief.md"), atomically: true, encoding: .utf8)
+        let workspaceID = UUID()
+
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "task", "create", "Composer keeps a blank line",
+                "--file", "shot.png", "--file", "/abs/log.txt",
+                "--workspace", workspaceID.uuidString,
+                "--agent", "codex", "--model", "gpt-6.1-sol", "--effort", "high",
+                "--prompt-file", "brief.md",
+                "--title", "Composer blank line", "--slug", "composer-blank-line",
+                "--request-id", "req-1",
+            ],
+            environment: ["PWD": directory.path]
+        )
+
+        guard case .appControlRun(let kind, let id, let args) = invocation.command else {
+            Issue.record("expected an app-control run")
+            return
+        }
+        #expect(kind == .action)
+        #expect(id == "task.create")
+        #expect(invocation.taskWait == nil)
+        #expect(args == [
+            "text": .string("Composer keeps a blank line"),
+            "files": .array([.string(directory.appendingPathComponent("shot.png").path), .string("/abs/log.txt")]),
+            "workspace": .string(workspaceID.uuidString),
+            "agent": .string("codex"),
+            "model": .string("gpt-6.1-sol"),
+            "effort": .string("high"),
+            "prompt": .string("Fix it.\nThen test it."),
+            "title": .string("Composer blank line"),
+            "slug": .string("composer-blank-line"),
+            "clientRequestID": .string("req-1"),
+        ])
+    }
+
+    @Test
+    func taskCreateTakesARootDirectoryAndAnExternalReference() throws {
+        func arguments(_ extra: [String]) throws -> [String: AutomationJSONValue] {
+            let invocation = try ToasttyCLI.parse(
+                arguments: ["task", "create", "Pricing typo", "--agent", "claude"] + extra,
+                environment: ["PWD": "/Users/me/work"]
+            )
+            guard case .appControlRun(_, "task.create", let args) = invocation.command else {
+                throw ToasttyCLIError.usage("expected task.create")
+            }
+            return args
+        }
+        let args = try arguments([
+            "--root", "website",
+            "--external-ref", "github:acme/website#4",
+            "--external-url", "https://github.com/acme/website/issues/4",
+        ])
+        #expect(args["rootDirectory"] == .string("/Users/me/work/website"))
+        #expect(args["externalRef"] == .string("github:acme/website#4"))
+        #expect(args["externalURL"] == .string("https://github.com/acme/website/issues/4"))
+        #expect(try arguments(["--root", "/srv/site"])["rootDirectory"] == .string("/srv/site"))
+
+        #expect(throws: ToasttyCLIError.self) { try arguments(["--root", "/srv/site", "--workspace", UUID().uuidString]) }
+        #expect(throws: ToasttyCLIError.self) { try arguments(["--external-url", "https://example.com"]) }
+    }
+
+    @Test
+    func startWorkMapsFlagsToItsActionAndCreateTakesStartWorkFlags() throws {
+        let startWork = try ToasttyCLI.parse(
+            arguments: ["task", "start-work", "--base", "feat/stack", "--branch-prefix", "fix", "--title", "Split it"],
+            environment: [:]
+        )
+        #expect(startWork.command == .appControlRun(kind: .action, id: "task.start-work", args: [
+            "base": .string("feat/stack"),
+            "branchPrefix": .string("fix"),
+            "title": .string("Split it"),
+        ]))
+
+        let create = try ToasttyCLI.parse(
+            arguments: ["task", "create", "x", "--start-work", "--base", "main", "--branch-prefix", "feat"],
+            environment: [:]
+        )
+        guard case .appControlRun(_, "task.create", let args) = create.command else {
+            Issue.record("expected task.create")
+            return
+        }
+        #expect(args["startWork"] == .bool(true))
+        #expect(args["base"] == .string("main"))
+        #expect(args["branchPrefix"] == .string("feat"))
+        #expect(args["fork"] == nil)
+
+        let fork = try ToasttyCLI.parse(arguments: ["task", "create", "x", "--fork", "--start-work"], environment: [:])
+        guard case .appControlRun(_, "task.create", let forkArgs) = fork.command else {
+            Issue.record("expected task.create")
+            return
+        }
+        #expect(forkArgs["fork"] == .bool(true))
+        #expect(forkArgs["startWork"] == .bool(true))
+        // The fork starts after the caller's turn, which --wait would hold.
+        #expect(throws: ToasttyCLIError.self) {
+            try ToasttyCLI.parse(arguments: ["task", "create", "x", "--fork", "--wait"], environment: [:])
+        }
+
+        #expect(throws: ToasttyCLIError.self) {
+            try ToasttyCLI.parse(arguments: ["task", "create", "x", "--base", "main"], environment: [:])
+        }
+        #expect(throws: ToasttyCLIError.self) {
+            try ToasttyCLI.parse(arguments: ["task", "start-work", "now"], environment: [:])
+        }
+    }
+
+    @Test
+    func taskCreateWaitTakesATimeout() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["task", "create", "--text", "x", "--wait", "--timeout", "30"],
+            environment: [:]
+        )
+        #expect(invocation.taskWait == CLITaskWait(timeout: 30))
+        let defaulted = try ToasttyCLI.parse(arguments: ["task", "create", "x", "--wait"], environment: [:])
+        #expect(defaulted.taskWait == CLITaskWait(timeout: CLITaskWait.defaultTimeout))
+    }
+
+    @Test(arguments: [
+        ["task", "create", "a", "b"],
+        ["task", "create", "a", "--text", "b"],
+        ["task", "create", "a", "--prompt", "p", "--prompt-file", "f"],
+        ["task", "create", "a", "--timeout", "5"],
+        ["task", "create", "a", "--wait", "--timeout", "0"],
+        ["task", "create", "a", "--workspace", "toastty"],
+        ["task", "retry"],
+        ["task", "get", "not-a-uuid"],
+        ["task", "list", "extra"],
+        ["task", "archive", "x"],
+        ["task"],
+    ])
+    func taskUsageErrors(arguments: [String]) {
+        #expect(throws: (any Error).self) {
+            _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
+        }
+    }
+
+    @Test
+    func taskVerbsMapToQueriesAndActions() throws {
+        let taskID = UUID().uuidString
+        let expected: [(arguments: [String], kind: AppControlCommandKind, id: String, args: [String: AutomationJSONValue])] = [
+            (["task", "get", taskID], .query, "task.get", ["taskID": .string(taskID)]),
+            (["task", "retry", taskID], .action, "task.retry", ["taskID": .string(taskID)]),
+            (["task", "delete", taskID], .action, "task.delete", ["taskID": .string(taskID)]),
+            (["task", "list"], .query, "task.list", [:]),
+        ]
+        for entry in expected {
+            let invocation = try ToasttyCLI.parse(arguments: entry.arguments, environment: [:])
+            guard case .appControlRun(let kind, let id, let args) = invocation.command else {
+                Issue.record("expected an app-control run for \(entry.arguments)")
+                continue
+            }
+            #expect(kind == entry.kind)
+            #expect(id == entry.id)
+            #expect(args == entry.args)
+        }
+    }
+
+    @Test
+    func taskSetWorkspaceTakesAnOpenOrARecentWorkspaceOrADirectory() throws {
+        let taskID = UUID().uuidString
+        let workspaceID = UUID().uuidString
+        let open = try ToasttyCLI.parse(arguments: ["task", "set-workspace", taskID, "--workspace", workspaceID], environment: [:])
+        #expect(open.command == .appControlRun(
+            kind: .action,
+            id: "task.set-workspace",
+            args: ["taskID": .string(taskID), "workspace": .string(workspaceID)]
+        ))
+        let recent = try ToasttyCLI.parse(arguments: ["task", "set-workspace", taskID, "--recent", workspaceID], environment: [:])
+        #expect(recent.command == .appControlRun(
+            kind: .action,
+            id: "task.set-workspace",
+            args: ["taskID": .string(taskID), "recentWorkspace": .string(workspaceID)]
+        ))
+        let root = try ToasttyCLI.parse(arguments: ["task", "set-workspace", taskID, "--root", "~/repos/website"], environment: [:])
+        #expect(root.command == .appControlRun(
+            kind: .action,
+            id: "task.set-workspace",
+            args: ["taskID": .string(taskID), "rootDirectory": .string("~/repos/website")]
+        ))
+        let choices = try ToasttyCLI.parse(arguments: ["task", "workspace-choices"], environment: [:])
+        #expect(choices.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: [:]))
+        let forTask = try ToasttyCLI.parse(arguments: ["task", "workspace-choices", taskID], environment: [:])
+        #expect(forTask.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: ["taskID": .string(taskID)]))
+        let named = try ToasttyCLI.parse(arguments: ["task", "workspace-choices", "--name", "billing service"], environment: [:])
+        #expect(named.command == .appControlRun(kind: .query, id: "task.workspace-choices", args: ["name": .string("billing service")]))
+
+        for arguments in [
+            ["task", "set-workspace", taskID],
+            ["task", "set-workspace", taskID, "--workspace", workspaceID, "--recent", workspaceID],
+            ["task", "set-workspace", taskID, "--workspace", workspaceID, "--root", "/tmp"],
+            ["task", "set-workspace", taskID, "--workspace", "toastty"],
+            ["task", "workspace-choices", "toastty"],
+            ["task", "workspace-choices", "--name", " "],
+            ["task", "workspace-choices", "--name"],
+        ] {
+            #expect(throws: ToasttyCLIError.self) {
+                _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
+            }
+        }
+    }
+
+    @Test
+    func sendWatchAndListMapToTheirCommands() throws {
+        let taskID = UUID().uuidString
+        let other = UUID().uuidString
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-cli-send-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "Rebase on main.\nThen push.".write(to: directory.appendingPathComponent("note.md"), atomically: true, encoding: .utf8)
+
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "status?"], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.send", args: ["taskID": .string(taskID), "text": .string("status?")]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "--text-file", "note.md"], environment: ["PWD": directory.path]).command
+            == .appControlRun(kind: .action, id: "task.send", args: ["taskID": .string(taskID), "text": .string("Rebase on main.\nThen push.")]))
+
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "Use the new name", "--steer"], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.send", args: [
+                "taskID": .string(taskID), "text": .string("Use the new name"), "steer": .bool(true),
+            ]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "--from", "Grok Bot", "Yes, ship it"], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.send", args: [
+                "taskID": .string(taskID), "text": .string("Yes, ship it"), "from": .string("Grok Bot"),
+            ]))
+
+        let notify = try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "idle", "--notify", other], environment: [:])
+        #expect(notify.command == .appControlRun(kind: .action, id: "task.watch", args: [
+            "taskID": .string(taskID), "until": .string("idle"), "notifyTaskID": .string(other),
+        ]))
+        #expect(notify.watchWait == nil)
+
+        let wait = try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "merged", "--wait", "--timeout", "30"], environment: [:])
+        #expect(wait.command == .appControlRun(kind: .action, id: "task.watch", args: [
+            "taskID": .string(taskID), "until": .string("merged"), "wait": .bool(true),
+        ]))
+        #expect(wait.watchWait == CLIWatchWait(timeout: 30))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "watch", taskID, "--until", "idle", "--wait"], environment: [:]).watchWait
+            == CLIWatchWait(timeout: nil))
+
+        #expect(try ToasttyCLI.parse(arguments: ["task", "list", "--changed-since", "ab12.7", "--include-reply"], environment: [:]).command
+            == .appControlRun(kind: .query, id: "task.list", args: ["changedSince": .string("ab12.7"), "includeReply": .bool(true)]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "watches", "--notify", other], environment: [:]).command
+            == .appControlRun(kind: .query, id: "task.watches", args: ["notifyTaskID": .string(other)]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "get"], environment: [:]).command
+            == .appControlRun(kind: .query, id: "task.get", args: [:]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "unwatch", other], environment: [:]).command
+            == .appControlRun(kind: .action, id: "task.unwatch", args: ["watchID": .string(other)]))
+    }
+
+    @Test
+    func lifecycleVerbsMapToTheirActions() throws {
+        let taskID = UUID().uuidString
+        let workspaceID = UUID().uuidString
+        func command(_ arguments: [String]) throws -> CLICommand {
+            try ToasttyCLI.parse(arguments: ["task"] + arguments, environment: [:]).command
+        }
+
+        // A task's agent merges its own task; a coordinator names a child.
+        #expect(try command(["merge", "--head", "abc1234"])
+            == .appControlRun(kind: .action, id: "task.merge", args: ["head": .string("abc1234")]))
+        #expect(try command(["merge", taskID])
+            == .appControlRun(kind: .action, id: "task.merge", args: ["taskID": .string(taskID)]))
+        #expect(try command(["cancel-merge"]) == .appControlRun(kind: .action, id: "task.cancel-merge", args: [:]))
+        #expect(try command(["ready-for-review"]) == .appControlRun(kind: .action, id: "task.ready-for-review", args: [:]))
+        #expect(try command(["needs-reply"]) == .appControlRun(kind: .action, id: "task.needs-reply", args: [:]))
+        #expect(try command(["needs-reply", taskID, "--question", "Pick a hostname option"])
+            == .appControlRun(kind: .action, id: "task.needs-reply", args: [
+                "taskID": .string(taskID),
+                "question": .string("Pick a hostname option"),
+            ]))
+        #expect(throws: ToasttyCLIError.self) { try command(["ready-for-review", "--question", "Why?"]) }
+        // A wait outside Toastty, with an optional wake, or its removal.
+        #expect(try command(["waiting", "--on", "email replies"])
+            == .appControlRun(kind: .action, id: "task.waiting", args: ["on": .string("email replies")]))
+        #expect(try command(["waiting", taskID, "--on", "email replies", "--wake", "2026-12-01T17:00:00Z"])
+            == .appControlRun(kind: .action, id: "task.waiting", args: [
+                "taskID": .string(taskID),
+                "on": .string("email replies"),
+                "wakeAt": .string("2026-12-01T17:00:00Z"),
+            ]))
+        #expect(try command(["waiting", "--clear"]) == .appControlRun(kind: .action, id: "task.waiting", args: ["clear": .bool(true)]))
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting"]) }
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting", "--wake", "2026-12-01T17:00:00Z"]) }
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting", "--clear", "--on", "email replies"]) }
+        #expect(throws: ToasttyCLIError.self) { try command(["waiting", "not-a-task", "--on", "email replies"]) }
+        // An outside caller asks the task's agent to merge.
+        #expect(try command(["request-merge", taskID])
+            == .appControlRun(kind: .action, id: "task.request-merge", args: ["taskID": .string(taskID)]))
+        #expect(try command(["mark-done", taskID])
+            == .appControlRun(kind: .action, id: "task.mark-done", args: ["taskID": .string(taskID)]))
+        #expect(try command(["clean-up", taskID])
+            == .appControlRun(kind: .action, id: "task.clean-up", args: ["taskID": .string(taskID)]))
+        // The request to release one task right after it merges; a task's
+        // agent sets it on its own task.
+        #expect(try command(["set-release", taskID, "--after-merge"])
+            == .appControlRun(kind: .action, id: "task.set-release", args: ["taskID": .string(taskID), "afterMerge": .bool(true)]))
+        #expect(try command(["set-release", taskID, "--clear"])
+            == .appControlRun(kind: .action, id: "task.set-release", args: ["taskID": .string(taskID), "afterMerge": .bool(false)]))
+        #expect(try command(["set-release", "--after-merge"])
+            == .appControlRun(kind: .action, id: "task.set-release", args: ["afterMerge": .bool(true)]))
+        #expect(try command(["archive", taskID, "--close-pr", "--discard-changes"])
+            == .appControlRun(kind: .action, id: "task.archive", args: [
+                "taskID": .string(taskID),
+                "closePullRequest": .bool(true),
+                "deleteUnpushedCommits": .bool(false),
+                "discardChanges": .bool(true),
+                "dryRun": .bool(false),
+            ]))
+        #expect(try command(["archive", taskID, "--dry-run"])
+            == .appControlRun(kind: .action, id: "task.archive", args: [
+                "taskID": .string(taskID),
+                "closePullRequest": .bool(false),
+                "deleteUnpushedCommits": .bool(false),
+                "discardChanges": .bool(false),
+                "dryRun": .bool(true),
+            ]))
+        #expect(try command(["release"]) == .appControlRun(kind: .action, id: "task.release", args: [:]))
+        #expect(try command(["release", "--workspace", workspaceID])
+            == .appControlRun(kind: .action, id: "task.release", args: ["workspaceID": .string(workspaceID)]))
+        #expect(try command(["release", "--workspace", workspaceID, "--agent", "codex", "--model", "gpt-6.2-sol", "--effort", "high"])
+            == .appControlRun(kind: .action, id: "task.release", args: [
+                "workspaceID": .string(workspaceID),
+                "agent": .string("codex"),
+                "model": .string("gpt-6.2-sol"),
+                "effort": .string("high"),
+            ]))
+        #expect(try command(["list", "--parent", taskID])
+            == .appControlRun(kind: .query, id: "task.list", args: ["parent": .string(taskID)]))
+
+        for arguments in [
+            ["mark-done"], ["clean-up"], ["archive"], ["archive", "not-an-id"], ["merge", "a", "b"],
+            ["request-merge"], ["request-merge", "not-an-id"], ["request-merge", taskID, "--head", "abc1234"],
+            ["merge", "--head"], ["release", "extra"], ["release", "--agent"], ["list", "--parent", "nope"],
+            ["set-release", taskID], ["set-release", taskID, "--after-merge", "--clear"],
+            ["set-release", "not-an-id", "--after-merge"], ["set-release", taskID, taskID, "--clear"],
+        ] {
+            #expect(throws: ToasttyCLIError.self, "\(arguments)") { try command(arguments) }
+        }
+    }
+
+    @Test
+    func sendAndWatchRejectAmbiguousArguments() {
+        let taskID = UUID().uuidString
+        for arguments in [
+            ["task", "send", taskID],
+            ["task", "send", taskID, "one", "--text", "two"],
+            ["task", "send", "not-an-id", "hi"],
+            ["task", "watch", taskID],
+            ["task", "watch", taskID, "--until", "idle", "--notify", taskID, "--wait"],
+            ["task", "watch", taskID, "--until", "idle", "--timeout", "5"],
+            ["task", "watches", "--task", "nope"],
+        ] {
+            #expect(throws: ToasttyCLIError.self, "\(arguments)") {
+                _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
+            }
+        }
+    }
+}

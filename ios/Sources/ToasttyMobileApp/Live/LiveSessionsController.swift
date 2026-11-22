@@ -68,6 +68,27 @@ protocol LiveConnectionRuntime: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse?
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse?
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse?
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse?
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse?
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse?
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse?
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests?
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue?
+    func finishedTasks() async throws -> RemoteFinishedTasks?
 }
 
 extension LiveConnectionRuntime {
@@ -116,6 +137,54 @@ extension LiveConnectionRuntime {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse? {
+        nil
+    }
+
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        nil
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse? {
+        nil
+    }
+
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        nil
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
+        nil
+    }
+
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse? {
+        nil
+    }
+
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse? {
+        nil
+    }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        nil
+    }
+
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
+        nil
+    }
+
+    func finishedTasks() async throws -> RemoteFinishedTasks? {
         nil
     }
 
@@ -279,6 +348,54 @@ struct ConnectionCoordinatorLiveRuntime: LiveConnectionRuntime {
     ) async throws -> RemoteSessionStartResponse? {
         try await coordinator.startSession(request)
     }
+
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        try await coordinator.taskAction(request)
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse? {
+        try await coordinator.taskArchiveCheck(request)
+    }
+
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        try await coordinator.taskCreateOptions(request)
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
+        try await coordinator.createTask(request)
+    }
+
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse? {
+        try await coordinator.sendToCoordinator(request)
+    }
+
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse? {
+        try await coordinator.readCoordinatorChat(request)
+    }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        try await coordinator.coordinatorQuietDigests()
+    }
+
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
+        try await coordinator.coordinatorQueue()
+    }
+
+    func finishedTasks() async throws -> RemoteFinishedTasks? {
+        try await coordinator.finishedTasks()
+    }
 }
 
 /// Main-actor presentation bridge over the domain actors.
@@ -294,6 +411,8 @@ final class LiveSessionsController {
     private(set) var projectionRunID: String?
     private(set) var projectionGeneration: UInt64?
     private(set) var activeConversationController: LiveConversationController?
+    /// Whether the app is active, for the conversation that opens next.
+    private var isSceneActive = true
 
     var activeConversationCursor: UInt64? {
         activeConversationController?.cursor?.afterSequence
@@ -327,6 +446,18 @@ final class LiveSessionsController {
     private var conversationRequestID = UUID()
     private var conversationOpenOperations: [UUID: ConversationOpenOperation] = [:]
     private var conversationRuntimeOwners: [RemoteConversationID: UUID] = [:]
+    /// Which of the coordinator's wake turns are quiet, as the Mac last
+    /// answered. Its chat folds them.
+    private var quietDigests = ToasttyCoordinatorQuietDigests()
+    private var quietDigestsReadTask: Task<Void, Never>?
+    /// The coordinator's own queue, as the Mac last answered. Its chat
+    /// lists it with the conversation's queue.
+    private var coordinatorQueueReads = ToasttyMacRevisionedRead<RemoteCoordinatorQueue>()
+    private var coordinatorQueueReadTask: Task<Void, Never>?
+    /// The Mac's recent Done and archived tasks, as it last answered. Every
+    /// chat draws chips for links to them.
+    private var finishedTaskReads = ToasttyMacRevisionedRead<RemoteFinishedTasks>()
+    private var finishedTasksReadTask: Task<Void, Never>?
 
     init(
         runtime: any LiveConnectionRuntime,
@@ -345,11 +476,11 @@ final class LiveSessionsController {
         homeController.installSubspaceDone { [runtime] workspaceID, isDone in
             do {
                 let response = try await runtime.setWorkspaceDone(
-                    RemoteWorkspaceDoneRequest(workspaceID: workspaceID, done: isDone)
+                    RemoteWorkspaceDoneRequest(workspaceID: workspaceID, done: isDone, knowsOpenPullRequestResult: true)
                 )
                 switch response?.result {
                 case .updated?, .unchanged?: return .applied
-                case .notSubspace?, .workspaceNotFound?, .workInProgress?: return .refused
+                case .notSubspace?, .workspaceNotFound?, .workInProgress?, .hasOpenPullRequest?: return .refused
                 // The connection dropped or the Mac stopped accepting the
                 // change between the tap and the request.
                 case nil: return .failed
@@ -418,6 +549,55 @@ final class LiveSessionsController {
                 }
             }
         )
+        homeController.installTaskActions(
+            perform: { [runtime] request in
+                do {
+                    let response = try await runtime.taskAction(request)
+                    return response.map { .answered($0.result) } ?? .notSent
+                } catch {
+                    // Whether the Mac ran it is not known.
+                    return .unconfirmed
+                }
+            },
+            archiveCheck: { [runtime] request in
+                do {
+                    let response = try await runtime.taskArchiveCheck(request)
+                    return response.map { .answered($0.result) } ?? .unreachable
+                } catch {
+                    return .unreachable
+                }
+            }
+        )
+        homeController.installTaskCreate(
+            options: { [runtime] in
+                do {
+                    let response = try await runtime.taskCreateOptions(RemoteTaskCreateOptionsRequest())
+                    return response.map(ToasttyTaskCreateOptionsOutcome.loaded) ?? .unreachable
+                } catch {
+                    return .unreachable
+                }
+            },
+            create: { [runtime] request in
+                // Any failure leaves it unknown whether the Mac saved the
+                // task, so the caller retries with the same request ID.
+                do {
+                    let response = try await runtime.createTask(request)
+                    return response.map { .answered($0.result) } ?? .unconfirmed
+                } catch {
+                    return .unconfirmed
+                }
+            }
+        )
+        homeController.installCoordinatorSend { [runtime] request in
+            // Any failure leaves it unknown whether the Mac sent the
+            // message, so the caller retries with the same request ID.
+            do {
+                let response = try await runtime.sendToCoordinator(request)
+                return response.map { .answered($0.result) } ?? .unconfirmed
+            } catch {
+                return .unconfirmed
+            }
+        }
         homeController.installConversationLifecycle(
             onOpen: { [weak self] conversationID in
                 Task { @MainActor [weak self] in
@@ -587,11 +767,23 @@ final class LiveSessionsController {
             },
             releaseLocalDraft: { [runtime] request in
                 try await runtime.releaseLocalDraft(request)
+            },
+            readCoordinatorChat: { [runtime] request in
+                try await runtime.readCoordinatorChat(request)
             }
         )
         controller.onDiagnosticEvent = { [weak self] event in self?.onDiagnosticEvent(event) }
         controller.consumeConnectionState(coordinatorState)
         controller.consumeInputControl(inputControl(for: conversationID))
+        controller.consumeIsCoordinatorChat(isCoordinatorConversation(conversationID))
+        controller.consumeSceneActivity(isActive: isSceneActive)
+        controller.consumeCoordinatorChatRead(
+            isSupported: acceptsCoordinatorChatRead,
+            readPoint: homeController.snapshot.coordinatorChatRead
+        )
+        controller.consumeCoordinatorQuietDigests(quietDigests.keys)
+        controller.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
+        controller.consumeCoordinatorQueue(coordinatorQueueReads.answer, mayChange: mayChangeCoordinatorQueue)
         activeConversationController = controller
         await controller.start()
 
@@ -620,6 +812,18 @@ final class LiveSessionsController {
         homeController.setHostSupportsConversationFlag(acceptsConversationFlag)
         homeController.setHostSupportsConversationClose(acceptsConversationClose)
         homeController.setHostSupportsSessionStart(acceptsSessionStart)
+        homeController.setHostSupportsTaskActions(acceptsTaskActions)
+        homeController.setHostSupportsTaskCreate(acceptsTaskCreate)
+        homeController.setHostSupportsCoordinatorSend(acceptsCoordinatorSend)
+        if let acceptsLocalFilePreview {
+            homeController.setHostSupportsLocalFilePreview(acceptsLocalFilePreview)
+        }
+        activeConversationController?.consumeCoordinatorChatRead(
+            isSupported: acceptsCoordinatorChatRead,
+            readPoint: homeController.snapshot.coordinatorChatRead
+        )
+        activeConversationController?.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
+        updateCoordinatorQueue()
         await runtime.updateDeviceScopes(scopes)
     }
 
@@ -628,6 +832,68 @@ final class LiveSessionsController {
     /// when the sheet loads its options.
     private var acceptsSessionStart: Bool {
         coordinatorState.capabilities.contains(.sessionStart) && deviceScopes.contains(.send)
+    }
+
+    /// A task action changes the Mac, so only a device allowed to send
+    /// sees the controls. The Mac's per-device Task actions switch is
+    /// checked when the request arrives.
+    private var acceptsTaskActions: Bool {
+        coordinatorState.capabilities.contains(.taskActions) && deviceScopes.contains(.send)
+    }
+    /// A task starts an agent with the task as its first message, so it is
+    /// gated like a session start.
+    private var acceptsTaskCreate: Bool {
+        coordinatorState.capabilities.contains(.taskCreate) && deviceScopes.contains(.send)
+    }
+    /// The Mac shares the coordinator chat's read point. Showing the chat
+    /// needs only read access.
+    private var acceptsCoordinatorChatRead: Bool {
+        coordinatorState.capabilities.contains(.coordinatorChatRead) && deviceScopes.contains(.read)
+    }
+
+    /// The Mac shares which wake turns are quiet. Showing the chat needs
+    /// only read access.
+    private var acceptsCoordinatorQuietDigests: Bool {
+        coordinatorState.capabilities.contains(.coordinatorQuietDigests) && deviceScopes.contains(.read)
+    }
+
+    /// The Mac shares the coordinator's own queue. Showing its messages
+    /// needs only read access; letting them go or removing them needs send
+    /// access, which the Mac checks again.
+    private var acceptsCoordinatorQueue: Bool {
+        coordinatorState.capabilities.contains(.coordinatorQueue) && deviceScopes.contains(.read)
+    }
+
+    private var mayChangeCoordinatorQueue: Bool {
+        deviceScopes.contains(.send)
+    }
+
+    /// The Mac serves the images attached to the coordinator chat's
+    /// messages. Showing the chat needs only read access.
+    private var acceptsCoordinatorAttachmentImages: Bool {
+        coordinatorState.capabilities.contains(.coordinatorAttachmentImages) && deviceScopes.contains(.read)
+    }
+
+    /// Whether the Mac has the task system, once its capabilities are
+    /// known. Nil before the first hello and between connections, so Home
+    /// keeps what it knew.
+    private var hostHasTasks: Bool? {
+        coordinatorState.capabilities.isEmpty ? nil : coordinatorState.capabilities.contains(.tasks)
+    }
+
+    /// The coordinator makes a task from the message, so it is gated as a
+    /// task create is.
+    private var acceptsCoordinatorSend: Bool {
+        coordinatorState.capabilities.contains(.coordinatorSend) && deviceScopes.contains(.send)
+    }
+
+    /// A file preview is a read. Nil before the first hello and between
+    /// connections, so the Coordinator tab's menu keeps its files while the
+    /// phone reconnects; the sheet then shows its usual error and Retry.
+    private var acceptsLocalFilePreview: Bool? {
+        coordinatorState.capabilities.isEmpty
+            ? nil
+            : coordinatorState.capabilities.contains(.localFilePreview) && deviceScopes.contains(.read)
     }
 
     private var acceptsConversationFlag: Bool {
@@ -655,6 +921,17 @@ final class LiveSessionsController {
         let activeConversationID = activeConversationController?.conversationID
         activeConversationController?.stop()
         activeConversationController = nil
+        quietDigestsReadTask?.cancel()
+        quietDigestsReadTask = nil
+        quietDigests = ToasttyCoordinatorQuietDigests()
+        coordinatorQueueReadTask?.cancel()
+        coordinatorQueueReadTask = nil
+        coordinatorQueueReads = ToasttyMacRevisionedRead()
+        // An unpaired phone, or one paired again, keeps no finished task.
+        finishedTasksReadTask?.cancel()
+        finishedTasksReadTask = nil
+        finishedTaskReads = ToasttyMacRevisionedRead()
+        publishFinishedTasks()
         if let activeConversationID {
             conversationRuntimeOwners[RemoteConversationID(rawValue: activeConversationID)] = nil
         }
@@ -699,6 +976,14 @@ final class LiveSessionsController {
         }
         activeConversationController?.consumeConnectionState(state)
         applyPresentation()
+        activeConversationController?.consumeCoordinatorChatRead(
+            isSupported: acceptsCoordinatorChatRead,
+            readPoint: homeController.snapshot.coordinatorChatRead
+        )
+        activeConversationController?.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
+        updateQuietDigests()
+        updateCoordinatorQueue()
+        updateFinishedTasks()
         // Terminal admission/authorization state must be the final callback.
         // In particular, the stale projection presented for a retained 403
         // must not overwrite the paired authorization-denied explanation.
@@ -717,6 +1002,109 @@ final class LiveSessionsController {
             controller.consumeInputControl(inputControl(for: controller.conversationID))
         }
         applyPresentation()
+        if let controller = activeConversationController {
+            controller.consumeIsCoordinatorChat(isCoordinatorConversation(controller.conversationID))
+            controller.consumeCoordinatorChatRead(
+                isSupported: acceptsCoordinatorChatRead,
+                readPoint: homeController.snapshot.coordinatorChatRead
+            )
+            controller.consumeCoordinatorAttachedImages(isSupported: acceptsCoordinatorAttachmentImages)
+        }
+        updateQuietDigests()
+        updateCoordinatorQueue()
+        updateFinishedTasks()
+    }
+
+    /// Reads the Mac's finished tasks when its task board names a revision
+    /// this phone does not have. A board without one, from an older Mac or
+    /// a Mac without tasks, clears them. A reconnect keeps the last answer
+    /// until the Mac answers again.
+    private func updateFinishedTasks() {
+        if finishedTaskReads.consume(revision: homeController.snapshot.taskBoard?.finishedTasksRevision) {
+            readFinishedTasks()
+        }
+        publishFinishedTasks()
+    }
+
+    private func readFinishedTasks() {
+        finishedTaskReads.willRead()
+        finishedTasksReadTask = Task { @MainActor [weak self, runtime] in
+            let answer = try? await runtime.finishedTasks()
+            guard let self, Task.isCancelled == false else { return }
+            finishedTasksReadTask = nil
+            let readsAgain = finishedTaskReads.didRead(answer)
+            publishFinishedTasks()
+            if readsAgain { readFinishedTasks() }
+        }
+    }
+
+    /// Gives the chats the answer, only when it changed.
+    private func publishFinishedTasks() {
+        let answer = finishedTaskReads.answer
+        guard homeController.finishedTasks.revision != answer?.revision else { return }
+        homeController.finishedTasks = ToasttyFinishedTasks(answer)
+    }
+
+    /// Reads the coordinator's own queue when the snapshot names a revision
+    /// this phone does not have, and gives the open chat the queue it has.
+    /// A reconnect starts without one, so it reads again.
+    private func updateCoordinatorQueue() {
+        let revision = acceptsCoordinatorQueue ? homeController.snapshot.coordinatorQueueRevision : nil
+        if coordinatorQueueReads.consume(revision: revision) {
+            readCoordinatorQueue()
+        }
+        activeConversationController?.consumeCoordinatorQueue(
+            coordinatorQueueReads.answer, mayChange: mayChangeCoordinatorQueue
+        )
+    }
+
+    private func readCoordinatorQueue() {
+        coordinatorQueueReads.willRead()
+        coordinatorQueueReadTask = Task { @MainActor [weak self, runtime] in
+            let answer = try? await runtime.coordinatorQueue()
+            guard let self, Task.isCancelled == false else { return }
+            coordinatorQueueReadTask = nil
+            let readsAgain = coordinatorQueueReads.didRead(answer)
+            activeConversationController?.consumeCoordinatorQueue(
+                coordinatorQueueReads.answer, mayChange: mayChangeCoordinatorQueue
+            )
+            if readsAgain { readCoordinatorQueue() }
+        }
+    }
+
+    /// Reads the quiet turns' keys when the snapshot names a revision this
+    /// phone does not have, and gives the open chat the keys it has.
+    private func updateQuietDigests() {
+        let revision = acceptsCoordinatorQuietDigests ? homeController.snapshot.coordinatorQuietDigestsRevision : nil
+        if quietDigests.consume(revision: revision) {
+            readQuietDigests()
+        }
+        activeConversationController?.consumeCoordinatorQuietDigests(quietDigests.keys)
+    }
+
+    private func readQuietDigests() {
+        quietDigests.willRead()
+        quietDigestsReadTask = Task { @MainActor [weak self, runtime] in
+            let answer = try? await runtime.coordinatorQuietDigests()
+            guard let self, Task.isCancelled == false else { return }
+            quietDigestsReadTask = nil
+            let readsAgain = quietDigests.didRead(answer)
+            activeConversationController?.consumeCoordinatorQuietDigests(quietDigests.keys)
+            if readsAgain { readQuietDigests() }
+        }
+    }
+
+    /// The app became active, or stopped being active: a chat on screen
+    /// behind another app, or under Notification Center, is not read.
+    func sceneActivityChanged(isActive: Bool) {
+        isSceneActive = isActive
+        activeConversationController?.consumeSceneActivity(isActive: isActive)
+    }
+
+    /// Whether the conversation is the coordinator's own, as the Coordinator
+    /// tab sees it.
+    private func isCoordinatorConversation(_ conversationID: UUID) -> Bool {
+        homeController.snapshot.coordinatorConversation?.id == conversationID
     }
 
     /// The host's queue, steer, and stop controls for a conversation from
@@ -768,7 +1156,12 @@ final class LiveSessionsController {
             hostSupportsSubspaceDone: acceptsSubspaceDone,
             hostSupportsConversationFlag: acceptsConversationFlag,
             hostSupportsSessionStart: acceptsSessionStart,
+            hostSupportsTaskCreate: acceptsTaskCreate,
             hostSupportsConversationClose: acceptsConversationClose,
+            hostSupportsTaskActions: acceptsTaskActions,
+            hostSupportsCoordinatorSend: acceptsCoordinatorSend,
+            hostSupportsLocalFilePreview: acceptsLocalFilePreview,
+            hostSupportsTasks: hostHasTasks,
             hostSnapshotStamp: sessionsState.snapshot?.generatedAt
         )
         onFreshness(freshness)

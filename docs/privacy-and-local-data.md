@@ -58,6 +58,88 @@ Toastty is designed to run locally on your machine. The app itself does not send
     document paths, and Scratchpad document IDs/titles. The list contains up to
     20 items and may contain URLs or local paths that identify the supporting
     material you opened.
+- `~/.toastty/task-records.json`
+  - Every task you or an agent created: its text and title, the chosen
+    workspace, project directory, agent, model and effort, setup state, and the
+    IDs of its task space and agent session. Deleting a task removes its record.
+- `~/.toastty/task-attachments/<task-id>/`
+  - Toastty's copies of files attached to a task. They are removed when the
+    task is deleted, or a week after Toastty first sees the task Done or
+    Archived with its task space closed. The task record keeps the file names.
+- `~/.toastty/coordinator/`
+  - The working directory of the coordinator's agent, created when you first
+    open the coordinator, and a git repository of its own. Toastty writes the
+    agent's instructions there (`AGENTS.md`, `CLAUDE.md`, `references/`) and
+    creates `policy.md`, `ledger.md`, `friction.md` and `decisions.md` once;
+    see [The coordinator's folder](tasks.md#the-coordinators-folder). The
+    policy holds your rules for your tasks, and the ledger holds task titles
+    and what the coordinator did. `friction.md` holds what the coordinator
+    saw slow your work, with task titles, and `decisions.md` holds task IDs,
+    pull request addresses and what you decided. The coordinator's daily
+    list is a message in its chat. An earlier version also wrote the list to
+    a Scratchpad document, "Waiting on you", with task titles; such a
+    document is kept in `scratchpad-documents/` as every Scratchpad is, and
+    closing the coordinator's workspace leaves it.
+  - Before Toastty starts Claude Code there, it marks this one folder as
+    trusted in Claude Code's config file: `~/.claude.json`, or `.claude.json`
+    in `CLAUDE_CONFIG_DIR` when Toastty's environment or the `claude`
+    profile sets it. It changes only that folder's
+    `hasTrustDialogAccepted` entry and leaves the rest of the file as it
+    was. See [The coordinator](tasks.md#the-coordinator).
+  - `attachments/<message-id>/` holds Toastty's copies of the files you
+    attached to a quick entry message for the coordinator. Toastty removes
+    a message's copies when you remove the waiting message, and otherwise
+    7 days after it made them.
+- `~/.toastty/coordinator-queue.json`
+  - The messages you sent to the coordinator, from its chat or from quick
+    entry, that its prompt has not taken yet. A message leaves the file when
+    it is typed or removed. Closing the coordinator's workspace removes the
+    file.
+- `~/.toastty/coordinator-workspace.json`
+  - The IDs of the coordinator's workspace and terminal, so that Toastty can
+    mark that workspace as the coordinator's again after an older Toastty
+    saved the layout without the mark. Closing the coordinator's workspace
+    removes the file.
+- `~/.toastty/recent-workspaces.json`
+  - The title, root directory and close time of up to 20 recently closed
+    top-level workspaces, for the task workspace picker.
+- `~/.toastty/task-last-workspace.json`
+  - The ID of the workspace your last quick entry task went to, so the panel
+    starts on it.
+- `~/.toastty/task-preset-usage.json`
+  - The agent, model and effort presets you chose in quick entry, with a
+    use count and the time of the last use, for the panel's Frequent list.
+- `~/.toastty/task-webhooks.json` and `~/.toastty/task-webhook-outbox.json`
+  - The task webhooks you added, their status and the requester's hint on
+    where to find the key, and the events waiting to send with the task
+    states they came from. Webhook secrets and approvals
+    are in the login Keychain, not in these files.
+  - The outbox file also holds what waits for the coordinator: the titles and
+    stages of tasks that changed, and the time of its next check.
+- Task webhooks
+  - After you approve a webhook in the Tasks view, Toastty POSTs to its HTTPS
+    address when a task needs you, merges, finishes, or is archived or
+    deleted. Each event carries the task's ID, title, project path, external
+    reference, stage, the question an agent asked you, the pull request URL
+    and merge time. It never carries an agent's reply, the task's prompt or
+    its attachments. See [Webhooks for task events](tasks.md#webhooks-for-task-events).
+- Pull request checks for tasks
+  - For each task that has a pull request link, is not Done or Archived, and
+    whose pull request has not merged, Toastty runs your `gh pr view` with the
+    pull request's URL to read its state, checks and review status from
+    GitHub. It asks at launch, when the Tasks view opens and when an agent in
+    the task space stops working. Then it asks again after 15 seconds while no
+    answer came yet or an open pull request has running checks or unknown
+    readiness, and after 2 minutes otherwise. This includes task spaces from
+    before the update that carry a `PR #N` chip.
+    `gh` uses its own GitHub sign-in. A merge you accept also goes to GitHub
+    through `gh`. See [Stages](tasks.md#stages).
+- Task triage
+  - When you set `[triage] command` in `~/.toastty/tasks.toml`, Toastty sends
+    each task's text and file names, the titles, root directories and
+    guidelines of your open workspaces, and your agent profile names to that
+    command on stdin. Where the command sends them, such as a model provider,
+    depends on the command you chose.
 - `~/.toastty/remote-access/devices.json`
   - Paired-device IDs, names, browser/native kind, scopes, timestamps,
     revocation state, and SHA-256 hashes of device credentials. Native records
@@ -158,6 +240,12 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
   - `<runtime-home>/recent-right-panel-items.json`
+  - `<runtime-home>/task-records.json`
+  - `<runtime-home>/task-attachments/`
+  - `<runtime-home>/recent-workspaces.json`
+  - `<runtime-home>/task-last-workspace.json` and `<runtime-home>/task-preset-usage.json`
+  - `<runtime-home>/task-webhooks.json` and `<runtime-home>/task-webhook-outbox.json`
+  - `<runtime-home>/coordinator/`, `<runtime-home>/coordinator-queue.json` and `<runtime-home>/coordinator-workspace.json`
   - `<runtime-home>/remote-access/devices.json`
   - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`
@@ -378,8 +466,20 @@ Cloudflare push relay configured in the build. Requests use the relay send token
 for authentication. The relay sends the alert through Apple Push Notification
 service (APNs). There is no title-hiding option. Agent-generated session titles
 may summarize your prompt. Titles can also appear on the Lock Screen, depending
-on iOS preview settings. Notification delivery sends no message bodies, tool
-output, or attached files to the relay.
+on iOS preview settings.
+
+Task alerts, when the Mac runs tasks, send more. For a task that needs you,
+the Mac sends the task's title, the reason (a question, a review, a stopped
+merge, or a failed setup, move or cleanup), and identifiers for the task,
+conversation and event. A question alert also carries the agent's question,
+cut to 512 bytes, and a review or stopped-merge alert carries the pull
+request number. The relay words the alert from these and sends it through
+APNs; the question can show on the Lock Screen. Error text from a failed
+setup, merge or cleanup stays on the Mac. See
+[Task alerts](remote-access.md#task-alerts).
+
+Apart from a task's question, notification delivery sends no message bodies,
+tool output, or attached files to the relay.
 
 Before sending a session alert, the Mac reads its screen-lock state and elapsed
 time since keyboard or pointer input. These one-time checks need no Accessibility
@@ -395,7 +495,7 @@ verification outcome category and whether provider-token refresh was attempted.
 These values are cleared on activation or
 revocation and removed with expired registration cleanup. It contains no raw
 Apple reason or response body. It also retains the APNs signing key as a Cloudflare
-secret and caches an Apple provider token. Session titles are forwarded for
+secret and caches an Apple provider token. Session and task titles, and a task's question, are forwarded for
 delivery, not stored in the relay database.
 
 The iPhone stores its enrollment state, APNs device token, relay credentials,

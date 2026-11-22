@@ -244,6 +244,39 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `terminal.send-text`
 - `terminal.drop-image-files` (historical name; drops local file paths of any type)
 - `session.exit-after-turn`
+- `task.create`
+- `task.start-work`
+- `task.retry`
+- `task.delete`
+- `task.set-workspace`
+- `task.set-release`
+- `task.send`
+- `task.watch`
+- `task.unwatch`
+- `task.merge`
+- `task.request-merge`
+- `task.cancel-merge`
+- `task.clean-up`
+- `task.ready-for-review`
+- `task.needs-reply`
+- `task.waiting`
+- `task.mark-done`
+- `task.archive`
+- `task.release`
+- `task.adopt`
+- `coordinator.open`
+- `coordinator.restart`
+- `coordinator.send`
+- `coordinator.reply`
+- `coordinator.wake`
+- `coordinator.watch`
+- `webhook.add`
+- `webhook.set`
+- `webhook.remove`
+- `webhook.test`
+- `window.tasks.show`
+- `window.tasks.hide`
+- `window.sidebar.set-segment`
 
 Notable action-specific behavior:
 
@@ -268,12 +301,14 @@ Notable action-specific behavior:
     self-parenting and cycles are rejected.
   - The caller needs access to the target workspace, requested parent, and root.
     Reparenting retains the original spawning session when present; otherwise
-    it records the managed caller. Detaching clears the spawner and done mark.
+    it records the managed caller. Detaching clears the spawner, and the done
+    mark of a workspace that is not a task's task space.
     Any task spaces of the target workspace move under the same root.
 - `workspace.set-done`, `workspace.clear-done`
   - With no workspace or window selector, a managed caller targets its own
     workspace. A caller whose session has ended must name the workspace.
-  - `workspace.set-done` rejects top-level workspaces. Repeating it preserves
+  - `workspace.set-done` rejects a top-level workspace that is not a task's
+    task space. Repeating it preserves
     the original mark time; `workspace.clear-done` removes the mark.
   - The mark clears when a managed agent session in that workspace starts new
     work. The turn that set it, restored sessions, and process watches do not
@@ -325,6 +360,249 @@ Notable action-specific behavior:
     missing, ended, or replaced session returns `INVALID_PAYLOAD` before any
     terminal bytes or submission are sent; `allowUnavailable` cannot bypass
     this condition.
+- `task.create`
+  - takes `text`, repeatable absolute `files`, and optional `clientRequestID`,
+    `title`, `slug`, `workspace` (UUID) or `rootDirectory`, `externalRef`
+    with `externalURL`, `agent`, `model`, `effort`, `prompt`, `startWork`
+    (boolean) with `base` and `branchPrefix`, and `fork` (boolean). It takes
+    no selectors.
+  - `rootDirectory` (absolute or starting with `~`) names the project by its
+    directory instead of `workspace`: the open top-level workspace on it, or a
+    new workspace that Toastty opens after every other check passed, so an
+    invalid request opens nothing. A workspace-scoped session cannot use it.
+  - `externalRef` names the issue or report the task came from, such as
+    `github:owner/repo#123`: printable ASCII with no spaces, at most 128
+    characters. `externalURL`, its http or https page, needs `externalRef`.
+    The task object returns both as `externalRef: {id, url}`.
+  - `fork: true` runs only from a managed Claude Code or Codex session. The
+    task's agent starts as a fork of that session's conversation after its
+    current turn ends; the caller keeps running. It uses the caller's agent,
+    and `model` and `effort` default to the caller's task's. `[defaults]` and
+    triage do not apply. `task.get` reports it under `fork`.
+  - returns the task object (see `task.get`) as soon as the record is saved;
+    setup continues after the response. A repeated `clientRequestID` from the
+    same caller (the same managed session, or no session) returns the first
+    task.
+  - `workspace` defaults to the calling managed session's workspace; a subspace
+    resolves to its parent. A workspace-scoped session may always add tasks to
+    its own project; any other workspace must be in its scope.
+  - `[defaults]` in `~/.toastty/tasks.toml` fills an agent, model or effort
+    the request leaves out. A task with no workspace is in `needsWorkspace`
+    until `task.set-workspace` places it.
+  - optional: when `[triage]` has a command and the request leaves out the
+    workspace, agent, prompt, or a model or effort the agent takes, setup
+    starts in the `routing` state while triage chooses them first.
+  - invalid requests return `INVALID_PAYLOAD` and save nothing.
+- `task.start-work`
+  - requires a calling managed session, whose task moves into a new git
+    worktree. Takes optional `base`, `branchPrefix`, and, for a session that is
+    not a task's yet, `title` and `slug`. It takes no selectors.
+  - returns the task object as soon as the request is saved. The move waits for
+    the caller's turn to end before it forks the conversation, so the caller
+    should end its turn.
+  - fails with `INVALID_PAYLOAD` when the caller is not a managed session, the
+    task is still setting up, already has a worktree or is already moving, the
+    session works in another git worktree, or the project is not a git
+    repository.
+- `task.retry`, `task.delete`
+  - require `args.taskID`. A workspace-scoped session reaches only the tasks it
+    created or whose workspace or task space is in its scope. `task.retry`
+    fills the workspace and agent again for a task without them, with triage
+    when it is on; without a workspace, the task waits for one again.
+- `task.set-workspace`
+  - requires `args.taskID` and one of `workspace` (an open workspace ID),
+    `recentWorkspace` (an ID from `task.workspace-choices`, which Toastty opens
+    again) or `rootDirectory` (a project directory, absolute or under `~`,
+    which Toastty opens as a new workspace unless the project is open). The
+    task must not have started or have a task space. `[defaults]`, or triage
+    when it is on, fills anything else still missing, then setup starts.
+  - a workspace-scoped session may choose only workspaces in its scope, and
+    cannot reopen a closed workspace or open a directory.
+- `task.send`
+  - requires `args.taskID` and `args.text`. Toastty resolves the task's current
+    agent session at delivery: the session in the worktree after a move, else
+    the session setup started, else the session restored in that session's
+    pane after a relaunch, else the most recently active agent in the task
+    space. It types the text and submits it, as `terminal.send-text` with
+    `submit=true` does; a busy agent queues it as typed input.
+  - Toastty types a first line that names the sender, from the caller and
+    never from the text, as for `coordinator.send`: `[Toastty] From task
+    [title](toastty://task/<id>): not from the user.` for a caller in a task's
+    space, and `[Toastty] From the coordinator: not from the user.` for the
+    coordinator's own agent session. Optional `args.from` names a caller in no
+    session, also as for `coordinator.send`. The text starts on the second
+    line.
+  - optional `args.steer=true` checks the agent before it types, and types
+    nothing into a permission prompt or a question. The result adds
+    `message`, one sentence that says what Toastty did, and `delivery`: `sent` (typed at the open prompt), `steered` (typed into the
+    running turn of a Claude Code or Codex agent) or `queued` (held for the
+    agent's next open prompt, with `queuePosition` and `delivered` false).
+    Send it through `app_control.run_action`: it can wait up to 5 seconds for
+    the agent's state. It returns `INVALID_PAYLOAD`, with nothing typed, when
+    Toastty cannot tell what the agent does, when text that someone typed can
+    still be in the agent's prompt, and when 5 messages already wait. See
+    [Coordinate tasks](tasks.md#coordinate-tasks).
+  - returns `taskID`, `sessionID`, `panelID`, and `delivered`. A task with no
+    running agent, empty text, or a message that was typed but may not have
+    been submitted returns `INVALID_PAYLOAD`; Toastty does not retry the last
+    case, which could type the message twice.
+  - workspace scope applies to the task, not the panel: an unscoped caller
+    reaches any task, and a workspace-scoped session reaches only the tasks it
+    may see in `task.list`.
+- `task.watch`
+  - requires `args.taskID` and `args.until` (`idle`, `waiting`,
+    `ready-for-review`, `merged`, `to-ship`, `done`, or `archived`). Takes
+    either `notifyTaskID` or `wait=true`; with neither, the calling managed
+    session's own task is notified, and a caller that is not a task's agent
+    gets `INVALID_PAYLOAD`.
+  - `idle` holds when the target's agent finished a turn after the watch was
+    made; `waiting` while it waits for an approval or an answer. A stage
+    condition holds once the task reaches that stage and stays true after the
+    task moves past it, in the order `ready-for-review`, `merged`, `to-ship`,
+    `done`: a merged task also meets `ready-for-review`, and a merge in a
+    project without release tags, which goes straight to Done, also meets
+    `to-ship`. A task marked done by hand meets only `ready-for-review` and
+    `done`. `archived` holds only for an archived task.
+  - a notifying watch is saved on the notified task's record and fires once:
+    Toastty sends one line, `[Toastty watch <watchID>] Task
+    [<title>](toastty://task/<taskID>) <reason>...`, to that task's agent through `task.send`, and
+    retries while its agent is not running. A deleted target, or one archived
+    while the watch waits for another condition, fires it with that reason. A
+    `wait=true` watch lives in memory, notifies nobody, and is dropped when no
+    `task.watches` read of it arrives for 60 seconds.
+  - returns the watch object (see `task.watches`). A target that is already
+    archived returns `INVALID_PAYLOAD`, except for `until=archived`, which
+    fires at once. A fired stage watch's `reason` names the stage the task
+    reached, which can be later than `until`.
+- `task.unwatch`
+  - requires `args.watchID` and cancels that watch.
+- `task.merge`
+  - what a merge skill calls once its checks pass. Takes optional `taskID`
+    (the calling managed session's own task when left out) and `head`.
+  - runs only from a managed agent session in the task's task space or in its
+    parent task's task space. Any other caller, including the CLI outside an
+    agent session, gets `INVALID_PAYLOAD` naming `task.request-merge`. The
+    caller's session comes from the CLI's environment, so this rule prevents
+    mistakes; it is not a security boundary.
+  - records the user's acceptance and hands the merge to the merge owner. The
+    merge owner runs the bundled pull request script: it merges at the
+    checkout's commit with GitHub's merge API, never turns on auto-merge, waits
+    for checks that still run, and once GitHub reports the merge and no agent
+    in the task space is in a turn, closes the task space, removes the
+    worktree and deletes the branch.
+  - waits up to 8 seconds for the script's first answer, then returns the task
+    object with `merge` as `task.get` reports it: `waitingForChecks`,
+    `cleaningUp` (merged), or `merging` when the script has not answered yet.
+  - with `head`, the script refuses unless the checkout is at that commit.
+  - `INVALID_PAYLOAD` when the task is archived or merged, its task space is
+    closed, it has no pull request link, a merge is already under way, or the
+    user cancelled the merge during the caller's current turn; also, with the
+    reason, when the script refuses the merge (nothing changed: for example,
+    the worktree has uncommitted or untracked files) or the merge fails. The
+    task's `mergeFailure` records the same reason.
+- `task.request-merge`
+  - requires `args.taskID`. The user's acceptance given outside the task, as
+    the Merge button gives it: the task's agent gets the merge prompt, checks
+    the pull request, and calls `task.merge`. It always uses the agent, also
+    in a project with `merge = "direct"`. Returns the task object with
+    `mergeRequestedAt`.
+  - `INVALID_PAYLOAD` where the Merge button is not offered: no open pull
+    request, no task space, a merge under way, or a merged, archived or done
+    task.
+- `task.cancel-merge`
+  - takes optional `taskID`. Clears the acceptance and the task space's done
+    mark, which ends a wait for checks. `INVALID_PAYLOAD` while the script
+    merges, after the pull request merged, or when no merge is under way.
+- `task.clean-up`
+  - requires `args.taskID`. Retries a cleanup that stopped after a merge, an
+    archive or a release. When the recorded worktree branch differs from the
+    merged pull request's branch, cleanup keeps both remote branches and
+    removes the local task branch only if it can verify its commits on origin.
+- `task.ready-for-review`, `task.needs-reply`, `task.mark-done`
+  - `task.ready-for-review` takes optional `taskID`, sets
+    `readyForReviewAt`, and clears a reply request. `task.needs-reply` takes
+    optional `taskID` and `question` and sets `replyRequest`: the task waits in
+    Needs you with attention `awaitingReply`, even after the user reads the
+    turn, until the task's own agent starts its next turn.
+- `task.waiting`
+  - takes optional `taskID`, and either `on`, the text of what the task
+    waits for, with optional `wakeAt`, an ISO 8601 time in the future; or
+    `clear: true` alone. It sets or removes `waiting`
+    (`{on, since, wakeAt, wokenAt}`) and returns the task. Setting it clears
+    `readyForReviewAt`; `task.ready-for-review`, `task.mark-done` and an
+    archive clear it. The task stays Idle with the reason, and a task with
+    child tasks does not finish through them. At `wakeAt`, Toastty types one
+    line into the terminal of the task's own agent while the agent reports
+    that it waits at its prompt, no reply request waits, and nobody typed
+    there since its last turn ended, and sets `wokenAt`; the mark clears
+    when that agent's next turn starts.
+    `task.mark-done` requires `taskID`, sets `doneAt`, and marks the task space
+    done.
+- `task.set-release`
+  - requires the boolean `afterMerge` and takes optional `taskID`; without it,
+    a task's own agent sets it on its own task. `afterMerge=true` saves the
+    user's request to release this task right after it merges, as
+    `releaseAfterMerge.requestedAt`; a second request keeps the first time.
+    `afterMerge=false` clears it, also on a task that has none. Toastty only
+    saves and shows the request; it starts no release.
+  - a request fails with `INVALID_PAYLOAD` on a Done or archived task and on a
+    release task. Returns the task object.
+- `task.archive`
+  - requires `args.taskID`; takes booleans `closePullRequest`,
+    `deleteUnpushedCommits`, `discardChanges` and `dryRun`. Runs its checks before it
+    returns and refuses with `INVALID_PAYLOAD` and the reason: unsaved documents
+    in the task space, a merge under way, uncommitted changes without
+    `discardChanges`, or a detached worktree whose commit is on no remote branch
+    or tag without `deleteUnpushedCommits`.
+  - then returns the task object with `archivedAt` set while the steps run in
+    the background: close the pull request (only with `closePullRequest`),
+    close the task space, remove the worktree, and delete the local branch when
+    the remote has its commits or with `deleteUnpushedCommits`. The remote
+    branch stays. Each step is saved in `cleanup.stepsDone`; a stop sets
+    `cleanup.problem`, and `task.archive` or `task.clean-up` continues.
+  - with `dryRun=true`, changes nothing and returns `taskID`, `dryRun`,
+    `summary` (the lines the archive alert shows: what closes, what is
+    removed, and what stays, also what happens to the pull request) and
+    `refusal` (the reason the archive would refuse with these options, or
+    `null`).
+- `task.release`
+  - takes the `workspaceID` selector, or the calling managed session's
+    workspace; a task space resolves to its project. tasks.toml must give the
+    project a `release_skill` (its own or from `[defaults]`) or its own
+    `release_prompt`, and no other release of it may be unfinished. Makes a task with `release.childTaskIDs` (the project's To ship
+    tasks), fetches the remote's default branch (the fetch must succeed), and
+    starts the default agent in a new worktree on no branch at that commit.
+- `task.adopt`
+  - gives a task space without a task record one, with source `adopted`, and
+    returns the task object with its `stage`. Targets the calling managed
+    session's workspace when no `workspaceID` is given; a workspace-scoped
+    session reaches only workspaces in its scope. A task space that already has
+    a record returns that task; a top-level workspace fails with
+    `INVALID_PAYLOAD`.
+- `webhook.add`, `webhook.set`, `webhook.remove`, `webhook.test`
+  - manage task webhooks; see
+    [Webhooks for task events](tasks.md#webhooks-for-task-events). All four
+    require `args.name` (lowercase letters, digits, `-` and `_`) and are
+    refused for workspace-scoped sessions.
+  - `webhook.add` requires `args.url` (`https://`, or `http://` only for
+    127.0.0.1 and localhost) and takes optional `events` (task events, and
+    `coordinator_reply` for the coordinator's replies), `roots`
+    (repeatable), `externalRefPrefix`, `auth` (`bearer`, `header:<Name>`,
+    `hmac`, the default, or `none` for loopback only), `secret` (16 to 4096
+    printable ASCII bytes without spaces, kept in the login Keychain and never returned) and
+    `secretHint`. The webhook waits for the user's approval in the Tasks view
+    and receives nothing until then; no request can approve it.
+  - `webhook.set` takes the same optional fields. A change to the URL,
+    events, filters or auth needs approval again. A new secret alone keeps
+    the approval and starts a webhook that stopped after HTTP 401, 403 or
+    410. An empty `externalRefPrefix` or `secretHint` clears it.
+  - `webhook.remove` removes the webhook, its Keychain secret and its unsent
+    events. `webhook.test` sends an approved webhook a `task.test` event now
+    and returns the HTTP status, or the class of failure.
+- `window.tasks.show`, `window.tasks.hide`, `window.sidebar.set-segment`
+  - take the `windowID` selector. `window.sidebar.set-segment` requires
+    `segment` (`all` or `needsYou`; the earlier names `projects` and `status`
+    still work). All three are listed only when the task system is available.
 - `session.exit-after-turn`
   - requires `args.expectedSessionID`; the resolved panel must host that active
     Claude Code or Codex session in a running turn, in a top-level workspace, or
@@ -522,6 +800,144 @@ Common query IDs include:
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.list`
 - `panel.scratchpad.state`
+- `task.get`
+- `task.list`
+- `task.workspace-choices`
+- `task.watches`
+- `coordinator.get`
+- `coordinator.replies`
+- `webhook.list`
+
+`coordinator.get` returns `exists`, and for an open coordinator `windowID`,
+`workspaceID`, `panelID`, `agentState` (`notRunning`, `starting` or
+`running`), the agent's `sessionID`, `agent` and `status`, `startFailure`,
+`queuedCount`, `hold`, and `wake` with `pendingTaskCount`, `nextWakeAt` (the
+time that `coordinator.wake` set, or `null`), `lastWakeAt`, `watchedTaskIDs`
+and `watchedProjectRoots`.
+`coordinator.open` (optional `windowID` and
+`select`) and `coordinator.restart` (optional `windowID`) return the same
+fields with `createdWorkspace` and `startedAgent`, after the start attempt.
+`coordinator.send` requires `args.text` and returns `delivery` (`sent`,
+`sentUnconfirmed` or `queued`), `queuedCount`, and for a queued message
+`position` and `hold`. Toastty types the text after a first line that names
+the sender, from the request's `callerSessionID`: the task whose space that
+session is in, else the session, else the name in optional `args.from` as
+`[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran
+it.`, else "a terminal command". Toastty does not check who `args.from`
+names. It refuses a name that the line would change: it must be one line of
+at most 60 characters, without `"`, `|` or repeated spaces. The result also
+has `messageID`: for a sender outside a task (a named caller, a terminal
+command or an agent session outside a task) a UUID that the first line ends
+with as ` Message ID <uuid>.`, and `null` for a task's session or the
+coordinator's own. `coordinator.reply` requires `args.messageID` and
+`args.text` (at most 16 KB) and fails unless the request's `callerSessionID`
+is the coordinator's agent session and Toastty still keeps that message's
+ID. It returns `replyID`, `messageID`, `repliedAt` and `webhookEvents`, the
+number of `coordinator.reply` events queued. `coordinator.replies` takes
+optional `args.messageID` and `args.since` (a cursor from an earlier answer)
+and returns `replies`, oldest first, each with `id`, `messageID`, `from`,
+`text` and `repliedAt`, then `cursor` and `truncated`; see
+[Coordinator replies](tasks.md#coordinator-replies). `coordinator.wake` takes exactly one of
+`args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
+removes the coordinator's next check, and returns the `coordinator.get`
+fields. With `args.quiet` it also marks the wake turn that runs now as one
+that needs nothing from the user. It fails, and changes nothing, unless the
+request's `callerSessionID` is the coordinator's agent session and Toastty's
+last digest started the turn that runs now with no other message in it.
+`coordinator.watch` takes exactly one of `args.taskID` and
+`args.workspaceID` (a project's workspace or one of its subspaces), and
+optional `args.remove`; a watched task's merge or end, or any merge in a
+watched project, then wakes the coordinator. It returns the
+`coordinator.get` fields. See [The coordinator](tasks.md#the-coordinator) and
+[When Toastty wakes the coordinator](tasks.md#when-toastty-wakes-the-coordinator).
+
+`webhook.list` returns each task webhook with its status (`pendingApproval`,
+`approved` or `disabled`), a shortened URL, its events, filters and auth mode,
+and its last delivery. It never returns a secret or the full URL path. With
+`args.name`, it returns only that webhook.
+
+`task.get` takes `args.taskID`, which a task's own agent may leave out to get its own task, and returns `taskID`, `title`, `markdownLink`
+(the task as `[title](toastty://task/<taskID>)`, for an agent to name it in
+text), `slug`,
+`text`, `createdAt`, `source`, `clientRequestID`, `workspaceID`, `projectRoot`,
+`agent`, `model`, `effort`, `prompt`, `triageNote`, `files`, `filesRemovedAt`
+(when Toastty removed its copies of the files, a week after the task finished),
+and `setup` with
+`state` (`routing`, `needsWorkspace` with `reason`, `settingUp`, `setupFailed`
+with `reason`, or `started`), `taskSpaceWorkspaceID` and `sessionID`. It also
+has `parentTaskID`, a top-level `sessionID` for the session that works on
+the task now, `pullRequestURL`, `mergedAt` and `mergeCommit`, `readyForReviewAt`,
+`replyRequest` (`askedAt` and `question`, or `null`), `mergeRequestedAt`, `mergeCancelledAt`,
+`mergeFailure` (`at`, `reason`, `cause`, `head` and `base` of Toastty's last merge that
+stopped without merging, cleared when a new merge starts, or `null`; `cause` is
+`refused` when a check refused the merge, `error` when GitHub or a command
+failed and nothing refused it, `acceptanceEnded` when a cleared done mark, a
+closed workspace or another pull request ended a waiting merge, or `null` in an older
+record; `head` is the commit that was to merge and `base` the target branch
+accepted with it, each `null` when Toastty did not know it), `releaseAfterMerge`
+(`requestedAt` of the user's request to release the task right after it merges,
+from `task.set-release`, or `null`), `shippedAt`, `releaseTag`, `doneAt`,
+`archivedAt`, and `stage` with
+`group` (`needsYou`, `running`, `idle`, `toShip`, `done`, or `archived`; a task that
+is starting reports `running`), `needsUser`, `changedAt` (when the task entered
+this `group` and `attention`; a stage that lasts under 3 seconds does not move
+it), and for Needs you `attention` and, for failures and a stopped
+cleanup (`cleanupStopped`), `reason`. `merge` names a merge under way
+(`checking`, `merging`, `waitingForChecks`, or `cleaningUp`) or is `null`.
+`cleanup` (`kind`: `merge`, `archive` or `release`; `stepsDone`, `problem`,
+`finishedAt`; and `taskSpaceClosesAt`, the earliest time Toastty closes a
+merged task's space, while it waits) appears once a cleanup started, and `release` (`childTaskIDs`)
+on a release task. A task with a
+worktree request also has `worktree`: `state` (`running`, `failed` with
+`reason`, or `finished`), `branchPrefix`, `requestedBase`, `path`, `branch`
+(`null` for a release's worktree, which is on no branch, with `detached`),
+`baseSHA`, `baseRef`, `baseFetched`, `baseNote`, `sessionID` and `forked` for the
+session that continues in the worktree, `conversationConfirmed`,
+`sourceSessionID`, and `source` (`closed`, `exited`, or `kept` with
+`sourceKeptReason`). A task created with `fork` has `fork`:
+`sourceSessionID`, `sourceConversationID`, and `conversationConfirmed`, which is
+`true` once the fork reported a conversation of its own. `task.get` also has `agentState` (`state`: `notRunning`,
+`busy`, `waiting`, `idle`, or `error`; `sessionID`, `panelID`, `summary`,
+`changedAt`, when the agent entered that state, `lastTurnEndedAt`,
+`interruptedAtQuit`, which is `true` when the agent was in a turn when Toastty
+quit or crashed and has not started one since, and `lastOutputAt`, when its
+transcript last changed) and `lastReply` (`text`, cut at
+16 KB, `truncated`, and `at`), which is `null` until Toastty has confirmed the
+session's transcript. `lastUserInputAt` is when a person last typed into a
+terminal in the task space or sent its agent a message from Toastty Mobile.
+`pullRequest` is `null`, or GitHub's last answer: `state` (`open`, `closed` or
+`merged`), `isDraft`, `mergeStateStatus`, `checks` (`pending`, `failing`,
+`passing` or `null`) and `checksPendingSince`. See
+[How long a task has been in its state](tasks.md#how-long-a-task-has-been-in-its-state). `task.list` returns `tasks`, oldest first, with the same
+scope rule as `task.retry`, with `agentState` but without `lastReply` unless
+`args.includeReply` is `true`. With `args.parent` set to a task ID, it lists
+only the tasks that task started. It also returns `cursor`, `deletedTaskIDs`, and
+`reset`. With `args.changedSince` set to an earlier `cursor`, `tasks` holds only
+the tasks whose record, `stage`, `agentState` or `pullRequest` changed since
+(a change of only `lastOutputAt` or `lastUserInputAt` does not count), and `deletedTaskIDs` the
+tasks deleted since; a cursor from another launch, or one Toastty cannot read,
+returns every task with `reset: true`. `task.watches` returns `watches`, each
+with `watchID`, `taskID` (the watched task), `until`, `notifyTaskID` (`null` for
+`wait=true`), `createdAt`, and `state` (`pending`, `fired`, or `impossible`,
+with `firedAt`, `reason`, and `delivered`). Fired watches stay listed for up to
+a day; Toastty removes older ones when it next checks watches or relaunches. A
+watch whose message may have been typed without being submitted counts as
+delivered and is not sent again. It takes optional `watchID`, `taskID`, and `notifyTaskID` filters. `task.workspace-choices` returns `open`
+(`workspaceID`, `title`, `rootDirectory` when known) and `recent`
+(`recentWorkspace`, `title`, `rootDirectory`, `closedAt`) for
+`task.set-workspace`. With `taskID`, it also returns `suggested` when triage
+suggested a project that is not open: its `title` and `rootDirectory`, and the
+`task.set-workspace` argument that places the task there (`workspace`,
+`recentWorkspace` or `rootDirectory`). With `name`, it also returns
+`matches`: the project directories whose folder name or workspace title is
+`name`, ignoring case, `-`, `_`, `.` and spaces. Each has `title`,
+`rootDirectory` and `source`, and `workspaceID` or `recentWorkspace` when it
+is open or recently closed. The source is `open`, `recent`, `config` (a
+`[workspace."<root>"]` root in tasks.toml) or `history` (a task's project):
+a directory the user has worked in, listed first. Or it is `sibling`: a git
+repository in the same parent directory as one of those, which Toastty never
+opened. A linked worktree is not a match. A workspace-scoped session sees only
+open workspaces in its scope, also under `matches`.
 
 `agent.profile.state` requires `args.profileID` and takes no selectors. It
 returns the executable that profile would run in Toastty's launch environment,
@@ -674,6 +1090,9 @@ Supported action IDs:
 - `workspace.rename`
   - requires `args.title`
 - `workspace.close`
+  - `args.requireDone=true` requires the workspace to still be marked done.
+  - Optional `args.requirePullRequest` requires the workspace to still link to
+    that pull request URL and have no unsaved document changes.
 - `workspace.split.horizontal`
 - `workspace.split.vertical`
 - `workspace.split.right`
@@ -703,12 +1122,12 @@ Supported action IDs:
   - when a sidebar has not rendered, task spaces use stored workspace order; hidden or newly added task spaces remain reachable after the recorded rows
   - traversal visits rows below the current focus, then other windows in stored window order starting after the current window, then wraps to rows above the focus in the current window
   - panels without session rows remain reachable in tab and layout order after the workspace's session rows; a focused plain terminal anchors at the workspace header when session rows exist, or at its layout position otherwise
-  - a `ready` session only participates while unread; once visited it collapses back to `idle`
+  - a `ready` session participates through unread state and collapses back to `idle` once visited; its task space remains in the cycle if the task is ready for review
   - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
-  - if no attention-required panel exists, it builds an active-session cycle anchored to the current focus
-  - that active cycle first includes working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
+  - read attention-required panels and open task spaces whose task-board stage is ready for review or waiting for the user's reply stay in the cycle, before working panels; each review task space uses its focused panel, even without a live agent; a task space already represented by an agent or later flag keeps that existing target instead of adding a review target
+  - the cycle is anchored to the current focus and first includes attention-required panels, then review task spaces, then working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
   - repeated invocations continue through that same active cycle without repeating a target until the cycle wraps or the active set changes
-  - manual focus changes, changes to sidebar order, window/workspace/layout changes, panel removals, active status-kind changes, later-flag changes, or unread/attention preemption reset the active cycle and rebuild it from the new focus
+  - manual focus changes, changes to sidebar order, window/workspace/layout changes, panel removals, active status-kind changes, review-stage changes, later-flag changes, or unread preemption reset the active cycle and rebuild it from the new focus
   - if no target exists, the selected sidebar row flashes instead of changing focus
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
@@ -1236,6 +1655,11 @@ Request payload:
 
 - `step: String`
 - `fixture?: String`
+- `window?: String`: the identifier or accessibility identifier of the visible
+  window to capture, such as `quick-entry.panel`. If it is omitted, the first
+  visible window is captured.
+- `frame?: Bool`: when `true`, the capture includes the title bar and its
+  window buttons, not only the window's content. The default is `false`.
 
 Result:
 
@@ -1243,6 +1667,8 @@ Result:
 
 Behavior:
 
+- The PNG has the window's backing scale: 2x on a Retina display.
+- If no visible window has the `window` identifier, return `INVALID_PAYLOAD`.
 - If `fixture` is omitted, the current fixture name is used.
 - If `fixture` is provided and does not match the current fixture, return
   `INVALID_PAYLOAD`.

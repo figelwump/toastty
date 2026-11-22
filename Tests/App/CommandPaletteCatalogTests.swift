@@ -29,6 +29,8 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInSplit.id, "local-document.open-split")
         XCTAssertEqual(ToasttyBuiltInCommand.newScratchpad.id, "scratchpad.create")
         XCTAssertEqual(ToasttyBuiltInCommand.showScratchpadForCurrentSession.id, "scratchpad.show-current-session")
+        XCTAssertEqual(ToasttyBuiltInCommand.newTask.id, "task.new")
+        XCTAssertEqual(ToasttyBuiltInCommand.toggleTasksView.id, "window.toggle-tasks-view")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
@@ -115,6 +117,8 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.openLocalFileInSplit.id,
                 ToasttyBuiltInCommand.newScratchpad.id,
                 ToasttyBuiltInCommand.showScratchpadForCurrentSession.id,
+                ToasttyBuiltInCommand.newTask.id,
+                ToasttyBuiltInCommand.toggleTasksView.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
                 ToasttyBuiltInCommand.toggleRightPanel.id,
                 ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
@@ -171,6 +175,102 @@ final class CommandPaletteCatalogTests: XCTestCase {
             commands.filter { $0.id.hasPrefix("local-document.") }.map(\.title),
             ["Open Local File", "Open Local File in Tab", "Open Local File in Split"]
         )
+    }
+
+    func testNewTaskShowsTheConfiguredGlobalShortcutAndOpensQuickEntry() throws {
+        let actions = CommandPaletteActionSpy()
+        actions.newTaskShortcutValue = PaletteShortcut(symbolLabel: "⌥⇧T")
+        let command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.newTask.id })
+
+        XCTAssertEqual(command.title, "New Task…")
+        XCTAssertEqual(command.shortcut?.symbolLabel, "⌥⇧T")
+        XCTAssertTrue(actions.execute(command.invocation, originWindowID: UUID()))
+        XCTAssertEqual(actions.createTaskCount, 1)
+
+        actions.canCreateTaskValue = false
+        XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.newTask.id })
+    }
+
+    func testShowTasksToggleUsesItsShortcutAndCurrentTitle() throws {
+        let actions = CommandPaletteActionSpy()
+        let originWindowID = UUID()
+        var command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
+        XCTAssertEqual(command.title, "Show Tasks")
+        XCTAssertEqual(command.shortcut?.symbolLabel, "⇧⌘T")
+        XCTAssertTrue(actions.execute(command.invocation, originWindowID: originWindowID))
+        XCTAssertEqual(actions.toggledTasksViewWindowIDs, [originWindowID])
+
+        actions.tasksViewTitleValue = "Hide Tasks"
+        command = try XCTUnwrap(makeCommands(actions: actions).first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
+        XCTAssertEqual(command.title, "Hide Tasks")
+
+        actions.canToggleTasksViewValue = false
+        XCTAssertFalse(makeCommands(actions: actions).contains { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
+    }
+
+    func testTaskCommandsListTheDetailPaneActionsForTheCurrentTasksStage() throws {
+        let actions = CommandPaletteActionSpy()
+        func rows(
+            _ stage: TaskStage,
+            merge: TaskMergeActivity? = nil,
+            pullRequest: Bool = true,
+            source: TaskBoardCurrentTask.Source = .selectedTaskSpace,
+            hasMergeButton: Bool = true
+        ) -> [String] {
+            actions.currentTaskValue = TaskBoardCurrentTask(
+                item: taskItem(stage, merge: merge, pullRequest: pullRequest),
+                source: source,
+                hasMergeButton: hasMergeButton
+            )
+            return taskRows(makeCommands(actions: actions))
+        }
+
+        // Merge carries Option+Shift+M, which runs the selected task space's
+        // Merge button; every row names the task and its stage.
+        XCTAssertEqual(rows(.needsYou(.review)), [
+            "Task: Merge [⌥⇧M] — Fix the composer · Review",
+            "Task: Merge Without Checks — Fix the composer · Review",
+            "Task: Archive… — Fix the composer · Review",
+            "Task: Open PR #7 — Fix the composer · Review",
+        ])
+        XCTAssertEqual(rows(.running, merge: .checking), [
+            "Task: Cancel Merge — Fix the composer · Running",
+            "Task: Open PR #7 — Fix the composer · Running",
+        ])
+        XCTAssertEqual(rows(.needsYou(.readyForReview), pullRequest: false), [
+            "Task: Mark Done — Fix the composer · Review",
+            "Task: Archive… — Fix the composer · Review",
+        ])
+        XCTAssertEqual(rows(.needsYou(.cleanupStopped(reason: "dirty")), pullRequest: false), [
+            "Task: Clean Up — Fix the composer · Needs you",
+            "Task: Keep As Is — Fix the composer · Needs you",
+        ])
+        XCTAssertEqual(rows(.done, pullRequest: false), [])
+        // A pull request known only from the record leaves the top bar
+        // without its Merge button, so the shortcut would do nothing.
+        XCTAssertEqual(rows(.needsYou(.review), hasMergeButton: false).first, "Task: Merge — Fix the composer · Review")
+        // From the Tasks view the shortcut would act on another task, and
+        // the task space can be opened.
+        XCTAssertEqual(rows(.needsYou(.review), source: .tasksView), [
+            "Task: Merge — Fix the composer · Review",
+            "Task: Merge Without Checks — Fix the composer · Review",
+            "Task: Archive… — Fix the composer · Review",
+            "Task: Open PR #7 — Fix the composer · Review",
+            "Task: Open Task Space — Fix the composer · Review",
+        ])
+
+        let merge = try XCTUnwrap(makeCommands(actions: actions).first { $0.title == "Task: Merge" })
+        XCTAssertEqual(merge.usageKey, "task.action.merge")
+        XCTAssertTrue(Set(["task", "done", "merge", "archive", "ship"]).isSubset(of: merge.keywords))
+        let subject = try XCTUnwrap(actions.currentTaskValue?.item.id)
+        XCTAssertTrue(actions.execute(merge.invocation, originWindowID: UUID()))
+        XCTAssertEqual(actions.executedTaskCommands, [.action(.merge, subject: subject)])
+    }
+
+    func testNoTaskCommandsWithoutACurrentTask() {
+        let actions = CommandPaletteActionSpy()
+        actions.currentTaskValue = nil
+        XCTAssertEqual(taskRows(makeCommands(actions: actions)), [])
     }
 
     func testCatalogFiltersUnavailableCommands() {
@@ -596,6 +696,31 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(scratchpadCommand.title, ToasttyBuiltInCommand.showScratchpadForCurrentSession.title)
         XCTAssertTrue(actions.execute(scratchpadCommand.invocation, originWindowID: selection.windowID))
         XCTAssertEqual(shownScratchpadWindowIDs, [selection.windowID])
+    }
+
+    private func taskItem(_ stage: TaskStage, merge: TaskMergeActivity?, pullRequest: Bool) -> TaskBoardItem {
+        let record = TaskRecord(createdAt: Date(), text: "Fix the composer", title: "Fix the composer", slug: "fix-the-composer", source: .cli, setup: .started)
+        return TaskBoardItem(
+            id: .task(record.id),
+            record: record,
+            title: record.title,
+            taskSpaceWorkspaceID: UUID(),
+            stage: stage,
+            agent: .idle,
+            pullRequest: pullRequest ? WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/7") : nil,
+            merge: merge,
+            activityAt: Date()
+        )
+    }
+
+    /// Task rows as "title [shortcut] — subtitle".
+    private func taskRows(_ commands: [PaletteCommandDescriptor]) -> [String] {
+        commands
+            .filter { if case .task = $0.invocation { true } else { false } }
+            .map { command in
+                let title = command.shortcut.map { "\(command.title) [\($0.symbolLabel)]" } ?? command.title
+                return [title, command.subtitle].compactMap { $0 }.joined(separator: " — ")
+            }
     }
 
     private func makeCommands(

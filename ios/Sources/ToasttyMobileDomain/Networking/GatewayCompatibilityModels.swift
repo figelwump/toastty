@@ -132,17 +132,21 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
     public var conversations: [CompatibleConversationSummary]
     public var workspaces: [RemoteWorkspaceSummary]
     public var generatedAt: Date
+    /// The Mac's task board; absent from hosts without the task system.
+    public var tasks: RemoteTaskBoard?
 
     public init(
         projectionRunID: RemoteProjectionRunID,
         conversations: [CompatibleConversationSummary],
         workspaces: [RemoteWorkspaceSummary] = [],
-        generatedAt: Date
+        generatedAt: Date,
+        tasks: RemoteTaskBoard? = nil
     ) {
         self.projectionRunID = projectionRunID
         self.conversations = conversations
         self.workspaces = workspaces
         self.generatedAt = generatedAt
+        self.tasks = tasks
     }
 
     public func presentation(
@@ -249,7 +253,13 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
         stateTransitions.retain(mobileConversations.map(\.id))
         let grouped = Dictionary(grouping: mobileConversations, by: \.workspaceID)
         var metadata: [UUID: RemoteWorkspaceSummary] = [:]
-        for workspace in workspaces { metadata[workspace.id] = workspace }
+        // The Mac lists workspaces in its sidebar's order, which Home's
+        // project cards keep.
+        var sidebarPosition: [UUID: Int] = [:]
+        for (index, workspace) in workspaces.enumerated() {
+            metadata[workspace.id] = workspace
+            if sidebarPosition[workspace.id] == nil { sidebarPosition[workspace.id] = index }
+        }
         let ids = Set(grouped.keys).union(metadata.keys)
         let workspaces = ids.map { id in
             MobileWorkspace(
@@ -265,14 +275,23 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 parentWorkspaceID: metadata[id]?.parentWorkspaceID,
                 spawningConversationID: metadata[id]?.spawningConversationID?.rawValue,
                 primaryAnnotationKey: metadata[id]?.primaryAnnotationKey,
-                isDone: metadata[id]?.doneAt != nil
+                isDone: metadata[id]?.doneAt != nil,
+                acceptsDoneMark: metadata[id]?.acceptsDoneMark ?? true,
+                isCoordinator: metadata[id]?.isCoordinator ?? false,
+                coordinatorConversationID: metadata[id]?.coordinatorConversationID?.rawValue,
+                coordinatorChatRead: metadata[id]?.coordinatorChatRead,
+                coordinatorQuietDigestsRevision: metadata[id]?.coordinatorQuietDigestsRevision,
+                coordinatorQueueRevision: metadata[id]?.coordinatorQueueRevision
             )
         }.sorted {
+            // A workspace known only from its sessions follows, by title.
+            let left = sidebarPosition[$0.id] ?? .max, right = sidebarPosition[$1.id] ?? .max
+            if left != right { return left < right }
             let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
             if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
             return $0.id.uuidString < $1.id.uuidString
         }
-        return MobileHomeSnapshot(hostName: hostName, workspaces: workspaces)
+        return MobileHomeSnapshot(hostName: hostName, workspaces: workspaces, taskBoard: tasks.map(MobileTaskBoard.init))
     }
 
     private static func lastActivity(

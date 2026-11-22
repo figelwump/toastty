@@ -18,11 +18,6 @@ struct AutomationSocketServerManagedLaunchTests: AutomationSocketServerTestSuppo
 
         try waitForSocket(at: socketPath)
 
-        let initialHasEverLaunchedAgent = await MainActor.run {
-            server.store.hasEverLaunchedAgent
-        }
-        #expect(initialHasEverLaunchedAgent == false)
-
         let response = try sendRequest(
             AutomationRequestEnvelope(
                 requestID: UUID().uuidString,
@@ -66,10 +61,6 @@ struct AutomationSocketServerManagedLaunchTests: AutomationSocketServerTestSuppo
         #expect(environment["TOASTTY_PANEL_ID"] == .string(server.panelID.uuidString))
         #expect(environment["TOASTTY_SOCKET_PATH"] == .string(socketPath))
         #expect(environment["TOASTTY_CWD"] == .string("/tmp/repo"))
-        let hasEverLaunchedAgent = await MainActor.run {
-            server.store.hasEverLaunchedAgent
-        }
-        #expect(hasEverLaunchedAgent)
     }
 
     @Test
@@ -256,13 +247,11 @@ struct AutomationSocketServerManagedLaunchTests: AutomationSocketServerTestSuppo
             (
                 presentedWindowID: presentedWindowID.snapshot(),
                 firstWindowID: server.store.state.windows.first?.id,
-                sessionCount: server.sessionRuntimeStore.sessionRegistry.sessionsByID.count,
-                hasEverLaunchedAgent: server.store.hasEverLaunchedAgent
+                sessionCount: server.sessionRuntimeStore.sessionRegistry.sessionsByID.count
             )
         }
         #expect(preflightState.presentedWindowID == preflightState.firstWindowID)
         #expect(preflightState.sessionCount == 0)
-        #expect(preflightState.hasEverLaunchedAgent == false)
 
         let decisionResponse = try sendRequest(
             AutomationRequestEnvelope(
@@ -340,14 +329,10 @@ struct AutomationSocketServerManagedLaunchTests: AutomationSocketServerTestSuppo
 
         #expect(launchResponse.ok)
         #expect(launchResponse.result?.string("sessionID") != nil)
-        let launchState = await MainActor.run {
-            (
-                sessionCount: server.sessionRuntimeStore.sessionRegistry.sessionsByID.count,
-                hasEverLaunchedAgent: server.store.hasEverLaunchedAgent
-            )
+        let sessionCount = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID.count
         }
-        #expect(launchState.sessionCount == 1)
-        #expect(launchState.hasEverLaunchedAgent)
+        #expect(sessionCount == 1)
     }
 
     @Test

@@ -49,15 +49,28 @@ final class ToasttyMobileBadgeUITests: XCTestCase {
         XCTAssertTrue(waitForBadge("7", on: icon), "Expected seven attention sessions. Icon: \(icon.debugDescription)")
         attachHomeScreen(springboard, name: "ios-app-badge-seven")
 
+        // With the Mac's task system on, the badge is the yellow number on
+        // Home's Needs you switcher, not its Ready to review count.
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "TOASTTY_MOBILE_FIXTURE_NOTIFICATIONS")
+        app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_TASKS"] = "1"
+        app.launch()
+        let needsYouSegment = app.buttons["toastty-mobile-home-segment-needsYou"]
+        XCTAssertTrue(needsYouSegment.waitForExistence(timeout: 10))
+        XCTAssertEqual(needsYouSegment.label, "Only what needs you, 9, 1 ready for review")
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(waitForBadge("9", on: springboard.icons[iconLabel]), "Expected the nine Needs you rows.")
+        attachHomeScreen(springboard, name: "ios-app-badge-task-board-nine")
+
         // A new process has no known badge count until its first live snapshot.
         // The reconnecting fixture must preserve the badge stored by iOS.
         app.terminate()
-        app.launchEnvironment.removeValue(forKey: "TOASTTY_MOBILE_FIXTURE_NOTIFICATIONS")
+        app.launchEnvironment.removeValue(forKey: "TOASTTY_MOBILE_FIXTURE_TASKS")
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_SCENARIO"] = "reconnecting"
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(waitForBadge("7", on: springboard.icons[iconLabel]))
+        XCTAssertTrue(waitForBadge("9", on: springboard.icons[iconLabel]))
 
         app.activate()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))

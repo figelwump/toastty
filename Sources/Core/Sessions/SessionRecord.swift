@@ -28,6 +28,16 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var usesSessionStatusNotifications: Bool
     public var status: SessionStatus?
     public var statusUpdatedAt: Date?
+    /// When the agent itself last reported a status. Toastty's own changes,
+    /// such as collapsing a read `ready` to `idle`, move `statusUpdatedAt`
+    /// but not this. Runtime-only, like `statusUpdatedAt`.
+    public var agentStatusUpdatedAt: Date?
+    /// When the session last moved between its states: at rest (`idle` or
+    /// `ready`), working, waiting for an approval, and error. Unlike
+    /// `statusUpdatedAt`, a report that repeats the state, or the collapse
+    /// of a read `ready` to `idle`, does not move it. `nil` while the
+    /// session has been at rest since it started. Runtime-only.
+    public var stateChangedAt: Date?
     public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
     /// Provider work outside agents, such as background shells, that the
     /// session still waits on. Kept in the provider's reported order.
@@ -40,6 +50,9 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var turnStartedAt: Date?
     /// How long the previous turn took, for rows that are now at rest.
     public var lastTurnDuration: TimeInterval?
+    /// When the previous turn ended. Like the other turn timing, it is
+    /// runtime-only: a restored session has not finished a turn yet.
+    public var lastTurnEndedAt: Date?
     public var displayTitleOverride: String?
     /// The short name the provider CLI generated for this session (Claude's
     /// `ai-title`, Codex's `thread_name`). Kept separate from
@@ -71,6 +84,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         lastActivityFinishedAt: Date? = nil,
         turnStartedAt: Date? = nil,
         lastTurnDuration: TimeInterval? = nil,
+        lastTurnEndedAt: Date? = nil,
         displayTitleOverride: String? = nil,
         providerSessionName: String? = nil,
         repoRoot: String? = nil,
@@ -97,6 +111,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.lastActivityFinishedAt = lastActivityFinishedAt
         self.turnStartedAt = turnStartedAt
         self.lastTurnDuration = lastTurnDuration
+        self.lastTurnEndedAt = lastTurnEndedAt
         self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
         self.providerSessionName = Self.normalizedOptionalText(providerSessionName)
         self.repoRoot = repoRoot
@@ -134,6 +149,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         ) ?? false
         status = try container.decodeIfPresent(SessionStatus.self, forKey: .status)
         statusUpdatedAt = nil
+        stateChangedAt = nil
         // Background activity is runtime-only. Do not restore it from persisted
         // registry snapshots, because child processes from an old app run cannot
         // safely keep a restored sidebar row in a working state.
@@ -145,6 +161,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         // it were still counting up.
         turnStartedAt = nil
         lastTurnDuration = nil
+        lastTurnEndedAt = nil
         displayTitleOverride = Self.normalizedOptionalText(
             try container.decodeIfPresent(String.self, forKey: .displayTitleOverride)
         )

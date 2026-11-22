@@ -1,0 +1,934 @@
+import AppKit
+import CoreState
+import SwiftUI
+
+/// The groups the Tasks view lists, in sidebar order. Needs you is split as
+/// the sidebar splits it: what blocks an agent, then Ready to review. To
+/// ship lists its tasks under one header per project.
+struct TasksViewSections: Equatable {
+    struct Lane: Equatable, Identifiable {
+        /// The project's root directory, or its title for tasks without one:
+        /// two projects with the same title keep separate lanes.
+        let id: String
+        let projectTitle: String
+        let entries: [SidebarStatusSections.Entry]
+    }
+
+    var needsYou: [SidebarStatusSections.Entry] = []
+    /// Tasks in Needs you whose open pull request or ready mark waits for
+    /// the user's review.
+    var readyToReview: [SidebarStatusSections.Entry] = []
+    var running: [SidebarStatusSections.Entry] = []
+    var idle: [SidebarStatusSections.Entry] = []
+    var toShip: [Lane] = []
+    var done: [SidebarStatusSections.Entry] = []
+    var archived: [SidebarStatusSections.Entry] = []
+
+    static func make(_ items: [TaskBoardItem]) -> Self {
+        // Needs you, Running and Idle list a task by the bucket the sidebar
+        // lists its task space's row in: the more urgent of its stage and its
+        // sessions. To ship, Done and Archived list by stage.
+        let buckets = Dictionary(
+            items.compactMap { item in SidebarBucket.task(item).map { (item.id, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        func entries(_ isListed: (SidebarBucket) -> Bool) -> [SidebarStatusSections.Entry] {
+            SidebarStatusSections.grouped(items.filter { buckets[$0.id].map(isListed) == true })
+        }
+        func entries(_ group: TaskStage.Group) -> [SidebarStatusSections.Entry] {
+            SidebarStatusSections.grouped(items.filter { $0.stage.group == group })
+        }
+        var sections = Self()
+        // A family lists in Needs you when any member blocks an agent, else
+        // in Ready to review; a member whose own state is calmer is dimmed.
+        var family: [SidebarStatusSections.Entry] = []
+        func placeFamily() {
+            guard family.isEmpty == false else { return }
+            let bucket = family.compactMap { buckets[$0.id] }.min() ?? .needsYou
+            let placed = family.map { entry in
+                var entry = entry
+                entry.isContext = buckets[entry.id] != bucket
+                return entry
+            }
+            if bucket == .readyToReview { sections.readyToReview += placed } else { sections.needsYou += placed }
+            family = []
+        }
+        for entry in entries(\.isListedInNeedsYouSegment) {
+            if entry.isLinkedChild == false { placeFamily() }
+            family.append(entry)
+        }
+        placeFamily()
+        sections.running = entries { $0 == .running }
+        sections.idle = entries { $0 == .idle }
+        // Lanes first, then families in each lane: a child in another
+        // project's lane lists apart from its parent.
+        let toShipItems = items.filter { $0.stage.group == .toShip }
+        sections.toShip = Dictionary(grouping: toShipItems, by: SidebarStatusSections.laneKey)
+            .map { key, items in
+                let entries = SidebarStatusSections.grouped(items)
+                return Lane(
+                    id: key,
+                    projectTitle: entries.first?.item.projectTitle ?? "Other",
+                    entries: entries
+                )
+            }
+            .sorted { $0.projectTitle.localizedStandardCompare($1.projectTitle) == .orderedAscending }
+        sections.done = entries(.done)
+        sections.archived = entries(.archived)
+        return sections
+    }
+
+    /// Every entry in display order, for picking a selection.
+    var all: [SidebarStatusSections.Entry] {
+        needsYou + readyToReview + running + idle + toShip.flatMap(\.entries) + done + archived
+    }
+
+    /// The entries the list shows, in order: Done and Archived only while
+    /// they are expanded.
+    func visible(isDoneExpanded: Bool, isArchivedExpanded: Bool) -> [SidebarStatusSections.Entry] {
+        needsYou + readyToReview + running + idle + toShip.flatMap(\.entries)
+            + (isDoneExpanded ? done : []) + (isArchivedExpanded ? archived : [])
+    }
+
+    /// The row an arrow key selects: the next or previous visible row, or
+    /// the first or last when the selection is not among them. `nil` at
+    /// either end.
+    static func selection(
+        movingFrom selected: TaskBoardItem.Subject?,
+        by offset: Int,
+        in visible: [TaskBoardItem.Subject]
+    ) -> TaskBoardItem.Subject? {
+        guard let index = selected.flatMap(visible.firstIndex(of:)) else {
+            return offset > 0 ? visible.first : visible.last
+        }
+        let target = index + offset
+        return visible.indices.contains(target) ? visible[target] : nil
+    }
+
+    /// The row to select once `selected` leaves the list, as when it was
+    /// archived or marked done into a collapsed group: the next row it had
+    /// that still shows, or else the one before it. `nil` when the list did
+    /// not show it before, or shows nothing now.
+    static func selection(
+        replacing selected: TaskBoardItem.Subject,
+        before: [TaskBoardItem.Subject],
+        after: [TaskBoardItem.Subject]
+    ) -> TaskBoardItem.Subject? {
+        guard let index = before.firstIndex(of: selected) else { return nil }
+        let remaining = Set(after)
+        return before[(index + 1)...].first(where: remaining.contains)
+            ?? before[..<index].last(where: remaining.contains)
+    }
+}
+
+/// The full task board: a window-level mode that covers the workspace
+/// content while it is shown. Selecting a workspace leaves it.
+struct TasksView: View {
+    let windowID: UUID
+    @ObservedObject var store: AppStore
+    @ObservedObject var board: TaskBoardStore
+    /// Observed so agent activity redraws the list.
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let newTask: (() -> Void)?
+
+    @State private var isDoneExpanded = false
+    @State private var isArchivedExpanded = false
+    /// The row to scroll into view: one an arrow key selected, or a
+    /// selected task in a group the view was asked to reveal.
+    @State private var keyboardSelection: TaskBoardItem.Subject?
+
+    private static let detailWidth: CGFloat = 360
+
+    var body: some View {
+        let items = board.items()
+        let sections = TasksViewSections.make(items)
+        let selected = board.tasksViewSelection(windowID: windowID, items: items)
+        // A group the view was asked to reveal counts as expanded before the
+        // view applies the request. Otherwise a selected task in that group
+        // would leave the list when the view opens and lose the selection.
+        let revealing = board.revealGroupByWindowID[windowID]
+        let visibleIDs = sections.visible(
+            isDoneExpanded: isDoneExpanded || revealing == .done,
+            isArchivedExpanded: isArchivedExpanded || revealing == .archived
+        ).map(\.id)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                if let webhooks = board.coordinator?.webhooks {
+                    TaskWebhookApprovalBanner(webhooks: webhooks)
+                }
+                if let configError = board.configError {
+                    configErrorBanner(configError)
+                }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        list(sections, selectedID: selected?.id)
+                            .padding(.bottom, 16)
+                    }
+                    // The request can come while the view opens or while it
+                    // already shows.
+                    .onAppear { revealRequestedGroup(using: proxy) }
+                    .onChange(of: board.revealGroupByWindowID[windowID]) { _, _ in
+                        revealRequestedGroup(using: proxy)
+                    }
+                    .onChange(of: keyboardSelection) { _, subject in
+                        guard let subject, let entry = sections.all.first(where: { $0.id == subject }) else { return }
+                        proxy.scrollTo(Self.rowIdentity(entry))
+                        keyboardSelection = nil
+                    }
+                }
+
+            }
+            .frame(maxWidth: .infinity)
+
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(width: 1)
+
+            Group {
+                if let selected {
+                    TasksViewDetail(
+                        item: selected,
+                        windowID: windowID,
+                        store: store,
+                        board: board,
+                        sessionRuntimeStore: sessionRuntimeStore
+                    )
+                    .id(selected.id)
+                } else {
+                    VStack(spacing: 6) {
+                        Text("No tasks yet.")
+                            .font(ToastyTheme.fontBody)
+                        if newTask != nil, let hint = Self.emptyStateShortcutHint(board.newTaskShortcut) {
+                            Text(hint)
+                                .font(.system(size: 12))
+                                .accessibilityIdentifier("tasks.view.empty.shortcut")
+                        }
+                    }
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(width: Self.detailWidth)
+            .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .background(ToastyTheme.surfaceBackground)
+        .onAppear {
+            board.tasksViewDidOpen()
+            board.tasksViewListDidChange(windowID: windowID, visible: visibleIDs)
+        }
+        // A selected task that leaves the list, such as one just archived,
+        // hands the selection to its neighbour.
+        .onChange(of: visibleIDs) { _, ids in
+            board.tasksViewListDidChange(windowID: windowID, visible: ids)
+        }
+        // Holds keyboard focus in this window while the view shows, so keys
+        // never reach the terminal underneath, closes the view on Esc, and
+        // moves the selection with Up and Down Arrow.
+        .background {
+            TasksViewKeySink(
+                close: { _ = store.send(.setTasksViewShown(windowID: windowID, shown: false)) },
+                move: { offset in
+                    guard let next = TasksViewSections.selection(movingFrom: selected?.id, by: offset, in: visibleIDs) else { return }
+                    board.selectionByWindowID[windowID] = next
+                    keyboardSelection = next
+                }
+            )
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
+        // A container's identifier would replace its children's.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tasks.view")
+    }
+
+    /// The empty state's second line, which teaches the quick entry
+    /// shortcut. It says "in any app" only when macOS delivers the
+    /// shortcut while another app is active.
+    static func emptyStateShortcutHint(_ shortcut: NewTaskShortcutHint?) -> String? {
+        guard let shortcut else { return nil }
+        return shortcut.isGlobal
+            ? "Press \(shortcut.label) in any app to add a task."
+            : "Press \(shortcut.label) to add a task."
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text("Tasks")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(ToastyTheme.primaryText)
+            Spacer(minLength: 0)
+            if let newTask {
+                Button(action: newTask) {
+                    HStack(spacing: 7) {
+                        Label("New Task", systemImage: "plus")
+                        if let label = board.newTaskShortcut?.label {
+                            Text(label)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .padding(.horizontal, 4)
+                                .overlay { RoundedRectangle(cornerRadius: 3).stroke(Color(hex: 0x9A6208), lineWidth: 1) }
+                        }
+                    }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(hex: 0x1A1206))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(ToastyTheme.accent, in: RoundedRectangle(cornerRadius: 7))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("tasks.view.new")
+            }
+            Button {
+                _ = store.send(.setTasksViewShown(windowID: windowID, shown: false))
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close the Tasks view (Esc)")
+            .accessibilityLabel("Close Tasks")
+            .accessibilityIdentifier("tasks.view.close")
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 40)
+        .padding(.bottom, 10)
+    }
+
+    private func configErrorBanner(_ message: String) -> some View {
+        Text(message)
+            .font(.system(size: 11.5))
+            .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ToastyTheme.sessionNeedsApprovalBackground, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 18)
+            .padding(.bottom, 8)
+            .accessibilityIdentifier("tasks.view.configError")
+    }
+
+    @ViewBuilder
+    private func list(_ sections: TasksViewSections, selectedID: TaskBoardItem.Subject?) -> some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            groupHeader(.needsYou, count: sections.needsYou.count, isHot: sections.needsYou.isEmpty == false)
+            rows(sections.needsYou, selectedID: selectedID)
+            if sections.readyToReview.isEmpty == false {
+                groupHeader(
+                    title: SidebarBucket.readyToReview.title, identifier: "readyToReview",
+                    count: sections.readyToReview.count, color: ToastyTheme.sidebarTaskReviewMark
+                )
+                rows(sections.readyToReview, selectedID: selectedID)
+            }
+            groupHeader(.running, count: sections.running.count)
+            rows(sections.running, selectedID: selectedID)
+            groupHeader(.idle, count: sections.idle.count)
+            rows(sections.idle, selectedID: selectedID)
+            groupHeader(.toShip, count: sections.toShip.reduce(0) { $0 + $1.entries.count })
+                .id(TaskStage.Group.toShip)
+            ForEach(sections.toShip) { lane in
+                HStack(spacing: 8) {
+                    Text("\(lane.projectTitle) · \(lane.entries.count) \(lane.entries.count == 1 ? "task" : "tasks")")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.sidebarTaskToShipMark)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 6)
+                rows(lane.entries, selectedID: selectedID)
+            }
+            collapsibleGroup(.done, entries: sections.done, isExpanded: $isDoneExpanded, selectedID: selectedID)
+                .id(TaskStage.Group.done)
+            if sections.archived.isEmpty == false {
+                collapsibleGroup(.archived, entries: sections.archived, isExpanded: $isArchivedExpanded, selectedID: selectedID)
+                    .id(TaskStage.Group.archived)
+            }
+        }
+    }
+
+    private func groupHeader(_ group: TaskStage.Group, count: Int, isHot: Bool = false) -> some View {
+        groupHeader(
+            title: TaskBoardPresentation.groupTitle(group), identifier: "\(group)", count: count,
+            color: isHot ? Color(hex: 0xF2C46B) : ToastyTheme.mutedText
+        )
+    }
+
+    private func groupHeader(title: String, identifier: String, count: Int, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Text(title.uppercased())
+                .tracking(0.8)
+            Text("\(count)")
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(ToastyTheme.inactiveText)
+        }
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
+        .padding(.bottom, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("tasks.view.group.\(identifier)")
+    }
+
+    private func collapsibleGroup(
+        _ group: TaskStage.Group,
+        entries: [SidebarStatusSections.Entry],
+        isExpanded: Binding<Bool>,
+        selectedID: TaskBoardItem.Subject?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                isExpanded.wrappedValue.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                    groupHeader(group, count: entries.count)
+                        .padding(.horizontal, -18)
+                }
+                .padding(.horizontal, 18)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Self.collapsibleGroupLabel(group, count: entries.count, isExpanded: isExpanded.wrappedValue))
+            .background {
+                SidebarSemanticTextBridge(text: Self.collapsibleGroupLabel(group, count: entries.count, isExpanded: isExpanded.wrappedValue))
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+            if isExpanded.wrappedValue {
+                rows(entries, selectedID: selectedID)
+            }
+        }
+    }
+
+    static func collapsibleGroupLabel(_ group: TaskStage.Group, count: Int, isExpanded: Bool) -> String {
+        "\(TaskBoardPresentation.groupTitle(group)), \(count), \(isExpanded ? "expanded" : "collapsed")"
+    }
+
+    /// Shows the group that the sidebar or a task link asked for, once.
+    private func revealRequestedGroup(using proxy: ScrollViewProxy) {
+        guard let group = board.revealGroupByWindowID.removeValue(forKey: windowID) else { return }
+        let revealsSelectedRow = board.revealsSelectedRowWindowIDs.remove(windowID) != nil
+        switch group {
+        case .done: isDoneExpanded = true
+        case .archived: isArchivedExpanded = true
+        case .needsYou, .running, .idle, .toShip: break
+        }
+        // After the expanded rows lay out, so the group's top lands at the
+        // top of the list. A task selected to reveal it then scrolls its row
+        // into view, as an arrow key does, since a long group can put it
+        // below the fold. The lazy list knows a Done or Archived row only
+        // once its group is on screen, so the group comes first.
+        Task { @MainActor in
+            proxy.scrollTo(group, anchor: .top)
+            if revealsSelectedRow, let selected = board.tasksViewSelection(windowID: windowID), selected.stage.group == group {
+                keyboardSelection = selected.id
+            }
+        }
+    }
+
+    private func rows(_ entries: [SidebarStatusSections.Entry], selectedID: TaskBoardItem.Subject?) -> some View {
+        ForEach(entries) { entry in
+            TasksViewRow(
+                entry: entry,
+                isSelected: entry.id == selectedID,
+                select: { board.selectionByWindowID[windowID] = entry.id },
+                open: entry.item.taskSpaceWorkspaceID.map { workspaceID in
+                    { openTaskSpace(workspaceID) }
+                }
+            )
+            .contextMenu {
+                if let coordinator = board.coordinator {
+                    TaskContextMenuItems(sections: TaskBoardPresentation.menuItems(
+                        entry.item,
+                        isTriageConfigured: coordinator.isTriageConfigured
+                    )) { menuItem in
+                        TaskActions.runFromMenu(menuItem, coordinator: coordinator, openTaskSpace: openTaskSpace)
+                    }
+                }
+            }
+            // The lazy stack kept a row's old drawing when its task moved to
+            // another group while the view showed, so a row is rebuilt
+            // whenever its group or status line changes.
+            .id(Self.rowIdentity(entry))
+        }
+    }
+
+    private func openTaskSpace(_ workspaceID: UUID) {
+        TaskActions.openTaskSpace(
+            workspaceID: workspaceID,
+            fallbackWindowID: windowID,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+    }
+
+    private static func rowIdentity(_ entry: SidebarStatusSections.Entry) -> RowIdentity {
+        RowIdentity(
+            subject: entry.id,
+            group: entry.item.stage.group,
+            bucket: SidebarBucket.task(entry.item),
+            statusLine: TaskBoardPresentation.tasksViewStatusLine(entry.item),
+            hasUnreadTurn: entry.item.hasUnreadTurn,
+            releasesAfterMerge: TaskBoardPresentation.releaseAfterMergeRequestedAt(entry.item) != nil
+        )
+    }
+
+    private struct RowIdentity: Hashable {
+        let subject: TaskBoardItem.Subject
+        let group: TaskStage.Group
+        let bucket: SidebarBucket?
+        let statusLine: String
+        let hasUnreadTurn: Bool
+        let releasesAfterMerge: Bool
+    }
+
+}
+
+private struct TasksViewRow: View {
+    let entry: SidebarStatusSections.Entry
+    let isSelected: Bool
+    let select: () -> Void
+    /// Opens the task's space on a double click. Nil when the task has no
+    /// open task space.
+    let open: (() -> Void)?
+
+    @State private var isHovered = false
+
+    var body: some View {
+        let item = entry.item
+        HStack(alignment: .top, spacing: 10) {
+            TaskStageMark(item: item)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    // Bolder while a finished turn is unread, as in the sidebar.
+                    Text(item.title)
+                        .font(.system(size: 13, weight: item.hasUnreadTurn ? .semibold : .medium))
+                        .foregroundStyle(ToastyTheme.primaryText)
+                        .lineLimit(1)
+                    if TaskBoardPresentation.releaseAfterMergeRequestedAt(item) != nil {
+                        TaskReleaseAfterMergeMark()
+                    }
+                }
+                HStack(spacing: 8) {
+                    if let project = item.projectTitle {
+                        SidebarView.sidebarTaskTag(project, maximumWidth: .infinity)
+                    }
+                    if let link = item.pullRequest {
+                        Text("PR #\(link.number)")
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Color(hex: 0x8FD18F))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color(hex: 0x1D2A1D), in: RoundedRectangle(cornerRadius: 4))
+                            .overlay { RoundedRectangle(cornerRadius: 4).stroke(Color(hex: 0x3C5C3C), lineWidth: 1) }
+                    } else if let branch = item.branch {
+                        Text(branch)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                            .lineLimit(1)
+                    }
+                    Text(TaskBoardPresentation.tasksViewStatusLine(item))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(ToastyTheme.inactiveText.opacity(0.8))
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            // A watched task space with no agent activity has no date.
+            if item.activityAt > .distantPast {
+                Text(TaskAge.label(since: item.activityAt, now: Date()))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(ToastyTheme.mutedText)
+            }
+        }
+        .padding(.vertical, 9)
+        .padding(.leading, entry.isLinkedChild ? 36 : 18)
+        .padding(.trailing, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // A task an agent split off lists under the task that started it,
+        // indented, with a ↳ mark left of its status mark.
+        .overlay(alignment: .topLeading) {
+            if entry.isLinkedChild {
+                TaskChildArrowMark(size: 10)
+                    .frame(width: 18, height: 16)
+                    .padding(.leading, 18)
+                    .padding(.top, 9)
+            }
+        }
+        .background(isSelected ? Color(hex: 0x1C1C1C) : (isHovered ? Color(hex: 0x161616) : Color.clear))
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Rectangle().fill(ToastyTheme.accent).frame(width: 2)
+            }
+        }
+        .overlay(alignment: .top) {
+            Rectangle().fill(ToastyTheme.hairline).frame(height: 1)
+        }
+        .contentShape(Rectangle())
+        // The first click selects at once; the second click of a double
+        // click also opens the task space.
+        .onTapGesture(perform: select)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { open?() })
+        .onHover { isHovered = $0 }
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityLabel)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction(.default, select)
+        .accessibilityActions {
+            if let open {
+                Button("Open Task Space", action: open)
+            }
+        }
+        .accessibilityIdentifier("tasks.view.row")
+    }
+
+    private var accessibilityLabel: String {
+        let item = entry.item
+        return TaskBoardPresentation.addingReleaseAfterMerge(
+            to: "\(item.title), \(item.hasUnreadTurn ? "unread, " : "")\(TaskBoardPresentation.tasksViewStatusLine(item))",
+            item
+        )
+    }
+}
+
+/// The Tasks view's first responder. SwiftUI focus alone did not keep the
+/// terminal under the view from getting keys back when the window became
+/// key again, so this AppKit view takes first responder in its own window
+/// when it appears and again whenever a terminal has it while the view shows.
+/// Esc here closes the view. It is not a keyboard shortcut: AppKit offers
+/// those to the main window too, which would take Esc from a panel open over
+/// the view, such as quick entry.
+private struct TasksViewKeySink: NSViewRepresentable {
+    let close: () -> Void
+    /// Moves the selection by one row: -1 for Up Arrow, 1 for Down Arrow.
+    let move: (Int) -> Void
+
+    func makeNSView(context _: Context) -> KeySinkView {
+        let view = KeySinkView()
+        view.close = close
+        view.move = move
+        return view
+    }
+
+    func updateNSView(_ view: KeySinkView, context _: Context) {
+        view.close = close
+        view.move = move
+    }
+
+    final class KeySinkView: NSView {
+        var close: (() -> Void)?
+        var move: ((Int) -> Void)?
+        private var observers: [NSObjectProtocol] = []
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard let window else { return }
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didUpdateNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.claimIfATerminalHasFocus() }
+                })
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+
+        private func claimIfATerminalHasFocus() {
+            guard let window else { return }
+            if window.firstResponder === window || (window.firstResponder as? NSView)?.enclosingTerminalHost != nil {
+                window.makeFirstResponder(self)
+            }
+        }
+
+        override func keyDown(with event: NSEvent) {
+            // Esc closes and the plain arrows move the selection; other keys
+            // stop here instead of reaching the terminal or beeping.
+            let isPlain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+            switch event.keyCode {
+            case 53: close?()
+            case 125 where isPlain: move?(1)
+            case 126 where isPlain: move?(-1)
+            default: break
+            }
+        }
+
+        override func cancelOperation(_: Any?) {
+            close?()
+        }
+    }
+}
+
+private extension NSView {
+    /// The terminal this view is part of, if any.
+    var enclosingTerminalHost: TerminalHostView? {
+        var view: NSView? = self
+        while let current = view {
+            if let host = current as? TerminalHostView { return host }
+            view = current.superview
+        }
+        return nil
+    }
+}
+
+/// The detail pane's buttons: amber for the main action, outlined for the
+/// rest, as in the mockup.
+private struct TasksViewButtonStyle: ButtonStyle {
+    let isPrimary: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: isPrimary ? .semibold : .medium))
+            .foregroundStyle(isPrimary ? Color(hex: 0x1A1206) : ToastyTheme.primaryText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isPrimary ? ToastyTheme.accent : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .overlay {
+                if isPrimary == false {
+                    RoundedRectangle(cornerRadius: 7).stroke(Color(hex: 0x383838), lineWidth: 1)
+                }
+            }
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(Rectangle())
+    }
+}
+
+/// The detail pane: the task as written, where it stands, what happened to
+/// it, and what can be done next.
+private struct TasksViewDetail: View {
+    let item: TaskBoardItem
+    let windowID: UUID
+    @ObservedObject var store: AppStore
+    @ObservedObject var board: TaskBoardStore
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(TaskBoardPresentation.originLine(item, now: Date()))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(ToastyTheme.mutedText)
+                Text(item.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let record = item.record, let coordinator = board.coordinator, item.stage.isBeforeStart {
+                    // Setup or the move has not finished: the setup card's
+                    // controls, with the workspace picker when triage could
+                    // not place it.
+                    TaskSetupCard(taskID: record.id, records: coordinator.records, coordinator: coordinator)
+                } else {
+                    if let text = item.record?.text, text.isEmpty == false, text != item.title {
+                        Text(text)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ToastyTheme.inactiveText)
+                            .lineLimit(14)
+                            .textSelection(.enabled)
+                    }
+                    status
+                    history
+                    actions
+                }
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(ToastyTheme.sessionErrorText)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 40)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+        }
+        // The detail is short; long task text is cut to 14 lines.
+        .background(ToastyTheme.surfaceBackground)
+        .background {
+            SidebarSemanticTextBridge(text: "Task detail, \(item.title), \(TaskBoardPresentation.stageDescription(item).stage)")
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tasks.view.detail")
+    }
+
+    private var status: some View {
+        let stage = TaskBoardPresentation.stageDescription(item)
+        return card("Status") {
+            keyValue("Stage", stage.stage, why: stage.why)
+            if let pullRequest = TaskBoardPresentation.pullRequestLine(item) {
+                keyValue("PR", pullRequest)
+            }
+            if let branch = item.branch {
+                keyValue("Branch", branch, monospaced: true)
+            }
+            if let agent = item.record?.resolved?.agent {
+                keyValue("Agent", [agent, item.record?.resolved?.model].compactMap { $0 }.joined(separator: " · "))
+            }
+            if let source = item.record?.externalRef {
+                sourceRow(source)
+            }
+            if let requestedAt = TaskBoardPresentation.releaseAfterMergeRequestedAt(item) {
+                let age = TaskAge.label(since: requestedAt, now: Date())
+                keyValue("Release", "Right after merge", why: age == "now" ? "asked just now" : "asked \(age) ago")
+            }
+        }
+    }
+
+    /// The issue or report the task came from; its page opens in the
+    /// browser.
+    @ViewBuilder
+    private func sourceRow(_ source: TaskExternalRef) -> some View {
+        if let url = source.url.flatMap(URL.init(string:)) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Source")
+                    .font(.system(size: 12))
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .frame(width: 60, alignment: .leading)
+                Button(source.id) { NSWorkspace.shared.open(url) }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(url.absoluteString)
+                    .accessibilityIdentifier("tasks.view.detail.source")
+            }
+        } else {
+            keyValue("Source", source.id, monospaced: true)
+        }
+    }
+
+    @ViewBuilder
+    private var history: some View {
+        let lines = TaskBoardPresentation.history(item)
+        if lines.isEmpty == false {
+            card("History") {
+                ForEach(lines, id: \.self) { line in
+                    Text(line)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                }
+            }
+        }
+    }
+
+    /// The task's menu as buttons: where to go on one line, what to do on
+    /// the next.
+    private var actions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let coordinator = board.coordinator {
+                ForEach(Array(TaskBoardPresentation.menuItems(item).enumerated()), id: \.offset) { _, section in
+                    HStack(spacing: 8) {
+                        ForEach(section, id: \.self) { menuItem in
+                            menuButton(menuItem, coordinator: coordinator)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func menuButton(_ menuItem: TaskBoardPresentation.MenuItem, coordinator: TaskCoordinator) -> some View {
+        let isPrimary: Bool
+        let help: String?
+        let identifier: String
+        switch menuItem {
+        case .openTaskSpace:
+            (isPrimary, help, identifier) = (true, nil, "tasks.view.detail.open")
+        case .trackAsTask:
+            (isPrimary, help, identifier) = (false, "Give this task space a task record, so its history stays after it closes.", "tasks.view.detail.adopt")
+        case .action(let action, _, _):
+            (isPrimary, help, identifier) = (action.isPrimary, action.help, "tasks.view.detail.\(action)")
+        case .openPullRequest:
+            (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.openPullRequest")
+        case .delete:
+            (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.delete")
+        case .retry, .retryTriage:
+            // The setup card shows these in the pane.
+            (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.retry")
+        }
+        return Button(menuItem.title, role: menuItem.isDestructive ? .destructive : nil) {
+            perform { try TaskActions.run(menuItem, coordinator: coordinator, openTaskSpace: openTaskSpace) }
+        }
+        .buttonStyle(TasksViewButtonStyle(isPrimary: isPrimary))
+        .help(help ?? "")
+        .accessibilityIdentifier(identifier)
+    }
+
+    /// A titled box, as the mockup draws Status and History.
+    private func card(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(ToastyTheme.mutedText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            Rectangle().fill(ToastyTheme.hairline).frame(height: 1)
+            VStack(alignment: .leading, spacing: 7, content: content)
+                .padding(12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).stroke(Color(hex: 0x2A2A2A), lineWidth: 1) }
+    }
+
+    private func keyValue(_ key: String, _ value: String, why: String? = nil, monospaced: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(key)
+                .font(.system(size: 12))
+                .foregroundStyle(ToastyTheme.mutedText)
+                .frame(width: 60, alignment: .leading)
+            Text(value)
+                .font(monospaced ? .system(size: 11.5, design: .monospaced) : .system(size: 12))
+                .foregroundStyle(ToastyTheme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let why {
+                Text(why)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func openTaskSpace(_ workspaceID: UUID) {
+        TaskActions.openTaskSpace(
+            workspaceID: workspaceID,
+            fallbackWindowID: windowID,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+    }
+
+    private func perform(_ action: () throws -> Void) {
+        do {
+            try action()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}

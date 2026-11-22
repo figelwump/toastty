@@ -101,6 +101,7 @@ final class SessionCloseController {
     private let confirmStopAndClose: @MainActor (_ sessionTitle: String, _ detail: String?) -> Bool
     private let confirmWorkspaceClose: @MainActor (_ sessionTitle: String, _ close: WorkspaceClose) -> Bool
     private let presentRefusal: @MainActor (_ sessionTitle: String, _ reason: String) -> Void
+    private let taskSpaceCloseAsker: TaskSpaceCloseAsker
 
     init(
         store: AppStore,
@@ -111,7 +112,8 @@ final class SessionCloseController {
         shouldBypassConfirmation: Bool? = nil,
         confirmStopAndClose: (@MainActor (String, String?) -> Bool)? = nil,
         confirmWorkspaceClose: (@MainActor (String, WorkspaceClose) -> Bool)? = nil,
-        presentRefusal: (@MainActor (String, String) -> Void)? = nil
+        presentRefusal: (@MainActor (String, String) -> Void)? = nil,
+        taskSpaceCloseAsker: TaskSpaceCloseAsker = .never
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -126,6 +128,7 @@ final class SessionCloseController {
         self.confirmStopAndClose = confirmStopAndClose ?? Self.presentStopAndCloseConfirmation
         self.confirmWorkspaceClose = confirmWorkspaceClose ?? Self.presentWorkspaceCloseConfirmation
         self.presentRefusal = presentRefusal ?? Self.presentRefusalAlert
+        self.taskSpaceCloseAsker = taskSpaceCloseAsker
     }
 
     /// Who asked for a close, which decides what it may end without asking.
@@ -135,6 +138,10 @@ final class SessionCloseController {
         /// Nobody: the agent exited on its own. Such a close never stops a
         /// process or removes a workspace, even when prompts are bypassed.
         case agentExit
+        /// Nobody: the agent's conversation moved to a task's worktree, so
+        /// stopping it loses nothing. Such a close still never removes a
+        /// workspace.
+        case movedSession
     }
 
     /// Closes the session in `panelID` without UI. A remote client shows its
@@ -165,6 +172,19 @@ final class SessionCloseController {
         )
     }
 
+    /// Closes the pane of a session whose conversation moved into a task's
+    /// worktree, stopping its agent, and its tab when it was the tab's last.
+    /// A pane that is its workspace's last, or whose tab holds an unsaved
+    /// document, stays open.
+    func closeMovedSessionPane(panelID: UUID) -> CloseResult {
+        close(
+            panelID: panelID,
+            stopIfBusy: true,
+            requester: .movedSession,
+            source: AppActionSource("task_start_work", detail: "moved_session")
+        )
+    }
+
     private func close(
         panelID: UUID,
         stopIfBusy: Bool,
@@ -177,7 +197,7 @@ final class SessionCloseController {
         case .person(let confirmedID):
             asks = shouldBypassConfirmation == false
             confirmedWorkspaceCloseID = confirmedID
-        case .agentExit:
+        case .agentExit, .movedSession:
             asks = true
             confirmedWorkspaceCloseID = nil
         }
@@ -255,7 +275,9 @@ final class SessionCloseController {
     }
 
     /// The sidebar's Close Session item: asks before stopping a busy agent or
-    /// closing the workspace, and explains a refusal.
+    /// closing the workspace, and explains a refusal. Closing a task space
+    /// whose task asks the close question asks it instead of the workspace
+    /// confirmation.
     func closeSessionInteractively(panelID: UUID, sessionTitle: String) {
         let source = AppActionSource.ui("sidebar_session_close")
         switch closeSession(panelID: panelID, stopIfBusy: false, source: source) {
@@ -263,10 +285,20 @@ final class SessionCloseController {
             guard confirmStopAndClose(sessionTitle, detail) else { return }
             _ = closeSession(panelID: panelID, stopIfBusy: true, source: source)
         case .workspaceCloseConfirmationRequired(let workspaceClose):
-            guard confirmWorkspaceClose(sessionTitle, workspaceClose) else { return }
-            _ = closeSession(
+            let taskSpaceAnswer = taskSpaceCloseAsker.ask(closingWorkspaceID: workspaceClose.workspaceID) {
+                Self.workspaceCloseMessage(workspaceClose)
+            }
+            if let taskSpaceAnswer {
+                guard taskSpaceAnswer.choice != nil else { return }
+            } else {
+                guard confirmWorkspaceClose(sessionTitle, workspaceClose) else { return }
+            }
+            let result = closeSession(
                 panelID: panelID, stopIfBusy: true, confirmedWorkspaceCloseID: workspaceClose.workspaceID, source: source
             )
+            if result == .closed, let taskSpaceAnswer {
+                taskSpaceCloseAsker.taskSpaceClosed(taskSpaceAnswer)
+            }
         case .unsavedDocument(let displayName):
             presentRefusal(
                 sessionTitle,

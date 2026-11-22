@@ -1,0 +1,1117 @@
+import AppKit
+@testable import ConversationUI
+import CoreState
+import RemoteProtocol
+import SwiftUI
+@testable import ToasttyApp
+import XCTest
+
+/// The coordinator's chat as the Mac draws it: the shared transcript with a
+/// folded digest, task chips and the Mac's width. The image stays on the
+/// test result for visual review.
+@MainActor
+final class CoordinatorChatViewTests: XCTestCase {
+    private static let windowSize = CGSize(width: 1_100, height: 640)
+    private static let reviewTaskID = UUID(uuidString: "8C2F1D3A-4B5C-4D6E-8F70-1A2B3C4D5E6F")!
+    private static let questionTaskID = UUID(uuidString: "41B7E9C0-1111-4222-8333-444455556666")!
+    private static let missingTaskID = UUID(uuidString: "99999999-9999-4999-8999-999999999999")!
+
+    func testDockDragResizesComposerButRewrapsMountedTranscriptOnlyOnCommit() async throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("The transcript requires macOS 15.") }
+        let message = String(repeating: "This message wraps across several lines. ", count: 8)
+        let fixture = try CoordinatorChatFixture(initialUserMessages: [message])
+        defer { fixture.tearDown() }
+        let location = try XCTUnwrap(fixture.store.state.coordinator)
+        let resize = LiveColumnResize()
+        let start: CGFloat = 360
+        func dock(_ settledWidth: CGFloat) -> some View {
+            CoordinatorDockView(
+                controller: fixture.controller, sessionRuntimeStore: fixture.conversations.sessionRuntimeStore,
+                store: fixture.store, chat: fixture.chat, board: .disabled, location: location,
+                settledWidth: settledWidth, headerLeadingInset: 14, appIsActive: true
+            )
+            .modifier(ResizableColumnFrame(column: .dock, savedWidth: settledWidth, resize: resize))
+        }
+        let (host, window) = Self.host(dock(start))
+        defer { window.close() }
+        let text = try await fixture.waitFor("wrapped dock message") {
+            Self.descendants(of: host, as: ToasttyTranscriptTextView.self).first { $0.string.contains("This message wraps") }
+        }
+        let composer = try XCTUnwrap(Self.descendants(of: host, as: CoordinatorComposerTextView.self).first)
+        let textWidth = text.frame.width
+        let composerWidth = composer.frame.width
+        let selection = NSRange(location: 0, length: 4)
+        text.setSelectedRange(selection)
+
+        resize.begin(.dock, width: start)
+        resize.update(.dock, translation: -80, availableWidth: Self.windowSize.width)
+        Self.settle(host)
+        XCTAssertLessThan(composer.frame.width, composerWidth)
+        XCTAssertEqual(text.frame.width, textWidth)
+        resize.cancel(.dock)
+        Self.settle(host)
+        XCTAssertEqual(composer.frame.width, composerWidth)
+        XCTAssertEqual(text.frame.width, textWidth)
+
+        resize.begin(.dock, width: start)
+        resize.update(.dock, translation: 80, availableWidth: Self.windowSize.width)
+        Self.settle(host)
+        XCTAssertGreaterThan(composer.frame.width, composerWidth)
+        XCTAssertEqual(text.frame.width, textWidth)
+        let committed = try XCTUnwrap(resize.finish(.dock, translation: 80, availableWidth: Self.windowSize.width))
+        host.rootView = Self.hosted(dock(committed))
+        Self.settle(host)
+        XCTAssertTrue(text.window === window)
+        XCTAssertGreaterThan(text.frame.width, textWidth)
+        XCTAssertEqual(text.selectedRange(), selection)
+    }
+
+    func testSenderCardShowsShortMessagesAndOnlyShortensLongMessages() throws {
+        let short = "How should we prevent GUI checks from failing while Screen Sharing is connected?"
+        XCTAssertNil(ToasttySenderMessageCard.preview(of: short))
+        let long = short + "\n\n" + String(repeating: "Evidence from the validation Mac. ", count: 30) + "End of the evidence."
+        let preview = try XCTUnwrap(ToasttySenderMessageCard.preview(of: long))
+        XCTAssertTrue(preview.hasPrefix(short))
+        XCTAssertFalse(preview.contains("End of the evidence."))
+
+        let message = ToasttyHostMessagePresentation(
+            summary: "From task Coordinator left panel design · 10:05",
+            text: long,
+            style: .sender(name: "task Coordinator left panel design", timeText: "10:05")
+        )
+        for expanded in [false, true] {
+            let card = ToasttySenderMessageCard(
+                sender: "task Coordinator left panel design", timeText: "10:05", text: message.text,
+                isExpanded: expanded, toggleExpansion: {}, accessibilitySuffix: "sender-test"
+            )
+            let (host, window) = Self.host(card.padding(30))
+            defer { window.close() }
+            let text = Self.descendants(of: host, as: ToasttyTranscriptTextView.self).map(\.string).joined(separator: "\n")
+            XCTAssertTrue(text.contains(short))
+            XCTAssertEqual(text.contains("End of the evidence."), expanded)
+            try attachImage(of: host, name: expanded ? "sender-card-expanded" : "sender-card-preview")
+        }
+    }
+
+    func testTaskMessageAndAnswerStayVisibleBeforeAFoldedWakeTurn() throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("The transcript requires macOS 15.") }
+        let conversationID = RemoteConversationID()
+        let question = "How should we prevent GUI checks from failing while Screen Sharing is connected?"
+        let answer = "Add a preflight check before the build and document the cause."
+        let digest = CoordinatorWakeState.digestHeader + "\nScheduled check."
+        let payloads: [ConversationEventPayload] = [
+            .userMessage(.init(text: CoordinatorMessageHeader.message(
+                from: .task(id: Self.questionTaskID, title: "Coordinator left panel design"), text: question
+            ))),
+            .assistantMessage(.init(text: answer, phase: .final)),
+            .userMessage(.init(text: digest)),
+            .assistantMessage(.init(text: "Nothing needs you.", phase: .final)),
+        ]
+        let events = payloads.enumerated().map { index, payload in
+            ConversationEvent(conversationID: conversationID, sequence: UInt64(index + 1), eventID: "sender-\(index)",
+                              timestamp: Date(), provider: .claude, payload: payload)
+        }
+        let rows = CoordinatorChatTranscript.rows(
+            from: events, projectionRunID: RemoteProjectionRunID(), projectionGeneration: 0,
+            isSentFromThisMac: { _ in false }, isQuietDigest: { $0 == digest }, timeText: { _ in "10:05" }
+        )
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+        XCTAssertFalse(state.turns[0].workBlockIDs.contains(ToasttyTranscriptBlockID(rowID: rows[1].id)))
+        let transcript = ToasttyTranscriptView(
+            state: state, isSubmitting: false, readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: .constant(0), canAcknowledgeRead: false, options: CoordinatorChatView.transcriptOptions
+        )
+        let (host, window) = Self.host(transcript)
+        defer { window.close() }
+        let text = Self.descendants(of: host, as: ToasttyTranscriptTextView.self).map(\.string).joined(separator: "\n")
+        XCTAssertTrue(text.contains(question))
+        XCTAssertTrue(text.contains(answer))
+        XCTAssertFalse(text.contains("[Toastty] From"))
+        XCTAssertFalse(text.contains("Nothing needs you."), "Only the quiet digest's own answer folds")
+        try attachImage(of: host, name: "task-message-before-quiet-wake")
+    }
+
+    func testTranscriptDrawsTaskChipsAFoldedDigestAndPlainTextForOtherToasttyLinks() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let chips = CoordinatorTaskChips(items: [
+            Self.item(Self.reviewTaskID, title: "Restore split ratios", stage: .needsYou(.review), pullRequest: 283),
+            Self.item(Self.questionTaskID, title: "Composer blank line", stage: .needsYou(.awaitingReply)),
+        ])
+        let transcript = ToasttyTranscriptView(
+            state: Self.state,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .working,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false,
+            options: CoordinatorChatView.transcriptOptions
+        )
+        .environment(\.conversationLinkPresenter, chips.presenter)
+        let (hostingView, window) = Self.host(transcript)
+        defer { window.close() }
+
+        let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+        // Each paragraph of the answer is a text view of its own.
+        func attributes(of fragment: String) throws -> [NSAttributedString.Key: Any] {
+            for view in textViews {
+                guard let storage = view.textStorage else { continue }
+                let range = (storage.string as NSString).range(of: fragment)
+                if range.location != NSNotFound {
+                    return storage.attributes(at: range.location, effectiveRange: nil)
+                }
+            }
+            XCTFail("No rendered text view shows \"\(fragment)\"")
+            return [:]
+        }
+        _ = try attributes(of: "is ready")
+
+        // A chip shows the task's title now, not the text the agent wrote,
+        // with its pull request number. A click goes to the task's link.
+        XCTAssertFalse(textViews.contains { $0.string.contains("an old title") })
+        let reviewChip = try attributes(of: "Restore\u{00A0}split\u{00A0}ratios")
+        XCTAssertNotNil(reviewChip[.toasttyChip])
+        XCTAssertEqual(reviewChip[.link] as? URL, CoordinatorTaskLink.url(taskID: Self.reviewTaskID))
+        XCTAssertNotNil(try attributes(of: "#283")[.toasttyChip])
+        let questionChip = try attributes(of: "Composer\u{00A0}blank\u{00A0}line")
+        XCTAssertNotNil(questionChip[.toasttyChip])
+        XCTAssertEqual(questionChip[.link] as? URL, CoordinatorTaskLink.url(taskID: Self.questionTaskID))
+
+        // A link to no task, and any other Toastty link, is plain text: the
+        // words stay, and nothing can be clicked.
+        for fragment in ["a task that is gone", "run this action", "a task link with more"] {
+            let plain = try attributes(of: fragment)
+            XCTAssertNil(plain[.link], "\"\(fragment)\" must not be a link")
+            XCTAssertNil(plain[.toasttyChip], "\"\(fragment)\" must not be a chip")
+        }
+        // A web link stays a link.
+        XCTAssertEqual(try attributes(of: "the docs")[.link] as? URL, URL(string: "https://example.com/docs"))
+
+        // The digest is folded: its text is in no text view.
+        XCTAssertFalse(textViews.contains { $0.string.contains(CoordinatorWakeState.digestPrefix) })
+
+        // The column of messages keeps the Mac's reading width.
+        for view in textViews {
+            XCTAssertLessThanOrEqual(view.frame.width, CoordinatorChatView.maximumContentWidth)
+        }
+
+        try attachImage(of: hostingView, name: "coordinator-chat-transcript")
+    }
+
+    /// Command-plus in the chat sets the text scale. Every text of the
+    /// transcript on screen then draws larger, and the column keeps its
+    /// width.
+    func testTranscriptTextFollowsTheChatTextScale() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        func transcript(scale: CGFloat) -> some View {
+            ToasttyTranscriptView(
+                state: Self.state,
+                isSubmitting: false,
+                readAcknowledgementEpoch: .working,
+                jumpToLiveEdgeRequest: .constant(0),
+                canAcknowledgeRead: false,
+                options: CoordinatorChatView.transcriptOptions
+            )
+            .environment(\.conversationLinkPresenter, CoordinatorTaskChips(items: []).presenter)
+            .environment(\.conversationTextScale, scale)
+        }
+        func bodyFontSize(in hostingView: NSView, scale: CGFloat) throws -> CGFloat {
+            let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+            for view in textViews {
+                XCTAssertLessThanOrEqual(view.frame.width, CoordinatorChatView.maximumContentWidth)
+            }
+            try attachImage(of: hostingView, name: "coordinator-chat-transcript-\(Int((scale * 100).rounded()))")
+            let view = try XCTUnwrap(textViews.first { $0.string.contains("is ready") })
+            let font = try XCTUnwrap(view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+            return font.pointSize
+        }
+        let base = NSFont.preferredFont(forTextStyle: .body).pointSize
+        let (hostingView, window) = Self.host(transcript(scale: 1))
+        defer { window.close() }
+        XCTAssertEqual(try bodyFontSize(in: hostingView, scale: 1), base)
+        // The reader selected some words before the change.
+        let selected = try XCTUnwrap(Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+            .first { $0.string.contains("is ready") })
+        let selection = (selected.string as NSString).range(of: "is ready")
+        selected.setSelectedRange(selection)
+
+        // The same views on screen take the new size, and keep the selection.
+        hostingView.rootView = Self.hosted(transcript(scale: 1.5))
+        Self.settle(hostingView)
+        XCTAssertEqual(try bodyFontSize(in: hostingView, scale: 1.5), base * 1.5, accuracy: 0.01)
+        XCTAssertEqual(selected.selectedRange(), selection)
+    }
+
+    /// The view in a dark window of the test's size, after its layout settled.
+    private static func host(_ view: some View) -> (NSHostingView<AnyView>, NSWindow) {
+        let hostingView = NSHostingView(rootView: hosted(view))
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: windowSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        settle(hostingView)
+        return (hostingView, window)
+    }
+
+    private static func hosted(_ view: some View) -> AnyView {
+        AnyView(
+            view
+                .frame(width: windowSize.width, height: windowSize.height)
+                .environment(\.colorScheme, .dark)
+        )
+    }
+
+    private static func settle(_ hostingView: NSView) {
+        let deadline = Date().addingTimeInterval(0.8)
+        while Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        hostingView.layoutSubtreeIfNeeded()
+    }
+
+    /// Keeps a picture of the view on the test result for visual review.
+    private func attachImage(of hostingView: NSView, name: String) throws {
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        try Self.writeEvidence(png, name: name)
+    }
+
+    /// A quick entry message's images show as thumbnails in the user's
+    /// bubble, and its other files, or an image that is gone, as their
+    /// names. The text no longer lists the names.
+    func testUserMessageShowsAttachedImagesAsThumbnailsAndOtherFilesByName() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("chat-attachments-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let wide = folder.appendingPathComponent("wide-screenshot.png")
+        try Self.solidPNG(width: 1_200, height: 300, color: .systemRed).write(to: wide)
+        let tall = folder.appendingPathComponent("tall.png")
+        try Self.solidPNG(width: 300, height: 600, color: .systemBlue).write(to: tall)
+        let notes = folder.appendingPathComponent("notes.txt")
+        try Data("socket closed".utf8).write(to: notes)
+        let gone = folder.appendingPathComponent("removed.png")
+
+        let message = CoordinatorMessageHeader.quickEntryMessage(
+            .init(project: .init(id: UUID(), title: "toastty"), agent: "claude"),
+            text: "The image in this message does not show in the chat.",
+            attachmentPaths: [wide, tall, notes, gone].map(\.path)
+        )
+        let event = ConversationEvent(
+            conversationID: RemoteConversationID(rawValue: UUID()),
+            sequence: 1,
+            eventID: "event-1",
+            timestamp: Date(timeIntervalSince1970: 1_800_000_000),
+            provider: .claude,
+            payload: .userMessage(ConversationUserMessagePayload(text: message, origin: .remote, clientRequestID: "quick-1"))
+        )
+        let state = ToasttyConversationPresentationState(
+            rows: CoordinatorChatTranscript.rows(
+                from: [event],
+                projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
+                projectionGeneration: 1,
+                isSentFromThisMac: { _ in true },
+                timeText: { _ in "10:05" }
+            ),
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+        let transcript = ToasttyTranscriptView(
+            state: state,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .working,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false,
+            options: CoordinatorChatView.transcriptOptions
+        )
+        let (hostingView, window) = Self.host(transcript)
+        defer { window.close() }
+        // The thumbnails load off the main thread.
+        Self.settle(hostingView)
+
+        let bubbleText = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).map(\.string).joined()
+        XCTAssertTrue(bubbleText.contains("The image in this message does not show in the chat."))
+        XCTAssertFalse(bubbleText.contains("wide-screenshot.png"), "The text no longer names the files")
+        XCTAssertFalse(bubbleText.contains("notes.txt"))
+
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+        XCTAssertGreaterThan(Self.pixelCount(in: bitmap, matching: .systemRed), 200, "The wide image draws")
+        XCTAssertGreaterThan(Self.pixelCount(in: bitmap, matching: .systemBlue), 200, "The tall image draws")
+        try attachImage(of: hostingView, name: "coordinator-chat-attachments")
+    }
+
+    private static func solidPNG(width: Int, height: Int, color: NSColor) throws -> Data {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        color.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    /// Pixels in which one channel clearly leads, every fourth pixel in
+    /// each direction. The window's color space shifts the exact values.
+    private static func pixelCount(in bitmap: NSBitmapImageRep, matching color: NSColor) -> Int {
+        var count = 0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 4) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 4) {
+                guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let (red, green, blue) = (pixel.redComponent, pixel.greenComponent, pixel.blueComponent)
+                let matches = color == .systemRed
+                    ? red > 0.75 && green < 0.5 && blue < 0.5
+                    : blue > 0.75 && red < 0.5 && green < 0.75
+                if matches { count += 1 }
+            }
+        }
+        return count
+    }
+
+    /// A chip in running text: it moves to the next line as one piece, also
+    /// when its title has a hyphen. A chip wider than the line wraps, and each
+    /// line gets its own outline around that line's part of the chip.
+    func testTaskChipStaysOnOneLineAndOutlinesOnlyItsOwnTextWhenItWraps() throws {
+        let taskID = Self.reviewTaskID
+        let chips = CoordinatorTaskChips(items: [
+            Self.item(taskID, title: "Toastty-coordinator SKILL.md lightweight routing",
+                      stage: .running, pullRequest: 295),
+        ])
+        let markdown = """
+        Whether that event can go, or is useful in other cases, is already a question in \
+        [the routing task](toastty://task/\(taskID.uuidString)). Its agent is busy now, so I will \
+        send it your question when it is idle.
+        """
+        let source = try AttributedString(markdown: markdown)
+        func hosted(width: CGFloat) -> (NSHostingView<AnyView>, NSWindow) {
+            Self.hostChipText(source, presenter: chips.presenter, width: width)
+        }
+
+        let (probe, probeWindow) = hosted(width: 600)
+        defer { probeWindow.close() }
+        let storage = try XCTUnwrap(Self.descendants(of: probe, as: ToasttyTranscriptTextView.self).first?.textStorage)
+        let rendered = NSAttributedString(attributedString: storage)
+        var chipRange = NSRange()
+        let chipStart = (rendered.string as NSString).range(of: "Toastty-coordinator").location
+        XCTAssertNotEqual(chipStart, NSNotFound)
+        XCTAssertNotNil(rendered.attribute(.toasttyChip, at: chipStart, longestEffectiveRange: &chipRange,
+                                           in: NSRange(location: 0, length: rendered.length)))
+
+        /// The chip's text on each line, laid out at `width`. A layout
+        /// manager holds its storage weakly, so the caller keeps it.
+        func layout(width: CGFloat, layoutManager: NSLayoutManager)
+            -> (lines: [NSRange], chipWidth: CGFloat, storage: NSTextStorage) {
+            let textStorage = NSTextStorage(attributedString: rendered)
+            let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            textStorage.addLayoutManager(layoutManager)
+            layoutManager.ensureLayout(for: container)
+            let glyphs = layoutManager.glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
+            var lines: [NSRange] = []
+            var index = glyphs.location
+            while index < NSMaxRange(glyphs) {
+                var line = NSRange()
+                _ = layoutManager.lineFragmentRect(forGlyphAt: index, effectiveRange: &line)
+                lines.append(NSIntersectionRange(line, glyphs))
+                index = NSMaxRange(line)
+            }
+            let chipWidth = rendered.attributedSubstring(from: chipRange)
+                .boundingRect(with: CGSize(width: 100_000, height: 1_000), options: [.usesLineFragmentOrigin]).width
+            return (lines, chipWidth, textStorage)
+        }
+
+        var hyphenBreakWidth: CGFloat?
+        var sawWrappedChip = false
+        for width in stride(from: CGFloat(160), through: 900, by: 4) {
+            let manager = ToasttyChipLayoutManager()
+            let (lines, chipWidth, storage) = layout(width: width, layoutManager: manager)
+            if chipWidth + 1 < width {
+                XCTAssertEqual(lines.count, 1, "At width \(width) the chip must stay on one line")
+            } else {
+                sawWrappedChip = true
+            }
+            // Each outline covers that line's part of the chip, and nothing
+            // past it.
+            let outlines = manager.chipOutlineRects(forCharacterRange: chipRange)
+            XCTAssertEqual(outlines.count, lines.count, "At width \(width)")
+            for (outline, line) in zip(outlines, lines) {
+                let text = manager.boundingRect(forGlyphRange: line, in: manager.textContainers[0])
+                XCTAssertLessThanOrEqual(outline.maxX, text.maxX + 1, "At width \(width)")
+                XCTAssertGreaterThanOrEqual(outline.minX, text.minX - 1, "At width \(width)")
+            }
+            // Where a plain layout manager breaks the chip after its hyphen.
+            if hyphenBreakWidth == nil, chipWidth + 1 < width,
+               layout(width: width, layoutManager: NSLayoutManager()).lines.count > 1 {
+                hyphenBreakWidth = width
+            }
+            withExtendedLifetime(storage) {}
+        }
+        XCTAssertTrue(sawWrappedChip, "The sweep must include a line narrower than the chip")
+        let breakWidth = try XCTUnwrap(hyphenBreakWidth, "The sweep must include the hyphen break")
+
+        for (name, width) in [("task-chip-at-hyphen-break", breakWidth), ("task-chip-wider-than-line", 220)] {
+            let (hostingView, window) = hosted(width: width)
+            defer { window.close() }
+            let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+            hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            try Self.writeEvidence(png, name: name)
+        }
+    }
+
+    /// Two chips with nothing between them get one outline each, and a chip
+    /// next to plain text outlines only its own text.
+    func testTaskChipsSideBySideEachGetTheirOwnOutline() throws {
+        let chips = CoordinatorTaskChips(items: [
+            Self.item(Self.reviewTaskID, title: "Restore split ratios", stage: .needsYou(.review)),
+            Self.item(Self.questionTaskID, title: "Composer blank line", stage: .needsYou(.awaitingReply)),
+        ])
+        let source = try AttributedString(markdown: """
+        Both wait for you: [one](toastty://task/\(Self.reviewTaskID.uuidString))\
+        [two](toastty://task/\(Self.questionTaskID.uuidString)) and nothing else.
+        """)
+        let (hostingView, window) = Self.hostChipText(source, presenter: chips.presenter, width: 600)
+        defer { window.close() }
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+        attachment.name = "task-chips-side-by-side"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        try Self.writeEvidence(png, name: "task-chips-side-by-side")
+
+        let textView = try XCTUnwrap(Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).first)
+        let storage = try XCTUnwrap(textView.textStorage)
+        let manager = try XCTUnwrap(textView.layoutManager as? ToasttyChipLayoutManager)
+        let text = storage.string as NSString
+        let first = text.range(of: "Restore\u{00A0}split\u{00A0}ratios")
+        let second = text.range(of: "Composer\u{00A0}blank\u{00A0}line")
+        XCTAssertNotEqual(first.location, NSNotFound)
+        XCTAssertNotEqual(second.location, NSNotFound)
+        XCTAssertFalse(text.substring(with: NSRange(location: NSMaxRange(first),
+                                                    length: second.location - NSMaxRange(first))).contains(" "),
+                       "The chips must have nothing between them")
+
+        let ranges = manager.chipRanges(in: NSRange(location: 0, length: storage.length))
+        XCTAssertEqual(ranges.count, 2, "Each chip has its own outline: \(ranges)")
+        guard ranges.count == 2 else { return }
+        XCTAssertEqual(NSIntersectionRange(ranges[0], first), first)
+        XCTAssertEqual(NSIntersectionRange(ranges[1], second), second)
+        XCTAssertEqual(NSMaxRange(ranges[0]), ranges[1].location)
+        XCTAssertFalse(text.substring(with: ranges[0]).contains("Both"))
+        XCTAssertFalse(text.substring(with: ranges[1]).contains("nothing"))
+
+        // On one line, the two outlines sit next to each other.
+        let firstOutlines = manager.chipOutlineRects(forCharacterRange: ranges[0])
+        let secondOutlines = manager.chipOutlineRects(forCharacterRange: ranges[1])
+        XCTAssertEqual(firstOutlines.count, 1)
+        XCTAssertEqual(secondOutlines.count, 1)
+        if let left = firstOutlines.first, let right = secondOutlines.first {
+            XCTAssertEqual(left.midY, right.midY, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(left.maxX, right.minX + 0.5)
+        }
+    }
+
+    /// A working task's chip draws a turning spinner where its dot was. The
+    /// chip keeps the dot's width and line height, so the text around it
+    /// does not move when the task starts or stops working.
+    func testWorkingTaskChipDrawsATurningSpinnerInPlaceOfItsDot() throws {
+        let workingID = Self.reviewTaskID
+        let idleID = Self.questionTaskID
+        let chips = CoordinatorTaskChips(items: [
+            Self.item(workingID, title: "Task-system worktree Xcode build failure", stage: .running,
+                      agent: .working),
+            Self.item(idleID, title: "Composer blank line", stage: .running),
+        ])
+        let working = try XCTUnwrap(chips.chips[workingID])
+        XCTAssertTrue(working.showsActivity)
+        XCTAssertEqual(chips.chips[idleID]?.showsActivity, false)
+
+        // The same chip with and without the spinner.
+        var still = working
+        still.showsActivity = false
+        func presenter(_ chip: ConversationLinkChip) -> ConversationLinkPresenter {
+            ConversationLinkPresenter(revision: chip.hashValue) { _ in .chip(chip) }
+        }
+        let source = try AttributedString(markdown: """
+        The build fails in [the worktree task](toastty://task/\(workingID.uuidString)), and its agent \
+        is looking at the Xcode log now.
+        """)
+        struct Render {
+            let hostingView: NSHostingView<AnyView>
+            let window: NSWindow
+            let textView: ToasttyTranscriptTextView
+            let outlines: [NSRect]
+            let spinners: [NSRect]
+        }
+        func render(_ chip: ConversationLinkChip, width: CGFloat) throws -> Render {
+            let (hostingView, window) = Self.hostChipText(source, presenter: presenter(chip), width: width)
+            let textView = try XCTUnwrap(Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).first)
+            let storage = try XCTUnwrap(textView.textStorage)
+            let manager = try XCTUnwrap(textView.layoutManager as? ToasttyChipLayoutManager)
+            var chipRange = NSRange()
+            let start = (storage.string as NSString).range(of: "●").location
+            XCTAssertNotEqual(start, NSNotFound)
+            _ = storage.attribute(.toasttyChip, at: start, longestEffectiveRange: &chipRange,
+                                  in: NSRange(location: 0, length: storage.length))
+            return Render(
+                hostingView: hostingView, window: window, textView: textView,
+                outlines: manager.chipOutlineRects(forCharacterRange: chipRange),
+                spinners: try dotRects(textView, in: hostingView)
+            )
+        }
+        /// The square over the dot's ink, in the hosting view.
+        func dotRects(_ textView: ToasttyTranscriptTextView, in hostingView: NSView) throws -> [NSRect] {
+            let storage = try XCTUnwrap(textView.textStorage)
+            let manager = try XCTUnwrap(textView.layoutManager as? ToasttyChipLayoutManager)
+            let dot = (storage.string as NSString).range(of: "●")
+            XCTAssertNotEqual(dot.location, NSNotFound)
+            return manager.chipSpinnerRects(forCharacterRange: dot)
+                .map { textView.convert($0.offsetBy(dx: textView.textContainerOrigin.x,
+                                                    dy: textView.textContainerOrigin.y), to: hostingView) }
+        }
+
+        for width in [CGFloat(600), 300, 220] {
+            let spinning = try render(working, width: width)
+            let plain = try render(still, width: width)
+            defer {
+                spinning.window.close()
+                plain.window.close()
+            }
+            XCTAssertEqual(spinning.outlines, plain.outlines, "At width \(width) the chip must keep its size")
+            XCTAssertEqual(spinning.textView.frame.size, plain.textView.frame.size,
+                           "At width \(width) the text must keep its line height")
+            XCTAssertEqual(spinning.textView.chipSpinnerRects().count, 1)
+            XCTAssertTrue(plain.textView.chipSpinnerRects().isEmpty)
+            // The spinner sits in the middle of the chip's outline, and the
+            // whole outline is inside the view, which clips its drawing.
+            let origin = spinning.textView.textContainerOrigin
+            let outlines = spinning.outlines.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+            let spinner = try XCTUnwrap(spinning.textView.chipSpinnerRects().first)
+            let outline = try XCTUnwrap(outlines.first { $0.minX <= spinner.midX && spinner.midX <= $0.maxX })
+            XCTAssertEqual(outline.midY, spinner.midY, accuracy: 0.5, "At width \(width)")
+            for outline in outlines {
+                XCTAssertTrue(spinning.textView.bounds.contains(outline),
+                              "At width \(width) the outline \(outline) must be inside \(spinning.textView.bounds)")
+            }
+        }
+
+        let spinning = try render(working, width: 600)
+        let plain = try render(still, width: 600)
+        defer {
+            spinning.window.close()
+            plain.window.close()
+        }
+        let spinner = try XCTUnwrap(spinning.spinners.first)
+        // The spinner covers the dot: the plain chip's dot fills its center.
+        let plainImage = try Self.snapshot(plain.hostingView)
+        XCTAssertTrue(Self.isMarkColor(plainImage.color(at: NSPoint(x: spinner.midX, y: spinner.midY))),
+                      "The spinner must sit over the dot's ink")
+        // The spinner is a hollow arc in the dot's color, and no dot shows.
+        let first = try Self.snapshot(spinning.hostingView)
+        XCTAssertFalse(Self.isMarkColor(first.color(at: NSPoint(x: spinner.midX, y: spinner.midY))))
+        XCTAssertTrue(first.points(in: spinner).contains { Self.isMarkColor(first.color(at: $0)) })
+
+        // The view's timer turns the spinner.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        spinning.hostingView.displayIfNeeded()
+        let later = try Self.snapshot(spinning.hostingView)
+        XCTAssertTrue(later.points(in: spinner).contains { first.color(at: $0) != later.color(at: $0) },
+                      "The spinner must turn")
+
+        // When the task stops working, the same text view draws the dot again.
+        spinning.hostingView.rootView = Self.chipText(source, presenter: presenter(still), width: 600)
+        spinning.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(spinning.textView.chipSpinnerRects().isEmpty)
+        let stopped = try Self.snapshot(spinning.hostingView)
+        // The new root view can resize the hosting view, which moves the dot.
+        let dot = try XCTUnwrap(dotRects(spinning.textView, in: spinning.hostingView).first)
+        XCTAssertTrue(Self.isMarkColor(stopped.color(at: NSPoint(x: dot.midX, y: dot.midY))),
+                      "The dot must come back when the task stops working")
+
+        for (name, image) in [("task-chip-working", first), ("task-chip-not-working", plainImage)] {
+            let attachment = XCTAttachment(data: image.png, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            try Self.writeEvidence(image.png, name: name)
+        }
+    }
+
+    /// Each message has a copy button that shows while the pointer is over
+    /// the message and copies the whole message. A long answer that the
+    /// transcript draws as several rows copies all of its rows. The pointer
+    /// moves and clicks with mouse events; the button is found as the pixels
+    /// that change when the pointer comes over the message.
+    func testCopyButtonShowsUnderThePointerAndCopiesTheWholeMessage() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        // The long answer must be drawn as more than one row for this test.
+        let chunkCount = ToasttyTranscriptBlock.group(Self.copyState.rows).filter {
+            if case .messageChunk = $0.content { return true }
+            return false
+        }.count
+        XCTAssertGreaterThan(chunkCount, 1)
+        let size = CGSize(width: 1_100, height: 1_700)
+        let transcript = ToasttyTranscriptView(
+            state: Self.copyState,
+            isSubmitting: false,
+            readAcknowledgementEpoch: .ready,
+            jumpToLiveEdgeRequest: .constant(0),
+            canAcknowledgeRead: false,
+            options: CoordinatorChatView.transcriptOptions
+        )
+        .frame(width: size.width, height: size.height)
+        .environment(\.colorScheme, .dark)
+
+        let hostingView = NSHostingView(rootView: transcript)
+        let window = PointerWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.acceptsMouseMovedEvents = true
+        window.contentView = hostingView
+        // Off screen, so the real pointer never moves over the window.
+        window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        Self.pump(0.8)
+        hostingView.layoutSubtreeIfNeeded()
+
+        // A private pasteboard: the test must not change the user's clipboard.
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("toastty-chat-copy-tests-\(UUID().uuidString)"))
+        ConversationPasteboard.pasteboard = pasteboard
+        defer {
+            ConversationPasteboard.pasteboard = .general
+            pasteboard.releaseGlobally()
+        }
+
+        let textViews = Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self)
+        func textRect(_ fragment: String) throws -> CGRect {
+            let view = try XCTUnwrap(
+                textViews.first(where: { $0.string.contains(fragment) }),
+                "No rendered text view shows \"\(fragment)\""
+            )
+            return view.convert(view.bounds, to: hostingView)
+        }
+        func moveMouse(to point: CGPoint) throws {
+            try Self.send(.mouseMoved, at: point, in: hostingView)
+            Self.pump(0.4)
+        }
+        func click(at point: CGPoint) throws {
+            try Self.send(.leftMouseDown, at: point, in: hostingView)
+            Self.pump(0.05)
+            try Self.send(.leftMouseUp, at: point, in: hostingView)
+            Self.pump(0.4)
+        }
+        let restingPoint = CGPoint(x: 8, y: 8)
+        try moveMouse(to: restingPoint)
+        var evidence: [(String, Data)] = []
+
+        // Hover, find the button, click it, and read the pasteboard.
+        let cases: [(name: String, lastFragment: String, expected: String)] = [
+            // The name of the message's file comes after its text.
+            ("user-message", Self.copyUserText, Self.copyUserText + "\n\nnotes.txt"),
+            ("long-answer", Self.longAnswerLastParagraph, Self.longAnswer),
+            ("short-answer", Self.copyShortAnswer, Self.copyShortAnswer),
+        ]
+        for testCase in cases {
+            let messageRect = try textRect(testCase.lastFragment)
+            // The button sits under the message, inside the message column.
+            // Below the text, a user's message can show its files first.
+            let band = CGRect(
+                x: messageRect.minX - 40,
+                y: messageRect.maxY,
+                width: messageRect.width + 80,
+                height: 80
+            )
+            let before = try Self.bitmap(of: hostingView)
+            try moveMouse(to: CGPoint(x: messageRect.midX, y: messageRect.midY))
+            let hovered = try Self.bitmap(of: hostingView)
+            let button = try XCTUnwrap(
+                Self.changedPixels(from: before, to: hovered, in: band, of: hostingView),
+                "\(testCase.name): no button showed under the message while the pointer was over it"
+            )
+            XCTAssertLessThan(button.width, 40, "\(testCase.name): only a small button may appear")
+            evidence.append(("coordinator-chat-copy-\(testCase.name)-hover", try Self.png(hovered)))
+
+            pasteboard.clearContents()
+            pasteboard.setString("clipboard sentinel", forType: .string)
+            try click(at: CGPoint(x: button.midX, y: button.midY))
+            XCTAssertEqual(pasteboard.string(forType: .string), testCase.expected, testCase.name)
+            let copied = try Self.bitmap(of: hostingView)
+            XCTAssertNotNil(
+                Self.changedPixels(from: hovered, to: copied, in: band, of: hostingView),
+                "\(testCase.name): the button must show that it copied"
+            )
+            evidence.append(("coordinator-chat-copy-\(testCase.name)-copied", try Self.png(copied)))
+
+            // The button hides when the pointer leaves, once the copied mark ends.
+            try moveMouse(to: restingPoint)
+            Self.pump(1.8)
+            let left = try Self.bitmap(of: hostingView)
+            XCTAssertNil(
+                Self.changedPixels(from: before, to: left, in: band, of: hostingView),
+                "\(testCase.name): the button must hide after the pointer leaves"
+            )
+        }
+
+        // The pointer over an earlier row of the long answer shows the
+        // button under its last row too.
+        let lastRect = try textRect(Self.longAnswerLastParagraph)
+        let lastBand = CGRect(x: lastRect.minX - 40, y: lastRect.maxY, width: lastRect.width + 80, height: 44)
+        let firstRect = try textRect("Paragraph 1 of the summary.")
+        let resting = try Self.bitmap(of: hostingView)
+        try moveMouse(to: CGPoint(x: firstRect.midX, y: firstRect.midY))
+        XCTAssertNotNil(
+            Self.changedPixels(from: resting, to: try Self.bitmap(of: hostingView), in: lastBand, of: hostingView),
+            "the long answer's button must show while the pointer is over its first row"
+        )
+
+        for (name, png) in evidence {
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            try Self.writeEvidence(png, name: name)
+        }
+    }
+
+    private static func pump(_ duration: TimeInterval) {
+        RunLoop.main.run(until: Date().addingTimeInterval(duration))
+    }
+
+    /// Sends a mouse event at a point measured from the view's top leading
+    /// corner.
+    private static func send(_ type: NSEvent.EventType, at point: CGPoint, in view: NSView) throws {
+        let viewPoint = view.isFlipped ? point : CGPoint(x: point.x, y: view.bounds.height - point.y)
+        let window = try XCTUnwrap(view.window)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: type,
+            location: view.convert(viewPoint, to: nil),
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: type == .mouseMoved ? 0 : 1,
+            pressure: type == .leftMouseDown ? 1 : 0
+        ))
+        // A moved event through the window does not reach SwiftUI's hover
+        // tracking; the hosting view takes it directly. Like a real pointer,
+        // the first move enters the view once, through each of the view's
+        // own tracking areas, so that the event names the area.
+        if type == .mouseMoved {
+            if let pointerWindow = window as? PointerWindow, pointerWindow.hasEntered == false {
+                pointerWindow.hasEntered = true
+                for area in view.trackingAreas where area.owner === view {
+                    view.mouseEntered(with: try XCTUnwrap(NSEvent.enterExitEvent(
+                        with: .mouseEntered,
+                        location: view.convert(viewPoint, to: nil),
+                        modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber,
+                        context: nil,
+                        eventNumber: 0,
+                        trackingNumber: unsafeBitCast(area, to: Int.self),
+                        userData: nil
+                    )))
+                }
+            }
+            view.mouseMoved(with: event)
+        } else {
+            window.sendEvent(event)
+        }
+    }
+
+    private static func bitmap(of view: NSView) throws -> NSBitmapImageRep {
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
+    private static func png(_ bitmap: NSBitmapImageRep) throws -> Data {
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    /// The bounds, in the view's top-leading points, of the pixels that
+    /// differ between two captures inside `area`. `nil` when none differ.
+    private static func changedPixels(
+        from old: NSBitmapImageRep,
+        to new: NSBitmapImageRep,
+        in area: CGRect,
+        of view: NSView
+    ) -> CGRect? {
+        let scale = CGFloat(old.pixelsWide) / view.bounds.width
+        let pixelArea = CGRect(
+            x: area.minX * scale,
+            y: (view.isFlipped ? area.minY : view.bounds.height - area.maxY) * scale,
+            width: area.width * scale,
+            height: area.height * scale
+        ).integral.intersection(CGRect(x: 0, y: 0, width: old.pixelsWide, height: old.pixelsHigh))
+        var changed = CGRect.null
+        for y in Int(pixelArea.minY)..<Int(pixelArea.maxY) {
+            for x in Int(pixelArea.minX)..<Int(pixelArea.maxX) {
+                guard let a = old.colorAt(x: x, y: y), let b = new.colorAt(x: x, y: y) else { continue }
+                let difference = abs(a.redComponent - b.redComponent)
+                    + abs(a.greenComponent - b.greenComponent)
+                    + abs(a.blueComponent - b.blueComponent)
+                if difference > 0.15 {
+                    changed = changed.union(CGRect(x: x, y: y, width: 1, height: 1))
+                }
+            }
+        }
+        guard changed.isNull == false else { return nil }
+        return CGRect(
+            x: changed.minX / scale,
+            y: changed.minY / scale,
+            width: changed.width / scale,
+            height: changed.height / scale
+        )
+    }
+
+    /// Markdown with task links in one text view, at `width`, as the chat
+    /// draws an answer.
+    private static func hostChipText(_ source: AttributedString, presenter: ConversationLinkPresenter,
+                                     width: CGFloat) -> (NSHostingView<AnyView>, NSWindow) {
+        let hostingView = NSHostingView(rootView: chipText(source, presenter: presenter, width: width))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width + 24, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        hostingView.layoutSubtreeIfNeeded()
+        return (hostingView, window)
+    }
+
+    private static func chipText(_ source: AttributedString, presenter: ConversationLinkPresenter,
+                                 width: CGFloat) -> AnyView {
+        AnyView(ToasttySelectableText(ConversationLinkDecoration.apply(source, presenter: presenter))
+            .frame(width: width)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .background(Color.black)
+            .environment(\.colorScheme, .dark))
+    }
+
+    /// A drawn view, read by the point.
+    private struct Snapshot {
+        let bitmap: NSBitmapImageRep
+        let scale: CGFloat
+        let flipped: Bool
+        let height: CGFloat
+        let png: Data
+
+        func color(at point: NSPoint) -> NSColor? {
+            let y = flipped ? point.y : height - point.y
+            return bitmap.colorAt(x: Int(point.x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB)
+        }
+
+        /// The points of a rect, half a point apart.
+        func points(in rect: NSRect) -> [NSPoint] {
+            stride(from: rect.minX, through: rect.maxX, by: 0.5).flatMap { x in
+                stride(from: rect.minY, through: rect.maxY, by: 0.5).map { NSPoint(x: x, y: $0) }
+            }
+        }
+    }
+
+    private static func snapshot(_ view: NSView) throws -> Snapshot {
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return Snapshot(bitmap: bitmap, scale: CGFloat(bitmap.pixelsWide) / view.bounds.width,
+                        flipped: view.isFlipped, height: view.bounds.height,
+                        png: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])))
+    }
+
+    /// The accent of a working task's mark, on the black test background.
+    private static func isMarkColor(_ color: NSColor?) -> Bool {
+        guard let color else { return false }
+        return color.redComponent > 0.6 && color.greenComponent > 0.35 && color.blueComponent < 0.35
+    }
+
+    /// Writes the PNG when the runner sets `TOASTTY_CONVERSATION_EVIDENCE_DIR`
+    /// (pass it as `TEST_RUNNER_…` to xcodebuild).
+    private static func writeEvidence(_ png: Data, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["TOASTTY_CONVERSATION_EVIDENCE_DIR"],
+              directory.isEmpty == false else { return }
+        let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try png.write(to: directoryURL.appendingPathComponent("\(name).png"))
+    }
+
+    private static func descendants<T: NSView>(of view: NSView, as type: T.Type) -> [T] {
+        view.subviews.flatMap { subview in
+            ((subview as? T).map { [$0] } ?? []) + descendants(of: subview, as: type)
+        }
+    }
+
+    // MARK: - Fixture
+
+    private static func item(
+        _ taskID: UUID,
+        title: String,
+        stage: TaskStage,
+        agent: TaskAgentActivity = .idle,
+        pullRequest: Int? = nil
+    ) -> TaskBoardItem {
+        TaskBoardItem(
+            id: .task(taskID),
+            title: title,
+            stage: stage,
+            agent: agent,
+            pullRequest: pullRequest.flatMap {
+                WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/\($0)")
+            },
+            activityAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+    }
+
+    private static let copyUserText = "Summarize where the release work stands."
+    private static let copyShortAnswer = "Done. Nothing else waits on you."
+    private static let longAnswerLastParagraph = "Last part: the release can start after the two reviews."
+    /// Long enough that the transcript draws it as more than one row.
+    private static var longAnswer: String {
+        let paragraphs = (1...14).map { index in
+            "Paragraph \(index) of the summary. "
+                + String(repeating: "The task checks its relaunch cases and reports them with video. ", count: 4)
+        }
+        return (paragraphs + [longAnswerLastParagraph]).joined(separator: "\n\n")
+    }
+
+    private static var copyState: ToasttyConversationPresentationState {
+        let runID = RemoteProjectionRunID(rawValue: UUID())
+        let conversationID = RemoteConversationID(rawValue: UUID())
+        var sequence: UInt64 = 0
+        func event(_ payload: ConversationEventPayload) -> ConversationEvent {
+            sequence += 1
+            return ConversationEvent(
+                conversationID: conversationID,
+                sequence: sequence,
+                eventID: "event-\(sequence)",
+                timestamp: Date(timeIntervalSince1970: 1_800_000_000 + Double(sequence)),
+                provider: .claude,
+                payload: payload
+            )
+        }
+        let events = [
+            event(.userMessage(ConversationUserMessagePayload(
+                text: RemoteMessageAttachmentStore.Staged.deliveryText(
+                    text: copyUserText, paths: ["/tmp/toastty-copy-test/notes.txt"]
+                ),
+                origin: .remote,
+                clientRequestID: "composer-1"
+            ))),
+            event(.assistantMessage(ConversationAssistantMessagePayload(text: longAnswer, phase: .final))),
+            event(.userMessage(ConversationUserMessagePayload(
+                text: "thanks",
+                origin: .remote,
+                clientRequestID: "composer-2"
+            ))),
+            event(.assistantMessage(ConversationAssistantMessagePayload(text: copyShortAnswer, phase: .final))),
+        ]
+        return ToasttyConversationPresentationState(
+            rows: CoordinatorChatTranscript.rows(
+                from: events,
+                projectionRunID: runID,
+                projectionGeneration: 1,
+                isSentFromThisMac: { $0.hasPrefix("composer-") },
+                timeText: { _ in "14:05" }
+            ),
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+
+    /// The rows the chat's own adapter makes from a conversation: a digest
+    /// that Toastty typed, the coordinator's answer with task links, and a
+    /// message from the user.
+    private static var state: ToasttyConversationPresentationState {
+        let runID = RemoteProjectionRunID(rawValue: UUID())
+        let conversationID = RemoteConversationID(rawValue: UUID())
+        let digest = """
+        \(CoordinatorWakeState.digestHeader)
+        - [Restore split ratios](toastty://task/\(reviewTaskID.uuidString)): needsYou (review) at 2026-11-09T18:02:11Z
+        - [Composer blank line](toastty://task/\(questionTaskID.uuidString)): needsYou (awaitingReply) at 2026-11-09T18:03:40Z
+        \(CoordinatorWakeState.digestFooter)
+        """
+        let answer = """
+        [an old title](toastty://task/\(reviewTaskID.uuidString)) is ready. It checks four relaunch cases with video, and CI is green.
+
+        [Composer blank line](toastty://task/\(questionTaskID.uuidString)) asks which base to use. I'd say *main*, because the PR it waited for merged an hour ago.
+
+        Not chips: [a task that is gone](toastty://task/\(missingTaskID.uuidString)), [run this action](toastty://action/open-settings), [a task link with more](toastty://task/\(reviewTaskID.uuidString)/merge), and [the docs](https://example.com/docs).
+        """
+        var sequence: UInt64 = 0
+        func event(_ payload: ConversationEventPayload) -> ConversationEvent {
+            sequence += 1
+            return ConversationEvent(
+                conversationID: conversationID,
+                sequence: sequence,
+                eventID: "event-\(sequence)",
+                timestamp: Date(timeIntervalSince1970: 1_800_000_000 + Double(sequence)),
+                provider: .claude,
+                payload: payload
+            )
+        }
+        let events = [
+            event(.userMessage(ConversationUserMessagePayload(text: digest, origin: .remote, clientRequestID: "digest-1"))),
+            event(.assistantMessage(ConversationAssistantMessagePayload(text: answer, phase: .final))),
+            event(.userMessage(ConversationUserMessagePayload(
+                text: "main. and answer base questions yourself when the dependency merged",
+                origin: .remote,
+                clientRequestID: "composer-1"
+            ))),
+            event(.assistantMessage(ConversationAssistantMessagePayload(
+                text: "Sent. Added to Unblocking: \"Answer base-branch questions when the dependency merged.\"",
+                phase: .final
+            ))),
+        ]
+        return ToasttyConversationPresentationState(
+            rows: CoordinatorChatTranscript.rows(
+                from: events,
+                projectionRunID: runID,
+                projectionGeneration: 1,
+                isSentFromThisMac: { $0 == "composer-1" || $0 == "digest-1" },
+                timeText: { _ in "14:05" }
+            ),
+            phase: .live,
+            revision: .initial,
+            historyTruncated: false
+        )
+    }
+}
+
+/// A window that remembers whether the test's pointer has entered it.
+private final class PointerWindow: NSWindow {
+    var hasEntered = false
+}

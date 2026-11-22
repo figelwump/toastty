@@ -19,13 +19,49 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
     public var primaryAnnotationKey: String?
     /// When this subspace's task was marked done; absent while it is open.
     public var doneAt: Date?
+    /// Whether the host takes a done mark for this subspace. False for a
+    /// task with an open pull request, which finishes through Merge; the
+    /// host refuses the mark then. Sent only when false, so an older host's
+    /// subspaces accept it.
+    public var acceptsDoneMark: Bool
+    /// The coordinator's own workspace: the Mac pins it apart from the
+    /// projects, and a client with the task system shows it on its own. Sent
+    /// only when true. Absent from older hosts, whose clients list every
+    /// workspace as a project.
+    public var isCoordinator: Bool
+    /// On the coordinator's workspace: the coordinator's own session while
+    /// its agent runs. Other sessions can run in the same workspace, and a
+    /// listed transcript outlives its agent, so a client takes the
+    /// coordinator's session from here. Absent while the coordinator does
+    /// not run or is starting.
+    public var coordinatorConversationID: RemoteConversationID?
+    /// On the coordinator's workspace: the newest row of the coordinator's
+    /// chat that the user read, on the Mac or on a device, while the Mac
+    /// advertises `coordinatorChatRead`. Absent before the first read.
+    public var coordinatorChatRead: RemoteCoordinatorChatReadPoint?
+    /// On the coordinator's workspace, while the Mac advertises
+    /// `coordinatorQuietDigests`: `RemoteCoordinatorQuietDigests.revision`
+    /// of the quiet digests now. A device reads the keys again when it
+    /// changes.
+    public var coordinatorQuietDigestsRevision: String?
+    /// On the coordinator's workspace, while the Mac advertises
+    /// `coordinatorQueue`: `RemoteCoordinatorQueue.revision` of the
+    /// coordinator's own queue now. A native device reads the queue again
+    /// when it changes.
+    public var coordinatorQueueRevision: String?
     public init(
         id: UUID, title: String, panels: [RemoteWorkspacePanel],
         annotations: [RemoteWorkspaceAnnotation] = [],
         parentWorkspaceID: UUID? = nil,
         spawningConversationID: RemoteConversationID? = nil,
         primaryAnnotationKey: String? = nil,
-        doneAt: Date? = nil
+        doneAt: Date? = nil,
+        acceptsDoneMark: Bool = true,
+        isCoordinator: Bool = false,
+        coordinatorConversationID: RemoteConversationID? = nil,
+        coordinatorChatRead: RemoteCoordinatorChatReadPoint? = nil,
+        coordinatorQuietDigestsRevision: String? = nil,
+        coordinatorQueueRevision: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -35,6 +71,12 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         self.spawningConversationID = spawningConversationID
         self.primaryAnnotationKey = primaryAnnotationKey
         self.doneAt = doneAt
+        self.acceptsDoneMark = acceptsDoneMark
+        self.isCoordinator = isCoordinator
+        self.coordinatorConversationID = coordinatorConversationID
+        self.coordinatorChatRead = coordinatorChatRead
+        self.coordinatorQuietDigestsRevision = coordinatorQuietDigestsRevision
+        self.coordinatorQueueRevision = coordinatorQueueRevision
     }
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -46,10 +88,17 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
         try container.encodeIfPresent(spawningConversationID, forKey: .spawningConversationID)
         try container.encodeIfPresent(primaryAnnotationKey, forKey: .primaryAnnotationKey)
         try container.encodeIfPresent(doneAt, forKey: .doneAt)
+        if !acceptsDoneMark { try container.encode(false, forKey: .acceptsDoneMark) }
+        if isCoordinator { try container.encode(true, forKey: .isCoordinator) }
+        try container.encodeIfPresent(coordinatorConversationID, forKey: .coordinatorConversationID)
+        try container.encodeIfPresent(coordinatorChatRead, forKey: .coordinatorChatRead)
+        try container.encodeIfPresent(coordinatorQuietDigestsRevision, forKey: .coordinatorQuietDigestsRevision)
+        try container.encodeIfPresent(coordinatorQueueRevision, forKey: .coordinatorQueueRevision)
     }
     private enum CodingKeys: String, CodingKey {
         case id, title, panels, annotations
-        case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt
+        case parentWorkspaceID, spawningConversationID, primaryAnnotationKey, doneAt, acceptsDoneMark, isCoordinator
+        case coordinatorConversationID, coordinatorChatRead, coordinatorQuietDigestsRevision, coordinatorQueueRevision
     }
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -62,6 +111,18 @@ public struct RemoteWorkspaceSummary: Codable, Equatable, Sendable, Identifiable
             RemoteConversationID.self, forKey: .spawningConversationID)
         primaryAnnotationKey = try container.decodeIfPresent(String.self, forKey: .primaryAnnotationKey)
         doneAt = try container.decodeIfPresent(Date.self, forKey: .doneAt)
+        acceptsDoneMark = try container.decodeIfPresent(Bool.self, forKey: .acceptsDoneMark) ?? true
+        isCoordinator = try container.decodeIfPresent(Bool.self, forKey: .isCoordinator) ?? false
+        coordinatorConversationID = try container.decodeIfPresent(
+            RemoteConversationID.self, forKey: .coordinatorConversationID)
+        // A read point this client cannot read is left out: the chat then
+        // shows no line, as with an older Mac.
+        coordinatorChatRead = try? container.decodeIfPresent(
+            RemoteCoordinatorChatReadPoint.self, forKey: .coordinatorChatRead)
+        coordinatorQuietDigestsRevision = try? container.decodeIfPresent(
+            String.self, forKey: .coordinatorQuietDigestsRevision)
+        coordinatorQueueRevision = try? container.decodeIfPresent(
+            String.self, forKey: .coordinatorQueueRevision)
     }
 }
 

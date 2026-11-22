@@ -29,3 +29,35 @@ extension [ToasttyMobileRoute] {
         return path
     }
 }
+
+/// The app's tabs while the Mac runs its task system. Each tab keeps its
+/// own navigation stack. A new tab is a new case.
+enum ToasttyMobileTab: Hashable {
+    case home
+    case tasks
+    /// While the Mac has a coordinator. The tab's own screen is the
+    /// coordinator's chat.
+    case coordinator
+}
+
+/// The selected tab and each tab's navigation stack. Switching tabs keeps
+/// every stack as it was.
+struct ToasttyMobileTabState: Equatable {
+    var selected = ToasttyMobileTab.home
+    var paths: [ToasttyMobileTab: [ToasttyMobileRoute]] = [:]
+
+    /// The stack of the tab on screen.
+    var selectedPath: [ToasttyMobileRoute] {
+        get { paths[selected] ?? [] }
+        set { paths[selected] = newValue }
+    }
+
+    /// The conversation that `tab`'s top screen shows: a conversation on
+    /// top of its stack, or the coordinator's chat on the Coordinator tab's
+    /// own screen. Only the tab on screen keeps its conversation open.
+    func openConversationID(in tab: ToasttyMobileTab, coordinatorConversationID: UUID?) -> UUID? {
+        let path = paths[tab] ?? []
+        if let last = path.last { return last.conversationID }
+        return tab == .coordinator ? coordinatorConversationID : nil
+    }
+}

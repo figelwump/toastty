@@ -2,40 +2,44 @@ import CoreState
 import Foundation
 
 /// Pure presentation logic for the Subspaces group under a workspace card:
-/// one list of the workspaces spawned under it, sorted by what needs the
-/// user first, with a ⑂ chip on the session that spawned each one.
+/// one list of the workspaces spawned under it, in the window's workspace
+/// order, with a ⑂ chip on the session that spawned each one. Status shows
+/// in each row's mark and badge; it never moves a row.
 @MainActor
 enum SidebarSubspacePresentation {
-    /// Row status, in the order rows sort. Agent approval and error states
-    /// always win; `ready` covers an unread finished turn. `done` is the
-    /// workspace's done mark rather than a session state, so finished tasks
-    /// sink to the bottom.
-    enum RowStatus: Int, Comparable, Sendable {
+    /// Row status. Agent approval and error states always win; `ready`
+    /// covers an unread finished turn. `question`,
+    /// `review` and `toShip` come from the task's stage: an agent that waits
+    /// for the user's reply, a pull request waiting for the user, and a merge
+    /// waiting for a release. `done` is the workspace's
+    /// done mark or the task's stage rather than a session state, so finished
+    /// tasks leave the group.
+    enum RowStatus: Int, Sendable {
         case ready = 0
+        case question
         case needsApproval
         case error
+        case review
         case working
         case idle
+        case toShip
         case done
-
-        static func < (lhs: RowStatus, rhs: RowStatus) -> Bool {
-            lhs.rawValue < rhs.rawValue
-        }
+        /// The task rests in Idle while it waits on something outside
+        /// Toastty (`task waiting`): a still clock instead of the quiet box.
+        case waiting
 
         var needsAttention: Bool {
             self == .needsApproval || self == .error
         }
 
-        /// Which status wins when a subspace has several sessions. This is
-        /// not the sort order: approval and error outrank ready, but ready
-        /// rows still list first because they are the quickest to act on.
+        /// Which status wins when a subspace has several sessions.
         fileprivate var precedence: Int {
             switch self {
             case .needsApproval: return 4
             case .error: return 3
             case .ready: return 2
             case .working: return 1
-            case .idle, .done: return 0
+            case .idle, .question, .review, .toShip, .done, .waiting: return 0
             }
         }
     }
@@ -49,18 +53,60 @@ enum SidebarSubspacePresentation {
         var showsUnreadSessionAccent = false
         let summary: String?
         var turnStartedAt: Date? = nil
+        /// The agent's last status report, without changes caused by reading.
         var statusUpdatedAt: Date? = nil
+    }
+
+    /// The task that started a row's task.
+    struct ParentTask: Equatable, Sendable {
+        let taskID: UUID
+        let title: String
     }
 
     struct Row: Equatable, Identifiable, Sendable {
         let id: UUID
         let title: String
         let status: RowStatus
+        /// The task's stage, when the task system is on.
+        var stage: TaskStage? = nil
+        /// True when the row is a task's space. Its ↖ spawner tag is hidden:
+        /// the task list already shows which task started it.
+        var isTask = false
+        /// The task merged and Toastty holds its task space open for a
+        /// while, so the user can look at it: the row stays listed.
+        var isCleanupHeld = false
+        /// The project the row belongs to, shown where rows from several
+        /// projects share a list.
+        var projectTag: String? = nil
+        /// The task space of the task that started this one, when an agent
+        /// split its work. The row draws under that one.
+        var linkedParentID: UUID? = nil
+        /// Set when the row draws under its parent in this list.
+        var isLinkedChild = false
+        /// The task that started this one. The hover card's Parent button
+        /// opens it.
+        var parentTask: ParentTask? = nil
+        /// The list shows the row without its parent task, so the row names
+        /// that task with a ↖.
+        var listsApartFromParent = false
+        var parentTaskTitle: String? { listsApartFromParent ? parentTask?.title : nil }
+        /// How many of the tasks this one started have merged, such as
+        /// "1/3 merged".
+        var childProgressLabel: String? = nil
+        /// Drawn on one line, as the Needs you segment lists rows: the
+        /// summary is left to the hover card, and one tag shows.
+        var isCompact = false
         /// The workspace's done mark, which `status` shows only while its
         /// sessions are quiet.
         var isDone: Bool { doneAt != nil }
         /// When the workspace was marked done, including quiet spaces with no sessions.
         var doneAt: Date? = nil
+        /// False for a task with an open pull request or a merge under way;
+        /// see `TaskBoardItem.acceptsDoneMark`.
+        var acceptsDoneMark = true
+        /// The user asked to release the task right after it merges; see
+        /// `TaskBoardPresentation.releaseAfterMergeRequestedAt`.
+        var releasesAfterMerge = false
         let annotations: [String: WorkspaceAnnotation]
         var primaryAnnotationKey: String? = nil
         /// See `rowSummary(sessions:)`.
@@ -74,38 +120,12 @@ enum SidebarSubspacePresentation {
         /// elsewhere can nest a subspace under it.
         var spawnerWorkspaceID: UUID? = nil
         let sessions: [SessionLine]
-        /// Position in the window's workspace order. Working rows keep this
-        /// order; other groups use it when their recency times are equal.
-        let creationIndex: Int
         /// Absolute path of where the subspace lives; see
         /// `path(sessionCWDs:workspace:)`.
         var path: String? = nil
-
-        /// The latest status update from any session in this subspace.
-        /// Metadata changes do not update these times.
-        var latestActivityAt: Date? {
-            sessions.lazy.compactMap(\.statusUpdatedAt).max()
-        }
-
-        /// Progress changes the working row's text, not its position. Rows
-        /// that need the user follow the session that sets their status, so
-        /// another session's background progress cannot move them.
-        fileprivate var sortActivityAt: Date? {
-            switch status {
-            case .working:
-                return nil
-            case .done:
-                return [doneAt, latestActivityAt].compactMap { $0 }.max()
-            case .idle:
-                return latestActivityAt
-            case .ready, .needsApproval, .error:
-                return sessions.lazy.filter {
-                    SidebarSubspacePresentation.rowStatus(
-                        kind: $0.statusKind, showsUnreadSessionAccent: $0.showsUnreadSessionAccent
-                    ) == status
-                }.compactMap(\.statusUpdatedAt).max()
-            }
-        }
+        /// The task's menu items when the task space has a task record; see
+        /// `TaskBoardPresentation.menuItems`.
+        var taskMenu: [[TaskBoardPresentation.MenuItem]]? = nil
 
         /// A subspace is waiting only when none of its working sessions is
         /// actively making progress. Attention and unread ready states win.
@@ -113,6 +133,13 @@ enum SidebarSubspacePresentation {
             guard status == .working else { return false }
             let workingSessions = sessions.filter { $0.statusKind == .working }
             return workingSessions.isEmpty == false && workingSessions.allSatisfy(\.isWaiting)
+        }
+
+        /// The workspace's `github-pr` annotation, which a one-line row
+        /// shows before any other tag.
+        var pullRequestAnnotation: (key: String, annotation: WorkspaceAnnotation)? {
+            let key = SidebarSubspacePresentation.annotationKeyPullRequest
+            return annotations[key].map { (key, $0) }
         }
 
         /// The one annotation chip the row shows: the workspace's primary annotation,
@@ -127,18 +154,14 @@ enum SidebarSubspacePresentation {
         }
     }
 
-    /// The slot the selected row holds while it stays selected.
-    struct Pin: Equatable, Sendable {
-        let rowID: UUID
-        let index: Int
-    }
-
     struct Tally: Equatable, Sendable {
         var ready = 0
         var needsApproval = 0
         var error = 0
+        var review = 0
+        var question = 0
 
-        var isEmpty: Bool { ready == 0 && needsApproval == 0 && error == 0 }
+        var isEmpty: Bool { ready == 0 && needsApproval == 0 && error == 0 && review == 0 && question == 0 }
     }
 
     /// Tone of the ⑂ chip on a spawning session's row.
@@ -166,8 +189,76 @@ enum SidebarSubspacePresentation {
     static func rowStatus(sessionStatus: RowStatus, isDone: Bool) -> RowStatus {
         guard isDone else { return sessionStatus }
         switch sessionStatus {
-        case .idle, .ready, .done: return .done
+        case .idle, .ready, .done, .question, .review, .toShip, .waiting: return .done
         case .needsApproval, .error, .working: return sessionStatus
+        }
+    }
+
+    /// The same, with the task's stage: a working agent or one that wants
+    /// the user still shows first, since the user may need to act; a quiet
+    /// task space shows where its task stands. `waitsOutside` is the task's
+    /// `task waiting` mark: a quiet task space of an Idle task with it
+    /// shows the clock. An unread turn still shows first.
+    static func rowStatus(sessionStatus: RowStatus, isDone: Bool, stage: TaskStage?, waitsOutside: Bool = false) -> RowStatus {
+        switch sessionStatus {
+        case .needsApproval, .error, .working:
+            return sessionStatus
+        case .idle, .ready, .question, .review, .toShip, .done, .waiting:
+            break
+        }
+        switch stage {
+        case .needsYou(.awaitingReply)?:
+            return .question
+        case .needsYou(.startWaitsInTerminal)?:
+            // The agent's session shows idle, but it never began.
+            return .needsApproval
+        case .needsYou(.review)?, .needsYou(.readyForReview)?:
+            return .review
+        case .toShip?:
+            return .toShip
+        case .done?, .archived?:
+            return .done
+        case .starting?:
+            // Setup or the move into a worktree is under way, often before
+            // any agent in the task space reports.
+            return .working
+        case .idle? where waitsOutside && sessionStatus == .idle:
+            return .waiting
+        case .running?, .idle?, .needsYou?:
+            // The stage already counts a done mark that means the work is
+            // done; one a merge set as the user's acceptance does not make
+            // the task done while the merge runs.
+            return sessionStatus
+        case nil:
+            return rowStatus(sessionStatus: sessionStatus, isDone: isDone)
+        }
+    }
+
+    /// Whether a project's Task Spaces group leaves the row out: its task
+    /// is finished and nothing in it is running or waiting for the user.
+    /// The Tasks view still lists it. A merged task's task space that
+    /// Toastty holds open stays listed until it closes.
+    static func isHiddenAsFinished(_ row: Row) -> Bool {
+        row.isCleanupHeld == false && isFinishedAndQuiet(row)
+    }
+
+    /// A merged task whose task space Toastty holds open, with nothing in
+    /// it running or waiting for the user. Under its parent task, the
+    /// sidebar folds it into one "N/M merged" line.
+    static func isHeldFinished(_ row: Row) -> Bool {
+        row.isCleanupHeld && isFinishedAndQuiet(row)
+    }
+
+    private static func isFinishedAndQuiet(_ row: Row) -> Bool {
+        switch row.status {
+        case .done, .toShip:
+            // The row's status shows one session; any other agent that is
+            // working or waiting keeps the row too.
+            return row.sessions.contains { session in
+                session.statusKind == .working || session.statusKind == .needsApproval || session.statusKind == .error
+            } == false
+        case .ready, .needsApproval, .error, .question, .review, .working, .idle, .waiting:
+            return false
         }
     }
 
@@ -214,62 +305,43 @@ enum SidebarSubspacePresentation {
         }
     }
 
-    static func sortedRows(_ rows: [Row]) -> [Row] {
-        rows.sorted { lhs, rhs in
-            if lhs.status != rhs.status {
-                return lhs.status < rhs.status
+    /// Draws each linked child right under the task that started it, in
+    /// the order the children already had. A child whose parent is not in
+    /// the list keeps its own place.
+    static func groupingLinkedChildren(_ rows: [Row]) -> [Row] {
+        groupingLinkedChildren(rows, id: \.id, linkedParentID: \.linkedParentID) { $0.isLinkedChild = true }
+    }
+
+    /// The same grouping for any list with parent links. Jump to Next Active
+    /// uses it on workspace IDs, so it walks task spaces in the order the
+    /// group draws them.
+    static func groupingLinkedChildren<Item>(
+        _ items: [Item],
+        id: (Item) -> UUID,
+        linkedParentID: (Item) -> UUID?,
+        markChild: (inout Item) -> Void = { _ in }
+    ) -> [Item] {
+        // One level only: a child's own children draw as top-level rows.
+        let itemIDs = Set(items.map(id))
+        let topLevelIDs = Set(items.filter { item in
+            linkedParentID(item).map { $0 == id(item) || itemIDs.contains($0) == false } ?? true
+        }.map(id))
+        var childrenByParentID: [UUID: [Item]] = [:]
+        for item in items {
+            guard topLevelIDs.contains(id(item)) == false,
+                  let parentID = linkedParentID(item), topLevelIDs.contains(parentID) else { continue }
+            childrenByParentID[parentID, default: []].append(item)
+        }
+        guard childrenByParentID.isEmpty == false else { return items }
+        let childIDs = Set(childrenByParentID.values.flatMap { $0.map(id) })
+        var result: [Item] = []
+        for item in items where childIDs.contains(id(item)) == false {
+            result.append(item)
+            for var child in childrenByParentID[id(item)] ?? [] {
+                markChild(&child)
+                result.append(child)
             }
-            let lhsActivityAt = lhs.sortActivityAt ?? .distantPast
-            let rhsActivityAt = rhs.sortActivityAt ?? .distantPast
-            if lhsActivityAt != rhsActivityAt {
-                return lhsActivityAt > rhsActivityAt
-            }
-            return lhs.creationIndex < rhs.creationIndex
         }
-    }
-
-    /// Keeps the order the user was looking at while the pointer is over the
-    /// list, so a row cannot slide away as they aim at it. Rows that appeared
-    /// since the freeze follow in sorted order.
-    static func orderedRows(_ rows: [Row], frozenOrder: [UUID]?) -> [Row] {
-        let sorted = sortedRows(rows)
-        guard let frozenOrder else { return sorted }
-        let rowsByID = Dictionary(uniqueKeysWithValues: sorted.map { ($0.id, $0) })
-        var result = frozenOrder.compactMap { rowsByID[$0] }
-        let placed = Set(result.map(\.id))
-        result += sorted.filter { placed.contains($0.id) == false }
-        return result
-    }
-
-    /// Selecting a row reads it, which would sort a ready row away from
-    /// where the user found it, most visibly after a Next Unread jump. So
-    /// the selected row keeps the slot it had in `displayedOrder`, the order
-    /// on screen before the selection changed, until the selection moves.
-    /// The pin survives a filter that hides the row for a while.
-    static func pin(
-        previous: Pin?,
-        selectedRowID: UUID?,
-        displayedOrder: [UUID]?,
-        unpinnedOrder: [UUID]
-    ) -> Pin? {
-        guard let selectedRowID else { return nil }
-        if let previous, previous.rowID == selectedRowID {
-            return previous
-        }
-        guard let unpinnedIndex = unpinnedOrder.firstIndex(of: selectedRowID) else {
-            return nil
-        }
-        let index = displayedOrder?.firstIndex(of: selectedRowID) ?? unpinnedIndex
-        return Pin(rowID: selectedRowID, index: index)
-    }
-
-    static func applyingPin(_ pin: Pin?, to rows: [Row]) -> [Row] {
-        guard let pin, let currentIndex = rows.firstIndex(where: { $0.id == pin.rowID }) else {
-            return rows
-        }
-        var result = rows
-        let row = result.remove(at: currentIndex)
-        result.insert(row, at: min(pin.index, result.count))
         return result
     }
 
@@ -284,7 +356,9 @@ enum SidebarSubspacePresentation {
             case .ready: tally.ready += 1
             case .needsApproval: tally.needsApproval += 1
             case .error: tally.error += 1
-            case .working, .idle, .done: break
+            case .review: tally.review += 1
+            case .question: tally.question += 1
+            case .working, .idle, .toShip, .done, .waiting: break
             }
         }
     }
@@ -293,15 +367,19 @@ enum SidebarSubspacePresentation {
         rows.contains { $0.status.needsAttention }
     }
 
-    /// Spawner tags only help when the group mixes more than one spawner.
+    /// Spawner tags only help when the group mixes more than one spawner
+    /// among the rows that can show a tag.
     static func showsSpawnerTags(_ rows: [Row]) -> Bool {
-        Set(rows.map { $0.spawningSessionID ?? "" }).count > 1
+        Set(rows.filter { $0.isTask == false }.map { $0.spawningSessionID ?? "" }).count > 1
     }
 
     /// A spawner in another workspace has no ⑂ chip in this card, so its rows
-    /// carry the tag even when the group has only one spawner.
+    /// carry the tag even when the group has only one spawner. A task's row
+    /// has no tag: every task an agent made would name the same session, and
+    /// a task that another task started already draws under that task.
     static func showsSpawnerTag(_ row: Row, parentWorkspaceID: UUID, groupShowsSpawnerTags: Bool) -> Bool {
-        groupShowsSpawnerTags || row.spawnerWorkspaceID.map { $0 != parentWorkspaceID } == true
+        guard row.isTask == false else { return false }
+        return groupShowsSpawnerTags || row.spawnerWorkspaceID.map { $0 != parentWorkspaceID } == true
     }
 
     static func spawnerTagLabel(_ name: String) -> String {
@@ -342,13 +420,20 @@ enum SidebarSubspacePresentation {
         shownCount == totalCount ? "\(totalCount)" : "\(shownCount)/\(totalCount)"
     }
 
+    /// Whether the row offers to change its done mark: a task with an open
+    /// pull request finishes through Merge, so it offers only to clear one.
+    static func canToggleDone(_ row: Row) -> Bool {
+        row.isDone || row.acceptsDoneMark
+    }
+
     /// The rail mark toggles the done mark only while it is a box: idle,
     /// done, or a ready turn the user can wave off. A working, approval, or
     /// error mark is about the agent, not the task.
     static func showsDoneToggle(_ row: Row) -> Bool {
+        guard canToggleDone(row) else { return false }
         switch row.status {
-        case .idle, .ready, .done: return true
-        case .needsApproval, .error, .working: return false
+        case .idle, .ready, .done, .question, .review, .waiting: return true
+        case .needsApproval, .error, .working, .toShip: return false
         }
     }
 
@@ -375,6 +460,8 @@ enum SidebarSubspacePresentation {
         if tally.ready > 0 { components.append("\(tally.ready) ready") }
         if tally.needsApproval > 0 { components.append("\(tally.needsApproval) need approval") }
         if tally.error > 0 { components.append("\(tally.error) with errors") }
+        if tally.review > 0 { components.append("\(tally.review) ready for review") }
+        if tally.question > 0 { components.append("\(tally.question) waiting for your reply") }
         return components.joined(separator: ", ")
     }
 
@@ -385,8 +472,18 @@ enum SidebarSubspacePresentation {
         case .needsApproval: components.append("needs approval")
         case .error: components.append("error")
         case .working: components.append(row.isWaiting ? "waiting" : "working")
+        case .review: components.append("ready for review")
+        case .question: components.append("waiting for your reply")
+        case .toShip: components.append("merged, to ship")
         case .done: components.append("done")
+        case .waiting: components.append("waiting outside Toastty")
         case .idle: break
+        }
+        if row.releasesAfterMerge {
+            components.append(TaskBoardPresentation.releaseAfterMergeLabel)
+        }
+        if let projectTag = row.projectTag {
+            components.append("in \(projectTag)")
         }
         if let rowAnnotation = row.rowAnnotation {
             components.append(rowAnnotation.annotation.text)
@@ -396,6 +493,9 @@ enum SidebarSubspacePresentation {
         }
         if showsSpawnerTag, let spawnerName = row.spawnerName {
             components.append("spawned by \(spawnerName)")
+        }
+        if let parentTaskTitle = row.parentTaskTitle {
+            components.append("started by \(parentTaskTitle)")
         }
         return components.joined(separator: ", ")
     }
@@ -451,6 +551,7 @@ enum SidebarSubspacePresentation {
             }
         return SubspaceHoverTipModel(
             name: row.title,
+            stage: hoverTipStage(row),
             sessions: Array(sessions.prefix(hoverTipSessionLimit)),
             hiddenSessionCount: max(0, sessions.count - hoverTipSessionLimit),
             annotations: row.annotations.sorted { $0.key < $1.key }.map { key, annotation in
@@ -462,8 +563,65 @@ enum SidebarSubspacePresentation {
             },
             path: row.path.map(SidebarSessionPresentation.abbreviatedHomePathLabel),
             absolutePath: row.path,
-            spawnerName: row.spawnerName
+            spawnerName: row.spawnerName,
+            rowSummary: row.isCompact ? row.summary : nil,
+            parentTaskTitle: row.parentTask?.title
         )
+    }
+
+    /// The task space card's child tasks. Open ones list by the sidebar
+    /// group their rows list in, most urgent first, and keep `children`'s
+    /// order inside a group. Finished ones (To ship or Done) list newest
+    /// first. Archived ones are left out. A child in another project names
+    /// that project.
+    static func hoverTipChildTasks(
+        of parent: TaskBoardItem,
+        children: [TaskBoardItem]
+    ) -> (open: [SubspaceHoverTipModel.ChildTask], finished: [SubspaceHoverTipModel.ChildTask]) {
+        func childTask(_ item: TaskBoardItem, stage: SubspaceHoverTipModel.Stage) -> SubspaceHoverTipModel.ChildTask? {
+            guard case .task(let taskID) = item.id else { return nil }
+            let otherProject = item.projectWorkspaceID != parent.projectWorkspaceID || item.projectTitle != parent.projectTitle
+            return SubspaceHoverTipModel.ChildTask(
+                taskID: taskID, item: item, stage: stage, projectTitle: otherProject ? item.projectTitle : nil
+            )
+        }
+        var open: [(bucket: SidebarBucket, child: SubspaceHoverTipModel.ChildTask)] = []
+        var finished: [(date: Date, child: SubspaceHoverTipModel.ChildTask)] = []
+        for item in children {
+            switch item.stage {
+            case .archived:
+                continue
+            case .toShip:
+                if let child = childTask(item, stage: .toShip) { finished.append((SidebarRecentToShip.mergedAt(item), child)) }
+            case .done:
+                if let child = childTask(item, stage: .done) { finished.append((SidebarRecentToShip.mergedAt(item), child)) }
+            case .starting, .needsYou, .running, .idle:
+                if let bucket = SidebarBucket.task(item), let child = childTask(item, stage: .bucket(bucket)) {
+                    open.append((bucket, child))
+                }
+            }
+        }
+        return (
+            open.enumerated()
+                .sorted { ($0.element.bucket, $0.offset) < ($1.element.bucket, $1.offset) }
+                .map(\.element.child),
+            finished.enumerated()
+                .sorted { $0.element.date != $1.element.date ? $0.element.date > $1.element.date : $0.offset < $1.offset }
+                .map(\.element.child)
+        )
+    }
+
+    /// The card's stage chip: the row's own group, as the group counts
+    /// count it, or the task's stage once it has left the groups. A
+    /// subspace that is not a task has none.
+    static func hoverTipStage(_ row: Row) -> SubspaceHoverTipModel.Stage? {
+        guard row.isTask, let stage = row.stage else { return nil }
+        switch stage {
+        case .toShip: return .toShip
+        case .done: return .done
+        case .archived: return .archived
+        case .starting, .needsYou, .running, .idle: return .bucket(.subspace(row))
+        }
     }
 
     /// Where the subspace lives. Toastty does not record a directory for the

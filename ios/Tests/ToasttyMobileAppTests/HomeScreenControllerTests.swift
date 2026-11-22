@@ -19,6 +19,34 @@ final class ToasttyWorkspaceSessionFilterTests: XCTestCase {
         )
     }
 
+    /// Projects keeps a project whose tasks all finished and whose own
+    /// sessions closed, so its footer still counts them.
+    func testProjectsKeepsAProjectWhoseTasksAllFinished() {
+        let projectID = UUID(), taskSpaceID = UUID()
+        let project = MobileWorkspace(id: projectID, title: "site", conversations: [])
+        let taskSpace = MobileWorkspace(
+            id: taskSpaceID, title: "hero", conversations: [], parentWorkspaceID: projectID, isDone: true
+        )
+        let board = RemoteTaskBoard(
+            tasks: [RemoteTaskSummary(
+                id: UUID(), title: "hero", group: .done, mark: .done, statusLine: "Done",
+                stageTitle: "Done", stageReason: "marked done", projectWorkspaceID: projectID,
+                taskSpaceWorkspaceID: taskSpaceID, activityAt: Date()
+            )],
+            doneCount: 1,
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 0, doneCount: 1)]
+        )
+        let withBoard = MobileHomeSnapshot(
+            hostName: "Mac", workspaces: [project, taskSpace], taskBoard: MobileTaskBoard(board)
+        )
+        let sections = ToasttyWorkspaceSessionFilter.all.sections(in: withBoard)
+        XCTAssertEqual(sections.map(\.id), [projectID])
+        XCTAssertEqual(sections.first?.subspaceRows, [])
+        // Without the task system, the done task space keeps its project.
+        let withoutBoard = MobileHomeSnapshot(hostName: "Mac", workspaces: [project, taskSpace])
+        XCTAssertEqual(ToasttyWorkspaceSessionFilter.all.sections(in: withoutBoard).first?.subspaceRows.count, 1)
+    }
+
     func testActiveExcludesIdleSessionsAndWorkspacesWithNothingActive() throws {
         let activeConversation = try XCTUnwrap(
             ToasttyMobileFixture.home.activitySessions.first { $0.state.bucket != .idle }
@@ -295,6 +323,24 @@ final class ConversationFlagControllerTests: XCTestCase {
         controller.update(snapshot: snapshot(isFlagged: false, generation: 2), connectionState: .live, freshness: .live)
         try await waitUntil { controller.hasPendingConversationFlag == false }
         XCTAssertEqual(isShownFlagged(controller), false)
+    }
+
+    /// While a flag waits for the Mac, Home shows a copy of the Mac's
+    /// snapshot; the copy keeps its task board, so Projects | Status stays.
+    func testAPendingFlagKeepsTheTaskBoard() async throws {
+        let controller = liveController()
+        let board = MobileTaskBoard(RemoteTaskBoard(doneCount: 3))
+        let withBoard = snapshot(isFlagged: false)
+        controller.update(
+            snapshot: MobileHomeSnapshot(hostName: withBoard.hostName, workspaces: withBoard.workspaces, taskBoard: board),
+            connectionState: .live, freshness: .live
+        )
+        controller.installConversationFlag { _, _ in .applied }
+
+        controller.setConversationFlag(conversationID, isFlagged: true)
+        XCTAssertTrue(controller.hasPendingConversationFlag)
+        XCTAssertEqual(isShownFlagged(controller), true)
+        XCTAssertEqual(controller.snapshot.taskBoard, board)
     }
 
     func testASnapshotThatClearsTheFlagBeforeTheReplyWins() async throws {
@@ -620,6 +666,39 @@ final class SubspaceDoneControllerTests: XCTestCase {
             XCTAssertEqual(controller.subspaceDoneNotice?.message, message)
             XCTAssertEqual(controller.subspaceDoneNotice?.canUndo, false)
         }
+    }
+
+    /// A task with an open pull request finishes through Merge on the Mac:
+    /// the phone neither shows nor sends a done mark for it, but can still
+    /// clear one.
+    func testASubspaceTheMacWillNotMarkDoneSendsOnlyAClear() async throws {
+        func blocked(isDone: Bool) -> MobileHomeSnapshot {
+            MobileHomeSnapshot(hostName: "Mac", workspaces: [
+                MobileWorkspace(id: parentID, title: "parent", conversations: []),
+                MobileWorkspace(
+                    id: subspaceID, title: "task", conversations: [],
+                    parentWorkspaceID: parentID, isDone: isDone, acceptsDoneMark: false
+                ),
+            ])
+        }
+        let controller = liveController()
+        controller.update(snapshot: blocked(isDone: false), connectionState: .live, freshness: .live)
+        var requests: [Bool] = []
+        controller.installSubspaceDone { _, isDone in
+            requests.append(isDone)
+            return .applied
+        }
+        XCTAssertEqual(controller.snapshot.subspaceRow(id: subspaceID)?.showsDoneToggle, false)
+
+        controller.setSubspaceDone(subspaceID, isDone: true)
+        XCTAssertEqual(isShownDone(controller), false)
+        XCTAssertNil(controller.subspaceDoneNotice)
+
+        controller.update(snapshot: blocked(isDone: true), connectionState: .live, freshness: .live)
+        XCTAssertEqual(controller.snapshot.subspaceRow(id: subspaceID)?.showsDoneToggle, true)
+        controller.setSubspaceDone(subspaceID, isDone: false)
+        XCTAssertEqual(isShownDone(controller), false)
+        try await waitUntil { requests == [false] }
     }
 
     func testUndoSendsTheOppositeStateWithoutAnotherNotice() async throws {
@@ -960,6 +1039,34 @@ final class HomeScreenControllerTests: XCTestCase {
         XCTAssertNil(controller.removedSelectionMessage)
     }
 
+    /// The coordinator's session goes when it stops or restarts. Its tab
+    /// says so itself, so no banner reports it; the new session shows on the
+    /// tab once it comes.
+    func testRemovingTheCoordinatorsSessionDismissesWithoutABanner() throws {
+        let snapshot = ToasttyMobileFixture.withCoordinator(ToasttyMobileFixture.taskHome, status: .idle)
+        let controller = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot, connectionState: .live)
+        XCTAssertTrue(controller.openConversation(id: ToasttyMobileFixture.coordinatorConversationID))
+
+        controller.update(
+            snapshot: ToasttyMobileFixture.withCoordinator(ToasttyMobileFixture.taskHome, status: nil),
+            connectionState: .live,
+            freshness: .live
+        )
+
+        XCTAssertNil(controller.selectedConversationID)
+        XCTAssertNil(controller.removedSelectionMessage)
+        XCTAssertEqual(controller.snapshot.coordinatorMark, .notRunning)
+        // A session does not start in the coordinator's workspace, even when
+        // the phone last started one there.
+        XCTAssertNotEqual(
+            controller.defaultSessionStartWorkspace(lastUsed: ToasttyMobileFixture.coordinatorWorkspaceID)?.id,
+            ToasttyMobileFixture.coordinatorWorkspaceID
+        )
+        XCTAssertFalse(controller.sessionStartWorkspaces(keeping: []).contains {
+            $0.id == ToasttyMobileFixture.coordinatorWorkspaceID
+        })
+    }
+
     private func fixtureConversation(
         in bucket: MobileSessionBucket,
         where predicate: (MobileConversation) -> Bool = { _ in true }
@@ -1044,6 +1151,37 @@ final class SessionStartControllerTests: XCTestCase {
             id: subspace.id, title: "fix-picker", parentTitle: "toastty"
         ))
         XCTAssertEqual(kept.count, 3)
+    }
+
+    /// A tapped task alert opens the task's session while its task space is
+    /// open, else the task's detail. It waits for a live snapshot before it
+    /// falls back or gives up.
+    func testTaskAlertOpensTheSessionWhileItsTaskSpaceIsOpenElseTheDetail() throws {
+        let snapshot = ToasttyMobileFixture.taskHome
+        let question = ToasttyMobileFixture.questionTaskID
+        let taskSpace = try XCTUnwrap(snapshot.taskBoard?.task(id: question)?.taskSpaceWorkspaceID)
+        let session = try XCTUnwrap(snapshot.workspaces.first { $0.id == taskSpace }?.conversations.first?.id)
+        let live = HomeScreenController(runtimeMode: .fixture, snapshot: snapshot, connectionState: .live)
+        XCTAssertEqual(live.taskAlertRoute(taskID: question, conversationID: session), .conversation(session))
+        // The session closed since the alert: the detail opens instead.
+        XCTAssertEqual(live.taskAlertRoute(taskID: question, conversationID: UUID()), .taskDetail(question))
+        // Setup failed, so the task has no session.
+        let failed = ToasttyMobileFixture.setupFailedTaskID
+        XCTAssertEqual(live.taskAlertRoute(taskID: failed, conversationID: nil), .taskDetail(failed))
+        XCTAssertEqual(live.taskAlertRoute(taskID: UUID(), conversationID: nil), .unavailable)
+
+        let restored = HomeScreenController(
+            runtimeMode: .fixture, snapshot: snapshot, connectionState: .reconnecting, freshness: .stale
+        )
+        XCTAssertEqual(restored.taskAlertRoute(taskID: question, conversationID: session), .conversation(session))
+        XCTAssertEqual(restored.taskAlertRoute(taskID: question, conversationID: UUID()), .waitForLiveSnapshot)
+        XCTAssertEqual(restored.taskAlertRoute(taskID: UUID(), conversationID: nil), .waitForLiveSnapshot)
+
+        // A Mac that stopped running the task system has no task to show.
+        let withoutTasks = HomeScreenController(
+            runtimeMode: .fixture, snapshot: ToasttyMobileFixture.home, connectionState: .live
+        )
+        XCTAssertEqual(withoutTasks.taskAlertRoute(taskID: question, conversationID: nil), .unavailable)
     }
 
     func testHomeStartsInTheLastUsedWorkspaceWhileTheMacStillListsIt() {

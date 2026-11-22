@@ -241,7 +241,28 @@ struct SubspaceHoverTipModel: Hashable {
         let colorToken: AnnotationColorToken
     }
 
+    /// Where the task stands, in place of the "task space" tag: the task's
+    /// own sidebar group, as the group counts count it. A row that lists
+    /// with its family can sit under a more urgent heading.
+    enum Stage: Hashable {
+        case bucket(TaskBucket)
+        case toShip
+        case done
+        case archived
+
+        var title: String {
+            switch self {
+            case .bucket(let bucket): bucket.title
+            case .toShip: "To ship"
+            case .done: "Done"
+            case .archived: "Archived"
+            }
+        }
+    }
+
     var name: String
+    /// `nil` for a subspace that is not a task.
+    var stage: Stage? = nil
     var sessions: [Session]
     var hiddenSessionCount: Int
     var annotations: [Annotation]
@@ -250,26 +271,97 @@ struct SubspaceHoverTipModel: Hashable {
     /// What the copy button copies.
     var absolutePath: String?
     var spawnerName: String?
+    /// The row's summary, such as the question it asks, for a one-line row
+    /// that does not show it.
+    var rowSummary: String? = nil
+    /// The task that started this one, which the card's Parent button
+    /// opens.
+    var parentTaskTitle: String? = nil
+
+    /// A task that this one started, as the card lists it.
+    struct ChildTask: Hashable {
+        let taskID: UUID
+        /// The task, for its status mark.
+        let item: TaskBoardItem
+        /// Its sidebar group, or To ship or Done once its work finished.
+        let stage: Stage
+        /// The child's project, when it is not this task's project.
+        let projectTitle: String?
+
+        var title: String { item.title }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.taskID == rhs.taskID && lhs.item == rhs.item && lhs.stage == rhs.stage
+                && lhs.projectTitle == rhs.projectTitle
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(taskID)
+            hasher.combine(stage)
+            hasher.combine(projectTitle)
+        }
+    }
+
+    /// Open child tasks, most urgent first.
+    var openChildTasks: [ChildTask] = []
+    /// To ship and Done children, newest first.
+    var finishedChildTasks: [ChildTask] = []
+    var childProgress: TaskBoard.ChildProgress?
 }
 
 struct SubspaceHoverTipCard: View {
     let model: SubspaceHoverTipModel
     /// Jumps to a session; the card closes afterwards.
     var onSelectSession: ((UUID) -> Void)? = nil
+    /// Opens the parent task; the card closes afterwards.
+    var onSelectParentTask: (() -> Void)? = nil
+    /// Opens a child task; the card closes afterwards.
+    var onSelectChildTask: ((UUID) -> Void)? = nil
+    /// Opens this task in the Tasks view, for child tasks past what the
+    /// card lists; the card closes afterwards.
+    var onShowTaskInTasksView: (() -> Void)? = nil
 
     @State private var hoveredSessionPanelID: UUID?
+    @State private var hoveredChildTaskID: UUID?
+    @State private var showsMoreOpenChildTasks = false
+    @State private var showsFinishedChildTasks = false
+
+    /// Open child tasks the card lists before "N more open".
+    static let childTaskLimit = 5
+    /// The most rows each list of child tasks shows when opened; the open
+    /// ones count the rows shown before "N more open". Past this the rest
+    /// open in the Tasks view, so the card stays on screen.
+    static let expandedChildTaskLimit = 12
 
     private static let railWidth: CGFloat = 12
     private static let railGap: CGFloat = 6
     /// Room for the row hover fill, taken back outside so text still lines
     /// up with the header.
     private static let rowInset: CGFloat = 4
+    /// Wider than `rowInset`, so a row's hover fill stays inside the panel.
+    private static let sessionPanelInset: CGFloat = 6
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // No status mark: each session line below shows its own, and a
-            // combined one beside them would repeat it.
-            HoverTipHeader(name: model.name, tag: "task space")
+            // combined one beside them would repeat it. The stage chip is
+            // the one color in the header, so the card reads at a glance.
+            HoverTipHeader(
+                name: model.name,
+                tag: model.stage == nil ? "task space" : nil,
+                stage: model.stage,
+                wrapsName: true
+            )
+
+            if let rowSummary = model.rowSummary {
+                // One step dimmer than the title, so the title leads.
+                Text(rowSummary)
+                    .font(.system(size: 11, weight: .regular))
+                    .lineSpacing(1.5)
+                    .foregroundStyle(ToastyTheme.hoverTipBodyText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 7)
+            }
 
             if model.annotations.isEmpty == false {
                 // Text only: the card cannot be clicked, so no chip is a link.
@@ -291,6 +383,8 @@ struct SubspaceHoverTipCard: View {
                     .foregroundStyle(ToastyTheme.hoverTipMutedText)
                     .padding(.bottom, 6)
             } else {
+                // The sessions sit on a faint panel, so they read as one
+                // block apart from the summary above.
                 VStack(alignment: .leading, spacing: 5) {
                     ForEach(Array(model.sessions.enumerated()), id: \.offset) { _, session in
                         selectableSessionRow(session)
@@ -302,8 +396,17 @@ struct SubspaceHoverTipCard: View {
                             .padding(.leading, Self.railWidth + Self.railGap)
                     }
                 }
-                .padding(.top, 2)
-                .padding(.bottom, 7)
+                .padding(.horizontal, Self.sessionPanelInset)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ToastyTheme.hoverTipSessionPanelBackground, in: RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, -2)
+                .padding(.bottom, 8)
+            }
+
+            if let progress = model.childProgress {
+                childTasksSection(progress)
+                    .padding(.bottom, 8)
             }
 
             if model.path != nil || model.spawnerName != nil {
@@ -327,8 +430,168 @@ struct SubspaceHoverTipCard: View {
                 }
                 .padding(.top, 6)
             }
+
+            if let parentTaskTitle = model.parentTaskTitle, let onSelectParentTask {
+                HoverTipParentTaskButton(title: parentTaskTitle, action: onSelectParentTask)
+                    .padding(.top, model.path != nil || model.spawnerName != nil ? 8 : 0)
+            }
         }
         .hoverTipCardChrome()
+        // "N more open" and "N merged" change the card's height after it
+        // opened; the card's window follows.
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
+            DispatchQueue.main.async { HoverTipPresenter.shared.fitToContent() }
+        }
+    }
+
+    /// The tasks this one started: the open ones, most urgent first, then
+    /// one line for finished children. The heading repeats the row's progress.
+    private func childTasksSection(_ progress: TaskBoard.ChildProgress) -> some View {
+        let open = model.openChildTasks
+        let finished = model.finishedChildTasks
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text("Child tasks")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.hoverTipMutedText)
+                Spacer(minLength: 6)
+                Text(progress.label)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(ToastyTheme.sidebarChildContextText)
+            }
+            .padding(.bottom, 2)
+            .accessibilityElement(children: .combine)
+            .background {
+                SidebarSemanticTextBridge(text: "Child tasks: \(progress.label)")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+
+            ForEach(open.prefix(Self.childTaskLimit), id: \.taskID) { child in
+                selectableChildTaskRow(child, isFinished: false)
+            }
+            if open.count > Self.childTaskLimit {
+                childTaskFold(
+                    Array(open.dropFirst(Self.childTaskLimit)),
+                    title: "\(open.count - Self.childTaskLimit) more open",
+                    noun: "open child",
+                    isExpanded: $showsMoreOpenChildTasks,
+                    limit: Self.expandedChildTaskLimit - Self.childTaskLimit,
+                    isFinished: false
+                )
+            }
+            if finished.isEmpty == false {
+                childTaskFold(
+                    finished,
+                    title: "\(finished.count) \(progress.outcomeLabel)",
+                    noun: "\(progress.outcomeLabel) child",
+                    isExpanded: $showsFinishedChildTasks,
+                    limit: Self.expandedChildTaskLimit,
+                    isFinished: true
+                )
+            }
+        }
+    }
+
+    /// A line that shows or hides more child tasks under it, at most
+    /// `limit` of them.
+    @ViewBuilder
+    private func childTaskFold(
+        _ tasks: [SubspaceHoverTipModel.ChildTask],
+        title: String,
+        noun: String,
+        isExpanded: Binding<Bool>,
+        limit: Int,
+        isFinished: Bool
+    ) -> some View {
+        let plural = tasks.count == 1 ? "task" : "tasks"
+        HoverTipChildTaskFoldButton(
+            title: title,
+            isExpanded: isExpanded.wrappedValue,
+            showsCheckmark: isFinished,
+            accessibilityText: "\(isExpanded.wrappedValue ? "Hide" : "Show") \(tasks.count) \(noun) \(plural)",
+            markWidth: Self.railWidth,
+            markGap: Self.railGap
+        ) {
+            isExpanded.wrappedValue.toggle()
+        }
+        if isExpanded.wrappedValue {
+            ForEach(tasks.prefix(limit), id: \.taskID) { child in
+                selectableChildTaskRow(child, isFinished: isFinished)
+            }
+            let remaining = tasks.count - limit
+            if remaining > 0, let onShowTaskInTasksView {
+                HoverTipChildTaskFoldButton(
+                    title: "\(remaining) more in the Tasks view",
+                    isExpanded: nil,
+                    showsCheckmark: false,
+                    accessibilityText: "Show \(remaining) more \(noun) \(remaining == 1 ? "task" : "tasks") in the Tasks view",
+                    markWidth: Self.railWidth,
+                    markGap: Self.railGap
+                ) {
+                    let generation = HoverTipPresenter.shared.currentGeneration
+                    onShowTaskInTasksView()
+                    HoverTipPresenter.shared.hide(generation: generation)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func selectableChildTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isFinished: Bool) -> some View {
+        if let onSelectChildTask {
+            let project = child.projectTitle.map { " in \($0)" } ?? ""
+            let accessibilityText = "Go to child task \(child.title)\(project), \(child.stage.title)"
+            Button {
+                let generation = HoverTipPresenter.shared.currentGeneration
+                onSelectChildTask(child.taskID)
+                HoverTipPresenter.shared.hide(generation: generation)
+            } label: {
+                childTaskRow(child, isFinished: isFinished)
+                    .padding(.horizontal, Self.rowInset)
+                    .background(
+                        hoveredChildTaskID == child.taskID ? ToastyTheme.hoverTipTagBackground : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -Self.rowInset)
+            .onHover { isHovering in
+                if isHovering {
+                    hoveredChildTaskID = child.taskID
+                } else if hoveredChildTaskID == child.taskID {
+                    hoveredChildTaskID = nil
+                }
+            }
+            .accessibilityLabel(accessibilityText)
+            .background {
+                SidebarSemanticTextBridge(text: accessibilityText)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+        } else {
+            childTaskRow(child, isFinished: isFinished)
+        }
+    }
+
+    private func childTaskRow(_ child: SubspaceHoverTipModel.ChildTask, isFinished: Bool) -> some View {
+        HStack(spacing: Self.railGap) {
+            TaskStageMark(item: child.item)
+            Text(child.title)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 6)
+            if let projectTitle = child.projectTitle {
+                SidebarView.sidebarTaskTag(projectTitle, maximumWidth: 80)
+            }
+            HoverTipStageChip(stage: child.stage, bridgesText: false)
+        }
+        .frame(minHeight: 19)
+        // Merged work steps back, as the sidebar dims a calmer row.
+        .opacity(isFinished ? 0.62 : 1)
     }
 
     @ViewBuilder
@@ -431,9 +694,12 @@ private struct HoverTipHeader: View {
     var dotColor: Color? = nil
     let name: String
     var tag: String? = nil
+    var stage: SubspaceHoverTipModel.Stage? = nil
+    /// A larger name on up to two lines, for a card whose row cuts it off.
+    var wrapsName = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: wrapsName ? .top : .center, spacing: 6) {
             if let dotColor {
                 Circle()
                     .fill(dotColor.opacity(0.85))
@@ -442,12 +708,18 @@ private struct HoverTipHeader: View {
             }
 
             Text(name)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.system(size: wrapsName ? 12 : 11.5, weight: .semibold))
                 .foregroundStyle(ToastyTheme.hoverTipText)
-                .lineLimit(1)
+                .lineLimit(wrapsName ? 2 : 1)
                 .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: wrapsName)
 
             Spacer(minLength: 8)
+
+            if let stage {
+                HoverTipStageChip(stage: stage)
+                    .padding(.top, wrapsName ? 0.5 : 0)
+            }
 
             if let tag {
                 Text(tag)
@@ -463,6 +735,52 @@ private struct HoverTipHeader: View {
             }
         }
         .padding(.bottom, 4)
+    }
+}
+
+/// A task's stage in its sidebar group's colors: yellow for Needs you,
+/// blue for Ready to review, gray for the rest.
+private struct HoverTipStageChip: View {
+    let stage: SubspaceHoverTipModel.Stage
+    /// Off where the row around the chip already says the stage.
+    var bridgesText = true
+
+    var body: some View {
+        let (foreground, background): (Color, Color) = switch stage {
+        case .bucket(.needsYou):
+            (ToastyTheme.sidebarNeedsYouMark, ToastyTheme.sidebarNeedsYouMarkBackground)
+        case .bucket(.readyToReview):
+            (ToastyTheme.sidebarTaskReviewMark, ToastyTheme.sidebarTaskReviewMarkBackground)
+        case .bucket(.running), .bucket(.idle), .toShip, .done, .archived:
+            (ToastyTheme.hoverTipMutedText, ToastyTheme.hoverTipTagBackground)
+        }
+        HStack(spacing: 4) {
+            switch stage {
+            case .bucket(.needsYou):
+                Circle().fill(foreground).frame(width: 5, height: 5)
+            case .bucket(.readyToReview):
+                RoundedRectangle(cornerRadius: 1).fill(foreground).frame(width: 5, height: 5)
+            default:
+                EmptyView()
+            }
+            Text(stage.title)
+                .font(.system(size: 9.5, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1.5)
+        .background(background, in: RoundedRectangle(cornerRadius: 4))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(stage.title)
+        .background {
+            if bridgesText {
+                SidebarSemanticTextBridge(text: "Stage: \(stage.title)")
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 
@@ -580,6 +898,117 @@ private struct HoverTipPill: View {
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(border, lineWidth: 1)
             }
+    }
+}
+
+/// The foot of a task space card: opens the task that started this one,
+/// then closes the card.
+private struct HoverTipParentTaskButton: View {
+    let title: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            let generation = HoverTipPresenter.shared.currentGeneration
+            action()
+            HoverTipPresenter.shared.hide(generation: generation)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.up.left")
+                    .font(.system(size: 8.5, weight: .bold))
+                Text("Parent")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .fixedSize()
+                Text(title)
+                    .font(.system(size: 10.5, weight: .regular))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(ToastyTheme.hoverTipTabPillText)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                isHovered ? ToastyTheme.hoverTipParentButtonHoverBackground : ToastyTheme.hoverTipTabPillBackground,
+                in: RoundedRectangle(cornerRadius: 5)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(ToastyTheme.hoverTipTabPillBorder, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel("Go to parent task \(title)")
+        .background {
+            SidebarSemanticTextBridge(text: "Go to parent task \(title)")
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// A line in a task space card's child tasks that shows or hides the rows
+/// under it, or, without `isExpanded`, opens the rest elsewhere.
+private struct HoverTipChildTaskFoldButton: View {
+    let title: String
+    let isExpanded: Bool?
+    let showsCheckmark: Bool
+    let accessibilityText: String
+    /// The child rows' mark column and the gap after it, so the title
+    /// lines up with theirs.
+    let markWidth: CGFloat
+    let markGap: CGFloat
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: markGap) {
+                Group {
+                    if showsCheckmark {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundStyle(ToastyTheme.sidebarChildContextText)
+                    }
+                }
+                .frame(width: markWidth)
+                Text(title)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ToastyTheme.sidebarSummaryText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                HStack(spacing: 3) {
+                    if let isExpanded {
+                        Text(isExpanded ? "Hide" : "Show")
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 7, weight: .bold))
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 7, weight: .bold))
+                    }
+                }
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(isHovered ? ToastyTheme.hoverTipBodyText : ToastyTheme.sidebarChildContextText)
+            }
+            .frame(minHeight: 19)
+            .padding(.horizontal, 4)
+            .background(isHovered ? ToastyTheme.hoverTipTagBackground : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, -4)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(accessibilityText)
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityText)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -775,6 +1204,24 @@ final class HoverTipPresenter {
             ))
             currentAnchor = anchorScreenRect
         }
+    }
+
+    /// Sizes the open card to its content again after the card changed
+    /// itself, such as when it shows more rows. The top edge stays where it
+    /// is, so the line under the pointer does not move.
+    func fitToContent() {
+        guard let panel, panel.isVisible, let hostingView else { return }
+        hostingView.layoutSubtreeIfNeeded()
+        let tipSize = hostingView.fittingSize
+        guard tipSize.width > 0, tipSize.height > 0, tipSize != panel.frame.size else { return }
+        let previousFrame = panel.frame
+        panel.setContentSize(tipSize)
+        hostingView.frame = CGRect(origin: .zero, size: tipSize)
+        let visibleFrame = Self.visibleFrame(for: currentAnchor ?? previousFrame)
+        panel.setFrameOrigin(CGPoint(
+            x: previousFrame.minX,
+            y: max(visibleFrame.minY, previousFrame.maxY - tipSize.height)
+        ))
     }
 
     func hide(id: AnyHashable) {

@@ -4,15 +4,18 @@ import XCTest
 @testable import ToasttyApp
 
 final class CodexSkillsManagementSheetTests: XCTestCase {
-    func testManagementRowsExposeTheExactFiveQualifiedSkillsAndSummaries() {
+    func testManagementRowsExposeTheExactSixQualifiedSkillsAndSummaries() {
         XCTAssertEqual(
             ToasttyAgentPluginBundle.skills.map { "toastty:\($0.name)" },
             [
                 "toastty:toastty-capabilities",
+                "toastty:toastty-coordinator",
                 "toastty:toastty-open-markdown",
                 "toastty:toastty-read-terminal",
                 "toastty:toastty-scratchpad",
                 "toastty:toastty-send-diagnostics",
+                "toastty:toastty-task-merge",
+                "toastty:toastty-task-start",
             ]
         )
         XCTAssertTrue(ToasttyAgentPluginBundle.skills.allSatisfy { $0.summary.isEmpty == false })
@@ -72,6 +75,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Provisioned banner wording
 
+    @MainActor
     func testProvisionedBannerTitleIdentifiesTheManagedAgent() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.title(for: .codex),
@@ -95,6 +99,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testProvisionedBannerMessageForShippedOnlyLaunch() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
@@ -109,6 +114,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testProvisionedBannerMessageIncludesDeliveredUserSkillCount() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
@@ -174,6 +180,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Launch-provided delivery row (Claude Code, Pi, OpenCode, MiMo Code)
 
+    @MainActor
     func testLaunchDeliveryStatusTitleForEachState() {
         XCTAssertEqual(
             ToasttySkillsManagementSheet.launchDeliveryStatusTitle(
@@ -199,6 +206,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testDeliveredSkillsVersionPrefersStagedSkillsVersion() {
         let codexStatus = makeCodexStatus(bundledVersion: "0.3.0")
 
@@ -218,6 +226,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testDeliveredSkillsVersionFallsBackToCodexBundledVersion() {
         XCTAssertEqual(
             ToasttySkillsManagementSheet.deliveredSkillsVersion(
@@ -243,6 +252,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Duplicate-skills guidance copy
 
+    @MainActor
     func testDuplicateSkillsGuidanceStaysConciseAndNamesDeliveredHosts() {
         let guidance = ToasttySkillsManagementSheet.duplicateSkillsGuidanceText
 
@@ -284,6 +294,50 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
         XCTAssertNil(model.snapshotDigest)
         XCTAssertFalse(model.isWorking)
+    }
+
+    /// Copies of the examples that came before the task skills are still
+    /// delivered and compete with them; the sheet names them, matching only
+    /// the exact names, and only those that are included.
+    @MainActor
+    func testUserSkillsModelFlagsIncludedOldExampleSkills() async {
+        let state = makeCatalogState(packages: [
+            makePackage(name: "release-notes", status: .accepted),
+            makePackage(name: "worktree-create", status: .accepted),
+            makePackage(name: "worktree-done", status: .accepted),
+            makePackage(name: "worktree-cleanup", status: .excluded(.missingSkillFile)),
+            makePackage(name: "worktree-create-v2", status: .accepted),
+        ])
+        var revealed: [URL] = []
+        let model = UserSkillsManagementModel(
+            userSkillsDirectoryURL: URL(fileURLWithPath: "/tmp/user-skills", isDirectory: true),
+            scanProvider: { state },
+            existingSnapshotProvider: { nil },
+            refreshProvider: { nil },
+            revealFolder: { _ in },
+            revealFiles: { revealed = $0 }
+        )
+        model.refresh()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(model.oldExampleSkills.map(\.name), ["worktree-create", "worktree-done"])
+        XCTAssertEqual(
+            UserSkillsManagementModel.statusDescription(for: state.packages[1]),
+            "Included · old example, replaced by toastty-task-start"
+        )
+        XCTAssertEqual(UserSkillsManagementModel.statusDescription(for: state.packages[0]), "Included")
+        XCTAssertEqual(
+            UserSkillsManagementModel.oldExampleSkillsWarning(count: 2),
+            "2 old example skills compete with the built-in task skills."
+        )
+        model.revealOldExampleSkills()
+        XCTAssertEqual(revealed, [state.packages[1].sourceURL, state.packages[2].sourceURL])
+
+        let cleanState = makeCatalogState(packages: [makePackage(name: "release-notes", status: .accepted)])
+        let clean = makeModel(scan: { cleanState })
+        clean.refresh()
+        await clean.waitForPendingWork()
+        XCTAssertTrue(clean.oldExampleSkills.isEmpty)
     }
 
     @MainActor

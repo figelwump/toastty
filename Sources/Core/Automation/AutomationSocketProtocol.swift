@@ -3,6 +3,9 @@ import Foundation
 public enum AutomationSocketProtocol {
     public static let version = "1.0"
     public static let diagnosticsRecentRequestsCommand = "automation.diagnostics.recent_requests"
+    /// An event whose payload `events` array holds other event envelopes.
+    /// The app applies them in order in one pass and sends one response.
+    public static let eventBatchEventType = "event.batch"
 }
 
 public struct AutomationEnvelopeHeader: Decodable, Equatable, Sendable {
@@ -41,6 +44,23 @@ public struct AutomationEventEnvelope: Codable, Equatable, Sendable {
         self.panelID = panelID
         self.timestamp = timestamp
         self.payload = payload
+    }
+
+    /// Wraps `events` in one `event.batch` event, so that one socket request
+    /// delivers all of them or none of them.
+    public static func batch(
+        _ events: [AutomationEventEnvelope],
+        requestID: String? = nil
+    ) throws -> AutomationEventEnvelope {
+        let values = try JSONDecoder().decode(
+            [AutomationJSONValue].self,
+            from: JSONEncoder().encode(events)
+        )
+        return AutomationEventEnvelope(
+            eventType: AutomationSocketProtocol.eventBatchEventType,
+            requestID: requestID,
+            payload: ["events": .array(values)]
+        )
     }
 
     public var parsedTimestamp: Date? {

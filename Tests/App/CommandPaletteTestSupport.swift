@@ -24,6 +24,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canOpenLocalDocumentValue = true
     var canCreateScratchpadValue = true
     var canShowScratchpadForCurrentSessionValue = true
+    var canCreateTaskValue = true
+    var newTaskShortcutValue: PaletteShortcut?
+    var createTaskCount = 0
     var canToggleSidebarValue = true
     var canToggleRightPanelValue = true
     var canToggleFocusedPanelModeValue = true
@@ -49,6 +52,12 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canOpenRemoteAccessValue = true
     var canSendDiagnosticsValue = true
     var canReloadValue = true
+    var canToggleTasksViewValue = true
+    var tasksViewTitleValue = ToasttyBuiltInCommand.toggleTasksView.title
+    var toggledTasksViewWindowIDs: [UUID] = []
+    var currentTaskValue: TaskBoardCurrentTask?
+    var coordinatorOptionValue: PaletteCoordinatorOption?
+    var executedTaskCommands: [PaletteTaskCommand] = []
 
     var createWindowResult = true
     var createWorkspaceResult = true
@@ -256,9 +265,43 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return canShowScratchpadForCurrentSessionValue
     }
 
+    func canCreateTask() -> Bool { canCreateTaskValue }
+
+    func createTask() -> Bool {
+        createTaskCount += 1
+        return canCreateTaskValue
+    }
+
+    func newTaskShortcut() -> PaletteShortcut? { newTaskShortcutValue }
+
     func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
         shownScratchpadWindowIDs.append(originWindowID)
         return showScratchpadForCurrentSessionResult
+    }
+
+    func canToggleTasksView(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canToggleTasksViewValue
+    }
+
+    func toggleTasksView(originWindowID: UUID) -> Bool {
+        toggledTasksViewWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func tasksViewTitle(originWindowID: UUID) -> String {
+        _ = originWindowID
+        return tasksViewTitleValue
+    }
+
+    func currentTask(originWindowID: UUID) -> TaskBoardCurrentTask? {
+        _ = originWindowID
+        return currentTaskValue
+    }
+
+    func coordinatorOption(originWindowID: UUID) -> PaletteCoordinatorOption? {
+        _ = originWindowID
+        return coordinatorOptionValue
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {
@@ -618,6 +661,10 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return createScratchpad(originWindowID: originWindowID)
             case .showScratchpadForCurrentSession:
                 return showScratchpadForCurrentSession(originWindowID: originWindowID)
+            case .newTask:
+                return createTask()
+            case .toggleTasksView:
+                return toggleTasksView(originWindowID: originWindowID)
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
             case .toggleRightPanel:
@@ -681,6 +728,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 direction: direction,
                 originWindowID: originWindowID
             )
+        case .task(let command):
+            executedTaskCommands.append(command)
+            return true
         }
     }
 }

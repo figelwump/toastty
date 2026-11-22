@@ -99,6 +99,7 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
     func testHostEncodedSubspaceFieldsReachThePresentationAndOlderHostsStayFlat() throws {
         let parentID = UUID()
         let subspaceID = UUID()
+        let reviewID = UUID()
         let spawner = RemoteConversationID(rawValue: UUID())
         let response = RemoteGatewaySessionListResponse(snapshot: RemoteSessionListSnapshot(
             projectionRunID: RemoteProjectionRunID(rawValue: UUID()), conversations: [],
@@ -111,6 +112,10 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
                     parentWorkspaceID: parentID, spawningConversationID: spawner,
                     primaryAnnotationKey: "ticket", doneAt: Date(timeIntervalSince1970: 1_788_695_000)
                 ),
+                // A task with an open pull request, which finishes through Merge.
+                RemoteWorkspaceSummary(
+                    id: reviewID, title: "review", panels: [], parentWorkspaceID: parentID, acceptsDoneMark: false
+                ),
             ]
         ))
         // This is the encoder used by RemoteGatewayRequestHandler for session lists.
@@ -118,12 +123,22 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         let presentation = try GatewayCompatibilityDecoder().decodeSessionListResponse(data).presentation()
 
         XCTAssertEqual(presentation.topLevelWorkspaces.map(\.id), [parentID])
-        let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first)
+        // Workspaces keep the Mac sidebar's order, not their titles' order.
+        XCTAssertEqual(presentation.workspaces.map(\.id), [parentID, subspaceID, reviewID])
+        let row = try XCTUnwrap(presentation.subspaceRows(of: parentID).first { $0.id == subspaceID })
         XCTAssertEqual(row.id, subspaceID)
         XCTAssertEqual(row.status, .done)
         XCTAssertEqual(row.chip?.text, "TOAST-7")
         XCTAssertEqual(row.workspace.spawningConversationID, spawner.rawValue)
         XCTAssertEqual(presentation.parent(of: subspaceID)?.id, parentID)
+        XCTAssertTrue(row.showsDoneToggle)
+        let review = try XCTUnwrap(presentation.subspaceRows(of: parentID).first { $0.id == reviewID })
+        XCTAssertFalse(review.workspace.acceptsDoneMark)
+        XCTAssertFalse(review.showsDoneToggle)
+        // The host sends the field only when the box is hidden.
+        let plain = try ConversationEventCoding.makeEncoder().encode(
+            RemoteWorkspaceSummary(id: subspaceID, title: "task", panels: [], parentWorkspaceID: parentID))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("acceptsDoneMark"))
 
         // An older host sends none of the fields, so every workspace is top level.
         let flat = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(workspaces: [
@@ -132,6 +147,12 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         ])).presentation()
         XCTAssertEqual(Set(flat.topLevelWorkspaces.map(\.id)), [parentID, subspaceID])
         XCTAssertTrue(flat.subspaceRows(of: parentID).isEmpty)
+        // Nor the done-mark field, so its subspaces keep the box.
+        let older = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(workspaces: [
+            ["id": parentID.uuidString, "title": "toastty", "panels": []],
+            ["id": subspaceID.uuidString, "title": "task", "panels": [], "parentWorkspaceID": parentID.uuidString],
+        ])).presentation()
+        XCTAssertEqual(older.subspaceRows(of: parentID).map(\.showsDoneToggle), [true])
     }
 
     func testCanonicalHostAnnotationsReachWorkspacesAndOlderWorkspacesHaveNone() throws {
@@ -176,10 +197,161 @@ final class WorkspacePreviewMetadataTests: XCTestCase {
         XCTAssertEqual(workspaces.first { $0.title == "Broken" }?.annotations, [])
     }
 
-    private func snapshotData(workspaces: [[String: Any]]?) throws -> Data {
+    /// The Mac marks its coordinator's workspace. With a task board the
+    /// phone sets it apart for the Coordinator tab; without one, or from an
+    /// older Mac that sends no mark, it is an ordinary workspace.
+    func testCoordinatorMarkSetsTheWorkspaceApartOnlyWithATaskBoard() throws {
+        let projectID = UUID()
+        let coordinatorID = UUID()
+        let coordinatorConversation = RemoteConversationID(rawValue: UUID())
+        func response(tasks: RemoteTaskBoard?) throws -> Data {
+            try ConversationEventCoding.makeEncoder().encode(RemoteGatewaySessionListResponse(snapshot: RemoteSessionListSnapshot(
+                projectionRunID: RemoteProjectionRunID(rawValue: UUID()), conversations: [],
+                generatedAt: Date(timeIntervalSince1970: 1_788_696_000),
+                workspaces: [
+                    RemoteWorkspaceSummary(id: projectID, title: "toastty", panels: []),
+                    RemoteWorkspaceSummary(
+                        id: coordinatorID, title: "Coordinator", panels: [], isCoordinator: true,
+                        coordinatorConversationID: coordinatorConversation
+                    ),
+                ],
+                tasks: tasks
+            )))
+        }
+
+        let withBoard = try GatewayCompatibilityDecoder().decodeSessionListResponse(response(tasks: RemoteTaskBoard()))
+            .presentation()
+        XCTAssertEqual(withBoard.coordinator?.id, coordinatorID)
+        XCTAssertEqual(withBoard.topLevelWorkspaces.map(\.id), [projectID])
+        XCTAssertEqual(withBoard.rankedWorkspaces.map(\.id), [projectID])
+        // A lookup by ID still finds it, so its session can open.
+        XCTAssertEqual(withBoard.workspaces.map(\.id), [projectID, coordinatorID])
+        XCTAssertEqual(withBoard.workspaces.map(\.isCoordinator), [false, true])
+        XCTAssertEqual(withBoard.coordinator?.coordinatorConversationID, coordinatorConversation.rawValue)
+        // The named session is not in this snapshot's list, so none runs.
+        XCTAssertEqual(withBoard.coordinatorMark, .notRunning)
+
+        // Without a task board the phone has no tabs, so the workspace lists
+        // as a project.
+        let withoutBoard = try GatewayCompatibilityDecoder().decodeSessionListResponse(response(tasks: nil)).presentation()
+        XCTAssertNil(withoutBoard.coordinator)
+        XCTAssertNil(withoutBoard.coordinatorMark)
+        XCTAssertEqual(Set(withoutBoard.topLevelWorkspaces.map(\.id)), [projectID, coordinatorID])
+
+        // The Mac sends the field only for the coordinator's workspace.
+        let plain = try ConversationEventCoding.makeEncoder().encode(
+            RemoteWorkspaceSummary(id: projectID, title: "toastty", panels: []))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("isCoordinator"))
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("coordinatorConversationID"))
+
+        // An older Mac sends no mark, and a malformed one counts as none.
+        for mark: Any? in [nil, "yes"] {
+            var coordinator: [String: Any] = ["id": coordinatorID.uuidString, "title": "Coordinator", "panels": []]
+            coordinator["isCoordinator"] = mark
+            let older = try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(
+                workspaces: [["id": projectID.uuidString, "title": "toastty", "panels": []], coordinator],
+                tasks: [:]
+            )).presentation()
+            XCTAssertNotNil(older.taskBoard)
+            XCTAssertNil(older.coordinator, "mark: \(String(describing: mark))")
+            XCTAssertNil(older.workspaces.first { $0.id == coordinatorID }?.coordinatorConversationID)
+            XCTAssertEqual(Set(older.topLevelWorkspaces.map(\.id)), [projectID, coordinatorID])
+        }
+    }
+
+    /// The coordinator's workspace carries the read point of the
+    /// coordinator's chat. An older Mac sends none, and one this phone
+    /// cannot read counts as none, so the chat shows no New line.
+    func testTheCoordinatorsReadPointDecodesAndAnOlderOrMalformedOneIsNone() throws {
+        let coordinatorID = UUID()
+        func decoded(_ read: Any?) throws -> MobileHomeSnapshot {
+            var coordinator: [String: Any] = [
+                "id": coordinatorID.uuidString, "title": "Coordinator", "panels": [], "isCoordinator": true,
+            ]
+            coordinator["coordinatorChatRead"] = read
+            return try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(
+                workspaces: [coordinator], tasks: [:]
+            )).presentation()
+        }
+        let read = try decoded(["eventID": "claude:msg_7", "timestamp": "2026-09-06T12:00:00.250Z"])
+        XCTAssertEqual(read.coordinatorChatRead, RemoteCoordinatorChatReadPoint(
+            eventID: "claude:msg_7", timestamp: Date(timeIntervalSince1970: 1_788_696_000.25)
+        ))
+        // A read point that an older Toastty saved names no event.
+        XCTAssertNil(try decoded(["timestamp": "2026-09-06T12:00:00.250Z"]).coordinatorChatRead?.eventID)
+        XCTAssertNotNil(try decoded(["timestamp": "2026-09-06T12:00:00.250Z"]).coordinatorChatRead)
+        // A runtime event's identity does not survive a Mac relaunch.
+        XCTAssertNil(try decoded(["eventID": "rt:1:4", "timestamp": "2026-09-06T12:00:00.250Z"]).coordinatorChatRead?.eventID)
+        for value: Any? in [nil, "yes", ["eventID": "claude:msg_7"], ["timestamp": 12]] {
+            let snapshot = try decoded(value)
+            XCTAssertNotNil(snapshot.coordinator)
+            XCTAssertNil(snapshot.coordinatorChatRead, "value: \(String(describing: value))")
+        }
+    }
+
+    /// The coordinator's workspace carries the revision of its quiet wake
+    /// turns. An older Mac sends none, and one this phone cannot read
+    /// counts as none, so no turn folds.
+    func testTheQuietDigestsRevisionDecodesAndAnOlderOrMalformedOneIsNone() throws {
+        let coordinatorID = UUID()
+        func decoded(_ revision: Any?) throws -> MobileHomeSnapshot {
+            var coordinator: [String: Any] = [
+                "id": coordinatorID.uuidString, "title": "Coordinator", "panels": [], "isCoordinator": true,
+            ]
+            coordinator["coordinatorQuietDigestsRevision"] = revision
+            return try GatewayCompatibilityDecoder().decodeSessionListResponse(snapshotData(
+                workspaces: [coordinator], tasks: [:]
+            )).presentation()
+        }
+        XCTAssertEqual(try decoded("6ca155390421e7e6").coordinatorQuietDigestsRevision, "6ca155390421e7e6")
+        for value: Any? in [nil, 7, ["revision": "6ca155390421e7e6"]] {
+            let snapshot = try decoded(value)
+            XCTAssertNotNil(snapshot.coordinator)
+            XCTAssertNil(snapshot.coordinatorQuietDigestsRevision, "value: \(String(describing: value))")
+        }
+    }
+
+    /// The phone finds a digest's key from the text that the Mac's
+    /// conversation reader sends, so that text must cross the wire byte for
+    /// byte: white space, line endings, non-ASCII text, text in either
+    /// Unicode normal form and characters that JSON escapes. Swift's `==`
+    /// treats canonically equal strings as equal, so the bytes are compared.
+    func testADigestCrossesTheWireByteForByte() throws {
+        let header = "\(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user."
+        let texts = [
+            header + "\n- [Fix the login](toastty://task/1): needsYou (review) at 2026-11-16T15:25:00Z\nRead `toastty task list` for details.",
+            "\n  " + header + "\r\n- [Café \u{1F35E} \"quoted\" \\ back/slash](toastty://task/2): idle\r\n\t\n",
+            header + "\n- [e\u{0301} and \u{00E9}, \u{2028} \u{2029} \u{0007}](toastty://task/3): running",
+        ]
+        let conversationID = RemoteConversationID(rawValue: UUID())
+        let events = texts.enumerated().map { index, text in
+            ConversationEvent(
+                conversationID: conversationID, sequence: UInt64(index + 1), eventID: "claude:msg_\(index)",
+                timestamp: Date(timeIntervalSince1970: 1_800_000_000), provider: .claude,
+                payload: .userMessage(.init(text: text, origin: .remote))
+            )
+        }
+        let page = ConversationEventPage(
+            conversationID: conversationID, projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
+            projectionGeneration: 1, events: events, latestSequence: 3, firstAvailableSequence: 1
+        )
+        // The bytes the Mac's gateway writes, read by this phone's decoder.
+        let bytes = try ConversationEventCoding.makeEncoder().encode(RemoteGatewayEventsResponse.page(page))
+        guard case .page(let decoded) = try GatewayCompatibilityDecoder().decodeEventsResponse(bytes) else {
+            return XCTFail("The page did not decode")
+        }
+        let received = decoded.events.compactMap { event -> String? in
+            guard case .known(let known) = event, case .userMessage(let message) = known.payload else { return nil }
+            return message.text
+        }
+        XCTAssertEqual(received.map { Array($0.utf8) }, texts.map { Array($0.utf8) })
+    }
+
+    private func snapshotData(workspaces: [[String: Any]]?, tasks: [String: Any]? = nil) throws -> Data {
         var snapshot: [String: Any] = ["projectionRunID": UUID().uuidString, "conversations": [],
                                         "generatedAt": "2026-09-06T12:00:00.000Z"]
         if let workspaces { snapshot["workspaces"] = workspaces }
+        if let tasks { snapshot["tasks"] = tasks }
         return try JSONSerialization.data(withJSONObject: ["protocolVersion": "1.0", "snapshot": snapshot])
     }
 }

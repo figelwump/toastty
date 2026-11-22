@@ -469,6 +469,7 @@ toastty_run_paths_have_live_process() {
   local ancestor_pid="$$"
   local ancestor_pids=""
   local parent_pid
+  local process_inventory
 
   [[ -n "$derived_path" && "$derived_path" == /* && "$derived_path" == */Derived ]] || return 0
   [[ -n "$runtime_home" && "$runtime_home" == /* && "$runtime_home" == */runtime-home ]] || return 0
@@ -481,6 +482,8 @@ toastty_run_paths_have_live_process() {
     ancestor_pid="$parent_pid"
   done
 
+  # A failed inventory is unknown ownership, not evidence that the run is idle.
+  process_inventory="$(ps -axww -o pid=,command=)" || return 0
   while read -r pid command_line; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     case " $ancestor_pids " in
@@ -490,6 +493,21 @@ toastty_run_paths_have_live_process() {
       *"$derived_path"/*|*"$derived_path "*|*"$derived_path"|\
       *"$runtime_home"/*|*"$runtime_home "*|*"$runtime_home") return 0 ;;
     esac
-  done < <(ps -axww -o pid=,command=)
+  done <<<"$process_inventory"
   return 1
+}
+
+# Build and test helper processes can take a few seconds to exit after their
+# xcodebuild is stopped. Wait a bounded time before cleanup counts a process
+# as left behind, which keeps the desktop reserved.
+toastty_wait_run_paths_idle() {
+  local derived_path="$1" runtime_home="$2" seconds="${3:-15}" waited=0
+  while toastty_run_paths_have_live_process "$derived_path" "$runtime_home"; do
+    if (( waited >= seconds * 2 )); then
+      return 1
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  return 0
 }

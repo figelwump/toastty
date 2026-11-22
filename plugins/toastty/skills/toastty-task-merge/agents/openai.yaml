@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Task Merge"
+  short_description: "Check a task's pull request, then merge it through Toastty."
+  default_prompt: "Use $toastty-task-merge to merge this task's pull request."

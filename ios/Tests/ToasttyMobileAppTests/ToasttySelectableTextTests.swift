@@ -1,3 +1,4 @@
+@testable import ConversationUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers

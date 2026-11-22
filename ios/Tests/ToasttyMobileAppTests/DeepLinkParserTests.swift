@@ -22,8 +22,13 @@ final class DeepLinkParserTests: XCTestCase {
             .workspace(workspaceID)
         )
         XCTAssertEqual(
+            parser.parse(try url("toastty-mobile-dev://shared-draft/\(conversationID.uuidString)")),
+            .sharedDraft(conversationID)
+        )
+        // The route an earlier share extension built still opens its draft.
+        XCTAssertEqual(
             parser.parse(try url("toastty-mobile-dev://new-session/\(conversationID.uuidString)")),
-            .newSession(conversationID)
+            .sharedDraft(conversationID)
         )
     }
 

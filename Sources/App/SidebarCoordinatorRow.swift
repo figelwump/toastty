@@ -1,0 +1,291 @@
+import ConversationUI
+import CoreState
+import SwiftUI
+
+/// What the coordinator's sidebar row shows beside its name.
+@MainActor
+enum SidebarCoordinatorPresentation {
+    enum Mark: Equatable {
+        /// The agent is at rest and nothing is unread.
+        case quiet
+        case working
+        case unread
+        case needsApproval
+        case error
+        case starting
+        case notRunning
+    }
+
+    static func mark(
+        agentState: CoordinatorController.AgentState,
+        statusKind: SessionStatusKind?,
+        hasUnread: Bool
+    ) -> Mark {
+        switch agentState {
+        case .notRunning: return .notRunning
+        case .starting: return .starting
+        case .running: break
+        }
+        switch statusKind {
+        case .needsApproval?: return .needsApproval
+        case .error?: return .error
+        case .working?: return .working
+        case .idle?, .ready?, nil: return hasUnread ? .unread : .quiet
+        }
+    }
+
+    /// Unread marks in the coordinator's workspace, as its session rows
+    /// would count them: the panel the user looks at is read.
+    static func hasUnread(
+        in workspace: WorkspaceState,
+        selectedWorkspaceID: UUID?,
+        selectedPanelID: UUID?
+    ) -> Bool {
+        if workspace.unreadWorkspaceNotificationCount > 0 { return true }
+        return workspace.tabsByID.values.contains { tab in
+            tab.unreadPanelIDs.contains { panelID in
+                SidebarSessionPresentation.showsUnreadSessionAccent(
+                    for: panelID,
+                    in: workspace,
+                    selectedWorkspaceID: selectedWorkspaceID,
+                    selectedPanelID: selectedPanelID
+                )
+            }
+        }
+    }
+
+    /// The coordinator's mark now. `readPanelID` is the panel whose output
+    /// the user sees: the full view's focused panel, or the coordinator's
+    /// terminal while the dock shows its chat. `nil` when neither shows.
+    static func currentMark(
+        controller: CoordinatorController,
+        sessionRuntimeStore: SessionRuntimeStore,
+        workspace: WorkspaceState,
+        readPanelID: UUID?
+    ) -> Mark {
+        let status = controller.status
+        let statusKind = status?.location.panelID
+            .flatMap { sessionRuntimeStore.sessionRegistry.panelStatus(for: $0) }
+            .flatMap { $0.isActive ? $0.status.kind : nil }
+        return mark(
+            agentState: status?.agentState ?? .notRunning,
+            statusKind: statusKind,
+            hasUnread: hasUnread(
+                in: workspace,
+                selectedWorkspaceID: readPanelID == nil ? nil : workspace.id,
+                selectedPanelID: readPanelID
+            )
+        )
+    }
+
+    /// The status Toasty carries in the row's left column: steam while the
+    /// agent works, a session row's rail dot otherwise.
+    static func iconStatus(_ mark: Mark) -> ToastyIcon.Status {
+        switch mark {
+        case .working: .working
+        case .unread: .unread
+        case .needsApproval: .needsApproval
+        case .error: .error
+        case .quiet, .starting, .notRunning: .none
+        }
+    }
+
+    static func statusText(_ mark: Mark) -> String? {
+        switch mark {
+        case .quiet: nil
+        case .working: "working"
+        case .unread: "unread"
+        case .needsApproval: "needs approval"
+        case .error: "error"
+        case .starting: "starting"
+        case .notRunning: "not running"
+        }
+    }
+
+    static func accessibilityLabel(_ mark: Mark, isSelected: Bool, dockShows: Bool = false) -> String {
+        var parts = [AppState.coordinatorWorkspaceTitle]
+        if let status = statusText(mark) { parts.append(status) }
+        if isSelected { parts.append("selected") }
+        if dockShows { parts.append("dock open") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// The coordinator's row, pinned at the top of the sidebar above the Tasks
+/// row. It is not a project card: it shows in both sidebar segments, has no
+/// number and does not reorder. It shows the agent's status and unread
+/// marks, and says when the agent does not run.
+///
+/// Where the chat can show, a click shows or hides the dock beside the
+/// selected workspace, as the toolbar's Toasty button does. While the dock
+/// shows, the row is filled and Toasty is golden. The full view opens from
+/// the hover button and the menu.
+struct SidebarCoordinatorRow: View {
+    let workspace: WorkspaceState
+    /// The full view is open: the coordinator's workspace is selected.
+    let isSelected: Bool
+    /// The panel whose output the user sees. See `currentMark`.
+    let readPanelID: UUID?
+    /// The chat can show in a dock.
+    let offersDock: Bool
+    let dockShows: Bool
+    @ObservedObject var controller: CoordinatorController
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let select: () -> Void
+    let openFullView: () -> Void
+    let toggleDock: () -> Void
+    let openDocument: (CoordinatorDocument) -> Void
+    let restart: () -> Void
+    let close: () -> Void
+
+    @State private var isHovered = false
+
+    private var mark: SidebarCoordinatorPresentation.Mark {
+        SidebarCoordinatorPresentation.currentMark(
+            controller: controller,
+            sessionRuntimeStore: sessionRuntimeStore,
+            workspace: workspace,
+            readPanelID: readPanelID
+        )
+    }
+
+    /// The hover button that opens the full view. The full view is open
+    /// already on a selected row.
+    private var showsOpenFullViewButton: Bool {
+        offersDock && isHovered && isSelected == false
+    }
+
+    var body: some View {
+        let mark = mark
+        let label = SidebarCoordinatorPresentation.accessibilityLabel(
+            mark,
+            isSelected: isSelected,
+            dockShows: dockShows
+        )
+        Button(action: select) {
+            HStack(spacing: 8) {
+                // Golden while the coordinator is on screen, in the dock or
+                // the full view, as Toasty on the toolbar is.
+                ToastyIcon(
+                    style: dockShows || isSelected ? .golden : .outline,
+                    size: 14,
+                    status: SidebarCoordinatorPresentation.iconStatus(mark),
+                    badgeRingColor: rowBackground ?? ToastyTheme.chromeBackground
+                )
+                .frame(width: 14)
+                Text(AppState.coordinatorWorkspaceTitle)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                // The hover button takes the words' place.
+                CoordinatorStatusLabel(mark: mark)
+                    .opacity(showsOpenFullViewButton ? 0 : 1)
+            }
+            // As tall as the Tasks row, whatever mark shows.
+            .frame(minHeight: 20)
+            .padding(.vertical, 5)
+            .padding(.leading, 10)
+            .padding(.trailing, 8)
+            .background(rowBackground ?? Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(clickHelp)
+        .overlay(alignment: .trailing) {
+            if showsOpenFullViewButton {
+                Button(action: openFullView) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 4)
+                .help("Open Full View")
+                .accessibilityLabel("Open Full View")
+                .accessibilityIdentifier("sidebar.coordinator.open-full-view")
+            }
+        }
+        .onHover { isHovered = $0 }
+        .contextMenu {
+            if offersDock {
+                Button("Open Full View", action: openFullView)
+                    .disabled(isSelected)
+                Button(dockShows ? "Hide Dock" : "Show Dock", action: toggleDock)
+                    .keyboardShortcut(
+                        ToasttyKeyboardShortcuts.toggleCoordinatorDock.key,
+                        modifiers: ToasttyKeyboardShortcuts.toggleCoordinatorDock.modifiers
+                    )
+                Divider()
+            }
+            ForEach(CoordinatorDocument.allCases, id: \.self) { document in
+                Button(document.openTitle) { openDocument(document) }
+            }
+            Button("Restart Coordinator", action: restart)
+            Button("Close Coordinator", role: .destructive, action: close)
+        }
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("sidebar.coordinator")
+        .background {
+            SidebarSemanticTextBridge(text: label)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 2)
+        .background(ToastyTheme.chromeBackground)
+    }
+
+    /// What a click does, where it shows or hides the dock.
+    private var clickHelp: String {
+        guard offersDock, isSelected == false else { return "" }
+        return ToasttyKeyboardShortcuts.toggleCoordinatorDock.helpText(
+            CoordinatorDockPresentation.toggleTitle(dockShows: dockShows)
+        )
+    }
+
+    /// The selected, dock-open or hovered row's fill. Without one, the row
+    /// shows the sidebar's chrome.
+    private var rowBackground: Color? {
+        if isSelected { return ToastyTheme.sidebarSessionActiveBackground }
+        if dockShows {
+            return isHovered
+                ? ToastyTheme.sidebarCoordinatorDockOpenHoverBackground
+                : ToastyTheme.sidebarCoordinatorDockOpenBackground
+        }
+        if isHovered { return ToastyTheme.sidebarSessionHoverBackground }
+        return nil
+    }
+}
+
+/// The words for the coordinator's status, as on a session row's first
+/// line: at the right end of the coordinator's row, and after the title in
+/// the dock's header.
+struct CoordinatorStatusLabel: View {
+    let mark: SidebarCoordinatorPresentation.Mark
+
+    var body: some View {
+        switch mark {
+        case .quiet, .working, .unread:
+            EmptyView()
+        case .needsApproval:
+            SessionStatusBadge(kind: .needsApproval)
+        case .error:
+            SessionStatusBadge(kind: .error)
+        case .starting:
+            quietText("Starting…")
+        case .notRunning:
+            quietText("Not running")
+        }
+    }
+
+    private func quietText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10.5))
+            .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+            .lineLimit(1)
+    }
+}

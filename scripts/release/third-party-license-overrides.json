@@ -1,0 +1,8 @@
+{
+  "format@0.2.2": {
+    "license": "MIT",
+    "file": "third-party-licenses/format@0.2.2-License.md",
+    "source": "https://github.com/samsonjs/format/blob/91b6bd78af9b061c90010b86d83caa051edeb1ea/License.md",
+    "reason": "The format 0.2.2 npm package ships no license file. Its package.json declares MIT in the legacy licenses field, and its Readme says \"Copyright 2010 - 2014 Sami Samhuri\" with a link to the MIT license. The author added this License.md to the repository in 2023."
+  }
+}

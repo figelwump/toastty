@@ -27,10 +27,12 @@ enum AgentCommandShimInstallerError: LocalizedError, Equatable {
 final class AgentCommandShimInstaller {
     private static let defaultManagedCommandNames: Set<String> = ["codex", "cdx", "claude", "pi"]
     private static let managedCommandsManifestFileName = ".toastty-managed-agent-commands.json"
+    static let cliCommandName = "toastty"
 
     private let fileManager: FileManager
     private let installationDirectoryURL: URL
     private let helperExecutablePathProvider: @Sendable () -> String?
+    private let cliExecutablePathProvider: @Sendable () -> String?
     private let managedCommandNames: Set<String>
 
     init(
@@ -38,12 +40,14 @@ final class AgentCommandShimInstaller {
         fileManager: FileManager = .default,
         installationDirectoryURL: URL? = nil,
         managedCommandNames: Set<String> = AgentCommandShimInstaller.defaultManagedCommandNames,
-        helperExecutablePathProvider: @escaping @Sendable () -> String? = ToasttyBundledExecutableLocator.defaultAgentShimExecutablePath
+        helperExecutablePathProvider: @escaping @Sendable () -> String? = ToasttyBundledExecutableLocator.defaultAgentShimExecutablePath,
+        cliExecutablePathProvider: @escaping @Sendable () -> String? = { nil }
     ) {
         self.fileManager = fileManager
         self.installationDirectoryURL = installationDirectoryURL ?? runtimePaths.agentShimDirectoryURL
         self.managedCommandNames = managedCommandNames
         self.helperExecutablePathProvider = helperExecutablePathProvider
+        self.cliExecutablePathProvider = cliExecutablePathProvider
     }
 
     func install() throws -> AgentCommandShimInstallation {
@@ -56,9 +60,15 @@ final class AgentCommandShimInstaller {
 
         let directoryURL = installationDirectoryURL
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let previouslyInstalledNames = previouslyInstalledManagedCommandNames(in: directoryURL)
+        let cliPath = cliLinkDestination(
+            in: directoryURL,
+            ownsExistingLink: previouslyInstalledNames.contains(Self.cliCommandName)
+        )
+        let installedNames = managedCommandNames
+            .union(cliPath == nil ? [] : [Self.cliCommandName])
         try removeManagedLinks(
-            named: previouslyInstalledManagedCommandNames(in: directoryURL)
-                .subtracting(managedCommandNames),
+            named: previouslyInstalledNames.subtracting(installedNames),
             from: directoryURL
         )
 
@@ -73,7 +83,14 @@ final class AgentCommandShimInstaller {
             }
             try fileManager.createSymbolicLink(atPath: linkURL.path, withDestinationPath: helperPath)
         }
-        try writeManagedCommandsManifest(in: directoryURL, commandNames: managedCommandNames)
+        if let cliPath {
+            let linkURL = directoryURL.appendingPathComponent(Self.cliCommandName, isDirectory: false)
+            if Self.pathStatus(at: linkURL.path).isSymlink {
+                try fileManager.removeItem(at: linkURL)
+            }
+            try fileManager.createSymbolicLink(atPath: linkURL.path, withDestinationPath: cliPath)
+        }
+        try writeManagedCommandsManifest(in: directoryURL, commandNames: installedNames)
 
         return AgentCommandShimInstallation(
             directoryURL: directoryURL,
@@ -117,6 +134,25 @@ final class AgentCommandShimInstaller {
             .filter { $0.isEmpty == false && $0 != directoryPath }
         components.insert(directoryPath, at: 0)
         return components.joined(separator: ":")
+    }
+
+    /// The CLI that `toastty` in this directory links to, so that an agent
+    /// session finds Toastty's CLI on `PATH` by name. Nil leaves `toastty`
+    /// alone: no CLI was given, or the directory already holds a `toastty`
+    /// that the manifest does not record, such as the copy a
+    /// runtime-isolated instance stages there or a user's own link.
+    private func cliLinkDestination(in directoryURL: URL, ownsExistingLink: Bool) -> String? {
+        guard let cliPath = normalizedNonEmpty(cliExecutablePathProvider()),
+              fileManager.isExecutableFile(atPath: cliPath) else {
+            return nil
+        }
+        let linkURL = directoryURL.appendingPathComponent(Self.cliCommandName, isDirectory: false)
+        let pathStatus = Self.pathStatus(at: linkURL.path)
+        guard pathStatus.exists == false || (pathStatus.isSymlink && ownsExistingLink),
+              URL(fileURLWithPath: cliPath).standardizedFileURL != linkURL.standardizedFileURL else {
+            return nil
+        }
+        return cliPath
     }
 
     private static func pathStatus(at path: String) -> (exists: Bool, isSymlink: Bool) {

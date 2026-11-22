@@ -14,6 +14,11 @@ source "$IOS_SIMULATOR_RUN_HELPER"
 
 REMOTE_EXEC=0
 TEST_PLATFORM="macos"
+BUILD_ONLY="${TOASTTY_REMOTE_TEST_BUILD_ONLY:-0}"
+RESOURCE=""
+BUILD_JOBS="${TOASTTY_REMOTE_BUILD_JOBS:-4}"
+QUEUE_TIMEOUT="${TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS:-3600}"
+EXPLICIT_RUN_LABEL="${RUN_LABEL:-}"
 RUN_LABEL="${RUN_LABEL:-$(toastty_default_run_label test)}"
 VALIDATION_SCOPE="working-tree"
 REF_SPEC=""
@@ -51,6 +56,8 @@ macOS tests require Ghostty in the generated project, including focused suites.
 Install Ghostty artifacts in the remote source checkout before running them.
 
 Options:
+  --build-only                          Build the selected graph without running tests
+  --resource compute|desktop            Shared worker type (default: desktop for Mac tests, compute for builds/iOS)
   --platform macos|ios                   Project graph to test (default: macos)
   --scope working-tree|head|ref         Local change scope to test (default: working-tree)
   --ref <git-ref>                       Git ref to export when --scope ref is used
@@ -63,6 +70,8 @@ Options:
 
 Optional environment:
   TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS    Remote xcodebuild timeout in seconds (default: 3600, 0 disables)
+  TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS   Maximum admission wait (default: 3600); never falls back locally
+  TOASTTY_REMOTE_BUILD_JOBS              Default xcodebuild -jobs limit (default: 4)
   TOASTTY_ALLOW_REMOTE_X86_64_TESTS      Set to 1 to allow Rosetta x86_64 remote test destinations
   -h, --help                            Show this help
 
@@ -177,11 +186,13 @@ set_default_xcodebuild_args() {
       Debug
       -parallel-testing-enabled
       NO
+      -jobs
+      "$BUILD_JOBS"
     )
     return
   fi
 
-  local arch="${ARCH:-$(uname -m)}"
+  local arch="${ARCH:-arm64}"
   DEFAULT_XCODEBUILD_ARGS=(
     -workspace
     toastty.xcworkspace
@@ -191,6 +202,8 @@ set_default_xcodebuild_args() {
     Debug
     -destination
     "platform=macOS,arch=${arch}"
+    -jobs
+    "$BUILD_JOBS"
   )
 }
 
@@ -258,7 +271,7 @@ validate_paired_xcodebuild_args() {
   for ((index = 0; index < ${#args[@]}; index += 1)); do
     arg="${args[$index]}"
     case "$arg" in
-      -workspace|-project|-scheme|-configuration|-parallel-testing-enabled|-destination)
+      -workspace|-project|-scheme|-configuration|-parallel-testing-enabled|-destination|-jobs)
         option="$arg"
         if (( index + 1 >= ${#args[@]} )); then
           fail "$option requires a value after --"
@@ -315,13 +328,16 @@ merge_default_xcodebuild_args() {
   if ! xcodebuild_args_have_option -configuration "${custom_args[@]}"; then
     MERGED_XCODEBUILD_ARGS+=( -configuration Debug )
   fi
+  if ! xcodebuild_args_have_option -jobs "${custom_args[@]}"; then
+    MERGED_XCODEBUILD_ARGS+=( -jobs "$BUILD_JOBS" )
+  fi
   if [[ "$TEST_PLATFORM" == "ios" ]] \
     && ! xcodebuild_args_have_option -parallel-testing-enabled "${custom_args[@]}"; then
     MERGED_XCODEBUILD_ARGS+=( -parallel-testing-enabled NO )
   fi
   if [[ "$TEST_PLATFORM" == "macos" ]] \
     && ! xcodebuild_args_have_option -destination "${custom_args[@]}"; then
-    local arch="${ARCH:-$(uname -m)}"
+    local arch="${ARCH:-arm64}"
     MERGED_XCODEBUILD_ARGS+=( -destination "platform=macOS,arch=${arch}" )
   fi
 
@@ -344,6 +360,9 @@ write_request_env() {
     printf 'run_label=%q\n' "$RUN_LABEL"
     printf 'scope=%q\n' "$VALIDATION_SCOPE"
     printf 'platform=%q\n' "$TEST_PLATFORM"
+    printf 'resource=%q\n' "$RESOURCE"
+    printf 'build_only=%q\n' "$BUILD_ONLY"
+    printf 'build_jobs=%q\n' "$BUILD_JOBS"
     printf 'requested_target=%q\n' "remote"
     printf 'remote_host=%q\n' "$REMOTE_HOST"
     printf 'remote_repo_root=%q\n' "$REMOTE_REPO_ROOT"
@@ -564,7 +583,9 @@ build_display_command() {
     args=("${MERGED_XCODEBUILD_ARGS[@]}")
   fi
 
-  join_shell_words xcodebuild "${args[@]}" test
+  local action=test
+  [[ "$BUILD_ONLY" != 1 ]] || action=build
+  join_shell_words xcodebuild "${args[@]}" "$action"
 }
 
 assert_supported_xcodebuild_args() {
@@ -629,7 +650,7 @@ wait_for_remote_completion() {
   local remote_stderr="$LOCAL_ARTIFACTS_DIR/remote-stderr.log"
   local ssh_exit_code=0
 
-  emit_remote_test_script() {
+  emit_remote_session_script() {
     cat <<'EOF'
 set +xv
 unset BASH_XTRACEFD 2>/dev/null || true
@@ -663,6 +684,10 @@ xcodebuild_args_b64="$5"
 remote_timeout_seconds="$6"
 allow_remote_x86_64_tests="$7"
 test_platform="$8"
+resource="$9"
+queue_timeout="${10}"
+build_only="${11}"
+build_jobs="${12}"
 export TOASTTY_REMOTE_TEST_RUN_LABEL="$run_label"
 export TOASTTY_REMOTE_TEST_REMOTE_RUN_ROOT="$remote_run_root"
 export TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR="$remote_worktree_dir"
@@ -670,6 +695,10 @@ export TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64="$xcodebuild_args_b64"
 export TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS="$remote_timeout_seconds"
 export TOASTTY_ALLOW_REMOTE_X86_64_TESTS="$allow_remote_x86_64_tests"
 export TOASTTY_REMOTE_TEST_PLATFORM="$test_platform"
+export TOASTTY_REMOTE_TEST_BUILD_ONLY="$build_only"
+export TOASTTY_REMOTE_BUILD_JOBS="$build_jobs"
+export TOASTTY_REMOTE_ADMISSION_MARKER="$remote_run_root/desktop-active"
+export TOASTTY_REMOTE_ADMISSION_RESOURCE="$resource"
 
 live_gateway_broker_pid=""
 live_gateway_broker_root=""
@@ -711,7 +740,7 @@ if [[ -n "$live_gateway_url" || -n "$live_gateway_credential" ]]; then
       "$live_gateway_url" \
       "$live_gateway_credential" \
       "$live_gateway_allow_destructive" \
-    | node "$remote_worktree_dir/scripts/remote/live-gateway-test-broker.mjs" \
+    | node "$remote_run_root/controller/scripts/remote/live-gateway-test-broker.mjs" \
         --state-file "$live_gateway_broker_state" \
         >"$live_gateway_broker_root/stdout.log" \
         2>"$live_gateway_broker_root/stderr.log" &
@@ -753,19 +782,40 @@ if [[ -n "$live_gateway_url" || -n "$live_gateway_credential" ]]; then
 fi
 
 cd "$remote_worktree_dir"
-/bin/bash "$script_path" --remote-exec
+admission_resource="$resource"
+if [[ "$resource" == desktop && "$test_platform" == macos && "$build_only" != 1 ]]; then
+  # Build as compute work, then take the desktop only for the tests.
+  admission_resource=compute
+  export TOASTTY_REMOTE_DESKTOP_AFTER_BUILD=1
+fi
+/usr/bin/python3 "$remote_run_root/controller/scripts/remote/admission.py" run \
+  --root "$(dirname "$(dirname "$remote_run_root")")" --resource "$admission_resource" \
+  --label "$run_label" --timeout "$queue_timeout" --report "$remote_run_root/admission.json" \
+  --release-marker "$remote_run_root/desktop-active" \
+  -- /bin/bash "$script_path" --remote-exec
 EOF
+  }
+
+  emit_remote_test_script() {
+    if [[ "$LIVE_GATEWAY" == "1" ]]; then
+      # This session contains the live gateway credential. Never write it to
+      # disk, so it stays attached to the SSH session as before.
+      emit_remote_session_script
+    else
+      toastty_emit_detached_launcher emit_remote_session_script
+    fi
   }
 
   if ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$RUN_LABEL" \
       "$remote_run_root" \
       "$remote_worktree_dir" \
-      "$SCRIPT_PATH" \
+      "$remote_run_root/controller/$SCRIPT_PATH" \
       "$xcodebuild_args_b64" \
       "$remote_timeout_seconds" \
       "$allow_remote_x86_64_tests" \
       "$TEST_PLATFORM" \
+      "$RESOURCE" "$QUEUE_TIMEOUT" "$BUILD_ONLY" "$BUILD_JOBS" \
       > >(tee "$remote_stdout") \
       2> >(tee "$remote_stderr" >&2) \
       < <(emit_remote_test_script); then
@@ -785,14 +835,44 @@ run_local_mode() {
   [[ "$RUN_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
     || fail "--run-label must use 1-128 letters, numbers, dots, underscores, or hyphens"
 
+  [[ "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || fail "TOASTTY_REMOTE_BUILD_JOBS must be a positive integer"
+  [[ "$QUEUE_TIMEOUT" =~ ^[0-9]+$ ]] || fail "TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS must be a nonnegative integer"
+  if [[ -z "$RESOURCE" ]]; then
+    if [[ "$BUILD_ONLY" == 1 || "$TEST_PLATFORM" == ios ]]; then RESOURCE=compute; else RESOURCE=desktop; fi
+  fi
+  [[ "$RESOURCE" == compute || "$RESOURCE" == desktop ]] || fail "--resource must be compute or desktop"
+  [[ "$BUILD_ONLY" != 1 || "$LIVE_GATEWAY" != 1 ]] || fail "--live-gateway requires a test run"
   configure_live_gateway_environment
 
   if [[ "${#XCODEBUILD_ARGS[@]}" != "0" ]]; then
     assert_supported_xcodebuild_args "${XCODEBUILD_ARGS[@]}"
   fi
 
-  prepare_local_artifacts
-  toastty_begin_run_metadata xcodebuild "$TEST_PLATFORM" "xcodebuild-test"
+  local request_key="" reattach_label="" source_identity
+  if [[ "$LIVE_GATEWAY" != 1 && -n "$REMOTE_HOST" ]]; then
+    if source_identity="$(toastty_source_identity)"; then
+      request_key="$(toastty_request_key test "$ROOT_DIR" "$VALIDATION_SCOPE" "$source_identity" \
+        "$(toastty_controller_identity)" "$REMOTE_REPO_ROOT" "$REMOTE_GUI_ROOT" "$QUEUE_TIMEOUT" \
+        "${TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS:-}" "${TOASTTY_ALLOW_REMOTE_X86_64_TESTS:-}" \
+        "$TEST_PLATFORM" "$RESOURCE" "$BUILD_ONLY" "$BUILD_JOBS" ${XCODEBUILD_ARGS[@]+"${XCODEBUILD_ARGS[@]}"})"
+      if reattach_label="$(toastty_find_reattachable_run "$ROOT_DIR/artifacts/remote-tests" "$request_key" "$EXPLICIT_RUN_LABEL")" \
+        && toastty_remote_run_reattachable "$REMOTE_GUI_ROOT/test-runs/$reattach_label"; then
+        RUN_LABEL="$reattach_label"
+        log "Reattaching to remote run $RUN_LABEL, which kept running after its earlier wrapper stopped"
+      else
+        reattach_label=""
+      fi
+    else
+      warn "Could not identify the selected source; a rerun cannot reattach to this run"
+    fi
+  fi
+
+  if [[ -n "$reattach_label" ]]; then
+    LOCAL_ARTIFACTS_DIR="$ROOT_DIR/artifacts/remote-tests/$RUN_LABEL"
+  else
+    prepare_local_artifacts
+  fi
+  toastty_begin_run_metadata xcodebuild "$TEST_PLATFORM" "xcodebuild-$([[ "$BUILD_ONLY" == 1 ]] && echo build || echo test)"
 
   local xcodebuild_command_display
   if [[ "${#XCODEBUILD_ARGS[@]}" == "0" ]]; then
@@ -800,7 +880,7 @@ run_local_mode() {
   else
     xcodebuild_command_display="$(build_display_command "${XCODEBUILD_ARGS[@]}")"
   fi
-  write_request_env "$LOCAL_ARTIFACTS_DIR/request.env" "$xcodebuild_command_display"
+  [[ -n "$reattach_label" ]] || write_request_env "$LOCAL_ARTIFACTS_DIR/request.env" "$xcodebuild_command_display"
 
   local started_at
   started_at="$(timestamp_utc)"
@@ -840,12 +920,27 @@ run_local_mode() {
 
   TOASTTY_METADATA_REMOTE_RUN_ROOT="$remote_run_root"
   TOASTTY_METADATA_REMOTE_WORKTREE="$remote_worktree_dir"
+  local remote_test_exit_code=0
+  if [[ -n "$reattach_label" ]]; then
+    TOASTTY_METADATA_REMOTE_ALLOCATED=true
+    toastty_write_attach_record "$LOCAL_ARTIFACTS_DIR" "$request_key"
+    toastty_run_phase buildAndTest
+    toastty_detached_run_notice "$RUN_LABEL"
+    if toastty_remote_detached follow "$remote_run_root" \
+        > >(tee "$LOCAL_ARTIFACTS_DIR/remote-stdout.log") \
+        2> >(tee "$LOCAL_ARTIFACTS_DIR/remote-stderr.log" >&2); then
+      :
+    else
+      remote_test_exit_code=$?
+      warn "Remote xcodebuild test failed"
+    fi
+  else
   log "Preparing remote worktree on $REMOTE_HOST"
   remote_shell "
 REMOTE_REPO_ROOT=$(escape_sh "$REMOTE_REPO_ROOT")
 REMOTE_WORKTREE_DIR=$(escape_sh "$remote_worktree_dir")
 REMOTE_RUN_ROOT=$(escape_sh "$remote_run_root")
-$(declare -f toastty_allocate_remote_run)
+$(declare -f toastty_mkdir_exclusive toastty_allocate_remote_run)
 toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$REMOTE_RUN_ROOT\"
 "
   TOASTTY_METADATA_REMOTE_ALLOCATED=true
@@ -880,6 +975,8 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
     rm -rf "$export_root"
   fi
 
+  toastty_stage_remote_controller "$remote_run_root"
+
   local xcodebuild_args_b64
   if [[ "${#XCODEBUILD_ARGS[@]}" == "0" ]]; then
     # SSH command argument forwarding can drop an empty positional argument.
@@ -891,13 +988,26 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
   fi
 
   toastty_run_phase buildAndTest
-  log "Running remote xcodebuild test"
-  local remote_test_exit_code=0
+  log "Running remote xcodebuild ($RESOURCE worker)"
+  if [[ -n "$request_key" ]]; then
+    toastty_write_attach_record "$LOCAL_ARTIFACTS_DIR" "$request_key"
+    toastty_detached_run_notice "$RUN_LABEL"
+  fi
   if wait_for_remote_completion "$remote_worktree_dir" "$remote_run_root" "$xcodebuild_args_b64"; then
     :
   else
     remote_test_exit_code=$?
     warn "Remote xcodebuild test failed"
+  fi
+  fi
+  if [[ "$remote_test_exit_code" != 0 && -n "$request_key" ]] && toastty_remote_run_continues "$remote_run_root"; then
+    warn "Lost the connection to remote run $RUN_LABEL; it keeps running. Run the same command again to reattach."
+    return "$remote_test_exit_code"
+  fi
+  if [[ "$remote_test_exit_code" != 0 && -n "$request_key" ]] && toastty_remote_run_removed "$remote_run_root"; then
+    write_result_json "$LOCAL_ARTIFACTS_DIR/result.json" fail "$started_at" "$(timestamp_utc)" "$remote_run_root" \
+      "The remote run was cancelled before it started; its remote folders were removed" "$xcodebuild_command_display"
+    return "$remote_test_exit_code"
   fi
 
   toastty_run_phase artifactCopy
@@ -927,7 +1037,8 @@ toastty_allocate_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\
 
   local cleanup_confirmed=0
   if [[ "$remote_result_received" == 1 && -f "$LOCAL_ARTIFACTS_DIR/COMPLETED" ]] \
-    && [[ ! -e "$LOCAL_ARTIFACTS_DIR/INTERRUPTED" && ! -e "$LOCAL_ARTIFACTS_DIR/CLEANUP_FAILED" ]] \
+    && [[ ! -e "$LOCAL_ARTIFACTS_DIR/INTERRUPTED" && ! -e "$LOCAL_ARTIFACTS_DIR/CLEANUP_FAILED" && ! -e "$LOCAL_ARTIFACTS_DIR/desktop-active" ]] \
+    && jq -e '.state == "finished"' "$LOCAL_ARTIFACTS_DIR/admission.json" >/dev/null 2>&1 \
     && jq -e '
       .schemaVersion == 2
       and .cleanupFailureSummary == null
@@ -1010,10 +1121,11 @@ EOF
   local xcodebuild_log="$remote_run_root/xcodebuild.log"
   local destination_probe_log="$remote_run_root/destination-probe.log"
   local timeout_marker="$remote_run_root/xcodebuild.timeout"
-  local watchdog_timer_record="$remote_run_root/watchdog-timer.pid"
-  local watchdog_reaped_marker="$remote_run_root/watchdog-timer.reaped"
+  local watchdog_stop_pipe="$remote_run_root/watchdog.stop"
+  local action=test
+  [[ "$BUILD_ONLY" != 1 ]] || action=build
   local xcodebuild_command
-  xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
+  xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" "$action")"
   local exit_code=0
   local status="pass"
   local failure_summary=""
@@ -1033,7 +1145,7 @@ EOF
   local remote_finalize_status=1
 
   mkdir -p "$remote_run_root" "$runtime_home"
-  rm -rf "$derived_path" "$result_bundle" "$timeout_marker" "$watchdog_timer_record" "$watchdog_reaped_marker"
+  rm -rf "$derived_path" "$result_bundle" "$timeout_marker"
   rm -f "$destination_probe_log"
   : >"$xcodebuild_log"
   write_remote_run_ownership \
@@ -1044,6 +1156,44 @@ EOF
     "$derived_path" \
     "$runtime_home" \
     "$TEST_PLATFORM"
+
+  start_remote_watchdog() {
+    # Open both ends before forking so even an immediate completion can
+    # signal the watchdog. The timed read owns no sleep process to reap.
+    mkfifo "$watchdog_stop_pipe" || return 1
+    if ! exec 9<>"$watchdog_stop_pipe"; then
+      rm -f "$watchdog_stop_pipe"
+      return 1
+    fi
+    if ! rm -f "$watchdog_stop_pipe"; then
+      exec 9>&-
+      return 1
+    fi
+    (
+      if IFS= read -r -t "$timeout_seconds" <&9; then
+        exit 0
+      fi
+      if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+        printf 'error: remote xcodebuild timed out after %s seconds\n' "$timeout_seconds" >>"$xcodebuild_log"
+        : >"$timeout_marker"
+        kill_process_tree "$xcodebuild_pid" TERM
+        if ! IFS= read -r -t 5 <&9 && kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+          kill_process_tree "$xcodebuild_pid" KILL
+        fi
+      fi
+    ) &
+    watchdog_pid=$!
+  }
+
+  stop_remote_watchdog() {
+    [[ -n "$watchdog_pid" ]] || return 0
+    local failed=0
+    printf '\n' >&9 || failed=1
+    wait "$watchdog_pid" || failed=1
+    exec 9>&-
+    watchdog_pid=""
+    return "$failed"
+  }
 
   finalize_remote_resources() {
     local cleanup_failed=0
@@ -1057,11 +1207,7 @@ EOF
     remote_finalize_status=1
     trap '' HUP INT TERM QUIT PIPE
     toastty_ios_cancel_bounded_simctl
-    if [[ -n "${watchdog_pid:-}" ]]; then
-      kill "$watchdog_pid" >/dev/null 2>&1 || true
-      wait "$watchdog_pid" >/dev/null 2>&1 || true
-      watchdog_pid=""
-    fi
+    stop_remote_watchdog || true
     if [[ -n "${tail_pid:-}" ]]; then
       kill "$tail_pid" >/dev/null 2>&1 || true
       wait "$tail_pid" >/dev/null 2>&1 || true
@@ -1087,7 +1233,7 @@ EOF
       cleanup_failed=1
     fi
     if [[ "$cleanup_failed" == "0" ]] \
-      && toastty_run_paths_have_live_process "$derived_path" "$runtime_home"; then
+      && ! toastty_wait_run_paths_idle "$derived_path" "$runtime_home" 15; then
       warn "A process still references the run-owned DerivedData or runtime home"
       cleanup_failed=1
     fi
@@ -1116,6 +1262,7 @@ EOF
     remote_finalize_in_progress=0
     if [[ "$cleanup_failed" == "0" ]]; then
       remote_finalize_status=0
+      [[ -z "${TOASTTY_REMOTE_ADMISSION_MARKER:-}" ]] || rm -f "$TOASTTY_REMOTE_ADMISSION_MARKER"
     fi
     return "$remote_finalize_status"
   }
@@ -1187,7 +1334,10 @@ EOF
             break
           fi
         done
-        if [[ "$has_destination" == "0" ]]; then
+        if [[ "$has_destination" == "0" && "$BUILD_ONLY" == 1 ]]; then
+          xcodebuild_args+=( -destination "generic/platform=iOS Simulator" )
+          xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" "$action")"
+        elif [[ "$has_destination" == "0" ]]; then
           local simulator_setup_status=0
           if toastty_ios_simulator_create_owned_clone \
             "$run_label" "$remote_run_root" "$remote_worktree_dir" \
@@ -1200,7 +1350,7 @@ EOF
           owned_simulator_name="$TOASTTY_IOS_OWNED_SIMULATOR_NAME"
           if [[ "$simulator_setup_status" == "0" ]]; then
             xcodebuild_args+=( -destination "platform=iOS Simulator,id=${owned_simulator_udid}" )
-            xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
+            xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" "$action")"
           else
             exit_code=$SETUP_ERROR_EXIT_CODE
             status="setup_error"
@@ -1228,8 +1378,33 @@ EOF
       :
     else
 
+      # A desktop test run builds first as compute work. It asks for the
+      # desktop only when the build passed, and its tests reuse that build.
+      local xcodebuild_phases=("$action")
+      local xcodebuild_phase
+      if [[ "${TOASTTY_REMOTE_DESKTOP_AFTER_BUILD:-0}" == 1 && "$action" == test ]]; then
+        xcodebuild_phases=(build-for-testing test-without-building)
+        xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" build-for-testing) && $(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test-without-building)"
+      fi
+
       tail -n +1 -f "$xcodebuild_log" &
       tail_pid=$!
+
+    for xcodebuild_phase in "${xcodebuild_phases[@]}"; do
+      if [[ "$xcodebuild_phase" != build-for-testing && "${TOASTTY_REMOTE_ADMISSION_RESOURCE:-}" == desktop ]]; then
+        if [[ "${TOASTTY_REMOTE_DESKTOP_AFTER_BUILD:-0}" == 1 ]] \
+          && ! /usr/bin/python3 "$remote_run_root/controller/scripts/remote/admission.py" acquire-desktop \
+            --root "${TOASTTY_ADMISSION_ROOT:?}" >>"$xcodebuild_log" 2>&1; then
+          exit_code=75
+          status="fail"
+          failure_summary="The build passed, but the run did not get the desktop for its tests; see xcodebuild.log"
+          break
+        fi
+        : >"$TOASTTY_REMOTE_ADMISSION_MARKER"
+      fi
+      local result_bundle_args=(-resultBundlePath "$result_bundle")
+      [[ "$xcodebuild_phase" != build-for-testing ]] || result_bundle_args=()
+      rm -f "$timeout_marker"
 
     (
       cd "$remote_worktree_dir"
@@ -1240,8 +1415,8 @@ EOF
       xcodebuild \
         "${xcodebuild_args[@]}" \
         -derivedDataPath "$derived_path" \
-        -resultBundlePath "$result_bundle" \
-        test >>"$xcodebuild_log" 2>&1
+        ${result_bundle_args[@]+"${result_bundle_args[@]}"} \
+        "$xcodebuild_phase" >>"$xcodebuild_log" 2>&1
     ) &
     xcodebuild_pid=$!
       # AppKit window animations in the test host never finish while the
@@ -1258,35 +1433,12 @@ EOF
       caffeinate -disu -t "$display_hold_seconds" >/dev/null 2>&1 &
       caffeinate_pid=$!
 
-      if [[ "$timeout_seconds" != "0" ]]; then
-        (
-          watchdog_sleep_pid=""
-          cleanup_watchdog_timer() {
-            if [[ -n "${watchdog_sleep_pid:-}" ]]; then
-              kill "$watchdog_sleep_pid" >/dev/null 2>&1 || true
-              wait "$watchdog_sleep_pid" >/dev/null 2>&1 || true
-            fi
-            rm -f "$watchdog_timer_record"
-            : >"$watchdog_reaped_marker"
-          }
-          trap cleanup_watchdog_timer EXIT
-          trap 'exit 0' HUP INT TERM
-          sleep "$timeout_seconds" &
-          watchdog_sleep_pid=$!
-          printf '%s\n' "$watchdog_sleep_pid" >"$watchdog_timer_record"
-          wait "$watchdog_sleep_pid" || exit 0
-          watchdog_sleep_pid=""
-        if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
-          printf 'error: remote xcodebuild test timed out after %s seconds\n' "$timeout_seconds" >>"$xcodebuild_log"
-          : >"$timeout_marker"
-          kill_process_tree "$xcodebuild_pid" TERM
-          sleep 5
-          if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
-            kill_process_tree "$xcodebuild_pid" KILL
-          fi
-        fi
-        ) &
-        watchdog_pid=$!
+      if [[ "$timeout_seconds" != "0" ]] && ! start_remote_watchdog; then
+        kill "$caffeinate_pid" >/dev/null 2>&1 || true
+        exit_code=1
+        status="fail"
+        failure_summary="Could not start the remote xcodebuild timeout watchdog"
+        break
       fi
 
     if wait "$xcodebuild_pid"; then
@@ -1298,29 +1450,22 @@ EOF
       kill "$caffeinate_pid" >/dev/null 2>&1 || true
       caffeinate_pid=""
     fi
-    if [[ "$exit_code" == "0" ]]; then
-      :
-    else
+    if ! stop_remote_watchdog; then
+      exit_code=1
       status="fail"
-      if [[ -f "$timeout_marker" ]]; then
-        exit_code=124
-        failure_summary="Remote xcodebuild test timed out after ${timeout_seconds} seconds"
-      else
-        failure_summary="Remote xcodebuild test exited with status ${exit_code}"
-      fi
+      failure_summary="Remote xcodebuild timeout watchdog failed"
+    elif [[ -f "$timeout_marker" ]]; then
+      exit_code=124
+      status="fail"
+      failure_summary="Remote xcodebuild test timed out after ${timeout_seconds} seconds"
+    elif [[ "$exit_code" != "0" ]]; then
+      status="fail"
+      failure_summary="Remote xcodebuild test exited with status ${exit_code}"
     fi
 
     xcodebuild_pid=""
-    if [[ -n "$watchdog_pid" ]]; then
-      kill "$watchdog_pid" >/dev/null 2>&1 || true
-      wait "$watchdog_pid" >/dev/null 2>&1 || true
-      watchdog_pid=""
-      if [[ ! -f "$watchdog_reaped_marker" ]]; then
-        exit_code=1
-        status="fail"
-        failure_summary="Remote timeout watchdog did not confirm that it reaped its timer child"
-      fi
-    fi
+    [[ "$exit_code" == "0" ]] || break
+    done
     if [[ -n "$tail_pid" ]]; then
       kill "$tail_pid" >/dev/null 2>&1 || true
       wait "$tail_pid" >/dev/null 2>&1 || true
@@ -1371,6 +1516,15 @@ main() {
         VALIDATION_SCOPE="$2"
         shift 2
         ;;
+      --build-only)
+        BUILD_ONLY=1
+        shift
+        ;;
+      --resource)
+        [[ $# -ge 2 ]] || fail "--resource requires compute or desktop"
+        RESOURCE="$2"
+        shift 2
+        ;;
       --platform)
         [[ $# -ge 2 ]] || fail "--platform requires a value"
         case "$2" in
@@ -1387,6 +1541,7 @@ main() {
       --run-label)
         [[ $# -ge 2 ]] || fail "--run-label requires a value"
         RUN_LABEL="$2"
+        EXPLICIT_RUN_LABEL="$2"
         shift 2
         ;;
       --full-artifacts)

@@ -283,6 +283,7 @@ func applyGhosttyVariantLinkSettings(
 
 var appDependencies: [TargetDependency] = [
     .target(name: "CodexReconciliation"),
+    .target(name: "ConversationUI"),
     .target(name: "CoreState"),
     .target(name: "RemoteProtocol"),
     .target(name: "toastty"),
@@ -402,6 +403,7 @@ if let developmentTeam {
 var appTestDependencies: [TargetDependency] = [
     .target(name: "ToasttyApp"),
     .target(name: "CodexReconciliation"),
+    .target(name: "ConversationUI"),
     .target(name: "CoreState"),
     .target(name: "RemoteProtocol"),
 ]
@@ -526,13 +528,6 @@ let project = Project(
                     subpath: "ToasttyAgentPluginBundle/plugins",
                     files: [.folderReference(path: "plugins/toastty")]
                 ),
-                // Example workflow skills that the workflow guide tells agents to copy
-                // and adapt; SetupResourceResolver.workflowExamplesSubpath names this location.
-                .resources(
-                    name: "Bundle Workflow Example Skills",
-                    subpath: "WorkflowExamples",
-                    files: [.folderReference(path: "examples/skills")]
-                ),
             ],
             scripts: [
                 .post(
@@ -561,6 +556,17 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
             sources: ["Sources/RemoteProtocol/**"]
+        ),
+        // The conversation renderer, which the iOS graph also builds.
+        .target(
+            name: "ConversationUI",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "com.GiantThings.toastty.conversation-ui",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Sources/ConversationUI/**"],
+            dependencies: [.target(name: "RemoteProtocol")]
         ),
         .target(
             name: "CoreState",
@@ -663,6 +669,9 @@ let project = Project(
             infoPlist: .default,
             sources: [
                 "Tests/App/**",
+                // Tests of shared ConversationUI rules, also compiled into
+                // the iOS graph's ToasttyMobileAppTests.
+                "Tests/ConversationUI/**",
                 // Shared provider fixtures, also compiled into CoreStateTests.
                 "Tests/Core/RemoteAccess/CodexRolloutFixtures.swift",
                 "Tests/Core/RemoteAccess/ClaudeTranscriptFixtures.swift",

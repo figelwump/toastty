@@ -4,11 +4,11 @@ Release date: {{release_date_pretty}}
 Toastty commit: `{{release_source_commit_short}}`
 {{previous_release_line}}
 
-<!-- Remove this section for smaller releases. For broader releases, you can replace bullets with short subsections if a feature needs a little more explanation. -->
+<!-- Required. The update prompt shows this section, so keep it to a few bullets: what is new for an updating user, and what to try first. Use only - bullets, ### subheadings, paragraphs, `code`, **bold** and [text](https://...) links. -->
 ## Highlights
 
-- {{highlight_1_or_remove_section}}
-- {{highlight_2_or_remove_section}}
+- {{highlight_1}}
+- {{highlight_2_or_remove_bullet}}
 
 ## Changes
 

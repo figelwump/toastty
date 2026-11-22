@@ -508,6 +508,8 @@ public struct WorkspaceLayoutPersistenceStore: Sendable {
             fingerprint.append(window.sidebarWidthPointsOverride)
             fingerprint.append(window.terminalFontSizePointsOverride)
             fingerprint.append(window.markdownTextScaleOverride)
+            fingerprint.append(window.coordinatorDockVisible)
+            fingerprint.append(window.coordinatorDockWidthPointsOverride)
         }
 
         let workspaces = layout.workspacesByID.sorted {
