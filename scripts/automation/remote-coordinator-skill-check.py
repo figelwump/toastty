@@ -1198,8 +1198,7 @@ def first_run_instructions(run):
               and created[0].get('model') == 'claude-opus-5-5' and created[0].get('effort') == 'high',
               [(t['title'], t.get('model'), t.get('effort')) for t in created])
     before.update(t['taskID'] for t in created)
-    said = run.said(run.tell('New task in app: document the format flag. Use the private Claude model "Fixture Reserved 9.3". '
-                            'This private model has no public listing.'))
+    said = run.said(run.tell('New task in app: document the format flag. Use the Claude model "Fixture Reserved 9.3".'))
     created = created_since(run, before)
     run.check('an unresolved model needs a choice before the task is created',
               created == [] and '?' in said and 'default' in said.lower(), [created, said])

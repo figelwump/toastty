@@ -1766,8 +1766,8 @@ text.
   table. It suggests a rule for choosing a model that your own agent
   instruction files hold, such as a global `AGENTS.md`, then the history of
   your tasks, then a starter table that keeps the agent's default model.
-  It looks up model names in imported rules and chat before it saves a rule
-  or launches a task. If the match is unclear, it asks which model to use.
+  It checks task history for the IDs of models named in imported rules or
+  chat. If the match is unclear, it asks which model to use.
 - **Projects:** which work goes to which project, drafted from the history
   and your open projects. It asks only when that is unclear.
 - **Talking:** whether it answers questions itself or makes a task for each
