@@ -173,7 +173,12 @@ struct CoordinatorChatView: View {
                 onStop: { model.stop() },
                 onChooseFiles: { model.chooseFiles() },
                 dropTarget: model.attachmentDropTarget(host: host),
-                onTextView: { [host] in model.setComposerTextView($0, host: host) },
+                onTextView: { [host, panelID] textView in
+                    model.setComposerTextView(textView, host: host)
+                    (textView as? CoordinatorComposerTextView)?.canApplyFocusRequest = { [weak controller] in
+                        controller?.presentsComposer(at: host, panelID: panelID) == true
+                    }
+                },
                 mentionCandidates: mentionCandidates
             )
         }

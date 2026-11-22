@@ -1091,7 +1091,15 @@ final class TerminalHostView: NSView {
             notifyLocalInterruptIfNeeded(event, action: action)
         } else {
             notifyLocalInterruptIfNeeded(event, action: action)
-            handleLocalInput?(.key)
+            let unmodified = markedText.length == 0
+                && event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+            let kind: TerminalLocalInputKind
+            switch (unmodified, event.keyCode) {
+            case (true, 36), (true, 53), (true, 76): kind = .dialogAnswer
+            case (true, 123...126): kind = .dialogNavigation
+            default: kind = .key
+            }
+            handleLocalInput?(kind)
         }
         guard let ghosttySurface else {
             super.keyDown(with: event)

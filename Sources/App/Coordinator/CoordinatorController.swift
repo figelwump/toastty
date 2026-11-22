@@ -348,9 +348,8 @@ final class CoordinatorController: ObservableObject {
         }
     }
 
-    /// Show Terminal, in the chat's notice or in the panel's header: the
-    /// panel shows the terminal in place of the chat. Give the visible
-    /// terminal the keyboard after the chat and its field leave the window.
+    /// Show Terminal, in the chat's notice or in the panel's header: give
+    /// the keyboard to the terminal as soon as its AppKit view is ready.
     func showTerminal() {
         showsTerminal = true
         guard let location, let panelID = location.panelID else { return }
@@ -362,8 +361,21 @@ final class CoordinatorController: ObservableObject {
                   let workspace = self.store.selectedWorkspace(in: location.windowID),
                   workspace.id == location.workspaceID, workspace.focusedPanelID == panelID,
                   let terminals = self.terminals else { return true }
-            guard self.chat?.activeHost == nil else { return false }
             return terminals.focusVisibleTerminalIfPossible(panelID: panelID)
+        }
+    }
+
+    /// A composer focus request can run after the chat starts leaving.
+    func presentsComposer(at host: CoordinatorChatModel.Host, panelID: UUID) -> Bool {
+        guard let location, location.panelID == panelID,
+              let window = store.window(id: location.windowID) else { return false }
+        switch host {
+        case .dock:
+            return dockShows(in: location.windowID)
+        case .panel:
+            return coversTerminal(panelID: panelID) && !window.showsTasksView &&
+                store.selectedWorkspace(in: window.id)?.focusedPanelID == panelID &&
+                window.selectedWorkspaceID == location.workspaceID
         }
     }
 
@@ -1931,6 +1943,9 @@ final class CoordinatorController: ObservableObject {
             // Until the agent reports its session, the prompt is closed
             // because the agent is not up, not because of its state.
             return .held(summary.state == .starting ? .agentStarting : Self.hold(for: reason), recheckAt: nil)
+        }
+        if session.agent == .claude, terminals?.claudeHasNativeDialog(panelID: session.panelID) == true {
+            return .held(.terminalDialog, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
         }
         guard noteTypingStarts(entry) else {
             return .held(.notSaved, recheckAt: moment.addingTimeInterval(Self.saveRetryInterval))

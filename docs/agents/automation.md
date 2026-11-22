@@ -614,10 +614,9 @@ coordinator chat check, with `ax-drive`'s `sheet-texts`, `menu` and
   **Restart Coordinator** is offered only while it is open.
 - `notice`: the `claude` profile starts with `env -u …`, so the app cannot
   tell its config file and writes no trust. Claude asks about the folder, the
-  chat says that the agent may wait in the terminal, and **Show Terminal**
-  shows the question. Real keys there choose "Yes, I trust this folder".
-  Back in the chat, the notice for a draft in the terminal shows, and **Send
-  Anyway** types the waiting message, which Claude answers.
+  dock says that the agent may wait in the terminal, and **Show Terminal**
+  shows the question. The first keys choose "Yes, I trust this folder".
+  When Claude is ready it receives and answers the waiting message.
   `--expect-notice no` runs this scenario against a build from before the
   notice: it expects the chat to say nothing, and keeps a picture of the
   terminal with Claude's question.

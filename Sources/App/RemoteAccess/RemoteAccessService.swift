@@ -4608,6 +4608,14 @@ final class RemoteAccessService: ObservableObject {
     @discardableResult
     func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .key) -> Bool {
         let conversationID = conversationIDByPanelID[panelID]
+        // Arrow, Return and Escape keys that Claude uses to operate a known
+        // Coordinator dialog are not edits to its composer. Leave any
+        // existing draft protected and still pass the key to the terminal.
+        if store.state.coordinator?.panelID == panelID,
+           sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .claude,
+           terminalRuntimeRegistry.isClaudeDialogInput(panelID: panelID, kind: kind) {
+            return false
+        }
         // Only the first unbound Ctrl+C at a provider prompt can be ignored.
         // Another press may exit the agent. Remember presses in a draft too,
         // and do not reset this on Release (it does not send an agent key).
