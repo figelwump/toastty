@@ -11,7 +11,9 @@ Serve provides the tailnet HTTPS address; Toastty itself listens only on
 2. In Toastty, open **Toastty > Remote Access…**, or use the command palette's
    **Open Remote Access** action, and turn on **Enable Remote Access**. Toastty
    starts its local gateway, then sets up private Tailscale Serve HTTPS access
-   to it. The default local address is `http://127.0.0.1:42871`.
+   to it. The local address is `http://127.0.0.1:42871`. See
+   [Several Toastty instances](#several-toastty-instances) for dev and
+   worktree instances.
 3. If Toastty shows **Open Tailscale Setup**, open that page and complete the
    HTTPS approval steps. Your tailnet administrator may need to approve them.
    Return to Toastty and choose **Retry Setup**. Toastty does not wait for
@@ -65,6 +67,30 @@ running Serve setup. Turn off Remote Access in the other Toastty instance, or
 quit the app using the port, then enable Remote Access here. The screen reports
 missing Serve configuration, setup failure, and setup timeout separately. Use
 **Retry Setup** after resolving the reported Tailscale issue.
+
+### Several Toastty instances
+
+Each Toastty instance has its own local port, so several instances can run
+Remote Access at the same time. Your own Toastty, which uses `~/.toastty`,
+always uses port 42871. A runtime-isolated instance, such as a worktree, dev,
+or test run, uses a port from 42872 through 43871. Toastty computes that port
+from the instance's runtime home path, so it is the same at every launch.
+An isolated instance never uses 42871, so it cannot receive requests that
+Tailscale Serve sends to your own Toastty.
+
+Each instance also has its own paired devices and its own **Tailnet origin**.
+Because your own Toastty already uses HTTPS port 443, Tailscale setup in a
+second instance selects a fallback port, such as 8443. A phone keeps one
+pairing. Pairing it with a dev instance replaces its pairing with your own
+Toastty.
+
+A fallback HTTPS port stays mapped after you delete the worktree. When setup
+reports that no Tailscale HTTPS port is available, remove a mapping that you
+no longer use, for example `tailscale serve --https=8443 off`.
+
+Two isolated instances can compute the same port. The second one then reports
+that the local port is in use. Start it with another port, for example
+`-toastty.remoteAccess.port 43900` as a launch argument.
 
 Setup blocks pairing if Funnel exposes the selected HTTPS port or forwards
 public traffic to Toastty's local gateway. An unrelated public service occupies

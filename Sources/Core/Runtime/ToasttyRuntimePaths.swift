@@ -460,11 +460,18 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     }
 
     private static func stableHashHex(for value: String) -> String {
+        String(format: "%016llx", stableHash(for: value))
+    }
+
+    /// A 64-bit FNV-1a hash of `value`, the same in every process and at
+    /// every launch, unlike `Hasher`. Values derived from a runtime home path,
+    /// such as the defaults suite name, use it to stay fixed for that home.
+    public static func stableHash(for value: String) -> UInt64 {
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in value.utf8 {
             hash ^= UInt64(byte)
             hash &*= 0x100000001b3
         }
-        return String(format: "%016llx", hash)
+        return hash
     }
 }
