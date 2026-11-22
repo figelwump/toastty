@@ -1154,7 +1154,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func handleLocalInterruptResetsHookTrackedWorkingCodexSessionOnEscape() {
+    func handleLocalInterruptKeepsHookTrackedWorkingCodexSessionOnEscape() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1183,15 +1183,15 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(didReset)
+        #expect(didReset == false)
         #expect(
             sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
-                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+                SessionStatus(kind: .working, summary: "Working", detail: "Responding")
         )
     }
 
     @Test
-    func handleLocalInterruptResetsHookTrackedNeedsApprovalCodexSessionOnEscape() {
+    func handleLocalInterruptKeepsHookTrackedNeedsApprovalCodexSessionOnEscape() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1220,15 +1220,15 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(didReset)
+        #expect(didReset == false)
         #expect(
             sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
-                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+                SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command")
         )
     }
 
     @Test
-    func handleLocalInterruptKeepsCodexControlCResetBehavior() {
+    func handleLocalInterruptKeepsHookTrackedCodexSessionOnControlC() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1257,10 +1257,10 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(didReset)
+        #expect(didReset == false)
         #expect(
             sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
-                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+                SessionStatus(kind: .working, summary: "Working", detail: "Responding")
         )
     }
 

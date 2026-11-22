@@ -72,12 +72,12 @@ struct SessionRuntimeStoreVisibleTextTests {
         if source == .hooks {
             sessionStore.updateStatus(sessionID: "cua-approval", status: working, at: now.addingTimeInterval(8))
             #expect(refresh(prompt, elapsed: 9))
-            // An interrupt can arrive after the menu closed but before the next poll.
+            // Escape can dismiss the menu without ending the turn.
             #expect(sessionStore.handleLocalInterruptForPanelIfActive(
                 panelID: panelID, kind: .escape, at: now.addingTimeInterval(10)
-            ))
-            #expect(refresh("› Ask Codex to do anything", elapsed: 11) == false)
-            #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .idle)
+            ) == false)
+            #expect(refresh("Working (14s • esc to interrupt)", elapsed: 11))
+            #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status == working)
         }
     }
 
