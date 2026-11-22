@@ -132,6 +132,7 @@ struct WorkspaceView: View {
     @State private var transientUnfocusHighlightFadeWorkItem: DispatchWorkItem?
     @State private var transientUnfocusHighlightResetWorkItem: DispatchWorkItem?
     @StateObject private var splitResizeCoordinator = WorkspaceSplitResizeCoordinator()
+    @State private var warmRightPanels = WarmRightPanelHosts()
 
     static let seenUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
@@ -619,6 +620,9 @@ struct WorkspaceView: View {
         }
         .onChange(of: selectedWorkspaceTabSignature) { previous, current in
             handleSelectedWorkspaceTabChange(from: previous, to: current)
+        }
+        .onChange(of: presentedRightPanelHost, initial: true) { _, host in
+            if let host { warmRightPanels.visit(host) }
         }
         .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
             consumePendingWorkspaceTabRenameRequestIfNeeded()
@@ -1137,9 +1141,22 @@ struct WorkspaceView: View {
         isWorkspaceSelected: Bool,
         isWorkspaceTabSelected: Bool,
         rightAuxPanelVisible: Bool,
-        focusedPanelModeActive: Bool
+        focusedPanelModeActive: Bool,
+        keepHostWarm: Bool = false
     ) -> Bool {
-        isWorkspaceSelected && isWorkspaceTabSelected && rightAuxPanelVisible && focusedPanelModeActive == false
+        rightAuxPanelVisible && !focusedPanelModeActive &&
+            ((isWorkspaceSelected && isWorkspaceTabSelected) || keepHostWarm)
+    }
+
+    private var presentedRightPanelHost: WarmRightPanelHosts.Host? {
+        guard let tab = selectedWorkspace?.selectedTab,
+              tab.rightAuxPanel.isVisible, !tab.focusedPanelModeActive else { return nil }
+        return rightPanelHost(in: tab)
+    }
+
+    private func rightPanelHost(in tab: WorkspaceTabState) -> WarmRightPanelHosts.Host? {
+        guard let panel = RightAuxPanelView.mountedContentTab(in: tab.rightAuxPanel) else { return nil }
+        return .init(tabID: tab.id, panelID: panel.panelID)
     }
 
     static func rightAuxPanelResizeHandleVisible(
@@ -1658,9 +1675,10 @@ struct WorkspaceView: View {
             isWorkspaceSelected: isWorkspaceSelected,
             isWorkspaceTabSelected: isTabSelected,
             rightAuxPanelVisible: tab.rightAuxPanel.isVisible,
-            focusedPanelModeActive: tab.focusedPanelModeActive
+            focusedPanelModeActive: tab.focusedPanelModeActive,
+            keepHostWarm: rightPanelHost(in: tab).map(warmRightPanels.contains) == true
         )
-        let isVisible = mountsBodyContent
+        let isVisible = mountsBodyContent && isWorkspaceSelected && isTabSelected
 
         return Group {
             if mountsBodyContent {
@@ -3919,6 +3937,31 @@ private struct TerminalLiveTitleText: View {
             .lineLimit(1)
             .truncationMode(.tail)
     }
+}
+
+/// Keep the active side panels in the two most recently viewed workspace tabs.
+@MainActor @Observable
+private final class WarmRightPanelHosts {
+    struct Host: Hashable {
+        let tabID: UUID
+        let panelID: UUID
+    }
+
+    @ObservationIgnored private var mostRecent: [Host] = []
+    private var retained: Set<Host> = []
+
+    func visit(_ host: Host) {
+        // A workspace tab shows one side panel at a time. Replacing it must
+        // leave the other workspace tab's attachment warm.
+        mostRecent.removeAll { $0.tabID == host.tabID || $0.panelID == host.panelID }
+        mostRecent.insert(host, at: 0)
+        if mostRecent.count > 2 { mostRecent.removeLast() }
+
+        let nextRetained = Set(mostRecent)
+        if retained != nextRetained { retained = nextRetained }
+    }
+
+    func contains(_ host: Host) -> Bool { retained.contains(host) }
 }
 
 private struct SlotPlacementView: View {
