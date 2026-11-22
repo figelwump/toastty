@@ -1,11 +1,11 @@
 name: Toastty CI
 
+# Pull requests run only the Linux workflow tests and the CI gate, which branch
+# protection on main requires. The test jobs run only on manual dispatch:
+#   gh workflow run mobile-ios.yml --ref <branch>
 on:
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: '17 2 * * *'
-      timezone: America/Los_Angeles
 
 # New PR commits cancel superseded checks. Manual full validations keep distinct
 # groups so each requested source can finish and retain release evidence.
@@ -14,36 +14,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  nightly:
-    name: Dispatch nightly iOS validation
-    if: github.event_name == 'schedule' && github.repository == 'figelwump/toastty'
+  workflow:
+    name: CI workflow tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    concurrency: toastty-ios-nightly
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Dispatch if the iOS source needs validation
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/dispatch-nightly-ios.sh
-
-  changes:
-    name: Select checks
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read
-    outputs:
-      scripts: ${{ steps.filter.outputs.scripts }}
-      web: ${{ steps.filter.outputs.web }}
-      ios: ${{ steps.filter.outputs.ios }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -53,24 +29,17 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Test CI selection and gate
+      - name: Test CI workflow and gate
         run: |
           npm ci --prefix Tests/CI --no-audit --no-fund
           npm test --prefix Tests/CI
 
-      - name: Select affected checks
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
-        with:
-          filters: .github/ci-paths.yml
-
   ios:
     name: iOS tests (${{ matrix.configuration }})
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ios == 'true'
+    needs: workflow
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && matrix.configuration == 'Debug' && 150 || 45 }}
+    timeout-minutes: ${{ matrix.configuration == 'Debug' && 150 || 45 }}
     permissions:
       contents: read
     strategy:
@@ -106,20 +75,10 @@ jobs:
           test "$("$TUIST_BIN_DIR/tuist" version)" = "$TUIST_VERSION"
 
       - name: Test native client
-        if: github.event_name == 'workflow_dispatch'
         # Explicit validation includes the full UI suite and performance budgets.
         # Hosted runners can time out the first UI launch under load, so every
         # failed test gets one more attempt; the uploaded xcresult keeps both.
         run: node ios/scripts/toastty-ios.mjs test --retry-tests-on-failure
-
-      - name: Test native client for pull request
-        if: github.event_name == 'pull_request'
-        run: |
-          args=(test --skip-performance-budgets --retry-tests-on-failure)
-          if [[ "$TOASTTY_IOS_CONFIGURATION" == Debug ]]; then
-            args+=(--ui-tests smoke)
-          fi
-          node ios/scripts/toastty-ios.mjs "${args[@]}"
 
       - name: Upload iOS test artifacts
         if: always()
@@ -132,7 +91,7 @@ jobs:
 
   macos:
     name: macOS contract tests
-    needs: changes
+    needs: workflow
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     timeout-minutes: 45
@@ -202,8 +161,8 @@ jobs:
 
   scripts:
     name: Script tests
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.scripts == 'true'
+    needs: workflow
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -227,8 +186,8 @@ jobs:
 
   web:
     name: Web panel tests
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true'
+    needs: workflow
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -249,41 +208,27 @@ jobs:
 
   gate:
     name: CI gate
-    if: always() && github.event_name != 'schedule'
+    if: always()
     needs:
-      - changes
+      - workflow
       - ios
       - macos
       - scripts
       - web
     runs-on: ubuntu-latest
     steps:
-      - name: Require selected checks
+      - name: Require the workflow tests, and every job on a full run
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
+          WORKFLOW_RESULT: ${{ needs.workflow.result }}
           IOS_RESULT: ${{ needs.ios.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
-          IOS_SELECTED: ${{ needs.changes.outputs.ios }}
-          WEB_RESULT: ${{ needs.web.result }}
           SCRIPTS_RESULT: ${{ needs.scripts.result }}
-          SCRIPTS_SELECTED: ${{ needs.changes.outputs.scripts }}
-          WEB_SELECTED: ${{ needs.changes.outputs.web }}
+          WEB_RESULT: ${{ needs.web.result }}
           FULL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          test "$CHANGES_RESULT" = success
-          if [[ "$FULL_RUN" != true ]]; then
-            for selected in "$IOS_SELECTED" "$SCRIPTS_SELECTED" "$WEB_SELECTED"; do
-              case "$selected" in true|false) ;; *) exit 1 ;; esac
-            done
-          fi
-          require_result() {
-            if [[ "$FULL_RUN" == true || "$1" == true ]]; then
-              test "$2" = success
-            else
-              case "$2" in success|skipped) ;; *) return 1 ;; esac
-            fi
-          }
-          require_result "$IOS_SELECTED" "$IOS_RESULT"
-          require_result false "$MACOS_RESULT"
-          require_result "$SCRIPTS_SELECTED" "$SCRIPTS_RESULT"
-          require_result "$WEB_SELECTED" "$WEB_RESULT"
+          test "$WORKFLOW_RESULT" = success
+          expected=skipped
+          if [[ "$FULL_RUN" == true ]]; then expected=success; fi
+          for result in "$IOS_RESULT" "$MACOS_RESULT" "$SCRIPTS_RESULT" "$WEB_RESULT"; do
+            test "$result" = "$expected"
+          done
