@@ -822,7 +822,10 @@ Common query IDs include:
 `running`), the agent's `sessionID`, `agent` and `status`, `startFailure`,
 `queuedCount`, `hold`, and `wake` with `pendingTaskCount`, `nextWakeAt` (the
 time that `coordinator.wake` set, or `null`), `lastWakeAt`, `watchedTaskIDs`
-and `watchedProjectRoots`.
+and `watchedProjectRoots`. While the agent shows a question card that
+`coordinator.answer-question` can answer (one card with one question), it
+also returns `openQuestion` with the card's `card` ID, `header`, `question`
+and `options` (the choice labels).
 `coordinator.open` (optional `windowID` and
 `select`) and `coordinator.restart` (optional `windowID`) return the same
 fields with `createdWorkspace` and `startedAgent`, after the start attempt.
@@ -847,14 +850,20 @@ optional `args.messageID` and `args.since` (a cursor from an earlier answer)
 and returns `replies`, oldest first, each with `id`, `messageID`, `from`,
 `text` and `repliedAt`, then `cursor` and `truncated`; see
 [Coordinator replies](tasks.md#coordinator-replies). `coordinator.answer-question`
-answers the question card that the coordinator's agent shows now, as the user
-does in the chat. It takes exactly one of `args.option` (a choice's label;
-one that differs only in case also matches when only one does) and `args.text` (an answer in the user's own words), and
-returns the card's `header`, `question`, `options` (the choice labels) and
-`chosenOption`. The card must ask one question. The answer counts as the
-user's, so it fails for a request that has a `callerSessionID`; an agent
-uses `coordinator.send`. It also fails with no open card or no choice with
-that label. `coordinator.wake` takes exactly one of
+answers the question card that the coordinator's agent shows now. It
+requires `args.card`, the card's ID from `coordinator.get`, and fails when
+another card shows, so an answer never lands on a later card. It takes
+exactly one of `args.option` (a choice's label; one that differs only in
+case also matches when only one does) and `args.text` (an answer in the
+caller's own words), and optional `args.from` as `coordinator.send` does.
+The agent receives the answer as text after the first line that
+`coordinator.send` writes for the same caller, without a message ID: a
+chosen label goes as its text. So the coordinator reads the answer as that
+sender's, never as the user's; the user answers in the chat or on a phone,
+without such a line. It returns `card`, `header`, `question`, `options`,
+`chosenOption` and `answer`, the text that the agent received. The card must
+ask one question. It also fails with no open card or no choice with that
+label. `coordinator.wake` takes exactly one of
 `args.inSeconds`, `args.at` (an ISO 8601 time) and `args.clear`, sets or
 removes the coordinator's next check, and returns the `coordinator.get`
 fields. With `args.quiet` it also marks the wake turn that runs now as one

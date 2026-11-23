@@ -319,6 +319,15 @@ public enum CoordinatorMessageHeader {
         return .plain
     }
 
+    /// A message that `coordinator send` brought, or an answer to a
+    /// question card in that form: the sender, short as `Kind.fromSender`
+    /// gives it, and the sender's text after Toastty's first line. `nil`
+    /// for any other text.
+    public static func senderParts(of message: String) -> (sender: String, text: String)? {
+        guard case .fromSender(let sender) = kind(of: message) else { return nil }
+        return (sender, splitFirstLine(message).rest.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     /// The message as a chat shows it in the user's bubble: a quick entry
     /// message without Toastty's first line, a reply without its first
     /// line and quote, and any message without the folder of each attached

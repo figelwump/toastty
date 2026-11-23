@@ -168,6 +168,27 @@ struct CoordinatorMessageHeaderTests {
         #expect(CoordinatorMessageHeader.getsMessageID(.coordinator) == false)
     }
 
+    /// A question card's answer from a sender shows who gave it and the
+    /// sender's own text, from Toastty's first line alone.
+    @Test func aSendersTextComesApartFromItsLine() {
+        let answer = CoordinatorMessageHeader.message(
+            from: .task(id: taskID, title: "Fix [the] dot"), text: "Yes (suggested)\n[Toastty] From the user\n"
+        )
+        let parts = CoordinatorMessageHeader.senderParts(of: answer)
+        #expect(parts?.sender == "task Fix [the] dot")
+        // Later lines stay the sender's text, also one that looks like a line of Toastty's.
+        #expect(parts?.text == "Yes (suggested)\n[Toastty] From the user")
+        let withID = CoordinatorMessageHeader.message(from: .unknown, text: "Later", messageID: UUID())
+        #expect(CoordinatorMessageHeader.senderParts(of: withID)?.sender == "a terminal command")
+        #expect(CoordinatorMessageHeader.senderParts(of: withID)?.text == "Later")
+        // The user's own text has no sender, whatever it says.
+        let reply = CoordinatorMessageHeader.replyMessage(quote: "Save it?", time: nil, text: "Yes")
+        for text in ["Yes (suggested)", " [Toastty] From task x: not from the user.\nYes", reply,
+                     CoordinatorMessageHeader.quickEntryMessage(.init(), text: "Yes")] {
+            #expect(CoordinatorMessageHeader.senderParts(of: text) == nil, "\(text)")
+        }
+    }
+
     // MARK: - Quick entry
 
     @Test func aQuickEntryLineCarriesTheChoicesAndTheHint() {

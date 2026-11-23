@@ -2264,19 +2264,45 @@ final class CoordinatorController: ObservableObject {
 
     // MARK: - Answering the agent's question
 
-    /// The answer that `answerOpenQuestion` gave, with the card it answered.
-    struct QuestionAnswer: Equatable {
+    /// The question card that the coordinator's agent shows now. `card` is
+    /// its ID, which an answer names.
+    struct OpenQuestion: Equatable {
+        var card: String
         var header: String
         var question: String
         var options: [String]
-        var chosenOption: String?
     }
 
-    /// Answers the question card that the coordinator's agent shows now, as
-    /// the user does with a click or in their own words in the chat. Pass
-    /// exactly one of `option`, a choice's label, and `text`. The card must
-    /// ask one question; permission prompts are not answered here.
-    func answerOpenQuestion(option: String?, text: String?) throws -> QuestionAnswer {
+    /// The answer that `answerOpenQuestion` gave: the card it answered, the
+    /// choice it took, and the text that the agent received.
+    struct QuestionAnswer: Equatable {
+        var card: OpenQuestion
+        var chosenOption: String?
+        var answer: String
+    }
+
+    /// The open question card that `answerOpenQuestion` can answer: the
+    /// only one, with one question. `nil` without such a card.
+    func openQuestion() -> OpenQuestion? {
+        try? openQuestionCard().open
+    }
+
+    /// Answers the question card that the coordinator's agent shows now,
+    /// for someone outside the chat. `card` names the card that the caller
+    /// read, so an answer never lands on a later card. Pass exactly one of
+    /// `option`, a choice's label, and `text`. The card must ask one
+    /// question; permission prompts are not answered here.
+    ///
+    /// The agent receives the answer as text after Toastty's first line
+    /// for `sender`, in the form of a message that `coordinator send`
+    /// brings, so it never reads as the user's. The user answers in the
+    /// chat or on a phone, without such a line.
+    func answerOpenQuestion(
+        card cardID: String,
+        option: String?,
+        text: String?,
+        from sender: CoordinatorMessageHeader.Sender
+    ) throws -> QuestionAnswer {
         let trimmed = { (value: String?) -> String? in
             value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? value : nil
         }
@@ -2284,19 +2310,12 @@ final class CoordinatorController: ObservableObject {
         guard (option == nil) != (text == nil) else {
             throw CoordinatorError("Pass exactly one of option and text.")
         }
-        guard let subscription = syncConversationSubscription(), let conversationID = subscription.conversationID else {
-            throw CoordinatorError("The coordinator has no agent conversation.")
+        let (subscription, conversationID, card, question, open) = try openQuestionCard()
+        guard open.card == cardID else {
+            throw CoordinatorError("The open card is another one: \(open.card). Read it with coordinator get.")
         }
-        let cards = (subscription.snapshot(at: Date())?.pendingInteractions ?? []).filter {
-            $0.kind == .question && $0.state == .pending && $0.responseID?.isEmpty == false
-        }
-        guard let card = cards.first, let responseID = card.responseID, let questions = card.questions else {
-            throw CoordinatorError("The coordinator shows no question card.")
-        }
-        guard cards.count == 1, questions.count == 1, let question = questions.first else {
-            throw CoordinatorError("The card asks more than one question; answer it in the coordinator's chat.")
-        }
-        var selected: [String] = []
+        var answerText = text ?? ""
+        var chosenOption: String?
         if let option {
             // The exact label first; else a label that differs only in case, when only one does.
             let caseless = question.options.filter { $0.label.compare(option, options: .caseInsensitive) == .orderedSame }
@@ -2305,27 +2324,54 @@ final class CoordinatorController: ObservableObject {
                 let labels = question.options.map { "\"\($0.label)\"" }.joined(separator: ", ")
                 throw CoordinatorError("The card has no choice \"\(option)\". Its choices: \(labels).")
             }
-            selected = [match.id]
+            answerText = match.label
+            chosenOption = match.label
         }
+        // The sender's line goes first, and the choice goes as text after
+        // it: a chosen option alone would reach the agent as the user's.
+        let answer = CoordinatorMessageHeader.message(from: sender, text: answerText)
         let request = RemoteQuestionAnswerRequest(
             conversationID: conversationID,
             interactionID: card.id,
-            responseID: responseID,
+            responseID: card.responseID ?? "",
             expectedInputEpoch: card.inputEpoch,
             clientRequestID: UUID().uuidString.lowercased(),
-            answers: [RemoteInteractionAnswer(questionID: question.id, selectedOptionIDs: selected, text: text)]
+            answers: [RemoteInteractionAnswer(questionID: question.id, text: answer)]
         )
         switch subscription.answerQuestion(request) {
         case .submitted, .duplicate:
-            return QuestionAnswer(
-                header: question.header,
-                question: question.question,
-                options: question.options.map(\.label),
-                chosenOption: question.options.first { selected.contains($0.id) }?.label
-            )
+            return QuestionAnswer(card: open, chosenOption: chosenOption, answer: answer)
         case .rejected(let reason):
             throw CoordinatorError("The answer was refused: \(reason.rawValue).")
         }
+    }
+
+    private func openQuestionCard() throws -> (
+        subscription: any LocalConversationSubscription,
+        conversationID: RemoteConversationID,
+        card: RemotePendingInteraction,
+        question: RemoteInteractionQuestion,
+        open: OpenQuestion
+    ) {
+        guard let subscription = syncConversationSubscription(), let conversationID = subscription.conversationID else {
+            throw CoordinatorError("The coordinator has no agent conversation.")
+        }
+        let cards = (subscription.snapshot(at: Date())?.pendingInteractions ?? []).filter {
+            $0.kind == .question && $0.state == .pending && $0.responseID?.isEmpty == false
+        }
+        guard let card = cards.first, let questions = card.questions else {
+            throw CoordinatorError("The coordinator shows no question card.")
+        }
+        guard cards.count == 1, questions.count == 1, let question = questions.first else {
+            throw CoordinatorError("The card asks more than one question; answer it in the coordinator's chat.")
+        }
+        let open = OpenQuestion(
+            card: card.id.rawValue,
+            header: question.header,
+            question: question.question,
+            options: question.options.map(\.label)
+        )
+        return (subscription, conversationID, card, question, open)
     }
 
     // MARK: - The conversation the controller sends through
