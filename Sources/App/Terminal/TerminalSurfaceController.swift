@@ -244,6 +244,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return }
             self.delegate?.handleLocalInput(for: self.panelID, kind: kind)
         }
+        terminalHostView.reportKeyPress = { [weak self] press in
+            guard let self else { return }
+            self.delegate?.reportKeyPress(press, for: self.panelID)
+        }
         #else
         hostedView = fallbackView
         #endif
@@ -801,6 +805,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     var hasKeyboardFocus: Bool {
         hostedView.window?.firstResponder === keyboardFocusTarget
     }
+
+    func isKeyboardFocusTarget(_ responder: NSResponder) -> Bool {
+        responder === keyboardFocusTarget
+    }
+
+    var hostWindow: NSWindow? { hostedView.window }
 
     func focusVisibleHostViewIfNeeded() -> Bool {
         let target = keyboardFocusTarget

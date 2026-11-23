@@ -101,7 +101,7 @@ struct TaskLifecyclePresentationTests {
         for finished in [TaskStage.toShip, .done, .archived] {
             #expect(TaskBoardPresentation.detailActions(item(finished)).isEmpty)
         }
-        // A release ships through its tags, not a done mark.
+        // A managed release finishes through the agent's report.
         var release = record(mergeRequested: false)
         release.release = TaskRelease(childTaskIDs: [])
         #expect(TaskBoardPresentation.detailActions(item(.running, pullRequest: false, record: release)) == [.archive])
@@ -122,6 +122,25 @@ struct TaskLifecyclePresentationTests {
         var watched = item(.needsYou(.review))
         watched.record = nil
         #expect(watched.acceptsDoneMark)
+    }
+
+    @Test func aMergedPreparePullRequestLeavesTheReleaseRunning() {
+        var release = record(mergeRequested: false)
+        release.release = TaskRelease(childTaskIDs: [])
+        release.mergedAt = requestedAt
+        let live = TaskLiveFacts(taskSpaceOpen: true, agent: .working, pullRequest: TaskPullRequestState(state: .merged))
+        #expect(TaskStage.derive(TaskStageFacts(record: release), live: live, releaseTagsConfigured: true) == .running)
+
+        release.shippedAt = requestedAt
+        release.release?.completion = .init(reportedAt: requestedAt, tags: [
+            .init(tag: "worker-v1", taskIDs: []),
+            .init(tag: "bundle-v1", taskIDs: []),
+        ])
+        let item = TaskBoardItem(
+            id: .task(release.id), record: release, title: release.title, stage: .done,
+            agent: .idle, activityAt: requestedAt
+        )
+        #expect(TaskBoardPresentation.stageDescription(item).why == "shipped in worker-v1, bundle-v1")
     }
 
     /// The sidebar's and the Tasks view's context menus, and the detail

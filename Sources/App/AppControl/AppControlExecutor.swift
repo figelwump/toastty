@@ -842,7 +842,7 @@ final class AppControlExecutor {
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch,
              .taskUnwatch, .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply,
-             .taskWaiting, .taskMarkDone, .taskArchive:
+             .taskWaiting, .taskMarkDone, .taskArchive, .taskReleaseComplete:
             return try runTaskAction(action, args: args)
 
         case .webhookAdd, .webhookSet, .webhookRemove, .webhookTest:
@@ -932,6 +932,13 @@ final class AppControlExecutor {
                 try prepareTaskArchive(args: args)
             }
             return try await finishTaskArchive(coordinator, taskID: taskID, options: options, dryRun: dryRun)
+        }
+        if AppControlActionID.resolve(rawID) == .taskReleaseComplete {
+            let (coordinator, caller, tags) = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskReleaseComplete.descriptor)
+                return try prepareTaskReleaseCompletion(args: args)
+            }
+            return try await finishTaskReleaseCompletion(coordinator, caller: caller, tags: tags)
         }
         if AppControlActionID.resolve(rawID) == .taskMerge {
             let preparation = try withRequestContext(context) {

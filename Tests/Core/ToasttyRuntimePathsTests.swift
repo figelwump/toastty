@@ -78,6 +78,23 @@ struct ToasttyRuntimePathsTests {
     }
 
     @Test
+    func runtimeHomeUnderPrivateTmpKeepsOnePathBeforeAndAfterItExists() throws {
+        // The first launch resolves a runtime home that does not exist yet;
+        // later launches find it. Both must get the same defaults suite.
+        let parentPath = "/private/tmp/toastty-runtime-paths-\(UUID().uuidString)"
+        let environment = [ToasttyRuntimePaths.environmentKey: "\(parentPath)/runtime-home"]
+        defer { try? FileManager.default.removeItem(atPath: parentPath) }
+
+        let beforeCreation = ToasttyRuntimePaths.resolve(homeDirectoryPath: "/tmp/ignored-home", environment: environment)
+        try FileManager.default.createDirectory(atPath: "\(parentPath)/runtime-home", withIntermediateDirectories: true)
+        let afterCreation = ToasttyRuntimePaths.resolve(homeDirectoryPath: "/tmp/ignored-home", environment: environment)
+
+        #expect(beforeCreation.runtimeHomeURL?.path == afterCreation.runtimeHomeURL?.path)
+        #expect(beforeCreation.userDefaultsSuiteName == afterCreation.userDefaultsSuiteName)
+        #expect(afterCreation.runtimeHomeURL?.path.hasPrefix("/tmp/toastty-runtime-paths-") == true)
+    }
+
+    @Test
     func explicitRuntimeHomeCanCarryRunOwnedRuntimeLabel() throws {
         let runtimeHomePath = "/tmp/toastty-runtime-home-tests/runtime-a"
         let environment = [

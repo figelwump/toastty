@@ -142,7 +142,12 @@ final class SessionRuntimeStore: ObservableObject {
     /// lifecycle so no later status can follow its `session-stop` event.
     private var completedHookLifecycleSessionIDs: Set<String> = []
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
-    private var codexStatusBeforeComputerUseApprovalBySessionID: [String: SessionStatus] = [:]
+    private struct CodexTerminalPermissionWait {
+        var workingStatus: SessionStatus
+        let announced: Bool
+    }
+    private var codexTerminalPermissionWaits: [String: CodexTerminalPermissionWait] = [:]
+    private var codexSessionsWithPermissionReports: Set<String> = []
     private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private struct CursorHookCorrelationState: Equatable {
@@ -402,7 +407,8 @@ final class SessionRuntimeStore: ObservableObject {
         pendingHookReadyBySessionID = [:]
         completedHookLifecycleSessionIDs = []
         suppressedCodexVisibleErrorDetailBySessionID = [:]
-        codexStatusBeforeComputerUseApprovalBySessionID = [:]
+        codexTerminalPermissionWaits = [:]
+        codexSessionsWithPermissionReports = []
         codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         nativeBindingConfirmationBySessionID = [:]
@@ -1050,13 +1056,14 @@ final class SessionRuntimeStore: ObservableObject {
                 endInitialPromptTurnWait(sessionID: sessionID)
             }
         }
-        if codexStatusBeforeComputerUseApprovalBySessionID[sessionID] != nil, status.kind == .working {
-            // Other tool activity can report progress while the menu is open.
-            // Keep its latest detail for when the user closes the menu.
-            codexStatusBeforeComputerUseApprovalBySessionID[sessionID] = status
+        if codexTerminalPermissionWaits[sessionID] != nil, status.kind == .working {
+            // Other tool activity can report progress while Codex waits.
+            // Keep its latest detail for when the wait ends.
+            codexTerminalPermissionWaits[sessionID]?.workingStatus = status
             return
         }
-        let priorWorkingStatus = codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
+        let terminalWait = codexTerminalPermissionWaits.removeValue(forKey: sessionID)
+        let priorWorkingStatus = terminalWait?.workingStatus
         var previousRecord = sessionRegistry.sessionsByID[sessionID]
         if let priorWorkingStatus {
             previousRecord?.status = priorWorkingStatus
@@ -1101,6 +1108,7 @@ final class SessionRuntimeStore: ObservableObject {
                 sessionID: sessionID,
                 requestedKind: status.kind,
                 registry: nextRegistry,
+                approvalAlreadyAnnounced: terminalWait?.announced == true,
                 at: now
             )
         }
@@ -2096,6 +2104,30 @@ final class SessionRuntimeStore: ObservableObject {
         let status = turnError.map { SessionStatus(kind: .error, summary: "Error", detail: $0) }
             ?? SessionStatus(kind: .ready, summary: "Ready", detail: detail)
         updateStatus(sessionID: sessionID, status: status, at: now)
+        return true
+    }
+
+    /// Codex records cancellation in the rollout. Only the active root turn
+    /// can end hook-tracked work, since a watcher can replay an older turn.
+    @discardableResult
+    func handleCodexRolloutTurnAbort(
+        sessionID: String,
+        turnID: String?,
+        at now: Date
+    ) -> Bool {
+        guard codexStatusTrackingSourceBySessionID[sessionID] == .hooks,
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications,
+              record.status?.kind == .working || record.status?.kind == .needsApproval,
+              let turnID,
+              turnID == codexLegacyPolicySnapshot(sessionID: sessionID).rootTurnID else {
+            return false
+        }
+
+        endInitialPromptTurnWait(sessionID: sessionID)
+        removePendingCodexHookApproval(sessionID: sessionID)
+        updateStatus(sessionID: sessionID, status: Self.interruptedIdleStatus, at: now)
         return true
     }
 
@@ -3309,7 +3341,7 @@ final class SessionRuntimeStore: ObservableObject {
         programStatusRuntime.stop(record)
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)
         logSessionStop(record, reason: reason, at: now)
-        if let status = codexStatusBeforeComputerUseApprovalBySessionID[record.sessionID] {
+        if let status = codexTerminalPermissionWaits[record.sessionID]?.workingStatus {
             registry.updateStatus(sessionID: record.sessionID, status: status, fromAgent: false, at: now)
         }
         clearSessionRuntimeState(sessionID: record.sessionID)
@@ -3329,7 +3361,8 @@ final class SessionRuntimeStore: ObservableObject {
         sessionIDsWithUnstartedFirstPrompt.remove(sessionID)
         invalidateClaudeQuestionBinding(sessionID: sessionID)
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
-        codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
+        codexTerminalPermissionWaits.removeValue(forKey: sessionID)
+        codexSessionsWithPermissionReports.remove(sessionID)
         codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         cursorHookCorrelationBySessionID.removeValue(forKey: sessionID)
@@ -3636,6 +3669,7 @@ final class SessionRuntimeStore: ObservableObject {
         sessionID: String,
         requestedKind: SessionStatusKind,
         registry: SessionRegistry,
+        approvalAlreadyAnnounced: Bool,
         at now: Date
     ) {
         guard completedHookLifecycleSessionIDs.contains(sessionID) == false,
@@ -3663,6 +3697,7 @@ final class SessionRuntimeStore: ObservableObject {
                 record: record,
                 previousStatus: previousKind,
                 newStatus: .needsApproval,
+                approvalAlreadyAnnounced: approvalAlreadyAnnounced,
                 at: now
             )
 
@@ -3748,6 +3783,7 @@ final class SessionRuntimeStore: ObservableObject {
         previousStatus: SessionStatusKind?,
         newStatus: SessionStatusKind?,
         launchReason: AgentHookLaunchReason? = nil,
+        approvalAlreadyAnnounced: Bool = false,
         at now: Date
     ) {
         // Queue the shell event before callbacks can cause nested transitions.
@@ -3772,23 +3808,27 @@ final class SessionRuntimeStore: ObservableObject {
             actionableKind = isQuietCoordinatorTurnEnd(record, kind: .ready) ? nil : .turnComplete
             sessionExitController?.handle(.turnCompleted(sessionID: record.sessionID))
         case .needsApproval:
-            actionableKind = .needsApproval
+            actionableKind = approvalAlreadyAnnounced ? nil : .needsApproval
         case .sessionStart, .sessionError, .sessionStop:
             actionableKind = nil
         }
         if let actionableKind {
-            onActionableEvent?(
-                ManagedSessionActionableEvent(
-                    eventID: UUID(),
-                    kind: actionableKind,
-                    timestamp: now,
-                    sessionID: record.sessionID,
-                    agent: record.agent,
-                    workspaceID: record.workspaceID,
-                    panelID: record.panelID
-                )
-            )
+            emitActionableEvent(actionableKind, record: record, at: now)
         }
+    }
+
+    private func emitActionableEvent(_ kind: ManagedSessionActionableEvent.Kind, record: SessionRecord, at now: Date) {
+        onActionableEvent?(
+            ManagedSessionActionableEvent(
+                eventID: UUID(),
+                kind: kind,
+                timestamp: now,
+                sessionID: record.sessionID,
+                agent: record.agent,
+                workspaceID: record.workspaceID,
+                panelID: record.panelID
+            )
+        )
     }
 
     private func clearHookTransitionState(sessionID: String) {
@@ -6102,8 +6142,12 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         }
 
         if promptState == .busy,
-           let changed = refreshCodexComputerUseApproval(record: record, status: currentStatus, screen: visibleText, at: now) {
-            return changed
+           !codexSessionsWithPermissionReports.contains(record.sessionID) {
+            let waiting = CodexVisibleTextStatusParser.hasComputerUseApprovalPrompt(in: visibleText)
+            if waiting || !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               updateCodexTerminalPermissionWait(waiting, record: record, at: now) {
+                return true
+            }
         }
 
         if let nextStatus = CodexVisibleTextStatusParser.fatalErrorStatus(from: visibleText) {
@@ -6150,33 +6194,48 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         return true
     }
 
-    /// Codex's terminal receives the MCP elicitation directly. Neither its
-    /// status hooks nor its session recording report the incoming request.
-    /// Terminal text can drive the task's waiting state, but cannot attest
-    /// to a provider approval for hooks, notifications or remote answering.
-    private func refreshCodexComputerUseApproval(
-        record: SessionRecord,
-        status: SessionStatus,
-        screen: String,
-        at now: Date
-    ) -> Bool? {
+    func handleCodexTerminalPermissionReport(_ event: TerminalProgramStatusEvent, record: SessionRecord, at now: Date) {
+        guard record.agent == .codex,
+              record.usesSessionStatusNotifications,
+              !programStatusRuntime.fallbackSessionIDs.contains(record.sessionID) else { return }
+
+        if case .report(let report) = event {
+            guard report.id == nil || report.id == "" else { return }
+            if report.app == "codex", report.state == .blocked, report.kind == .permission {
+                codexSessionsWithPermissionReports.insert(record.sessionID)
+                _ = updateCodexTerminalPermissionWait(true, record: record, at: now)
+                return
+            }
+            guard codexSessionsWithPermissionReports.contains(record.sessionID),
+                  report.app == "codex" || (report.state == .clear && report.app == nil) else { return }
+        }
+        _ = updateCodexTerminalPermissionWait(false, record: record, at: now)
+    }
+
+    /// A terminal report describes a wait. It carries no provider approval
+    /// identity and can only update status and send a standard phone alert.
+    @discardableResult
+    private func updateCodexTerminalPermissionWait(_ waiting: Bool, record: SessionRecord, at now: Date) -> Bool {
         let sessionID = record.sessionID
-        let priorStatus = codexStatusBeforeComputerUseApprovalBySessionID[sessionID]
-        guard status.kind == .working || priorStatus != nil else { return nil }
-        let waiting = CodexVisibleTextStatusParser.hasComputerUseApprovalPrompt(in: screen)
         let nextStatus: SessionStatus
-        if let priorStatus {
-            guard !waiting, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-            codexStatusBeforeComputerUseApprovalBySessionID.removeValue(forKey: sessionID)
-            nextStatus = priorStatus
+        let shouldAnnounce: Bool
+        if waiting {
+            guard codexTerminalPermissionWaits[sessionID] == nil,
+                  let status = record.status, status.kind == .working else { return false }
+            shouldAnnounce = store?.state.workspacesByID[record.workspaceID]?.taskID != nil
+            codexTerminalPermissionWaits[sessionID] = .init(workingStatus: status, announced: shouldAnnounce)
+            nextStatus = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Answer in the terminal")
         } else {
-            guard waiting else { return nil }
-            codexStatusBeforeComputerUseApprovalBySessionID[sessionID] = status
-            nextStatus = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Computer Use app access")
+            guard let wait = codexTerminalPermissionWaits.removeValue(forKey: sessionID) else { return false }
+            nextStatus = wait.workingStatus
+            shouldAnnounce = false
         }
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: nextStatus, at: now)
-        publish(nextRegistry, reason: "codex_computer_use_approval_prompt", at: now)
+        publish(nextRegistry, reason: "codex_terminal_permission_wait", at: now)
+        if shouldAnnounce {
+            emitActionableEvent(.needsApproval, record: record, at: now)
+        }
         return true
     }
 
@@ -6211,7 +6270,9 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         if record.agent == .codex,
            codexSessionUsesFixedStatusAuthority(sessionID: record.sessionID) {
-            endInitialPromptTurnWait(sessionID: record.sessionID)
+            if codexStatusTrackingSourceBySessionID[record.sessionID] != .hooks {
+                endInitialPromptTurnWait(sessionID: record.sessionID)
+            }
             let interrupt: CodexRootProgressInterrupt = switch kind {
             case .escape:
                 .escape

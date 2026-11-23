@@ -75,6 +75,15 @@ struct WorkspaceHeaderMergeControl: View {
                 .help(menuHelpText(blocker: blocker))
                 .accessibilityLabel("Merge options")
                 .accessibilityIdentifier("topbar.workspace.merge.mode")
+
+                if isTask, blocker == .checksRunning {
+                    Text(PullRequestMergeBlocker.checksRunning.label)
+                        .font(ToastyTheme.fontWorkspaceMergeProgress)
+                        .foregroundStyle(ToastyTheme.sidebarSummaryText)
+                        .lineLimit(1)
+                        .padding(.leading, 5)
+                        .layoutPriority(-1)
+                }
             }
 
         case .merging, .cleaningUp, .closing:

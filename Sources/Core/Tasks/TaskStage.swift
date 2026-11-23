@@ -197,7 +197,7 @@ public enum TaskStage: Equatable, Sendable {
         if facts.doneAt != nil || facts.shippedAt != nil {
             return .done
         }
-        if facts.mergedAt != nil || live.pullRequest?.state == .merged {
+        if facts.isRelease == false, facts.mergedAt != nil || live.pullRequest?.state == .merged {
             let target = live.pullRequest?.mergeTarget ?? facts.mergeTarget
             // Keep the previous release wait until an older record's destination
             // is known. Never infer it from the branch the work started from.
@@ -284,6 +284,7 @@ public struct TaskStageFacts: Equatable, Sendable {
     public var hasTaskSpace: Bool
     /// Whether the task has, or is making, a worktree of its own.
     public var hasWorktree: Bool
+    public var isRelease: Bool
     public var readyForReviewAt: Date?
     /// When the agent marked that it waits for the user's reply.
     public var replyRequestedAt: Date?
@@ -308,6 +309,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         startWork: TaskStartWorkState? = nil,
         hasTaskSpace: Bool,
         hasWorktree: Bool = false,
+        isRelease: Bool = false,
         readyForReviewAt: Date? = nil,
         replyRequestedAt: Date? = nil,
         waitsOutside: Bool = false,
@@ -323,6 +325,7 @@ public struct TaskStageFacts: Equatable, Sendable {
         self.startWork = startWork
         self.hasTaskSpace = hasTaskSpace
         self.hasWorktree = hasWorktree
+        self.isRelease = isRelease
         self.readyForReviewAt = readyForReviewAt
         self.replyRequestedAt = replyRequestedAt
         self.waitsOutside = waitsOutside
@@ -341,6 +344,7 @@ public struct TaskStageFacts: Equatable, Sendable {
             startWork: record.startWork?.state,
             hasTaskSpace: record.operation.taskSpace != nil,
             hasWorktree: record.operation.worktree != nil,
+            isRelease: record.release != nil,
             readyForReviewAt: record.readyForReviewAt,
             replyRequestedAt: record.replyRequest?.askedAt,
             waitsOutside: record.waiting != nil,

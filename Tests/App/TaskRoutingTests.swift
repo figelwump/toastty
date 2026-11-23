@@ -178,7 +178,7 @@ struct TaskRoutingTests {
             _ = try await fixture.coordinator.create(TaskCreateRequest(text: "x", model: "two words"))
             Issue.record("a bad pinned model was accepted")
         } catch {
-            #expect(error.localizedDescription.contains("one word"))
+            #expect(error.localizedDescription.contains("--model expects a provider model ID"))
         }
         #expect(fixture.coordinator.records.records.isEmpty)
         #expect(fixture.triage.prompts.isEmpty)
@@ -259,7 +259,7 @@ struct TaskRoutingTests {
             _ = try await fixture.coordinator.create(TaskCreateRequest(text: "bad model", model: "two words"))
             Issue.record("a bad model was accepted without a workspace")
         } catch {
-            #expect(error.localizedDescription.contains("one word"))
+            #expect(error.localizedDescription.contains("--model expects a provider model ID"))
         }
 
         // Without triage or a default agent, the task takes the first

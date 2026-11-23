@@ -34,6 +34,7 @@ struct SessionRuntimeStoreVisibleTextTests {
         sessionStore.updateStatus(sessionID: "cua-approval", status: working, at: now)
         let prompt = """
         Field 1/1
+        Server: cua_repl (environment local)
         Allow Computer Use to use "Safari"?
         App: Safari
         › 1. Allow
@@ -72,13 +73,63 @@ struct SessionRuntimeStoreVisibleTextTests {
         if source == .hooks {
             sessionStore.updateStatus(sessionID: "cua-approval", status: working, at: now.addingTimeInterval(8))
             #expect(refresh(prompt, elapsed: 9))
-            // An interrupt can arrive after the menu closed but before the next poll.
+            // Escape can dismiss the menu without ending the turn.
             #expect(sessionStore.handleLocalInterruptForPanelIfActive(
                 panelID: panelID, kind: .escape, at: now.addingTimeInterval(10)
-            ))
-            #expect(refresh("› Ask Codex to do anything", elapsed: 11) == false)
-            #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .idle)
+            ) == false)
+            #expect(refresh("Working (14s • esc to interrupt)", elapsed: 11))
+            #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status == working)
         }
+    }
+
+    @Test
+    func codexProgramPermissionWaitUsesTheLivePanelAndClearsIndependentlyOfTheScreen() throws {
+        var state = makeTwoPanelAppState()
+        let selection = try #require(state.selectedWorkspaceSelection())
+        let panelID = try #require(selection.workspace.focusedPanelID)
+        let otherPanel = try #require(selection.workspace.allTerminalPanelIDs.first { $0 != panelID })
+        state.workspacesByID[selection.workspaceID]?.taskID = UUID()
+        let appStore = AppStore(state: state, persistTerminalFontPreference: false)
+        let store = SessionRuntimeStore()
+        store.bind(store: appStore)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let working = SessionStatus(kind: .working, summary: "Working")
+        store.startSession(sessionID: "codex", agent: .codex, panelID: panelID,
+                           windowID: selection.windowID, workspaceID: selection.workspaceID,
+                           usesSessionStatusNotifications: true, codexStatusTrackingSource: .hooks,
+                           cwd: "/repo", repoRoot: "/repo", at: now)
+        store.updateStatus(sessionID: "codex", status: working, at: now)
+        var alerts: [ManagedSessionActionableEvent] = []
+        store.onActionableEvent = { alerts.append($0) }
+
+        let blocked = TerminalProgramStatusEvent.report(.init(state: .blocked, app: "codex", kind: .permission))
+        store.handleProgramStatusEvent(blocked, panelID: otherPanel, at: now)
+        store.handleProgramStatusEvent(.report(.init(state: .blocked, id: "child", app: "codex", kind: .permission)),
+                                       panelID: panelID, at: now)
+        #expect(store.sessionRegistry.activeSession(for: panelID)?.status == working)
+        #expect(alerts.isEmpty)
+
+        store.handleProgramStatusEvent(blocked, panelID: panelID, at: now)
+        store.handleProgramStatusEvent(blocked, panelID: panelID, at: now)
+        _ = store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID, visibleText: "Working (3s • esc to interrupt)", promptState: .busy, at: now
+        )
+        #expect(store.sessionRegistry.activeSession(for: panelID)?.status?.kind == .needsApproval)
+        #expect(alerts.map(\.kind) == [.needsApproval])
+
+        store.handleProgramStatusEvent(.report(.init(state: .working, app: "codex")), panelID: panelID, at: now)
+        #expect(store.sessionRegistry.activeSession(for: panelID)?.status == working)
+        store.handleProgramStatusEvent(blocked, panelID: panelID, at: now)
+        let providerApproval = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Run pwd?")
+        store.updateStatus(sessionID: "codex", status: providerApproval, at: now)
+        store.handleProgramStatusEvent(.report(.init(state: .clear)), panelID: panelID, at: now)
+        #expect(store.sessionRegistry.activeSession(for: panelID)?.status == providerApproval)
+        #expect(alerts.map(\.kind) == [.needsApproval, .needsApproval])
+
+        store.updateStatus(sessionID: "codex", status: working, at: now)
+        store.updateStatus(sessionID: "codex", status: providerApproval, at: now)
+        store.handleProgramStatusEvent(blocked, panelID: panelID, at: now)
+        #expect(alerts.count == 3)
     }
 
     @Test

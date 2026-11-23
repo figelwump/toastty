@@ -7,7 +7,7 @@ extension AppControlActionID {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
              .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskWaiting,
-             .taskMarkDone, .taskArchive, .taskRelease, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
+             .taskMarkDone, .taskArchive, .taskRelease, .taskReleaseComplete, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
              .webhookAdd, .webhookSet, .webhookRemove, .webhookTest: true
         default: false
         }
@@ -112,6 +112,8 @@ extension AppControlExecutor {
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskArchive:
             throw AutomationSocketError.invalidPayload("task.archive checks git before it returns; send it through app_control.run_action")
+        case .taskReleaseComplete:
+            throw AutomationSocketError.invalidPayload("task.release-complete checks git before it returns; send it through app_control.run_action")
         case .taskSend:
             guard try args.taskBool("steer") != true else {
                 throw AutomationSocketError.invalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action")
@@ -306,6 +308,26 @@ extension AppControlExecutor {
             )
         }
         return .init(didMutateState: true, result: Self.taskSnapshot(record))
+    }
+
+    func prepareTaskReleaseCompletion(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, TaskCaller, [TaskRelease.Tag]) {
+        struct Report: Decodable {
+            var tags: [TaskRelease.Tag]
+        }
+        guard let content = args.taskString("report"),
+              let report = try? JSONDecoder().decode(Report.self, from: Data(content.utf8)) else {
+            throw AutomationSocketError.invalidPayload("Expected a JSON report with tags, each with a tag name and a list of taskIDs.")
+        }
+        return (try requiredTaskCoordinator(), taskCaller(), report.tags)
+    }
+
+    func finishTaskReleaseCompletion(_ coordinator: TaskCoordinator, caller: TaskCaller, tags: [TaskRelease.Tag]) async throws -> AppControlActionOutcome {
+        do {
+            let record = try await coordinator.reportReleaseCompletion(caller: caller, tags: tags)
+            return .init(didMutateState: true, result: Self.taskSnapshot(record))
+        } catch {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        }
     }
 
     /// The named task, or without a taskID the calling agent's own task.
@@ -928,9 +950,18 @@ extension AppControlExecutor {
             ])
         }
         if let release = record.release {
-            snapshot["release"] = .object([
+            var fields: [String: AutomationJSONValue] = [
                 "childTaskIDs": .array(release.childTaskIDs.map { .string($0.uuidString) }),
-            ])
+            ]
+            if let completion = release.completion {
+                fields["completion"] = .object([
+                    "reportedAt": date(completion.reportedAt),
+                    "tags": .array(completion.tags.map { entry in
+                        .object(["tag": .string(entry.tag), "taskIDs": .array(entry.taskIDs.map { .string($0.uuidString) })])
+                    }),
+                ])
+            }
+            snapshot["release"] = .object(fields)
         }
         if let stage {
             snapshot["stage"] = .object(stageSnapshot(
