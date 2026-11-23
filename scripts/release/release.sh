@@ -68,6 +68,7 @@ Required environment:
   TOASTTY_NOTARY_PASSWORD
   TOASTTY_TEAM_ID
   TOASTTY_SPARKLE_PRIVATE_KEY
+  TOASTTY_REMOTE_GUI_HOST
 
 Additional requirements:
   - clean Toastty git working tree
@@ -77,6 +78,7 @@ Outputs:
   artifacts/release/<version>-<build>/release-metadata.env
   artifacts/release/<version>-<build>/ghostty-metadata.env
   artifacts/release/<version>-<build>/sparkle-metadata.env
+  artifacts/release/<version>-<build>/first-launch/remote/result.json
   artifacts/release/<version>-<build>/Toastty-<version>.dmg
 
 Recommended invocation:
@@ -943,6 +945,7 @@ require_env TOASTTY_APPLE_ID
 require_env TOASTTY_NOTARY_PASSWORD
 require_env TOASTTY_TEAM_ID
 require_env TOASTTY_SPARKLE_PRIVATE_KEY
+require_env TOASTTY_REMOTE_GUI_HOST
 
 validate_build_number
 validate_version_string
@@ -997,6 +1000,7 @@ sign_dmg_for_sparkle
 snapshot_ghostty_metadata
 snapshot_sparkle_metadata
 write_release_metadata
+"$ROOT_DIR/scripts/release/verify-first-launch.sh" "$DMG_PATH" "$SOURCE_COMMIT" "$RELEASE_DIR/first-launch"
 
 log "Release DMG ready: $DMG_PATH"
 log "Release metadata snapshot: $RELEASE_METADATA_PATH"

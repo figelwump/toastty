@@ -14,6 +14,7 @@ RELEASE_METADATA_PATH=""
 RELEASE_LABEL=""
 RELEASE_DIR=""
 DMG_PATH=""
+UPLOAD_DMG_PATH=""
 RELEASE_VERSION=""
 RELEASE_BUILD_NUMBER=""
 RELEASE_SOURCE_COMMIT=""
@@ -513,6 +514,20 @@ wait_for_github_tag_visibility() {
   fail "tag $TAG was pushed but did not become visible to GitHub in time"
 }
 
+prepare_verified_dmg() {
+  UPLOAD_DMG_PATH="$DMG_PATH"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    # Upload the same bytes we verify, even if a separate build replaces
+    # the release directory while GitHub processes the tag.
+    UPLOAD_DIR="$(mktemp -d)"
+    trap 'rm -rf "$UPLOAD_DIR"' EXIT
+    UPLOAD_DMG_PATH="$UPLOAD_DIR/$(basename "$DMG_PATH")"
+    cp "$DMG_PATH" "$UPLOAD_DMG_PATH"
+  fi
+  /usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" verify \
+    "$UPLOAD_DMG_PATH" "$RELEASE_SOURCE_COMMIT" "$RELEASE_DIR/first-launch/remote"
+}
+
 create_tag_if_requested() {
   local local_commit=""
   local remote_commit=""
@@ -549,7 +564,7 @@ create_tag_if_requested() {
 create_release() {
   local command=(
     gh release create "$TAG"
-    "$DMG_PATH"
+    "$UPLOAD_DMG_PATH"
     --repo "$REPO"
     --title "$TITLE"
     --notes-file "$NOTES_FILE"
@@ -793,6 +808,7 @@ resolve_defaults
 load_release_metadata
 load_sparkle_metadata
 verify_inputs
+prepare_verified_dmg
 ensure_tag_matches_release_commit
 
 if [[ "$DRY_RUN" != "1" ]]; then

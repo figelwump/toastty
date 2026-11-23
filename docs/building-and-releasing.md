@@ -351,6 +351,7 @@ The release script expects:
 - a local `Developer ID Application` certificate
 - notarization credentials injected at runtime
 - a Sparkle private key injected at runtime as `TOASTTY_SPARKLE_PRIVATE_KEY`
+- the configured Toastty Mac mini, with its validation desktop unlocked and Accessibility available
 
 Before building a release artifact, run the full automated gate on the release candidate:
 
@@ -369,6 +370,30 @@ sv exec -- env \
 ```
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
+Before reporting the candidate ready, it sends the finished DMG to the Mac mini
+and reserves the shared desktop through the remote admission queue. It copies
+the app from a read-only mount into a disposable run directory and starts it
+with fresh runtime data and preferences. The check requires the first-launch
+sheet, presses **Not Now**, and queries the still-running app after dismissal.
+A crash, matching AppKit startup exception, timeout, or unconfirmed cleanup
+stops the release build.
+
+To check an existing candidate separately, use the full source commit from
+the candidate build and a new evidence directory:
+
+```bash
+sv exec -- ./scripts/release/verify-first-launch.sh \
+  artifacts/release/<version>-<build>/Toastty-<version>.dmg \
+  <full-source-commit> <new-evidence-directory>
+```
+
+The command runs on the Mac mini and writes its result, desktop admission
+record, app logs, and sheet evidence to the supplied directory. The release
+build keeps this directory at `artifacts/release/<version>-<build>/first-launch/`.
+If the desktop or connection was unavailable, move any failed evidence
+directory aside and rerun the check with `first-launch/` as the destination
+inside that same release directory. The staged DMG and release metadata
+remain available for the retry.
 `sv exec` must provide `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` and `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY`; release builds fail if the generated project would embed empty diagnostics submit endpoint or upload-key settings.
 `sv exec` must also provide the production session push relay: `TUIST_TOASTTY_PUSH_RELAY_URL`, `TUIST_TOASTTY_PUSH_RELAY_ID`, and `TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT=production`. The release fails before building when they are missing or not production, and after export when the app's `Info.plist` does not contain them. Without these values, the Mac sends no iPhone session alerts.
 Before the archive is built, the release workflow verifies the generated
@@ -397,6 +422,9 @@ After the DMG exists locally, publish it to GitHub Releases with the helper scri
 Prerequisites:
 - `gh` is installed and authenticated for the target repo
 - the recorded release commit is available in the current checkout
+- the `first-launch/remote/` evidence records a successful desktop check for the
+  recorded source commit and the SHA-256 of the DMG being uploaded. This also
+  applies to draft releases and dry runs.
 
 Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release. Every release needs a `## Highlights` section with content. With `--publish`, the publisher writes that section, as HTML, into the update feed item's `description`, followed by a "Full release notes on GitHub" link. The Sparkle update prompt shows it in its release notes box, so it is the first thing an updating user reads. The item has no `sparkle:releaseNotesLink`, because Sparkle then shows the linked page instead of the `description`; its `sparkle:fullReleaseNotesLink` points to the GitHub releases list for the Version History button. The section can use `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publisher stops when the section is missing, repeated, or empty, uses other Markdown, or when a `{{placeholder}}` from the template remains. A `--publish --dry-run` writes the updated feed to `artifacts/release/<version>-<build>/appcast-dry-run.xml` without changing anything.
 
