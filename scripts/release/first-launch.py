@@ -45,14 +45,18 @@ def confirmed_cleanup(root):
     require(not os.path.ismount(root / "image"), f"DMG is still mounted. Retaining {root}")
 
 
-def verify(dmg, commit, evidence):
+def verify(dmg, commit, evidence, sparkle_digest=None, sparkle_length=None):
     result = read_json(evidence / "result.json")
     admission = read_json(evidence / "admission.json")
     require(admission["state"] == "finished" and admission["exitCode"] == 0
             and admission["resource"] == "desktop" and result["status"] == "pass",
             "Candidate has no successful desktop first-launch check")
-    require(result["sourceCommit"] == commit and result["dmgSHA256"] == digest(dmg),
+    actual_digest = digest(dmg)
+    require(result["sourceCommit"] == commit and result["dmgSHA256"] == actual_digest,
             "First-launch evidence does not match the candidate DMG and source commit")
+    if sparkle_digest is not None:
+        require(sparkle_digest == actual_digest and int(sparkle_length) == Path(dmg).stat().st_size,
+                "Sparkle metadata does not match the candidate DMG")
 
 
 def run(*args, timeout=10, check=True):
@@ -70,6 +74,28 @@ def stop(process):
         process.wait(timeout=5)
 
 
+def preference_suite(runtime):
+    # Same path hash as ToasttyRuntimePaths.userDefaultsSuiteName. Derive it
+    # here so a crash before instance.json still gets its own suite cleaned up.
+    hashed = 0xcbf29ce484222325
+    for byte in os.fsencode(runtime):
+        hashed = ((hashed ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+    return f"com.GiantThings.toastty.runtime.{hashed:016x}"
+
+
+def preference_file(suite):
+    return Path.home() / "Library/Preferences" / f"{suite}.plist"
+
+
+def clear_preferences(suite):
+    # cfprefsd can write suites to the login account even with a separate HOME.
+    result = run("/usr/bin/defaults", "delete", suite, check=False)
+    require(result.returncode == 0 or f"Domain ({suite}) not found." in result.stderr,
+            f"Could not remove disposable preferences {suite}: {result.stderr.strip()}")
+    require(not preference_file(suite).exists(), f"Disposable preferences still exist: {suite}")
+    print(f"Confirmed disposable preferences removed: {suite}", flush=True)
+
+
 def check_process(root, bundle, isolated, evidence):
     runtime = root / "runtime-home"
     user_home = root / "user-home"
@@ -79,6 +105,8 @@ def check_process(root, bundle, isolated, evidence):
     binary = bundle / "Contents/MacOS/Toastty"
     cli = bundle / "Contents/Helpers/toastty"
     require(binary.is_file() and cli.is_file(), "DMG is missing the app or bundled CLI")
+    suite = preference_suite(runtime)
+    require(not preference_file(suite).exists(), f"Disposable preferences already exist: {suite}")
 
     # Keep persistent app behavior, including the offer, within a new runtime
     # and preferences home. The quit-confirmation bypass also keeps Toastty
@@ -102,9 +130,9 @@ def check_process(root, bundle, isolated, evidence):
         finally:
             if app is not None:
                 stop(app)
-            # On interruption or failed process cleanup, leave admission's
-            # marker in place until it can confirm the candidate is gone.
+            # Keep admission's marker if process cleanup cannot be confirmed.
             marker.unlink()
+            clear_preferences(suite)
             if app is not None:
                 scan_exceptions(app.pid, started, evidence)
         require(app.returncode == -signal.SIGTERM, f"Candidate exited unexpectedly ({app.returncode})")
@@ -151,7 +179,8 @@ def exercise(driver, app, binary, cli, runtime, socket, environment, evidence):
     require(instance["pid"] == app.pid
             and Path(instance["executablePath"]).resolve() == binary.resolve()
             and Path(instance["runtimeHomePath"]).resolve() == runtime
-            and Path(instance["socketPath"]).resolve() == socket,
+            and Path(instance["socketPath"]).resolve() == socket
+            and instance["userDefaultsSuiteName"] == preference_suite(runtime),
             "Runtime record does not identify the candidate process and isolated paths")
     shutil.copyfile(instance_path, evidence / "instance.json")
 
@@ -196,6 +225,32 @@ def exercise(driver, app, binary, cli, runtime, socket, environment, evidence):
     print("Candidate workspace responded after dismissal", flush=True)
 
 
+def interrupted_mount(number, _frame):
+    # Let the mount's finally block detach the image before exiting.
+    signal.signal(number, signal.SIG_IGN)
+    raise RuntimeError(f"Candidate DMG preparation was interrupted (signal {number})")
+
+
+def extract_bundle(root, image, dmg):
+    handlers = {number: signal.signal(number, interrupted_mount)
+                for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        image.mkdir()
+        run("/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen",
+            "-mountpoint", image, dmg, timeout=45)
+        bundle = root / "candidate/Toastty.app"
+        bundle.parent.mkdir()
+        run("/usr/bin/ditto", image / "Toastty.app", bundle, timeout=45)
+        return bundle
+    finally:
+        try:
+            if os.path.ismount(image):
+                run("/usr/bin/hdiutil", "detach", image, timeout=20)
+        finally:
+            for number, handler in handlers.items():
+                signal.signal(number, handler)
+
+
 def check(root, commit, expected_digest):
     evidence = root / "evidence"
     image = root / "image"
@@ -207,16 +262,7 @@ def check(root, commit, expected_digest):
         require(result["dmgSHA256"] == expected_digest, "Candidate DMG changed during transfer")
         run("/usr/bin/xcrun", "swiftc", "-O", root / "ax-drive.swift",
             "-o", root / "ax-drive", timeout=120)
-        image.mkdir()
-        try:
-            run("/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen",
-                "-mountpoint", image, dmg, timeout=45)
-            bundle = root / "candidate/Toastty.app"
-            bundle.parent.mkdir()
-            run("/usr/bin/ditto", image / "Toastty.app", bundle, timeout=45)
-        finally:
-            if os.path.ismount(image):
-                run("/usr/bin/hdiutil", "detach", image, timeout=30)
+        bundle = extract_bundle(root, image, dmg)
         subprocess.run([sys.executable, admission, "acquire-desktop", "--root",
                         os.environ["TOASTTY_ADMISSION_ROOT"]], check=True)
         status = run(root / "ax-drive", str(os.getpid()), "status").stdout.strip()
@@ -230,8 +276,9 @@ def check(root, commit, expected_digest):
         result["status"] = "pass"
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         result["error"] = str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
-            result["stderr"] = error.stderr.strip()
+        if isinstance(error, subprocess.CalledProcessError):
+            result["commandOutput"] = "\n".join(
+                output.strip() for output in (error.stdout, error.stderr) if output)
         raise
     finally:
         (evidence / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -242,7 +289,7 @@ def main():
     if command == "digest":
         print(digest(args[0]))
     elif command == "verify":
-        verify(args[0], args[1], Path(args[2]))
+        verify(args[0], args[1], Path(args[2]), *args[3:])
     elif command == "check":
         check(Path(args[0]).resolve(), args[1], args[2])
     elif command == "cleanup":

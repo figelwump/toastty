@@ -411,7 +411,7 @@ license file, and the text is the MIT `License.md` its author added upstream.
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags
-- `sparkle-metadata.env` with the feed URL, public key, DMG signature, and enclosure metadata needed for appcast publication
+- `sparkle-metadata.env` with the feed URL, public key, DMG signature, SHA-256, and enclosure metadata needed for appcast publication
 
 The script also records the canonical `artifacts/release/<version>-<build>/release-notes.md` path in `release-metadata.env`, but it does not generate the file for you. The repo-local `toastty-release` skill covers the build step and drafting `release-notes.md` from the recorded release diff so it can be reviewed before publish; the repo-local `toastty-publish` skill covers publishing those drafted notes later.
 
@@ -425,6 +425,8 @@ Prerequisites:
 - the `first-launch/remote/` evidence records a successful desktop check for the
   recorded source commit and the SHA-256 of the DMG being uploaded. This also
   applies to draft releases and dry runs.
+- the upload matches the SHA-256 and file size recorded alongside the
+  Sparkle signature
 
 Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release. Every release needs a `## Highlights` section with content. With `--publish`, the publisher writes that section, as HTML, into the update feed item's `description`, followed by a "Full release notes on GitHub" link. The Sparkle update prompt shows it in its release notes box, so it is the first thing an updating user reads. The item has no `sparkle:releaseNotesLink`, because Sparkle then shows the linked page instead of the `description`; its `sparkle:fullReleaseNotesLink` points to the GitHub releases list for the Version History button. The section can use `- ` bullets, `### ` subheadings, paragraphs, `` `code` ``, `**bold**`, and `[text](https://...)` links. The publisher stops when the section is missing, repeated, or empty, uses other Markdown, or when a `{{placeholder}}` from the template remains. A `--publish --dry-run` writes the updated feed to `artifacts/release/<version>-<build>/appcast-dry-run.xml` without changing anything.
 

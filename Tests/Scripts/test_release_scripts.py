@@ -170,7 +170,7 @@ class PublishNotesTests(unittest.TestCase):
         self.admission = self.evidence / "admission.json"
         self.admission.write_text(json.dumps(dict(state="finished", exitCode=0, resource="desktop")))
         self.notes = self.release_dir / "release-notes.md"
-        sparkle = self.release_dir / "sparkle-metadata.env"
+        sparkle = self.sparkle = self.release_dir / "sparkle-metadata.env"
         (self.release_dir / "release-metadata.env").write_text("\n".join([
             f"RELEASE_VERSION={self.VERSION}",
             f"RELEASE_BUILD_NUMBER={self.BUILD}",
@@ -190,6 +190,7 @@ class PublishNotesTests(unittest.TestCase):
             "SPARKLE_MINIMUM_SYSTEM_VERSION=14.0",
             f"SPARKLE_DMG_PATH={dmg}",
             f"SPARKLE_DMG_FILENAME={dmg.name}",
+            f"SPARKLE_DMG_SHA256={self.receipt['dmgSHA256']}",
             "SPARKLE_ENCLOSURE_LENGTH=3",
             "SPARKLE_ED_SIGNATURE=c2lnbmF0dXJl",
             "",
@@ -280,6 +281,16 @@ class PublishNotesTests(unittest.TestCase):
         self.receipt["sourceCommit"] = OTHER
         self.result.write_text(json.dumps(self.receipt))
         self.assert_publication_blocked("does not match the candidate DMG and source commit")
+
+    def test_rebuild_with_old_sparkle_metadata_blocks_publication(self):
+        self.dmg.write_bytes(b"new")
+        self.receipt["dmgSHA256"] = hashlib.sha256(self.dmg.read_bytes()).hexdigest()
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("Sparkle metadata does not match the candidate DMG")
+
+    def test_wrong_sparkle_enclosure_length_blocks_publication(self):
+        self.sparkle.write_text(self.sparkle.read_text().replace("SPARKLE_ENCLOSURE_LENGTH=3", "SPARKLE_ENCLOSURE_LENGTH=4"))
+        self.assert_publication_blocked("Sparkle metadata does not match the candidate DMG")
 
     def test_highlights_with_subsections_pass(self):
         notes = VALID_NOTES.replace(

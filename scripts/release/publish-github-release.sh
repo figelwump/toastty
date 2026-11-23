@@ -33,6 +33,7 @@ SPARKLE_PUBLIC_ED_KEY=""
 SPARKLE_MINIMUM_SYSTEM_VERSION=""
 SPARKLE_DMG_PATH=""
 SPARKLE_DMG_FILENAME=""
+SPARKLE_DMG_SHA256=""
 SPARKLE_ENCLOSURE_LENGTH=""
 SPARKLE_ED_SIGNATURE=""
 APPCAST_CONTENT_SHA=""
@@ -252,6 +253,7 @@ load_sparkle_metadata() {
   SPARKLE_MINIMUM_SYSTEM_VERSION="${SPARKLE_MINIMUM_SYSTEM_VERSION:-}"
   SPARKLE_DMG_PATH="${SPARKLE_DMG_PATH:-}"
   SPARKLE_DMG_FILENAME="${SPARKLE_DMG_FILENAME:-}"
+  SPARKLE_DMG_SHA256="${SPARKLE_DMG_SHA256:-}"
   SPARKLE_ENCLOSURE_LENGTH="${SPARKLE_ENCLOSURE_LENGTH:-}"
   SPARKLE_ED_SIGNATURE="${SPARKLE_ED_SIGNATURE:-}"
 }
@@ -298,6 +300,7 @@ verify_inputs() {
   [[ -n "$SPARKLE_MINIMUM_SYSTEM_VERSION" ]] || fail "Sparkle metadata is missing SPARKLE_MINIMUM_SYSTEM_VERSION"
   [[ -n "$SPARKLE_DMG_PATH" ]] || fail "Sparkle metadata is missing SPARKLE_DMG_PATH"
   [[ -n "$SPARKLE_DMG_FILENAME" ]] || fail "Sparkle metadata is missing SPARKLE_DMG_FILENAME"
+  [[ "$SPARKLE_DMG_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "Sparkle metadata is missing a valid SPARKLE_DMG_SHA256"
   [[ -n "$SPARKLE_ENCLOSURE_LENGTH" ]] || fail "Sparkle metadata is missing SPARKLE_ENCLOSURE_LENGTH"
   [[ -n "$SPARKLE_ED_SIGNATURE" ]] || fail "Sparkle metadata is missing SPARKLE_ED_SIGNATURE"
   [[ "$SPARKLE_DMG_PATH" == "$DMG_PATH" ]] || fail "Sparkle metadata DMG path mismatch: expected $DMG_PATH, got $SPARKLE_DMG_PATH"
@@ -525,7 +528,8 @@ prepare_verified_dmg() {
     cp "$DMG_PATH" "$UPLOAD_DMG_PATH"
   fi
   /usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" verify \
-    "$UPLOAD_DMG_PATH" "$RELEASE_SOURCE_COMMIT" "$RELEASE_DIR/first-launch/remote"
+    "$UPLOAD_DMG_PATH" "$RELEASE_SOURCE_COMMIT" "$RELEASE_DIR/first-launch/remote" \
+    "$SPARKLE_DMG_SHA256" "$SPARKLE_ENCLOSURE_LENGTH"
 }
 
 create_tag_if_requested() {

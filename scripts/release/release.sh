@@ -48,6 +48,7 @@ SPARKLE_PUBLIC_ED_KEY=""
 SPARKLE_MINIMUM_SYSTEM_VERSION=""
 SPARKLE_ED_SIGNATURE=""
 SPARKLE_ENCLOSURE_LENGTH=""
+SPARKLE_DMG_SHA256=""
 RELEASE_NOTES_PATH=""
 RELEASE_METADATA_PATH=""
 
@@ -409,6 +410,7 @@ snapshot_sparkle_metadata() {
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_MINIMUM_SYSTEM_VERSION" "$SPARKLE_MINIMUM_SYSTEM_VERSION"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_PATH" "$DMG_PATH"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_FILENAME" "$(basename "$DMG_PATH")"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_SHA256" "$SPARKLE_DMG_SHA256"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_ENCLOSURE_LENGTH" "$SPARKLE_ENCLOSURE_LENGTH"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_ED_SIGNATURE" "$SPARKLE_ED_SIGNATURE"
 }
@@ -891,6 +893,7 @@ sign_dmg_for_sparkle() {
   local sign_update_path="$SPARKLE_TOOLS_DIRECTORY/sign_update"
 
   log "Signing DMG for Sparkle updates"
+  SPARKLE_DMG_SHA256="$(/usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" digest "$DMG_PATH")"
   SPARKLE_ED_SIGNATURE="$(
     printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
       | "$sign_update_path" --ed-key-file - -p "$DMG_PATH" \
@@ -905,6 +908,8 @@ sign_dmg_for_sparkle() {
 
   printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
     | "$sign_update_path" --ed-key-file - --verify "$DMG_PATH" "$SPARKLE_ED_SIGNATURE" >/dev/null
+  [[ "$SPARKLE_DMG_SHA256" == "$(/usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" digest "$DMG_PATH")" ]] \
+    || fail "DMG changed while signing for Sparkle"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
