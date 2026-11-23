@@ -1173,6 +1173,11 @@ launch option disables hooks. A later accepted managed status takes priority
 again. A quiet agent does not cause a switch. Hook settings outside the supplied
 launch settings are not inspected. A manual process watch also keeps priority.
 
+Managed Codex sessions also use a terminal permission report to show a live
+wait, including Computer Use requests. Codex handles the decision in its
+terminal. Toastty uses the visible Computer Use menu on older Codex versions
+that lack the report.
+
 Explicit progress percentages use blue text.
 
 A shell prompt or terminal process exit clears working, blocked, and idle

@@ -809,6 +809,10 @@ to 75 seconds. If the task does not need you for a reason above in that time,
 the Ready alert goes out. An approval alert goes out at once: an approval puts
 the task in Needs you for a reason without a task alert.
 
+When a Codex task waits for permission in its terminal, its session sends the
+same **Needs approval** alert while you are away. Tap it to open the task. The
+conversation points you to the task's Mac terminal, where you can answer.
+
 Tapping a task alert opens the task's session while its task space is open,
 and the task's detail otherwise. The app icon badge shows the yellow number on
 Home's Needs you switcher: the sessions, task spaces and tasks that need you,
