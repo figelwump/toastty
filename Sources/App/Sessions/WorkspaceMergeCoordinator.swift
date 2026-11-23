@@ -195,6 +195,14 @@ struct WorkspaceMergeLiveCommandRunner: WorkspaceMergeCommandRunning {
 /// first check after that time while no agent is in a turn and no window
 /// shows the workspace. New work in the workspace clears its done mark,
 /// which drops the request as for any other wait.
+///
+/// A cleanup that fails for a cause that can pass, such as no network or a
+/// GitHub error, runs again later, as a waiting merge does: the script ended
+/// without its report, or `gh` could not check the merged pull request
+/// several times in a row. The request then waits in `.holdingCleanup`, or
+/// checks less often, for each of `cleanupRetryDelays` in turn, and shows as
+/// stopped only after the last. A report that refuses the cleanup, such as
+/// uncommitted changes in the worktree, stops it at once.
 @MainActor
 final class WorkspaceMergeCoordinator {
     /// What happened to a request's merge or cleanup, for the task that
@@ -221,6 +229,9 @@ final class WorkspaceMergeCoordinator {
     /// Failed runs in a row before the request shows as failed: `gh`
     /// checks of a merged pull request, or runs of an accepted merge.
     static let maximumPollFailures = 3
+    /// How long a cleanup waits before each new run after a failure that
+    /// can pass. The first run and these retries span about 50 minutes.
+    static let cleanupRetryDelays: [TimeInterval] = [60, 5 * 60, 15 * 60, 30 * 60]
     static let pullRequestCheckTimeout: TimeInterval = 30
     static let scriptTimeout: TimeInterval = 300
     private static let persistenceKey = "toastty.workspaceMergeRequests"
@@ -251,6 +262,7 @@ final class WorkspaceMergeCoordinator {
     /// How long a task space waits after the merge before its cleanup;
     /// zero cleans up at once.
     private let taskSpaceCleanupHold: TimeInterval
+    private let cleanupRetryDelays: [TimeInterval]
     private let now: () -> Date
     /// Tells the user what happened. Never a modal alert: a merge can
     /// start from an agent or the CLI, and an app-modal alert would stall
@@ -259,6 +271,9 @@ final class WorkspaceMergeCoordinator {
     private var requests: [UUID: WorkspaceMergeRequest] = [:]
     private var pollTasks: [UUID: Task<Void, Never>] = [:]
     private var pollFailureCounts: [UUID: Int] = [:]
+    /// When a cleanup whose `gh` checks failed checks again. Not saved: a
+    /// relaunch checks at once.
+    private var checkNotBefore: [UUID: Date] = [:]
     /// Workspaces whose pull request script is running now.
     private var scriptWorkspaceIDs: Set<UUID> = []
     /// Why a waiting merge stopped applying while its script ran, or after
@@ -274,6 +289,7 @@ final class WorkspaceMergeCoordinator {
         userDefaults: UserDefaults? = ToasttyAppDefaults.current,
         pollInterval: Duration = WorkspaceMergeCoordinator.pollInterval,
         taskSpaceCleanupHold: TimeInterval = 0,
+        cleanupRetryDelays: [TimeInterval] = WorkspaceMergeCoordinator.cleanupRetryDelays,
         now: @escaping () -> Date = Date.init,
         notify: @escaping @MainActor (_ title: String, _ body: String) -> Void = WorkspaceMergeCoordinator.sendNotification
     ) {
@@ -284,6 +300,7 @@ final class WorkspaceMergeCoordinator {
         self.userDefaults = userDefaults
         self.pollInterval = pollInterval
         self.taskSpaceCleanupHold = taskSpaceCleanupHold
+        self.cleanupRetryDelays = cleanupRetryDelays
         self.now = now
         self.notify = notify
         sessionRuntimeStore.workspaceMergeCoordinator = self
@@ -417,10 +434,12 @@ final class WorkspaceMergeCoordinator {
         }
     }
 
-    /// Checks the pull request again after a failure.
+    /// Checks the pull request again after a failure. The user's retry
+    /// gets the full set of automatic retries again.
     func retryCleanup(workspaceID: UUID, afterMerge: Bool = false) {
         guard var request = requests[workspaceID], case .failed = request.phase else { return }
         pollFailureCounts[workspaceID] = nil
+        request.cleanupRetries = nil
         if afterMerge {
             // Older saved stops may lack the flag set when the hold ends.
             request.cleanupHoldEnded = true
@@ -562,6 +581,7 @@ final class WorkspaceMergeCoordinator {
         } else {
             pollTasks.removeValue(forKey: workspaceID)?.cancel()
             pollFailureCounts[workspaceID] = nil
+            checkNotBefore[workspaceID] = nil
         }
     }
 
@@ -794,6 +814,9 @@ final class WorkspaceMergeCoordinator {
             return await runHeldCleanupIfDue(workspaceID: workspaceID, request: request, until: until)
         }
         guard request.phase == .awaitingMerge else { return false }
+        if let notBefore = checkNotBefore[workspaceID], now() < notBefore {
+            return true
+        }
         let number = request.pullRequest.number
         let askedAt = Date()
         guard let context = cleanupContext(workspaceID: workspaceID, request: request) else {
@@ -862,8 +885,16 @@ final class WorkspaceMergeCoordinator {
                 ]
             )
             if failures >= Self.maximumPollFailures {
+                let problem = "Could not check PR #\(number) with gh: \(result.problemSummary)"
+                // GitHub or the network may answer again later.
+                if let retry = nextCleanupRetry(workspaceID, request, problem: problem) {
+                    pollFailureCounts[workspaceID] = nil
+                    update(workspaceID, retry.request)
+                    checkNotBefore[workspaceID] = retry.at
+                    return true
+                }
                 pollTasks[workspaceID] = nil
-                fail(workspaceID, request, "Could not check PR #\(number) with gh: \(result.problemSummary)")
+                fail(workspaceID, request, problem)
                 return false
             }
             return true
@@ -949,8 +980,17 @@ final class WorkspaceMergeCoordinator {
             report(workspaceID, .stopped(reason: outcome.detail))
             notify("Cleanup of \(pullRequest) did not finish", "\(workspaceTitle): \(outcome.detail)")
         } else {
-            fail(workspaceID, request, outcome.detail)
-            report(workspaceID, .stopped(reason: outcome.detail))
+            // The script ended without its report, so it decided nothing
+            // about the worktree or the workspace; the cause, such as no
+            // network, may pass. It checks everything again before its first
+            // change, so a later run is as safe as this one.
+            if outcome.endedWithoutReport, var retry = nextCleanupRetry(workspaceID, request, problem: outcome.detail) {
+                retry.request.phase = .holdingCleanup(until: retry.at)
+                update(workspaceID, retry.request)
+            } else {
+                fail(workspaceID, request, outcome.detail)
+                report(workspaceID, .stopped(reason: outcome.detail))
+            }
             // New work or a changed pull request during the run drops the
             // request instead of offering a retry.
             if let state = store?.state {
@@ -1033,11 +1073,16 @@ final class WorkspaceMergeCoordinator {
         var head: String?
         /// For a merge, the target branch accepted with that commit.
         var base: String?
+        /// The script exited with an error, did not finish in time, or did
+        /// not start, for example because `gh` could not reach GitHub.
+        var endedWithoutReport = false
     }
 
     static func scriptOutcome(from result: WorkspaceMergeCommandResult) -> ScriptOutcome {
         guard result.exitCode == 0 else {
-            return ScriptOutcome(status: nil, detail: "The pull request script failed: \(result.problemSummary)")
+            return ScriptOutcome(
+                status: nil, detail: "The pull request script failed: \(result.problemSummary)", endedWithoutReport: true
+            )
         }
         guard let object = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
               let status = object["status"] as? String else {
@@ -1047,6 +1092,30 @@ final class WorkspaceMergeCoordinator {
             status: status, detail: object["detail"] as? String ?? status,
             head: object["head"] as? String, base: object["base"] as? String
         )
+    }
+
+    /// The request to save and the time to run the cleanup again after a
+    /// failure that can pass, or `nil` when no retry is left.
+    private func nextCleanupRetry(
+        _ workspaceID: UUID, _ request: WorkspaceMergeRequest, problem: String
+    ) -> (request: WorkspaceMergeRequest, at: Date)? {
+        let retries = request.cleanupRetries ?? 0
+        guard retries < cleanupRetryDelays.count else { return nil }
+        let at = now().addingTimeInterval(cleanupRetryDelays[retries])
+        var next = request
+        next.cleanupRetries = retries + 1
+        ToasttyLog.warning(
+            "Workspace cleanup failed and will run again",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "pull_request": String(request.pullRequest.number),
+                "retry": String(retries + 1),
+                "at": ISO8601DateFormatter().string(from: at),
+                "problem": problem,
+            ]
+        )
+        return (next, at)
     }
 
     private func fail(_ workspaceID: UUID, _ request: WorkspaceMergeRequest, _ reason: String) {

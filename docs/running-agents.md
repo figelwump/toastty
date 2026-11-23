@@ -649,7 +649,17 @@ with `toastty task merge` finish its reply.
   reason. Its menu offers **Retry Clean Up** and **Don't Clean Up**. A cleanup
   that closes the workspace and then cannot remove the worktree or a branch
   reports what it kept in a notification. A pull request that closes without
-  merging, or three failed `gh` checks in a row, also stops the cleanup.
+  merging also stops the cleanup.
+- A cleanup that fails for a cause that can pass, such as no network, a
+  GitHub error, or Toastty not answering the script's workspace list in time,
+  runs again by itself: after 1, 5, 15 and 30 minutes. This
+  applies when the cleanup script ends with an error instead of its report, or
+  when three `gh` checks of the merged pull request in a row fail. While a
+  failed script run waits, the button reads **Done · PR #N** and a task's
+  status line says when its task space closes; while a failed check waits,
+  the button keeps **Merging PR #N…**. Only after the last retry fails does the button read
+  **Cleanup Stopped · PR #N**. A cleanup that Toastty skips for one of the
+  reasons above stops at once, because it needs you.
 - New work in the workspace clears its done mark and drops the cleanup, because
   the merge is no longer the version you accepted. Toastty checks the mark again
   in the same step that closes the workspace.
