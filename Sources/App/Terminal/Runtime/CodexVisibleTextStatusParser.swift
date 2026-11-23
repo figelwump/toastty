@@ -10,7 +10,10 @@ enum CodexVisibleTextStatusParser {
         let lines = TerminalVisibleTextSanitizer.sanitizedLines(activeScreen).suffix(24)
         guard lines.last == footer,
               let heading = lines.lastIndex(of: "Field 1/1") else { return false }
-        let body = lines[lines.index(after: heading)..<lines.index(before: lines.endIndex)]
+        var body = lines[lines.index(after: heading)..<lines.index(before: lines.endIndex)]
+        if let server = body.first, server.hasPrefix("Server: cua_repl (environment "), server.hasSuffix(")") {
+            body = body.dropFirst()
+        }
         guard body.first?.hasPrefix(questionPrefix) == true else { return false }
         let question = body.prefix { !$0.hasPrefix("App: ") && !$0.hasPrefix("1. ") && !$0.hasPrefix("› 1. ") }
         guard question.last?.hasSuffix("\"?") == true else { return false }

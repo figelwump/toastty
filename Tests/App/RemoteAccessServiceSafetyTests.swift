@@ -598,6 +598,42 @@ private actor RemoteAccessTailnetSetupSpy {
 
 struct RemoteAccessServiceSafetyTests {
     @MainActor
+    @Test func codexTerminalPermissionWaitSendsOneExistingApprovalAlertWhenAway() async throws {
+        let relay = RemotePushRelaySpy()
+        let configuration = try #require(RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!))
+        let presence = MainActorValue(RemotePushMacPresence(screenIsLocked: false, idleSeconds: 0))
+        let fixture = try RemoteBootstrapFixture(
+            statusKind: .working, codexStatusTrackingSource: .hooks, pairNativeDevice: true,
+            pushConfiguration: configuration, pushRelay: relay, pushMacPresence: { presence.value }
+        )
+        defer { fixture.removeRuntimeFiles() }
+        let store = fixture.sessionRuntimeStore
+        store.bind(store: fixture.store)
+        let workspaceID = try #require(fixture.summary.placement.workspaceID)
+        try #require(fixture.store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: UUID())))
+        try fixture.setPushRegistration(.init(registrationID: UUID(), sendToken: String(repeating: "A", count: 43),
+                                              relayID: configuration.relayID))
+        let wait = TerminalProgramStatusEvent.report(.init(state: .blocked, app: "codex",
+                                                           title: "Private", message: "Private", kind: .permission))
+        store.handleProgramStatusEvent(wait, panelID: fixture.panelID)
+        presence.value = .init(screenIsLocked: true, idleSeconds: 0)
+        store.handleProgramStatusEvent(wait, panelID: fixture.panelID)
+        store.handleProgramStatusEvent(.report(.init(state: .working, app: "codex")), panelID: fixture.panelID)
+        store.handleProgramStatusEvent(wait, panelID: fixture.panelID)
+        store.handleProgramStatusEvent(wait, panelID: fixture.panelID)
+        let snapshot = try #require(fixture.service.facadeConversationSnapshot(for: fixture.conversationID, at: .now))
+        #expect(snapshot.summary.presentationStatus == .needsApproval)
+        #expect(snapshot.pendingInteractions.isEmpty)
+        store.updateStatus(sessionID: fixture.sessionID, status: .init(kind: .needsApproval, summary: "Needs approval"),
+                           at: .now)
+        await SessionRuntimeStoreTestSupport.waitUntil { relay.notifications.count == 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(relay.notifications.map(\.status) == [.needsApproval])
+        #expect(relay.notifications.first?.conversationID == fixture.conversationID)
+        #expect(relay.notifications.first?.sessionTitle == fixture.summary.title)
+    }
+
+    @MainActor
     @Test func activeMacDropsEventsWithoutReplayingThemWhenAway() async throws {
         let relay = RemotePushRelaySpy()
         let configuration = RemotePushConfiguration(relayURL: URL(string: "https://push.example.com")!)!
