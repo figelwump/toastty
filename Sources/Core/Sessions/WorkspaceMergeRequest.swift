@@ -58,9 +58,11 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         /// The workspace is done; the pull request has merged or is about to,
         /// and the cleanup waits for it.
         case awaitingMerge
-        /// The pull request merged and the cleanup waits until `until`, so
-        /// the user can still look at the task space. A task space gets
-        /// this after its merge; other workspaces clean up at once.
+        /// The pull request merged and the cleanup waits until `until`. A
+        /// task space waits after its merge, so the user can still look at
+        /// it; other workspaces clean up at once. Any workspace waits here
+        /// before a cleanup runs again after a failure that can pass, such
+        /// as no network.
         case holdingCleanup(until: Date)
         case cleaningUp
         /// Cleanup did not finish. The workspace stays, and the user can retry
@@ -79,12 +81,17 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// The target branch reported when a merge started waiting for checks.
     /// Older saved waits have no target and must be accepted again.
     public var acceptedBase: String?
+    /// A preparation merge does not use a workspace Done mark or run cleanup.
+    public var releasePreparation: Bool?
     /// An adopted task with no saved checkout may close only its empty
     /// task space. A checkout found by branch name must stay untouched.
     public var requiresAbsentWorktree: Bool?
     /// The cleanup already waited in `.holdingCleanup`, so a retry or a
     /// relaunch after it cleans up without waiting again.
     public var cleanupHoldEnded: Bool?
+    /// How many times the cleanup was scheduled to run again after a
+    /// failure that can pass, since the user last asked for it.
+    public var cleanupRetries: Int?
     public init(
         pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase,
         requiresAbsentWorktree: Bool? = nil
@@ -117,7 +124,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         }
         guard workspaceExists else { return .workspaceClosed }
         guard pullRequest == self.pullRequest else { return .pullRequestChanged }
-        return isDone ? nil : .doneMarkCleared
+        return isDone || releasePreparation == true ? nil : .doneMarkCleared
     }
 
     /// Whether the pull request script is running for this request.

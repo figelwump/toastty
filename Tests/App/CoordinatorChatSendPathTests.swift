@@ -502,6 +502,101 @@ struct CoordinatorChatSendPathTests {
     // MARK: - The user's text in the terminal
 
     @MainActor
+    @Test(arguments: [.none, .beforeDialog, .afterAnswer] as [CompactionDraft])
+    func compactionDialogHoldsMessagesAndKeepsRealDraftsProtected(draft: CompactionDraft) async throws {
+        let fixture = try CoordinatorChatFixture(agent: .claude)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") { fixture.controller.promptIsOpenForTesting }
+        let registry = fixture.conversations.terminalRuntimeRegistry
+        var screen = "❯ "
+        registry.setAutomationReadVisibleTextHandlerForTesting { panelID, _ in
+            panelID == fixture.panelID ? screen : nil
+        }
+        defer { registry.setAutomationReadVisibleTextHandlerForTesting(nil) }
+        if draft == .beforeDialog { registry.handleLocalInput(for: fixture.panelID, kind: .key) }
+        screen = """
+        We recommend compacting earlier
+        Want to autocompact at 400k tokens instead?
+          Autocompact at ‹ 400k › tokens
+          Keep auto (1m tokens)
+        ↑/↓ choose · ←/→ change size · enter confirm · esc not now
+        """
+        fixture.chat.draft = "From the composer"
+        fixture.chat.send()
+        #expect(fixture.controller.hold == (draft == .beforeDialog ? .userDraft : .terminalDialog))
+        let notice: CoordinatorChatModel.Notice = draft == .beforeDialog ? .terminalDraft : .awaitingAnswerInTerminal
+        try await fixture.waitUntil("the reason the message waits") { fixture.chat.notice == notice }
+        #expect(fixture.delivered.texts.isEmpty)
+
+        registry.handleLocalInput(for: fixture.panelID, kind: .dialogNavigation)
+        registry.handleLocalInput(for: fixture.panelID, kind: .dialogAnswer)
+        if draft == .afterAnswer {
+            // The last frame still shows the dialog. Up can already recall
+            // a message into Claude's composer while the terminal redraws.
+            registry.handleLocalInput(for: fixture.panelID, kind: .dialogNavigation)
+        }
+        // The dialog may still be on the active page above the current prompt.
+        screen += "\n❯ "
+        if draft != .none {
+            try await fixture.waitUntil("the terminal draft notice") { fixture.chat.notice == .terminalDraft }
+            #expect(fixture.controller.hold == .userDraft)
+            #expect(fixture.delivered.texts.isEmpty)
+            fixture.chat.sendPastTerminalDraft()
+        }
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["From the composer"] }
+        #expect(fixture.controller.queuedEntries.isEmpty)
+    }
+
+    @MainActor
+    @Test func scrolledPageKeepsTheCompactionDialogHold() async throws {
+        let fixture = try CoordinatorChatFixture(agent: .claude)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") { fixture.controller.promptIsOpenForTesting }
+        let registry = fixture.conversations.terminalRuntimeRegistry
+        let dialog = """
+        We recommend compacting earlier
+        Want to autocompact at 400k tokens instead?
+        ❯ Autocompact at ‹ 400k › tokens
+          Keep auto (1m tokens)
+        ↑/↓ choose · ←/→ change size · enter confirm · esc not now
+        """
+        var screen = dialog
+        registry.setAutomationReadVisibleTextHandlerForTesting { panelID, _ in
+            panelID == fixture.panelID ? screen : nil
+        }
+        defer { registry.setAutomationReadVisibleTextHandlerForTesting(nil) }
+        fixture.chat.draft = "From the composer"
+        fixture.chat.send()
+        #expect(fixture.controller.hold == .terminalDialog)
+
+        // The wheel moves Claude's page up. The dialog is out of the page,
+        // and Claude still waits for its answer.
+        // Claude 2.1.330 draws its mark in one of these two last lines.
+        for lastLine in [
+            "✻ Baked for 2s · done 2:30 PM                   Jump to bottom (click) ↓ ",
+            "──────────────── Jump to bottom (click) ↓ ────────────────",
+        ] {
+            screen = "⏺ An earlier answer\n\n\(lastLine)\n"
+            // Longer than the half second after which the controller looks again.
+            try await Task.sleep(for: .milliseconds(1300))
+            #expect(fixture.controller.hold == .terminalDialog)
+            #expect(fixture.delivered.texts.isEmpty)
+        }
+
+        // At the bottom again, Escape answers the dialog and the prompt shows.
+        screen = dialog
+        registry.handleLocalInput(for: fixture.panelID, kind: .dialogAnswer)
+        screen = "❯ "
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["From the composer"] }
+    }
+
+    enum CompactionDraft: Sendable {
+        case none, beforeDialog, afterAnswer
+    }
+
+    @MainActor
     @Test func textTypedInTheTerminalHoldsMessagesUntilTheUserReleasesIt() async throws {
         let fixture = try CoordinatorChatFixture()
         defer { fixture.tearDown() }
@@ -1722,6 +1817,7 @@ final class CoordinatorChatFixture {
         pairsNativeDevice: Bool = false,
         savesQueue: Bool = false,
         agentReportsStart: Bool = true,
+        agent: AgentKind = .codex,
         initialUserMessages: [String] = [],
         chatDefaults: UserDefaults? = nil,
         sendConfirmationTimeout: Duration = .seconds(10)
@@ -1729,6 +1825,7 @@ final class CoordinatorChatFixture {
         let conversations = try LocalConversationFixture(
             pairsNativeDevice: pairsNativeDevice,
             inCoordinatorWorkspace: true,
+            agent: agent,
             initialTranscript: try Self.userMessagesTranscript(initialUserMessages),
             sendConfirmationTimeout: sendConfirmationTimeout
         )
@@ -1782,6 +1879,7 @@ final class CoordinatorChatFixture {
             },
             defaults: defaults
         )
+        controller.connectKeyboard(to: conversations.terminalRuntimeRegistry)
         controller.conversationAccess = conversations.service
         let chat = CoordinatorChatModel(
             controller: controller,

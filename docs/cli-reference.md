@@ -375,7 +375,12 @@ visual order.
 
 `workspace.set-annotation` sets or updates one structured `key -> (text, url?)`
 chip rendered under the workspace name in the sidebar, and
-`workspace.clear-annotation` removes one by key. The caller chooses the key;
+`workspace.clear-annotation` removes one by key. Set and clear require
+`--workspace` for the `github-pr` key. A managed session in a release task's
+own space can set this key to its preparation pull request. A link saved by
+an earlier version stays visible. To enable its merge controls, the release
+agent sets the annotation again with the verified URL.
+The caller chooses the key;
 Toastty never derives it from the displayed text. Use a stable semantic identity
 for the annotation kind rather than copying its current value into the key. For
 example:
@@ -890,6 +895,7 @@ toastty task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
 toastty task mark-done <task-id>
 toastty task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
 toastty task release [--workspace <id>] [--agent <id>] [--model <id>] [--effort <level>]
+toastty task release-complete --text-file <report.json>
 ```
 
 `task create` returns once the task is saved; `--wait` polls `task.get` until
@@ -1009,6 +1015,13 @@ project with `release_skill` or `release_prompt`. `--agent`, `--model` and
 `--effort` choose its agent as for `task create`; `[defaults]` fills what
 they leave out. See [Merge a task](tasks.md#merge-a-task),
 [Archive a task](tasks.md#archive-a-task) and [Release](tasks.md#release).
+The release task's own agent runs `task release-complete` after all approved
+lanes pass verification. Save the report outside the release worktree. Its
+format is `{"tags":[{"tag":"v1.2.3","taskIDs":[]}]}`. Each entry names an exact
+remote tag and the UUIDs of the tasks it ships. An empty list means that
+tag ships no tracked task. Repeating the same report returns the saved
+confirmation. `task get` shows it as `release.completion`. The task stays
+open while its agent works or it has an outstanding wait.
 `task set-release --after-merge` saves the user's request to release one task
 right after it merges; `--clear` removes it. Without a task ID, it applies to
 the calling agent's own task. Toastty starts no release because of it:
@@ -1019,7 +1032,7 @@ archived task and on a release task. See
 `task list --parent` lists the tasks one task started.
 
 These commands are short forms of
-`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.set-release|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.waiting|task.mark-done|task.archive|task.release`
+`action run task.create|task.start-work|task.retry|task.delete|task.set-workspace|task.set-release|task.adopt|task.send|task.watch|task.unwatch|task.merge|task.request-merge|task.cancel-merge|task.clean-up|task.ready-for-review|task.needs-reply|task.waiting|task.mark-done|task.archive|task.release|task.release-complete`
 and `query run task.get|task.list|task.workspace-choices|task.watches`. The
 Tasks view and the sidebar segment have actions too: `window.tasks.show`,
 `window.tasks.hide`, and `window.sidebar.set-segment segment=all|needsYou`

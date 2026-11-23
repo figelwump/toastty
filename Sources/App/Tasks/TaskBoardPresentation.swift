@@ -249,10 +249,18 @@ enum TaskBoardPresentation {
             return ("To ship", item.finishedThroughChildren ? "child tasks merged, waiting for a release tag" : "merged, waiting for a release tag")
         case .done:
             if item.finishedThroughChildren { return ("Done", "child tasks finished") }
-            if let tag = item.record?.releaseTag { return ("Done", "shipped in \(tag)") }
+            if let tags = shippedTags(item.record) { return ("Done", "shipped in \(tags)") }
             return ("Done", item.record?.mergedAt != nil || item.pullRequestState?.state == .merged ? "merged" : "marked done")
         case .archived: return ("Archived", "closed without finishing")
         }
+    }
+
+    private static func shippedTags(_ record: TaskRecord?) -> String? {
+        guard let record else { return nil }
+        if record.shippedAt != nil, let completion = record.release?.completion {
+            return completion.tags.map(\.tag).joined(separator: ", ")
+        }
+        return record.releaseTag
     }
 
     /// The task actions the detail pane offers, in order.
@@ -349,7 +357,7 @@ enum TaskBoardPresentation {
             return []
         }
         var actions: [DetailAction] = []
-        if item.hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
+        if item.allowsPullRequestActions, item.hasOpenPullRequest, item.taskSpaceWorkspaceID != nil {
             actions += [.merge, .mergeWithoutChecks]
         } else if record.release == nil {
             actions.append(.markDone)
@@ -500,7 +508,7 @@ enum TaskBoardPresentation {
             lines.append("Releasing \(release.childTaskIDs.count) \(release.childTaskIDs.count == 1 ? "task" : "tasks")")
         }
         if record.mergedAt != nil { lines.append("Merged") }
-        if let tag = record.releaseTag { lines.append("Shipped in \(tag)") }
+        if let tags = shippedTags(record) { lines.append("Shipped in \(tags)") }
         if record.doneAt != nil { lines.append("Marked done") }
         if record.archivedAt != nil { lines.append("Archived") }
         if record.attachmentsRemovedAt != nil { lines.append("Attached files removed a week after it finished") }

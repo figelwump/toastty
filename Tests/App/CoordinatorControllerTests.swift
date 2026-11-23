@@ -19,6 +19,7 @@ struct CoordinatorControllerTests {
         var typingSucceeds = true
         /// The next delivery types the text but does not confirm Return.
         var nextSubmitIsUnconfirmed = false
+        let restore = RestoreState()
         private let deliveryOverride = DeliveryOverride()
         /// The lines the controller scrolled document panels to, in order.
         let reveals = RevealRecorder()
@@ -27,6 +28,15 @@ struct CoordinatorControllerTests {
         @MainActor
         final class DeliveryOverride {
             var result: (() -> TerminalInputDeliveryResult?)?
+        }
+
+        @MainActor
+        final class RestoreState {
+            var panelID: UUID?
+
+            func state(for panelID: UUID) -> TerminalManagedAgentRestoreState {
+                self.panelID == panelID ? .pending : .inactive
+            }
         }
 
         @MainActor
@@ -58,6 +68,7 @@ struct CoordinatorControllerTests {
             terminals.bind(sessionLifecycleTracker: tasks.sessionRuntimeStore)
             let terminals = terminals
             let deliveryOverride = deliveryOverride
+            let restore = restore
             let reveals = reveals
             controller = CoordinatorController(
                 store: tasks.store,
@@ -76,6 +87,7 @@ struct CoordinatorControllerTests {
                     return result == .delivered ? (deliveryOverride.result?() ?? result) : result
                 },
                 promptState: { [unowned tasks] panelID in tasks.router.promptState(panelID: panelID) },
+                managedAgentRestoreState: restore.state,
                 revealDocumentLine: { panelID, lineNumber in
                     reveals.lines.append((panelID, lineNumber))
                     return true
@@ -488,6 +500,7 @@ struct CoordinatorControllerTests {
                 cwd: fixture.directory.path, capturedAt: Date()
             )
         )))
+        fixture.restore.panelID = panelID
         fixture.tasks.router.promptStateByPanelID[panelID] = .unavailable
         let attempts = fixture.tasks.router.sendAttemptCount
 
@@ -495,6 +508,11 @@ struct CoordinatorControllerTests {
         let opened = try await fixture.controller.open()
         #expect(opened.startedAgent == false)
         #expect(opened.location == first.location)
+        #expect(fixture.tasks.router.sendAttemptCount == attempts)
+        // The prompt is visible while the registry still owns the handoff.
+        fixture.tasks.router.promptStateByPanelID[panelID] = .idleAtPrompt
+        #expect(try fixture.status().agentState == .starting)
+        #expect(try await fixture.controller.open().startedAgent == false)
         #expect(fixture.tasks.router.sendAttemptCount == attempts)
         // A message waits for the resumed agent.
         #expect(try fixture.controller.send("after relaunch") == .queued(position: 1, hold: .noSession))

@@ -72,6 +72,8 @@ Prints one JSON object, {"status": ..., "detail": ...}. merge reports "merged",
 changed), or "failed", and adds "head", the accepted commit. clean-up
 and close report "cleaned", "partial" (some changes made and something kept),
 "stopped" (a step failed before any change), or "skipped" (nothing changed).
+clean-up exits with an error, before any change, when Toastty does not answer
+the workspace list query, so that Toastty can run it again.
 """
 
 from __future__ import annotations
@@ -107,6 +109,12 @@ REMOTE_SLUG = re.compile(r"[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
 
 class Refusal(Exception):
     """A check failed before any change; the message says which."""
+
+
+class WorkspaceListUnavailable(Refusal):
+    """Toastty did not answer the workspace list query, for example while its main
+    thread was busy. This can pass by itself: clean-up exits with an error before its
+    first change, so that Toastty runs it again later."""
 
 
 def run(args: list[str], cwd: str | None = None, check: bool = True) -> str:
@@ -179,6 +187,8 @@ class Context:
     clicked_head: str | None = None
     # For a merge click: the commit the caller checked, which HEAD must be.
     expected_head: str | None = None
+    # The release's pending managed merge supplies acceptance without a Done mark.
+    release_preparation_url: str | None = None
     # The task record's path, which may already have been removed externally.
     expected_worktree_path: str | None = None
     expected_worktree_branch: str | None = None
@@ -344,6 +354,8 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
         raise Refusal("the repository allows no merge method")
 
     if pr["isDraft"]:
+        if ctx.release_preparation_url:
+            check_release_preparation(ctx)
         ok, output = succeeds(gh_pr(ctx.repo_slug, "ready", str(number)), cwd=ctx.repo)
         if not ok:
             return "failed", f"could not mark draft PR #{number} ready: {output}", accepted
@@ -359,15 +371,18 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
     # equivalent target-branch condition, so the final request still has a race.
     current = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", "baseRefName"), cwd=ctx.repo))
     check_target_branch(current.get("baseRefName"), accepted_base)
+    if ctx.release_preparation_url:
+        check_release_preparation(ctx)
     if ctx.clicked_head is None:
         # A waiting merge, checked last before the merge call: the user may
         # have cancelled it by clearing the done mark since Toastty started
         # this run. Toastty keeps the mark through new agent work, so a commit
         # in the clicked checkout that is not pushed yet also ends the
         # acceptance.
-        workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
-        if workspace is None or not workspace.get("done"):
-            raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
+        if not ctx.release_preparation_url:
+            workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
+            if workspace is None or not workspace.get("done"):
+                raise Refusal("the workspace is no longer marked done, so the merge was cancelled")
         ok, head = succeeds(["git", "rev-parse", "HEAD"], cwd=ctx.checkout)
         if not ok:
             raise Refusal(f"could not read the commit in this workspace's checkout: {head}")
@@ -381,11 +396,22 @@ def merge(ctx: Context, accepted: str | None, accepted_base: str | None) -> tupl
                            "-f", f"sha={accepted}", "-f", f"merge_method={method}"], cwd=ctx.repo)
     if not ok:
         return "failed", f"GitHub did not merge PR #{number}: {output}", accepted
-    view = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", "state"), cwd=ctx.repo,
+    view_fields = "state,mergeCommit" if ctx.release_preparation_url else "state"
+    view = json.loads(run(gh_pr(ctx.repo_slug, "view", str(number), "--json", view_fields), cwd=ctx.repo,
                           check=False) or "{}")
     if view.get("state") == "MERGED":
+        pr["mergeCommit"] = view.get("mergeCommit")
         return "merged", f"merged PR #{number}", accepted
     return "failed", f"GitHub reported the merge, but PR #{number} is {view.get('state', 'unknown').lower()}", accepted
+
+
+def check_release_preparation(ctx: Context) -> None:
+    workspace = next((w for w in toastty_workspaces() if w.get("workspaceID") == ctx.workspace_id), None)
+    if workspace is None or workspace.get("releaseMergePullRequestURL") != ctx.release_preparation_url:
+        raise Refusal("the release task no longer authorizes this preparation pull request merge")
+    ok, branch = succeeds(["git", "symbolic-ref", "--short", "HEAD"], cwd=ctx.checkout)
+    if not ok or branch != ctx.pr["headRefName"]:
+        raise Refusal("the release checkout is no longer on the preparation pull request branch")
 
 
 # MARK: - Clean up and close
@@ -395,13 +421,16 @@ def toastty_workspaces() -> list[dict]:
     cli = os.environ.get("TOASTTY_CLI_PATH")
     if not cli:
         raise Refusal("TOASTTY_CLI_PATH is not set")
-    output = run([cli, "--json", "query", "run", "workspace.list"], check=False)
+    answer = subprocess.run([cli, "--json", "query", "run", "workspace.list"], capture_output=True, text=True)
     try:
-        response = json.loads(output)
+        response = json.loads(answer.stdout)
     except json.JSONDecodeError:
         response = {}
+    if not isinstance(response, dict) or not response.get("ok"):
+        why = answer.stderr.strip().splitlines()[-1:] or [f"exit status {answer.returncode}"]
+        raise WorkspaceListUnavailable(f"could not read the full Toastty workspace list: {why[0]}")
     result = response.get("result") or {}
-    if not response.get("ok") or result.get("callerIsScoped") is not False:
+    if result.get("callerIsScoped") is not False:
         raise Refusal("could not read the full Toastty workspace list")
     return result.get("workspaces", [])
 
@@ -589,6 +618,8 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     try:
         workspace, problem = workspace_problem(ctx, require_done=not close_pr)
     except Refusal as refusal:
+        if isinstance(refusal, WorkspaceListUnavailable) and not done:
+            raise
         problem = str(refusal)
     if problem:
         return stop(f"{problem}; workspace kept")
@@ -771,7 +802,9 @@ def load(options: argparse.Namespace) -> Context:
         repo_info=repo_info, pr=pr, worktree=worktree,
         other_worktrees=[w.path for w in worktrees if worktree is None or w.path != worktree.path],
         workspace_id=options.workspace, checkout=checkout, clicked_head=clicked_head,
-        expected_head=options.expect_head, expected_worktree_path=options.worktree,
+        expected_head=options.expect_head,
+        release_preparation_url=options.pr_url if options.release_preparation else None,
+        expected_worktree_path=options.worktree,
         expected_worktree_branch=options.worktree_branch)
 
 
@@ -785,6 +818,8 @@ def main() -> None:
     parser.add_argument("--head", help="with merge: the commit the user accepted, from an earlier waiting report")
     parser.add_argument("--base", help="with --head: the target branch from the earlier waiting report")
     parser.add_argument("--expect-head", help="with merge and no --head: the commit the checkout must be at")
+    parser.add_argument("--release-preparation", action="store_true",
+                        help="with merge: check release acceptance in place of a workspace Done mark")
     parser.add_argument("--worktree", help="with clean-up: the worktree path from the task record")
     parser.add_argument("--worktree-branch", help="with --worktree: the branch from the task record")
     parser.add_argument("--expect-absent-worktree", action="store_true",
@@ -796,6 +831,8 @@ def main() -> None:
         parser.error("--base is only for a merge with --head")
     if options.expect_head and (options.action != "merge" or options.head):
         parser.error("--expect-head is only for a merge without --head")
+    if options.release_preparation and options.action != "merge":
+        parser.error("--release-preparation is only for merge")
     if (options.worktree is not None or options.worktree_branch is not None) and (
             options.action != "clean-up" or not options.worktree or not options.worktree_branch):
         parser.error("--worktree and --worktree-branch are only valid together with clean-up")
@@ -809,8 +846,17 @@ def main() -> None:
         if options.action == "merge":
             report["base"] = ctx.pr["baseRefName"]
             status, detail, report["head"] = merge(ctx, options.head, options.base)
+            if options.release_preparation and status == "merged":
+                report["mergeCommit"] = (ctx.pr.get("mergeCommit") or {}).get("oid")
+                report["releaseBranch"] = ctx.default_branch
         else:
             status, detail = clean_up(ctx, close_pr=options.action == "close")
+    except WorkspaceListUnavailable as unavailable:
+        if options.action == "clean-up":
+            # Nothing changed, and Toastty may answer again soon.
+            sys.exit(f"workspace-pull-request: {unavailable}")
+        status = "refused" if options.action == "merge" else "skipped"
+        detail = str(unavailable)
     except Refusal as refusal:
         status = "refused" if options.action == "merge" else "skipped"
         detail = str(refusal)

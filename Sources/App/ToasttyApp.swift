@@ -1107,6 +1107,7 @@ struct ToasttyApp: App {
             triageRunner: TaskLiveTriageRunner(),
             recentWorkspaces: recentWorkspaces
         )
+        taskCoordinator.merges = sessionRuntimeStore.workspaceMergeCoordinator
         taskCoordinator.reconcileAfterLaunch()
         self.taskCoordinator = taskCoordinator
         // A quit must leave the marks of turns it cuts off; see
@@ -1137,7 +1138,6 @@ struct ToasttyApp: App {
         taskCoordinator.webhooks = taskWebhooks
         self.taskWebhooks = taskWebhooks
         taskWebhooks.start()
-        taskCoordinator.merges = sessionRuntimeStore.workspaceMergeCoordinator
         sessionRuntimeStore.workspaceMergeCoordinator?.cleanupObserver = { [weak taskCoordinator] workspaceID, event in
             taskCoordinator?.mergeCleanupEvent(workspaceID: workspaceID, event: event)
         }
@@ -1463,6 +1463,9 @@ struct ToasttyApp: App {
             },
             promptState: { [weak terminalRuntimeRegistry] panelID in
                 terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
+            },
+            managedAgentRestoreState: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.managedAgentRestoreState(panelID: panelID) ?? .inactive
             },
             revealDocumentLine: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
                 webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false

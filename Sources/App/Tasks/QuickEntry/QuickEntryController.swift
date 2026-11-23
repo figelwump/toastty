@@ -392,6 +392,7 @@ final class QuickEntryController: ObservableObject {
             case .noSession: "Waits: the coordinator is not running"
             case .agentStarting: "Waits: the coordinator is starting"
             case .userDraft: "Waits: text is in the coordinator's terminal"
+            case .terminalDialog: "Waits for your answer in the coordinator's terminal"
             case .busy, .awaitingTurn, .settling: "Waits: the coordinator is working"
             case .terminalUnavailable, .promptNotOpen: "Waits for the coordinator's prompt"
             case .notSaved: "Waits: Toastty could not save it"

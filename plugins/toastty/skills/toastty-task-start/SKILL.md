@@ -165,6 +165,10 @@ the first time, check whether the remote you push to is on `github.com`.
 
 On GitHub:
 
+- Read `result.setup.taskSpaceWorkspaceID` from `toastty task get --json`.
+  Pass this ID as `--workspace` when you set the annotation or open the
+  browser panel. This selects the task's own space while the user works
+  in another workspace.
 - Set the workspace's `github-pr` annotation to the pull request, as
   `toastty-capabilities` describes. Toastty reads the pull request from it: the
   task shows as ready for review while the pull request is open, not a draft,

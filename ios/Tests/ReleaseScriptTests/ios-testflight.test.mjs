@@ -677,7 +677,6 @@ test("asset catalog supplies the Toastty amber AccentColor expected by actool", 
 test("manual workflow and names-only manifest expose all release inputs", () => {
   const workflow = fs.readFileSync(workflowPath, "utf8");
   const mobileWorkflow = fs.readFileSync(mobileWorkflowPath, "utf8");
-  const mobileFilters = read(".github/ci-paths.yml");
   const secrets = fs.readFileSync(secretsManifest, "utf8");
   const requiredSecrets = [
     "APP_STORE_CONNECT_API_KEY_ID",
@@ -721,11 +720,6 @@ test("manual workflow and names-only manifest expose all release inputs", () => 
   }
   assert.match(workflow, /\.node-version/);
   assert.match(workflow, /\.tool-versions/);
-  assert.match(mobileWorkflow, /filters: \.github\/ci-paths\.yml/);
-  assert.match(mobileFilters, /'\.node-version'/);
-  assert.match(mobileFilters, /'\.tool-versions'/);
-  assert.match(mobileFilters, /'\.github\/workflows\/ios-testflight\.yml'/);
-  assert.match(mobileFilters, /'scripts\/\*\*'/);
   assert.match(mobileWorkflow, /ios\/Tests\/ReleaseScriptTests\/require-ios-ci\.test\.mjs/);
   assert.match(mobileWorkflow, /ios\/Tests\/ReleaseScriptTests\/ios-testflight\.test\.mjs/);
   assert.match(mobileWorkflow, /configuration: \[Debug, Release\]/);

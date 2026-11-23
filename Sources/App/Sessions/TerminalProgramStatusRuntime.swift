@@ -142,6 +142,9 @@ extension SessionRuntimeStore {
     }
 
     func handleProgramStatusEvent(_ event: TerminalProgramStatusEvent, panelID: UUID, at now: Date) {
+        if let owner = sessionRegistry.activeSession(for: panelID) {
+            handleCodexTerminalPermissionReport(event, record: owner, at: now)
+        }
         let previousRecords = programStatusRuntime.recordsByPanel
         programStatusRuntime.apply(event, panelID: panelID, owner: sessionRegistry.activeSession(for: panelID))
         guard programStatusRuntime.recordsByPanel != previousRecords else { return }

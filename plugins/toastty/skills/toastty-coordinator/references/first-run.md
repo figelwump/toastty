@@ -62,6 +62,14 @@ the rest of this file says. Everything else in this file holds for both ways.
 
 ## The first answer
 
+When the message that starts the setup holds a request, or an answer to a
+question that you asked, handle that first, as A request under The answers
+says. When that ends with a question to the user, such as a project
+directory to confirm, a choice between directories or "Is that a rule?",
+ask only that question, so that one "yes" does not answer two questions.
+Write no `asked first-run` line and do not start the setup: it starts in the
+next turn that the user starts.
+
 1. Each step costs the user seconds, so do these two in one step, with both
    commands at once, and read nothing more before you write:
    - add an `asked first-run` line to the ledger, in place of an earlier
@@ -96,15 +104,17 @@ choices in one line.
    is, with an agent, a model and an effort. Take the suggestion from the
    first of these that has one:
    - a rule for choosing the model and effort of handed-off work in the
-     user's instruction files that your agent program loaded. Name the file,
-     and say that the policy will hold a copy of its rule;
+     user's instruction files that your agent program loaded. Name the file
+     and say that the policy will hold a copy with resolved IDs. Use Model
+     IDs under New tasks with the history you already read. For any
+     unresolved row, say which name still needs a lookup before you save
+     the table. Let the user give an ID if they know it;
    - the task history: which agent, model and effort the user chose for which
      kind of work;
    - a starter table with three rows: a small, clear change; a feature with
      clear requirements; work with open decisions or that is hard to check.
      Keep the agent's default model, give the rows a rising effort, and ask
-     whether the user wants another model for a row. Toastty has no list of
-     models: use a model ID exactly as the user or the history gives it.
+     whether the user wants another model for a row.
 2. **Which project for which work (Projects).** First read the projects with
    `toastty task workspace-choices --json`. Say that you can create a
    task in any repository on this Mac, also one that is not open in
@@ -160,6 +170,11 @@ The open part is the first part on the `asked first-run` line. Write to
   suggest", and "defaults" settles every part on the line. A part that the
   user did not change gets your suggestion. Before you write Projects, read
   the projects, as its part says.
+- **For Agents,** before saving the accepted rows, use Model IDs to resolve
+  names left open in the suggestion or added in the answer. If a choice
+  is still unclear, ask once for the ID or permission to use the default.
+  Keep the row and question on the `asked first-run` line until the user
+  settles it.
 - **Write the answer at once.** Write each part that the answer settles in
   its section. Where that is the default of your instructions, write the line
   `- The coordinator's defaults.`, so that you do not ask again. Improving
@@ -167,14 +182,15 @@ The open part is the first part on the `asked first-run` line. Write to
   `- Review once a day at 09:00. Proposals only.`, or
   `- Review only when I ask.` Follow steps 1 to 3 of Change the policy, with
   one commit for the answer, named after the parts it wrote, such as
-  `Policy: first run, Agents`. Then remove those parts from the `asked
-  first-run` line. When Improving got a time, set your next check as
-  `references/improving.md` says under "A time in Improving".
+  `Policy: first run, Agents`. Then remove those parts, and ` paused`,
+  from the `asked first-run` line. When Improving got a time, set your next
+  check as `references/improving.md` says under "A time in Improving".
 - **Then,** when parts remain on the line, say in a few words what you saved,
   and ask the next part with its place. When none remain, remove the line,
   and show what you saved: one short line for each part that you asked
   about, and that the user can change each rule at any time.
-- **A question about the open part:** answer it, and ask the part again.
+- **A question about the open part:** when the line says `paused`, remove
+  ` paused` from it. Answer the question, and ask the part again.
 - **A request:** handle it first, as the turn says. Choose its project,
   agent, model and effort as New tasks says. Where that gives no model or
   effort, take them from your suggested Agents table, and say so. Then:

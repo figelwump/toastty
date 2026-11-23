@@ -4918,10 +4918,10 @@ final class SidebarViewTests: XCTestCase {
 
     func testCoordinatorRowShowsTheAgentsStateAndSelectsItsWorkspace() throws {
         let fixture = try makeCoordinatorSidebarState()
-        var coordinatorPromptState = TerminalPromptState.idleAtPrompt
+        var coordinatorRestoreState = TerminalManagedAgentRestoreState.inactive
         let harness = try makeSidebarHarness(
             state: fixture.state, windowID: fixture.windowID, taskRecords: [], withTaskBoard: true, withCoordinator: true,
-            coordinatorPromptState: { _ in coordinatorPromptState }
+            coordinatorRestoreState: { _ in coordinatorRestoreState }
         )
         defer { harness.window.orderOut(nil) }
         harness.sessionRuntimeStore.bind(store: harness.store)
@@ -4947,11 +4947,11 @@ final class SidebarViewTests: XCTestCase {
             cwd: "/Users/tester/.toastty/coordinator", capturedAt: Date()
         )
         XCTAssertTrue(harness.store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord)))
-        coordinatorPromptState = .unavailable
+        coordinatorRestoreState = .pending
         XCTAssertEqual(coordinatorLabels(), ["Coordinator, starting"])
         try attachSidebarRender(root, name: "coordinator-row-starting")
         try writeSidebarEvidence(root, name: "coordinator-row-starting")
-        coordinatorPromptState = .idleAtPrompt
+        coordinatorRestoreState = .inactive
 
         // The agent starts: a quiet row while it is at rest.
         harness.sessionRuntimeStore.startSession(
@@ -5599,7 +5599,7 @@ final class SidebarViewTests: XCTestCase {
         withTaskBoard: Bool = false,
         tasksConfig: TasksConfig = .empty,
         withCoordinator: Bool = false,
-        coordinatorPromptState: @escaping (UUID) -> TerminalPromptState = { _ in .idleAtPrompt }
+        coordinatorRestoreState: @escaping (UUID) -> TerminalManagedAgentRestoreState = { _ in .inactive }
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -5640,7 +5640,8 @@ final class SidebarViewTests: XCTestCase {
                 .appending(path: "toastty-sidebar-coordinator-\(UUID().uuidString)", directoryHint: .isDirectory),
             configLoader: { tasksConfig },
             deliverText: { _, _ in .unavailable },
-            promptState: coordinatorPromptState
+            promptState: { _ in .idleAtPrompt },
+            managedAgentRestoreState: coordinatorRestoreState
         ) : nil
         taskCoordinator?.coordinatorController = coordinatorController
 

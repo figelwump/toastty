@@ -954,6 +954,132 @@ struct TaskBoardTests {
         await waitUntil { gitHub.calls.count > callsBefore }
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func aRestoredReleaseKeepsItsLegacyLinkWithoutUsingItForMerge(shipped: Bool, markedDone: Bool) async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let release = try await startTask(fixture, text: "Release")
+        let task = try await startTask(fixture, text: "Fix the unread dot")
+        let releaseSpace = try #require(release.taskSpaceWorkspaceID)
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        let chip = WorkspaceAnnotation(text: "PR #124", url: pullRequestURL)
+        _ = fixture.store.send(.setWorkspaceAnnotation(workspaceID: releaseSpace, key: "github-pr", annotation: chip))
+        _ = fixture.store.send(.setWorkspaceAnnotation(workspaceID: taskSpace, key: "github-pr", annotation: chip))
+        let shippedAt = shipped ? Date(timeIntervalSince1970: 100) : nil
+        let doneAt = markedDone ? Date(timeIntervalSince1970: 200) : nil
+        _ = fixture.store.send(.setWorkspaceDone(workspaceID: releaseSpace, doneAt: doneAt ?? Date()))
+        try fixture.coordinator.records.save(id: release.id) {
+            $0.release = TaskRelease(childTaskIDs: [])
+            $0.pullRequestURL = pullRequestURL
+            $0.mergedAt = Date()
+            $0.mergeCommit = "old"
+            $0.cleanup = TaskCleanup(kind: .merge, problem: "Stopped")
+            $0.shippedAt = shippedAt
+            $0.releaseTag = shipped ? "v1.0.0" : nil
+            $0.doneAt = doneAt
+        }
+        fixture.replaceCoordinator(fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile)))
+        let gitHub = FakeGitHub()
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        let defaultsSuite = "ReleasePRRestore.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let oldMergeLink = markedDone
+            ? try #require(WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/125"))
+            : link
+        let oldRequest = WorkspaceMergeRequest(
+            pullRequest: oldMergeLink, repoPath: fixture.projectRoot,
+            phase: .awaitingChecks(acceptedHead: "abc123", thenCleanUp: true)
+        )
+        let savedRequests = try JSONEncoder().encode([releaseSpace.uuidString: oldRequest])
+        defaults.set(savedRequests, forKey: "toastty.workspaceMergeRequests")
+        let merges = WorkspaceMergeCoordinator(
+            store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            runner: gitHub, userDefaults: defaults, notify: { _, _ in }
+        )
+        fixture.coordinator.merges = merges
+        #expect(merges.request(workspaceID: releaseSpace) == (markedDone ? nil : oldRequest))
+        fixture.coordinator.reconcileAfterLaunch()
+        #expect(merges.request(workspaceID: releaseSpace) == nil)
+
+        let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        gitHub.answer(pullRequestURL, state: "MERGED", mergeCommit: "abc123")
+        await board.pullRequests?.refresh(link).value
+
+        let restored = try #require(fixture.record(release.id))
+        #expect(fixture.store.state.workspacesByID[releaseSpace]?.annotations["github-pr"] == chip)
+        #expect(restored.pullRequestURL == pullRequestURL)
+        #expect(restored.mergedAt == nil)
+        #expect(restored.mergeCommit == nil)
+        #expect(restored.cleanup == nil)
+        #expect(restored.doneAt == doneAt)
+        #expect(fixture.store.state.workspacesByID[releaseSpace]?.doneAt == doneAt)
+        #expect(restored.shippedAt == shippedAt)
+        #expect(restored.releaseTag == (shipped ? "v1.0.0" : nil))
+        let item = try #require(board.items().first { $0.taskID == release.id })
+        #expect(item.stage.group == (shipped || markedDone ? .done : .running))
+        #expect(item.pullRequest == link)
+        #expect(item.hasMerged == false)
+        #expect(!TaskBoardPresentation.detailActions(item).contains(.merge))
+        #expect(try await fixture.coordinator.archiveCheck(taskID: release.id).pullRequest == nil)
+        #expect(throws: TaskError.self) { try fixture.coordinator.mergeTarget(restored) }
+        #expect(fixture.record(task.id)?.mergeCommit == "abc123")
+        try fixture.coordinator.records.flush()
+        #expect(fixture.savedRecord(release.id)?.pullRequestURL == pullRequestURL)
+    }
+
+    @Test func aConfirmedReleaseLinkAndItsWaitSurviveRelaunch() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let release = try await startTask(fixture, text: "Release")
+        let releaseSpace = try #require(release.taskSpaceWorkspaceID)
+        let link = try #require(WorkspacePullRequestLink(annotationURL: pullRequestURL))
+        _ = fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: releaseSpace, key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #124", url: link.url)
+        ))
+        try fixture.coordinator.records.save(id: release.id) {
+            $0.release = TaskRelease(childTaskIDs: [])
+            $0.release?.preparationPullRequestURL = link.url
+            $0.pullRequestURL = link.url
+            $0.mergeRequestedAt = Date()
+        }
+        fixture.replaceCoordinator(fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile)))
+        let gitHub = FakeGitHub()
+        let suite = "ReleasePreparationRestore.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var request = WorkspaceMergeRequest(
+            pullRequest: link, repoPath: fixture.projectRoot,
+            phase: .awaitingChecks(acceptedHead: "abc123", thenCleanUp: false)
+        )
+        request.releasePreparation = true
+        request.acceptedBase = "main"
+        let savedRequests = try JSONEncoder().encode([releaseSpace.uuidString: request])
+        defaults.set(savedRequests, forKey: "toastty.workspaceMergeRequests")
+        let merges = WorkspaceMergeCoordinator(
+            store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            runner: gitHub, userDefaults: defaults, notify: { _, _ in }
+        )
+        fixture.coordinator.merges = merges
+        fixture.coordinator.reconcileAfterLaunch()
+        #expect(merges.request(workspaceID: releaseSpace) == request)
+        #expect(fixture.store.state.workspacesByID[releaseSpace]?.doneAt == nil)
+        let board = makeBoard(fixture, gitHub: gitHub)
+        fixture.coordinator.board = board
+        let restored = try #require(board.items().first { $0.taskID == release.id })
+        #expect(restored.allowsPullRequestActions)
+        #expect(restored.pullRequest == link)
+        #expect(restored.merge == .waitingForChecks)
+
+        try fixture.coordinator.cancelMerge(taskID: release.id)
+        gitHub.answer(link.url, state: "MERGED", mergeCommit: "abc123")
+        await board.pullRequests?.refresh(link).value
+        #expect(fixture.record(release.id)?.mergeCommit == "abc123")
+        #expect(fixture.record(release.id)?.cleanup == nil)
+        #expect(merges.request(workspaceID: releaseSpace) == nil)
+        #expect(board.items().first { $0.taskID == release.id }?.stage.group != .done)
+    }
+
     @Test func adoptingATaskSpaceRecordsAMergeSeenBefore() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let gitHub = FakeGitHub()

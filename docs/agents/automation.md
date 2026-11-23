@@ -4,24 +4,26 @@ Use this reference when a task needs smoke automation, remote validation, shortc
 
 ## GitHub CI
 
-`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR, on manual dispatch, and on the nightly schedule. A newer PR commit cancels that PR's older run. Full dispatches have separate groups so they can retain evidence for their own source.
+`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. Hosted CI is mostly manual: one developer works on Toastty, and the task's own toastty-mini runs are the review check.
 
-`.github/ci-paths.yml` selects checks for each PR:
+- **On every PR**, Toastty CI runs only **CI workflow tests** (`npm test --prefix Tests/CI` on Linux, about a minute) and the **CI gate**. Branch protection on `main` requires the **CI gate** check, so this part must stay. A newer PR commit cancels that PR's older run.
+- **On manual dispatch**, it runs every job: **Script tests**, **Web panel tests**, **macOS contract tests**, and **iOS tests** in Debug and Release. Full dispatches have separate groups so they can retain evidence for their own source.
+- There is no nightly schedule.
 
-- **Script tests** for iOS, script, remote runner fixture, and CI configuration changes. These run portable dispatcher, release-evidence, and remote runner contracts with fake tools. They do not build or launch either app.
-- **Web panel tests** for web-panel sources, generated bundles, and shared CI configuration. Each package's `npm test` also checks generated bundle synchronization.
-- **iOS tests** for client code, shared Swift code and fixtures, bundled web panels, and iOS toolchain or CI changes. Debug runs the unit suites and four smoke UI tests. Release runs the unit suites.
-- Documentation-only and Mac-only changes can skip all three. CI selection and gate tests still run on every PR.
+The **CI gate** requires the workflow tests on every run. On a PR it also requires every test job to be skipped; on a manual run it requires every job to pass. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs the gate's shell logic locally without launching an app.
 
-The separate `.github/workflows/push-worker.yml` runs the existing checks and bundle dry runs for affected push-worker PRs, or by manual dispatch. It does not run again after merge. The `iOS TestFlight` archive/upload workflow is also manual-only.
+The separate `.github/workflows/push-worker.yml` runs the push-worker checks and bundle dry runs only by manual dispatch (`gh workflow run push-worker.yml --ref <branch>`). For push-worker changes, run `npm run check` in `workers/push` locally or start the workflow. The `iOS TestFlight` archive/upload workflow is also manual-only.
 
-Branch protection on `main` requires the **CI gate** check. For PRs, it requires selection and all selected checks to pass. For full dispatches, it requires all jobs, including both native platforms. Failed, cancelled, or missing selected jobs block the gate. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` checks selection and runs the gate's shell logic locally without launching an app.
+Because PRs run no test jobs, run the checks that match a change yourself: toastty-mini runs for native code (see `.agents/skills/toastty-verify/SKILL.md`), and these local Linux-portable checks for scripts and web panels:
+
+- Script tests: `node --test ios/Tests/ScriptTests/native-device.test.mjs ios/Tests/ScriptTests/physical-device.test.mjs ios/Tests/ScriptTests/toastty-ios.test.mjs ios/Tests/ReleaseScriptTests/require-ios-ci.test.mjs ios/Tests/ReleaseScriptTests/select-ios-xcode.test.mjs Tests/RemoteScripts/*Tests.mjs`
+- Web panel tests: `npm ci --prefix <panel> && npm test --prefix <panel>` for `WebPanels/LocalDocumentApp` and `WebPanels/ScratchpadApp`.
 
 Use **Run workflow** to request full validation on a branch or the exact `main` release commit. Mac-only release-script and device-plist fixtures use `sips` and Apple plist tools, so they stay in the manual macOS job. The workflow tests check that every script fixture is assigned to Linux or manual macOS coverage.
 
 A manual run includes the Linux checks, macOS Debug tests and an unsigned Release build, and iOS Debug and Release simulator tests. Debug includes the full UI suite; both iOS configurations include the provisional performance budget. Before TestFlight, run full `Toastty CI` on `main`, wait for success, and confirm its source SHA matches the release. A green PR gate does not qualify as release evidence. See [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
 
-Native implementation checks still follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. Check which jobs the PR gate selected and add focused verification for the changed behavior. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
+Native implementation checks follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. A green PR gate shows only that the CI workflow tests passed; it is not evidence for the change. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
 
 GitHub jobs use disposable runners and no production host. Manual macOS jobs build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
 
@@ -614,10 +616,9 @@ coordinator chat check, with `ax-drive`'s `sheet-texts`, `menu` and
   **Restart Coordinator** is offered only while it is open.
 - `notice`: the `claude` profile starts with `env -u …`, so the app cannot
   tell its config file and writes no trust. Claude asks about the folder, the
-  chat says that the agent may wait in the terminal, and **Show Terminal**
-  shows the question. Real keys there choose "Yes, I trust this folder".
-  Back in the chat, the notice for a draft in the terminal shows, and **Send
-  Anyway** types the waiting message, which Claude answers.
+  dock says that the agent may wait in the terminal, and **Show Terminal**
+  shows the question. The first keys choose "Yes, I trust this folder".
+  When Claude is ready it receives and answers the waiting message.
   `--expect-notice no` runs this scenario against a build from before the
   notice: it expects the chat to say nothing, and keeps a picture of the
   terminal with Claude's question.
@@ -638,6 +639,47 @@ which Terminal in the GUI session may run). It makes no screen recording:
 on the screen until a person answers it. `--window-frame` puts the app's
 window where nothing else on the screen covers it, and `--claude` runs another
 Claude CLI than the one on the `PATH`.
+
+### Coordinator compact offer
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-compact-offer-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac; the installed production app is not touched. It makes the
+real Claude CLI show its "We recommend compacting earlier" offer, which shows
+only in the terminal: a first turn, synthetic text added to that turn's
+transcript, a relaunch that resumes it, and one more real turn. The run uses
+subscription usage: the second turn has about 230k input tokens. It needs the
+remote Mac's screen unlocked, and takes about four minutes after the build.
+
+It checks that a message sent in the chat waits for the answer in the
+terminal, that arrow keys move the offer's choice one second after **Show
+Terminal**, that the message still waits while the wheel has moved the offer
+out of Claude's page, and that Claude gets the message once after Escape.
+`--host dock` uses the dock's **Show Terminal**, which opens the full view.
+
+Escape leaves a count in the account's `~/.claude.json`
+(`autoCompactOffer`). The check puts that record back as it was, under Claude
+Code's lock. Do not answer the offer with Return or a click in a check: that
+changes the account's setting or ends the offer for the account.
+
+`--record-bytes` puts `scripts/automation/pty-recorder.py` between the
+terminal and Claude, and writes every byte that Claude receives, with its
+time, to `remote-coordinator-compact-offer-check-bytes-to-claude.jsonl`. Use
+it to tell a key that Toastty or Ghostty did not send from a key that Claude
+received and did not act on. The app log of the run is at the debug level; it
+has Toastty's own record of the key presses after **Show Terminal** (see
+[The coordinator](../tasks.md#the-coordinator)).
+
+`ax-drive`'s `key up|down|left|right` send an arrow key as a keyboard does,
+with the numeric-pad and function flags. Do not send an arrow key with
+Control: macOS takes it for Mission Control, and the app gets no more keys.
+
+It writes `remote-coordinator-compact-offer-check.json`, the app log, Claude's
+transcript and still pictures under the run's artifacts directory.
 
 `ax-drive` makes no click at a place that a system prompt covers, such as a
 permission question or a crash report, and exits with code 4: that prompt is
@@ -950,13 +992,11 @@ sv exec -- scripts/remote/test.sh \
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-On iOS-related PRs, `Toastty CI` runs the app and domain unit suites in Debug and Release. Debug also runs the four tests selected by `--ui-tests smoke`. Both PR jobs use `--skip-performance-budgets` and keep the separate 5,000-event correctness check. Each PR job has a 45-minute limit.
-
-The full manual `Toastty CI` dispatch runs all Debug UI tests and both unit configurations with the performance budgets. Full Debug has a 150-minute limit, and Release has 45 minutes. At 2:17 a.m. Pacific the GitHub schedule checks the shared branch for changes to iOS inputs and dispatches the same full workflow when needed. The schedule starts on `main` and prefers `feat/task-system-coordinator` while that branch exists. The dispatch runs tests on disposable hosted runners and creates CI artifacts. The release task separately requires green full evidence for the exact TestFlight commit on `main`.
+The full manual `Toastty CI` dispatch runs all Debug UI tests and both unit configurations with the performance budgets. Full Debug has a 150-minute limit, and Release has 45 minutes. PRs run no hosted iOS tests, and there is no nightly run. The dispatch runs tests on disposable hosted runners and creates CI artifacts. The release task separately requires green full evidence for the exact TestFlight commit on `main`.
 
 Each hosted simulator invocation passes `--retry-tests-on-failure`, which maps to `xcodebuild -retry-tests-on-failure -test-iterations 2`. The uploaded xcresult records both attempts. Investigate tests that need a retry. Local dispatcher runs and the remote wrapper keep single attempts so flaky and deterministic failures remain distinguishable.
 
-Select the branch in **Run workflow** for broader validation, and select `main` before TestFlight. The default dispatcher is unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that coverage, and both UI selector values require Debug. `--skip-performance-budgets` remains available for focused checks, but full manual CI does not use it. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
+Select the branch in **Run workflow** for broader validation, and select `main` before TestFlight. The default dispatcher is unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that coverage, and both UI selector values require Debug. `--ui-tests smoke` selects the four smoke UI tests and `--skip-performance-budgets` skips only the numeric budget; both remain available for focused checks, but full manual CI does not use them. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
 
 The `iOS TestFlight` workflow reuses a successful full manual `Toastty CI` run for the exact release SHA. It does not repeat simulator tests. Its evidence check and toolchain pin are described in [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow). Both the manual simulator jobs and the archive job verify `.github/ios-xcode-version`; missing full CI evidence or an unavailable pinned Xcode blocks release validation.
 

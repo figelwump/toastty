@@ -25,7 +25,8 @@ extension TaskCoordinator {
     /// records the user's acceptance and hands the merge to the merge
     /// coordinator, which merges at the checkout's commit, waits for
     /// GitHub's checks if they still run, and cleans up after the agent's
-    /// turn ends. Returns at once. With `expectedHead`, the merge is
+    /// turn ends for ordinary tasks. A release preparation merge leaves the
+    /// space and worktree open. Returns at once. With `expectedHead`, the merge is
     /// refused unless the checkout is still at the commit the skill checked.
     /// Only an agent working on the task, or on its parent task, may call
     /// it; see `checkMergeCaller`.
@@ -210,7 +211,7 @@ extension TaskCoordinator {
         if let taskSpaceID {
             merges?.cancelWaitingMerge(workspaceID: taskSpaceID)
         }
-        if let taskSpaceID, store.state.workspacesByID[taskSpaceID]?.doneAt != nil {
+        if record.release == nil, let taskSpaceID, store.state.workspacesByID[taskSpaceID]?.doneAt != nil {
             _ = store.send(.setWorkspaceDone(workspaceID: taskSpaceID, doneAt: nil))
         }
         ToasttyLog.info("Cancelled a task's merge", category: .tasks, metadata: ["task_id": taskID.uuidString])
@@ -393,6 +394,7 @@ extension TaskCoordinator {
         guard let record = records.record(taskSpaceWorkspaceID: workspaceID) else { return }
         switch event {
         case .mergeFailed(let reason, let cause, let head, let base):
+            if record.release != nil, record.mergeRequestedAt == nil { return }
             // The acceptance ends with the merge, as with Cancel Merge, so
             // the task no longer shows a merge under way and offers Merge
             // again. The reason stays for `task get`, the task's row, and
@@ -420,7 +422,9 @@ extension TaskCoordinator {
                     $0.mergeTarget = state?.mergeTarget ?? $0.mergeTarget
                     $0.mergeRequestedAt = $0.mergeRequestedAt ?? self.now()
                     $0.mergeFailure = nil
-                    $0.cleanup = TaskCleanup(kind: .merge)
+                    if record.release == nil {
+                        $0.cleanup = TaskCleanup(kind: .merge)
+                    }
                 }
                 try records.flush()
             } catch {
@@ -430,10 +434,12 @@ extension TaskCoordinator {
                 ])
             }
         case .cleaned(let detail):
+            guard record.release == nil else { return }
             records.update(id: record.id) {
                 $0.cleanup = TaskCleanup(kind: .merge, stepsDone: [detail], finishedAt: self.now())
             }
         case .stopped(let reason):
+            guard record.release == nil else { return }
             // While the task space is open, the coordinator's stopped
             // request shows the reason and offers the retry. After it
             // closed, only the record can.
@@ -444,6 +450,7 @@ extension TaskCoordinator {
                 $0.cleanup = cleanup
             }
         case .dropped(let canceledPullRequest):
+            guard record.release == nil else { return }
             // The user kept the task space (Don't Clean Up), or new work
             // started there after the merge. Either way the cleanup is over,
             // so a later answer from GitHub does not start it again; Archive
@@ -529,8 +536,16 @@ extension TaskCoordinator {
             }
             try saveMergeState(taskID: taskID) { $0.cleanup = nil }
             cleanUpMergedTasks([taskID])
-        case .archive, .release:
-            startTeardown(taskID: taskID, kind: cleanup.kind, options: cleanup.kind == .archive ? lastArchiveOptions(record) : TaskArchiveOptions())
+        case .archive:
+            startTeardown(taskID: taskID, kind: .archive, options: lastArchiveOptions(record))
+        case .release:
+            guard record.release?.completion != nil else {
+                throw TaskError("This release has no completion report. Archive it when its work is over.")
+            }
+            guard releaseHasOutstandingWork(record) == false else {
+                throw TaskError("This release still has work outstanding. Clean up after it finishes.")
+            }
+            startTeardown(taskID: taskID, kind: .release, options: TaskArchiveOptions())
         }
     }
 
@@ -555,7 +570,7 @@ extension TaskCoordinator {
     func mergedTaskSpaceClosed(workspaceID: UUID) {
         guard store.state.workspacesByID[workspaceID] == nil,
               let record = records.record(taskSpaceWorkspaceID: workspaceID),
-              record.mergedAt != nil, record.archivedAt == nil,
+              record.release == nil, record.mergedAt != nil, record.archivedAt == nil,
               let worktree = record.worktree, worktree.isDetached == false,
               isDirectory(worktree.path),
               cleanupTasks[record.id] == nil,
@@ -601,6 +616,9 @@ extension TaskCoordinator {
         guard record.archivedAt == nil else {
             throw TaskError("Task \(record.title) is archived.")
         }
+        if let release = record.release, release.completion != nil || record.doneAt != nil || record.shippedAt != nil {
+            throw TaskError("Release task \(record.title) has finished.")
+        }
         guard afterMerge || record.mergedAt == nil else {
             throw TaskError("Task \(record.title) has merged.")
         }
@@ -608,8 +626,10 @@ extension TaskCoordinator {
               let workspace = store.state.workspacesByID[taskSpaceID] else {
             throw TaskError("The task space of \(record.title) is closed.")
         }
-        guard let pullRequest = TaskBoard.pullRequestLink(workspace)
-            ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL) else {
+        guard let pullRequest = TaskBoard.confirmedPullRequestLink(for: record, in: workspace) else {
+            if record.release != nil {
+                throw TaskError("Link the preparation pull request from a managed session in \(record.title)'s task space before merging.")
+            }
             throw TaskError("Task \(record.title) has no pull request. Its task space needs a github-pr annotation with the pull request URL.")
         }
         let repoPath: String
@@ -663,7 +683,8 @@ extension TaskCoordinator {
             workspaceID: target.taskSpaceID,
             pullRequest: target.pullRequest,
             repoPath: target.repoPath,
-            thenCleanUp: true,
+            thenCleanUp: record.release == nil,
+            releasePreparation: record.release != nil,
             expectedHead: expectedHead
         ) else {
             throw TaskError("A merge of \(record.title) is already under way.")
@@ -693,10 +714,13 @@ extension TaskCoordinator {
     private func checkMergeCaller(_ record: TaskRecord, caller: TaskCaller) throws {
         if let callerWorkspaceID = caller.workspaceID {
             if callerWorkspaceID == record.taskSpaceWorkspaceID { return }
-            if let parentID = record.parentTaskID,
+            if record.release == nil, let parentID = record.parentTaskID,
                callerWorkspaceID == records.record(id: parentID)?.taskSpaceWorkspaceID {
                 return
             }
+        }
+        if record.release != nil {
+            throw TaskError("task merge for a release runs from a managed session in its own task space.")
         }
         throw TaskError(
             "task merge runs from an agent in the task's task space or its parent task's. "

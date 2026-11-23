@@ -78,6 +78,7 @@ struct TaskSessionInfo: Equatable {
     var isActive: Bool
     /// Working, or waiting for an approval.
     var isInTurn: Bool
+    var hasBackgroundWork = false
     /// The provider conversation Toastty confirmed for the session.
     var nativeConversationID: String?
     var title: String?
@@ -1050,9 +1051,9 @@ final class TaskCoordinator {
                 if let root = record.projectRoot, board != nil,
                    record.operation.worktree == nil, board?.repositoryRoots[root] == nil { continue }
             }
-            let releaseTagsConfigured = record.projectRoot.flatMap {
-                config.releaseWorkspace(forProjectRoot: $0, repositoryRoot: releaseRepositoryRoot(projectRoot: $0, record: record), homeDirectoryPath: homeDirectoryPath)?.releaseTags
-            } != nil
+            let releaseTagsConfigured = record.projectRoot.map {
+                config.releaseWorkspace(forProjectRoot: $0, repositoryRoot: releaseRepositoryRoot(projectRoot: $0, record: record), homeDirectoryPath: homeDirectoryPath)?.tracksShipping == true
+            } ?? false
             let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
             let hasFiles = fileManager.fileExists(atPath: directoryURL.path)
             let step = TaskAttachmentRetention.step(
@@ -1151,6 +1152,7 @@ final class TaskCoordinator {
             }
         }
         relinkTaskSpaces()
+        reconcileReleaseMerges()
         for workspace in store.state.workspacesByID.values {
             guard let taskID = workspace.taskID, records.record(id: taskID) == nil else { continue }
             let parent = workspace.parentWorkspaceID.flatMap { store.state.workspacesByID[$0] }
@@ -2010,7 +2012,7 @@ final class TaskCoordinator {
             throw TaskError("Agent \(profile.profileID) does not accept a model.")
         }
         guard RemoteSessionStartPolicy.isValidSelectionValue(model, maximumLength: RemoteSessionStartPolicy.maximumModelLength) else {
-            throw TaskError("A model must be one word with no spaces that does not start with a dash.")
+            throw TaskError("--model expects a provider model ID such as gpt-6.2-sol. Use one printable ASCII token of at most \(RemoteSessionStartPolicy.maximumModelLength) characters that does not start with a dash.")
         }
     }
 

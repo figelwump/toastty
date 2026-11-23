@@ -511,8 +511,8 @@ extension TaskCoordinator {
                 TaskBoard.isInMergeFlow(record, request: merges?.request(workspaceID: id))
                     ? nil : store.state.workspacesByID[id]?.doneAt
             } != nil
-            if record.archivedAt != nil || record.doneAt != nil || record.shippedAt != nil || record.mergedAt != nil
-                || taskSpaceDone {
+            let mergedTask = record.release == nil && record.mergedAt != nil
+            if record.archivedAt != nil || record.doneAt != nil || record.shippedAt != nil || mergedTask || taskSpaceDone {
                 saveOrDefer(taskID: record.id) { $0.waiting = nil }
                 continue
             }

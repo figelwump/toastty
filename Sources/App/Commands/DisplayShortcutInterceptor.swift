@@ -1138,6 +1138,7 @@ final class DisplayShortcutInterceptor {
               let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID(),
               let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace,
               store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: workspace.id),
+              sessionRuntimeStore.workspaceAllowsPullRequestActions(workspace),
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],

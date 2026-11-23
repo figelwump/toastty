@@ -407,7 +407,24 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         }
 
         let expandedPath = (rawValue as NSString).expandingTildeInPath
-        return URL(filePath: expandedPath).standardizedFileURL
+        return fileSystemIndependentURL(URL(filePath: expandedPath).standardizedFileURL)
+    }
+
+    /// `standardizedFileURL` drops a leading `/private` only when the shorter
+    /// path exists, so a runtime home would get one path before Toastty
+    /// creates it and another one afterwards. Its defaults suite and Remote
+    /// Access port come from that path and must not change between launches.
+    /// `/tmp`, `/var`, and `/etc` link into `/private` on macOS, so drop the
+    /// prefix for them whether or not the folder exists yet.
+    private static func fileSystemIndependentURL(_ url: URL) -> URL {
+        let path = url.path
+        for linkedRoot in ["/tmp", "/var", "/etc"] {
+            let privateRoot = "/private" + linkedRoot
+            if path == privateRoot || path.hasPrefix(privateRoot + "/") {
+                return URL(filePath: String(path.dropFirst("/private".count)))
+            }
+        }
+        return url
     }
 
     private static func normalizedWorktreeRootURL(environment: [String: String]) -> URL? {
@@ -460,11 +477,18 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     }
 
     private static func stableHashHex(for value: String) -> String {
+        String(format: "%016llx", stableHash(for: value))
+    }
+
+    /// A 64-bit FNV-1a hash of `value`, the same in every process and at
+    /// every launch, unlike `Hasher`. Values derived from a runtime home path,
+    /// such as the defaults suite name, use it to stay fixed for that home.
+    public static func stableHash(for value: String) -> UInt64 {
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in value.utf8 {
             hash ^= UInt64(byte)
             hash &*= 0x100000001b3
         }
-        return String(format: "%016llx", hash)
+        return hash
     }
 }

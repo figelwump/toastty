@@ -22,6 +22,12 @@ struct TaskAppControlTests {
                 slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
             ),
             agentLaunchService: fixture.launcher,
+            annotationStyleStore: AnnotationStyleStore(
+                runtimePaths: ToasttyRuntimePaths.resolve(
+                    homeDirectoryPath: fixture.root.path,
+                    environment: [ToasttyRuntimePaths.environmentKey: fixture.root.path]
+                )
+            ),
             taskCoordinator: coordinator,
             reloadConfigurationAction: nil
         )
@@ -52,6 +58,74 @@ struct TaskAppControlTests {
     private func setupState(_ result: [String: AutomationJSONValue]) -> String? {
         guard case .object(let setup)? = result["setup"], case .string(let state)? = setup["state"] else { return nil }
         return state
+    }
+
+    @Test func pullRequestAnnotationRequiresAnExplicitWorkspaceAndTheReleaseAgentOwnsItsLink() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let board = TaskBoardStore(
+            coordinator: fixture.coordinator, store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore,
+            pullRequests: PullRequestStateCache(runner: TaskBoardTests.FakeGitHub()),
+            refreshInterval: nil, releaseCheckInterval: nil
+        )
+        fixture.coordinator.board = board
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let request = TaskCreateRequest(text: "Task for PR", workspaceID: fixture.workspaceID, agent: "codex")
+        let task = try await fixture.coordinator.create(request)
+        await fixture.waitForSetup(task.id)
+        let release = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Release", workspaceID: fixture.workspaceID, agent: "codex"
+        ))
+        await fixture.waitForSetup(release.id)
+        try fixture.coordinator.records.save(id: release.id) { $0.release = TaskRelease(childTaskIDs: []) }
+        let releaseSpace = try #require(fixture.record(release.id)?.taskSpaceWorkspaceID)
+        let taskSpace = try #require(fixture.record(task.id)?.taskSpaceWorkspaceID)
+        let windowID = try #require(fixture.store.state.windows.first?.id)
+        _ = fixture.store.send(.selectWorkspace(windowID: windowID, workspaceID: releaseSpace))
+        #expect(fixture.store.state.selectedWorkspaceSelection()?.workspaceID == releaseSpace)
+
+        let url = "https://github.com/example/toastty/pull/124"
+        var args: [String: AutomationJSONValue] = [
+            "key": .string("GitHub-PR"), "text": .string("PR #124"), "url": .string(url)
+        ]
+        let caller = context(try #require(fixture.record(task.id)?.currentSessionID))
+        await expectInvalidPayload("workspaceID is required for a github-pr annotation") {
+            _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        }
+        args["windowID"] = .string(windowID.uuidString)
+        await expectInvalidPayload("workspaceID is required for a github-pr annotation") {
+            _ = try executor.runAction(id: "workspace.clear-annotation", args: args, context: caller)
+        }
+        args["workspaceID"] = .string(releaseSpace.uuidString)
+        let releaseCaller = context(try #require(fixture.record(release.id)?.currentSessionID))
+        for foreignCaller in [caller, context()] {
+            await expectInvalidPayload("Only a managed session in the release task space can link its preparation pull request") {
+                _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: foreignCaller)
+            }
+        }
+
+        args["workspaceID"] = .string(taskSpace.uuidString)
+        let result = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        #expect(result.result?["workspaceID"] == .string(taskSpace.uuidString))
+        #expect(fixture.record(task.id)?.pullRequestURL == url)
+        #expect(fixture.record(release.id)?.pullRequestURL == nil)
+        #expect(fixture.store.state.workspacesByID[releaseSpace]?.annotations["github-pr"] == nil)
+        #expect(fixture.store.state.selectedWorkspaceSelection()?.workspaceID == releaseSpace)
+        #expect(try executor.runAction(id: "workspace.clear-annotation", args: args, context: caller).didMutateState)
+        #expect(fixture.record(task.id)?.pullRequestURL == url)
+
+        let preparationURL = "https://github.com/example/toastty/pull/125"
+        args["workspaceID"] = .string(releaseSpace.uuidString)
+        args["url"] = .string(preparationURL)
+        #expect(try executor.runAction(id: "workspace.set-annotation", args: args, context: releaseCaller).didMutateState)
+        #expect(fixture.savedRecord(release.id)?.release?.preparationPullRequestURL == preparationURL)
+        #expect(try fixture.coordinator.mergeTarget(try #require(fixture.record(release.id))).pullRequest.url == preparationURL)
+        await expectInvalidPayload("Only a managed session in the release task space can link its preparation pull request") {
+            _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        }
+        #expect(fixture.record(release.id)?.pullRequestURL == preparationURL)
+        #expect(try executor.runAction(id: "workspace.clear-annotation", args: args, context: releaseCaller).didMutateState)
+        #expect(fixture.record(release.id)?.pullRequestURL == nil)
+        #expect(fixture.savedRecord(release.id)?.release?.preparationPullRequestURL == nil)
     }
 
     @Test func createReturnsAtOnceAndGetReportsTheStartedTask() async throws {
@@ -117,6 +191,22 @@ struct TaskAppControlTests {
         #expect(outcome.result?["agent"] == .string("codex"))
         #expect(outcome.result?["model"] == .string("gpt-6.2-sol"))
         #expect(outcome.result?["effort"] == .string("high"))
+    }
+
+    @Test func releaseCompletionRejectsInvalidReportsAndUnmanagedCallers() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        await expectInvalidPayload("Expected a JSON report with tags, each with a tag name and a list of taskIDs.") {
+            _ = try await executor.runActionAsync(
+                id: "task.release-complete", args: ["report": .string("{}")], context: context()
+            )
+        }
+        await expectInvalidPayload("Only the release task's own agent can report its completion.") {
+            _ = try await executor.runActionAsync(
+                id: "task.release-complete", args: ["report": .string(#"{"tags":[{"tag":"v1","taskIDs":[]}]}"#)], context: context()
+            )
+        }
+        #expect(fixture.coordinator.records.records.isEmpty)
     }
 
     /// The bug this guards: an agent's `workspace.set-done` finished its own

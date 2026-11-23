@@ -250,7 +250,7 @@ enum RemoteTaskBoardProjection {
               let workspace = context.state.workspacesByID[workspaceID],
               workspace.parentWorkspaceID != nil,
               workspace.taskID == record.id else { return nil }
-        if let presentation = WorkspaceMergePresentation.make(
+        if item.allowsPullRequestActions, let presentation = WorkspaceMergePresentation.make(
             workspace: workspace,
             request: context.mergeRequest(workspaceID),
             isCheckingMerge: item.merge == .checking,

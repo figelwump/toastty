@@ -240,16 +240,21 @@ final class AppControlExecutor {
             return try runSetWorkspaceAnnotation(args: args)
 
         case .workspaceClearAnnotation:
-            let workspaceID = try resolveWorkspaceID(args: args)
             guard let key = WorkspaceAnnotation.canonicalKey(try requireTextParameter("key", args: args)) else {
                 throw AutomationSocketError.invalidPayload(
                     "key must be 1-\(WorkspaceAnnotation.maximumKeyLength) ASCII letters, digits, '.', '_', or '-'"
                 )
             }
+            let workspaceID = try resolveAnnotationWorkspaceID(key: key, args: args)
+            var didClearReleasePullRequest = false
+            if key == SidebarSubspacePresentation.annotationKeyPullRequest,
+               let coordinator = taskCoordinator,
+               let record = coordinator.records.record(taskSpaceWorkspaceID: workspaceID), record.release != nil {
+                didClearReleasePullRequest = try coordinator.setReleasePreparationPullRequest(nil, for: record)
+            }
+            let didClearAnnotation = try requiredStore().send(.clearWorkspaceAnnotation(workspaceID: workspaceID, key: key))
             return .init(
-                didMutateState: try requiredStore().send(
-                    .clearWorkspaceAnnotation(workspaceID: workspaceID, key: key)
-                ),
+                didMutateState: didClearAnnotation || didClearReleasePullRequest,
                 result: nil
             )
 
@@ -842,7 +847,7 @@ final class AppControlExecutor {
 
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch,
              .taskUnwatch, .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply,
-             .taskWaiting, .taskMarkDone, .taskArchive:
+             .taskWaiting, .taskMarkDone, .taskArchive, .taskReleaseComplete:
             return try runTaskAction(action, args: args)
 
         case .webhookAdd, .webhookSet, .webhookRemove, .webhookTest:
@@ -929,6 +934,13 @@ final class AppControlExecutor {
                 try prepareTaskArchive(args: args)
             }
             return try await finishTaskArchive(coordinator, taskID: taskID, options: options, dryRun: dryRun)
+        }
+        if AppControlActionID.resolve(rawID) == .taskReleaseComplete {
+            let (coordinator, caller, tags) = try withRequestContext(context) {
+                try validateTabParameter(args, descriptor: AppControlActionID.taskReleaseComplete.descriptor)
+                return try prepareTaskReleaseCompletion(args: args)
+            }
+            return try await finishTaskReleaseCompletion(coordinator, caller: caller, tags: tags)
         }
         if AppControlActionID.resolve(rawID) == .taskMerge {
             let preparation = try withRequestContext(context) {
@@ -2627,6 +2639,13 @@ private extension AppControlExecutor {
         return .object(result)
     }
 
+    private func resolveAnnotationWorkspaceID(key: String, args: [String: AutomationJSONValue]) throws -> UUID {
+        if key == SidebarSubspacePresentation.annotationKeyPullRequest, args.stringValue("workspaceID") == nil {
+            throw AutomationSocketError.invalidPayload("workspaceID is required for a github-pr annotation")
+        }
+        return try resolveWorkspaceID(args: args)
+    }
+
     /// Validates the whole request, claims or verifies the key's global color,
     /// then mutates the workspace. A live key's claim cannot be replaced; a
     /// key becomes replaceable only after its usage reaches zero across the
@@ -2635,14 +2654,20 @@ private extension AppControlExecutor {
         args: [String: AutomationJSONValue]
     ) throws -> AppControlActionOutcome {
         let store = try requiredStore()
-        let workspaceID = try resolveWorkspaceID(args: args)
-        guard let workspace = store.state.workspacesByID[workspaceID] else {
-            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
-        }
         guard let key = WorkspaceAnnotation.canonicalKey(try requireTextParameter("key", args: args)) else {
             throw AutomationSocketError.invalidPayload(
                 "key must be 1-\(WorkspaceAnnotation.maximumKeyLength) ASCII letters, digits, '.', '_', or '-'"
             )
+        }
+        let workspaceID = try resolveAnnotationWorkspaceID(key: key, args: args)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+        let release = key == SidebarSubspacePresentation.annotationKeyPullRequest
+            ? taskCoordinator?.records.record(taskSpaceWorkspaceID: workspaceID).flatMap { $0.release == nil ? nil : $0 }
+            : nil
+        if release != nil, callerManagedSession()?.workspaceID != workspaceID {
+            throw AutomationSocketError.invalidPayload("Only a managed session in the release task space can link its preparation pull request")
         }
         guard let text = WorkspaceAnnotation.normalizedText(try requireTextParameter("text", args: args)) else {
             throw AutomationSocketError.invalidPayload(
@@ -2656,6 +2681,10 @@ private extension AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("url must be an absolute http or https URL")
             }
             url = validatedURL
+        }
+        let releasePullRequest = WorkspacePullRequestLink(annotationURL: url)
+        if release != nil, releasePullRequest == nil {
+            throw AutomationSocketError.invalidPayload("A release preparation pull request requires a GitHub pull request URL")
         }
 
         var colorToken: AnnotationColorToken?
@@ -2756,11 +2785,17 @@ private extension AppControlExecutor {
             )
         }
 
+        let didConfirmReleasePullRequest: Bool
+        if let release, let taskCoordinator {
+            didConfirmReleasePullRequest = try taskCoordinator.setReleasePreparationPullRequest(releasePullRequest, for: release)
+        } else {
+            didConfirmReleasePullRequest = false
+        }
         let didChangeAnnotation = store.send(
             .setWorkspaceAnnotation(workspaceID: workspaceID, key: key, annotation: annotation, primary: primary)
         )
         return .init(
-            didMutateState: didChangeStyle || didChangeAnnotation,
+            didMutateState: didChangeStyle || didChangeAnnotation || didConfirmReleasePullRequest,
             result: [
                 "workspaceID": .string(workspaceID.uuidString),
                 "key": .string(key),
@@ -2917,6 +2952,11 @@ private extension AppControlExecutor {
                 let documents = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
                     panelIDs: workspace.allPanelsByID.keys
                 )
+                let releaseMergeURL: String? = sessionRuntimeStore.workspaceMergeCoordinator?.request(workspaceID: workspaceID).flatMap { request in
+                    guard request.releasePreparation == true, sessionRuntimeStore.workspaceAllowsPullRequestActions(workspace),
+                          TaskBoard.pullRequestLink(workspace) == request.pullRequest else { return nil }
+                    return request.pullRequest.url
+                }
                 entries.append(.object([
                     "windowID": .string(window.id.uuidString),
                     "workspaceID": .string(workspaceID.uuidString),
@@ -2925,6 +2965,7 @@ private extension AppControlExecutor {
                     "isSelected": .bool(store.state.selectedWorkspaceID(in: window.id) == workspaceID),
                     "annotations": .array(annotationsJSON(for: workspace)),
                     "done": .bool(workspace.doneAt != nil),
+                    "releaseMergePullRequestURL": releaseMergeURL.map(AutomationJSONValue.string) ?? .null,
                     "terminalCwds": .array(terminalCwds.sorted().map(AutomationJSONValue.string)),
                     "activeSessions": .array(activeSessions),
                     "busyTerminalCount": .int(busyTerminalCount),
