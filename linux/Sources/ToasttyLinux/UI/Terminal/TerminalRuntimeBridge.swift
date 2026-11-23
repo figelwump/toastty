@@ -56,6 +56,11 @@ public protocol TerminalRuntimeBridge: AnyObject {
     @discardableResult
     func send(_ action: AppAction) -> Bool
 
+    /// A user visit that Back/Forward history records (see
+    /// `LinuxStoreBinding.sendNavigation`).
+    @discardableResult
+    func sendNavigation(_ action: AppAction) -> Bool
+
     /// Environment, cwd, initial input and font for a new surface.
     func launchSpec(panelID: UUID, terminal: TerminalPanelState, windowID: UUID) -> TerminalLaunchSpec
 
@@ -80,6 +85,9 @@ public protocol TerminalRuntimeBridge: AnyObject {
 }
 
 extension TerminalRuntimeBridge {
+    @discardableResult
+    public func sendNavigation(_ action: AppAction) -> Bool { send(action) }
+
     func selection(containing panelID: UUID) -> (windowID: UUID, workspaceID: UUID)? {
         guard let selection = state.workspaceSelection(containingPanelID: panelID) else { return nil }
         return (selection.windowID, selection.workspaceID)

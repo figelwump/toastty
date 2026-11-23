@@ -14,11 +14,14 @@ enum ToasttyDiagnosticLogger {
     static func record(
         _ event: ToasttyConnectionDiagnosticEvent,
         recordedAt: Date = .now,
+        pushDetails: ToasttyPushDiagnosticDetails? = nil,
         in state: inout ToasttyDiagnosticsState
     ) {
-        record(event, recordedAt: recordedAt, in: &state) { category, event in
-            logger(for: category).notice("\(event.rawValue, privacy: .public)")
-        }
+        state.record(event, recordedAt: recordedAt, pushDetails: pushDetails)
+        guard state.isSystemLoggingEnabled(event.category) else { return }
+        // Every string is a fixed enum value. These numbers contain no stable
+        // registration identity or private server/phone data.
+        logger(for: event.category).notice("\(event.rawValue, privacy: .public) registration=\(pushDetails?.registrationNumber ?? 0, privacy: .public) http=\(pushDetails?.relay?.statusCode ?? 0, privacy: .public) relay=\(pushDetails?.relay?.code?.rawValue ?? "unavailable", privacy: .public) rate_source=\(pushDetails?.relay?.rateLimitSource?.rawValue ?? "unavailable", privacy: .public) provider_refresh=\(pushDetails?.relay?.providerRefreshAttempted ?? false, privacy: .public) retry_seconds=\(pushDetails?.retryAfterSeconds ?? 0, privacy: .public)")
     }
 
     static func record(

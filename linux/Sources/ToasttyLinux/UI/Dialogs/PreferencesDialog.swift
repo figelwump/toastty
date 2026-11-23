@@ -357,9 +357,23 @@ public enum AboutDialog {
         adw_about_dialog_set_application_name(cast(about), "Toastty")
         adw_about_dialog_set_application_icon(cast(about), AppIcon.name)
         adw_about_dialog_set_developer_name(cast(about), "Giant Things")
-        adw_about_dialog_set_version(cast(about), ProcessInfo.processInfo.environment["TOASTTY_VERSION"] ?? "0.1.0 (Linux preview)")
+        adw_about_dialog_set_version(cast(about), version)
         adw_about_dialog_set_comments(cast(about), "A terminal workspace for running and following coding agents.")
         adw_about_dialog_set_website(cast(about), "https://github.com/figelwump/toastty")
         adw_dialog_present(cast(about), parent)
+    }
+
+    /// `TOASTTY_VERSION`, else the `version` file scripts/linux/package.sh
+    /// writes next to the installed resources (version, then build number).
+    static var version: String {
+        if let version = ProcessInfo.processInfo.environment["TOASTTY_VERSION"] { return version }
+        if let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+            let file = executable.deletingLastPathComponent()
+                .appendingPathComponent("../share/toastty/version").standardizedFileURL
+            if let lines = try? String(contentsOf: file, encoding: .utf8).split(separator: "\n"), let first = lines.first {
+                return lines.count > 1 ? "\(first) (\(lines[1]))" : String(first)
+            }
+        }
+        return "0.1.0 (Linux preview)"
     }
 }

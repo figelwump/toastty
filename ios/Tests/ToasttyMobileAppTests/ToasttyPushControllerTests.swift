@@ -9,6 +9,81 @@ import XCTest
 final class ToasttyPushControllerTests: XCTestCase {
     // Badge-only authorization must not count as visible push delivery. Quiet
     // delivery remains usable when Notification Center or Lock Screen is on.
+    func testVerificationCooldownRecordsResponseAndAppliedDelayWithoutChangingRetryBehavior() async throws {
+        let h = try await Harness.make(desired: true)
+        var records: [ToasttyDiagnosticRecord] = []
+        h.controller.installDiagnosticRecordHandler { records.append($0) }
+        await h.relay.setBeginDiagnostic(PushRelayDiagnostic(statusCode: 429,
+            code: .verificationTokenLimit, rateLimitSource: .relay))
+        await h.relay.failBeginOnce(.rateLimited(retryAfter: 120))
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        let response = try XCTUnwrap(records.first { $0.event == .pushVerificationResponse })
+        let cooldown = try XCTUnwrap(records.first { $0.event == .pushRateLimited })
+        XCTAssertEqual(response.pushDetails?.registrationNumber, 1)
+        XCTAssertEqual(response.pushDetails?.relay?.code, .verificationTokenLimit)
+        XCTAssertEqual(cooldown.pushDetails?.retryAfterSeconds, 120)
+        XCTAssertEqual(cooldown.pushDetails?.registrationNumber, response.pushDetails?.registrationNumber)
+        XCTAssertEqual(h.controller.errorMessage, "Notification setup is busy. Try again later.")
+        h.controller.retry()
+        await assertBeginCount(1, h.relay)
+        XCTAssertFalse(String(describing: records).contains(Harness.token))
+        let pending = try XCTUnwrap(h.controller.storedState?.pending)
+        XCTAssertFalse(String(describing: records).contains(pending.registrationID.uuidString))
+    }
+
+    func testEachActualCooldownResponseKeepsItsAppliedDelay() async throws {
+        let h = try await Harness.make(desired: true)
+        var records: [ToasttyDiagnosticRecord] = []
+        h.controller.installDiagnosticRecordHandler { records.append($0) }
+        h.controller.receivedToken(Harness.token)
+        await h.relay.failBeginOnce(.rateLimited(retryAfter: 120))
+        await h.controller.reconcile()
+        h.clock.advance(120)
+        await h.relay.failBeginOnce(.rateLimited(retryAfter: 60))
+        await h.controller.reconcile()
+        let cooldowns = records.filter { $0.event == .pushRateLimited }
+        XCTAssertEqual(cooldowns.compactMap { $0.pushDetails?.retryAfterSeconds }, [120, 60])
+        XCTAssertEqual(cooldowns.compactMap { $0.pushDetails?.registrationNumber }, [1, 1])
+    }
+
+    func testReplacementChurnKeepsTheActiveRegistrationNumberForLateProofs() async throws {
+        let h = try await Harness.make(desired: true)
+        let active = try await h.enable()
+        var records: [ToasttyDiagnosticRecord] = []
+        h.controller.installDiagnosticRecordHandler { records.append($0) }
+        h.controller.receivedToken(String(repeating: "cd", count: 32))
+        for _ in 0..<10 {
+            await h.controller.reconcile()
+            h.clock.advance(301)
+        }
+        _ = await h.controller.receiveForeground(Harness.proof(active))
+        let late = try XCTUnwrap(records.last { $0.event == .pushProofReceived })
+        XCTAssertEqual(late.pushDetails?.registrationNumber, 1)
+    }
+
+    func testUnknownProofsDoNotAcquireRegistrationNumbersAndRestoredPendingDoes() async throws {
+        let h = try await Harness.make(desired: true)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        let pending = try XCTUnwrap(h.controller.storedState?.pending)
+        let restored = h.makeController()
+        var records: [ToasttyDiagnosticRecord] = []
+        restored.installDiagnosticRecordHandler { records.append($0) }
+        await h.connect(restored)
+        XCTAssertEqual(records.first { $0.event == .pushRegistrationRestored }?.pushDetails?.registrationNumber, 1)
+        for _ in 0..<12 {
+            var other = pending
+            other.registrationID = UUID()
+            _ = await restored.receiveForeground(Harness.proof(other))
+        }
+        let unknown = records.filter { $0.event == .pushProofReceived || $0.event == .pushProofOtherRegistration }
+        XCTAssertTrue(unknown.allSatisfy { $0.pushDetails?.registrationNumber == nil })
+        h.clock.advance(301)
+        await restored.reconcile()
+        XCTAssertEqual(records.last { $0.event == .pushVerificationStarted }?.pushDetails?.registrationNumber, 2)
+    }
+
     func testNotificationPermissionRequiresAnEnabledDeliverySurface() {
         for status: UNAuthorizationStatus in [.authorized, .provisional, .ephemeral] {
             XCTAssertEqual(ToasttySystemPushNotificationClient.permission(
@@ -39,6 +114,66 @@ final class ToasttyPushControllerTests: XCTestCase {
         }
     }
 
+    func testFreshInstallationDefaultsToAlertsWithoutRequestingPermissionAutomatically() async throws {
+        let h = try await Harness.make(freshInstallation: true)
+        await h.controller.reconcile()
+        XCTAssertTrue(h.controller.desired)
+        XCTAssertTrue(h.controller.canIntroduce)
+        XCTAssertEqual(h.controller.presentation, .off)
+        XCTAssertEqual(h.notifications.permissionRequests, 0)
+        XCTAssertEqual(h.notifications.registrationRequests, 0)
+
+        h.notifications.currentPermission = .allowed
+        await h.controller.reconcile()
+        XCTAssertEqual(h.notifications.registrationRequests, 1)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        XCTAssertNotNil(h.controller.storedState?.pending)
+        await assertBeginCount(1, h.relay)
+        XCTAssertTrue(try XCTUnwrap(h.store.load()).desired)
+
+        // Permission may already be granted when the introduction appears.
+        await h.controller.deferIntroduction()
+        XCTAssertFalse(h.controller.desired)
+        XCTAssertNil(h.controller.storedState?.pending)
+        XCTAssertEqual(h.controller.storedState?.cleanup.count, 1)
+        await h.controller.reconcile()
+        XCTAssertTrue(try XCTUnwrap(h.store.load()).cleanup.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(h.store.load()).needsMacClear)
+    }
+
+    func testSavedOptOutSurvivesRestoreWithNotificationPermission() async throws {
+        let h = try await Harness.make(freshInstallation: true)
+        await h.controller.setDesired(false)
+        h.notifications.currentPermission = .allowed
+        let restored = h.makeController()
+        await restored.restore()
+        restored.updateConnection(gatewayURL: h.credential.gatewayURL, pairingID: h.credential.device.id,
+            connected: true, supported: true)
+        await restored.reconcile()
+        XCTAssertFalse(restored.desired)
+        XCTAssertFalse(restored.canIntroduce)
+        XCTAssertEqual(restored.storedState?.installationID, h.controller.storedState?.installationID)
+        XCTAssertEqual(h.notifications.registrationRequests, 0)
+        await assertBeginCount(0, h.relay)
+    }
+
+    func testNotificationPermissionRefreshesWithoutAConnectedMac() async throws {
+        let h = try await Harness.make(freshInstallation: true)
+        h.controller.updateConnection(gatewayURL: h.credential.gatewayURL, pairingID: h.credential.device.id,
+            connected: false, supported: true)
+        h.notifications.currentPermission = .allowed
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.permission, .allowed)
+        XCTAssertTrue(h.controller.desired)
+        XCTAssertEqual(h.notifications.registrationRequests, 0)
+
+        h.notifications.currentPermission = .denied
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.presentation, .permissionDenied)
+        XCTAssertEqual(h.notifications.permissionRequests, 0)
+    }
+
     func testAllowPersistsIntentAndStartsProofWithoutBlockingHomeWithASuccessScreen() async throws {
         let h = try await Harness.make()
         await h.controller.reconcile()
@@ -65,9 +200,9 @@ final class ToasttyPushControllerTests: XCTestCase {
     }
 
     func testDeclineAndNotNowAreRememberedWithoutAutomaticPermissionRequests() async throws {
-        let h = try await Harness.make()
+        let h = try await Harness.make(freshInstallation: true)
         await h.controller.reconcile()
-        h.controller.deferIntroduction()
+        await h.controller.deferIntroduction()
         await h.controller.reconcile()
         XCTAssertFalse(h.controller.canIntroduce)
         XCTAssertFalse(h.controller.desired)
@@ -111,6 +246,8 @@ final class ToasttyPushControllerTests: XCTestCase {
     func testProofCompletesBeforeBeginHTTPResponseAndCannotBeRevertedByIt() async throws {
         let h = try await Harness.make(desired: true)
         await h.relay.pauseBegin()
+        var records: [ToasttyDiagnosticRecord] = []
+        h.controller.installDiagnosticRecordHandler { records.append($0) }
         h.controller.receivedToken(Harness.token)
         let beginning = Task { await h.controller.reconcile() }
         for _ in 0..<100 {
@@ -125,6 +262,15 @@ final class ToasttyPushControllerTests: XCTestCase {
         await beginning.value
         XCTAssertEqual(h.controller.presentation, .enabled)
         XCTAssertNil(h.controller.storedState?.pending)
+        let events = records.map(\.event)
+        let started = try XCTUnwrap(events.firstIndex(of: .pushVerificationStarted))
+        let proof = try XCTUnwrap(events.firstIndex(of: .pushProofReceived))
+        let completed = try XCTUnwrap(events.firstIndex(of: .pushProofCompleted))
+        let response = try XCTUnwrap(events.firstIndex(of: .pushVerificationResponse))
+        XCTAssertLessThan(started, proof)
+        XCTAssertLessThan(proof, completed)
+        XCTAssertLessThan(completed, response)
+        XCTAssertEqual(Set(records.compactMap { $0.pushDetails?.registrationNumber }), [1])
     }
 
     func testBackgroundProofIsPersistedAndCompletesOnNextForeground() async throws {
@@ -251,15 +397,91 @@ final class ToasttyPushControllerTests: XCTestCase {
 
     func testNewInstallationQueuesLeftoverKeychainRegistrationBeforeResettingIntent() async throws {
         let h = try await Harness.make(desired: true)
+        await h.relay.setBeginDiagnostic(Harness.accepted)
         h.controller.receivedToken(Harness.token)
         await h.controller.reconcile()
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.storedState?.missedProofs, 1)
         h.marker.installationID = nil
         let reinstalled = h.makeController()
         await reinstalled.restore()
+        XCTAssertNil(reinstalled.storedState?.missedProofs)
         XCTAssertFalse(reinstalled.desired)
         XCTAssertNil(reinstalled.storedState?.pending)
-        XCTAssertEqual(reinstalled.storedState?.cleanup.count, 1)
+        XCTAssertEqual(reinstalled.storedState?.cleanup.count, 2)
         XCTAssertFalse(reinstalled.storedState?.introHandled ?? true)
+    }
+
+    func testRepeatedUnreceivedProofsSuggestReinstallingUntilAProofArrives() async throws {
+        let h = try await Harness.make(desired: true)
+        await h.relay.setBeginDiagnostic(Harness.accepted)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        for _ in 0..<ToasttyPushController.missedProofsBeforeHint {
+            XCTAssertNil(h.controller.deliveryHint)
+            h.clock.advance(301)
+            await h.controller.reconcile()
+        }
+        XCTAssertNotNil(h.controller.deliveryHint)
+        await assertBeginCount(3, h.relay)
+
+        // The count survives an app restart. A delivered proof clears it even
+        // when the relay completion fails.
+        let restarted = h.makeController()
+        await h.connect(restarted)
+        await restarted.reconcile()
+        XCTAssertNotNil(restarted.deliveryHint)
+        await h.relay.failCompletionOnce()
+        let pending = try XCTUnwrap(restarted.storedState?.pending)
+        _ = await restarted.receiveForeground(Harness.proof(pending))
+        XCTAssertEqual(restarted.storedState?.pending?.stage, .pending)
+        XCTAssertNil(restarted.storedState?.missedProofs)
+        XCTAssertNil(restarted.deliveryHint)
+        await restarted.reconcile()
+        await restarted.reconcile()
+        XCTAssertEqual(restarted.presentation, .enabled)
+    }
+
+    func testOnlyAcceptedProofsWithTimeToArriveCountTowardTheReinstallHint() async throws {
+        let h = try await Harness.make(desired: true)
+        // A pending retry reports an unknown outcome, not Apple's acceptance.
+        await h.relay.setBeginDiagnostic(PushRelayDiagnostic(statusCode: 202, code: .verificationResultUnknown))
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertNil(h.controller.storedState?.missedProofs)
+
+        // Acceptance 20 seconds before the local deadline is too recent to count.
+        await h.relay.setBeginDiagnostic(Harness.accepted)
+        await h.relay.failBeginOnce(.network)
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        h.clock.advance(280)
+        await h.controller.reconcile()
+        h.clock.advance(21)
+        await h.controller.reconcile()
+        XCTAssertNil(h.controller.storedState?.missedProofs)
+
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.storedState?.missedProofs, 1)
+        h.controller.receivedToken(String(repeating: "cd", count: 32))
+        await h.controller.reconcile()
+        XCTAssertNil(h.controller.storedState?.missedProofs)
+    }
+
+    func testTurningAlertsOffForgetsMissedProofs() async throws {
+        let h = try await Harness.make(desired: true)
+        await h.relay.setBeginDiagnostic(Harness.accepted)
+        h.controller.receivedToken(Harness.token)
+        await h.controller.reconcile()
+        h.clock.advance(301)
+        await h.controller.reconcile()
+        XCTAssertEqual(h.controller.storedState?.missedProofs, 1)
+        await h.controller.setDesired(false)
+        XCTAssertNil(h.controller.storedState?.missedProofs)
     }
 
     func testLockedStateResumesAfterUnlockWithoutReplacingTheSavedAttempt() async throws {
@@ -726,16 +948,18 @@ final class ToasttyPushControllerTests: XCTestCase {
         let native: PushNativeSpy
         let clock: PushClock
         static let token = String(repeating: "ab", count: 32)
+        static let accepted = PushRelayDiagnostic(statusCode: 201, code: .appleAccepted)
         static let config = ToasttyPushConfiguration(relayURL: URL(string: "https://push.example.com")!,
             relayID: "toastty-push-dev-v1", apnsEnvironment: .development)
 
-        static func make(desired: Bool = false) async throws -> Harness {
+        static func make(desired: Bool = false, freshInstallation: Bool = false) async throws -> Harness {
             let credential = try credential()
             let vault = TestAppCredentialVault(initialCredential: credential)
             _ = await vault.restore()
-            let state = MobilePushState()
-            let marker = PushInstallationSpy(state.installationID)
-            let store = PushMemoryStore(state)
+            var state = MobilePushState()
+            state.desired = false
+            let marker = PushInstallationSpy(freshInstallation ? nil : state.installationID)
+            let store = PushMemoryStore(freshInstallation ? nil : state)
             let notifications = PushNotificationsSpy()
             let relay = PushRelaySpy()
             let native = PushNativeSpy()
@@ -832,10 +1056,12 @@ private actor PushRelaySpy: PushRelayClientProtocol {
     private var revokeFailure = false
     private var paused = false
     private var beginFailure: PushRelayFailure?
+    private var beginDiagnostic: PushRelayDiagnostic?
     private var statusFailure: PushRelayFailure?
     private var statusPaused = false
     private var statusContinuation: CheckedContinuation<Void, Never>?
     private var beginContinuation: CheckedContinuation<Void, Never>?
+    func setBeginDiagnostic(_ diagnostic: PushRelayDiagnostic) { beginDiagnostic = diagnostic }
     func pauseBegin() { paused = true }
     func finishBegin() { paused = false; beginContinuation?.resume(); beginContinuation = nil }
     func failCompletionOnce() { completionFailures = 1 }
@@ -844,6 +1070,11 @@ private actor PushRelaySpy: PushRelayClientProtocol {
     func pauseStatus() { statusPaused = true }
     func finishStatus() { statusPaused = false; statusContinuation?.resume(); statusContinuation = nil }
     func setRevokeFailure(_ value: Bool) { revokeFailure = value }
+    func begin(_ registration: MobilePushRegistration,
+               onDiagnostic: @escaping @Sendable (PushRelayDiagnostic) -> Void) async throws -> PushRelayBeginResponse {
+        if let beginDiagnostic { onDiagnostic(beginDiagnostic) }
+        return try await begin(registration)
+    }
     func begin(_ registration: MobilePushRegistration) async throws -> PushRelayBeginResponse {
         beginCount += 1
         if paused { await withCheckedContinuation { beginContinuation = $0 } }

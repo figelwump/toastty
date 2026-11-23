@@ -153,12 +153,28 @@ struct CommandRouterTests {
             == .ui(.renameWorkspace(workspaceID: fixture.workspaceID)))
         #expect(CommandRouter.route("command-palette.toggle", windowID: fixture.windowID, state: state) == .ui(.commandPalette))
         #expect(CommandRouter.route("app.remote-access.open", windowID: fixture.windowID, state: state) == .app("app.remote-access.open"))
+        // The shared command presents another window's unread target.
+        #expect(CommandRouter.route("panel.focus-next-unread-or-active", windowID: fixture.windowID, state: state)
+            == .app("panel.focus-next-unread-or-active"))
         if case .ui(.panel(let id, let panelID)) = CommandRouter.route("find.show", windowID: fixture.windowID, state: state) {
             #expect(id == "find.show")
             #expect(panelID == fixture.tab.resolvedFocusedPanelID)
         } else {
             Issue.record("find.show should route to the focused panel")
         }
+    }
+
+    @Test func closePanelTargetsTheFocusedRightPanelTab() throws {
+        let fixture = Fixture()
+        let terminalID = try #require(fixture.tab.resolvedFocusedPanelID)
+        fixture.perform("browser.create")
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let browserID = try #require(workspace.rightAuxPanel.focusedPanelID)
+        #expect(CommandRouter.route("panel.close", windowID: fixture.windowID, state: fixture.store.state)
+            == .actions([.closePanel(panelID: browserID)]))
+        fixture.perform("panel.close")
+        #expect(fixture.tab.panels[terminalID] != nil, "the terminal behind the browser stays open")
+        #expect(fixture.store.state.workspacesByID[fixture.workspaceID]?.rightAuxPanel.panelState(for: browserID) == nil)
     }
 
     @Test func paneFocusByPositionAndDirection() {

@@ -3,6 +3,8 @@ import Foundation
 enum ToasttyMobileDeepLinkDestination: Equatable, Sendable {
     case conversation(UUID)
     case workspace(UUID)
+    /// A draft the share extension saved for the new-session sheet.
+    case newSession(UUID)
 }
 
 /// Pure, strict parser for the routes owned by the current app build.
@@ -49,6 +51,8 @@ struct DeepLinkParser: Equatable, Sendable {
             return .conversation(identifier)
         case "workspace":
             return .workspace(identifier)
+        case "new-session":
+            return .newSession(identifier)
         default:
             return nil
         }

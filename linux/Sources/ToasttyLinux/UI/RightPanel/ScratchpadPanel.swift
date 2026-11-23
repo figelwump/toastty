@@ -54,11 +54,22 @@ public final class ScratchpadPanelController: WebPanelController {
         webkit_web_view_load_uri(webView, Self.entryURI)
     }
 
+    /// A revision number from the bridge, or nil for anything that is not a
+    /// whole number in `Int` range (`1e100`, `1.5`, `NaN`, a string).
+    nonisolated static func revision(_ value: Any?) -> Int? {
+        if let number = value as? Int { return number }
+        return (value as? Double).flatMap { Int(exactly: $0) }
+    }
+
     /// The bundle page itself and its `about:srcdoc` content frame only.
     nonisolated static func allowsNavigation(to uri: String) -> Bool {
         uri.hasPrefix("about:") || uri == entryURI || uri == "toastty://scratchpad/" || uri.hasPrefix(entryURI + "#")
     }
 
+    /// `body` is untrusted: the generated document's `allow-scripts` iframe
+    /// can post to this handler too, and WebKitGTK does not report a
+    /// message's source frame (macOS drops non-main-frame messages). Every
+    /// case only records state, and numbers are converted exactly.
     private func handle(_ body: [String: Any]) {
         switch body["type"] as? String {
         case "bridgeReady":
@@ -67,7 +78,7 @@ public final class ScratchpadPanelController: WebPanelController {
             pendingBootstrapScript = currentBootstrap?.deliveryJavaScript()
             pushBootstrap()
         case "renderReady":
-            renderedRevision = (body["revision"] as? Int) ?? (body["revision"] as? Double).map(Int.init)
+            renderedRevision = Self.revision(body["revision"])
         case "consoleMessage":
             record("console.\(body["level"] as? String ?? "info"): \(body["message"] as? String ?? "")")
         case "javascriptError":

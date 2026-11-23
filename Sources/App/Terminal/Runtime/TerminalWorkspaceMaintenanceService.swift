@@ -201,10 +201,30 @@ final class TerminalWorkspaceMaintenanceService {
             )
         }
 
-        guard promptState == .idleAtPrompt else {
+        applyPromptState(promptState, panelID: panelID, at: now)
+    }
+
+    /// Applies a panel's prompt state to its tracked session. A shell at its
+    /// prompt normally means that the session's agent has ended.
+    func applyPromptState(_ promptState: TerminalPromptState, panelID: UUID, at now: Date) {
+        switch promptState {
+        case .busy, .exited:
+            sessionLifecycleTracker?.noteShellLeftPrompt(panelID: panelID, at: now)
             return
+        case .unavailable:
+            return
+        case .idleAtPrompt:
+            break
         }
-        guard restoredManagedLaunchPendingProvider(panelID) == false else {
+        // Toastty starts a session before it types the launch command, and the
+        // shell can need seconds to start that command. Until then the prompt
+        // is the one from before the agent, not the one after it.
+        let awaitsLaunchCommandStart = sessionLifecycleTracker?.isAwaitingManagedLaunchCommandStart(
+            panelID: panelID,
+            at: now
+        ) == true
+        guard awaitsLaunchCommandStart == false,
+              restoredManagedLaunchPendingProvider(panelID) == false else {
             return
         }
 

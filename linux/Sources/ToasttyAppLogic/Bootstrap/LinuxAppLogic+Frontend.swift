@@ -44,6 +44,19 @@ extension LinuxAppLogic {
         store.send(action, source: AppActionSource(source))
     }
 
+    /// A user visit (sidebar, tab or pane click, a navigation command): like
+    /// `send`, and Back/Forward history records it when the focused location
+    /// changes, as macOS does through `AppStore.sendNavigation`. Several
+    /// actions form one visit.
+    @discardableResult
+    public func sendNavigation(_ actions: [AppAction], source: String = "linux_ui") -> Bool {
+        let source = AppActionSource(source)
+        if actions.count == 1 { return store.sendNavigation(actions[0], source: source) }
+        return store.performNavigation(recordIf: { $0 }) {
+            actions.reduce(false) { changed, action in store.send(action, source: source) || changed }
+        }
+    }
+
     /// Emits the current state, then every new state, on the main thread.
     public var statePublisher: AnyPublisher<AppState, Never> {
         store.$state.eraseToAnyPublisher()

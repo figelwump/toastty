@@ -6,11 +6,14 @@ import PackageDescription
 let generated = ".generated"
 
 // terminal-integration: SwiftPM drops pkg-config's -Wl,-rpath, so binaries
-// find libghostty through an absolute rpath to the dev build and an
+// find libghostty through an absolute rpath to the dev build (the same
+// TOASTTY_GHOSTTY_PREFIX linux/env.sh hands pkg-config) and an
 // $ORIGIN-relative one for an installed layout (<prefix>/bin + <prefix>/lib).
+let ghosttyPrefix = Context.environment["TOASTTY_GHOSTTY_PREFIX"].flatMap { $0.isEmpty ? nil : $0 }
+    ?? "\(Context.packageDirectory)/.deps/ghostty"
 let ghosttyLinkerSettings: [LinkerSetting] = [
     .unsafeFlags([
-        "-Xlinker", "-rpath", "-Xlinker", "\(Context.packageDirectory)/.deps/ghostty/lib",
+        "-Xlinker", "-rpath", "-Xlinker", "\(ghosttyPrefix)/lib",
         "-Xlinker", "-rpath", "-Xlinker", "$ORIGIN/../lib",
     ]),
 ]

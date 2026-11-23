@@ -408,6 +408,45 @@ final class ConnectionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testConversationCloseIsSentOnlyToAHostThatAdvertisesItFromADeviceThatMaySend() async throws {
+        let run = runID(4)
+        let request = RemoteConversationCloseRequest(conversationID: conversationID, stopIfBusy: true)
+        for (capabilities, scopes, expectsRequest) in [
+            ([RemoteGatewayCapability](), [RemoteDeviceScope.read, .send], false),
+            ([.conversationClose], [.read], false),
+            ([.conversationClose], [.read, .send], true),
+        ] {
+            let operations = OperationLog()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: capabilities))],
+                sessions: [.success(snapshot(runID: run, title: "Seed"))],
+                events: []
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                ),
+                deviceScopes: scopes
+            )
+            let early = try await coordinator.closeConversation(request)
+            XCTAssertNil(early)
+
+            await coordinator.connectIfNeeded()
+            await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let response = try await coordinator.closeConversation(request)
+
+            XCTAssertEqual(response?.result, expectsRequest ? .closed : nil)
+            let sent = await gateway.recordedConversationCloseRequests()
+            XCTAssertEqual(sent, expectsRequest ? [request] : [])
+            await coordinator.suspend()
+        }
+    }
+
     func testQueueUpdateAndInterruptAreSentOnlyToAHostThatAdvertisesInputControl() async throws {
         let run = runID(4)
         let turnEpoch = RemoteInputEpoch(bindingID: UUID(), counter: 3)
@@ -2677,6 +2716,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var readAcknowledgements: [RemoteConversationReadAcknowledgementRequest] = []
     private var workspaceDoneRequests: [RemoteWorkspaceDoneRequest] = []
     private var conversationFlagRequests: [RemoteConversationFlagRequest] = []
+    private var conversationCloseRequests: [RemoteConversationCloseRequest] = []
     private var queueUpdateRequests: [RemoteConversationQueueUpdateRequest] = []
     private var interruptRequests: [RemoteConversationInterruptRequest] = []
     private var localDraftReleaseRequests: [RemoteConversationLocalDraftReleaseRequest] = []
@@ -2771,6 +2811,13 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return RemoteConversationFlagResponse(result: .updated)
     }
 
+    func closeConversation(
+        _ request: RemoteConversationCloseRequest
+    ) async throws -> RemoteConversationCloseResponse {
+        conversationCloseRequests.append(request)
+        return RemoteConversationCloseResponse(result: .closed)
+    }
+
     func updateQueue(
         _ request: RemoteConversationQueueUpdateRequest
     ) async throws -> RemoteConversationQueueUpdateResponse {
@@ -2806,6 +2853,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     }
 
     func recordedConversationFlagRequests() -> [RemoteConversationFlagRequest] { conversationFlagRequests }
+    func recordedConversationCloseRequests() -> [RemoteConversationCloseRequest] { conversationCloseRequests }
     func recordedQueueUpdateRequests() -> [RemoteConversationQueueUpdateRequest] { queueUpdateRequests }
     func recordedInterruptRequests() -> [RemoteConversationInterruptRequest] { interruptRequests }
     func recordedLocalDraftReleaseRequests() -> [RemoteConversationLocalDraftReleaseRequest] {

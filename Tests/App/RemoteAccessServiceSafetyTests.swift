@@ -1380,6 +1380,69 @@ struct RemoteAccessServiceSafetyTests {
             .init(conversationID: fixture.conversationID, flagged: false), device: device) == .conversationNotFound)
     }
 
+    @MainActor
+    @Test func remoteCloseAsksForABusyAgentAndForTheWorkspaceThenPublishesTheClose() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, closesSessions: true)
+        defer { fixture.removeRuntimeFiles() }
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        func close(stopIfBusy: Bool = false) -> RemoteConversationCloseResult {
+            fixture.service.closeConversation(
+                .init(conversationID: fixture.conversationID, stopIfBusy: stopIfBusy), device: device
+            )
+        }
+        let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
+
+        // The agent's tab is the workspace's only tab, so even permission to
+        // stop the agent does not close the workspace.
+        #expect(close(stopIfBusy: true) == .workspaceConfirmationRequired)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) != nil)
+        #expect(fixture.store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+
+        #expect(close() == .confirmationRequired)
+        fixture.service.setSessionWriteEnabled(false, for: fixture.conversationID)
+        #expect(close(stopIfBusy: true) == .sessionWritesDisabled)
+        fixture.service.setSessionWriteEnabled(true, for: fixture.conversationID)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) != nil)
+
+        fixture.server.removeAllBroadcasts()
+        #expect(close(stopIfBusy: true) == .closed)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) == nil)
+        #expect(fixture.service.facadeSessionList(at: fixture.confirmedAt).conversations.contains {
+            $0.conversationID == fixture.conversationID
+        } == false)
+        #expect(fixture.server.sessionListSnapshots.last?.conversations.contains {
+            $0.conversationID == fixture.conversationID
+        } == false)
+        #expect(close() == .conversationNotFound)
+    }
+
+    @MainActor
+    @Test func remoteCloseWithWorkspacePermissionClosesTheOnlyTabsWorkspace() throws {
+        let fixture = try RemoteBootstrapFixture(agent: .claude, statusKind: .working, closesSessions: true)
+        defer { fixture.removeRuntimeFiles() }
+        let device = RemoteDeviceRecord(name: "Phone", scopes: [.read, .send], createdAt: fixture.confirmedAt)
+        let workspaceID = try #require(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID)?.workspaceID)
+        func close(stopIfBusy: Bool, confirming confirmedWorkspaceID: UUID? = nil) -> RemoteConversationCloseResult {
+            fixture.service.closeConversation(
+                .init(
+                    conversationID: fixture.conversationID, stopIfBusy: stopIfBusy,
+                    confirmedWorkspaceCloseID: confirmedWorkspaceID ?? workspaceID
+                ),
+                device: device
+            )
+        }
+
+        // Consent names a workspace, and permission to close it does not
+        // stop a working agent.
+        #expect(close(stopIfBusy: true, confirming: UUID()) == .workspaceConfirmationRequired)
+        #expect(close(stopIfBusy: false) == .confirmationRequired)
+        #expect(fixture.store.state.workspacesByID[workspaceID] != nil)
+
+        #expect(close(stopIfBusy: true) == .closed)
+        #expect(fixture.store.state.workspacesByID[workspaceID] == nil)
+        #expect(fixture.store.state.workspaceSelection(containingPanelID: fixture.panelID) == nil)
+    }
+
     @Test func conversationSummaryCarriesTurnTimingAndOmitsAbsentMarks() throws {
         let startedAt = Date(timeIntervalSince1970: 1_788_696_000)
         let full = RemoteConversationSummary(
@@ -1860,6 +1923,40 @@ struct RemoteAccessServiceSafetyTests {
             for: mismatchingConversationID
         )
         #expect(correlator.conversationIDs.isEmpty)
+    }
+
+    /// A send past its deadline may still be recorded later, but its echo
+    /// must never cost a newer live send its confirmation.
+    @Test(arguments: [
+        // Late echoes confirm the expired sends; the live send follows.
+        (["first held", "second held", "next text"], ["first-held", "second-held", "next-request"]),
+        (["second held", "first held", "next text"], ["second-held", "first-held", "next-request"]),
+        // The live send's echo can come first without consuming them.
+        (["next text", "first held"], ["next-request", "first-held"]),
+        // A message that matches nothing consumes no live send and ends the
+        // expired sends' chance to confirm.
+        (["first held, altered", "next text", "first held"], [nil, "next-request", nil]),
+    ])
+    func expiredSendsNeverCostALiveSendItsConfirmation(
+        messages: [String],
+        expectedRequestIDs: [String?]
+    ) throws {
+        let conversationID = RemoteConversationID()
+        var correlator = RemotePendingSendCorrelator()
+        for (requestID, text) in [("first-held", "first held"), ("second-held", "second held"), ("next-request", "next text")] {
+            correlator.record(Self.request(conversationID: conversationID, clientRequestID: requestID, text: text))
+        }
+        correlator.expire(clientRequestID: "first-held", for: conversationID)
+        correlator.expire(clientRequestID: "second-held", for: conversationID)
+
+        let requestIDs = try messages.enumerated().map { index, text in
+            let stamped = correlator.stamp(
+                [Self.userObservation(text: text, fingerprint: "message-\(index)")],
+                for: conversationID
+            )
+            return try #require(Self.userPayload(from: stamped[0])).clientRequestID
+        }
+        #expect(requestIDs == expectedRequestIDs)
     }
 
     @MainActor
@@ -2432,7 +2529,7 @@ struct RemoteAccessServiceSafetyTests {
         let deliveredFile = fixture.attachmentRoot
             .appendingPathComponent(try #require(directories.first).lastPathComponent)
             .appendingPathComponent(file.lastPathComponent)
-        #expect(delivered.first == "Read this\n\nRead the following files attached to this message on this Mac:\n" + TerminalDropPayloadBuilder.shellEscapedPath(deliveredFile.path))
+        #expect(delivered.first == "Read this\n\nRead the following files attached to this message on this Mac:\n`" + deliveredFile.path + "`")
         #expect(try await send() == .duplicate)
         #expect(delivered.count == 1)
         #expect(try FileManager.default.contentsOfDirectory(at: fixture.attachmentRoot, includingPropertiesForKeys: nil).count == 1)
@@ -2586,6 +2683,125 @@ struct RemoteAccessServiceSafetyTests {
             at: "2026-08-07T10:00:06.000Z"
         ))
         try await Self.waitForReceipt(next.clientRequestID, mode: nil, in: fixture)
+    }
+
+    /// Claude Code held a pasted image path in its prompt until the Mac user
+    /// pressed Return, 90 s after delivery. The late echo must still confirm
+    /// the send for the phone, and that Return must not leave the next prompt
+    /// held as a local draft.
+    @MainActor
+    @Test func claudeEchoAfterTheDeadlineConfirmsTheUnconfirmedSend() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            sendConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        guard case .openPrompt(let epoch) = fixture.summary.inputAvailability else {
+            Issue.record("Expected confirmed prompt")
+            return
+        }
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        let panelID = fixture.panelID
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting {
+            _, _, deliveredPanelID, _ in deliveredPanelID == panelID
+        }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-late-echo", at: fixture.confirmedAt
+        ))
+        func observe(_ payload: ProviderObservationPayload, fingerprint: String, offset: TimeInterval) {
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "claude-late-echo",
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                                   fingerprint: fingerprint, payload: payload)
+            ))
+        }
+
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "held-in-claude-prompt",
+            expectedInputEpoch: epoch, text: "Here's another permission case"
+        )
+        #expect(fixture.service.performRemoteSend(request, device: device).isAccepted)
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
+            Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture)
+        }
+        #expect(Self.hasUnconfirmedReceipt(request.clientRequestID, in: fixture))
+
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        observe(.transcript(.userMessage(.init(text: request.text))), fingerprint: "late-echo", offset: 1)
+        try await Self.waitForReceipt(request.clientRequestID, mode: nil, in: fixture, afterUnconfirmedReceipt: true)
+
+        observe(.turnEnded(turnID: "late-turn", reason: .completed), fingerprint: "late-turn-end", offset: 2)
+        let reopened = try await Self.waitForSummary(fixture) { $0.inputAvailability.allowsRemoteSend }
+        guard case .openPrompt = reopened.inputAvailability else {
+            Issue.record("Expected an open prompt, not \(reopened.inputAvailability)")
+            return
+        }
+    }
+
+    /// Claude reads a Steer from its own input queue, possibly long after
+    /// the deadline. Its late echo confirms the send but says nothing about
+    /// the Mac composer, so a draft typed there stays protected.
+    @MainActor
+    @Test func lateClaudeSteerEchoKeepsTheMacDraftProtected() async throws {
+        let fixture = try RemoteBootstrapFixture(
+            agent: .claude,
+            claudePromptStabilizationDelay: .milliseconds(40),
+            steerConfirmationTimeout: .milliseconds(300),
+            pairNativeDevice: true
+        )
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
+        let device = try #require(fixture.service.devices.first { $0.authKind == .native })
+        #expect(fixture.sessionRuntimeStore.resetProviderConversationFeed(
+            managedSessionID: fixture.sessionID, provider: .claude,
+            nativeSessionID: fixture.resumeRecord.nativeSessionID,
+            snapshotID: "claude-late-steer", at: fixture.confirmedAt
+        ))
+        func observe(_ payload: ProviderObservationPayload, fingerprint: String, offset: TimeInterval) {
+            #expect(fixture.sessionRuntimeStore.ingestProviderConversationObservation(
+                managedSessionID: fixture.sessionID, provider: .claude,
+                nativeSessionID: fixture.resumeRecord.nativeSessionID,
+                snapshotID: "claude-late-steer",
+                observation: .init(timestamp: fixture.confirmedAt.addingTimeInterval(offset),
+                                   fingerprint: fingerprint, payload: payload)
+            ))
+        }
+        observe(.transcript(.userMessage(.init(text: "Original task"))), fingerprint: "first-user", offset: 1)
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.turnEpoch != nil }
+        let turn = try #require(working.inputControl?.turnEpoch)
+        let steer = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "late-steer",
+            expectedInputEpoch: turn, text: "Correction", deliveryMode: .steer
+        )
+        #expect(fixture.service.performRemoteSend(steer, device: device) == .accepted(epoch: turn))
+        await SessionRuntimeStoreTestSupport.waitUntil(timeoutNanoseconds: 3_000_000_000) {
+            Self.hasUnconfirmedReceipt(steer.clientRequestID, in: fixture)
+        }
+        #expect(Self.hasUnconfirmedReceipt(steer.clientRequestID, in: fixture))
+
+        fixture.service.noteLocalInput(panelID: fixture.panelID)
+        observe(.transcript(.userMessage(.init(text: steer.text))), fingerprint: "late-steer", offset: 2)
+        try await Self.waitForReceipt(steer.clientRequestID, mode: .steer, in: fixture, afterUnconfirmedReceipt: true)
+
+        observe(.turnEnded(turnID: "turn-1", reason: .completed), fingerprint: "turn-end", offset: 3)
+        let settled = try await Self.waitForSummary(fixture) {
+            if case .localDraft = $0.inputAvailability { return true }
+            return false
+        }
+        guard case .localDraft = settled.inputAvailability else {
+            Issue.record("Expected the Mac draft to hold the prompt, not \(settled.inputAvailability)")
+            return
+        }
     }
 
     enum CodexStartedTurnOutcome: CaseIterable, Sendable {
@@ -2944,13 +3160,15 @@ private final class RemoteBootstrapFixture {
         codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
+        steerConfirmationTimeout: Duration = .seconds(180),
         codexTurnConfirmationTimeout: Duration = .seconds(300),
         localDraftEpochBroadcastInterval: Duration = .milliseconds(500),
         pairNativeDevice: Bool = false,
         pushConfiguration: RemotePushConfiguration? = nil,
         pushRelay: any RemotePushRelaying = RemotePushRelayClient(),
         pushMacPresence: @escaping @MainActor () -> RemotePushMacPresence = { .init(screenIsLocked: false, idleSeconds: 120) },
-        pendingPushCleanupCount: Int = 0
+        pendingPushCleanupCount: Int = 0,
+        closesSessions: Bool = false
     ) throws {
         store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
@@ -3009,16 +3227,31 @@ private final class RemoteBootstrapFixture {
                 }
             }
         } else { nativeCredential = nil }
+        let sessionCloseController = closesSessions ? SessionCloseController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: terminalRuntimeRegistry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator(),
+                shouldConfirmClose: false
+            ),
+            terminalCloseAssessment: { _ in TerminalCloseConfirmationAssessment(requiresConfirmation: true) },
+            localDocumentCloseConfirmationState: { _ in nil },
+            shouldBypassConfirmation: false
+        ) : nil
         service = RemoteAccessService(
             store: store,
             annotationStyleStore: AnnotationStyleStore(runtimePaths: runtimePaths),
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
+            sessionCloseController: sessionCloseController,
             port: 42_997,
             initiallyEnabled: false,
             claudePromptStabilizationDelay: claudePromptStabilizationDelay,
             sendConfirmationTimeout: sendConfirmationTimeout,
+            steerConfirmationTimeout: steerConfirmationTimeout,
             codexTurnConfirmationTimeout: codexTurnConfirmationTimeout,
             localDraftEpochBroadcastInterval: localDraftEpochBroadcastInterval,
             pushConfiguration: pushConfiguration,
@@ -3546,7 +3779,8 @@ extension RemoteAccessServiceSafetyTests {
 
     @MainActor
     private static func waitForReceipt(
-        _ clientRequestID: String, mode: RemoteMessageDeliveryMode?, in fixture: RemoteBootstrapFixture
+        _ clientRequestID: String, mode: RemoteMessageDeliveryMode?, in fixture: RemoteBootstrapFixture,
+        afterUnconfirmedReceipt: Bool = false
     ) async throws {
         await SessionRuntimeStoreTestSupport.waitUntil {
             guard case .page(let page) = fixture.service.facadeConversationEvents(
@@ -3571,10 +3805,10 @@ extension RemoteAccessServiceSafetyTests {
         #expect(receipts.count == 1)
         #expect(receipts.first?.origin == .remote)
         #expect(receipts.first?.deliveryMode == mode)
-        #expect(!page.events.contains { event in
+        #expect(page.events.contains { event in
             guard case .sendDeliveryUnconfirmed(let payload) = event.payload else { return false }
             return payload.clientRequestID == clientRequestID
-        })
+        } == afterUnconfirmedReceipt)
     }
 
     @MainActor
@@ -3906,6 +4140,67 @@ extension RemoteAccessServiceSafetyTests {
             try transcript.write(contentsOf: Self.claudeUserLine(pasted, id: "direct-echo"))
             try await Self.waitForReceipt(direct.clientRequestID, mode: nil, in: fixture)
         }
+    }
+
+    /// The phone steers by default while the agent works, so a message with
+    /// attachments steers too: the Mac stages the files and types the text
+    /// with their paths into the running turn.
+    @MainActor
+    @Test func attachmentSteerTypesTextAndStagedPathsIntoTheRunningTurn() async throws {
+        let fixture = try RemoteBootstrapFixture(agent: .codex, pairNativeDevice: true)
+        defer { fixture.removeRuntimeFiles() }
+        #expect(fixture.confirmCurrentLaunchBinding())
+        var delivered: [String] = []
+        fixture.terminalRuntimeRegistry.setAutomationPromptStateHandlerForTesting { _ in .idleAtPrompt }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, submit, panelID, _ in
+            #expect(panelID == fixture.panelID)
+            #expect(submit)
+            delivered.append(text)
+            return true
+        }
+        let transcript = try FileHandle(forWritingTo: URL(filePath: fixture.resumeRecord.sessionFilePath))
+        defer { try? transcript.close() }
+        try transcript.seekToEnd()
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"user_message","message":"Fix the flicker","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}"#,
+            at: "2026-08-07T10:00:05.000Z"
+        ))
+        try transcript.write(contentsOf: Self.codexLine(
+            #"{"type":"task_started","turn_id":"turn-1","started_at":1786000805,"model_context_window":258400,"collaboration_mode_kind":"default"}"#,
+            at: "2026-08-07T10:00:05.100Z"
+        ))
+        let working = try await Self.waitForSummary(fixture) { $0.inputControl?.canSteer == true }
+        let turnEpoch = try #require(working.inputControl?.turnEpoch)
+
+        let attachment = RemoteMessageAttachment(filename: "trace.txt", data: Data("frame timings".utf8))
+        let request = RemoteMessageSendRequest(
+            conversationID: fixture.conversationID, clientRequestID: "steer-attachment",
+            expectedInputEpoch: turnEpoch, text: "Match this trace", attachments: [attachment], deliveryMode: .steer
+        )
+        let http = RemoteGatewayHTTPRequest(method: "POST", path: RemoteAttachmentPolicy.sendPath,
+            headers: ["authorization": "Bearer \(try #require(fixture.nativeCredential))", "tailscale-user-login": "owner@example.com"],
+            body: try JSONEncoder().encode(request))
+        guard case .deferredAttachments(let deviceID, let body) = fixture.gatewayHandler.handle(http, at: Date()) else {
+            Issue.record("Expected the attachment send route")
+            return
+        }
+        let response = await fixture.gatewayHandler.resolveAttachments(deviceID: deviceID, body: body)
+        #expect(try JSONDecoder().decode(RemoteMessageSendResult.self, from: response.body) == .accepted(epoch: turnEpoch))
+
+        let directory = try #require(
+            try FileManager.default.contentsOfDirectory(at: fixture.attachmentRoot, includingPropertiesForKeys: nil).first
+        )
+        let file = try #require(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+        #expect(try Data(contentsOf: file) == attachment.data)
+        let deliveredFile = fixture.attachmentRoot
+            .appendingPathComponent(directory.lastPathComponent)
+            .appendingPathComponent(file.lastPathComponent)
+        #expect(delivered == [
+            "Match this trace\n\nRead the following files attached to this message on this Mac:\n`" + deliveredFile.path + "`",
+        ])
+        // A steer joins the running turn; it does not open or consume a prompt.
+        #expect(fixture.summary.inputControl?.turnEpoch == turnEpoch)
+        #expect(fixture.summary.inputAvailability.allowsRemoteSend == false)
     }
 
     @MainActor

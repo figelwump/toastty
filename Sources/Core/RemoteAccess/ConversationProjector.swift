@@ -171,7 +171,8 @@ public struct ConversationProjector: Sendable {
                 presentedAt: observation.timestamp,
                 questions: interactionObservation.questions,
                 responseID: authorizesCurrentRuntime ? interactionObservation.responseID : nil,
-                responseExpiresAt: authorizesCurrentRuntime ? interactionObservation.responseExpiresAt : nil
+                responseExpiresAt: authorizesCurrentRuntime ? interactionObservation.responseExpiresAt : nil,
+                permission: interactionObservation.permission
             )
             emitted.append(appendProviderEvent(.interactionPresented(interaction), from: observation))
             if authorizesCurrentRuntime {

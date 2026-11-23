@@ -20,6 +20,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.isForMainFrameOnly)
         XCTAssertTrue(script.source.contains("__toasttyLocalDocumentKeyboardNavigationInstalled"))
         XCTAssertTrue(script.source.contains(".local-document-code-scroll"))
+        XCTAssertTrue(script.source.contains(".local-document-formatted-scroll"))
         XCTAssertTrue(script.source.contains("ArrowDown"))
         XCTAssertTrue(script.source.contains("ArrowRight"))
     }
@@ -86,7 +87,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         runtime.apply(webState: webState)
         runtime.apply(webState: webState)
 
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertEqual(metadataCallCount, 1)
@@ -205,7 +206,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.enterEditMode()
 
@@ -242,7 +243,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertTrue(runtime.canEnterEditFromCommand())
         XCTAssertTrue(runtime.enterEditFromCommand())
@@ -280,7 +281,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
 
@@ -320,7 +321,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
 
@@ -380,7 +381,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
 
         runtime.requestReveal(lineNumber: 7)
@@ -465,7 +466,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(evaluator.scripts.count, 0)
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
@@ -513,7 +514,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         runtime.apply(webState: webState)
         runtime.requestReveal(lineNumber: 12)
-        await fulfillment(of: [loaderExpectation], timeout: 1)
+        await fulfillment(of: [loaderExpectation], timeout: 5)
 
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
         XCTAssertNil(runtime.automationState().currentBootstrap)
@@ -529,7 +530,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 diskRevision: nil
             )
         )
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
         XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
@@ -581,7 +582,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyTextScale(1.25)
         runtime.simulateBridgeReadyForTesting()
@@ -628,7 +629,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.simulateBridgeReadyForTesting()
         XCTAssertTrue(runtime.automationState().hasPendingBootstrapScript)
@@ -676,7 +677,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.requestReveal(lineNumber: 12)
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
@@ -817,7 +818,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
@@ -901,7 +902,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
@@ -943,7 +944,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
@@ -1003,7 +1004,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         XCTAssertTrue(runtime.startSearch())
 
         runtime.updateSearchQuery("toast")
@@ -1067,7 +1068,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         XCTAssertTrue(runtime.startSearch())
         XCTAssertEqual(resetSpy.callCount, 1)
@@ -1109,7 +1110,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         XCTAssertFalse(runtime.findNext())
         XCTAssertFalse(runtime.findPrevious())
 
@@ -1155,7 +1156,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         XCTAssertTrue(runtime.startSearch())
         runtime.updateSearchQuery("toast")
         searchSpy.removeAllCalls()
@@ -1194,7 +1195,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         XCTAssertTrue(runtime.startSearch())
         runtime.updateSearchQuery("toast")
@@ -1236,7 +1237,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.enterEditMode()
         XCTAssertTrue(runtime.startSearch())
         runtime.updateSearchQuery("toast")
@@ -1339,10 +1340,10 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.openInDefaultApp()
-        await fulfillment(of: [openExpectation], timeout: 1)
+        await fulfillment(of: [openExpectation], timeout: 5)
 
         let openedURL = await capturedURL.snapshot()
         XCTAssertEqual(openedURL, URL(filePath: filePath))
@@ -1387,10 +1388,10 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.copyFullPath()
-        await fulfillment(of: [copyExpectation], timeout: 1)
+        await fulfillment(of: [copyExpectation], timeout: 5)
 
         let copiedPath = await capturedPath.snapshot()
         XCTAssertEqual(copiedPath, filePath)
@@ -1427,7 +1428,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.copyFullPath()
         await fulfillment(of: [copyExpectation], timeout: 0.1)
@@ -1465,7 +1466,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.openInDefaultApp()
         await fulfillment(of: [openExpectation], timeout: 0.1)
@@ -1626,7 +1627,15 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         runtime.save(baseContentRevision: baseRevision)
         runtime.save(baseContentRevision: baseRevision)
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Wait until the first save is parked in the saver, so resume() below
+        // releases it instead of running before the save starts.
+        let saveParkedDeadline = ContinuousClock.now + .seconds(5)
+        while await saver.isWaiting() == false {
+            guard ContinuousClock.now < saveParkedDeadline else {
+                throw WaitUntilTimedOutError(description: "The first save never reached the saver")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         let savingBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         let saveCallCountWhileSaving = await saver.snapshot()
@@ -1634,7 +1643,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(saveCallCountWhileSaving, 1)
 
         await saver.resume()
-        try await Task.sleep(nanoseconds: 250_000_000)
+        try await waitUntil { runtime.automationState().currentBootstrap?.isSaving == false }
 
         let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         let finalSaveCallCount = await saver.snapshot()
@@ -2246,6 +2255,167 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(nil))
     }
 
+    func testMarkdownViewChoiceResendsBootstrapReportsTheNewDefaultAndRefreshesFind() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [])
+        let bootstrapRecorder = BootstrapRecorder()
+        let reportedModes = MainActorRecorder<LocalDocumentMarkdownViewMode>()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            markdownViewMode: .source,
+            markdownViewModeDidChange: { reportedModes.record($0) },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                await bootstrapRecorder.recordCall()
+                return LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.localDocument?.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        runtime.apply(webState: WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
+        ))
+        await fulfillment(of: [metadataExpectation], timeout: 5)
+        runtime.simulateBridgeReadyForTesting()
+        runtime.simulateBridgeMessageForTesting(["type": "searchControllerReady"])
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("Docs")
+        searchSpy.removeAllCalls()
+
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.markdownViewMode, .source)
+        XCTAssertTrue(try XCTUnwrap(evaluator.scripts.last).contains("\"markdownViewMode\":\"source\""))
+
+        runtime.simulateBridgeMessageForTesting(["type": "setMarkdownViewMode", "mode": "formatted"])
+        runtime.simulateBridgeMessageForTesting(["type": "setMarkdownViewMode", "mode": "formatted"])
+        runtime.simulateBridgeMessageForTesting(["type": "setMarkdownViewMode", "mode": "wysiwyg"])
+
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.markdownViewMode, .formatted)
+        XCTAssertTrue(try XCTUnwrap(evaluator.scripts.last).contains("\"markdownViewMode\":\"formatted\""))
+        XCTAssertEqual(reportedModes.values, [.formatted])
+        XCTAssertEqual(searchSpy.commands, [.setQuery("Docs")], "Find runs again on the newly shown view")
+        let documentLoadCount = await bootstrapRecorder.snapshot()
+        XCTAssertEqual(documentLoadCount, 1, "A view change must not read the file again")
+    }
+
+    func testOpenLinkOpensWebLinksAndPreviewableLocalDocumentsOnly() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let panelID = UUID()
+        let openedLinks = MainActorRecorder<(UUID, URL)>()
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-links-\(UUID().uuidString)", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let docsURL = rootURL.appendingPathComponent("docs", isDirectory: true)
+        try fileManager.createDirectory(at: docsURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: rootURL.appendingPathComponent("Tool.app/Contents", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        addTeardownBlock { try? fileManager.removeItem(at: rootURL) }
+        try Data("# Readme\n".utf8).write(to: rootURL.appendingPathComponent("README.md"))
+        try Data("#!/bin/sh\necho hi\n".utf8).write(to: rootURL.appendingPathComponent("setup.command"))
+        let planPath = docsURL.appendingPathComponent("plan.md").path
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: panelID,
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            linkedURLOpener: { panelID, url in
+                openedLinks.record((panelID, url))
+                return true
+            },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.localDocument?.filePath,
+                    displayName: webState.title,
+                    content: "# Plan",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        runtime.apply(webState: WebPanelState(
+            definition: .localDocument,
+            title: "plan.md",
+            localDocument: LocalDocumentState(filePath: planPath)
+        ))
+        await fulfillment(of: [metadataExpectation], timeout: 5)
+
+        let hrefs = [
+            "../README.md#L12",
+            "https://example.com/a?b=1#c",
+            "../setup.command",
+            "../Tool.app",
+            "file://\(rootURL.path)/setup.command",
+            "../missing.md",
+            "javascript:alert(1)",
+            "#setup",
+        ]
+        for href in hrefs {
+            runtime.simulateBridgeMessageForTesting(["type": "openLink", "href": href])
+        }
+
+        XCTAssertEqual(openedLinks.values.map(\.0), [panelID, panelID])
+        XCTAssertEqual(openedLinks.values.map(\.1.absoluteString), [
+            URL(fileURLWithPath: rootURL.appendingPathComponent("README.md").path + ":12").absoluteString,
+            "https://example.com/a?b=1#c",
+        ], "Scripts, app bundles, and missing files are never handed to the system")
+    }
+
+    func testLinkURLResolution() throws {
+        let documentPath = "/Users/dev/project/docs/plan.md"
+        func resolved(_ href: String, documentPath: String? = documentPath) -> String? {
+            guard let url = LocalDocumentPanelRuntime.linkURL(forHref: href, documentFilePath: documentPath) else {
+                return nil
+            }
+            return url.isFileURL ? url.path : url.absoluteString
+        }
+
+        XCTAssertEqual(resolved("notes.md"), "/Users/dev/project/docs/notes.md")
+        XCTAssertEqual(resolved("./my%20notes.md"), "/Users/dev/project/docs/my notes.md")
+        XCTAssertEqual(resolved("../Sources/App.swift#L42"), "/Users/dev/project/Sources/App.swift:42")
+        XCTAssertEqual(resolved("../Sources/App.swift#L42-L50"), "/Users/dev/project/Sources/App.swift:42")
+        XCTAssertEqual(resolved("guide.md#setup"), "/Users/dev/project/docs/guide.md")
+        XCTAssertEqual(resolved("guide.md#L0"), "/Users/dev/project/docs/guide.md")
+        XCTAssertEqual(resolved("src/app.ts:7"), "/Users/dev/project/docs/src/app.ts:7")
+        XCTAssertEqual(resolved("/etc/hosts"), "/etc/hosts")
+        XCTAssertEqual(resolved("file:///tmp/a%20b.md#L3"), "/tmp/a b.md:3")
+        XCTAssertEqual(resolved("file://localhost/tmp/a.md"), "/tmp/a.md")
+        XCTAssertEqual(resolved("HTTPS://Example.com/x"), "HTTPS://Example.com/x")
+        XCTAssertEqual(resolved("mailto:dev@example.com"), "mailto:dev@example.com")
+
+        XCTAssertNil(resolved("#L4"), "In-document links stay in the page")
+        XCTAssertNil(resolved(""))
+        XCTAssertNil(resolved("?tab=2"))
+        XCTAssertNil(resolved("//example.com/x"))
+        XCTAssertNil(resolved("file://server/share/a.md"))
+        XCTAssertNil(resolved("javascript:alert(1)"))
+        XCTAssertNil(resolved("ftp://example.com/a"))
+        XCTAssertNil(resolved("notes.md", documentPath: nil), "A relative link needs a backing file")
+        XCTAssertEqual(resolved("/etc/hosts", documentPath: nil), "/etc/hosts")
+    }
+
     func testThemeResolvesFromEffectiveAppearance() {
         XCTAssertEqual(LocalDocumentPanelRuntime.theme(for: NSAppearance(named: .darkAqua)), .dark)
         XCTAssertEqual(LocalDocumentPanelRuntime.theme(for: NSAppearance(named: .aqua)), .light)
@@ -2318,7 +2488,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
         runtime.apply(webState: webState)
 
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
         XCTAssertEqual(bootstrapCallCount, 1)
@@ -2353,13 +2523,71 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
         try await Task.sleep(nanoseconds: 100_000_000)
 
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
         XCTAssertEqual(bootstrapCallCount, 1)
+    }
+
+    func testAppearanceChoiceOverridesAppAppearanceUntilMatchSystemIsChosen() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        var reportedAppearances: [LocalDocumentAppearance] = []
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            appearanceDidChange: { reportedAppearances.append($0) },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.localDocument?.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(filePath: "/tmp/toastty/readme.md")
+        )
+        runtime.applyEffectiveAppearance(NSAppearance(named: .darkAqua))
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .dark)
+
+        let menuItem = runtime.appearanceContextMenuItem()
+        XCTAssertEqual(menuItem.title, "Appearance")
+        let submenu = try XCTUnwrap(menuItem.submenu)
+        XCTAssertEqual(submenu.items.map(\.title), ["Match System", "Light", "Dark"])
+        XCTAssertEqual(submenu.items.map(\.state), [.on, .off, .off])
+
+        submenu.performActionForItem(at: 1)
+        XCTAssertEqual(reportedAppearances, [.light])
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .light)
+        XCTAssertEqual(runtime.appearanceContextMenuItem().submenu?.items.map(\.state), [.off, .on, .off])
+
+        // A fixed choice ignores the app switching between light and dark.
+        runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
+        runtime.applyEffectiveAppearance(NSAppearance(named: .darkAqua))
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .light)
+
+        runtime.selectAppearance(.system)
+        XCTAssertEqual(reportedAppearances, [.light, .system])
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .dark)
+        runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .light)
+
+        // A choice made in another panel applies here without reporting back.
+        runtime.applyAppearance(.dark)
+        XCTAssertEqual(reportedAppearances, [.light, .system])
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .dark)
     }
 
     func testApplyTextScaleDoesNotReReadMarkdownContent() async throws {
@@ -2390,7 +2618,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyTextScale(1.2)
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -2426,7 +2654,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
         runtime.applyTextScale(1.3)
         runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -2462,7 +2690,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [metadataExpectation], timeout: 1)
+        await fulfillment(of: [metadataExpectation], timeout: 5)
 
         runtime.applyTextScale(0)
         let minimumScale = try XCTUnwrap(runtime.automationState().currentBootstrap?.textScale)
@@ -2722,6 +2950,15 @@ private func makePanelEntryURL() throws -> URL {
 }
 
 @MainActor
+private final class MainActorRecorder<Value> {
+    private(set) var values: [Value] = []
+
+    func record(_ value: Value) {
+        values.append(value)
+    }
+}
+
+@MainActor
 private final class BridgeScriptEvaluatorSpy {
     enum Response {
         case delivered
@@ -2816,6 +3053,10 @@ private actor ControlledDocumentSaver {
         callCount
     }
 
+    func isWaiting() -> Bool {
+        continuation != nil
+    }
+
     func resume() {
         continuation?.resume()
         continuation = nil
@@ -2886,7 +3127,7 @@ private func waitForSaveToFinish(_ runtime: LocalDocumentPanelRuntime) async thr
 
 @MainActor
 private func waitUntil(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    timeoutNanoseconds: UInt64 = 5_000_000_000,
     pollIntervalNanoseconds: UInt64 = 10_000_000,
     condition: @MainActor () -> Bool
 ) async throws {

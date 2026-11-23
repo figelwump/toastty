@@ -71,6 +71,13 @@ public protocol LinuxLocalDocumentPanelHost: AnyObject {
     func setSearchQuery(_ query: String?)
     func findNext() -> Bool
     func findPrevious() -> Bool
+    /// The bootstrap last sent to the page, JSON-encoded in the shared
+    /// contract's field names, for `automation.local_document_panel_state`.
+    var currentBootstrapJSON: Data? { get }
+}
+
+public extension LinuxLocalDocumentPanelHost {
+    var currentBootstrapJSON: Data? { nil }
 }
 
 public enum LinuxLocalDocumentCloseConfirmation: Sendable, Equatable {
@@ -386,16 +393,43 @@ final class LocalDocumentPanelRuntime: ObservableObject {
     private var search: LocalDocumentSearchState?
     private var searchFieldFocused = false
 
+    /// The Markdown view mode and appearance the shared registry passes in.
+    /// The WebKitGTK host does not offer the view-mode toggle or the
+    /// appearance menu yet; it keeps the values so the registry can share
+    /// them across panels.
+    private(set) var currentMarkdownViewMode: LocalDocumentMarkdownViewMode
+    private(set) var currentAppearance: LocalDocumentAppearance
+    private let markdownViewModeDidChange: @MainActor (LocalDocumentMarkdownViewMode) -> Void
+    private let appearanceDidChange: @MainActor (LocalDocumentAppearance) -> Void
+    private let linkedURLOpener: @MainActor (UUID, URL) -> Bool
+
     init(
         panelID: UUID,
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
-        responderDidRequestFocus: @escaping @MainActor (UUID) -> Void
+        responderDidRequestFocus: @escaping @MainActor (UUID) -> Void,
+        markdownViewMode: LocalDocumentMarkdownViewMode = .formatted,
+        markdownViewModeDidChange: @escaping @MainActor (LocalDocumentMarkdownViewMode) -> Void = { _ in },
+        appearance: LocalDocumentAppearance = .system,
+        appearanceDidChange: @escaping @MainActor (LocalDocumentAppearance) -> Void = { _ in },
+        linkedURLOpener: @escaping @MainActor (UUID, URL) -> Bool = { _, _ in false }
     ) {
         _ = responderDidRequestFocus
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
         self.interactionDidRequestFocus = interactionDidRequestFocus
+        self.currentMarkdownViewMode = markdownViewMode
+        self.markdownViewModeDidChange = markdownViewModeDidChange
+        self.currentAppearance = appearance
+        self.appearanceDidChange = appearanceDidChange
+        self.linkedURLOpener = linkedURLOpener
+    }
+
+    /// Applies an app-wide appearance choice made in any document panel.
+    func applyAppearance(_ appearance: LocalDocumentAppearance) {
+        guard appearance != currentAppearance else { return }
+        currentAppearance = appearance
+        objectWillChange.send()
     }
 
     private var attachment = LinuxWebPanelAttachment()
@@ -438,7 +472,9 @@ final class LocalDocumentPanelRuntime: ObservableObject {
             hasPendingBootstrapScript: false,
             pendingRevealLine: pendingRevealLine,
             currentAssetPath: nil,
-            currentBootstrap: nil,
+            currentBootstrap: host?.currentBootstrapJSON.flatMap {
+                try? JSONDecoder().decode(LocalDocumentPanelBootstrap.self, from: $0)
+            },
             searchState: search,
             isSearchFieldFocused: searchFieldFocused
         )
@@ -587,8 +623,17 @@ final class ScratchpadPanelRuntime: ObservableObject {
             hasPendingBootstrapScript: false,
             currentAssetPath: nil,
             currentBootstrap: nil,
-            recentDiagnostics: []
+            recentDiagnostics: [],
+            // WebKitGTK Scratchpads have no zoom yet.
+            magnification: 1
         )
+    }
+
+    /// Zoom commands are not supported by the WebKitGTK Scratchpad yet;
+    /// `nil` tells the registry nothing changed.
+    func adjustMagnification(_ adjustment: ScratchpadMagnificationAdjustment) -> Double? {
+        _ = adjustment
+        return nil
     }
 
     func focusWebView() -> Bool { host?.focus() ?? false }

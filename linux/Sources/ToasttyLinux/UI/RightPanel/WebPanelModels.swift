@@ -54,6 +54,10 @@ public struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     /// `<textarea>` editor (macOS's, which omits this field) re-lays out
     /// every line after the caret on each keystroke.
     public let editorEngine: String
+    /// `formatted` or `source` for Markdown when not editing (macOS
+    /// `LocalDocumentMarkdownViewMode`). The WebKitGTK host has no view-mode
+    /// toggle yet, so it always asks for the formatted view, macOS's default.
+    public let markdownViewMode: String
 
     /// Same derivation as macOS `LocalDocumentPanelRuntime.makeBootstrap`.
     public init(session: LocalDocumentEditingSession, theme: LocalDocumentPanelTheme, textScale: Double) {
@@ -81,6 +85,7 @@ public struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
         self.theme = theme
         self.textScale = textScale
         editorEngine = "codemirror"
+        markdownViewMode = "formatted"
     }
 
     public static func highlightState(

@@ -19,6 +19,18 @@ struct RemoteMessageAttachmentTests {
         #expect(try JSONDecoder().decode(RemoteMessageSendRequest.self, from: JSONEncoder().encode(enriched)) == enriched)
     }
 
+    /// Claude Code converts a pasted bare or quoted image path and drops the
+    /// Return sent with it; a code span keeps the path plain text.
+    @Test(arguments: [
+        ("/tmp/a b/photo.jpg", "`/tmp/a b/photo.jpg`"),
+        ("/tmp/it's.png", "`/tmp/it's.png`"),
+        ("/tmp/a`b.png", "``/tmp/a`b.png``"),
+        ("`/tmp/x``", "``` `/tmp/x`` ```"),
+    ])
+    func deliveredPathsUseCodeSpansLongerThanAnyBacktickRun(path: String, expected: String) {
+        #expect(RemoteMessageAttachmentStore.Staged.codeSpan(path) == expected)
+    }
+
     @Test func validatesTypeContentsCountAndDecodedLimits() {
         let valid = RemoteMessageAttachment(filename: "note.swift", data: Data("let answer = 42".utf8))
         #expect(RemoteAttachmentPolicy.validationError(for: [valid]) == nil)
@@ -93,7 +105,7 @@ struct RemoteMessageAttachmentTests {
         #expect(try FileManager.default.attributesOfItem(atPath: root.path)[.posixPermissions] as? Int == 0o700)
         #expect(try FileManager.default.attributesOfItem(atPath: staged.files[0].path)[.posixPermissions] as? Int == 0o600)
         let prompt = staged.deliveryText(for: request)
-        #expect(prompt.contains(TerminalDropPayloadBuilder.shellEscapedPath(staged.files[0].path)))
+        #expect(prompt.hasSuffix("on this Mac:\n`" + staged.files[0].path + "`"))
         #expect(!prompt.contains("\u{1B}"))
         let protected = base.appendingPathComponent("protected")
         try FileManager.default.createDirectory(at: protected, withIntermediateDirectories: true)

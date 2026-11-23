@@ -84,7 +84,7 @@ final class TerminalStoreActionCoordinator {
             workingDirectory: _
         ):
             registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState, nil)
-        case .closePanel(panelID: let panelID):
+        case .closePanel(panelID: let panelID, preservesTabSelection: _):
             armCloseTransitionViewportDeferralIfNeeded(
                 closedPanelID: panelID,
                 previousState: previousState,

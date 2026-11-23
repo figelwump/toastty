@@ -41,6 +41,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case renameWorkspace
     case closeWorkspace
     case renameTab
+    case closeTab
     case selectPreviousTab
     case selectNextTab
     case selectPreviousRightPanelTab
@@ -141,6 +142,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "workspace.close"
         case .renameTab:
             return "workspace.tab.rename"
+        case .closeTab:
+            return "workspace.tab.close"
         case .selectPreviousTab:
             return "workspace.tab.select-previous"
         case .selectNextTab:
@@ -247,6 +250,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Close Workspace"
         case .renameTab:
             return "Rename Tab"
+        case .closeTab:
+            return "Close Tab"
         case .selectPreviousTab:
             return "Select Previous Tab"
         case .selectNextTab:
@@ -350,6 +355,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.closeWorkspace
         case .renameTab:
             return ToasttyKeyboardShortcuts.renameTab
+        case .closeTab:
+            return ToasttyKeyboardShortcuts.closeTab
         case .selectPreviousTab:
             return ToasttyKeyboardShortcuts.selectPreviousTab
         case .selectNextTab:
@@ -458,6 +465,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["workspace", "close", "remove"]
         case .renameTab:
             return ["tab", "rename", "edit", "title"]
+        case .closeTab:
+            return ["tab", "close", "remove"]
         case .selectPreviousTab:
             return ["tab", "previous", "left", "back"]
         case .selectNextTab:

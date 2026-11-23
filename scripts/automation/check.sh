@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ "$(uname -s)" == "Linux" ]]; then
+  exec "$ROOT_DIR/scripts/linux/check.sh" "$@"
+fi
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUNTIME_OWNERSHIP_SELF_TEST="$ROOT_DIR/scripts/automation/runtime-ownership-self-test.sh"
 CLEANUP_ARTIFACTS_SELF_TEST="$ROOT_DIR/scripts/automation/cleanup-artifacts-self-test.sh"
@@ -368,7 +371,8 @@ validate_local_release_environment_forwarding() (
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
-  if ! TUIST_TOASTTY_TERMINAL_PROFILES_PATH="$manifest_validation_terminal_profiles_path" \
+  if ! TUIST_TOASTTY_DISABLE_PUSH=1 \
+    TUIST_TOASTTY_TERMINAL_PROFILES_PATH="$manifest_validation_terminal_profiles_path" \
     tuist generate --no-open >"$local_release_env_log" 2>&1; then
     cat "$local_release_env_log" >&2
     exit 1
@@ -400,7 +404,7 @@ validate_local_release_environment_forwarding() (
     exit 1
   fi
 
-  if TUIST_TOASTTY_TERMINAL_PROFILES_PATH="" \
+  if TUIST_TOASTTY_DISABLE_PUSH=1 TUIST_TOASTTY_TERMINAL_PROFILES_PATH="" \
     tuist generate --no-open >"$local_release_empty_env_log" 2>&1; then
     echo "expected an empty local Release runtime value to fail generation" >&2
     exit 1
@@ -411,7 +415,7 @@ validate_local_release_environment_forwarding() (
     exit 1
   fi
 
-  if ! env -u TUIST_TOASTTY_TERMINAL_PROFILES_PATH \
+  if ! TUIST_TOASTTY_DISABLE_PUSH=1 env -u TUIST_TOASTTY_TERMINAL_PROFILES_PATH \
     tuist generate --no-open >"$local_release_env_log" 2>&1; then
     cat "$local_release_env_log" >&2
     exit 1
@@ -476,11 +480,19 @@ if ! node --test "$COMPUTER_USE_PROTOCOL_TEST"; then
   exit 10
 fi
 
+if ! node --test "$ROOT_DIR/Tests/RemoteScripts/RunnerInfrastructureTests.mjs" "$ROOT_DIR/Tests/RemoteScripts/RunnerWrapperTests.mjs" "$ROOT_DIR/Tests/RemoteScripts/CleanupServiceTests.mjs"; then
+  exit 10
+fi
+
 if ! node --test "$REMOTE_WEB_CLIENT_TEST"; then
   exit 10
 fi
 
 if ! run_web_panel_tests; then
+  exit 10
+fi
+
+if ! node --test "$ROOT_DIR/Tests/BuildConfig/PushManifestTests.mjs"; then
   exit 10
 fi
 

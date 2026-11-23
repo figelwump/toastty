@@ -10,6 +10,9 @@
  *   5. clipboard round-trips: OSC 52 write -> GdkClipboard (standard and
  *      primary), GdkClipboard -> paste into the terminal
  *   6. key filter interception
+ *   7. quit while a terminal floods title updates: with the app mailbox full
+ *      and no main loop draining it, toastty_ghostty_free_all_surfaces must
+ *      still return (a watchdog fails the test if it hangs)
  * Exits non-zero on the first failure.
  */
 #include <toastty-ghostty-gtk.h>
@@ -17,8 +20,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static const char *artifact_dir = NULL;
+
+/* Fails the run if teardown does not finish within `seconds`. */
+typedef struct
+{
+  GMutex lock;
+  GCond done_cond;
+  gboolean done;
+  guint seconds;
+} Watchdog;
+
+static gpointer
+watchdog_thread (gpointer data)
+{
+  Watchdog *w = data;
+  gint64 deadline = g_get_monotonic_time () + (gint64) w->seconds * G_TIME_SPAN_SECOND;
+  g_mutex_lock (&w->lock);
+  while (!w->done)
+    if (!g_cond_wait_until (&w->done_cond, &w->lock, deadline))
+      {
+        fprintf (stderr, "FAIL: freeing surfaces hung for %us with the app mailbox undrained\n", w->seconds);
+        fflush (stderr);
+        _exit (1);
+      }
+  g_mutex_unlock (&w->lock);
+  return NULL;
+}
 static int failures = 0;
 static int render_actions = 0;
 
@@ -425,6 +455,39 @@ main (int argc, char **argv)
   fprintf (stderr, "info: final renderer %s\n",
            toastty_ghostty_surface_get_renderer (term) == TOASTTY_GHOSTTY_RENDERER_GL ? "gl (dmabuf)"
                                                                                       : "offscreen (memory)");
+
+  /* Quit while a terminal floods title updates (OSC 0). Each one is a
+   * message for the app mailbox, which only the main loop drains. Stop
+   * iterating it, let the mailbox fill, then free every surface: Ghostty
+   * joins the surface threads, one of which is blocked pushing a title. */
+  {
+    ghostty_surface_config_s sc = ghostty_surface_config_new ();
+    sc.command = "/bin/sh";
+    GtkWidget *flood = toastty_ghostty_surface_new (app, &sc);
+    GtkWidget *flood_window = gtk_window_new ();
+    gtk_window_set_default_size (GTK_WINDOW (flood_window), 400, 200);
+    gtk_window_set_child (GTK_WINDOW (flood_window), flood);
+    gtk_window_present (GTK_WINDOW (flood_window));
+    CHECK (spin_until (has_prompt, flood, 10000), "flood terminal shows a prompt");
+    type_keys (TOASTTY_GHOSTTY_SURFACE (flood), "while :; do printf '\\033]0;x\\007'; done");
+    press_enter (TOASTTY_GHOSTTY_SURFACE (flood));
+    spin_for (300);
+    g_usleep (500 * 1000); /* no ticks: the mailbox fills */
+
+    Watchdog w = { .seconds = 10 };
+    g_mutex_init (&w.lock);
+    g_cond_init (&w.done_cond);
+    GThread *watchdog = g_thread_new ("teardown-watchdog", watchdog_thread, &w);
+    toastty_ghostty_free_all_surfaces ();
+    g_mutex_lock (&w.lock);
+    w.done = TRUE;
+    g_cond_signal (&w.done_cond);
+    g_mutex_unlock (&w.lock);
+    g_thread_join (watchdog);
+    CHECK (TRUE, "surfaces freed while a terminal flooded the undrained mailbox");
+    term = NULL; /* its surface is freed too */
+    gtk_window_destroy (GTK_WINDOW (flood_window));
+  }
 
 done:
   {

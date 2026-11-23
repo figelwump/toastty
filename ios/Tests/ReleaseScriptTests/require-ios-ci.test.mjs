@@ -12,12 +12,15 @@ const repo = 'figelwump/toastty';
 const workflow = 340799440;
 const run = { id: 123, run_number: 10, run_attempt: 2, workflow_id: workflow,
   path: '.github/workflows/mobile-ios.yml', head_sha: sha, head_branch: 'main',
-  event: 'push', status: 'completed', conclusion: 'success',
+  event: 'workflow_dispatch', status: 'completed', conclusion: 'success',
   repository: { full_name: repo }, head_repository: { full_name: repo } };
 const gate = { name: 'CI gate', run_id: run.id, run_attempt: run.run_attempt, head_sha: sha,
   status: 'completed', conclusion: 'success' };
 
-function invoke({ runs = [run], current = run, final = current, jobs = [gate],
+const requiredNames = JSON.parse(readFileSync(path.join(root, '.github/ios-release-ci-jobs.json'), 'utf8'));
+const fullJobs = requiredNames.map((name) => ({ ...gate, name }));
+
+function invoke({ runs = [run], current = run, final = current, jobs = fullJobs,
   total = runs.length, jobTotal = jobs.length, errorAt, malformedAt, source = sha,
   repository = repo } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'toastty-ci-gate-'));
@@ -25,7 +28,7 @@ function invoke({ runs = [run], current = run, final = current, jobs = [gate],
     const bin = path.join(dir, 'bin');
     mkdirSync(bin);
     const responses = [
-      { endpoint: `repos/${repo}/actions/workflows/${workflow}/runs?branch=main&head_sha=${sha}&per_page=100`,
+      { endpoint: `repos/${repo}/actions/workflows/${workflow}/runs?branch=main&head_sha=${sha}&event=workflow_dispatch&per_page=100`,
         body: { total_count: total, workflow_runs: runs } },
       { endpoint: `repos/${repo}/actions/runs/${current.id}`, body: current },
       { endpoint: `repos/${repo}/actions/runs/${current.id}/attempts/${current.run_attempt}/jobs?per_page=100`,
@@ -67,21 +70,21 @@ function rejected(options) {
   assert.match(result.stderr, /CI evidence rejected/);
 }
 
-for (const event of ['push', 'workflow_dispatch']) {
+for (const event of ['workflow_dispatch']) {
   test(`accepts trusted ${event} and retains exact run evidence`, () => {
     const trusted = { ...run, event };
     const result = invoke({ runs: [trusted], current: trusted });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.evidence, { repository: repo, workflow_id: workflow, workflow_path: run.path,
       run_id: run.id, run_url: `https://github.com/${repo}/actions/runs/${run.id}/attempts/2`,
-      run_attempt: 2, head_sha: sha, head_branch: 'main', event, status: 'completed', conclusion: 'success' });
+      run_attempt: 2, head_sha: sha, head_branch: 'main', event, status: 'completed', conclusion: 'success', required_jobs: requiredNames });
     assert.equal(result.output, `verified_sha=${sha}\n`);
   });
 }
 
 for (const patch of [
   { head_sha: '0'.repeat(40) }, { workflow_id: 42 }, { path: '.github/workflows/other.yml' },
-  { head_branch: 'feature' }, { event: 'pull_request' }, { event: 'pull_request_target' },
+  { head_branch: 'feature' }, { event: 'push' }, { event: 'pull_request' }, { event: 'pull_request_target' },
   { repository: { full_name: 'other/repo' } }, { head_repository: { full_name: 'fork/toastty' } },
 ]) {
   test(`rejects untrusted identity ${JSON.stringify(patch)}`, () => {
@@ -133,6 +136,28 @@ test('requires exact checked-out source and repository', () => {
 
 test('ignores a newer PR run even when its source SHA and branch match', () => {
   const result = invoke({ runs: [{ ...run, id: 999, run_number: 99, event: 'pull_request' }, run] });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.evidence.run_id, run.id);
+});
+
+// A green lightweight PR gate or legacy workflow must not authorize signing.
+test('requires every full-coverage job in the same successful run attempt', () => {
+  rejected({ jobs: [gate] });
+  for (const name of requiredNames) {
+    rejected({ jobs: fullJobs.filter((job) => job.name !== name) });
+    rejected({ jobs: [...fullJobs, { ...gate, name }] });
+    for (const patch of [
+      { conclusion: 'skipped' }, { conclusion: 'failure' }, { conclusion: 'cancelled' },
+      { conclusion: 'abandoned' }, { status: 'in_progress' },
+      { run_id: 9 }, { run_attempt: 1 }, { head_sha: '0'.repeat(40) },
+    ]) {
+      rejected({ jobs: fullJobs.map((job) => job.name === name ? { ...job, ...patch } : job) });
+    }
+  }
+});
+
+test('ignores legacy push runs when selecting the latest full manual validation', () => {
+  const result = invoke({ runs: [{ ...run, id: 999, run_number: 99, event: 'push' }, run] });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.evidence.run_id, run.id);
 });

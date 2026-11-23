@@ -322,7 +322,7 @@ When the profile ID is `codex`, Toastty:
 4. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
 5. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 6. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and permits Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=0` so fullscreen selections can receive `Cmd+C`. The explicit value overrides the disabling setting inherited from older managed sessions. Codex owns its keyboard-mode setup and exit cleanup; existing sessions must restart after updating Toastty.
-7. **Starts local session watchers**. Toastty polls the durable per-launch TUI session log (every 250 ms) for Codex root-turn and auto-review approval context; when hooks are unavailable, that log also provides the compatibility status fallback. After Codex reports native resume metadata, Toastty separately watches that session's native rollout JSONL for collaboration-agent lifecycle and the spawn-tool-to-child-agent identity mapping. When hooks are installed, hooks remain authoritative for collaboration lifecycle, while rollout events provide correlation metadata and a task-label fallback. Toastty joins that mapping with available `PreToolUse` metadata regardless of arrival order. When hooks are unavailable, the rollout watcher also provides the compatibility collaboration-lifecycle fallback.
+7. **Starts local session watchers**. Toastty polls the durable per-launch TUI session log (every 250 ms) for Codex root-turn and auto-review approval context; when hooks are unavailable, that log also provides the compatibility status fallback. A Codex `PermissionRequest` hook can precede automatic review. If its approval context is missing or its reviewer is unknown, Toastty keeps the request pending and does not send approval alerts merely because time passed. Approval alerts require context that confirms human review. After Codex reports native resume metadata, Toastty separately watches that session's native rollout JSONL for collaboration-agent lifecycle and the spawn-tool-to-child-agent identity mapping. When hooks are installed, hooks remain authoritative for collaboration lifecycle, while rollout events provide correlation metadata and a task-label fallback. Toastty joins that mapping with available `PreToolUse` metadata regardless of arrival order. When hooks are unavailable, the rollout watcher also provides the compatibility collaboration-lifecycle fallback.
 8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
 9. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the durable per-launch artifacts directory.
 
@@ -1084,6 +1084,43 @@ Use `Cmd+Shift+L` to flag or clear the focused managed session for later follow-
 Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
 
 Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
+
+### Closing sessions
+
+Right-click a session row in the sidebar and choose **Close Session** to close
+that session's pane, and its tab when the pane was the tab's last. The close
+works the same from the iOS app's session rows. A session whose agent has
+finished its turn closes at once. A session whose agent is still working,
+waiting on approval, or waiting on sub-agents asks first, and **Stop and
+Close** stops the agent. A session that has not finished a turn since the
+agent started, or since Toastty relaunched, also asks.
+
+When the session's tab is the only tab in its workspace, closing it also
+closes the workspace, so Toastty always asks first. One **Close Workspace**
+confirmation covers stopping a running agent too. Closing the workspace does
+not clean up an associated git worktree; use `worktree-cleanup` for that.
+
+Toastty refuses to close a session whose tab holds a right-panel document with
+unsaved changes. Save or close the document first.
+
+A session started from the iOS app runs in a tab Toastty opened for it. When
+its agent exits cleanly (exit status 0), for example after `/exit`, Toastty
+closes that tab without asking and keeps the tab you are looking at. The tab
+stays when the agent crashed, when it is the tab you are looking at, when you
+typed into its terminal after the exit, when it is its workspace's only tab, or
+when it holds an unsaved document. Toastty remembers these tabs until it quits.
+
+An agent can ask to exit when its current turn completes with the
+`session.exit-after-turn` action; the `worktree-create` skill uses it so the
+launching session exits after its handoff. Toastty then types the agent's native
+`/exit`. It supports Claude Code and Codex, in top-level workspaces only: a
+task space is marked done when its work is finished, so its sessions do not exit
+on request. It skips the exit when anyone typed
+into the session or sent it a phone message during the turn, or when the turn
+ends without completing. After the requested exit is delivered and confirmed
+with exit status 0, Jump to Next Active skips the session's completion notice.
+The unread badge and final terminal output stay available. Other unread terminal
+notifications still make the panel a navigation target.
 
 ### Automatic program status
 

@@ -30,6 +30,8 @@ Products land in `linux/.build/debug/` (or `release/`).
 ## Test
 
 ```bash
+scripts/automation/check.sh                  # full local gate (runs scripts/linux/check.sh)
+scripts/automation/smoke-ui.sh               # shared smoke scripts, on a private Broadway display
 scripts/linux/test.sh                        # all test targets
 scripts/linux/test.sh CoreStateTests         # swift test --filter
 scripts/linux/test.sh --shared-only          # shared-core tests only
@@ -115,9 +117,14 @@ behaves the same: an isolated runtime home owns its config, `logs/`, and
 | UserDefaults suite `com.GiantThings.toastty.runtime.<hash>` | same suite name; swift-corelibs stores it as `$XDG_CONFIG_HOME/<suite>.plist` |
 
 If `$XDG_RUNTIME_DIR` is unset, relative, or missing, socket paths fall back
-to the macOS layout under `$TMPDIR` (or `/tmp`). Callers that pass an explicit
+to the macOS layout under an absolute `$TMPDIR`, and without one under
+`~/.toastty/run` (never the shared `/tmp`). Callers that pass an explicit
 environment without `XDG_RUNTIME_DIR` (most tests) therefore keep the macOS
-`TMPDIR` behavior. A relative `XDG_STATE_HOME` is ignored per the XDG spec.
+`TMPDIR` behavior. On both platforms the server only binds in a socket
+directory it owns (made 0700) or a root-owned system directory such as a
+sticky `/tmp`. Clients read `current-socket.json` and scan for sockets only in
+a directory they own that no one else can write to, and the CLI refuses a
+socket owned by another user (`AutomationSocketDirectory`). A relative `XDG_STATE_HOME` is ignored per the XDG spec.
 Note `UserDefaults.standard` on Linux uses the executable name as its domain
 (`$XDG_CONFIG_HOME/<executable>.plist`, e.g. `toastty-linux.plist`).
 swift-corelibs-foundation writes that plist only on `synchronize()` (no
@@ -551,6 +558,12 @@ return "not handled".
 The local-document runtime does not yet load files, compute
 `LocalDocumentPanelBootstrap`, or watch files itself (macOS does that inside
 the WKWebView runtime); that logic belongs in the panels port.
+It accepts the registry's Markdown view mode, appearance and link opener and
+keeps the appearance in step across panels (`applyAppearance`), but the
+WebKitGTK host has no view-mode toggle or appearance menu yet: Markdown
+shows formatted, the bundle's default. Scratchpad zoom
+(`adjustMagnification`) returns `nil` (unsupported) and reports a
+magnification of 1.
 
 ### Remote Access on Linux
 
@@ -974,7 +987,23 @@ code hops back to the main thread with `MainLoop.dispatch` (g_idle_add), not
   `share/{ghostty,terminfo}`),
   symlinks `PREFIX/bin/{toastty-linux,toastty}`, installs the desktop file
   (absolute Exec), metainfo and hicolor icons, and refreshes the desktop
-  database / icon cache. No root needed.
+  database / icon cache. No root needed. `--destdir DIR` stages the same
+  layout under `DIR/PREFIX` for packaging, with the desktop entry still
+  pointing at `PREFIX`.
+- `scripts/linux/package.sh --version X.Y.Z [--build-number N] [--format
+  deb|appimage|snap|flatpak]`: release packages in
+  `artifacts/release/linux/<version>-<build>/`, all wrapping the
+  `--destdir` stage (`docs/plans/linux-release.md`). It writes
+  `lib/toastty/share/toastty/version`, which the About dialog shows. The
+  default formats are `deb` and `appimage`; `scripts/linux/fetch-appimagetool.sh`
+  installs the pinned, checksum-verified appimagetool.
+- `scripts/linux/test-package.sh`: launches the built `.deb` and AppImage on
+  Broadway (or `--real-window`), runs a terminal command, starts Claude Code
+  and Codex with a one-word prompt, and writes screenshots, transcripts and
+  `report.md` under `artifacts/package-tests/`. `scripts/linux/check.sh` runs
+  it with `--agents none`.
+- `scripts/release/publish-linux-release.sh`: attaches the packages to the
+  `v<version>` GitHub Release after the macOS publish created it.
 
 - App icon: `scripts/linux/render-app-icon.py` renders `linux/data/icons/hicolor`
   (scalable SVG + 16–512 PNGs) from macOS's
@@ -1043,8 +1072,9 @@ code (macOS branches unchanged); run a macOS build
 
 | File | Reason |
 |---|---|
-| `Sources/Core/Runtime/ToasttyRuntimePaths.swift` | XDG state dir for the user-home log; `$XDG_RUNTIME_DIR` socket base (`socketBaseDirectoryPath`, `linuxXDGRuntimeDirectoryPath`) |
-| `Sources/Core/Automation/AutomationSocketLocator.swift` | `socketDirectoryURL` uses `$XDG_RUNTIME_DIR/toastty`; made `public` for the CLI probe and tests |
+| `Sources/Core/Runtime/ToasttyRuntimePaths.swift` | XDG state dir for the user-home log; `$XDG_RUNTIME_DIR` socket base (`socketBaseDirectoryPath`, `linuxXDGRuntimeDirectoryPath`), then `$TMPDIR`, then `~/.toastty/run` instead of `/tmp` |
+| `Sources/Core/Automation/AutomationSocketLocator.swift` | `socketDirectoryURL` uses `$XDG_RUNTIME_DIR/toastty`, otherwise `socketBaseDirectoryPath`; made `public` for the CLI probe and tests |
+| `Sources/Core/Automation/AutomationSocketDirectory.swift` (new; used by `AutomationSocketLocator`, `AutomationSocketServer` and `ToasttySocketClient`) | (unguarded, applies to macOS too) the server never binds in another user's socket directory; clients ignore discovery data in a directory that is not theirs or that others can write to, and refuse sockets owned by another user. Linux needed it because the socket directory could fall back to the shared `/tmp`. New file: `tuist generate` on macOS |
 | `Sources/CLIKit/DiagnosticsSocketProbe.swift` | socket directory comes from `AutomationSocketLocator` on Linux |
 | `Sources/Core/RemoteAccess/RemotePreviewFileReader.swift` | no `/private` aliases for `/tmp`, `/var`, `/etc`; descriptor path via `/proc/self/fd` instead of `F_GETPATH` |
 | `Sources/Core/RemoteAccess/RemoteMessageAttachmentStore.swift` | `discard` compares paths: corelibs URL equality is trailing-slash sensitive |
@@ -1067,11 +1097,15 @@ code (macOS branches unchanged); run a macOS build
 | `Tests/App/WorkspaceMergeEndToEndTests.swift` | Linux CLI path next to the test runner; the pull-request script comes from the resolved app resources (the test runner has no bundle resources) |
 | `Tests/App/SystemNotificationSenderTests.swift` | `tearDown` hops onto the main actor explicitly under corelibs XCTest |
 | `Sources/App/Agents/ToasttyAgentPluginBundle.swift` | `bundleRootURL(bundle:)` (macOS value unchanged: `<resources>/ToasttyAgentPluginBundle`) backs `bundledPluginURL`; on Linux, for `Bundle.main`, `linuxBundleRootURL` looks in `TOASTTY_APP_RESOURCES_PATH` (install) and then the checkout root (same layout) |
+| `Sources/App/Agents/ManagedAgentHelperInstaller.swift` | staging the CLI and agent shim into a runtime home also links the `lib*.so*` files beside the source executables: an installed helper finds the Swift runtime only through `$ORIGIN` |
+| `Tests/App/ManagedAgentResumeResolverTests.swift` | (unguarded, platform-neutral) the transcript-path assertion compares symlink-resolved paths (`/var` vs `/private/var` on macOS) |
 | `Sources/App/Agents/CodexSkillsManager.swift` | (unguarded, same path on macOS) the default marketplace source is `ToasttyAgentPluginBundle.bundleRootURL()` instead of a restated `Bundle.main.resourceURL` path |
 | `Sources/CLIKit/ToasttyCLI.swift` | `#if os(Linux)` hook at the top of `run` hands `toastty browser …` to `BrowserCLICommand` |
 | `Sources/App/Automation/AutomationCommandExecutor.swift` | `#if os(Linux)` `browser.automation` command case runs `LinuxBrowserAutomation` |
 | `Sources/App/AppControl/AppControlExecutor.swift` | `#if os(Linux)` extension at the end exposes browser target/workspace resolution, placement parsing and the `panel.browser.state` snapshot (file-private there) to `LinuxBrowserAutomation` |
 | `plugins/toastty/skills/toastty-capabilities/SKILL.md` | (text, ships on macOS too) "Testing A Web App In A Browser Panel (Linux)" section for `toastty browser` |
+| `Sources/App/Agents/BundledResourceCopier.swift` (new; used by `ClaudeSkillsBundleManager.swift` and `CodexSkillsManager.swift` to stage the bundled agent plugin) | on Linux, copies a directory tree without keeping ownership: corelibs `copyItem` calls `fchown` on each copied directory, which fails with `EPERM` for the root-owned resources of an AppImage or an installed `.deb`, so Claude and Codex launched without Toastty's skills. macOS still calls `copyItem`. New file: `tuist generate` on macOS |
+| `Sources/App/Agents/CodexDaemonOptOutProbe.swift` (new), `AgentLaunchInstrumentation.swift`, `CodexManagedLaunchSkillsResolver.swift`, `ManagedAgentLaunchPlanner.swift` | (unguarded, applies to macOS too) managed Codex launches pass `--no-daemon` when `codex --help` lists it, so Codex 0.157+ cannot run the session in its shared app-server daemon, whose hooks carry the environment of whichever session started it. On macOS the `--profile` Toastty adds kept Codex in-process whenever skills were delivered; this also covers launches without the profile. New file: `tuist generate` on macOS |
 | `Sources/CLIKit/SetupResourceResolver.swift` | Linux checkout builds fall back to `<checkout>/examples/skills` when the resources have no `WorkflowExamples/skills` |
 | `plugins/toastty/skills/toastty-read-terminal/SKILL.md` | (text, ships on macOS too) the pane-by-number example says "pane 3" (Option+Shift+3; Alt+Shift+3 on Linux) instead of "⌘3", which switches tabs on macOS |
 | `WebPanels/LocalDocumentApp/src/{LocalDocumentPanelApp.tsx,styles.css}` + regenerated `Sources/App/Resources/WebPanels/local-document-panel/*` | Edit button shows `Ctrl+E` outside Apple platforms; editor text uses `--pre-text` (light theme previously drew dark text on the dark editor background, macOS included). `npm test` in `WebPanels/LocalDocumentApp` passes (71) |
@@ -1100,6 +1134,7 @@ list). Inside mirrored files, these are guarded (`#if os(macOS)` or
 | `ManagedAgentNativeSessionObserverTests.observerCapturesCodexSessionFromShellSnapshot` | backdates a file's mtime; Linux birth times cannot move earlier |
 | `AgentLaunchServiceTests.launchQuotesDirectLaunchEnvironmentAndArgv` | disabled only when the host has `/tmp/.git` (its fixture path is a literal `/tmp` path) |
 | `AutomationSocketServerBrowserPanelTargetingTests` (2), `AutomationSocketServerLocalDocumentPanelTests` (4) | pending the WebKitGTK panel runtimes (need a live browser host / local-document loading) |
+| `WebPanelRuntimeRegistryTests`: `testMarkdownPanelLinkOpensLinkedDocumentAndViewChoiceCarriesToLaterPanels`, `testAppearanceChoiceAppliesToEveryDocumentPanel` | drive the WKWebView local-document runtime (bridge messages, `NSAppearance`, the appearance menu); the WebKitGTK runtime has no view-mode toggle or appearance menu yet |
 
 ## Known issues
 

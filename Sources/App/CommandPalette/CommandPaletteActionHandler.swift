@@ -52,6 +52,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func closeWorkspace(originWindowID: UUID) -> Bool
     func canRenameTab(originWindowID: UUID) -> Bool
     func renameTab(originWindowID: UUID) -> Bool
+    func canCloseTab(originWindowID: UUID) -> Bool
+    func closeTab(originWindowID: UUID) -> Bool
     func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
     func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
     func canSelectAdjacentRightPanelTab(direction: PanelTabNavigationDirection, originWindowID: UUID) -> Bool
@@ -471,6 +473,14 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         store?.renameSelectedWorkspaceTabFromCommand(preferredWindowID: originWindowID) ?? false
     }
 
+    func canCloseTab(originWindowID: UUID) -> Bool {
+        store?.canCloseSelectedWorkspaceTabFromCommand(preferredWindowID: originWindowID) ?? false
+    }
+
+    func closeTab(originWindowID: UUID) -> Bool {
+        store?.closeSelectedWorkspaceTabFromCommand(preferredWindowID: originWindowID) ?? false
+    }
+
     func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
         _ = direction
         guard let workspace = store?.commandSelection(preferredWindowID: originWindowID)?.workspace else {
@@ -786,6 +796,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return closeWorkspace(originWindowID: originWindowID)
         case .renameTab:
             return renameTab(originWindowID: originWindowID)
+        case .closeTab:
+            return closeTab(originWindowID: originWindowID)
         case .selectPreviousTab:
             return selectAdjacentTab(direction: .previous, originWindowID: originWindowID)
         case .selectNextTab:

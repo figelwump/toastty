@@ -1279,7 +1279,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testCodex0147ServiceTierOverrideDoesNotSurfaceAutoReviewedApproval() async throws {
+    func testCodexLaunchIntentDoesNotSurfaceAutoReviewedApproval() async throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
         )
@@ -1360,6 +1360,34 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             .string("auto_review")
         )
 
+        // Codex records an in-turn Steer as another outbound UserTurn, without
+        // a new turn ID or UserPromptSubmit hook. It keeps the active policy.
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-10-25T15:29:28.946Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"client_user_message_id":"steer-message","items":[{"type":"text","text":"Explain the result as you continue","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
+            """,
+            to: logURL
+        )
+        let steerFingerprint = CodexInputFingerprint.fingerprint(for: "Explain the result as you continue")
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?
+                .pendingRootInputFingerprint == steerFingerprint
+        }
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore
+                .codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?
+                .pendingRootInputFingerprint,
+            steerFingerprint
+        )
+        // There has been no permission request in this turn. Suppression must
+        // use the current context rather than an earlier auto-review decision.
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.codexAutoReviewedPermissionTurnIDsForTesting(
+                sessionID: plan.sessionID
+            ).isEmpty
+        )
+
         let accepted = fixture.sessionRuntimeStore.handleCodexHookEvent(
             sessionID: plan.sessionID,
             event: CodexHookEvent(
@@ -1388,6 +1416,8 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             ),
             ["turn-root"]
         )
+        // Stay working beyond the default approval-context timeout.
+        try await Task.sleep(nanoseconds: 1_200_000_000)
         XCTAssertEqual(
             fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
             .working

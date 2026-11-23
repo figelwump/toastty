@@ -10,6 +10,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     private let firstToasttyConversationID = "B1000000-0000-0000-0000-000000000003"
     private let fourthToasttyConversationID = "B1000000-0000-0000-0000-000000000004"
     private let researchWorkspaceID = "A1000000-0000-0000-0000-000000000002"
+    /// Matches `ToasttySharedDraftFixture.draftID` in the app.
+    private let sharedDraftID = "5A4E0D2A-0000-4000-8000-000000000001"
     private let activeResearchConversationID = "B1000000-0000-0000-0000-000000000005"
     private let idleResearchConversationID = "B1000000-0000-0000-0000-000000000006"
     private let releaseWorkspaceID = "A1000000-0000-0000-0000-000000000003"
@@ -179,6 +181,77 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
     }
 
+    func testConversationHeaderTapShowsFullDetails() {
+        let app = launchFixtureConversation()
+        app.staticTexts["toastty-mobile-conversation-title"].tap()
+
+        let details = app.descendants(matching: .any)["toastty-conversation-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        func value(_ field: String) -> String {
+            app.descendants(matching: .any)["toastty-conversation-details-\(field)"].label
+        }
+        XCTAssertEqual(value("title"), "Mobile gateway design")
+        // The header drops these; the popover shows each in full.
+        XCTAssertEqual(value("path"), "~/GiantThings/repos/toastty")
+        XCTAssertEqual(
+            value("workspace"),
+            "toastty › Release preparation — changelog, signing, and TestFlight verification"
+        )
+        XCTAssertEqual(
+            value("agent"),
+            "claude · claude-opus-long-provider-model-identifier-for-accessibility-layout · high reasoning"
+        )
+        XCTAssertTrue(app.buttons["toastty-conversation-details-copy-path"].exists)
+        attachScreenshot(named: "conversation-header-details", of: app)
+
+        // A task space's session names its parent workspace first.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+        XCTAssertTrue(details.waitForNonExistence(timeout: 5))
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        app.navigationBars.firstMatch.buttons.firstMatch.tap()
+        let subspace = app.buttons["toastty-subspace-row-\(needsApprovalSubspaceID)"]
+        XCTAssertTrue(scrollHomeTo(subspace, in: app))
+        subspace.tap()
+        let session = app.buttons["toastty-mobile-workspace-session-\(subspaceSessionID)"]
+        XCTAssertTrue(scrollWorkspaceTo(session, in: app))
+        session.tap()
+        let title = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(waitForLabel(title, "Implement compact rows"))
+        title.tap()
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertEqual(value("workspace"), "toastty › compact-session-rows")
+        XCTAssertEqual(value("path"), "~/GiantThings/repos/toastty-compact-session-rows")
+        attachScreenshot(named: "conversation-header-details-task-space", of: app)
+    }
+
+    func testConversationDetailsFitAtAccessibilityTextSize() {
+        let app = launchFixtureApp(
+            launchArguments: [
+                "-UIPreferredContentSizeCategoryName",
+                UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
+            ]
+        )
+        openFixtureConversation(in: app)
+        app.staticTexts["toastty-mobile-conversation-title"].tap()
+
+        let title = app.descendants(matching: .any)["toastty-conversation-details-title"]
+        let agent = app.descendants(matching: .any)["toastty-conversation-details-agent"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        // Too tall for the screen, the card opens at its top and scrolls to
+        // its last row.
+        XCTAssertTrue(title.isHittable)
+        attachScreenshot(named: "conversation-header-details-accessibility-xxxl", of: app)
+        // The card's frame runs past the screen, so drag within the part of
+        // the card that is on screen.
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.8))
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.35))
+        for _ in 0..<8 where !agent.isHittable {
+            lower.press(forDuration: 0.05, thenDragTo: upper)
+        }
+        XCTAssertTrue(agent.isHittable)
+        attachScreenshot(named: "conversation-header-details-accessibility-xxxl-scrolled", of: app)
+    }
+
     func testWorkingConversationExposesIndeterminateComposerStatus() {
         let app = launchFixtureApp()
         openWorkspace(toasttyWorkspaceID, in: app)
@@ -293,6 +366,37 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Domain tests, UI test"].exists)
         XCTAssertTrue(app.staticTexts["Mention the semantic answer flow"].exists)
         attachScreenshot(named: "fixture-question-answer-accepted", of: app)
+    }
+
+    func testPermissionFixtureShowsPreviewAndSendsOneTapDecision() {
+        let app = launchFixtureApp(environment: [
+            "TOASTTY_MOBILE_FIXTURE_SCENARIO": "interaction-answer",
+            "TOASTTY_MOBILE_FIXTURE_PERMISSION": "1",
+        ])
+        openGatedSendConversation(in: app)
+        let transcript = app.scrollViews["toastty-mobile-transcript"]
+        for _ in 0..<4 { transcript.swipeDown() }
+
+        let preview = app.descendants(matching: .any)[
+            "toastty-mobile-permission-preview-fixture-question-interaction"
+        ]
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Run the permission broker tests"].exists)
+        let prefix = "toastty-mobile-permission-option-fixture-question-interaction-"
+        for option in ["allow", "always:0", "deny"] {
+            XCTAssertTrue(app.buttons["\(prefix)\(option)"].exists, option)
+        }
+        attachScreenshot(named: "fixture-permission-request", of: app)
+
+        let always = app.buttons["\(prefix)always:0"]
+        for _ in 0..<8 where always.isHittable == false { transcript.swipeUp() }
+        XCTAssertTrue(always.isHittable)
+        always.tap()
+
+        let sent = app.staticTexts["Sent from iPhone: Always allow Bash(xcodebuild -workspace:*)"]
+        XCTAssertTrue(sent.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["\(prefix)deny"].exists)
+        attachScreenshot(named: "fixture-permission-sent", of: app)
     }
 
     func testFixtureCurrentBuildDeepLinksRouteWorkspaceAndConversation() throws {
@@ -690,6 +794,34 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(flagged.label.hasSuffix("flagged for later"))
     }
 
+    func testSwipeCloseAsksForAWorkingSessionAndRemovesTheRow() {
+        let app = launchFixtureApp()
+        showAllSessions(in: app)
+        // "Sparkle updater fix" is working in the fixture, so Close asks first.
+        let row = app.buttons["toastty-mobile-grouped-card-\(workingConversationID)"]
+        XCTAssertTrue(scrollHomeTo(row, in: app))
+
+        row.swipeLeft()
+        let close = app.buttons["toastty-session-swipe-close-\(workingConversationID)"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        attachScreenshot(named: "fixture-session-swipe-close", of: app)
+        close.tap()
+
+        // The dialog's buttons can appear twice in the accessibility tree.
+        let confirm = app.buttons.matching(identifier: "toastty-session-close-confirm").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.exists, "The row stays while the user decides")
+        attachScreenshot(named: "fixture-session-close-confirmation", of: app)
+        confirm.tap()
+
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+        let notice = app.staticTexts["toastty-subspace-done-notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5))
+        XCTAssertTrue(notice.label.hasPrefix("Closed "), notice.label)
+        XCTAssertFalse(app.buttons["toastty-subspace-done-undo"].exists)
+        attachScreenshot(named: "fixture-session-closed", of: app)
+    }
+
     func testNewSessionFromAWorkspaceStartsAndOpensTheConversation() {
         let app = launchFixtureApp()
         openWorkspace(toasttyWorkspaceID, in: app)
@@ -902,6 +1034,47 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
                 .firstMatch.waitForExistence(timeout: 5)
         )
         attachScreenshot(named: "fixture-new-session-home-listed", of: app)
+    }
+
+    func testSharedDraftLinkOpensThePrefilledNewSessionSheet() throws {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "link"])
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
+        let start = app.buttons["toastty-mobile-new-session-start"]
+        XCTAssertFalse(start.exists, "A draft opened by its link waits for the link")
+
+        let link = try XCTUnwrap(URL(string: "toastty-mobile-dev://new-session/\(sharedDraftID)"))
+        app.open(link)
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        let message = app.textViews["toastty-mobile-new-session-message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertEqual(message.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
+        XCTAssertTrue(app.staticTexts["Shared screenshot.png"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-new-session-error"].exists,
+                      "The sheet says what the share left out")
+        let claude = app.buttons["toastty-mobile-new-session-agent-claude"]
+        XCTAssertTrue(claude.waitForExistence(timeout: 5))
+        claude.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { start.isEnabled })
+        attachScreenshot(named: "fixture-shared-draft-sheet", of: app)
+        start.tap()
+
+        let title = app.staticTexts["toastty-mobile-conversation-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 15))
+        XCTAssertEqual(title.label, "New Claude session")
+    }
+
+    func testWaitingSharedDraftOpensWhenTheAppStarts() {
+        let app = launchFixtureApp(environment: ["TOASTTY_MOBILE_FIXTURE_SHARED_DRAFT": "waiting"])
+        let start = app.buttons["toastty-mobile-new-session-start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        let message = app.textViews["toastty-mobile-new-session-message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertEqual(message.value as? String, "Toastty fixture page\nhttps://example.com/toastty")
+        XCTAssertTrue(app.staticTexts["Shared screenshot.png"].exists)
+        attachScreenshot(named: "fixture-shared-draft-waiting", of: app)
+
+        app.buttons["toastty-mobile-new-session-cancel"].tap()
+        XCTAssertTrue(start.waitForNonExistence(timeout: 5))
     }
 
     func testSwipeInfoOpensTheDetailSheet() {
@@ -1782,7 +1955,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: 5) == .completed
     }
 
-    func testWorkingTurnQueuesByDefaultStopsAndOffersSteer() {
+    func testWorkingTurnSteersByDefaultStopsAndOffersQueue() {
         let app = launchFixtureApp(
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "queue-steer"]
         )
@@ -1813,27 +1986,25 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
             "Unexpected elapsed time: \(String(describing: working.value))"
         )
 
-        // Typing expands the card: attach, then the Queue chip next to Send.
-        // Send replaces Stop while the field is open.
+        // Typing expands the card: attach, then the mode chip next to Send.
+        // Send replaces Stop while the field is open. Steer is the default
+        // while the agent works.
         input.tap()
-        input.typeText("Also add a UI test")
+        input.typeText("Use 300 ms, not 400")
         let mode = app.buttons["toastty-mobile-composer-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertEqual(mode.label, "Queue selected")
+        XCTAssertEqual(mode.label, "Steer selected")
         XCTAssertTrue(send.waitForExistence(timeout: 5))
-        XCTAssertEqual(send.label, "Queue message")
+        XCTAssertEqual(send.label, "Steer message")
         XCTAssertFalse(stop.exists)
         XCTAssertLessThan(mode.frame.maxX, send.frame.minX)
         XCTAssertLessThan(send.frame.minX - mode.frame.maxX, 16)
         attachScreenshot(named: "fixture-queue-steer-expanded", of: app)
 
         send.tap()
-        let queued = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-1"]
-        XCTAssertTrue(queued.waitForExistence(timeout: 5))
-        XCTAssertTrue(queued.label.contains("Also add a UI test"))
-        XCTAssertTrue(queued.label.contains("Queued"))
-        XCTAssertLessThan(working.frame.maxY, queued.frame.minY)
-        // Queueing never locks the composer the way a prompt send does, but
+        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-1"]
+        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        // Steering never locks the composer the way a prompt send does, but
         // the send still ends the edit: the keyboard leaves and the card
         // folds back to the one-line field.
         XCTAssertTrue(input.isEnabled)
@@ -1843,28 +2014,36 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         assertComposerCollapsed(input: input, stop: stop)
         attachScreenshot(named: "fixture-queue-steer-collapsed-after-send", of: app)
 
-        // The chip offers Steer; choosing it changes what Send does and the
-        // choice resets to Queue after the send.
+        // The chip offers Queue; choosing it changes what Send does, and the
+        // choice returns to Steer after the send.
+        let queueChoice = app.buttons["toastty-mobile-composer-mode-queue"]
+        func chooseQueue() {
+            mode.tap()
+            XCTAssertTrue(queueChoice.waitForExistence(timeout: 5))
+            queueChoice.tap()
+            XCTAssertTrue(waitForLabel("Queue selected", of: mode))
+            XCTAssertEqual(send.label, "Queue message")
+        }
         input.tap()
-        input.typeText("Use 300 ms, not 400")
-        mode.tap()
-        let steerChoice = app.buttons["toastty-mobile-composer-mode-steer"]
-        XCTAssertTrue(steerChoice.waitForExistence(timeout: 5))
-        steerChoice.tap()
-        XCTAssertEqual(mode.label, "Steer selected")
-        XCTAssertEqual(send.label, "Steer message")
+        input.typeText("Also add a UI test")
+        chooseQueue()
+        attachScreenshot(named: "fixture-queue-steer-queue-selected", of: app)
         send.tap()
-        let steered = app.descendants(matching: .any)["toastty-mobile-send-optimistic-fixture-queued-2"]
-        XCTAssertTrue(steered.waitForExistence(timeout: 5))
+        let queued = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-2"]
+        XCTAssertTrue(queued.waitForExistence(timeout: 5))
+        XCTAssertTrue(queued.label.contains("Also add a UI test"))
+        XCTAssertTrue(queued.label.contains("Queued"))
+        XCTAssertLessThan(working.frame.maxY, queued.frame.minY)
         input.tap()
         input.typeText("x")
-        XCTAssertEqual(mode.label, "Queue selected")
-        app.buttons["toastty-mobile-queued-remove-fixture-queued-1"].tap()
+        XCTAssertTrue(waitForLabel("Steer selected", of: mode))
+        app.buttons["toastty-mobile-queued-remove-fixture-queued-2"].tap()
         XCTAssertFalse(queued.waitForExistence(timeout: 2))
 
         // Edit puts the queued text back into the field.
         app.keys["delete"].tap()
         input.typeText("Then run the suite")
+        chooseQueue()
         send.tap()
         let second = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-3"]
         XCTAssertTrue(second.waitForExistence(timeout: 5))
@@ -1873,6 +2052,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Then run the suite")
         // Edit opens the keyboard again so the text can change right away.
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        chooseQueue()
         send.tap()
         let third = app.descendants(matching: .any)["toastty-mobile-send-queued-fixture-queued-4"]
         XCTAssertTrue(third.waitForExistence(timeout: 5))

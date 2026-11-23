@@ -1,11 +1,13 @@
 ---
 name: toastty-dev-run
-description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance with runtime isolation, instance.json targeting, local smoke automation, and local or remote GUI validation.
+description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance with runtime isolation, instance.json targeting, local smoke automation, and local or remote GUI validation, on macOS or the Linux port (offscreen Broadway or a real window for OpenGL checks).
 ---
 
 # Toastty Dev Run
 
 Use this workflow when the task requires a real running Toastty app instance rather than unit tests alone.
+
+**Linux:** read `references/linux.md` first; it replaces the build, launch and inspection sections below. "Core rules" items 1, 3, 9, 10 and 11, "Validation planning" (for runs that validate a change) and "Runtime-home conventions" still apply. Everything runs locally, offscreen on a private Broadway display, plus a runtime-isolated real window for OpenGL checks.
 
 Pair this skill with the global `peekaboo` skill for local UI inspection and interaction. When foreground validation would steal focus from the current desktop, prefer the repo-local remote GUI wrapper instead of running Peekaboo locally.
 
@@ -45,7 +47,7 @@ Then derive a short validation plan from that scope:
 
 - Inspect the diff or the relevant changed files first.
 - Write down the concrete user-visible behaviors that could have changed.
-- Prefer 2-5 high-signal test cases over a generic “open the app and click around”.
+- Write specific test cases that come from the changed behavior, not a generic “open the app and click around”.
 - If the user already gave explicit test cases, use those instead of inventing new ones.
 
 ## Choosing the path

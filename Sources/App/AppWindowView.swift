@@ -45,6 +45,20 @@ struct AppWindowView: View {
         workspaceMergeController.requestClose(workspaceID: workspaceID)
     }
 
+    private func requestSessionClose(panelID: UUID, sessionTitle: String) {
+        SessionCloseController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: focusedPanelCommandController,
+            terminalCloseAssessment: { [terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+            },
+            localDocumentCloseConfirmationState: { [webPanelRuntimeRegistry] panelID in
+                webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
+            }
+        ).closeSessionInteractively(panelID: panelID, sessionTitle: sessionTitle)
+    }
+
     private var workspaceMergeController: WorkspaceMergeController {
         WorkspaceMergeController.live(store: store, sessionRuntimeStore: sessionRuntimeStore)
     }
@@ -68,7 +82,8 @@ struct AppWindowView: View {
                         annotationStyleStore: annotationStyleStore,
                         terminalRuntimeContext: terminalRuntimeContext,
                         requestWorkspaceMerge: requestWorkspaceMerge,
-                        requestWorkspaceClose: requestWorkspaceClose
+                        requestWorkspaceClose: requestWorkspaceClose,
+                        requestSessionClose: requestSessionClose
                     )
                     .frame(width: effectiveSidebarWidth)
 

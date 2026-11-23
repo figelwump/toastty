@@ -75,9 +75,13 @@ else
   )
 fi
 
-# Drop session state inherited from a Toastty terminal or agent.
+# Drop session state inherited from a Toastty terminal or agent, keeping this
+# script's own TOASTTY_LINUX_TEST_* controls.
 while IFS='=' read -r name _; do
-  case "$name" in TOASTTY_*|CODEX_*|CLAUDE*) unset "$name" ;; esac
+  case "$name" in
+    TOASTTY_LINUX_TEST_*) ;;
+    TOASTTY_*|CODEX_*|CLAUDE*) unset "$name" ;;
+  esac
 done < <(env)
 
 # Agent CLIs the operator installed (codex, claude in ~/.local/bin) change

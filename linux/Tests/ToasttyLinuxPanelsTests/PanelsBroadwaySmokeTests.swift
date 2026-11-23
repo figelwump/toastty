@@ -137,7 +137,15 @@ struct PanelsBroadwaySmokeTests {
             if result == process.processIdentifier {
                 return (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
             }
-            if result < 0 { return process.isRunning ? nil : process.terminationStatus }
+            if result < 0 {
+                // Foundation's Process reaped the child first (ECHILD). It
+                // updates isRunning a moment later: wait for that instead of
+                // reporting a process that already exited as still running.
+                while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+                guard process.isRunning == false else { return nil }
+                return process.terminationReason == .uncaughtSignal
+                    ? 128 + process.terminationStatus : process.terminationStatus
+            }
             Thread.sleep(forTimeInterval: 0.1)
         }
         return nil

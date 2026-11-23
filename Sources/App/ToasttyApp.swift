@@ -774,6 +774,8 @@ struct ToasttyApp: App {
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
             initialWorkspaceMergeMode: initialToasttySettings.workspaceMergeMode,
             isWorkspaceMergeEnabled: initialToasttySettings.isWorkspaceMergeEnabled,
+            initialLocalDocumentMarkdownViewMode: initialToasttySettings.localDocumentMarkdownViewMode,
+            initialLocalDocumentAppearance: initialToasttySettings.localDocumentAppearance,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()
@@ -1215,13 +1217,40 @@ struct ToasttyApp: App {
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         // A local, because the StateObject autoclosure cannot capture `self`.
         let remoteSessionLauncher = agentLaunchService
+        let remoteSessionCloseController = SessionCloseController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: focusedPanelCommandController,
+            terminalCloseAssessment: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.terminalCloseConfirmationAssessment(panelID: panelID)
+            },
+            localDocumentCloseConfirmationState: { [weak webPanelRuntimeRegistry] panelID in
+                webPanelRuntimeRegistry?.localDocumentCloseConfirmationState(panelID: panelID)
+            }
+        )
+        let sessionExitController = SessionExitController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            sessionCloseController: remoteSessionCloseController,
+            sendText: { [weak terminalRuntimeRegistry] text, panelID in
+                terminalRuntimeRegistry?.sendText(
+                    text,
+                    submit: true,
+                    panelID: panelID,
+                    focusPolicy: .preserveFirstResponder
+                ) ?? false
+            }
+        )
+        sessionRuntimeStore.sessionExitController = sessionExitController
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
             store: store,
             annotationStyleStore: annotationStyleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
-            sessionLauncher: remoteSessionLauncher
+            sessionLauncher: remoteSessionLauncher,
+            sessionCloseController: remoteSessionCloseController,
+            sessionExitController: sessionExitController
         ))
         _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle

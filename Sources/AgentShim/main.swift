@@ -535,13 +535,20 @@ private enum AgentCommandShim {
             return nil
         }
 
-        process.waitUntilExit()
+        // Either pipe can fill before the helper exits. Drain both while it runs.
+        let stderrCapture = CLIOutputCapture()
+        let stderrReadGroup = DispatchGroup()
+        let stderrHandle = stderrPipe.fileHandleForReading
+        DispatchQueue.global().async(group: stderrReadGroup) {
+            stderrCapture.read(from: stderrHandle)
+        }
         let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        stderrReadGroup.wait()
         return CLIOutput(
             exitCode: process.terminationStatus,
             stdout: stdout,
-            stderr: stderr
+            stderr: stderrCapture.snapshot()
         )
     }
 
@@ -902,6 +909,20 @@ private struct CLIOutput {
     let exitCode: Int32
     let stdout: Data
     let stderr: Data
+}
+
+private final class CLIOutputCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func read(from handle: FileHandle) {
+        let result = handle.readDataToEndOfFile()
+        lock.withLock { data = result }
+    }
+
+    func snapshot() -> Data {
+        lock.withLock { data }
+    }
 }
 
 private enum ManagedLaunchPreparationOutcome {

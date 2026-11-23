@@ -32,6 +32,11 @@ public final class AppLogicTerminalRuntimeBridge: TerminalRuntimeBridge {
     @discardableResult
     public func send(_ action: AppAction) -> Bool { logic.send(action, source: "linux_terminal") }
 
+    @discardableResult
+    public func sendNavigation(_ action: AppAction) -> Bool {
+        logic.sendNavigation([action], source: "linux_terminal")
+    }
+
     public func launchSpec(panelID: UUID, terminal: TerminalPanelState, windowID: UUID) -> TerminalLaunchSpec {
         guard let configuration = logic.terminalLaunchConfiguration(panelID: panelID) else {
             return standalone.launchSpec(panelID: panelID, terminal: terminal, windowID: windowID)

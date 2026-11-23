@@ -24,6 +24,8 @@ enum ToasttyInteractionAnswerStatus: Equatable, Sendable {
 
 enum ToasttyInteractionAnswerEdit: Equatable, Sendable {
     case toggleOption(questionID: String, optionID: String)
+    /// Makes this option the only answer, as a permission decision button does.
+    case selectOnly(questionID: String, optionID: String)
     case toggleCustomText(questionID: String)
     case setCustomText(questionID: String, text: String)
 }
@@ -94,6 +96,10 @@ struct ToasttyInteractionAnswerState: Equatable, Sendable {
                 draft.selectedOptionIDs.insert(optionID)
             }
             drafts[questionID] = draft
+        case .selectOnly(let questionID, let optionID):
+            guard let question = questions.first(where: { $0.id == questionID }),
+                  question.options.contains(where: { $0.id == optionID }) else { return }
+            drafts[questionID] = ToasttyInteractionQuestionDraft(selectedOptionIDs: [optionID])
         case .toggleCustomText(let questionID):
             guard let question = questions.first(where: { $0.id == questionID }) else { return }
             var draft = drafts[questionID] ?? ToasttyInteractionQuestionDraft()
@@ -119,6 +125,11 @@ struct ToasttyInteractionAnswerState: Equatable, Sendable {
         if case .failed = status { return .editing }
         return status
     }
+
+    /// The decision this phone sent for a permission request, if any.
+    var sentOptionID: String? {
+        retryRequest?.answers.first?.selectedOptionIDs.first
+    }
 }
 
 struct ToasttyInteractionCard: View {
@@ -132,21 +143,23 @@ struct ToasttyInteractionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if interaction.questions == nil {
-                Text(interaction.prompt)
-                    .font(.body)
-                    .foregroundStyle(ToasttyDesignTokens.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if interaction.state == .resolved, let answers = interaction.answers {
-                resolvedAnswers(answers)
-            } else if let answerState,
-                      interaction.state == .pending,
-                      presentation.responseClosedReason == nil {
-                questionForm(answerState)
+            if interaction.kind == .permission, let permission = interaction.permission,
+               let decision = interaction.questions?.first {
+                ToasttyPermissionRequestContent(
+                    interaction: interaction,
+                    permission: permission,
+                    decision: decision,
+                    answerState: interaction.state == .pending && presentation.responseClosedReason == nil
+                        ? answerState : nil,
+                    sentOptionID: answerState?.sentOptionID,
+                    readOnlyMessage: readOnlyMessage,
+                    onChoose: { optionID in
+                        onEdit(.selectOnly(questionID: decision.id, optionID: optionID))
+                        onSubmit()
+                    }
+                )
             } else {
-                readOnlyContent
+                standardContent
             }
         }
         .padding(14)
@@ -165,6 +178,26 @@ struct ToasttyInteractionCard: View {
         .accessibilityElement(children: answerState == nil ? .combine : .contain)
         .sensoryFeedback(trigger: answerState) { old, new in
             ToasttyHapticFeedback.interactionAnswer(from: old, to: new)
+        }
+    }
+
+    @ViewBuilder
+    private var standardContent: some View {
+        if interaction.questions == nil {
+            Text(interaction.prompt)
+                .font(.body)
+                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        if interaction.state == .resolved, let answers = interaction.answers {
+            resolvedAnswers(answers)
+        } else if let answerState,
+                  interaction.state == .pending,
+                  presentation.responseClosedReason == nil {
+            questionForm(answerState)
+        } else {
+            readOnlyContent
         }
     }
 

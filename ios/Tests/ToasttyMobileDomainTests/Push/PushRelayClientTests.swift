@@ -4,6 +4,67 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class PushRelayClientTests: XCTestCase {
+    // Unknown optional diagnostics must never change enrollment or errors.
+    func testVerificationDiagnosticsDoNotChangeResponsesOrRateLimitErrors() async throws {
+        let item = MobilePushStateTests.registration()
+        for header in ["apple_accepted", "SENTINEL_PRIVATE_HEADER", String(repeating: "x", count: 4097), "null", ""] {
+            let transport = NativeRecordingHTTPTransport(responses: [
+                HTTPTransportResponse(statusCode: 201, headers: ["x-toastty-push-diagnostic": header],
+                    body: try JSONEncoder().encode(PushRelayBeginResponse(registrationID: item.registrationID,
+                        state: "pending", expiresAt: 1_800_000_000))),
+                HTTPTransportResponse(statusCode: 429, headers: ["retry-after": "90", "x-toastty-push-diagnostic": header],
+                    body: Data(#"{"error":"rate_limited","diagnostic":{"SENTINEL":"ignored"}}"#.utf8)),
+            ])
+            let capture = RelayDiagnosticCapture()
+            let client = PushRelayClient(baseURL: item.relayURL, transport: transport)
+            let response = try await client.begin(item, onDiagnostic: capture.record)
+            XCTAssertEqual(response.state, "pending")
+            XCTAssertEqual(capture.value?.statusCode, 201)
+            XCTAssertEqual(capture.value?.code, header == "apple_accepted" ? .appleAccepted : nil)
+            do { _ = try await client.begin(item, onDiagnostic: capture.record); XCTFail("Expected cooldown") }
+            catch { XCTAssertEqual(error as? PushRelayFailure, .rateLimited(retryAfter: 90)) }
+            XCTAssertEqual(capture.value?.rateLimitSource, .relay)
+            XCTAssertFalse(String(describing: capture.value).contains("SENTINEL"))
+        }
+    }
+
+    func testDiagnosticCategoriesFollowTheCurrentAndOriginalResponseContracts() async throws {
+        let item = MobilePushStateTests.registration()
+        for (status, header, expected): (Int, String, PushRelayDiagnosticCode?) in [
+            (201, "apple_bad_device_token", nil), (201, "provider_unavailable", nil),
+            (200, "apple_accepted", nil), (200, "existing_active", .existingActive),
+            (202, "apple_accepted", .appleAccepted), (202, "provider_unavailable", .providerUnavailable),
+            (202, "existing_active", nil), (202, "apple_bad_device_token", nil),
+            (503, "verification_token_limit", nil), (503, "apple_provider_updates_limited", .appleProviderUpdatesLimited),
+        ] {
+            let body: Data
+            if status >= 400 { body = Data(#"{"error":"verification_unavailable"}"#.utf8) }
+            else {
+                body = try JSONEncoder().encode(PushRelayBeginResponse(registrationID: item.registrationID,
+                    state: status == 200 ? "active" : "pending", expiresAt: 1_800_000_000))
+            }
+            let capture = RelayDiagnosticCapture()
+            let client = PushRelayClient(baseURL: item.relayURL, transport: NativeRecordingHTTPTransport(responses: [
+                HTTPTransportResponse(statusCode: status, headers: ["x-toastty-push-diagnostic": header,
+                    "x-toastty-push-provider-refresh": "attempted"], body: body),
+            ]))
+            _ = try? await client.begin(item, onDiagnostic: capture.record)
+            XCTAssertEqual(capture.value?.code, expected)
+            XCTAssertEqual(capture.value?.providerRefreshAttempted, expected != nil && status != 200)
+        }
+    }
+
+    func testRateLimitWithoutRelayEnvelopeRemainsUnidentified() async throws {
+        let item = MobilePushStateTests.registration()
+        let capture = RelayDiagnosticCapture()
+        let client = PushRelayClient(baseURL: item.relayURL, transport: NativeRecordingHTTPTransport(responses: [
+            HTTPTransportResponse(statusCode: 429, headers: ["retry-after": "inf"], body: Data("<html>upstream</html>".utf8)),
+        ]))
+        do { _ = try await client.begin(item, onDiagnostic: capture.record); XCTFail("Expected cooldown") }
+        catch { XCTAssertEqual(error as? PushRelayFailure, .rateLimited(retryAfter: 60)) }
+        XCTAssertEqual(capture.value?.rateLimitSource, .unidentified)
+        XCTAssertNil(capture.value?.code)
+    }
     func testBeginProofStatusAndDeleteUseBoundedRoutesAndSeparateManagementCredential() async throws {
         let registration = MobilePushStateTests.registration()
         let transport = NativeRecordingHTTPTransport(responses: [
@@ -91,4 +152,11 @@ final class PushRelayClientTests: XCTestCase {
             catch { XCTAssertEqual(error as? PushRelayFailure, .rateLimited(retryAfter: delay)) }
         }
     }
+}
+
+private final class RelayDiagnosticCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: PushRelayDiagnostic?
+    var value: PushRelayDiagnostic? { lock.withLock { stored } }
+    func record(_ value: PushRelayDiagnostic) { lock.withLock { stored = value } }
 }

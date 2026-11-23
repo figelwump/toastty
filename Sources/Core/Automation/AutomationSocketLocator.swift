@@ -55,8 +55,7 @@ public enum AutomationSocketLocator {
         fileManager: FileManager = .default
     ) throws {
         let directoryURL = socketDirectoryURL(environment: environment)
-        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        _ = chmod(directoryURL.path, 0o700)
+        try AutomationSocketDirectory.prepareSocketDirectory(at: directoryURL, fileManager: fileManager)
 
         let record = AutomationSocketDiscoveryRecord(socketPath: socketPath, processID: processID)
         let data = try JSONEncoder().encode(record)
@@ -84,6 +83,12 @@ public enum AutomationSocketLocator {
         environment: [String: String],
         fileManager: FileManager = .default
     ) -> AutomationSocketDiscoveryRecord? {
+        // A record in a directory another user controls could point anywhere.
+        guard AutomationSocketDirectory.isTrustedDirectory(
+            atPath: socketDirectoryURL(environment: environment).path
+        ) else {
+            return nil
+        }
         let recordURL = discoveryRecordURL(environment: environment)
         guard let data = try? Data(contentsOf: recordURL),
               let record = try? JSONDecoder().decode(AutomationSocketDiscoveryRecord.self, from: data) else {
@@ -100,7 +105,7 @@ public enum AutomationSocketLocator {
         guard processIsAlive(record.processID) else {
             return false
         }
-        return fileManager.fileExists(atPath: record.socketPath)
+        return AutomationSocketDirectory.isOwnedByCurrentUser(atPath: record.socketPath) == true
     }
 
     static func latestLiveSocketPath(
@@ -109,7 +114,8 @@ public enum AutomationSocketLocator {
         processIsAlive: (Int32) -> Bool
     ) -> String? {
         let directoryURL = socketDirectoryURL(environment: environment)
-        guard let candidateURLs = try? fileManager.contentsOfDirectory(
+        guard AutomationSocketDirectory.isTrustedDirectory(atPath: directoryURL.path),
+              let candidateURLs = try? fileManager.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
@@ -141,8 +147,7 @@ public enum AutomationSocketLocator {
                 .appendingPathComponent("toastty", isDirectory: true)
         }
         #endif
-        let tempDirectory = environment["TMPDIR"] ?? NSTemporaryDirectory()
-        return URL(fileURLWithPath: tempDirectory, isDirectory: true)
+        return URL(fileURLWithPath: ToasttyRuntimePaths.socketBaseDirectoryPath(environment: environment), isDirectory: true)
             .appendingPathComponent("toastty-\(getuid())", isDirectory: true)
     }
 
@@ -177,7 +182,7 @@ public enum AutomationSocketLocator {
             .dropLast(socketFilenameSuffix.count)
         guard let processID = Int32(pidSubstring),
               processIsAlive(processID),
-              fileManager.fileExists(atPath: url.path) else {
+              AutomationSocketDirectory.isOwnedByCurrentUser(atPath: url.path) == true else {
             return nil
         }
 

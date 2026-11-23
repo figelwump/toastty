@@ -72,7 +72,9 @@ struct ToasttyNotificationIntroduction: View {
             .tint(ToasttyDesignTokens.inkOnAmber)
             .disabled(requestingPermission)
             .accessibilityIdentifier("toastty-mobile-notifications-continue")
-            Button { controller.deferIntroduction(); dismiss() } label: {
+            Button {
+                Task { await controller.deferIntroduction(); dismiss() }
+            } label: {
                 Text("Not now")
                     .font(.subheadline)
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
@@ -150,7 +152,7 @@ struct ToasttyNotificationSettingsSection: View {
     var body: some View {
         Section("Notifications") {
             Toggle("Session alerts", isOn: Binding(get: {
-                controller.desired && controller.permission != .denied
+                controller.desired && controller.permission == .allowed
             }, set: { value in
                 Task { await controller.setDesired(value) }
             }))
@@ -184,7 +186,7 @@ struct ToasttyNotificationSettingsSection: View {
         case .off: "Off"
         case .turningOff: "Off on this iPhone. Waiting to stop alerts at the notification service."
         case .permissionDenied: "Alerts are off in iOS Settings."
-        case .pending: "Enabling alerts. Keep Toastty open and connected to your Mac."
+        case .pending: controller.deliveryHint ?? "Enabling alerts. Keep Toastty open and connected to your Mac."
         case .enabled: "On"
         }
     }
@@ -192,13 +194,15 @@ struct ToasttyNotificationSettingsSection: View {
 
 struct ToasttyNotificationErrorBanner: View {
     let message: String
-    let retry: () -> Void
+    let retry: (() -> Void)?
     var body: some View {
         HStack(spacing: 12) {
             Text(message).font(.caption).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Retry", action: retry).font(.caption.weight(.semibold))
-                .accessibilityIdentifier("toastty-mobile-notifications-banner-retry")
+            if let retry {
+                Button("Retry", action: retry).font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("toastty-mobile-notifications-banner-retry")
+            }
         }
         .padding(12)
         .background(ToasttyDesignTokens.elevatedSurface, in: RoundedRectangle(cornerRadius: 12))

@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { RelayAPNsClient } from "./relay-apns";
 import {
   base64url, bearerHash, capability, digest, enrollment, failure, json, policy,
-  readObject, RelayError, sameHash, sessionAlert, uuid
+  readObject, RelayError, sameHash, sessionAlert, uuid, diagnosticHeaders, type VerificationOutcome
 } from "./relay-protocol";
 import { RelayStore, type RegistrationRow } from "./relay-store";
 
@@ -99,31 +99,39 @@ export class PushRelayState extends DurableObject<RelayEnv> {
         if (row.status === "revoked" || row.expires_at <= timestamp) throw new RelayError(410, "registration_inactive");
         return row;
       }
-      store.consumeLimit(`verify-token:${tokenHash}`, policy.verificationPerToken, 3600, timestamp);
-      store.consumeLimit(`verify-ip:${ipHash}`, policy.verificationPerIP, 3600, timestamp);
-      store.consumeLimit("verify-global", policy.verificationGlobal, 3600, timestamp);
+      store.consumeLimit(`verify-token:${tokenHash}`, policy.verificationPerToken, 3600, timestamp, "verification_token_limit");
+      store.consumeLimit(`verify-ip:${ipHash}`, policy.verificationPerIP, 3600, timestamp, "verification_ip_limit");
+      store.consumeLimit("verify-global", policy.verificationGlobal, 3600, timestamp, "verification_global_limit");
       store.insert({ id: value.registrationID, token: value.deviceToken, token_hash: tokenHash, pairing_id: value.pairingID,
         management_hash: managementHash, send_hash: sendHash, nonce_hash: nonceHash, status: "pending",
         expires_at: timestamp + policy.challengeSeconds, last_used: timestamp });
       return undefined;
     });
-    if (existing) return json(status(existing), existing.status === "active" ? 200 : 202);
+    if (existing) return json(status(existing), existing.status === "active" ? 200 : 202,
+      diagnosticHeaders(existing.status === "active" ? "existing_active" : existing.verification_outcome ?? "verification_result_unknown",
+        existing.status === "pending" && existing.verification_refresh === 1));
     await this.schedulePruning();
+    let diagnostic: VerificationOutcome = "provider_unavailable";
+    let providerRefreshAttempted = false;
     const result = await apns.send(value.deviceToken, {
       aps: { alert: { title: "Toastty notification test", body: "Checking delivery to this iPhone." } },
       toastty: { version: 1, kind: "verification", registrationID: value.registrationID, pairingID: value.pairingID, nonce }
-    }, timestamp + policy.challengeSeconds, "toastty-verification");
+    }, timestamp + policy.challengeSeconds, "toastty-verification", (value, refreshed) => {
+      diagnostic = value; providerRefreshAttempted = refreshed;
+    });
+    // Diagnostics must not turn an accepted send into a failed setup request.
+    try { store.recordVerificationOutcome(value.registrationID, diagnostic, providerRefreshAttempted); } catch { /* outcome unavailable on retry */ }
     // Completion or revocation may have arrived while APNs was in flight.
     // Never write a post-send state over either decision.
     const current = store.registration(value.registrationID);
     if (!current || current.status === "revoked") throw new RelayError(410, "registration_inactive");
-    if (current.status === "active") return json(status(current));
+    if (current.status === "active") return json(status(current), 200, diagnosticHeaders("existing_active"));
     if (result === "inactive" || result === "invalid_device_token") {
       store.revoke(value.registrationID, now());
-      throw new RelayError(422, "invalid_device_token");
+      throw new RelayError(422, "invalid_device_token", undefined, diagnostic, providerRefreshAttempted);
     }
-    if (result !== "accepted") throw new RelayError(503, "verification_unavailable");
-    return json(status(current), 201);
+    if (result !== "accepted") throw new RelayError(503, "verification_unavailable", undefined, diagnostic, providerRefreshAttempted);
+    return json(status(current), 201, diagnosticHeaders(diagnostic, providerRefreshAttempted));
   }
 
   private async complete(request: Request, store: RelayStore, original: RegistrationRow): Promise<Response> {

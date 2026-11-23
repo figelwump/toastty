@@ -459,6 +459,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             launchEnvironment: request.environment,
             codexStatusTrackingSource: codexStatusTrackingSource,
             codexSkillsIntegration: effectiveCodexSkillsConfiguration,
+            codexSupportsNoDaemon: codexSkillsDecision?.supportsNoDaemon ?? false,
             stagedSkillsIntegration: stagedSkillsConfiguration,
             deliveredUserSkillsRootPath: deliveredUserSkillsRootPath
         )
@@ -695,6 +696,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         launchEnvironment: [String: String],
         codexStatusTrackingSource: CodexStatusTrackingSource,
         codexSkillsIntegration: CodexSkillsLaunchConfiguration?,
+        codexSupportsNoDaemon: Bool = false,
         stagedSkillsIntegration: ClaudeSkillsLaunchConfiguration?,
         deliveredUserSkillsRootPath: String? = nil
     ) -> PreparedAgentLaunchCommand {
@@ -710,6 +712,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 launchEnvironment: launchEnvironment,
                 codexStatusTrackingSource: codexStatusTrackingSource,
                 codexSkillsIntegration: codexSkillsIntegration,
+                codexSupportsNoDaemon: codexSupportsNoDaemon,
                 stagedSkillsIntegration: stagedSkillsIntegration,
                 deliveredUserSkillsRootPath: deliveredUserSkillsRootPath
             )
@@ -733,7 +736,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     fileManager: fileManager,
                     launchEnvironment: launchEnvironment,
                     codexStatusTrackingSource: codexStatusTrackingSource,
-                    codexSkillsIntegration: nil
+                    codexSkillsIntegration: nil,
+                    codexSupportsNoDaemon: codexSupportsNoDaemon
                ) {
                 return PreparedAgentLaunchCommand(
                     argv: fallback.argv,
@@ -746,7 +750,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 )
             }
             return PreparedAgentLaunchCommand(
-                argv: argv,
+                argv: agent == .codex && codexSupportsNoDaemon
+                    ? AgentLaunchInstrumentation.insertingCodexNoDaemonFlag(into: argv)
+                    : argv,
                 environment: [:],
                 artifacts: nil,
                 codexSkillsInjectionResult: agent == .codex

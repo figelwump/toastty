@@ -5,9 +5,11 @@ import Testing
 @testable import ToasttyApp
 
 extension SessionRuntimeStoreTests {
-    @Test
-    func codexHookPermissionRequestWithOmittedReviewerSurfacesAfterContextTimeout() async {
+    @Test(arguments: [1, 3], ["omitted", "future_reviewer"])
+    func codexHookPermissionRequestWithUnknownReviewerStaysSilentAfterContextTimeout(requestCount: Int, reviewer: String) async {
         let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
+        var actionableEvents: [ManagedSessionActionableEvent] = []
+        store.onActionableEvent = { actionableEvents.append($0) }
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
 
@@ -28,7 +30,7 @@ extension SessionRuntimeStoreTests {
             fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
             turnID: "turn-root",
             approvalPolicyField: .string("on-request"),
-            approvalsReviewerField: .unspecified
+            approvalsReviewerField: reviewer == "omitted" ? .unspecified : .string(reviewer)
         )
         _ = store.handleCodexHookEvent(
             sessionID: "sess-codex-unknown-reviewer",
@@ -45,32 +47,35 @@ extension SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(1)
         )
 
-        let accepted = store.handleCodexHookEvent(
-            sessionID: "sess-codex-unknown-reviewer",
-            event: CodexHookEvent(
-                hookEventName: "PermissionRequest",
-                permissionMode: "default",
-                threadID: "thread-root",
-                turnID: "turn-root",
-                promptFingerprint: nil,
-                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
-                nativeSessionID: "thread-root",
-                sessionFilePath: nil,
-                cwd: nil
-            ),
-            at: startedAt.addingTimeInterval(2)
-        )
+        for _ in 0..<requestCount {
+            let accepted = store.handleCodexHookEvent(
+                sessionID: "sess-codex-unknown-reviewer",
+                event: CodexHookEvent(
+                    hookEventName: "PermissionRequest",
+                    permissionMode: "default",
+                    threadID: "thread-root",
+                    turnID: "turn-root",
+                    promptFingerprint: nil,
+                    status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                ),
+                at: startedAt.addingTimeInterval(2)
+            )
 
-        #expect(accepted == false)
-        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-unknown-reviewer")?.status?.kind == .working)
+            #expect(accepted == false)
+            #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-unknown-reviewer")?.status?.kind == .working)
+        }
 
         try? await Task.sleep(nanoseconds: 80_000_000)
 
         #expect(
             store.sessionRegistry.activeSession(
                 sessionID: "sess-codex-unknown-reviewer"
-            )?.status?.kind == .needsApproval
+            )?.status?.kind == .working
         )
+        #expect(actionableEvents.isEmpty)
 
         store.recordCodexCanonicalTurnContext(
             sessionID: "sess-codex-unknown-reviewer",
@@ -84,6 +89,7 @@ extension SessionRuntimeStoreTests {
                 sessionID: "sess-codex-unknown-reviewer"
             )?.status?.kind == .working
         )
+        #expect(actionableEvents.isEmpty)
     }
 
     @Test
@@ -168,9 +174,11 @@ extension SessionRuntimeStoreTests {
         #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
     }
 
-    @Test
-    func codexHookPermissionRequestWithOmittedReviewerSurfacesAfterExplicitNullContextArrives() {
-        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 1_000_000_000)
+    @Test(arguments: ["user", "default"])
+    func codexHookPermissionRequestWithOmittedReviewerNotifiesWhenHumanContextArrivesAfterTimeout(reviewer: String) async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
+        var actionableEvents: [ManagedSessionActionableEvent] = []
+        store.onActionableEvent = { actionableEvents.append($0) }
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
 
@@ -230,17 +238,23 @@ extension SessionRuntimeStoreTests {
             )?.status?.kind == .working
         )
 
-        store.recordCodexOverrideTurnContext(
-            sessionID: "sess-codex-unknown-reviewer-later-null",
-            approvalPolicy: .unspecified,
-            approvalsReviewer: .null
-        )
+        try? await Task.sleep(nanoseconds: 80_000_000)
+        #expect(actionableEvents.isEmpty)
+
+        for _ in 0..<2 {
+            store.recordCodexOverrideTurnContext(
+                sessionID: "sess-codex-unknown-reviewer-later-null",
+                approvalPolicy: .unspecified,
+                approvalsReviewer: reviewer == "user" ? .string("user") : .null
+            )
+        }
 
         #expect(
             store.sessionRegistry.activeSession(
                 sessionID: "sess-codex-unknown-reviewer-later-null"
             )?.status?.kind == .needsApproval
         )
+        #expect(actionableEvents.map(\.kind) == [.needsApproval])
     }
 
     @Test
@@ -355,10 +369,7 @@ extension SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        await SessionRuntimeStoreTestSupport.waitUntil {
-            store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-timeout")?.status?.kind ==
-                .working
-        }
+        try? await Task.sleep(nanoseconds: 80_000_000)
 
         #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-timeout")?.status?.kind == .working)
     }

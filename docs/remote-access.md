@@ -127,6 +127,8 @@ through Apple's permission prompt. After Allow, Toastty returns to Home and
 finishes setup automatically. Not now defers all three permissions. Not now and
 Don't Allow are remembered. You can change the choice in Settings.
 Existing iOS permission choices stay in effect. Use iOS Settings to change them.
+Session alerts default to on for new notification settings. They start after iOS
+allows alert delivery. Saved off choices stay off.
 
 Badge permission alone does not enable session alerts. If all alert delivery
 locations are off, Toastty links to iOS Settings. Delivery to Notification Center
@@ -158,8 +160,26 @@ Interrupted setup retries automatically while the app is open and connected.
 Transient failures wait 30 seconds, then increase the wait up to 10 minutes.
 A service cooldown takes priority over setup retries. A failure shows a small
 Retry message; Retry does not bypass a service cooldown. The Gateway diagnostic
-log records fixed notification setup reasons and failed operations, without
-tokens, credentials, addresses, or notification content.
+log records notification setup steps, fixed Apple/relay result categories,
+HTTP status, the applied cooldown delay, and registration numbers local to this
+app run. These numbers do not identify the phone or count quota usage. Tokens,
+credentials, addresses, and notification content are not recorded. The bounded
+128-entry log is kept in memory. Enable Gateway system logging before a setup
+reproduction if the events must survive an app restart. Apple accepting a
+verification push does not establish that the iPhone received it or completed
+setup. Older relay versions provide fewer result details.
+
+iOS can keep giving Toastty a notification token that Apple accepts but no
+longer delivers to. Updates and unregistering do not replace this token.
+Setup then stays at "Enabling alerts", or alerts stop with no error on the
+iPhone, the Mac, or the service. After two test notifications that Apple
+accepted expire without reaching the iPhone, Home and Settings show a message
+that recommends reinstalling Toastty. Retry does not appear with this message.
+A test notification counts as missed only if it had at least one minute to
+arrive. The count resets when a test notification arrives, the token or relay
+changes, or alerts turn off. To fix the token, delete Toastty from the iPhone,
+install it again, and allow notifications. Pairing credentials are kept in the
+iPhone Keychain, so the Mac connection usually continues without pairing again.
 
 Off and unpairing retain pending notification revocation
 until the service accepts it. Settings shows when turning off is still pending;
@@ -275,11 +295,13 @@ a newer prompt, a modal interaction, an offline session, or an unavailable
 terminal rejects the send. An accepted send means Toastty handed it to the
 terminal; the transcript event carrying the same request ID is the later
 confirmation. If that event does not arrive in time, the phone reports that
-the send was not confirmed and does not retry it. Codex starts a turn before
-it records the turn's message, and an automatic context compaction can delay
-the message by more than a minute. While a Codex turn that started after the
-send is still running, Toastty waits up to five minutes and reports the send
-only if that turn ends without it.
+the send was not confirmed and does not retry it. For agents other than Codex,
+if the agent records the message later, for example after you press Return on
+the Mac, the phone replaces that report with the confirmed message. Codex
+starts a turn before it records the turn's message, and an automatic context
+compaction can delay the message by more than a minute. While a Codex turn
+that started after the send is still running, Toastty waits up to five minutes
+and reports the send only if that turn ends without it.
 
 ### Queue, steer, and stop while the agent works
 
@@ -292,28 +314,34 @@ chip directly left of it; Send uses the same arrow for every mode, and Stop and
 Send are never shown together. The agent's working state is shown in the
 transcript, not under the field.
 
-- **Queue** is the default. Send holds the message on the Mac, and the Mac
-  types it as the next prompt once the turn ends and the prompt opens, through
-  the same open-prompt gate as a live send. One queued message is delivered per
-  open prompt, in order; messages are never merged. The queue holds at most 5
-  messages per conversation and belongs to the current runtime binding: a
-  resumed or relaunched agent drops it, and the phone shows those messages as
-  not delivered. Queued messages appear at the end of the transcript as dashed
-  bubbles with **Edit**, **Steer now**, and **Remove**. Edit and Steer now first
-  remove the message on the Mac and act only when the Mac confirms it was still
-  waiting. A queued message with attachments keeps them on the Mac; editing it
-  restores only the text.
-- **Steer** submits the message to the running Codex or Claude Code CLI, only
-  while nobody has typed in that turn's terminal on the Mac. Claude Code labels
-  this input queued, but can read it within the current turn after active tool
-  calls finish. If it has no earlier opportunity to read the message, it sends
-  it after the turn ends. Toastty's **Queue** holds the message until the turn
+- **Steer** is the default while the host allows it. Send submits the message
+  to the running Codex or Claude Code CLI, only while nobody has typed in that
+  turn's terminal on the Mac. A message with attachments can steer: the Mac
+  types its text and the paths of the staged files. When steer is not
+  available, or closes while the user types, the chip, the Send label, and the
+  send itself fall back to Queue together. Claude Code labels this input
+  queued, but can read it within the current turn after active tool calls
+  finish. If it has no earlier opportunity to read the message, it sends it
+  after the turn ends. Toastty's **Queue** holds the message until the turn
   ends and the next prompt opens. See Claude Code's [interrupt and steer documentation](https://code.claude.com/docs/en/how-claude-code-works#interrupt-and-steer).
   A Claude steer leaves **Sending…** when Claude reads it. The message appears
   in the transcript within the running turn, or as a new turn if Claude reads
   it after the current turn ends. Input submitted on the Mac within a running
   turn also appears when Claude reads it.
-  The chip returns to Queue after each send.
+- **Queue** is the other choice, and the chip shows it in the accent color.
+  Send holds the message on the Mac, and the Mac types it as the next prompt
+  once the turn ends and the prompt opens, through the same open-prompt gate
+  as a live send. One queued message is delivered per open prompt, in order;
+  messages are never merged. The queue holds at most 5 messages per
+  conversation and belongs to the current runtime binding: a resumed or
+  relaunched agent drops it, and the phone shows those messages as not
+  delivered. Queued messages appear at the end of the transcript as dashed
+  bubbles with **Edit**, **Steer now**, and **Remove**. Edit and Steer now first
+  remove the message on the Mac and act only when the Mac confirms it was still
+  waiting. A queued message with attachments keeps them on the Mac; editing it
+  restores only the text, and it does not offer Steer now.
+- The chip returns to Steer after a send empties the field and when a new turn
+  starts. A send that fails keeps the user's choice with the draft.
 - **Stop** sends the agent's interrupt key (Escape) for the turn the phone saw.
   A stop names that turn, so a late tap cannot stop a later one. After a stop
   the queue pauses until the user taps **Send next** on a queued message,
@@ -422,9 +450,36 @@ return later during that window. The Mac must remain awake with Toastty and the
 Claude session running: a lost hook connection, including a long sleep or host
 restart, closes mobile input without answering Claude's question. If the
 connection ends, the window expires, or the provider's form is unsupported,
-continue on the Mac. Other tool permission requests remain read-only on the
-phone. Existing Claude sessions must be relaunched or resumed through the
-updated Toastty to install the hook with the longer answer window.
+continue on the Mac. Existing Claude sessions must be relaunched or resumed
+through the updated Toastty to install the hook with the longer answer window.
+
+### Permission requests
+
+The phone can also answer Claude Code permission requests from the main agent
+for the built-in Bash, Edit, MultiEdit, Write, NotebookEdit, Read, Glob, Grep,
+WebFetch, and WebSearch tools. The card shows Claude's reason and the full
+command, file change, or tool arguments, shortened only past 16 KB with a note
+that says so. Then choose one decision:
+
+- **Allow once** runs this request.
+- **Always allow …** applies one of Claude's own suggestions for this request,
+  such as a rule like `Bash(npm test:*)` saved to `.claude/settings.local.json`,
+  or accepting all edits for the rest of the session. The button names the
+  exact rule and where Claude saves it. At most two suggestions are shown, and
+  only rule additions and the session-only accept-edits switch are offered.
+- **Deny** refuses the request and stops Claude, like **No** on the desktop,
+  so you can send a message that says what to do instead.
+
+The desktop prompt stays open, and the first answer wins. Claude does not
+report which answer it took, so after a phone decision the card shows what the
+phone sent, not a confirmed result.
+
+Answering needs a native paired device with send access and its **Approve
+requests** switch on under **Paired Devices** in Remote Access settings. The
+switch is off by default, also for devices paired before this feature. Other
+tools, MCP tools, sub-agent requests, Codex sessions, and requests Toastty
+cannot match to a single tool call stay read-only on the phone. Older iPhone
+apps show the same decision as a list of options with the full request text.
 
 Session rows follow the desktop sidebar: a status mark, the session name, and
 its latest summary. Touch and hold a row to see its path, last update, model,
@@ -440,6 +495,18 @@ appears for a few seconds. The change reaches the Mac's sidebar and every other
 device; the Mac still clears the flag itself when the session starts new work.
 Flag needs a Mac that advertises it and a device with send access, and is
 hidden otherwise.
+
+**Close** closes the session's pane on the Mac, and its tab when the pane was
+the tab's last, the same as **Close Session** in the Mac's sidebar. The row
+leaves the list at once. When the agent is still running, the phone asks
+first, and **Stop and Close** stops it. When the session's tab is the only
+tab in its workspace, the phone asks whether to close the workspace too, and
+**Close Workspace** closes it and stops the agent. Its git worktree is not
+cleaned up, and if that workspace is showing on the Mac, the Mac switches to
+the next workspace. The Mac decides, with the same rules as its sidebar. The Mac
+refuses to close a session whose tab holds an unsaved document, and a session
+whose remote writes are turned off. Close needs a Mac that advertises it and a
+device with send access, and is hidden otherwise.
 
 While a session is working, its row shows the running turn's time, ticking,
 in place of its age. Touch and hold the row for the elapsed time and the
@@ -487,8 +554,9 @@ The host sends optional `parentWorkspaceID`, `spawningConversationID`,
 `primaryAnnotationKey`, and `doneAt` fields on each workspace summary, and
 optional `isFlaggedForLater`, `turnStartedAt`, and `lastTurnDuration` fields on
 each conversation summary. It advertises the `workspace_done` capability for
-`POST /api/workspace.done.set` and `conversation_flag` for
-`POST /api/conversation.flag.set`. An older Mac
+`POST /api/workspace.done.set`, `conversation_flag` for
+`POST /api/conversation.flag.set`, and `conversation_close` for
+`POST /api/conversation.close`. An older Mac
 omits them, so the phone lists every workspace at the top level and shows no
 checkbox. An older phone ignores them and keeps its flat list.
 
@@ -513,8 +581,10 @@ starts keep the same seven-day file retention and storage quota as replies.
 
 The Mac opens a new tab in that workspace with a plain terminal, starts the
 agent there with your message, and leaves the tab you are looking at and your
-keyboard focus where they were. The session then appears in the phone's list
-and opens. If it has not appeared after 10 seconds, the sheet closes with a
+keyboard focus where they were. When the agent later exits cleanly, the Mac
+closes that tab again, unless you are looking at it or it is its workspace's
+only tab; see Closing sessions in [Running agents](running-agents.md). The
+session then appears in the phone's list and opens. If it has not appeared after 10 seconds, the sheet closes with a
 notice, and you open the session from the list when it arrives.
 
 - **Workspace.** The menu lists every top-level workspace in Home order. From
@@ -560,6 +630,28 @@ An older Mac does not, so the phone hides **+**. If you turn **Start sessions**
 off and then run an older Toastty build on the Mac, that build does not know
 the switch: it rewrites the device record without it, and the switch is on
 again when you return to a newer build.
+
+### Share to Toastty from other apps
+
+In Photos, Safari, Files, or any app with a share sheet, tap **Share**, then
+**Toastty**. Toastty opens with the new-session sheet filled in. Images, PDFs,
+and supported text files become attachments. A link becomes the page title and
+URL in the message, and shared text goes in the message as is. The sheet starts
+on the same workspace as **+** on Home. Choose the agent and tap **Start** as
+usual. Nothing goes to the Mac until you tap **Start**.
+
+The share applies the same limits as the attachment picker: up to four files,
+8 MiB in total, with photos resized and re-encoded as JPEG. When you share more,
+Toastty keeps what fits and the sheet says how many items it left out. Shared
+content waits on the phone in Toastty's App Group container. The app deletes it
+when the sheet opens, and deletes unopened content after 30 minutes.
+
+The sheet waits when it cannot open right away: while another new-session
+sheet is open, before the Mac connects, or while the phone is not paired. It
+opens when that ends, or the next time you open Toastty within 30 minutes. If
+iOS does not let the share open Toastty, the share sheet says so; open Toastty
+yourself. A notification you tap goes first, and the shared sheet waits for
+the next time you open Toastty.
 
 Toastty Mobile reconnects automatically after transient network loss and
 reloads from Toastty's current snapshots when it detects an event gap. For a
@@ -706,6 +798,13 @@ support conversations; update Toastty on the Mac to enable previews.
   answer text; the Mac applies them only to the exact pending question through
   Claude's hook response. This does not grant tool permissions or change
   Claude's permission settings.
+- Answering a Claude permission request needs a native paired device with send
+  access and the **Approve requests** switch on, which is off by default. The
+  phone sends only the identifier of one decision the Mac offered. Claude's
+  suggested permission changes stay in the hook process on the Mac; **Always
+  allow** applies the chosen suggestion unchanged, which can save a rule in
+  Claude's settings files. Accepted and refused decisions are recorded in the
+  audit log with the device.
 - Marking a task space done or flagging a session needs a native paired device
   with send access. Each changes only that one mark, and each change is
   recorded in the audit log with the device that made it.

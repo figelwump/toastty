@@ -25,8 +25,8 @@ func optionalManifestValue(_ keys: [String]) -> String? {
     return nil
 }
 
-func manifestFlag(_ key: String) -> Bool {
-    guard let value = environment[key] else { return false }
+func manifestFlag(_ key: String, default defaultValue: Bool = false) -> Bool {
+    guard let value = environment[key] else { return defaultValue }
     switch value.lowercased() {
     case "1", "true", "yes", "on": return true
     case "0", "false", "no", "off": return false
@@ -102,6 +102,9 @@ let releaseProvisioningProfile = optionalManifestValue([
 let releaseOtherCodeSignFlags = optionalManifestValue([
     "TUIST_TOASTTY_MOBILE_RELEASE_OTHER_CODE_SIGN_FLAGS",
 ])
+let releaseShareExtensionProvisioningProfile = optionalManifestValue([
+    "TUIST_TOASTTY_MOBILE_RELEASE_SHARE_EXTENSION_PROVISIONING_PROFILE_SPECIFIER",
+])
 
 let productionBundleID = "com.giantthings.toastty.mobile"
 let prodTestBundleID = "com.giantthings.toastty.mobile.prodtest"
@@ -164,35 +167,60 @@ let debugDisplayName = enablesComposerTrace
         : "Toastty \((bundleSuffix.split(separator: ".").last ?? "dev").prefix(12))")
 let deploymentTarget: DeploymentTargets = .iOS("18.0")
 
-var appSettings: SettingsDictionary = [
-    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
-    "ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS": "NO",
+// The share extension hands shared content to the app through an App Group,
+// which every signing identity must provision for the app and the extension.
+// The TestFlight script turns it off until its distribution profiles do.
+let sharesFromOtherApps = manifestFlag("TUIST_TOASTTY_MOBILE_SHARE_EXTENSION", default: true)
+let shareExtensionBundleSuffix = ".share"
+if sharesFromOtherApps, releaseProvisioningProfile != nil, releaseShareExtensionProvisioningProfile == nil {
+    fatalError("Manual Release signing needs TUIST_TOASTTY_MOBILE_RELEASE_SHARE_EXTENSION_PROVISIONING_PROFILE_SPECIFIER for the share extension, or TUIST_TOASTTY_MOBILE_SHARE_EXTENSION=0.")
+}
+
+/// Settings the app and its share extension must agree on: one version, one
+/// name in the share sheet, and the URL scheme and App Group they hand off by.
+let identitySettings: SettingsDictionary = [
     "CURRENT_PROJECT_VERSION": SettingValue(stringLiteral: buildNumber),
     "MARKETING_VERSION": SettingValue(stringLiteral: marketingVersion),
-    "PRODUCT_BUNDLE_IDENTIFIER[config=Release]": SettingValue(stringLiteral: releaseBundleID),
-    "PRODUCT_MODULE_NAME": "ToasttyMobileApp",
     "SWIFT_STRICT_CONCURRENCY": "complete",
     "TOASTTY_MOBILE_APP_DISPLAY_NAME[config=Debug]": SettingValue(stringLiteral: debugDisplayName),
     "TOASTTY_MOBILE_APP_DISPLAY_NAME[config=Release]": SettingValue(stringLiteral: releaseDisplayName),
+    "TOASTTY_MOBILE_APP_GROUP[config=Debug]": SettingValue(stringLiteral: sharesFromOtherApps ? "group.\(debugBundleID)" : ""),
+    "TOASTTY_MOBILE_APP_GROUP[config=Release]": SettingValue(stringLiteral: sharesFromOtherApps ? "group.\(releaseBundleID)" : ""),
     "TOASTTY_MOBILE_URL_SCHEME[config=Debug]": "toastty-mobile-dev",
     "TOASTTY_MOBILE_URL_SCHEME[config=Release]": SettingValue(stringLiteral: releaseURLScheme),
+]
+
+var appSettings: SettingsDictionary = identitySettings.merging([
+    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+    "ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS": "NO",
+    "PRODUCT_BUNDLE_IDENTIFIER[config=Release]": SettingValue(stringLiteral: releaseBundleID),
+    "PRODUCT_MODULE_NAME": "ToasttyMobileApp",
     "TOASTTY_COMPOSER_TRACE_ENABLED[config=Debug]": enablesComposerTrace ? "YES" : "NO",
     "TOASTTY_COMPOSER_TRACE_ENABLED[config=Release]": "NO",
-]
+]) { _, appValue in appValue }
 
 appSettings["CODE_SIGN_STYLE"] = "Automatic"
 appSettings["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
+if sharesFromOtherApps {
+    appSettings["CODE_SIGN_ENTITLEMENTS"] = "Entitlements/AppGroup.entitlements"
+}
 if usesPushProbe {
     // Keep the APNs receiver and development entitlement out of Release even
     // when both configurations come from this same generated project.
     appSettings["SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]"] = "$(inherited) DEBUG TOASTTY_MOBILE_PUSH_PROBE"
-    appSettings["CODE_SIGN_ENTITLEMENTS[config=Debug]"] = "Entitlements/PushProbe.entitlements"
+    appSettings["CODE_SIGN_ENTITLEMENTS[config=Debug]"] = sharesFromOtherApps
+        ? "Entitlements/PushDevelopmentAppGroup.entitlements"
+        : "Entitlements/PushProbe.entitlements"
 }
 if debugPushRelayURL != nil {
-    appSettings["CODE_SIGN_ENTITLEMENTS[config=Debug]"] = "Entitlements/PushDevelopment.entitlements"
+    appSettings["CODE_SIGN_ENTITLEMENTS[config=Debug]"] = sharesFromOtherApps
+        ? "Entitlements/PushDevelopmentAppGroup.entitlements"
+        : "Entitlements/PushDevelopment.entitlements"
 }
 if productionPushRelayURL != nil {
-    appSettings["CODE_SIGN_ENTITLEMENTS[config=Release]"] = "Entitlements/PushProduction.entitlements"
+    appSettings["CODE_SIGN_ENTITLEMENTS[config=Release]"] = sharesFromOtherApps
+        ? "Entitlements/PushProductionAppGroup.entitlements"
+        : "Entitlements/PushProduction.entitlements"
 }
 appSettings["TOASTTY_MOBILE_PUSH_RELAY_URL[config=Debug]"] = SettingValue(stringLiteral: debugPushRelayURL ?? "")
 appSettings["TOASTTY_MOBILE_PUSH_RELAY_URL[config=Release]"] = SettingValue(stringLiteral: productionPushRelayURL ?? "")
@@ -223,6 +251,7 @@ var appInfoPlist: [String: Plist.Value] = [
         ]),
     ]),
     "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
+    "ToasttyMobileAppGroup": .string("$(TOASTTY_MOBILE_APP_GROUP)"),
     "ToasttyMobilePushRelayURL": .string("$(TOASTTY_MOBILE_PUSH_RELAY_URL)"),
     "ToasttyMobilePushRelayID": .string("$(TOASTTY_MOBILE_PUSH_RELAY_ID)"),
     "ToasttyMobilePushEnvironment": .string("$(TOASTTY_MOBILE_PUSH_ENVIRONMENT)"),
@@ -245,6 +274,70 @@ if localHTTPAllowed(for: gatewayURL) {
         "NSAllowsLocalNetworking": .boolean(true),
     ])
 }
+
+var shareExtensionSettings: SettingsDictionary = identitySettings.merging([
+    "CODE_SIGN_ENTITLEMENTS": "Entitlements/AppGroup.entitlements",
+    "CODE_SIGN_STYLE": "Automatic",
+    "DEVELOPMENT_TEAM": SettingValue(stringLiteral: developmentTeam),
+    "PRODUCT_BUNDLE_IDENTIFIER[config=Release]": SettingValue(
+        stringLiteral: "\(releaseBundleID)\(shareExtensionBundleSuffix)"
+    ),
+    "PRODUCT_MODULE_NAME": "ToasttyMobileShareExtension",
+]) { _, extensionValue in extensionValue }
+// The extension has its own App Store profile, so Release signs it with the
+// app's identity and keychain but that profile.
+if let releaseShareExtensionProvisioningProfile {
+    shareExtensionSettings["CODE_SIGN_STYLE[config=Release]"] = "Manual"
+    shareExtensionSettings["PROVISIONING_PROFILE_SPECIFIER[config=Release]"] = SettingValue(
+        stringLiteral: releaseShareExtensionProvisioningProfile
+    )
+}
+if let releaseCodeSignIdentity {
+    shareExtensionSettings["CODE_SIGN_IDENTITY[config=Release]"] = SettingValue(stringLiteral: releaseCodeSignIdentity)
+}
+if let releaseOtherCodeSignFlags {
+    shareExtensionSettings["OTHER_CODE_SIGN_FLAGS[config=Release]"] = SettingValue(stringLiteral: releaseOtherCodeSignFlags)
+}
+
+let shareExtensionTargets: [Target] = sharesFromOtherApps ? [
+    .target(
+        name: "ToasttyMobileShareExtension",
+        destinations: .iOS,
+        product: .appExtension,
+        productName: "ToasttyShare",
+        bundleId: "\(debugBundleID)\(shareExtensionBundleSuffix)",
+        deploymentTargets: deploymentTarget,
+        infoPlist: .extendingDefault(with: [
+            "CFBundleDisplayName": .string("$(TOASTTY_MOBILE_APP_DISPLAY_NAME)"),
+            "CFBundleShortVersionString": .string("$(MARKETING_VERSION)"),
+            "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
+            "ToasttyMobileAppGroup": .string("$(TOASTTY_MOBILE_APP_GROUP)"),
+            "ToasttyMobileURLScheme": .string("$(TOASTTY_MOBILE_URL_SCHEME)"),
+            "UIUserInterfaceStyle": .string("Dark"),
+            "NSExtension": .dictionary([
+                "NSExtensionPointIdentifier": .string("com.apple.share-services"),
+                "NSExtensionPrincipalClass": .string("$(PRODUCT_MODULE_NAME).ToasttyShareViewController"),
+                "NSExtensionAttributes": .dictionary([
+                    // Counts above the Mac's four-file limit keep Toastty in
+                    // the share sheet for a larger selection; the draft takes
+                    // the first four and says what it left out.
+                    "NSExtensionActivationRule": .dictionary([
+                        "NSExtensionActivationSupportsImageWithMaxCount": .integer(10),
+                        "NSExtensionActivationSupportsFileWithMaxCount": .integer(10),
+                        "NSExtensionActivationSupportsWebURLWithMaxCount": .integer(1),
+                        "NSExtensionActivationSupportsText": .boolean(true),
+                    ]),
+                ]),
+            ]),
+        ]),
+        sources: [
+            "Sources/ToasttyMobileShareExtension/**",
+            "Sources/ToasttyMobileShared/**",
+        ],
+        dependencies: [.target(name: "RemoteProtocol")],
+        settings: .settings(base: shareExtensionSettings)
+    ),
+] : []
 
 let project = Project(
     name: "ToasttyMobile",
@@ -275,7 +368,10 @@ let project = Project(
             bundleId: debugBundleID,
             deploymentTargets: deploymentTarget,
             infoPlist: .extendingDefault(with: appInfoPlist),
-            sources: ["Sources/ToasttyMobileApp/**"],
+            sources: [
+                "Sources/ToasttyMobileApp/**",
+                "Sources/ToasttyMobileShared/**",
+            ],
             resources: [
                 "Resources/ToasttyMobileApp/**",
                 .folderReference(path: "../Sources/App/Resources/WebPanels/local-document-panel"),
@@ -284,7 +380,7 @@ let project = Project(
             dependencies: [
                 .target(name: "ToasttyMobileDomain"),
                 .target(name: "RemoteProtocol"),
-            ],
+            ] + shareExtensionTargets.map { .target(name: $0.name) },
             settings: .settings(base: appSettings)
         ),
         .target(
@@ -337,7 +433,7 @@ let project = Project(
             sources: ["Tests/ToasttyMobileUITests/**"],
             dependencies: [.target(name: "ToasttyMobileApp")]
         ),
-    ],
+    ] + shareExtensionTargets,
     schemes: [
         .scheme(
             name: "ToasttyMobileApp",

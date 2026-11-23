@@ -328,7 +328,7 @@ run_local_mode() {
   require_command ssh
 
   log "target=$REMOTE_HOST mode=$MODE retention_hours=$MAX_AGE_HOURS"
-  ssh -T -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -s -- \
+  ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -s -- \
     --remote-exec \
     "$MODE" \
     "$NOW_EPOCH" \

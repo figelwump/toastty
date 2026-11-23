@@ -1,4 +1,5 @@
 import Foundation
+import ToasttyMobileDomain
 
 enum ToasttyDiagnosticCategory: String, CaseIterable, Identifiable, Sendable {
     case gateway
@@ -39,6 +40,31 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
     case authRequired = "auth_required"
     case authRevoked = "auth_revoked"
 
+    case pushRegistrationRestored = "push_registration_restored"
+    case pushTokenRequested = "push_token_requested"
+    case pushTokenReceived = "push_token_received"
+    case pushTokenRequestFailed = "push_token_request_failed"
+    case pushBridgeAttached = "push_bridge_attached"
+    case pushPayloadInvalid = "push_payload_invalid"
+    case pushProofBuffered = "push_proof_buffered"
+    case pushVerificationStarted = "push_verification_started"
+    case pushVerificationResponse = "push_verification_response"
+    case pushSetupContextChanged = "push_setup_context_changed"
+    case pushProofReceived = "push_proof_received"
+    case pushProofInvalid = "push_proof_invalid"
+    case pushProofNoPending = "push_proof_no_pending"
+    case pushProofOtherRegistration = "push_proof_other_registration"
+    case pushProofOtherPairing = "push_proof_other_pairing"
+    case pushProofDisabled = "push_proof_disabled"
+    case pushProofSaveFailed = "push_proof_save_failed"
+    case pushProofDeferredBackground = "push_proof_deferred_background"
+    case pushProofDeferredDisconnected = "push_proof_deferred_disconnected"
+    case pushProofDeferredPairing = "push_proof_deferred_pairing"
+    case pushProofDeferredConfiguration = "push_proof_deferred_configuration"
+    case pushProofAlreadyVerified = "push_proof_already_verified"
+    case pushProofCompletionStarted = "push_proof_completion_started"
+    case pushProofCompleted = "push_proof_completed"
+    case pushMacHandoffStarted = "push_mac_handoff_started"
     case pushRegistrationMissing = "push_registration_missing"
     case pushTokenChanged = "push_token_changed"
     case pushRelayChanged = "push_relay_changed"
@@ -59,6 +85,13 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
     var category: ToasttyDiagnosticCategory {
         switch self {
         case .gatewayRequestStarted, .gatewayRequestSucceeded, .gatewayRequestFailed,
+             .pushRegistrationRestored, .pushTokenRequested, .pushTokenReceived, .pushTokenRequestFailed,
+             .pushBridgeAttached, .pushPayloadInvalid, .pushProofBuffered, .pushVerificationStarted,
+             .pushVerificationResponse, .pushSetupContextChanged, .pushProofReceived, .pushProofInvalid,
+             .pushProofNoPending, .pushProofOtherRegistration, .pushProofOtherPairing, .pushProofDisabled,
+             .pushProofSaveFailed, .pushProofDeferredBackground, .pushProofDeferredDisconnected,
+             .pushProofDeferredPairing, .pushProofDeferredConfiguration, .pushProofAlreadyVerified, .pushProofCompletionStarted, .pushProofCompleted,
+             .pushMacHandoffStarted,
              .pushRegistrationMissing, .pushTokenChanged, .pushRelayChanged,
              .pushPairingChanged, .pushProofExpired, .pushRegistrationExpired,
              .pushStateUnavailable, .pushMacConfigurationFailed, .pushRelayStatusFailed,
@@ -93,6 +126,31 @@ enum ToasttyConnectionDiagnosticEvent: String, CaseIterable, Sendable {
         case .authSucceeded: "Authentication succeeded"
         case .authRequired: "Authentication required"
         case .authRevoked: "Access revoked"
+        case .pushRegistrationRestored: "Push registration restored"
+        case .pushTokenRequested: "Requesting Apple notification token"
+        case .pushTokenReceived: "Apple notification token received"
+        case .pushTokenRequestFailed: "Apple notification token request failed"
+        case .pushBridgeAttached: "Push notification handler attached"
+        case .pushPayloadInvalid: "Push payload ignored: invalid format"
+        case .pushProofBuffered: "Push verification buffered before setup was ready"
+        case .pushVerificationStarted: "Push verification request started"
+        case .pushVerificationResponse: "Push verification response received"
+        case .pushSetupContextChanged: "Push setup result belongs to an earlier connection"
+        case .pushProofReceived: "Push verification received"
+        case .pushProofInvalid: "Push verification ignored: invalid proof"
+        case .pushProofNoPending: "Push verification ignored: no pending registration"
+        case .pushProofOtherRegistration: "Push verification ignored: another registration"
+        case .pushProofOtherPairing: "Push verification ignored: another pairing"
+        case .pushProofDisabled: "Push verification ignored: alerts off"
+        case .pushProofSaveFailed: "Push verification could not be saved"
+        case .pushProofDeferredBackground: "Push verification saved: app is in background"
+        case .pushProofDeferredDisconnected: "Push verification saved: Mac is disconnected"
+        case .pushProofDeferredPairing: "Push verification saved: pairing changed"
+        case .pushProofDeferredConfiguration: "Push verification saved: relay settings do not match"
+        case .pushProofAlreadyVerified: "Push verification ignored: proof already completed"
+        case .pushProofCompletionStarted: "Push verification completion started"
+        case .pushProofCompleted: "Push verification completed"
+        case .pushMacHandoffStarted: "Push registration handoff started"
         case .pushRegistrationMissing: "Push setup: no registration"
         case .pushTokenChanged: "Push token changed"
         case .pushRelayChanged: "Push service changed"
@@ -119,10 +177,11 @@ struct ToasttyConnectionDiagnosticEntry: Equatable, Identifiable, Sendable {
     let sequence: UInt64
     let recordedAt: Date
     let event: ToasttyConnectionDiagnosticEvent
+    var pushDetails: ToasttyPushDiagnosticDetails? = nil
 }
 
 struct ToasttyConnectionDiagnosticLog: Equatable, Sendable {
-    static let defaultCapacity = 40
+    static let defaultCapacity = 128
 
     let capacity: Int
     private(set) var entries: [ToasttyConnectionDiagnosticEntry] = []
@@ -139,12 +198,14 @@ struct ToasttyConnectionDiagnosticLog: Equatable, Sendable {
 
     mutating func append(
         _ event: ToasttyConnectionDiagnosticEvent,
-        recordedAt: Date = .now
+        recordedAt: Date = .now,
+        pushDetails: ToasttyPushDiagnosticDetails? = nil
     ) {
         let entry = ToasttyConnectionDiagnosticEntry(
             sequence: nextSequence,
             recordedAt: recordedAt,
-            event: event
+            event: event,
+            pushDetails: pushDetails
         )
         nextSequence &+= 1
 
@@ -189,9 +250,10 @@ struct ToasttyDiagnosticsState: Equatable, Sendable {
 
     mutating func record(
         _ event: ToasttyConnectionDiagnosticEvent,
-        recordedAt: Date = .now
+        recordedAt: Date = .now,
+        pushDetails: ToasttyPushDiagnosticDetails? = nil
     ) {
-        connectionLog.append(event, recordedAt: recordedAt)
+        connectionLog.append(event, recordedAt: recordedAt, pushDetails: pushDetails)
     }
 
     func isSystemLoggingEnabled(_ category: ToasttyDiagnosticCategory) -> Bool {

@@ -694,6 +694,9 @@ final class LiveConversationController {
         switch reason {
         case .invalidAnswers:
             .failed("Review every answer and try again.")
+        case .approvalsDisabled:
+            // Turning the switch on at the Mac fixes this; keep the buttons.
+            .failed(questionRejectionMessage(reason))
         default:
             .unavailable(questionRejectionMessage(reason))
         }
@@ -710,6 +713,8 @@ final class LiveConversationController {
             "This answer is no longer available on iPhone."
         case .invalidAnswers: "Review every answer and try again."
         case .unsupported: "Update Toastty on your Mac to answer here."
+        case .approvalsDisabled:
+            "Approving from this iPhone is off. Turn on Approve requests for it in Toastty's Remote Access settings on the Mac."
         }
     }
 

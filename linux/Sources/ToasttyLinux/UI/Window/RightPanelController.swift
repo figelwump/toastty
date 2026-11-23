@@ -53,7 +53,7 @@ public final class RightPanelController {
 
         tabs.onSelect = { [weak self] tabID in
             guard let self, let workspaceID = self.workspaceID else { return }
-            self.store.send(.selectRightAuxPanelTab(workspaceID: workspaceID, tabID: tabID, focus: true))
+            self.store.sendNavigation(.selectRightAuxPanelTab(workspaceID: workspaceID, tabID: tabID, focus: true))
         }
         tabs.onCloseRequest = { [weak self] tabID in
             guard let self, let workspaceID = self.workspaceID else { return }

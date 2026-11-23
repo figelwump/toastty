@@ -177,6 +177,21 @@ final class WorkspaceTabCommandController {
         return store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
     }
 
+    func canCloseSelectedTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.canCloseSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    @discardableResult
+    func closeSelectedTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.closeSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
     func canSelectAdjacentTab() -> Bool {
         guard let preferredWindowID = currentKeyWindowID() else {
             return false
@@ -322,6 +337,7 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         static let closePanel = ToasttyBuiltInCommand.closePanel.title
         static let watchRunningCommand = ToasttyBuiltInCommand.watchRunningCommand.title
         static let renameTab = ToasttyBuiltInCommand.renameTab.title
+        static let closeTab = ToasttyBuiltInCommand.closeTab.title
         static let selectPreviousTab = ToasttyBuiltInCommand.selectPreviousTab.title
         static let selectNextTab = ToasttyBuiltInCommand.selectNextTab.title
         static let selectPreviousRightPanelTab = ToasttyBuiltInCommand.selectPreviousRightPanelTab.title
@@ -389,6 +405,11 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
             in: workspaceMenu
         )
         configureItem(
+            titled: ItemTitle.closeTab,
+            action: #selector(closeSelectedTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
             titled: ItemTitle.selectPreviousTab,
             action: #selector(selectPreviousTab(_:)),
             in: workspaceMenu
@@ -452,6 +473,11 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     @objc
+    func closeSelectedTab(_: Any?) {
+        _ = workspaceTabCommandController.closeSelectedTab()
+    }
+
+    @objc
     func selectPreviousTab(_: Any?) {
         _ = workspaceTabCommandController.selectAdjacentTab(.previous)
     }
@@ -495,6 +521,8 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
 
         case #selector(renameSelectedTab(_:)):
             return workspaceTabCommandController.canRenameSelectedTab()
+        case #selector(closeSelectedTab(_:)):
+            return workspaceTabCommandController.canCloseSelectedTab()
 
         case #selector(selectPreviousTab(_:)),
             #selector(selectNextTab(_:)):

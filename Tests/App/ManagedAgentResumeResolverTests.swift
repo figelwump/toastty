@@ -521,8 +521,12 @@ struct ManagedAgentResumeResolverTests {
         try Data("{}\n".utf8).write(to: actual)
         let reported = resumedFrom.appendingPathComponent("\(sessionID).jsonl").path
 
-        #expect(ManagedAgentResumeResolver.existingClaudeTranscriptPath(
-            reported: reported, nativeSessionID: sessionID) == actual.path)
+        // The directory listing can name the file through a symlinked
+        // ancestor (/var -> /private/var on macOS).
+        let found = ManagedAgentResumeResolver.existingClaudeTranscriptPath(
+            reported: reported, nativeSessionID: sessionID)
+        #expect(URL(fileURLWithPath: found).resolvingSymlinksInPath().path
+            == actual.resolvingSymlinksInPath().path)
         // A reported file that exists is used as is.
         #expect(ManagedAgentResumeResolver.existingClaudeTranscriptPath(
             reported: actual.path, nativeSessionID: sessionID) == actual.path)

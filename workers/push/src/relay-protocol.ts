@@ -11,8 +11,21 @@ export const policy = {
   sendsGlobalPerMinute: 1000
 } as const;
 
+export type VerificationOutcome = "apple_accepted" | "apple_bad_device_token" | "apple_token_topic_mismatch"
+  | "apple_unregistered" | "apple_provider_expired" | "apple_provider_rejected" | "apple_rate_limited"
+  | "apple_provider_updates_limited" | "apple_server_error"
+  | "apple_rejected" | "apple_response_unknown" | "apple_transport_unknown" | "provider_unavailable";
+export type RelayDiagnostic = VerificationOutcome | "verification_result_unknown" | "existing_active"
+  | "verification_token_limit" | "verification_ip_limit" | "verification_global_limit";
+
+export function diagnosticHeaders(diagnostic?: RelayDiagnostic | null, providerRefreshAttempted = false): Record<string, string> {
+  return { ...(diagnostic ? { "x-toastty-push-diagnostic": diagnostic } : {}),
+    ...(providerRefreshAttempted ? { "x-toastty-push-provider-refresh": "attempted" } : {}) };
+}
+
 export class RelayError extends Error {
-  constructor(readonly status: number, readonly code: string, readonly retryAfter?: number) { super(code); }
+  constructor(readonly status: number, readonly code: string, readonly retryAfter?: number,
+    readonly diagnostic?: RelayDiagnostic, readonly providerRefreshAttempted = false) { super(code); }
 }
 
 export function json(value: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -21,8 +34,10 @@ export function json(value: unknown, status = 200, headers: Record<string, strin
 
 export function failure(error: unknown): Response {
   const known = error instanceof RelayError ? error : new RelayError(503, "service_unavailable");
-  return json({ error: known.code }, known.status,
-    known.retryAfter === undefined ? {} : { "retry-after": String(known.retryAfter) });
+  return json({ error: known.code }, known.status, {
+    ...diagnosticHeaders(known.diagnostic, known.providerRefreshAttempted),
+    ...(known.retryAfter === undefined ? {} : { "retry-after": String(known.retryAfter) })
+  });
 }
 
 export async function readObject(request: Request, keys: readonly string[]): Promise<Record<string, unknown>> {

@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  # Real key events go through System Events (osascript). On Linux the
+  # Broadway suites cover shortcuts: scripts/linux/test.sh LinuxCommandTable.
+  echo "error: shortcut-trace is macOS-only; on Linux run scripts/linux/test.sh (Broadway shortcut suites)" >&2
+  exit 2
+fi
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-shortcut-trace-$(date +%Y%m%d-%H%M%S)}"
 RUNTIME_LABEL="$(toastty_sanitize_runtime_label "$RUN_ID")"

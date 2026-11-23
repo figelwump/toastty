@@ -119,6 +119,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.option, .shift]
     )
 
+    static let closeTab = ToasttyKeyboardShortcut(
+        "w",
+        modifiers: [.option, .shift]
+    )
+
     static let selectPreviousTab = ToasttyKeyboardShortcut(
         "[",
         modifiers: [.command, .shift]

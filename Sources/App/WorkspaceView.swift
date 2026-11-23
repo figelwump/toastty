@@ -608,6 +608,9 @@ struct WorkspaceView: View {
         .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
             consumePendingWorkspaceTabRenameRequestIfNeeded()
         }
+        .onChange(of: store.pendingCloseWorkspaceTabRequest) { _, _ in
+            consumePendingWorkspaceTabCloseRequestIfNeeded()
+        }
         .onChange(of: store.pendingPanelFlashRequest) { _, _ in
             handlePendingPanelFlashRequest()
         }
@@ -2470,7 +2473,11 @@ struct WorkspaceView: View {
             tab: tab,
             shouldBypassConfirmation: shouldBypassInteractiveConfirmation
         ) { panelID in
-            terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+            // An agent that finished its turn does not ask, although its
+            // process still runs; one that is mid-turn always asks.
+            sessionRuntimeStore.agentCloseReadiness(panelID: panelID).terminalCloseAssessment {
+                terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+            }
         } localDocumentCloseConfirmationState: { panelID in
             webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
         }
@@ -2835,6 +2842,15 @@ struct WorkspaceView: View {
         }
 
         beginTabRename(tab)
+    }
+
+    private func consumePendingWorkspaceTabCloseRequestIfNeeded() {
+        guard let request = store.consumePendingWorkspaceTabCloseRequest(windowID: windowID),
+              store.state.workspacesByID[request.workspaceID]?.tab(id: request.tabID) != nil else {
+            return
+        }
+
+        closeWorkspaceTab(workspaceID: request.workspaceID, tabID: request.tabID)
     }
 
     private func renameTextFieldAccessibilityID(for tabID: UUID) -> String {

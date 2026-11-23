@@ -485,6 +485,7 @@ enum
   SIG_RENDERER_HEALTH,
   SIG_MOUSE_NAVIGATION,
   SIG_CONTEXT_MENU,
+  SIG_LOCAL_PASTE,
   SIG_CLIPBOARD_CONFIRM,
   N_SIGNALS,
 };
@@ -524,6 +525,20 @@ surface_handle_free_idle (gpointer data)
 void
 toastty_ghostty_free_all_surfaces (void)
 {
+  /* The main loop has returned, so no tick drains the app mailbox again. A
+   * render or IO thread blocked on that full mailbox would never finish, and
+   * ghostty_surface_free joins those threads: let blocked pushes give up. */
+  g_mutex_lock (&runtimes_lock);
+  if (runtimes != NULL)
+    {
+      GHashTableIter iter;
+      gpointer app;
+      g_hash_table_iter_init (&iter, runtimes);
+      while (g_hash_table_iter_next (&iter, &app, NULL))
+        ghostty_app_begin_shutdown (app);
+    }
+  g_mutex_unlock (&runtimes_lock);
+
   if (surface_handles != NULL)
     {
       GHashTableIter iter;
@@ -1445,9 +1460,15 @@ on_click_pressed (GtkGestureClick *gesture, int n_press, double x, double y, Toa
     return;
 
   ghostty_input_mouse_button_e gbutton = translate_button (button);
-  if (gbutton == GHOSTTY_MOUSE_MIDDLE && !primary_paste_enabled () &&
-      !ghostty_surface_mouse_captured (self->surface))
-    return;
+  if (gbutton == GHOSTTY_MOUSE_MIDDLE && !ghostty_surface_mouse_captured (self->surface))
+    {
+      if (!primary_paste_enabled ())
+        return;
+      /* Ghostty pastes the primary selection on this press. Tell the host
+       * first, like a key or menu paste, so a remote draft cannot append to
+       * the pasted text. */
+      g_signal_emit (self, signals[SIG_LOCAL_PASTE], 0);
+    }
 
   gboolean consumed = ghostty_surface_mouse_button (self->surface, GHOSTTY_MOUSE_PRESS, gbutton,
                                                     translate_mods (state));
@@ -2277,6 +2298,8 @@ toastty_ghostty_surface_class_init (ToasttyGhosttySurfaceClass *klass)
                                                 1, G_TYPE_INT);
   signals[SIG_CONTEXT_MENU] = g_signal_new ("context-menu", type, G_SIGNAL_RUN_LAST, 0, NULL, NULL,
                                             NULL, G_TYPE_NONE, 2, G_TYPE_DOUBLE, G_TYPE_DOUBLE);
+  signals[SIG_LOCAL_PASTE] = g_signal_new ("local-paste", type, G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+                                           NULL, G_TYPE_NONE, 0);
   /* (confirm: const ghostty_clipboard_confirm_s*, state: gpointer,
    *  request: ghostty_clipboard_request_e) -> handled. A handler that
    * returns TRUE must later call ghostty_surface_complete_clipboard_request

@@ -3,6 +3,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sessionFixture from "../../../../Tests/RemoteProtocol/Fixtures/v1/push-session.json";
 import { policy } from "../../src/relay-protocol";
+import { RelayStore } from "../../src/relay-store";
 import verificationFixture from "../../../../Tests/RemoteProtocol/Fixtures/v1/push-verification.json";
 
 // Failure modes: proof before begin response; lost HTTP responses; expired or
@@ -115,6 +116,12 @@ describe("account-free registration and session alerts", () => {
     expect(complete.status).toBe(200);
     release();
     await beginning;
+    await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) => {
+      const row = state.storage.sql.exec<{ verification_outcome: string | null; verification_refresh: number }>(
+        "SELECT verification_outcome, verification_refresh FROM registrations WHERE id = ?", value.registrationID).one();
+      expect(row.verification_outcome).toBeNull();
+      expect(row.verification_refresh).toBe(0);
+    });
     expect((await call(registrationPath(value), "GET", undefined, value.managementToken)).status).toBe(200);
     expect((await send(value)).status).toBe(202);
   });
@@ -397,5 +404,183 @@ describe("account-free registration and session alerts", () => {
     expect((await send(value, { sessionTitle: "😀".repeat(128) })).status).toBe(202);
     expect(new TextEncoder().encode(String(outbound.mock.calls.at(-1)?.[1]?.body)).byteLength).toBeLessThan(4096);
     expect(outbound).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Preserve HTTP behavior, idempotency, and quotas while exposing only safe categories.
+describe("verification diagnostics", () => {
+  const header = "x-toastty-push-diagnostic";
+  it("retains the Apple result for a pending retry and clears it after proof", async () => {
+    const value = attempt();
+    const first = await call("/v1/registrations", "POST", value);
+    expect(first.status).toBe(201);
+    expect(first.headers.get(header)).toBe("apple_accepted");
+    const nonce = pushPayload().toastty.nonce;
+    const retry = await call("/v1/registrations", "POST", value);
+    expect(retry.status).toBe(202);
+    expect(retry.headers.get(header)).toBe("apple_accepted");
+    expect(outbound).toHaveBeenCalledTimes(1);
+    expect((await call(`${registrationPath(value)}/complete`, "POST", { nonce }, value.managementToken)).status).toBe(200);
+    expect((await call("/v1/registrations", "POST", value)).headers.get(header)).toBe("existing_active");
+    await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) => {
+      expect(state.storage.sql.exec<{ verification_outcome: string | null }>(
+        "SELECT verification_outcome FROM registrations WHERE id = ?", value.registrationID
+      ).one().verification_outcome).toBeNull();
+    });
+  });
+  it.each([
+    [400, "BadDeviceToken", 422, "apple_bad_device_token"],
+    [400, "DeviceTokenNotForTopic", 422, "apple_token_topic_mismatch"],
+    [410, "Unregistered", 422, "apple_unregistered"],
+    [403, "InvalidProviderToken", 503, "apple_provider_rejected"],
+    [429, "TooManyRequests", 503, "apple_rate_limited"],
+    [503, "SENTINEL_PRIVATE_PROVIDER_REASON", 503, "apple_server_error"],
+  ])("reports safe Apple categories for %s %s", async (status, reason, expectedStatus, diagnostic) => {
+    outbound.mockResolvedValueOnce(new Response(JSON.stringify({ reason }), { status }));
+    const value = attempt();
+    const response = await call("/v1/registrations", "POST", value);
+    expect(response.status).toBe(expectedStatus);
+    expect(response.headers.get(header)).toBe(diagnostic);
+    expect(await response.text()).not.toContain("SENTINEL_PRIVATE_PROVIDER_REASON");
+    if (expectedStatus === 503) {
+      const retry = await call("/v1/registrations", "POST", value);
+      expect(retry.status).toBe(202);
+      expect(retry.headers.get(header)).toBe(diagnostic);
+      expect(outbound).toHaveBeenCalledTimes(1);
+    }
+  });
+  it("retains an uncertain result without resending verification", async () => {
+    outbound.mockRejectedValueOnce(new Error("SENTINEL_PRIVATE_TRANSPORT_ERROR"));
+    const value = attempt();
+    const response = await call("/v1/registrations", "POST", value);
+    expect(response.status).toBe(503);
+    expect(response.headers.get(header)).toBe("apple_transport_unknown");
+    expect(await response.text()).not.toContain("SENTINEL_PRIVATE_TRANSPORT_ERROR");
+    const retry = await call("/v1/registrations", "POST", value);
+    expect(retry.status).toBe(202);
+    expect(retry.headers.get(header)).toBe("apple_transport_unknown");
+    expect(outbound).toHaveBeenCalledTimes(1);
+  });
+  it("does not claim Apple acceptance while the first request is still in flight", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    outbound.mockImplementationOnce(async () => {
+      entered();
+      await new Promise<void>(resolve => { release = resolve; });
+      return new Response(null, { status: 200 });
+    });
+    const value = attempt();
+    const first = call("/v1/registrations", "POST", value);
+    await started;
+    const retry = await call("/v1/registrations", "POST", value);
+    expect(retry.status).toBe(202);
+    expect(retry.headers.get(header)).toBe("verification_result_unknown");
+    release();
+    expect((await first).headers.get(header)).toBe("apple_accepted");
+    expect(outbound).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ["verify-token:", "verification_token_limit", policy.verificationPerToken],
+    ["verify-ip:", "verification_ip_limit", policy.verificationPerIP],
+    ["verify-global", "verification_global_limit", policy.verificationGlobal],
+  ])("identifies %s without exposing its private key", async (prefix, diagnostic, maximum) => {
+    expect((await call("/v1/registrations", "POST", attempt())).status).toBe(201);
+    await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) => {
+      state.storage.sql.exec("UPDATE limits SET count = ? WHERE key LIKE ?", maximum, prefix + "%");
+    });
+    const counters = await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) =>
+      state.storage.sql.exec("SELECT key, count, expires_at FROM limits ORDER BY key").toArray());
+    const response = await call("/v1/registrations", "POST", attempt());
+    expect(response.status).toBe(429);
+    expect(response.headers.get(header)).toBe(diagnostic);
+    expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(Number(response.headers.get("retry-after"))).toBeLessThanOrEqual(3600);
+    expect(await response.text()).toBe('{"error":"rate_limited"}');
+    expect(outbound).toHaveBeenCalledTimes(1);
+    const after = await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) =>
+      state.storage.sql.exec("SELECT key, count, expires_at FROM limits ORDER BY key").toArray());
+    expect(after).toEqual(counters);
+  });
+  it("preserves a provider setup failure without exposing its configuration", async () => {
+    const originalKeyID = configuration.APNS_KEY_ID;
+    try {
+      configuration.APNS_KEY_ID = "SENTINEL_INVALID_KEY_ID";
+      const value = attempt();
+      const response = await call("/v1/registrations", "POST", value);
+      expect(response.status).toBe(503);
+      expect(response.headers.get(header)).toBe("provider_unavailable");
+      expect(await response.text()).not.toContain("SENTINEL_INVALID_KEY_ID");
+      const retry = await call("/v1/registrations", "POST", value);
+      expect(retry.status).toBe(202);
+      expect(retry.headers.get(header)).toBe("provider_unavailable");
+      expect(outbound).not.toHaveBeenCalled();
+    } finally { configuration.APNS_KEY_ID = originalKeyID; }
+  });
+  it("does not report a saved result as usable after verification expiry", async () => {
+    const value = attempt();
+    expect((await call("/v1/registrations", "POST", value)).status).toBe(201);
+    await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) => {
+      state.storage.sql.exec("UPDATE registrations SET expires_at = ? WHERE id = ?",
+        Math.floor(Date.now() / 1000), value.registrationID);
+    });
+    const expired = await call("/v1/registrations", "POST", value);
+    expect(expired.status).toBe(410);
+    expect(expired.headers.get(header)).toBeNull();
+    expect(outbound).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    { status: 200, reason: "", expected: 201, diagnostic: "apple_accepted" },
+    { status: 429, reason: "TooManyRequests", expected: 503, diagnostic: "apple_rate_limited" },
+    { status: 429, reason: "TooManyProviderTokenUpdates", expected: 503, diagnostic: "apple_provider_updates_limited" },
+    { status: 0, reason: "transport", expected: 503, diagnostic: "apple_transport_unknown" },
+  ])("preserves provider refresh context before $diagnostic", async ({ status, reason, expected, diagnostic }) => {
+    await enroll();
+    await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) => {
+      state.storage.sql.exec("UPDATE provider_token SET created_at = ?", Math.floor(Date.now() / 1000) - 25 * 60);
+    });
+    outbound.mockResolvedValueOnce(new Response('{"reason":"ExpiredProviderToken"}', { status: 403 }));
+    if (status === 0) outbound.mockRejectedValueOnce(new Error("SENTINEL_TRANSPORT"));
+    else outbound.mockResolvedValueOnce(new Response(reason ? JSON.stringify({ reason }) : null, { status }));
+    const value = attempt();
+    const response = await call("/v1/registrations", "POST", value);
+    expect(response.status).toBe(expected);
+    expect(response.headers.get(header)).toBe(diagnostic);
+    expect(response.headers.get("x-toastty-push-provider-refresh")).toBe("attempted");
+    const retry = await call("/v1/registrations", "POST", value);
+    expect(retry.status).toBe(202);
+    expect(retry.headers.get(header)).toBe(diagnostic);
+    expect(retry.headers.get("x-toastty-push-provider-refresh")).toBe("attempted");
+    expect(outbound).toHaveBeenCalledTimes(3);
+  });
+  it("reports an Apple 429 even when its body cannot be decoded", async () => {
+    outbound.mockResolvedValueOnce(new Response("SENTINEL_NOT_JSON", { status: 429 }));
+    const response = await call("/v1/registrations", "POST", attempt());
+    expect(response.status).toBe(503);
+    expect(response.headers.get(header)).toBe("apple_rate_limited");
+    expect(await response.text()).not.toContain("SENTINEL_NOT_JSON");
+  });
+  it("does not let a diagnostic write failure change a successful verification response", async () => {
+    const failure = vi.spyOn(RelayStore.prototype, "recordVerificationOutcome").mockImplementationOnce(() => {
+      throw new Error("SENTINEL_DIAGNOSTIC_WRITE");
+    });
+    try {
+      const response = await call("/v1/registrations", "POST", attempt());
+      expect(response.status).toBe(201);
+      expect(response.headers.get(header)).toBe("apple_accepted");
+      expect(failure).toHaveBeenCalledTimes(1);
+      expect(await response.text()).not.toContain("SENTINEL_DIAGNOSTIC_WRITE");
+    } finally { failure.mockRestore(); }
+  });
+  it("migrates an existing database without losing its registration", async () => {
+    const { value } = await enroll();
+    await runInDurableObject(configuration.PUSH_STATE.getByName("relay-v1"), (_instance, state) => {
+      state.storage.sql.exec("ALTER TABLE registrations DROP COLUMN verification_outcome");
+      state.storage.sql.exec("ALTER TABLE registrations DROP COLUMN verification_refresh");
+      const store = new RelayStore(state.storage);
+      expect(store.registration(value.registrationID)?.status).toBe("active");
+      expect(store.registration(value.registrationID)?.verification_outcome).toBeNull();
+    });
+    expect((await send(value)).status).toBe(202);
   });
 });

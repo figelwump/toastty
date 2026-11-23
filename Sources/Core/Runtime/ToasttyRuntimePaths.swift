@@ -289,15 +289,25 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     /// Parent directory for automation sockets. macOS uses the per-user
     /// `$TMPDIR`. Linux prefers `$XDG_RUNTIME_DIR`, which is private to the
-    /// user and short enough for `sun_path` (108 bytes), and otherwise falls
-    /// back to the temporary directory like macOS.
+    /// user and short enough for `sun_path` (108 bytes), then an explicit
+    /// `$TMPDIR`, and otherwise `~/.toastty/run` rather than the shared `/tmp`
+    /// (see `AutomationSocketDirectory`).
     public static func socketBaseDirectoryPath(environment: [String: String]) -> String {
         #if os(Linux)
         if let runtimeDirectory = linuxXDGRuntimeDirectoryPath(environment: environment) {
             return runtimeDirectory
         }
-        #endif
+        if let temporaryDirectory = environment["TMPDIR"], temporaryDirectory.hasPrefix("/") {
+            return temporaryDirectory
+        }
+        let home = environment["HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? NSHomeDirectory()
+        return URL(fileURLWithPath: home, isDirectory: true)
+            .appendingPathComponent(configDirectoryName, isDirectory: true)
+            .appendingPathComponent("run", isDirectory: true)
+            .path
+        #else
         return environment["TMPDIR"] ?? NSTemporaryDirectory()
+        #endif
     }
 
     #if os(Linux)
