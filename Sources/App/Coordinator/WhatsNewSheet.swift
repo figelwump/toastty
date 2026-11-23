@@ -366,10 +366,13 @@ extension WhatsNewSheet {
                 guard let window, let sheetWindow else { return }
                 window.endSheet(sheetWindow, returnCode: choice == .start ? .alertFirstButtonReturn : .alertSecondButtonReturn)
             }
-            let hosting = NSHostingController(rootView: view)
-            hosting.sizingOptions = [.preferredContentSize]
-            sheetWindow.contentViewController = hosting
-            sheetWindow.setContentSize(hosting.view.fittingSize)
+            let hostingView = NSHostingView(rootView: view)
+            // Measure before attaching the view. SwiftUI can invalidate AppKit's
+            // window constraints if AppKit asks for the size during sheet animation.
+            let contentSize = hostingView.fittingSize
+            hostingView.sizingOptions = []
+            sheetWindow.contentView = hostingView
+            sheetWindow.setContentSize(contentSize)
             window.beginSheet(sheetWindow) { response in
                 // The handler holds the sheet until it ends.
                 _ = sheetWindow
