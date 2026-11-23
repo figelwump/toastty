@@ -2788,8 +2788,32 @@ def list_line(run):
     return next((line for line in run.ledger().splitlines() if re.match(r'- \S+ list\b', line)), '')
 
 
+def offers_block(said):
+    """The offers of the newest `toastty-offers` block in the coordinator's text, or None without a block that is JSON."""
+    blocks = re.findall(r'```toastty-offers[ \t]*\n(.*?)\n[ \t]*```', said, re.S)
+    if not blocks:
+        return None
+    try:
+        data = json.loads(blocks[-1])
+    except ValueError:
+        return None
+    offers = data.get('offers') if isinstance(data, dict) else data
+    return offers if isinstance(offers, list) and all(isinstance(o, dict) for o in offers) else None
+
+
+def answers_message(answers, time_text='9:03 AM'):
+    """The user's clicks on offer cards, as Toastty's chat types them (`CoordinatorMessageHeader.answersMessage`)."""
+    count = '1 answer' if len(answers) == 1 else f'{len(answers)} answers'
+    lines = [f'[Toastty] Answers from the user | to your offers of {time_text}, {count}']
+    for offer, choice in answers:
+        title = ' '.join(str(offer.get('title', '')).replace('"', "'").replace('|', '/').split())
+        title = title if len(title) <= 60 else title[:59] + '…'
+        lines.append(f'- {choice}: {offer["id"]} "{title or "untitled"}"')
+    return '\n'.join(lines)
+
+
 def daily_list(run):
-    """The list is due: one message with every item; offers expire, answered lines go, counts rise; numbers work."""
+    """The list is due: one message with every item; offers expire, answered lines go, counts rise; numbers and cards work."""
     question = run.create_task('Pick the export format', status='working')
     run.ask(question, 'CSV or JSON for the export?', 'Which format should the export use, CSV or JSON? I suggest CSV.')
     merged = run.create_task('Move links to the new domain', done=True)
@@ -2819,6 +2843,23 @@ def daily_list(run):
     run.check('it publishes no Scratchpad for the list', not pads, pads)
     run.check('the message lists the open question and the open offer',
               'export format' in lower and re.search(r'export command|docs/export|document the export', lower), said)
+    # The offers are one block of data that the chat draws as cards.
+    offers = offers_block(said)
+    run.check('the offers are one toastty-offers block of valid JSON', offers is not None, said)
+    offer = next((o for o in offers or [] if re.search(r'export', str(o.get('id', '')) + str(o.get('title', '')), re.I)), None)
+    run.check('the block holds the open offer', offer, offers)
+    if offer:
+        run.check('the offer has an ID that an answer can name',
+                  re.fullmatch(r'[A-Za-z0-9._-]{1,64}', str(offer.get('id', ''))), offer)
+        run.check('the offer says what it is, when it helps and what a yes starts',
+                  all(str(offer.get(field) or '').strip() for field in ('title', 'what', 'example', 'yes')), offer)
+        run.check('the offer names its list', offer.get('list') == 2 and offer.get('suggested') in ('yes', 'skip'), offer,
+                  required=False)
+    run.check('the dropped offer is not in the block',
+              not [o for o in offers or [] if re.search(r'screen', json.dumps(o), re.I)], offers)
+    outside = re.sub(r'```toastty-offers.*?```', '', said, flags=re.S)
+    run.check('the question is a numbered line outside the block',
+              re.search(r'^\s*\d+\.\s.*export format', outside, re.I | re.M), outside)
     run.check('the message shows the follow-up that moves', re.search(r'roll ?out', lower), said, required=False)
     run.check('the message names the dropped offer', 'screen sharing' in lower, said, required=False)
     ledger = run.ledger()
@@ -2852,19 +2893,30 @@ def daily_list(run):
               re.search(r'export command|docs/export|document the export', run.said(asked).lower()), run.said(asked),
               required=False)
 
-    # The user answers with the number of the offer.
-    # The list that the user asked for numbered the items again: answer by its numbers.
-    current = list_line(run)
-    number = re.search(r'(\d+)\s+[^;]*?(export-docs|document)', current)
-    run.check('the list line names the offer with its number', number, current)
-    if number:
-        answered = run.tell(f'{number.group(1)} yes')
+    # The user asks about the offer on its card: a reply that quotes one line with the offer's ID.
+    # The list that the user asked for wrote the block again: use its offer.
+    offer = next((o for o in offers_block(run.said(asked)) or offers or []
+                  if re.search(r'export', str(o.get('id', '')) + str(o.get('title', '')), re.I)), None)
+    run.check('a list that the user asked for has the block again', offers_block(run.said(asked)), run.said(asked),
+              required=False)
+    if offer:
+        question_turns = run.tell(
+            '[Toastty] Reply from the user | quotes your message of 9:03 AM, 1 line\n'
+            f'> Offer {offer["id"]}: {offer.get("title", "")}\n'
+            'What is this, and when would it be useful?')
+        run.check('a question about an offer is answered', re.search(r'export', run.said(question_turns).lower()),
+                  run.said(question_turns))
+        run.check('a question about an offer starts nothing', created_since(run, before) == [],
+                  [t['title'] for t in created_since(run, before)])
+        run.check('the offer stays open after a question', asked_line(run, 'export-docs'), run.ledger())
+        # The user clicks Yes on the card, and Send answers.
+        answered = run.tell(answers_message([(offer, 'yes')]))
         created = created_since(run, before)
-        run.check('the answer by number creates the offered task',
+        run.check('a yes on the card creates the offered task',
                   len(created) == 1 and re.search(r'export', (created[0].get('text') or '').lower()),
                   [(t['title'], t.get('text', '')[:200]) for t in created])
         run.check('the offer leaves the ledger', not asked_line(run, 'export-docs'), run.ledger(), required=False)
-        turns += answered
+        turns += question_turns + answered
     return turns + asked
 
 

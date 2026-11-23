@@ -816,11 +816,15 @@ remaining work in the same project, without `--start-work`, and tells the
 user. `daily-list` names a list time in Talking that has just passed and
 seeds the ledger with a question, two offers (one that was on 3 lists), a
 question that the policy already answers, and a follow-up. It checks that
-the list is one chat message with the open items and no Scratchpad, the
+the list is one chat message with the open items and no Scratchpad, that the
+open offer is in one `toastty-offers` block of valid JSON with an ID, what it
+is, an example and what a yes starts, the
 dropped offer and the answered question, the raised `listed=` counts, the
 `list` line, and the next check a day later;
-then that "what waits for me?" changes no count, and that an answer with an
-item's number creates the offered task. `daily-list-quiet` checks that a due
+then that "what waits for me?" changes no count, that a question about the
+offer, typed as the chat's Ask types it, gets an answer and starts nothing,
+and that a yes, typed as the cards' Send answers types it, creates the
+offered task. `daily-list-quiet` checks that a due
 list with nothing on it is a quiet turn. Every other scenario seeds Talking
 with "No daily list", so that its checks of the next check stay as they were.
 `--scenarios a,b` selects some, and `--scenarios judgment`

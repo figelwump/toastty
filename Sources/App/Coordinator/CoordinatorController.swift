@@ -253,14 +253,14 @@ final class CoordinatorController: ObservableObject {
         }
 
         /// "Steer now" may type it into a running turn: a message that the
-        /// user wrote in the chat, also a reply. A quick entry message
+        /// user wrote in the chat, also a reply and answers to offers. A quick entry message
         /// always waits for an open prompt, as messages from `coordinator
         /// send` and Toastty's digests do. The first line that Toastty
         /// writes on a message says which it is, also after a relaunch.
         var canBeSteered: Bool {
             guard byUser else { return false }
             switch CoordinatorMessageHeader.kind(of: text) {
-            case .plain, .reply: return true
+            case .plain, .reply, .answers: return true
             case .digest, .fromSender, .quickEntry: return false
             }
         }

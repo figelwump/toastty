@@ -15,6 +15,8 @@ import Foundation
 ///   panel, with the choices the user made there.
 /// - `[Toastty] Reply …`: the user's message from the chat that answers
 ///   one of the coordinator's messages, with that message quoted.
+/// - `[Toastty] Answers …`: the user's answers to the coordinator's offers,
+///   from the cards of the chat (`CoordinatorOffers.swift`).
 public enum CoordinatorMessageHeader {
     /// Who ran `coordinator send`, as far as Toastty can tell.
     public enum Sender: Equatable, Sendable {
@@ -196,12 +198,13 @@ public enum CoordinatorMessageHeader {
         return RemoteAttachmentDeliveryText.text(reply, paths: attachmentPaths)
     }
 
-    /// The text starts with Toastty's line for a digest, another sender or
-    /// the quick entry panel. A reply puts its own line first, which would
-    /// change whose message it is, so such text cannot become a reply.
+    /// The text starts with Toastty's line for a digest, another sender,
+    /// the quick entry panel or answers to offers. A reply puts its own
+    /// line first, which would change whose message it is or what it says,
+    /// so such text cannot become a reply.
     public static func hasOtherHeader(_ text: String) -> Bool {
         switch kind(of: text) {
-        case .digest, .fromSender, .quickEntry: true
+        case .digest, .fromSender, .quickEntry, .answers: true
         case .reply, .plain: false
         }
     }
@@ -293,6 +296,9 @@ public enum CoordinatorMessageHeader {
         /// message that it answers; `text` is what the user wrote, without
         /// the list of attached files, whose names are in `fileNames`.
         case reply(quote: String, time: String?, text: String, fileNames: [String])
+        /// The user's answers to the coordinator's offers, from the cards
+        /// of the chat.
+        case answers([CoordinatorOfferAnswer])
         case plain
     }
 
@@ -316,13 +322,16 @@ public enum CoordinatorMessageHeader {
             let (text, fileNames) = splitAttachments(reply.body)
             return .reply(quote: reply.quote, time: reply.time, text: text, fileNames: fileNames)
         }
+        if let answers = offerAnswers(of: message) {
+            return .answers(answers)
+        }
         return .plain
     }
 
     /// The message as a chat shows it in the user's bubble: a quick entry
     /// message without Toastty's first line, a reply without its first
-    /// line and quote, and any message without the folder of each attached
-    /// file. A message without either is shown as it is.
+    /// line and quote, answers to offers as one line for each, and any
+    /// message without the folder of each attached file. A message without either is shown as it is.
     public static func displayText(of message: String) -> String {
         switch kind(of: message) {
         case .quickEntry(let text, let detail):
@@ -330,6 +339,8 @@ public enum CoordinatorMessageHeader {
         case .reply(_, _, let text, let fileNames):
             let files = fileNames.isEmpty ? nil : fileNames.joined(separator: ", ")
             return [text, files].compactMap { $0 }.filter { $0.isEmpty == false }.joined(separator: "\n\n")
+        case .answers(let answers):
+            return answersDisplayText(answers)
         case .plain:
             let (text, fileNames) = splitAttachments(message)
             guard fileNames.isEmpty == false else { return message }
@@ -355,6 +366,8 @@ public enum CoordinatorMessageHeader {
         case .reply(_, _, let text, _):
             let paths = replyParts(of: message).flatMap { attachedFiles(in: $0.body)?.paths } ?? []
             return (text, paths)
+        case .answers(let answers):
+            return (answersDisplayText(answers), [])
         case .plain:
             guard let (text, paths) = attachedFiles(in: message) else { return (message, []) }
             return (text, paths)

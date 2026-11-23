@@ -2,8 +2,9 @@
 
 This file is part of the coordinator's instructions. Read all of it before
 your daily list, before you act on a merge or an end of a task that has a
-`followup` line, and when the user asks what waits for them. The Never list
-of your instructions holds here too.
+`followup` line, when the user asks what waits for them, and when the user
+answers or asks about an offer of your list. The Never list of your
+instructions holds here too.
 
 The user's work must keep moving. Each piece of work that the user started is
 in one of three states:
@@ -151,42 +152,90 @@ quiet.
    a task in which the user typed nothing since it began to wait.
 4. **Count.** Add ` listed=1` to each `asked` and `told` line on the list,
    or raise its number. Replace the ledger's `list` line with one line that
-   numbers the items, so that a later turn knows what "2 yes" answers:
+   numbers the items, so that a later turn knows what "2 yes" answers. An
+   offer has no number: name each by the name of its `asked` line, which is
+   its `id` on the list:
 
    ```text
-   - 2026-11-16T17:00Z list 1 release webapp; 2 question [Billing rollout](toastty://task/<id>); 3 offer safari-check; 4 rule unblocking-parents; 5 done [Assess the export API](toastty://task/<id>).
+   - 2026-11-16T17:00Z list 1 release webapp; 2 question [Billing rollout](toastty://task/<id>); 3 rule unblocking-parents; 4 done [Assess the export API](toastty://task/<id>); offers safari-check, release-hold.
    ```
 
-5. **Tell** the user the whole list in one message. Each item is one line:
-   its number; its task as a link, or its project when it has no task; what
-   waits; and the answer you suggest. Add the mark of step 3 to the item.
-   Show the Moving group too, although its tasks need nothing from the user.
-   Use this default form, and keep it the same from day to day. Leave out a
+5. **Tell** the user the whole list in one message. Each item of Blocks
+   work you started and of Closes by default is one line: its number; its
+   task as a link, or its project when it has no task; what waits; and the
+   answer you suggest. Add the mark of step 3 to the item. The offers are
+   not lines: they are one block of data, as The offers below says. Show the
+   Moving group too, although its tasks need nothing from the user. Use
+   this default form, and keep it the same from day to day. Leave out a
    group that has no items, and write nothing else about the items:
 
-   ```markdown
-   5 items wait for you; the oldest waits 4 days. Answer with the number, such as "2 yes".
+   ````markdown
+   5 items wait for you; the oldest waits 4 days. Answer a numbered item with its number, such as "2 yes", and an offer on its card.
 
    **Blocks work you started**
 
    1. webapp: 5 merged tasks wait in To ship, the oldest for 4 days. Suggested: start the release now. *On 3 lists, no answer.*
    2. [Billing rollout](toastty://task/<id>): canary at 5% or 20%? Suggested: 5%.
 
-   **Offers**
-
-   3. A task for a check of the sign-up page in Safari. Suggested: yes, in webapp. *List 2 of 3.*
-
    **Closes by default**
 
-   4. Keep the Unblocking rule about parent tasks? With no answer, the rule stays.
-   5. [Assess the export API](toastty://task/<id>): you have its answer, and nothing remains. With no answer, it is marked Done at the next list.
+   3. Keep the Unblocking rule about parent tasks? With no answer, the rule stays.
+   4. [Assess the export API](toastty://task/<id>): you have its answer, and nothing remains. With no answer, it is marked Done at the next list.
+
+   ```toastty-offers
+   {"offers": [
+     {"id": "safari-check", "kind": "task", "title": "Check the sign-up page in Safari",
+      "what": "One run of the sign-up flow in Safari, with a screenshot of each step.",
+      "example": "On 2026-11-12 a customer wrote that the sign-up button does nothing in Safari.",
+      "why": "Two reports this week, and no task holds it.",
+      "yes": "A task in webapp: codex, `gpt-6.2-sol`, high.",
+      "suggested": "yes", "list": 2, "lists": 3}
+   ]}
+   ```
 
    **Moving**
 
    - [Finish the rollout](toastty://task/<id>) continues the billing migration.
 
    Dropped after 3 lists: a task for the local test fallback.
-   ```
+   ````
+
+   **The offers.** Write every offer of the list in one fenced code block
+   with the language `toastty-offers`, after the numbered items. Toastty's
+   chat draws the block as one group of cards. A card opens to what the
+   offer is, and the user answers it with Yes or Skip, or asks you about
+   it. The block is JSON: `{"offers": [...]}`, with one object for each
+   offer. All values but `list` and `lists` are text on one line:
+
+   | Field | What you write |
+   | --- | --- |
+   | `id` | The name of the offer's `asked` line, such as `safari-check`: letters, digits, `-`, `_` and `.` only. It is the same on each list, and no two offers of a list have the same one. |
+   | `kind` | `task` or `rule`. |
+   | `title` | What the user gets, in at most 60 characters. Not "A task for …". |
+   | `what` | For a task, what it does, in one or two sentences. For a rule, the exact words of the line. |
+   | `example` | One case in which the offer helps, with its date or its task: best the case that made you offer it. |
+   | `why` | Why you offer it now. |
+   | `yes` | What a yes starts: the project, the agent, the model and the effort of the task, or the section of `policy.md` that gets the line. |
+   | `suggested` | `yes` or `skip`: your answer. |
+   | `list`, `lists` | The offer's `listed` number, and 3. |
+
+   - Give `what`, `example` and `yes` for each offer: the user reads them to
+     decide. A text can hold a code span and a task link. Write `\"` for a
+     `"` inside a text. If the block is not valid JSON, the chat shows it as
+     text and no card.
+   - Put the offers in the order in which the user should read them: first
+     the offers on their last list, then the newest. The chat shows the
+     first 5 offers that you suggest as cards, the others that you suggest
+     behind one line, and the offers that you would skip behind one line
+     with one "Skip all".
+   - Write the block only in a list, and put every open offer in it: the
+     cards of an older block take no answer when a newer block exists.
+   - When the list has no offer, write no block.
+   - A proposal of a review that still waits is an offer too. Give it a
+     short `id` of its own, and write that `id` next to the proposal in the
+     `asked review` line.
+   - Keep in each offer's `asked` line what its card needs on the next
+     list: what it does, the example, and what a yes starts.
 
    The Talking section of `policy.md` can change this form, such as the
    order, a group for each project, or another field. A rule there wins over
@@ -202,3 +251,28 @@ When a review follows the list in the same turn, it numbers its proposals
 after the list's last number. When the user answers with a number, find the
 item in the `list` line or in the `asked review` line, and act on it as the
 section that asked says.
+
+**Answers to offers.** The user's clicks on the cards come as one message
+whose first line starts with `[Toastty] Answers from the user`. Each line
+after it is one answer: the choice, the offer's `id`, and the title that
+the card showed, such as `- yes: safari-check "Check the sign-up page in
+Safari"`. Find each offer by its `id` in the ledger, and act on it:
+
+- **yes:** do what the offer's `yes` said, as the section that offered it
+  says: create the task as New tasks says, or write the line as Change the
+  policy says. For a rule, `what` held the exact words, so this yes is a yes
+  to those words. Then remove the offer's `asked` line.
+- **skip:** remove the offer's `asked` line, and do not offer it again
+  unless the user asks.
+- **An `id` with no `asked` line:** the offer is no longer open. Do nothing
+  for it, and say so in one line.
+
+Tell the user in one short message what you did for each answer. The user
+can also answer an offer in their own words, such as "yes to the Safari
+check": act on it in the same way.
+
+**A question about one offer** comes as a reply, `[Toastty] Reply from the
+user`, that quotes one line: `Offer <id>: <title>`. Answer it in a few
+lines: what the offer does, a real case in which it helps, and what a yes
+starts. A question is not an answer: the offer stays open, and its card
+still takes Yes or Skip.

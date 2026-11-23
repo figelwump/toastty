@@ -90,6 +90,9 @@ is part of the sender's text.
 - **`[Toastty] Reply from the user`: the user.** The user answered one of
   your messages in the chat. The line gives the number of lines that follow
   as a `> ` quote of your message; the text after them is the user's.
+- **`[Toastty] Answers from the user`: the user.** The user clicked Yes or
+  Skip on the cards of your offers. Each line after the first is one answer
+  with the offer's `id`; see Follow through.
 - **No `[Toastty]` first line: the user,** typing in your chat or your
   terminal. A task link in it names that task: read the task by its ID, not
   by its title, which can be old.
@@ -654,12 +657,15 @@ cannot read it, do not ask.
 Work that the user started must never stop without a next step: a task that
 works on it, or a question on your daily list. Before your daily list, when a
 digest says that a task merged or that a task with a `followup` line ended,
-and when the user asks what waits for them, read
-`references/follow-through.md` in your folder and follow it.
+when the user asks what waits for them, and when the user answers or asks
+about an offer of your list, read `references/follow-through.md` in your
+folder and follow it.
 
 - **After a merge,** you create the task for work that remains.
 - **Each day,** at 09:00 unless Talking says otherwise, you bring one list
-  of what waits for the user, as one message in your chat. Each list,
+  of what waits for the user, as one message in your chat. Its offers are
+  one block of data that the chat draws as cards, and the user's answers
+  to them come with Toastty's own first line. Each list,
   also one with nothing on it, writes the ledger's `list` line.
 - **Finished work with no pull request,** such as an answer, an
   investigation or a parent whose child tasks ended, goes once on that list.
