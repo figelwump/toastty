@@ -332,7 +332,7 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             panelID: hookPanelID,
             kind: .escape,
             at: startedAt.addingTimeInterval(1)
-        ))
+        ) == false)
         #expect(store.handleLocalInterruptForPanelIfActive(
             panelID: fallbackPanelID,
             kind: .escape,
@@ -343,24 +343,15 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             kind: .escape,
             at: startedAt.addingTimeInterval(1)
         ) == false)
-        #expect(store.sessionRegistry.activeSession(for: hookPanelID)?.status == SessionStatus(
-            kind: .idle,
-            summary: "Waiting",
-            detail: "Ready for prompt"
-        ))
+        #expect(store.sessionRegistry.activeSession(for: hookPanelID)?.status == working)
         #expect(store.sessionRegistry.activeSession(for: fallbackPanelID)?.status == working)
         #expect(store.sessionRegistry.activeSession(for: externalSourcePanelID)?.status == working)
 
-        store.updateStatus(
-            sessionID: "hook-local-interrupt",
-            status: working,
-            at: startedAt.addingTimeInterval(2)
-        )
         #expect(store.handleLocalInterruptForPanelIfActive(
             panelID: hookPanelID,
             kind: .controlC,
             at: startedAt.addingTimeInterval(3)
-        ))
+        ) == false)
         #expect(store.handleLocalInterruptForPanelIfActive(
             panelID: fallbackPanelID,
             kind: .controlC,
@@ -371,7 +362,8 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
             kind: .controlC,
             at: startedAt.addingTimeInterval(3)
         ))
-        for panelID in [hookPanelID, fallbackPanelID, externalSourcePanelID] {
+        #expect(store.sessionRegistry.activeSession(for: hookPanelID)?.status == working)
+        for panelID in [fallbackPanelID, externalSourcePanelID] {
             #expect(store.sessionRegistry.activeSession(for: panelID)?.status == SessionStatus(
                 kind: .idle,
                 summary: "Waiting",

@@ -263,6 +263,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.mark-done`
 - `task.archive`
 - `task.release`
+- `task.release-complete`
 - `task.adopt`
 - `coordinator.open`
 - `coordinator.restart`
@@ -572,6 +573,13 @@ Notable action-specific behavior:
     `release_prompt`, and no other release of it may be unfinished. Makes a task with `release.childTaskIDs` (the project's To ship
     tasks), fetches the remote's default branch (the fetch must succeed), and
     starts the default agent in a new worktree on no branch at that commit.
+- `task.release-complete`
+  - Takes `args.report` as JSON text with a `tags` array. Each entry has
+    an exact remote `tag` and a `taskIDs` array of UUIDs. Only the release
+    task's own managed agent can submit it. Toastty verifies the tag and
+    the listed merge commits before it saves the report. The result has
+    `release.completion` with `reportedAt` and `tags`. Outstanding work
+    defers completion and cleanup of the release task.
 - `task.adopt`
   - gives a task space without a task record one, with source `adopted`, and
     returns the task object with its `stage`. Targets the calling managed

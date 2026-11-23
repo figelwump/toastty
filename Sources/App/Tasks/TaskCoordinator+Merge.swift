@@ -536,8 +536,16 @@ extension TaskCoordinator {
             }
             try saveMergeState(taskID: taskID) { $0.cleanup = nil }
             cleanUpMergedTasks([taskID])
-        case .archive, .release:
-            startTeardown(taskID: taskID, kind: cleanup.kind, options: cleanup.kind == .archive ? lastArchiveOptions(record) : TaskArchiveOptions())
+        case .archive:
+            startTeardown(taskID: taskID, kind: .archive, options: lastArchiveOptions(record))
+        case .release:
+            guard record.release?.completion != nil else {
+                throw TaskError("This release has no completion report. Archive it when its work is over.")
+            }
+            guard releaseHasOutstandingWork(record) == false else {
+                throw TaskError("This release still has work outstanding. Clean up after it finishes.")
+            }
+            startTeardown(taskID: taskID, kind: .release, options: TaskArchiveOptions())
         }
     }
 
@@ -608,7 +616,7 @@ extension TaskCoordinator {
         guard record.archivedAt == nil else {
             throw TaskError("Task \(record.title) is archived.")
         }
-        if record.release != nil, record.doneAt != nil || record.shippedAt != nil {
+        if let release = record.release, release.completion != nil || record.doneAt != nil || record.shippedAt != nil {
             throw TaskError("Release task \(record.title) has finished.")
         }
         guard afterMerge || record.mergedAt == nil else {

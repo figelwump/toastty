@@ -59,10 +59,15 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 private struct RestoredManagedLaunch {
     let sessionID: String
-    let commandLine: String
     let configuration: TerminalSurfaceLaunchConfiguration
     var surfaceLaunchCompleted: Bool
     var commandSubmittedAt: Date?
+}
+
+enum TerminalManagedAgentRestoreState {
+    case inactive
+    case pending
+    case inputUncertain
 }
 
 @MainActor
@@ -74,8 +79,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     ) -> Void
 
     private static let restoredManagedLaunchSubmitTimeout: TimeInterval = 5.0
+    private static let restoredCoordinatorLaunchSubmitTimeout: TimeInterval = 30.0
     private static let restoredManagedLaunchSubmitRetryDelayNanoseconds: UInt64 = 100_000_000
     private static let restoredManagedLaunchPostSubmitGraceInterval: TimeInterval = 2.0
+    static let restoredAgentCommandEnvironmentKey = "TOASTTY_RESTORED_AGENT_COMMAND"
+    // Like a restore notice, the long payload goes in the surface's
+    // environment. Both this short line and Return fit in the PTY before
+    // the shell starts its line editor, even with no prompt marker.
+    private static let restoredAgentInput = " eval \"$\(restoredAgentCommandEnvironmentKey)\""
 
     private let focusCoordinator: TerminalFocusCoordinator
     private let activateApp: @MainActor () -> Void
@@ -105,6 +116,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private static let restoreNoticeFinishWindow: TimeInterval = 30
     private var restoredManagedLaunchesByPanelID: [UUID: RestoredManagedLaunch] = [:]
     private var restoredManagedLaunchSubmitTasksByPanelID: [UUID: Task<Void, Never>] = [:]
+    private var uncertainRestoredManagedLaunchPanelIDs: Set<UUID> = []
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     private var exitedTerminalPanelIDs: Set<UUID> = []
@@ -117,7 +129,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
     private var searchDispatchTaskByPanelID: [UUID: Task<Void, Never>] = [:]
     private var searchDispatchTokenByPanelID: [UUID: UUID] = [:]
-    private var restoredManagedLaunchSubmitterForTesting: ((String, Bool, UUID) -> Bool)?
+    private var restoredManagedLaunchSubmitterForTesting: ((String, UUID) -> TerminalInputDeliveryResult)?
     private var automationSendTextHandlerForTesting: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?
     private var automationSendInterruptHandlerForTesting: ((UUID) -> Bool)?
     private var automationPromptStateHandlerForTesting: ((UUID) -> TerminalPromptState)?
@@ -218,6 +230,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// that nothing covers. The answer says whether the covering view took
     /// the keyboard. A covered terminal never takes the keyboard itself.
     var coveringInputFocus: ((UUID) -> (@MainActor () -> Bool)?)?
+    /// Receives each key press that a terminal's view handled, with the
+    /// panel. The coordinator sets it while it keeps a record of its
+    /// terminal's keys; `nil` at any other time.
+    var keyPressObserver: ((UUID, TerminalKeyPress) -> Void)?
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
         self.sessionLifecycleTracker = sessionLifecycleTracker
@@ -231,8 +247,28 @@ final class TerminalRuntimeRegistry: ObservableObject {
         restoredManagedLaunchPlanner = planner
     }
 
-    func setRestoredManagedLaunchSubmitterForTesting(_ submitter: ((String, Bool, UUID) -> Bool)?) {
+    func setRestoredManagedLaunchSubmitterForTesting(_ submitter: ((String, UUID) -> TerminalInputDeliveryResult)?) {
         restoredManagedLaunchSubmitterForTesting = submitter
+    }
+
+    func managedAgentRestoreState(panelID: UUID) -> TerminalManagedAgentRestoreState {
+        if restoredManagedLaunchesByPanelID[panelID] != nil {
+            return .pending
+        }
+        if uncertainRestoredManagedLaunchPanelIDs.contains(panelID) {
+            return .inputUncertain
+        }
+        if restoredTerminalPanelIDsAwaitingLaunch.contains(panelID),
+           let workspace = store?.state.workspaceSelection(containingPanelID: panelID)?.workspace,
+           case .terminal(let terminal)? = workspace.panelState(for: panelID),
+           terminal.resumeRecord != nil {
+            return .pending
+        }
+        return .inactive
+    }
+
+    func clearUncertainManagedRestoreInput(panelID: UUID) {
+        uncertainRestoredManagedLaunchPanelIDs.remove(panelID)
     }
 
     func setAutomationSendTextHandlerForTesting(_ handler: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?) {
@@ -470,6 +506,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         let livePanelIDs = liveTerminalPanelIDs(in: state)
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
+        uncertainRestoredManagedLaunchPanelIDs.formIntersection(livePanelIDs)
         restoreNoticeQueuedAtByPanelID = restoreNoticeQueuedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         for (panelID, launch) in restoredManagedLaunchesByPanelID where livePanelIDs.contains(panelID) == false {
             restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)?.cancel()
@@ -619,21 +656,71 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     private var answeredClaudeDialogPanelID: UUID?
+    /// The panels whose Claude showed a native dialog at the last look at
+    /// the bottom of its page.
+    private var claudeDialogPanelIDs: Set<UUID> = []
+    /// Claude puts these words in the last line of its page while the
+    /// person has scrolled its transcript away from the bottom. The line is
+    /// Claude's own: with the page at its bottom, the last line belongs to
+    /// the prompt or to a dialog, never to the transcript.
+    private static let claudeScrolledPageMark = "Jump to bottom (click) ↓"
+
+    /// Where a look at Claude's page finds a native dialog.
+    private enum ClaudeDialogPlace: String {
+        case onPage = "on_page"
+        /// The page is scrolled, and the last look at its bottom showed a dialog.
+        case outOfPage = "out_of_page"
+        case absent = "none"
+    }
+
+    /// Looks at Claude's page, or `nil` when the terminal has no text to
+    /// read. `remembering` keeps what the bottom of the page shows for the
+    /// next look at a scrolled page; a look for the log passes `false`, so
+    /// that it never changes what holds a message.
+    private func claudeDialogPlace(panelID: UUID, remembering: Bool) -> ClaudeDialogPlace? {
+        guard let screen = readVisibleText(panelID: panelID) else { return nil }
+        let lastLine = screen.split(whereSeparator: \.isNewline).last { $0.contains { !$0.isWhitespace } }
+        if lastLine?.contains(Self.claudeScrolledPageMark) == true {
+            // The wheel moves a dialog out of the page, and Claude still
+            // waits for its answer. Text typed now would go into that
+            // dialog. The last look at the bottom of the page stands.
+            return claudeDialogPanelIDs.contains(panelID) ? .outOfPage : .absent
+        }
+        let text = screen.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let onPage = Self.containsClaudeNativeDialog(text)
+        if remembering {
+            if onPage {
+                claudeDialogPanelIDs.insert(panelID)
+            } else {
+                claudeDialogPanelIDs.remove(panelID)
+            }
+        }
+        return onPage ? .onPage : .absent
+    }
 
     func claudeHasNativeDialog(panelID: UUID) -> Bool {
-        guard let screen = readVisibleText(panelID: panelID) else { return false }
-        let present = Self.containsClaudeNativeDialog(screen)
-        if !present, answeredClaudeDialogPanelID == panelID {
+        guard let place = claudeDialogPlace(panelID: panelID, remembering: true) else { return false }
+        if place == .absent, answeredClaudeDialogPanelID == panelID {
             answeredClaudeDialogPanelID = nil
         }
-        return present
+        return place != .absent
+    }
+
+    /// For the log: where a look finds Claude's dialog now. It changes
+    /// nothing that Toastty remembers about the dialog.
+    func claudeDialogPlaceForLog(panelID: UUID) -> String {
+        claudeDialogPlace(panelID: panelID, remembering: false)?.rawValue ?? "unreadable"
     }
 
     func isClaudeDialogInput(panelID: UUID, kind: TerminalLocalInputKind) -> Bool {
         guard kind == .dialogNavigation || kind == .dialogAnswer,
-              claudeHasNativeDialog(panelID: panelID),
-              answeredClaudeDialogPanelID != panelID else { return false }
-        if kind == .dialogAnswer {
+              let place = claudeDialogPlace(panelID: panelID, remembering: true) else { return false }
+        if place == .absent, answeredClaudeDialogPanelID == panelID {
+            answeredClaudeDialogPanelID = nil
+        }
+        guard place != .absent, answeredClaudeDialogPanelID != panelID else { return false }
+        // Only a dialog on the page takes the answer for certain.
+        if kind == .dialogAnswer, place == .onPage {
             // The terminal can still show the old dialog after Return or
             // Escape reached Claude. A following Up can already recall a draft.
             answeredClaudeDialogPanelID = panelID
@@ -644,8 +731,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// Claude does not emit a conversation interaction for these dialogs.
     /// Require both the dialog's body and its controls at the bottom of the
     /// active page. History and an ordinary prompt below the dialog do not count.
-    private static func containsClaudeNativeDialog(_ screen: String) -> Bool {
-        let text = screen.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    /// `text` is the page with each run of white space as one space.
+    private static func containsClaudeNativeDialog(_ text: String) -> Bool {
         if text.hasSuffix("choose · ←/→ change size · enter confirm · esc not now") {
             return text.contains("We recommend compacting earlier") &&
                 text.contains("Want to autocompact at")
@@ -862,6 +949,17 @@ final class TerminalRuntimeRegistry: ObservableObject {
                 focusHostViewIfNeeded: { controller.focusHostViewIfNeeded() }
             )
         }
+    }
+
+    /// Whether `responder` is the view that takes the keyboard for the
+    /// panel's terminal.
+    func isKeyboardFocusTarget(_ responder: NSResponder, panelID: UUID) -> Bool {
+        runtimeStore.existingController(for: panelID)?.isKeyboardFocusTarget(responder) ?? false
+    }
+
+    /// The window that shows the panel's terminal.
+    func terminalWindow(panelID: UUID) -> NSWindow? {
+        runtimeStore.existingController(for: panelID)?.hostWindow
     }
 
     func focusVisibleTerminalIfPossible(panelID: UUID) -> Bool {
@@ -1317,6 +1415,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     func handleLocalInput(for panelID: UUID, kind: TerminalLocalInputKind = .key) {
         noteLocalInput(panelID: panelID, kind: kind)
+    }
+
+    func reportKeyPress(_ press: TerminalKeyPress, for panelID: UUID) {
+        keyPressObserver?(panelID, press)
     }
 
     private func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .programmatic) {
@@ -1988,19 +2090,22 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
             commandEnvironment["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] = record.agent.rawValue
             commandEnvironment["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"] = record.nativeSessionID
+            // Clear the payload for the launched command. Clear it inside
+            // the evaluated line so shells such as fish can expand it first.
+            commandEnvironment[Self.restoredAgentCommandEnvironmentKey] = ""
 
-            let commandLine = ShellCommandRenderer.render(
+            var shellEnvironment = fallbackConfiguration.environmentVariables
+            shellEnvironment[Self.restoredAgentCommandEnvironmentKey] = ShellCommandRenderer.render(
                 argv: plan.argv,
                 environment: commandEnvironment
             )
 
             let configuration = TerminalSurfaceLaunchConfiguration(
-                environmentVariables: fallbackConfiguration.environmentVariables,
+                environmentVariables: shellEnvironment,
                 workingDirectoryOverride: fallbackConfiguration.workingDirectoryOverride
             )
             restoredManagedLaunchesByPanelID[panelID] = RestoredManagedLaunch(
                 sessionID: plan.sessionID,
-                commandLine: commandLine,
                 configuration: configuration,
                 surfaceLaunchCompleted: false,
                 commandSubmittedAt: nil
@@ -2111,11 +2216,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             return
         }
         let sessionID = launch.sessionID
-        let deadline = Date().addingTimeInterval(Self.restoredManagedLaunchSubmitTimeout)
+        let isCoordinator = store?.state.coordinator?.panelID == panelID
+        let timeout = isCoordinator ? Self.restoredCoordinatorLaunchSubmitTimeout : Self.restoredManagedLaunchSubmitTimeout
+        let deadline = Date().addingTimeInterval(timeout)
         restoredManagedLaunchSubmitTasksByPanelID[panelID] = Task { @MainActor [weak self] in
             await self?.submitRestoredManagedLaunchCommand(
                 panelID: panelID,
                 sessionID: sessionID,
+                waitsForShellPrompt: isCoordinator,
                 deadline: deadline
             )
         }
@@ -2124,6 +2232,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     private func submitRestoredManagedLaunchCommand(
         panelID: UUID,
         sessionID: String,
+        waitsForShellPrompt: Bool,
         deadline: Date
     ) async {
         while Task.isCancelled == false {
@@ -2158,10 +2267,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 continue
             }
 
-            // The resume command is typed without waiting for the prompt, so
-            // the shell may still run its own startup.
-            let shellWasAtPrompt = promptState(panelID: panelID) == .idleAtPrompt
-            if sendRestoredManagedLaunchCommand(launch.commandLine, panelID: panelID) {
+            let currentPromptState = promptState(panelID: panelID)
+            let shellWasAtPrompt = currentPromptState == .idleAtPrompt
+            // The Coordinator waits for its first prompt. Ordinary panes
+            // also support shells that never report a prompt marker.
+            let delivery = waitsForShellPrompt && !shellWasAtPrompt
+                ? .unavailable
+                : sendRestoredManagedLaunchCommand(panelID: panelID)
+            if delivery != .unavailable {
                 var submittedLaunch = launch
                 submittedLaunch.commandSubmittedAt = now
                 restoredManagedLaunchesByPanelID[panelID] = submittedLaunch
@@ -2173,14 +2286,21 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     shellWasAtPrompt: shellWasAtPrompt,
                     at: now
                 )
-                ToasttyLog.info(
-                    "Submitted restored managed agent resume command",
-                    category: .terminal,
-                    metadata: [
-                        "panel_id": panelID.uuidString,
-                        "session_id": launch.sessionID,
-                    ]
-                )
+                let metadata = [
+                    "panel_id": panelID.uuidString,
+                    "session_id": launch.sessionID,
+                    "prompt_state": String(describing: currentPromptState),
+                    "input_bytes": String(Self.restoredAgentInput.utf8.count),
+                ]
+                if delivery == .uncertain {
+                    // The pasted text may still be on the prompt. Stop
+                    // retries and keep fresh launches out of this terminal
+                    // until the shell reports that a command finished.
+                    uncertainRestoredManagedLaunchPanelIDs.insert(panelID)
+                    ToasttyLog.warning("Could not confirm restored managed agent resume submission", category: .terminal, metadata: metadata)
+                } else {
+                    ToasttyLog.info("Submitted restored managed agent resume command", category: .terminal, metadata: metadata)
+                }
                 continue
             }
 
@@ -2194,6 +2314,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     metadata: [
                         "panel_id": panelID.uuidString,
                         "session_id": launch.sessionID,
+                        "prompt_state": String(describing: currentPromptState),
+                        "waiting_for_prompt": String(waitsForShellPrompt && !shellWasAtPrompt),
                     ]
                 )
                 return
@@ -2203,12 +2325,12 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         }
     }
 
-    private func sendRestoredManagedLaunchCommand(_ commandLine: String, panelID: UUID) -> Bool {
+    private func sendRestoredManagedLaunchCommand(panelID: UUID) -> TerminalInputDeliveryResult {
         if let restoredManagedLaunchSubmitterForTesting {
-            return restoredManagedLaunchSubmitterForTesting(commandLine, true, panelID)
+            return restoredManagedLaunchSubmitterForTesting(Self.restoredAgentInput, panelID)
         }
-        return sendManagedAgentCommand(
-            commandLine,
+        return sendManagedAgentCommandResult(
+            Self.restoredAgentInput,
             panelID: panelID,
             focusPolicy: .focusTarget
         )

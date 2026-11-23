@@ -218,8 +218,7 @@ and upload.
 
 Full manual CI retains app/domain correctness tests in both iOS configurations,
 the complete Debug UI suite, and the provisional performance budget. Release
-excludes the Debug-only UI bundle. Selected iOS PRs run the app/domain tests
-and four Debug smoke UI tests. The release task checks for existing green full
+excludes the Debug-only UI bundle. PRs run no hosted iOS tests. The release task checks for existing green full
 evidence on the exact main SHA before dispatching another run. TestFlight
 does not repeat simulator tests or download CI build artifacts.
 
@@ -251,7 +250,7 @@ workflow, event, result, and required successful job names. It is retained with 
 This records evidence at gate time; a later CI rerun does not revoke that record.
 Simulator logs retain the 14-day policy. No separate release test
 artifacts are produced. The portable release-evidence and dispatcher fixtures
-run on Linux PR CI when these scripts or workflows change. Mac-dependent release and device-plist fixtures stay in the full manual
+run in the manual Linux Script tests job. Mac-dependent release and device-plist fixtures stay in the full manual
 macOS job.
 
 The workflow retains the signed IPA, compressed Xcode archive (including app

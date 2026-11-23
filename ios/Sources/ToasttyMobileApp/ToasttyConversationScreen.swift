@@ -209,7 +209,18 @@ struct ToasttyConversationScreen: View {
                 // task space.
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if let task = task(for: conversation) {
-                        ToasttyTaskBar(task: task, controller: controller)
+                        VStack(spacing: 0) {
+                            ToasttyTaskBar(task: task, controller: controller)
+                            if conversation.agent == .codex, conversation.state.bucket == .needsApproval,
+                               controller.freshness == .live {
+                                Label("Open this task’s terminal on your Mac to answer.", systemImage: "macwindow")
+                                    .font(.footnote)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(.bar)
+                            }
+                        }
                     }
                 }
             } else {

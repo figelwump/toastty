@@ -92,48 +92,38 @@ struct CodexRootProgressReconciliationTests {
     }
 
     @Test
-    func escapeOnlyIdlesEligibleHookStates() {
+    func hookAuthorityWaitsForConfirmationAfterEitherInterruptKey() {
         for kind in allKinds {
-            let hookExpected: CodexRootProgressDecision
-            switch kind {
-            case .working, .needsApproval:
-                hookExpected = .projectIdle(detail: "Ready for prompt")
-            case .none, .idle, .ready, .error:
-                hookExpected = .ignored(.currentRegistryKindDoesNotPermitTransition)
+            for interrupt in [CodexRootProgressInterrupt.escape, .controlC] {
+                #expect(evaluate(
+                    authority: .hooks,
+                    kind: kind,
+                    observation: .localInterrupt(interrupt)
+                ) == .ignored(.incompatibleWithAuthority))
             }
+        }
+    }
 
-            #expect(evaluate(
-                authority: .hooks,
-                kind: kind,
-                observation: .localInterrupt(.escape)
-            ) == hookExpected)
-
+    @Test
+    func fallbackAuthorityWaitsOnEscapeAndIdlesEligibleStatesOnControlC() {
+        for kind in allKinds {
             #expect(evaluate(
                 authority: .sessionLogFallback,
                 kind: kind,
                 observation: .localInterrupt(.escape)
             ) == fallbackEscapeExpected(for: kind))
-        }
-    }
-
-    @Test
-    func controlCIdlesEligibleStatesForBothAuthorities() {
-        for authority in [CodexRootProgressAuthority.hooks, .sessionLogFallback] {
-            for kind in allKinds {
-                let expected: CodexRootProgressDecision
-                switch kind {
-                case .working, .needsApproval:
-                    expected = .projectIdle(detail: "Ready for prompt")
-                case .none, .idle, .ready, .error:
-                    expected = .ignored(.currentRegistryKindDoesNotPermitTransition)
-                }
-
-                #expect(evaluate(
-                    authority: authority,
-                    kind: kind,
-                    observation: .localInterrupt(.controlC)
-                ) == expected)
+            let controlCExpected: CodexRootProgressDecision
+            switch kind {
+            case .working, .needsApproval:
+                controlCExpected = .projectIdle(detail: "Ready for prompt")
+            case .none, .idle, .ready, .error:
+                controlCExpected = .ignored(.currentRegistryKindDoesNotPermitTransition)
             }
+            #expect(evaluate(
+                authority: .sessionLogFallback,
+                kind: kind,
+                observation: .localInterrupt(.controlC)
+            ) == controlCExpected)
         }
     }
 

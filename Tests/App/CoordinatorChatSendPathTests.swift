@@ -548,6 +548,50 @@ struct CoordinatorChatSendPathTests {
         #expect(fixture.controller.queuedEntries.isEmpty)
     }
 
+    @MainActor
+    @Test func scrolledPageKeepsTheCompactionDialogHold() async throws {
+        let fixture = try CoordinatorChatFixture(agent: .claude)
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        try await fixture.waitUntil("the open prompt") { fixture.controller.promptIsOpenForTesting }
+        let registry = fixture.conversations.terminalRuntimeRegistry
+        let dialog = """
+        We recommend compacting earlier
+        Want to autocompact at 400k tokens instead?
+        ❯ Autocompact at ‹ 400k › tokens
+          Keep auto (1m tokens)
+        ↑/↓ choose · ←/→ change size · enter confirm · esc not now
+        """
+        var screen = dialog
+        registry.setAutomationReadVisibleTextHandlerForTesting { panelID, _ in
+            panelID == fixture.panelID ? screen : nil
+        }
+        defer { registry.setAutomationReadVisibleTextHandlerForTesting(nil) }
+        fixture.chat.draft = "From the composer"
+        fixture.chat.send()
+        #expect(fixture.controller.hold == .terminalDialog)
+
+        // The wheel moves Claude's page up. The dialog is out of the page,
+        // and Claude still waits for its answer.
+        // Claude 2.1.330 draws its mark in one of these two last lines.
+        for lastLine in [
+            "✻ Baked for 2s · done 2:30 PM                   Jump to bottom (click) ↓ ",
+            "──────────────── Jump to bottom (click) ↓ ────────────────",
+        ] {
+            screen = "⏺ An earlier answer\n\n\(lastLine)\n"
+            // Longer than the half second after which the controller looks again.
+            try await Task.sleep(for: .milliseconds(1300))
+            #expect(fixture.controller.hold == .terminalDialog)
+            #expect(fixture.delivered.texts.isEmpty)
+        }
+
+        // At the bottom again, Escape answers the dialog and the prompt shows.
+        screen = dialog
+        registry.handleLocalInput(for: fixture.panelID, kind: .dialogAnswer)
+        screen = "❯ "
+        try await fixture.waitUntil("the waiting message") { fixture.delivered.texts == ["From the composer"] }
+    }
+
     enum CompactionDraft: Sendable {
         case none, beforeDialog, afterAnswer
     }

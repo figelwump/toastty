@@ -1506,6 +1506,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     childThreadID: childThreadID
                 )
             }
+        case .turnAborted:
+            sessionRuntimeStore?.handleCodexRolloutTurnAbort(
+                sessionID: sessionID,
+                turnID: event.completionTurnID,
+                at: nowProvider()
+            )
         case .taskCompleted:
             // Without hooks, the rollout backs up `notify`, which a resumed
             // Codex session may never run.

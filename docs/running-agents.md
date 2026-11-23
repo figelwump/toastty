@@ -329,7 +329,7 @@ When the profile ID is `codex`, Toastty:
 5. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 6. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and permits Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=0` so fullscreen selections can receive `Cmd+C`. The explicit value overrides the disabling setting inherited from older managed sessions. Codex owns its keyboard-mode setup and exit cleanup; existing sessions must restart after updating Toastty.
 7. **Starts local session watchers**. Toastty polls the durable per-launch TUI session log (every 250 ms) for Codex root-turn and auto-review approval context; when hooks are unavailable, that log also provides the compatibility status fallback. A Codex `PermissionRequest` hook can precede automatic review. If its approval context is missing or its reviewer is unknown, Toastty keeps the request pending and does not send approval alerts merely because time passed. Approval alerts require context that confirms human review. After Codex reports native resume metadata, Toastty separately watches that session's native rollout JSONL for collaboration-agent lifecycle and the spawn-tool-to-child-agent identity mapping. When hooks are installed, hooks remain authoritative for collaboration lifecycle, while rollout events provide correlation metadata and a task-label fallback. Toastty joins that mapping with available `PreToolUse` metadata regardless of arrival order. When hooks are unavailable, the rollout watcher also provides the compatibility collaboration-lifecycle fallback.
-8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
+8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves. For sessions tracked by hooks, pressing Esc or Ctrl-C keeps the current status until Codex confirms the outcome. A `turn_aborted` event in the native rollout for the current root turn sets the session to **Idle**.
 9. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the durable per-launch artifacts directory.
 
 Computer Use requests app access through MCP elicitation. When Codex shows its
@@ -649,7 +649,17 @@ with `toastty task merge` finish its reply.
   reason. Its menu offers **Retry Clean Up** and **Don't Clean Up**. A cleanup
   that closes the workspace and then cannot remove the worktree or a branch
   reports what it kept in a notification. A pull request that closes without
-  merging, or three failed `gh` checks in a row, also stops the cleanup.
+  merging also stops the cleanup.
+- A cleanup that fails for a cause that can pass, such as no network, a
+  GitHub error, or Toastty not answering the script's workspace list in time,
+  runs again by itself: after 1, 5, 15 and 30 minutes. This
+  applies when the cleanup script ends with an error instead of its report, or
+  when three `gh` checks of the merged pull request in a row fail. While a
+  failed script run waits, the button reads **Done · PR #N** and a task's
+  status line says when its task space closes; while a failed check waits,
+  the button keeps **Merging PR #N…**. Only after the last retry fails does the button read
+  **Cleanup Stopped · PR #N**. A cleanup that Toastty skips for one of the
+  reasons above stops at once, because it needs you.
 - New work in the workspace clears its done mark and drops the cleanup, because
   the merge is no longer the version you accepted. Toastty checks the mark again
   in the same step that closes the workspace.
@@ -1172,6 +1182,11 @@ preparation explicitly fails or skips status integration, or when a supported
 launch option disables hooks. A later accepted managed status takes priority
 again. A quiet agent does not cause a switch. Hook settings outside the supplied
 launch settings are not inspected. A manual process watch also keeps priority.
+
+Managed Codex sessions also use a terminal permission report to show a live
+wait, including Computer Use requests. Codex handles the decision in its
+terminal. Toastty uses the visible Computer Use menu on older Codex versions
+that lack the report.
 
 Explicit progress percentages use blue text.
 

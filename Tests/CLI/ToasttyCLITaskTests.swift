@@ -4,6 +4,19 @@ import Testing
 @testable import ToasttyCLIKit
 
 struct ToasttyCLITaskTests {
+    @Test func releaseCompletionSendsTheReportFromTheCallingDirectory() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let report = #"{"tags":[{"tag":"v1","taskIDs":[]}]}"#
+        try report.write(to: directory.appendingPathComponent("release.json"), atomically: true, encoding: .utf8)
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["task", "release-complete", "--text-file", "release.json"],
+            environment: ["PWD": directory.path]
+        )
+        #expect(invocation.command == .appControlRun(kind: .action, id: "task.release-complete", args: ["report": .string(report)]))
+    }
+
     @Test
     func taskCreateMapsFlagsToTheActionAndResolvesPaths() throws {
         let directory = FileManager.default.temporaryDirectory

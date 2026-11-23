@@ -573,7 +573,7 @@ enum TaskBoard {
             if let answer = answers[key] { return answer }
             let answer = config.releaseWorkspace(
                 forProjectRoot: key.root, repositoryRoot: key.repositoryRoot, homeDirectoryPath: inputs.homeDirectory
-            )?.releaseTags != nil
+            )?.tracksShipping == true
             answers[key] = answer
             return answer
         }
@@ -959,6 +959,7 @@ final class TaskBoardStore: ObservableObject {
             self.isTurnCheckScheduled = false
             self.syncSessionTitles()
             self.refreshAfterTurnsEnded()
+            self.coordinator?.finishReportedReleases()
             let items = self.items()
             let drawn = self.itemsAtLastSessionCheck
             self.itemsAtLastSessionCheck = items

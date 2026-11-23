@@ -1573,6 +1573,87 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertEqual(status?.detail, "401 Unauthorized: Incorrect API key provided")
     }
 
+    func testResumedHookTrackedCodexWaitsForAbortOfItsCurrentTurn() async throws {
+        let fixture = try makePlannerFixture(codexStatusTrackingSourceProvider: { .hooks })
+        let rolloutURL = temporaryJSONLURL()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex", "resume", "thread-root"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        let runtime = fixture.sessionRuntimeStore
+        defer {
+            runtime.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            removeRolloutFixture(rolloutURL)
+        }
+        func status() -> SessionStatusKind? {
+            runtime.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind
+        }
+        func sendHook(_ name: String, turnID: String, kind: SessionStatusKind) {
+            XCTAssertTrue(runtime.handleCodexHookEvent(
+                sessionID: plan.sessionID,
+                event: CodexHookEvent(
+                    hookEventName: name,
+                    threadID: "thread-root",
+                    turnID: turnID,
+                    promptFingerprint: nil,
+                    status: SessionStatus(kind: kind, summary: kind == .working ? "Working" : "Ready", detail: nil),
+                    nativeSessionID: nil,
+                    sessionFilePath: nil,
+                    cwd: nil
+                ),
+                at: Date()
+            ))
+        }
+
+        let replayedAbort = #"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-before-restart","reason":"interrupted"}}"#
+        try appendCodexSessionLogLine(replayedAbort, to: rolloutURL)
+        try appendCodexSessionLogLine(
+            #"{"type":"turn_context","payload":{"turn_id":"turn-continues","cwd":"/tmp/repo","approval_policy":"never"}}"#,
+            to: rolloutURL
+        )
+        sendHook("UserPromptSubmit", turnID: "turn-continues", kind: .working)
+        XCTAssertTrue(fixture.store.send(.updateTerminalPanelResumeRecord(
+            panelID: fixture.panelID,
+            resumeRecord: codexResumeRecord(nativeSessionID: "thread-root", sessionFilePath: rolloutURL.path)
+        )))
+        await waitUntil {
+            runtime.codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?.latestCanonicalTurnID == "turn-continues"
+        }
+        XCTAssertEqual(status(), .working)
+        XCTAssertFalse(runtime.handleLocalInterruptForPanelIfActive(
+            panelID: fixture.panelID, kind: .escape, at: Date()
+        ))
+        XCTAssertEqual(status(), .working)
+        sendHook("PreToolUse", turnID: "turn-continues", kind: .working)
+        XCTAssertNil(runtime.sessionRegistry.activeSession(sessionID: plan.sessionID)?.lastTurnEndedAt)
+        sendHook("Stop", turnID: "turn-continues", kind: .ready)
+        XCTAssertNotNil(runtime.sessionRegistry.activeSession(sessionID: plan.sessionID)?.lastTurnEndedAt)
+
+        for (key, turnID) in [(TerminalLocalInterruptKind.escape, "turn-esc"), (.controlC, "turn-ctrl-c")] {
+            sendHook("UserPromptSubmit", turnID: turnID, kind: .working)
+            if key == .controlC {
+                // An unbound steer leaves the current turn ID in place.
+                runtime.recordCodexRootTurnInput(sessionID: plan.sessionID, fingerprint: "steer-without-turn-id")
+            }
+            XCTAssertFalse(runtime.handleLocalInterruptForPanelIfActive(
+                panelID: fixture.panelID, kind: key, at: Date()
+            ))
+            XCTAssertEqual(status(), .working)
+            try appendCodexSessionLogLine(
+                #"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"\#(turnID)","reason":"interrupted"}}"#,
+                to: rolloutURL
+            )
+            await waitUntil { status() == .idle }
+            XCTAssertEqual(status(), .idle)
+        }
+    }
+
     /// A Codex session resumed after a relaunch may never run `notify`, so
     /// without hooks the rollout's `task_complete` must end its turn.
     func testCodexRolloutTurnCompletionEndsAFallbackTurnThatNotifyNeverReported() async throws {

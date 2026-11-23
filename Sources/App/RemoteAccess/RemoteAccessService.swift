@@ -278,7 +278,12 @@ final class RemoteAccessTaskCreateBridge: @unchecked Sendable {
 }
 
 enum RemoteAccessPreferences {
+    /// The local port of the user's own Toastty, which uses the real home.
     static let defaultPort: UInt16 = 42871
+    /// Local ports for runtime-isolated instances: dev, worktree, and test
+    /// runs. They never use `defaultPort`, so they cannot take the user's
+    /// Toastty's port or the Tailscale Serve mapping that points at it.
+    static let isolatedPortRange: ClosedRange<UInt16> = 42872...43871
     private static let enabledKey = "toastty.remoteAccess.enabled"
     private static let portKey = "toastty.remoteAccess.port"
     private static let tailnetOriginKey = "toastty.remoteAccess.tailnetOrigin"
@@ -291,10 +296,29 @@ enum RemoteAccessPreferences {
         userDefaults.set(enabled, forKey: enabledKey)
     }
 
-    static func loadPort(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> UInt16 {
+    /// A saved or launch-argument `toastty.remoteAccess.port` wins. Without
+    /// one, the port belongs to the instance: see `instancePort`.
+    static func loadPort(
+        userDefaults: UserDefaults = ToasttyAppDefaults.current,
+        runtimePaths: ToasttyRuntimePaths
+    ) -> UInt16 {
         let stored = userDefaults.integer(forKey: portKey)
-        guard stored > 0, stored <= UInt16.max, stored >= 1024 else { return defaultPort }
+        guard stored > 0, stored <= UInt16.max, stored >= 1024 else {
+            return instancePort(runtimePaths: runtimePaths)
+        }
         return UInt16(stored)
+    }
+
+    /// The user's Toastty uses `defaultPort`. A runtime-isolated instance
+    /// gets a port in `isolatedPortRange` from its runtime home path, so the
+    /// port is the same at every launch, and several instances can run
+    /// Remote Access at once. Two instances can still get the same port;
+    /// the second one then reports that the port is in use.
+    static func instancePort(runtimePaths: ToasttyRuntimePaths) -> UInt16 {
+        guard let runtimeHomeURL = runtimePaths.runtimeHomeURL else { return defaultPort }
+        let hash = ToasttyRuntimePaths.stableHash(for: runtimeHomeURL.path)
+        let offset = hash % UInt64(isolatedPortRange.count)
+        return isolatedPortRange.lowerBound + UInt16(offset)
     }
 
     static func loadTailnetOrigin(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> String? {
@@ -815,7 +839,7 @@ final class RemoteAccessService: ObservableObject {
         sessionExitController: SessionExitController? = nil,
         taskCoordinator: (any RemoteTaskCreating)? = nil,
         quickEntryController: QuickEntryController? = nil,
-        port: UInt16 = RemoteAccessPreferences.loadPort(),
+        port: UInt16? = nil,
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
@@ -847,7 +871,7 @@ final class RemoteAccessService: ObservableObject {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionCloseController = sessionCloseController
-        self.port = port
+        self.port = port ?? RemoteAccessPreferences.loadPort(runtimePaths: runtimePaths)
         self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
