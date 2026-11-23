@@ -154,6 +154,49 @@ final class TerminalHostViewTextInputTests: TerminalHostViewTestCase {
         XCTAssertEqual(preeditRecorder.values, ["你好", nil])
     }
 
+    func testUnfinishedComposedTextEndsWhenTheKeyboardLeavesTheTerminal() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let preeditRecorder = GhosttyPreeditRecorder()
+        let keyRecorder = GhosttyKeyEventRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in }, setOcclusion: { _, _ in }, refresh: { _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, event in keyRecorder.record(event); return true },
+            keyIsBinding: { _, _ in false },
+            setPreedit: { _, text, length in preeditRecorder.record(text, length: length) }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1247))
+        // A real window, so that AppKit itself moves the keyboard between the views.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let otherView = NSTextField(frame: NSRect(x: 0, y: 120, width: 200, height: 24))
+        window.contentView?.addSubview(hostView)
+        window.contentView?.addSubview(otherView)
+        XCTAssertTrue(window.makeFirstResponder(hostView))
+        var kinds: [TerminalLocalInputKind] = []
+        hostView.reportKeyPress = { kinds.append($0.localInputKind) }
+
+        // A dead key or an input method leaves this, and the person never finishes it.
+        hostView.setMarkedText("´", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange())
+        XCTAssertTrue(window.makeFirstResponder(otherView))
+        XCTAssertTrue(window.makeFirstResponder(hostView))
+
+        XCTAssertFalse(hostView.hasMarkedText())
+        XCTAssertEqual(preeditRecorder.values, ["´", nil])
+        // While composed text stays, Ghostty sends no arrow key, Return or
+        // Escape to the program, and the key counts as typed text.
+        let downArrow = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+        hostView.keyDown(with: try makeKeyEvent(
+            type: .keyDown, keyCode: 125, modifierFlags: [.numericPad, .function],
+            characters: downArrow, charactersIgnoringModifiers: downArrow
+        ))
+        XCTAssertEqual(kinds, [.dialogNavigation])
+        XCTAssertEqual(keyRecorder.events.map(\.composing), [false])
+    }
+
     func testFlagsChangedIgnoresModifierTransitionsDuringMarkedTextComposition() throws {
         let hostView = TerminalHostView()
         let keyRecorder = GhosttyKeyEventRecorder()

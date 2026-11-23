@@ -19,8 +19,13 @@ protocol TerminalCommandRouting: AnyObject {
         focusPolicy: TerminalInputFocusPolicy
     ) -> TerminalInputDeliveryResult
     func isReadyForManagedAgentCommand(panelID: UUID) -> Bool
+    func managedAgentRestoreState(panelID: UUID) -> TerminalManagedAgentRestoreState
     func readVisibleText(panelID: UUID) -> String?
     func promptState(panelID: UUID) -> TerminalPromptState
+}
+
+extension TerminalCommandRouting {
+    func managedAgentRestoreState(panelID: UUID) -> TerminalManagedAgentRestoreState { .inactive }
 }
 
 extension TerminalRuntimeRegistry: TerminalCommandRouting {}
@@ -1057,7 +1062,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         panelID: UUID,
         terminalCommandRouter: any TerminalCommandRouting
     ) throws {
-        guard terminalCommandRouter.promptState(panelID: panelID).isIdleAtPrompt else {
+        guard terminalCommandRouter.managedAgentRestoreState(panelID: panelID) == .inactive,
+              terminalCommandRouter.promptState(panelID: panelID).isIdleAtPrompt else {
             throw AgentLaunchError.panelBusy(runningCommand: nil)
         }
     }
@@ -1088,9 +1094,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 try await Task.sleep(for: Self.asyncPromptReadinessPollInterval)
                 continue
             }
-            guard promptState.isIdleAtPrompt else {
-                throw AgentLaunchError.panelBusy(runningCommand: nil)
-            }
+            try ensurePanelAppearsInteractive(panelID: panelID, terminalCommandRouter: terminalCommandRouter)
             return
         }
     }

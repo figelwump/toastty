@@ -429,7 +429,7 @@ struct TaskCoordinatorTests {
         await expectFailure(TaskCreateRequest(text: "x", workspaceID: UUID(), agent: "codex"), mentioning: "No open workspace")
         await expectFailure(TaskCreateRequest(text: "x", slug: "Bad Slug", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "slug")
         await expectFailure(TaskCreateRequest(text: "x", title: "two\nlines", workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "one line")
-        await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "codex", model: "gpt 6"), mentioning: "one word")
+        await expectFailure(TaskCreateRequest(text: "x", workspaceID: fixture.workspaceID, agent: "codex", model: "GPT-6.2 Sol"), mentioning: "--model expects a provider model ID")
         await expectFailure(TaskCreateRequest(text: "x", files: [fixture.root.appendingPathComponent("missing.png").path], workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "missing.png")
         await expectFailure(TaskCreateRequest(text: "x", files: [fixture.root.path], workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "not a regular file")
         await expectFailure(TaskCreateRequest(text: "x", files: ["relative.png"], workspaceID: fixture.workspaceID, agent: "codex"), mentioning: "absolute path")

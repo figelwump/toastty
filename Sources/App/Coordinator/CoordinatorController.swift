@@ -193,6 +193,7 @@ final class CoordinatorController: ObservableObject {
     private let trustFolder: @MainActor (_ profileID: String, _ directory: String) async -> Void
     private let deliverText: (String, UUID) -> TerminalInputDeliveryResult
     private let promptState: (UUID) -> TerminalPromptState
+    private let managedAgentRestoreState: (UUID) -> TerminalManagedAgentRestoreState
     /// Scrolls a local-document panel to a line, from 1. See
     /// `WebPanelRuntimeRegistry.requestLocalDocumentReveal`.
     private let revealDocumentLine: (UUID, Int) -> Bool
@@ -309,7 +310,53 @@ final class CoordinatorController: ObservableObject {
             ToasttyLog.info("Changed what the coordinator's panel shows", category: .tasks, metadata: [
                 "shows": newValue ? "terminal" : "chat",
             ])
+            if newValue {
+                terminalKeyLog.start()
+            } else {
+                terminalKeyLog.stop()
+            }
+            logKeyboardOwnerAfterPanelChange()
         }
+    }
+
+    /// The record of the key presses that follow Show Terminal.
+    private let terminalKeyLog = CoordinatorTerminalKeyLog()
+    private var keyboardOwnerLog: Task<Void, Never>?
+
+    /// Says in the log which view has the keyboard once the panel's change
+    /// has settled. Show Terminal tries for about 0.2 seconds to give the
+    /// terminal the keyboard, and says nothing when that does not work.
+    private func logKeyboardOwnerAfterPanelChange() {
+        keyboardOwnerLog?.cancel()
+        keyboardOwnerLog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let self, Task.isCancelled == false else { return }
+            var metadata = self.terminalLogFacts()
+            metadata["keyboard_owner"] = self.terminalKeyLog.keyboardOwner()
+            metadata["app_active"] = NSApp.isActive ? "true" : "false"
+            ToasttyLog.info("The keyboard's owner after the coordinator's panel changed", category: .tasks, metadata: metadata)
+        }
+    }
+
+    /// The coordinator's state that explains a key press or a hold in the log.
+    private func terminalLogFacts() -> [String: String] {
+        var facts = [
+            "shows": showsTerminal ? "terminal" : "chat",
+            "hold": hold?.rawValue ?? "none",
+            "queued": String(queuedCount),
+        ]
+        if let summary = conversationSubscription?.snapshot(at: now())?.summary {
+            facts["input"] = switch summary.inputAvailability {
+            case .openPrompt: "open_prompt"
+            case .localDraft: "local_draft"
+            case .pendingInteraction(let ids): "pending_interaction:\(ids.count)"
+            case .unavailable(let reason): "unavailable:\(reason.rawValue)"
+            }
+        }
+        if let session, session.agent == .claude, let terminals {
+            facts["claude_dialog"] = terminals.claudeDialogPlaceForLog(panelID: session.panelID)
+        }
+        return facts
     }
 
     /// The chat needs the shared transcript view, which needs macOS 15.
@@ -333,6 +380,9 @@ final class CoordinatorController: ObservableObject {
     /// The app's terminals, which give the coordinator's terminal the
     /// keyboard. Set by `connectKeyboard(to:)`.
     private weak var terminals: TerminalRuntimeRegistry?
+    // Workspace and window changes can schedule an automatic focus restore
+    // during the switch. Keep the user's explicit request independent of it.
+    private let showTerminalFocus = TerminalFocusCoordinator()
 
     /// Connects the keyboard of the chat and the terminal under it:
     /// keyboard focus meant for the covered terminal goes to the chat's
@@ -343,22 +393,50 @@ final class CoordinatorController: ObservableObject {
             guard let self, self.coversTerminal(panelID: panelID) else { return nil }
             return { [weak self] in self?.chat?.focusComposer() ?? false }
         }
+        terminals.keyPressObserver = { [weak self] panelID, press in
+            guard let self, self.location?.panelID == panelID else { return }
+            self.terminalKeyLog.record(press)
+        }
+        terminalKeyLog.isCoordinatorTerminal = { [weak self, weak terminals] responder in
+            guard let panelID = self?.location?.panelID else { return false }
+            return terminals?.isKeyboardFocusTarget(responder, panelID: panelID) ?? false
+        }
+        terminalKeyLog.terminalWindow = { [weak self, weak terminals] in
+            guard let panelID = self?.location?.panelID else { return nil }
+            return terminals?.terminalWindow(panelID: panelID)
+        }
+        terminalKeyLog.context = { [weak self] in self?.terminalLogFacts() ?? [:] }
     }
 
-    /// Show Terminal, in the chat's notice or in the panel's header: the
-    /// panel shows the terminal in place of the chat, and the terminal
-    /// takes the keyboard, so that the user can answer a login or a
-    /// folder-trust question with the keys at once. The chat's field had
-    /// the keyboard and leaves the window with the chat. A terminal that
-    /// shows does not take the keyboard from that field by itself (see
-    /// `TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus`), so
-    /// without this the keys reach nothing until the user clicks.
+    /// Show Terminal, in the chat's notice or in the panel's header: give
+    /// the keyboard to the terminal as soon as its AppKit view is ready.
     func showTerminal() {
         showsTerminal = true
         guard let location, let panelID = location.panelID else { return }
         // policy.md beside it can have the focus.
         _ = store.send(.focusPanel(workspaceID: location.workspaceID, panelID: panelID))
-        terminals?.takeKeyboardFocus(panelID: panelID)
+        showTerminalFocus.scheduleFocusRestore(avoidStealingKeyboardFocus: false) { [weak self] in
+            guard let self, self.showsTerminal, self.location == location,
+                  self.store.state.selectedWindowID == location.windowID,
+                  let workspace = self.store.selectedWorkspace(in: location.windowID),
+                  workspace.id == location.workspaceID, workspace.focusedPanelID == panelID,
+                  let terminals = self.terminals else { return true }
+            return terminals.focusVisibleTerminalIfPossible(panelID: panelID)
+        }
+    }
+
+    /// A composer focus request can run after the chat starts leaving.
+    func presentsComposer(at host: CoordinatorChatModel.Host, panelID: UUID) -> Bool {
+        guard let location, location.panelID == panelID,
+              let window = store.window(id: location.windowID) else { return false }
+        switch host {
+        case .dock:
+            return dockShows(in: location.windowID)
+        case .panel:
+            return coversTerminal(panelID: panelID) && !window.showsTasksView &&
+                store.selectedWorkspace(in: window.id)?.focusedPanelID == panelID &&
+                window.selectedWorkspaceID == location.workspaceID
+        }
     }
 
     /// Reads and sends to agent conversations inside the app. Set once the
@@ -417,6 +495,7 @@ final class CoordinatorController: ObservableObject {
         trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in },
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
+        managedAgentRestoreState: @escaping (UUID) -> TerminalManagedAgentRestoreState = { _ in .inactive },
         revealDocumentLine: @escaping (UUID, Int) -> Bool = { _, _ in false },
         terminalReadinessTimeout: Duration = .seconds(10),
         now: @escaping () -> Date = Date.init,
@@ -436,6 +515,7 @@ final class CoordinatorController: ObservableObject {
         self.trustFolder = trustFolder
         self.deliverText = deliverText
         self.promptState = promptState
+        self.managedAgentRestoreState = managedAgentRestoreState
         self.revealDocumentLine = revealDocumentLine
         self.terminalReadinessTimeout = terminalReadinessTimeout
         self.now = now
@@ -629,13 +709,11 @@ final class CoordinatorController: ObservableObject {
         )
     }
 
-    /// After a relaunch, Toastty resumes the agent of a restored terminal
-    /// when that terminal comes up. Until then the terminal has a saved
-    /// conversation to resume, no session and no surface. A second start in
-    /// that time would type into the same shell as the resume.
+    /// The terminal registry owns the restore from before surface creation
+    /// through command handoff. Its shell can show a prompt during that time.
     private func awaitsRestore(_ location: CoordinatorLocation) -> Bool {
-        guard let panelID = location.panelID, hasSavedConversation(location) else { return false }
-        return promptState(panelID) == .unavailable
+        guard let panelID = location.panelID else { return false }
+        return managedAgentRestoreState(panelID) == .pending
     }
 
     /// The coordinator's agent conversation is new, so it has no history:
@@ -1178,7 +1256,10 @@ final class CoordinatorController: ObservableObject {
             if self.location?.workspaceID == workspaceID {
                 failedStart = FailedStart(workspaceID: workspaceID, reason: reason)
             }
-            ToasttyLog.warning("The coordinator's agent did not start", category: .tasks, metadata: ["reason": reason])
+            ToasttyLog.warning("The coordinator's agent did not start", category: .tasks, metadata: [
+                "reason": reason,
+                "requested_action": replacingBusyTerminal ? "restart" : "open",
+            ])
             // Keeps the installed agent that a person can choose instead.
             throw error as? CoordinatorError ?? CoordinatorError(reason)
         }
@@ -1221,6 +1302,7 @@ final class CoordinatorController: ObservableObject {
             "session_id": result.sessionID,
             "panel_id": terminal.panelID.uuidString,
             "agent": config.agent,
+            "requested_action": replacingBusyTerminal ? "restart" : "open",
         ])
         return result.sessionID
     }
@@ -1238,8 +1320,9 @@ final class CoordinatorController: ObservableObject {
             let isBusy = sessionRuntimeStore.sessionRegistry.activeSession(for: panelID) != nil
                 || promptState(panelID) == .busy
                 || promptState(panelID) == .exited
-                // Closing the terminal also drops its pending resume.
-                || awaitsRestore(location)
+                // Closing the terminal also drops its pending resume or any
+                // text that may have been left there by an unconfirmed paste.
+                || managedAgentRestoreState(panelID) != .inactive
             if replacingBusyTerminal == false || isBusy == false {
                 return StartTerminal(panelID: panelID, tabID: nil, replacedPanelID: nil)
             }
@@ -1926,6 +2009,9 @@ final class CoordinatorController: ObservableObject {
             // because the agent is not up, not because of its state.
             return .held(summary.state == .starting ? .agentStarting : Self.hold(for: reason), recheckAt: nil)
         }
+        if session.agent == .claude, terminals?.claudeHasNativeDialog(panelID: session.panelID) == true {
+            return .held(.terminalDialog, recheckAt: moment.addingTimeInterval(CoordinatorSendGate.pollInterval))
+        }
         guard noteTypingStarts(entry) else {
             return .held(.notSaved, recheckAt: moment.addingTimeInterval(Self.saveRetryInterval))
         }
@@ -2237,7 +2323,15 @@ final class CoordinatorController: ObservableObject {
     }
 
     private func setHold(_ next: CoordinatorSendHold?) {
-        if hold != next { hold = next }
+        guard hold != next else { return }
+        let previous = hold
+        hold = next
+        var metadata = terminalLogFacts()
+        metadata["previous_hold"] = previous?.rawValue ?? "none"
+        ToasttyLog.info("Changed why the coordinator's waiting message waits", category: .tasks, metadata: metadata)
+        // A new reason while the terminal shows is the moment that a later
+        // report asks about: record the next key presses again.
+        if showsTerminal { terminalKeyLog.start() }
     }
 
     private func scheduleRecheck(at date: Date, from moment: Date) {

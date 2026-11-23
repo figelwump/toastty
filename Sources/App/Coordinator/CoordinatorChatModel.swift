@@ -75,6 +75,7 @@ final class CoordinatorChatModel: ObservableObject {
     )
     /// The conversation's summary, or `nil` while Toastty reads none.
     @Published private(set) var summary: RemoteConversationSummary?
+    @Published private(set) var interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
     /// The composer's text. It is kept here so that it survives a switch to
     /// the terminal and back.
     @Published var draft = ""
@@ -331,6 +332,7 @@ final class CoordinatorChatModel: ObservableObject {
         if summary != snapshot?.summary {
             summary = snapshot?.summary
         }
+        reconcileQuestionAnswers(snapshot?.pendingInteractions ?? [])
         // Replay batches are historical output, not new live messages.
         // Wait for the reader's boundary instead of guessing from a pause;
         // a long transcript can take seconds and have gaps between batches.
@@ -362,6 +364,52 @@ final class CoordinatorChatModel: ObservableObject {
         } else {
             loadNewestPage(from: subscription)
         }
+    }
+
+    private func reconcileQuestionAnswers(_ pending: [RemotePendingInteraction]) {
+        var updated: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:]
+        for interaction in pending where interaction.kind == .question && interaction.state == .pending {
+            guard let responseID = interaction.responseID, !responseID.isEmpty,
+                  let questions = interaction.questions, RemoteQuestionAnswerValidation.supports(questions) else { continue }
+            let key = ToasttyInteractionAnswerKey(
+                interactionID: interaction.id, responseID: responseID, inputEpoch: interaction.inputEpoch
+            )
+            if let current = interactionAnswerStates[interaction.id], current.key == key {
+                updated[interaction.id] = current
+            } else {
+                updated[interaction.id] = ToasttyInteractionAnswerState(key: key, questions: questions)
+            }
+        }
+        if updated != interactionAnswerStates { interactionAnswerStates = updated }
+    }
+
+    func editQuestionAnswer(_ id: RemotePendingInteraction.ID, _ edit: ToasttyInteractionAnswerEdit) {
+        guard var state = interactionAnswerStates[id] else { return }
+        state.apply(edit)
+        if state != interactionAnswerStates[id] { interactionAnswerStates[id] = state }
+    }
+
+    func submitQuestionAnswer(_ id: RemotePendingInteraction.ID) {
+        guard let subscription, let conversationID = subscription.conversationID,
+              var state = interactionAnswerStates[id], state.canSubmit,
+              let answers = state.canonicalAnswers else { return }
+        let request = RemoteQuestionAnswerRequest(
+            conversationID: conversationID,
+            interactionID: state.key.interactionID,
+            responseID: state.key.responseID,
+            expectedInputEpoch: state.key.inputEpoch,
+            clientRequestID: UUID().uuidString.lowercased(),
+            answers: answers
+        )
+        switch subscription.answerQuestion(request) {
+        case .submitted, .duplicate:
+            state.status = .awaitingClaude
+        case .rejected(reason: .invalidAnswers):
+            state.status = .failed("Review every answer and try again.")
+        case .rejected:
+            state.status = .unavailable("This answer is no longer available in chat.")
+        }
+        interactionAnswerStates[id] = state
     }
 
     private func loadNewestPage(from subscription: any LocalConversationSubscription) {
@@ -597,6 +645,8 @@ final class CoordinatorChatModel: ObservableObject {
             "Queued \(position) · waits for the agent to start"
         case .userDraft:
             "Queued \(position) · waits for the text in the terminal"
+        case .terminalDialog:
+            "Queued \(position) · waits for your answer in the terminal"
         case .terminalUnavailable, .promptNotOpen:
             "Queued \(position) · waits for the prompt"
         case .notSaved:
@@ -638,8 +688,9 @@ final class CoordinatorChatModel: ObservableObject {
         case .running:
             break
         }
+        if status.hold == .terminalDialog { return .awaitingAnswerInTerminal }
         if status.session?.status?.kind == .needsApproval {
-            return .awaitingAnswerInTerminal
+            return needsTerminalForPendingAnswer ? .awaitingAnswerInTerminal : nil
         }
         // The agent's process runs, but the agent has not reported its
         // session. Toastty then has no conversation of its to read, or only
@@ -656,12 +707,21 @@ final class CoordinatorChatModel: ObservableObject {
         }
         switch summary.inputAvailability {
         case .pendingInteraction:
-            return .awaitingAnswerInTerminal
+            return needsTerminalForPendingAnswer ? .awaitingAnswerInTerminal : nil
         case .localDraft:
             return .terminalDraft
         default:
             if controller.hasInterruptedEntry { return .typingInterrupted }
             return controller.mayReadPartOfItsInstructions ? .instructionsMayBeCut : nil
+        }
+    }
+
+    private var needsTerminalForPendingAnswer: Bool {
+        guard case .pendingInteraction(let ids) = summary?.inputAvailability, !ids.isEmpty else { return true }
+        return ids.contains { id in
+            guard let state = interactionAnswerStates[id] else { return true }
+            if case .unavailable = state.status { return true }
+            return false
         }
     }
 

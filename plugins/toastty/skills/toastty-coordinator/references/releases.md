@@ -25,17 +25,17 @@ settings unless they set their own values.
   `toastty task set-release <task-id> --after-merge`. A task with
   `releaseAfterMerge` that reaches `toShip` gets a release at once, also in
   a batch project.
-- **Say what else ships.** A release builds the default branch tip and
-  includes the eligible `toShip` tasks from related project worktrees of the
-  same repository. Before you start one for a single
-  task, name the others: "This also ships 3 other merged tasks: …".
+- **Name the other waiting tasks.** The release agent starts at the default
+  branch tip and gets the eligible `toShip` tasks from the same repository.
+  Before starting a release for one task, tell the user which other merged
+  tasks are waiting. The release agent reports which of them each tag ships.
 - **Choose the agent.** Choose the release task's agent, model and effort as
   you do for a new task (see New tasks): the user's explicit choice, then
   the Agents section of `policy.md`, then the releases of the same project in
   the task history. A release is operational work: a rule in Agents for
   releases or operational work covers it. Omit what none of them gives, and
   Toastty uses its default.
-- **Start:** `toastty task release --workspace <workspaceID> [--agent <profile>] [--model <model>] [--effort <level>]`,
+- **Start:** `toastty task release --workspace <workspaceID> [--agent <profile>] [--model '<id>'] [--effort <level>]`,
   with the project's workspace ID; `toastty task workspace-choices --json`
   lists it. When the user asks for a release, start it also when no task of
   the project is in To ship. Do not start one while a release task of the
@@ -43,6 +43,7 @@ settings unless they set their own values.
   tell the user the release task as a link, with the agent, model and effort
   you passed, or "the default".
 - **Then follow the release task** like any other task. Its questions about
-  versions, approvals and production always go to the user.
+  versions, approvals and production always go to the user. The release
+  agent confirms completion after all approved lanes and checks finish.
 - **A task whose `merged` line in the ledger says "by rule"** gets no
   release before the user's yes.

@@ -1942,9 +1942,26 @@ final class WorkspaceViewTests: XCTestCase {
     /// turns back into Merge once GitHub says it is ready.
     @MainActor
     func testPullRequestSubspaceHeaderOpensAPullRequestThatIsNotReady() throws {
+        try checkPullRequestHeaderWhileBlocked(task: nil)
+    }
+
+    @MainActor
+    func testTaskHeaderShowsChecksRunningBesideOpenPR() throws {
+        let taskTitle = "@-mention list: task titles crowded by workspace names"
+        let task = TaskRecord(
+            createdAt: Date(), text: taskTitle, title: taskTitle,
+            slug: "mention-list", source: .quickEntry
+        )
+        try checkPullRequestHeaderWhileBlocked(task: task)
+    }
+
+    @MainActor
+    private func checkPullRequestHeaderWhileBlocked(task: TaskRecord?) throws {
         var mergeRequests: [UUID] = []
         var openedURLs: [URL] = []
-        let pullRequestURL = "https://github.com/example/toastty/pull/59"
+        let prNumber = task == nil ? 59 : 479
+        let pullRequestURL = "https://github.com/example/toastty/pull/\(prNumber)"
+        let evidencePrefix = task == nil ? "subspace-header" : "task-header"
         var observedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let cache = PullRequestStateCache(runner: OfflinePullRequestRunner(), now: { observedAt })
         let link = try XCTUnwrap(WorkspacePullRequestLink(annotationURL: pullRequestURL))
@@ -1954,18 +1971,19 @@ final class WorkspaceViewTests: XCTestCase {
             pumpMainRunLoop(duration: 0.05)
         }
         let harness = try makeWorkspaceHarness(
-            hostWidth: 720,
-            isWorkspaceMergeEnabled: true,
+            hostWidth: task == nil ? 720 : 653,
+            isWorkspaceMergeEnabled: task == nil,
+            taskRecord: task,
             configureState: { state, windowID, workspaceID in
                 let parent = WorkspaceState.bootstrap(title: "toastty")
                 state.workspacesByID[parent.id] = parent
                 let windowIndex = try XCTUnwrap(state.windows.firstIndex { $0.id == windowID })
                 state.windows[windowIndex].workspaceIDs.insert(parent.id, at: 0)
                 var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
-                workspace.title = "fix-claude-question-lifetime"
+                workspace.title = task?.title ?? "fix-claude-question-lifetime"
                 workspace.parentWorkspaceID = parent.id
                 workspace.annotations["github-pr"] = try XCTUnwrap(
-                    WorkspaceAnnotation.validated(text: "PR #59", url: pullRequestURL)
+                    WorkspaceAnnotation.validated(text: "PR #\(prNumber)", url: pullRequestURL)
                 )
                 state.workspacesByID[workspaceID] = workspace
             },
@@ -1977,7 +1995,7 @@ final class WorkspaceViewTests: XCTestCase {
         let subtitleSlotCenter = CGPoint(x: 12 + 24, y: ToastyTheme.topBarHeight - 10)
 
         answer(TaskPullRequestState(state: .open, isDraft: true, mergeability: PullRequestMergeability(mergeState: .draft)))
-        try writeTopBarEvidence(harness, name: "topbar-open-pr-draft")
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-open-pr-draft")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(openedURLs, [URL(string: pullRequestURL)])
         XCTAssertEqual(mergeRequests, [])
@@ -1986,7 +2004,7 @@ final class WorkspaceViewTests: XCTestCase {
             state: .open, headSHA: "head1",
             mergeability: PullRequestMergeability(mergeState: .blocked, checks: .failing)
         ))
-        try writeTopBarEvidence(harness, name: "topbar-open-pr-checks-failing")
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-open-pr-checks-failing")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(openedURLs.count, 2)
         XCTAssertEqual(mergeRequests, [])
@@ -2006,12 +2024,21 @@ final class WorkspaceViewTests: XCTestCase {
 
         answer(TaskPullRequestState(
             state: .open, headSHA: "head1",
+            mergeability: PullRequestMergeability(mergeState: .unstable, checks: .running)
+        ))
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-open-pr-checks-running")
+        try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
+        XCTAssertEqual(openedURLs.count, 4)
+        XCTAssertEqual(mergeRequests, [harness.workspaceID])
+
+        answer(TaskPullRequestState(
+            state: .open, headSHA: "head1",
             mergeability: PullRequestMergeability(mergeState: .clean, checks: .passing)
         ))
-        try writeTopBarEvidence(harness, name: "topbar-merge-ready-clean")
+        try writeTopBarEvidence(harness, name: "\(evidencePrefix)-merge-ready-clean")
         try click(atTopLeadingPoint: subtitleSlotCenter, in: harness)
         XCTAssertEqual(mergeRequests, [harness.workspaceID, harness.workspaceID])
-        XCTAssertEqual(openedURLs.count, 3)
+        XCTAssertEqual(openedURLs.count, 4)
     }
 
     func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
@@ -3108,56 +3135,93 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testRightPanelRuntimeSurvivesWorkspaceTabSwitch() throws {
-        let rightPanelID = UUID()
-        var visibleTabID: UUID?
-        var inactiveTabID: UUID?
-        let harness = try makeWorkspaceHarness(tabCount: 2) { state, _, workspaceID in
+    func testRightPanelsKeepTwoRecentAttachmentsAcrossWorkspaceTabSwitches() async throws {
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+        let thirdPanelID = UUID()
+        let alternatePanelID = UUID()
+        let panelIDs = [firstPanelID, secondPanelID, thirdPanelID]
+        let harness = try makeWorkspaceHarness(tabCount: panelIDs.count) { state, _, workspaceID in
             var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
-            let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
-            var selectedTab = try XCTUnwrap(workspace.tabsByID[selectedTabID])
-            selectedTab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
-                panelID: rightPanelID,
-                isVisible: true
-            )
-            workspace.tabsByID[selectedTabID] = selectedTab
-            visibleTabID = selectedTabID
-            inactiveTabID = try XCTUnwrap(workspace.tabIDs.dropFirst().first)
+            for (tabID, panelID) in zip(workspace.tabIDs, panelIDs) {
+                var tab = try XCTUnwrap(workspace.tabsByID[tabID])
+                tab.rightAuxPanel = self.makeScratchpadRightAuxPanel(panelID: panelID, isVisible: true)
+                if panelID == secondPanelID {
+                    let alternatePanel = try XCTUnwrap(
+                        self.makeScratchpadRightAuxPanel(panelID: alternatePanelID, isVisible: true).activeTab
+                    )
+                    tab.rightAuxPanel.appendTab(alternatePanel, activate: false)
+                }
+                workspace.tabsByID[tabID] = tab
+            }
             state.workspacesByID[workspaceID] = workspace
         }
         defer { harness.window.orderOut(nil) }
 
-        pumpMainRunLoop(duration: 0.1)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let initialRuntime = try XCTUnwrap(
-            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
-        )
+        func waitForLayout(timeout: Duration = .seconds(5), until condition: () -> Bool) async throws {
+            let deadline = ContinuousClock.now + timeout
+            harness.hostingView.layoutSubtreeIfNeeded()
+            // Scratchpad teardown runs in a deferred main-actor task after SwiftUI
+            // removes its host. Suspend the test until the lifecycle has caught up.
+            while !condition() && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+                harness.hostingView.layoutSubtreeIfNeeded()
+            }
+        }
 
-        _ = harness.store.send(
-            .selectWorkspaceTab(
-                workspaceID: harness.workspaceID,
-                tabID: try XCTUnwrap(inactiveTabID)
-            )
-        )
-        pumpMainRunLoop(duration: 0.1)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let runtimeAfterSwitchAway = try XCTUnwrap(
-            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
-        )
-        XCTAssertTrue(initialRuntime === runtimeAfterSwitchAway)
+        func readyAttachment(for panelID: UUID) async throws -> (ScratchpadPanelRuntime, PanelHostAttachmentToken) {
+            let registry = harness.webPanelRuntimeRegistry
+            try await waitForLayout {
+                registry.loadedScratchpadRuntime(for: panelID)?.lifecycleState.isReadyForFocus == true
+            }
+            let runtime = try XCTUnwrap(registry.loadedScratchpadRuntime(for: panelID))
+            let attachment = try XCTUnwrap(runtime.lifecycleState.attachmentToken)
+            XCTAssertEqual(runtime.lifecycleState, .ready(attachment))
+            return (runtime, attachment)
+        }
 
-        _ = harness.store.send(
-            .selectWorkspaceTab(
-                workspaceID: harness.workspaceID,
-                tabID: try XCTUnwrap(visibleTabID)
-            )
-        )
-        pumpMainRunLoop(duration: 0.1)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let runtimeAfterSwitchBack = try XCTUnwrap(
-            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
-        )
-        XCTAssertTrue(initialRuntime === runtimeAfterSwitchBack)
+        let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        func selectTab(at index: Int) {
+            XCTAssertTrue(harness.store.send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: workspace.tabIDs[index])))
+        }
+
+        let (first, firstAttachment) = try await readyAttachment(for: firstPanelID)
+        let firstWebView = try XCTUnwrap(findDescendantView(in: harness.hostingView, ofType: FocusAwareWKWebView.self))
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: secondPanelID))
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: thirdPanelID))
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: alternatePanelID))
+
+        selectTab(at: 1)
+        let (second, _) = try await readyAttachment(for: secondPanelID)
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+
+        let secondTab = try XCTUnwrap(workspace.tabsByID[workspace.tabIDs[1]])
+        let alternateTabID = try XCTUnwrap(secondTab.rightAuxPanel.tabID(containingPanelID: alternatePanelID))
+        XCTAssertTrue(harness.store.send(.selectRightAuxPanelTab(workspaceID: workspace.id, tabID: alternateTabID, focus: false)))
+        let (alternate, alternateAttachment) = try await readyAttachment(for: alternatePanelID)
+        try await waitForLayout { second.lifecycleState == .detached }
+        XCTAssertEqual(second.lifecycleState, .detached)
+        XCTAssertEqual(alternate.lifecycleState, .ready(alternateAttachment))
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+
+        XCTAssertTrue(firstWebView.isHidden)
+        selectTab(at: 0)
+        try await waitForLayout { !firstWebView.isHidden }
+        XCTAssertFalse(firstWebView.isHidden)
+        // Showing the selected panel can precede the render that applies the
+        // retention update. Check that both hosts stay ready before visiting tab 3.
+        try await waitForLayout(timeout: .milliseconds(300)) {
+            first.lifecycleState != .ready(firstAttachment) || alternate.lifecycleState != .ready(alternateAttachment)
+        }
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+        XCTAssertEqual(alternate.lifecycleState, .ready(alternateAttachment))
+
+        selectTab(at: 2)
+        let (third, thirdAttachment) = try await readyAttachment(for: thirdPanelID)
+        try await waitForLayout { alternate.lifecycleState == .detached }
+        XCTAssertEqual(first.lifecycleState, .ready(firstAttachment))
+        XCTAssertEqual(alternate.lifecycleState, .detached)
+        XCTAssertEqual(third.lifecycleState, .ready(thirdAttachment))
     }
 
     private func assertColor(

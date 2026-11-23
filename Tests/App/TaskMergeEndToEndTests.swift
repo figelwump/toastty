@@ -1207,7 +1207,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         try await withScenario { scenario in
             scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
                 sessionID: "agent", agent: .claude, panelID: scenario.taskPanelID, workspaceID: scenario.taskSpaceID,
-                cwd: scenario.worktree, isActive: true, isInTurn: false
+                cwd: scenario.worktree, isActive: true, isInTurn: false,
+                status: SessionStatus(kind: .ready, summary: "Ready")
             )
             let taskID = scenario.taskID.uuidString
             scenario.failMergeCalls(once: false)
@@ -1268,7 +1269,8 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
             scenario.config.defaults.merge = .direct
             scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
                 sessionID: "agent", agent: .claude, panelID: scenario.taskPanelID, workspaceID: scenario.taskSpaceID,
-                cwd: scenario.worktree, isActive: true, isInTurn: false
+                cwd: scenario.worktree, isActive: true, isInTurn: false,
+                status: SessionStatus(kind: .ready, summary: "Ready")
             )
             let taskID = scenario.taskID.uuidString
             // The scenario's own server starts before its task coordinator

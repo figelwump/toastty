@@ -1,8 +1,7 @@
 name: Push Worker checks
 
+# Runs only on manual dispatch: gh workflow run push-worker.yml --ref <branch>
 on:
-  pull_request:
-    paths: ['workers/push/**', '.github/workflows/push-worker.yml']
   workflow_dispatch:
 
 permissions:

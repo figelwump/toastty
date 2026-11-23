@@ -314,6 +314,13 @@ struct CoordinatorDockTests {
         let taskWorkspaceID = try #require(store.state.topLevelWorkspaceIDs(in: windowID).first)
         let host = try HostedCoordinatorWindow(fixture, windowID: windowID)
         defer { host.close() }
+        // Show Terminal hands off the keyboard in the active window. XCTest
+        // can host this experience without activating the app on its own.
+        NSApp.activate(ignoringOtherApps: true)
+        host.window.makeKeyAndOrderFront(nil)
+        try await fixture.waitUntil("the focus test window to become active") {
+            NSApp.isActive && host.window.isKeyWindow
+        }
         let terminal = fixture.conversations.terminalRuntimeRegistry.controller(
             for: fixture.panelID, workspaceID: location.workspaceID, windowID: windowID
         )
@@ -324,11 +331,15 @@ struct CoordinatorDockTests {
         // The full view: the chat covers the terminal, and the chat's field
         // has the keyboard.
         try await fixture.waitUntil("the chat's field to take the keyboard", chatFieldHasTheKeyboard)
+        let departingField = try #require(fixture.chat.composerTextView as? CoordinatorComposerTextView)
         #expect(terminal.hasKeyboardFocus == false)
 
         // Show Terminal in the chat's notice, or Terminal in the panel's
         // header. The terminal keeps the keyboard after the chat has gone.
         controller.showTerminal()
+        // A focus callback enqueued just before the switch can run while
+        // the retiring AppKit field still has a window.
+        #expect(departingField.canApplyFocusRequest() == false)
         try await fixture.waitUntil("the terminal to take the keyboard") { terminal.hasKeyboardFocus }
         try await Task.sleep(for: .milliseconds(300))
         #expect(terminal.hasKeyboardFocus)
@@ -359,12 +370,24 @@ struct CoordinatorDockTests {
         host.window.contentView?.addSubview(dockField)
         try await Task.sleep(for: .milliseconds(300))
         #expect(host.window.makeFirstResponder(dockField))
+        // The pane can be ready before the dock's animated removal tells
+        // the chat model that its viewer disappeared.
+        fixture.chat.show(panelID: fixture.panelID, host: .dock)
         controller.openFullView(showingTerminal: true)
+        fixture.conversations.terminalRuntimeRegistry.scheduleWorkspaceFocusRestore(workspaceID: location.workspaceID)
         try await fixture.waitUntil("the terminal to take the keyboard from the dock's field") { terminal.hasKeyboardFocus }
         #expect(store.selectedWorkspaceID(in: windowID) == location.workspaceID)
         #expect(store.state.workspacesByID[location.workspaceID]?.focusedPanelID == fixture.panelID)
         try await Task.sleep(for: .milliseconds(300))
         #expect(terminal.hasKeyboardFocus)
+        fixture.chat.hide(panelID: fixture.panelID, host: .dock)
+
+        controller.showsTerminal = false
+        try await fixture.waitUntil("the chat to take the keyboard again") { chatFieldHasTheKeyboard() }
+        controller.showTerminal()
+        controller.showsTerminal = false
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(chatFieldHasTheKeyboard())
     }
 
     /// A file dropped on the chat, perhaps from Finder, gives that view's

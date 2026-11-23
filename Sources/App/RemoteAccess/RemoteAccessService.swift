@@ -278,7 +278,12 @@ final class RemoteAccessTaskCreateBridge: @unchecked Sendable {
 }
 
 enum RemoteAccessPreferences {
+    /// The local port of the user's own Toastty, which uses the real home.
     static let defaultPort: UInt16 = 42871
+    /// Local ports for runtime-isolated instances: dev, worktree, and test
+    /// runs. They never use `defaultPort`, so they cannot take the user's
+    /// Toastty's port or the Tailscale Serve mapping that points at it.
+    static let isolatedPortRange: ClosedRange<UInt16> = 42872...43871
     private static let enabledKey = "toastty.remoteAccess.enabled"
     private static let portKey = "toastty.remoteAccess.port"
     private static let tailnetOriginKey = "toastty.remoteAccess.tailnetOrigin"
@@ -291,10 +296,29 @@ enum RemoteAccessPreferences {
         userDefaults.set(enabled, forKey: enabledKey)
     }
 
-    static func loadPort(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> UInt16 {
+    /// A saved or launch-argument `toastty.remoteAccess.port` wins. Without
+    /// one, the port belongs to the instance: see `instancePort`.
+    static func loadPort(
+        userDefaults: UserDefaults = ToasttyAppDefaults.current,
+        runtimePaths: ToasttyRuntimePaths
+    ) -> UInt16 {
         let stored = userDefaults.integer(forKey: portKey)
-        guard stored > 0, stored <= UInt16.max, stored >= 1024 else { return defaultPort }
+        guard stored > 0, stored <= UInt16.max, stored >= 1024 else {
+            return instancePort(runtimePaths: runtimePaths)
+        }
         return UInt16(stored)
+    }
+
+    /// The user's Toastty uses `defaultPort`. A runtime-isolated instance
+    /// gets a port in `isolatedPortRange` from its runtime home path, so the
+    /// port is the same at every launch, and several instances can run
+    /// Remote Access at once. Two instances can still get the same port;
+    /// the second one then reports that the port is in use.
+    static func instancePort(runtimePaths: ToasttyRuntimePaths) -> UInt16 {
+        guard let runtimeHomeURL = runtimePaths.runtimeHomeURL else { return defaultPort }
+        let hash = ToasttyRuntimePaths.stableHash(for: runtimeHomeURL.path)
+        let offset = hash % UInt64(isolatedPortRange.count)
+        return isolatedPortRange.lowerBound + UInt16(offset)
     }
 
     static func loadTailnetOrigin(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> String? {
@@ -815,7 +839,7 @@ final class RemoteAccessService: ObservableObject {
         sessionExitController: SessionExitController? = nil,
         taskCoordinator: (any RemoteTaskCreating)? = nil,
         quickEntryController: QuickEntryController? = nil,
-        port: UInt16 = RemoteAccessPreferences.loadPort(),
+        port: UInt16? = nil,
         initiallyEnabled: Bool = RemoteAccessPreferences.loadEnabled(),
         claudePromptStabilizationDelay: Duration = .milliseconds(500),
         sendConfirmationTimeout: Duration = .seconds(10),
@@ -847,7 +871,7 @@ final class RemoteAccessService: ObservableObject {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionCloseController = sessionCloseController
-        self.port = port
+        self.port = port ?? RemoteAccessPreferences.loadPort(runtimePaths: runtimePaths)
         self.tailnetServeSetup = tailnetServeSetup
         self.claudePromptStabilizationDelay = claudePromptStabilizationDelay
         self.sendConfirmationTimeout = sendConfirmationTimeout
@@ -3823,8 +3847,20 @@ final class RemoteAccessService: ObservableObject {
     func performQuestionAnswer(_ request: RemoteQuestionAnswerRequest, device: RemoteDeviceRecord) -> RemoteQuestionAnswerResult {
         guard device.scopes.contains(.send) else { return .rejected(reason: .sendScopeDenied) }
         guard sessionWritePolicy.isEnabled(for: request.conversationID) else { return .rejected(reason: .sessionWritesDisabled) }
-        guard isReady,
-              let panelID = panelIDByConversationID[request.conversationID],
+        guard isReady else { return .rejected(reason: .notBound) }
+        return submitQuestionAnswer(request, origin: .device(device))
+    }
+
+    private enum QuestionAnswerOrigin {
+        case device(RemoteDeviceRecord)
+        case local
+    }
+
+    private func submitQuestionAnswer(
+        _ request: RemoteQuestionAnswerRequest,
+        origin: QuestionAnswerOrigin
+    ) -> RemoteQuestionAnswerResult {
+        guard let panelID = panelIDByConversationID[request.conversationID],
               let sessionID = activeSessionIDByConversationID[request.conversationID] else {
             return .rejected(reason: .notBound)
         }
@@ -3832,8 +3868,13 @@ final class RemoteAccessService: ObservableObject {
             .first(where: { $0.id == request.interactionID }) else { return .rejected(reason: .notPending) }
         guard interaction.inputEpoch == request.expectedInputEpoch else { return .rejected(reason: .epochMismatch) }
         guard interaction.responseID == request.responseID else { return .rejected(reason: .notPending) }
-        if interaction.kind == .permission, device.canApprovePermissions == false {
-            return .rejected(reason: .approvalsDisabled)
+        switch origin {
+        case .device(let device):
+            if interaction.kind == .permission, device.canApprovePermissions == false {
+                return .rejected(reason: .approvalsDisabled)
+            }
+        case .local:
+            guard interaction.kind == .question else { return .rejected(reason: .unsupported) }
         }
         return sessionRuntimeStore.submitClaudeQuestion(request, sessionID: sessionID, panelID: panelID)
     }
@@ -4591,6 +4632,14 @@ final class RemoteAccessService: ObservableObject {
     @discardableResult
     func noteLocalInput(panelID: UUID, kind: TerminalLocalInputKind = .key) -> Bool {
         let conversationID = conversationIDByPanelID[panelID]
+        // Arrow, Return and Escape keys that Claude uses to operate a known
+        // Coordinator dialog are not edits to its composer. Leave any
+        // existing draft protected and still pass the key to the terminal.
+        if store.state.coordinator?.panelID == panelID,
+           sessionRuntimeStore.sessionRegistry.activeSession(for: panelID)?.agent == .claude,
+           terminalRuntimeRegistry.isClaudeDialogInput(panelID: panelID, kind: kind) {
+            return false
+        }
         // Only the first unbound Ctrl+C at a provider prompt can be ignored.
         // Another press may exit the agent. Remember presses in a draft too,
         // and do not reset this on Release (it does not send an agent key).
@@ -5395,6 +5444,16 @@ extension RemoteAccessService: LocalConversationAccess {
         return performInterrupt(request, origin: .mac(byUser: true))
     }
 
+    fileprivate func answerLocalQuestion(
+        _ request: RemoteQuestionAnswerRequest,
+        subscriptionID: UUID
+    ) -> RemoteQuestionAnswerResult {
+        guard localConversationID(subscriptionID: subscriptionID) == request.conversationID else {
+            return .rejected(reason: .notBound)
+        }
+        return submitQuestionAnswer(request, origin: .local)
+    }
+
     fileprivate func localStopHandler(subscriptionID: UUID) -> (@MainActor () -> Void)? {
         localSubscriptions[subscriptionID]?.onStop
     }
@@ -5479,6 +5538,10 @@ private final class ServiceConversationSubscription: LocalConversationSubscripti
 
     func interrupt(_ request: RemoteConversationInterruptRequest) -> RemoteConversationInterruptResult {
         service?.interruptLocal(request, subscriptionID: id) ?? .rejected(reason: .notBound)
+    }
+
+    func answerQuestion(_ request: RemoteQuestionAnswerRequest) -> RemoteQuestionAnswerResult {
+        service?.answerLocalQuestion(request, subscriptionID: id) ?? .rejected(reason: .notBound)
     }
 
     var onStop: (@MainActor () -> Void)? {

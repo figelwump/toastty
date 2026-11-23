@@ -586,6 +586,7 @@ final class CoordinatorComposerTextView: AttachmentTextView {
     private(set) var isSettingDraft = false
 
     private var hasPendingFocusRequest = false
+    var canApplyFocusRequest: () -> Bool = { true }
 
     /// SwiftUI can update the field before it is in a window. The request
     /// waits for that, and is not tried again after it was refused.
@@ -603,6 +604,7 @@ final class CoordinatorComposerTextView: AttachmentTextView {
     private func applyPendingFocus() {
         guard hasPendingFocusRequest, let window else { return }
         hasPendingFocusRequest = false
+        guard canApplyFocusRequest() else { return }
         window.makeFirstResponder(self)
     }
 
