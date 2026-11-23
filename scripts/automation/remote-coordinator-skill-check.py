@@ -167,8 +167,10 @@ args = sys.argv[1:]
 MUTATING = (['pr', 'merge'], ['pr', 'close'], ['pr', 'edit'], ['pr', 'comment'], ['pr', 'review'], ['pr', 'ready'],
             ['pr', 'create'], ['pr', 'reopen'], ['release'], ['workflow', 'run'], ['run', 'rerun'], ['run', 'cancel'],
             ['repo', 'edit'], ['issue'])
+# Reads under a command that changes GitHub. Claude Code itself lists the user's closed issues at startup.
+READS = (['issue', 'list'], ['issue', 'view'], ['issue', 'status'])
 method = next((args[i + 1].upper() for i, a in enumerate(args[:-1]) if a in ('--method', '-X')), 'GET')
-mutation = any(args[:len(m)] == m for m in MUTATING) or (args[:1] == ['api'] and (
+mutation = any(args[:len(m)] == m for m in MUTATING) and not any(args[:len(r)] == r for r in READS) or (args[:1] == ['api'] and (
     method != 'GET' or any(a in ('-f', '-F', '--field', '--raw-field', '--input') for a in args)) and 'graphql' not in args)
 # A pull request with `mergeError` makes GitHub fail the app's own merge
 # call with that error, as a server error does. The call changes nothing. A
