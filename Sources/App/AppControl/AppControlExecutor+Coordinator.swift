@@ -180,6 +180,20 @@ extension AppControlExecutor {
         return name
     }
 
+    /// Test-only, and only in a Debug build: an instance launched with
+    /// `TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER=1` takes an answer from a
+    /// caller with no session and no `from` name as the user's, without a
+    /// sender's line. `scripts/automation/remote-coordinator-skill-check.py`
+    /// sets it on its throwaway instance to answer the coordinator's setup
+    /// cards as the user. A release build never reads it.
+    static let terminalAnswersCountAsUser: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER"] == "1"
+        #else
+        false
+        #endif
+    }()
+
     /// Answers the coordinator's open question card for the caller. The
     /// answer starts with the first line that `coordinator.send` writes for
     /// the same caller, so the coordinator reads it as that sender's, never
@@ -197,7 +211,7 @@ extension AppControlExecutor {
                 card: card,
                 option: args.coordinatorString("option"),
                 text: args.coordinatorString("text"),
-                from: sender
+                from: sender == .unknown && Self.terminalAnswersCountAsUser ? nil : sender
             )
         } catch let error as CoordinatorError {
             throw AutomationSocketError.invalidPayload(error.message)

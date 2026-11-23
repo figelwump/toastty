@@ -2296,12 +2296,14 @@ final class CoordinatorController: ObservableObject {
     /// The agent receives the answer as text after Toastty's first line
     /// for `sender`, in the form of a message that `coordinator send`
     /// brings, so it never reads as the user's. The user answers in the
-    /// chat or on a phone, without such a line.
+    /// chat or on a phone, without such a line. A `nil` sender answers as
+    /// the user, as the chat's card does: only a test instance of a Debug
+    /// build passes it (see `AppControlExecutor.terminalAnswersCountAsUser`).
     func answerOpenQuestion(
         card cardID: String,
         option: String?,
         text: String?,
-        from sender: CoordinatorMessageHeader.Sender
+        from sender: CoordinatorMessageHeader.Sender?
     ) throws -> QuestionAnswer {
         let trimmed = { (value: String?) -> String? in
             value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? value : nil
@@ -2315,7 +2317,7 @@ final class CoordinatorController: ObservableObject {
             throw CoordinatorError("The open card is another one: \(open.card). Read it with coordinator get.")
         }
         var answerText = text ?? ""
-        var chosenOption: String?
+        var chosen: RemotePendingInteraction.Option?
         if let option {
             // The exact label first; else a label that differs only in case, when only one does.
             let caseless = question.options.filter { $0.label.compare(option, options: .caseInsensitive) == .orderedSame }
@@ -2325,22 +2327,31 @@ final class CoordinatorController: ObservableObject {
                 throw CoordinatorError("The card has no choice \"\(option)\". Its choices: \(labels).")
             }
             answerText = match.label
-            chosenOption = match.label
+            chosen = match
         }
-        // The sender's line goes first, and the choice goes as text after
-        // it: a chosen option alone would reach the agent as the user's.
-        let answer = CoordinatorMessageHeader.message(from: sender, text: answerText)
+        let answer: String
+        let reply: RemoteInteractionAnswer
+        if let sender {
+            // The sender's line goes first, and the choice goes as text after
+            // it: a chosen option alone would reach the agent as the user's.
+            answer = CoordinatorMessageHeader.message(from: sender, text: answerText)
+            reply = RemoteInteractionAnswer(questionID: question.id, text: answer)
+        } else {
+            answer = answerText
+            reply = chosen.map { RemoteInteractionAnswer(questionID: question.id, selectedOptionIDs: [$0.id]) }
+                ?? RemoteInteractionAnswer(questionID: question.id, text: answer)
+        }
         let request = RemoteQuestionAnswerRequest(
             conversationID: conversationID,
             interactionID: card.id,
             responseID: card.responseID ?? "",
             expectedInputEpoch: card.inputEpoch,
             clientRequestID: UUID().uuidString.lowercased(),
-            answers: [RemoteInteractionAnswer(questionID: question.id, text: answer)]
+            answers: [reply]
         )
         switch subscription.answerQuestion(request) {
         case .submitted, .duplicate:
-            return QuestionAnswer(card: open, chosenOption: chosenOption, answer: answer)
+            return QuestionAnswer(card: open, chosenOption: chosen?.label, answer: answer)
         case .rejected(let reason):
             throw CoordinatorError("The answer was refused: \(reason.rawValue).")
         }

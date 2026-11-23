@@ -107,5 +107,17 @@ struct CoordinatorQuestionAnswerTests {
         #expect(typed.chosenOption == nil)
         #expect(received(second)
             == "[Toastty] From a terminal command: Toastty cannot tell who ran it.\nBuild the billing page first.")
+
+        // Without a sender, the answer is the user's, as the live check's
+        // test instance gives it: a choice reaches Claude as the chat
+        // card's click does, with no line.
+        #expect(sessions.handleClaudeQuestion(hook(
+            .observe, .postToolUse, call: "call-2", answers: [questions[0].question: received(second) ?? ""]
+        ), at: Date()).status == .observed)
+        let third = ask("call-3")
+        let asUser = try controller.answerOpenQuestion(card: "claude:call:call-3", option: "later", text: nil, from: nil)
+        #expect(asUser.chosenOption == "Later")
+        #expect(asUser.answer == "Later")
+        #expect(received(third) == "Later")
     }
 }
