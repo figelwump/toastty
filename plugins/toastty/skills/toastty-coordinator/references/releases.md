@@ -35,7 +35,7 @@ settings unless they set their own values.
   the task history. A release is operational work: a rule in Agents for
   releases or operational work covers it. Omit what none of them gives, and
   Toastty uses its default.
-- **Start:** `toastty task release --workspace <workspaceID> [--agent <profile>] [--model <model>] [--effort <level>]`,
+- **Start:** `toastty task release --workspace <workspaceID> [--agent <profile>] [--model '<id>'] [--effort <level>]`,
   with the project's workspace ID; `toastty task workspace-choices --json`
   lists it. When the user asks for a release, start it also when no task of
   the project is in To ship. Do not start one while a release task of the

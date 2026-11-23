@@ -775,6 +775,7 @@ final class LocalConversationFixture {
         startsSession: Bool = true,
         savedConversationID: RemoteConversationID? = nil,
         inCoordinatorWorkspace: Bool = false,
+        agent: AgentKind = .codex,
         initialTranscript: Data = Data(),
         sendConfirmationTimeout: Duration = .seconds(10)
     ) throws {
@@ -795,8 +796,8 @@ final class LocalConversationFixture {
         let transcriptURL = URL(filePath: runtimeHome + "-transcript.jsonl")
         try initialTranscript.write(to: transcriptURL)
         resumeRecord = ManagedAgentResumeRecord(
-            agent: .codex,
-            nativeSessionID: "native-\(UUID().uuidString)",
+            agent: agent,
+            nativeSessionID: agent == .claude ? UUID().uuidString : "native-\(UUID().uuidString)",
             sessionFilePath: transcriptURL.path,
             cwd: "/repo",
             capturedAt: confirmedAt
@@ -806,7 +807,7 @@ final class LocalConversationFixture {
         if startsSession {
             sessionRuntimeStore.startSession(
                 sessionID: sessionID,
-                agent: .codex,
+                agent: agent,
                 panelID: panelID,
                 windowID: selection.windowID,
                 workspaceID: selection.workspaceID,

@@ -2011,7 +2011,7 @@ final class TaskCoordinator {
             throw TaskError("Agent \(profile.profileID) does not accept a model.")
         }
         guard RemoteSessionStartPolicy.isValidSelectionValue(model, maximumLength: RemoteSessionStartPolicy.maximumModelLength) else {
-            throw TaskError("A model must be one word with no spaces that does not start with a dash.")
+            throw TaskError("--model expects a provider model ID such as gpt-6.2-sol. Use one printable ASCII token of at most \(RemoteSessionStartPolicy.maximumModelLength) characters that does not start with a dash.")
         }
     }
 

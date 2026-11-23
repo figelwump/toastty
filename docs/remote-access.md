@@ -11,7 +11,9 @@ Serve provides the tailnet HTTPS address; Toastty itself listens only on
 2. In Toastty, open **Toastty > Remote Access…**, or use the command palette's
    **Open Remote Access** action, and turn on **Enable Remote Access**. Toastty
    starts its local gateway, then sets up private Tailscale Serve HTTPS access
-   to it. The default local address is `http://127.0.0.1:42871`.
+   to it. The local address is `http://127.0.0.1:42871`. See
+   [Several Toastty instances](#several-toastty-instances) for dev and
+   worktree instances.
 3. If Toastty shows **Open Tailscale Setup**, open that page and complete the
    HTTPS approval steps. Your tailnet administrator may need to approve them.
    Return to Toastty and choose **Retry Setup**. Toastty does not wait for
@@ -55,8 +57,8 @@ no-port QR codes and saved credentials keep working without re-pairing. The
 updated client preserves the selected port in pairing, requests, and reconnects.
 Your tailnet policy must also allow the selected port.
 
-Avoid editing Serve configuration from another app or terminal while Toastty
-is setting it up. Toastty checks the authenticated node before and after setup.
+Avoid editing Serve configuration from another app, another Toastty
+instance, or a terminal while Toastty is setting it up. Toastty checks the authenticated node before and after setup.
 The Tailscale command cannot atomically prevent concurrent profile switches or
 external configuration changes.
 
@@ -65,6 +67,38 @@ running Serve setup. Turn off Remote Access in the other Toastty instance, or
 quit the app using the port, then enable Remote Access here. The screen reports
 missing Serve configuration, setup failure, and setup timeout separately. Use
 **Retry Setup** after resolving the reported Tailscale issue.
+
+### Several Toastty instances
+
+Each Toastty instance has its own local port, so several instances can run
+Remote Access at the same time. Your own Toastty, which uses `~/.toastty`,
+uses port 42871. A runtime-isolated instance, such as a worktree, dev, or test
+run, uses a port from 42872 through 43871. Toastty computes that port from the
+instance's runtime home path, so it is the same at every launch. Without a
+port override, an isolated instance never uses 42871, so it cannot receive
+requests that Tailscale Serve sends to your own Toastty. To see an instance's
+port, run `lsof -nP -a -p <pid> -iTCP -sTCP:LISTEN` with the PID from its
+`instance.json`.
+
+Each instance also has its own paired devices and its own **Tailnet origin**.
+Because your own Toastty already uses HTTPS port 443, Tailscale setup in a
+second instance selects a fallback port, such as 8443. A phone keeps one
+pairing. Pairing it with a dev instance replaces its pairing with your own
+Toastty.
+
+An isolated instance that ran Remote Access before it had its own port can
+still have a saved **Tailnet origin** that forwards to 42871. Its setup then
+reports that the HTTPS port has a different setup. Revoke its paired devices,
+clear **Tailnet origin**, choose **Retry Setup**, and pair again. Do not change
+the mapping to 42871, because your own Toastty uses it.
+
+A fallback HTTPS port stays mapped after you delete the worktree. When setup
+reports that no Tailscale HTTPS port is available, remove a mapping that you
+no longer use, for example `tailscale serve --https=8443 off`.
+
+Two isolated instances can compute the same port. The second one then reports
+that the local port is in use. Start it with another port, for example
+`-toastty.remoteAccess.port 43900` as a launch argument.
 
 Setup blocks pairing if Funnel exposes the selected HTTPS port or forwards
 public traffic to Toastty's local gateway. An unrelated public service occupies
@@ -87,6 +121,10 @@ tailscale serve status
 tailscale serve --bg --https=443 http://127.0.0.1:42871
 tailscale serve status
 ```
+
+These commands are for your own Toastty. For a runtime-isolated instance, use
+its local port in place of 42871. See
+[Several Toastty instances](#several-toastty-instances).
 
 The status command reads your Mac's existing Tailscale configuration. The
 `--bg` command changes it. Inspect the current mapping first and do not replace

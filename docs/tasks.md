@@ -162,6 +162,14 @@ rules that you already have:
 The rules in a project's own `.claude/settings.json` apply only after you
 trusted that folder in Claude Code.
 
+For model lookup, add `"WebSearch"` to `permissions.allow` in
+`~/.toastty/coordinator/.claude/settings.local.json` to allow searches
+without a prompt in the Coordinator only. Keep your other rules in that
+file. With no standing approval, Claude may ask before searching. On Mac,
+choose **Show Terminal** to answer. A paired iPhone with **Approve
+requests** enabled can answer supported Claude prompts in Coordinator
+chat. Toastty leaves these permissions to you.
+
 On a wake, a coordinator reads tasks (`task list` through `jq`, `task get`),
 sends to them (`task send --text-file message.md`), answers a sender
 outside Toastty (`coordinator reply <id> --text-file message.md`), sets its next check
@@ -451,7 +459,7 @@ failed; the command then exits with 1 on a failed setup, or when the wait passes
 | `--workspace <id>` | The workspace the task belongs to. A subspace means its parent. An agent session defaults to its own workspace. Without one, the task waits in Needs you for you to pick one. |
 | `--root <dir>` | The project's directory, instead of `--workspace`. Toastty uses the open workspace on it, or opens the project once every other check passed, so a request that fails opens nothing. |
 | `--external-ref <id>`, `--external-url <url>` | The issue or report the task came from, such as `github:owner/repo#123`, and its http or https page. The Tasks view shows it as **Source**. |
-| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml` and its settings. With no profile there, as on a fresh install, the installed built-in agents are offered: Claude Code, Codex, Cursor, Grok Build and Pi. `[defaults]` in `tasks.toml` fills what you leave out; with no agent there, the task takes the first offered agent that is installed. |
+| `--agent`, `--model`, `--effort` | The agent profile from `agents.toml`, a provider model ID such as `gpt-6.2-sol`, and the effort. With no profile there, as on a fresh install, the installed built-in agents are offered: Claude Code, Codex, Cursor, Grok Build and Pi. `[defaults]` in `tasks.toml` fills what you leave out; with no agent there, the task takes the first offered agent that is installed. |
 | `--prompt <text>`, `--prompt-file <path>` | A first prompt, sent before the task text. |
 | `--title`, `--slug` | The task's title and the task space's name. They start from the first line of the text. An explicit title stays fixed. Otherwise, the task uses its agent session's title when available. The slug stays fixed. |
 | `--request-id <id>` | The caller's key for this request. A repeat from the same agent session, or from the CLI outside one, with the same key returns the first task instead of making another. |
@@ -1217,15 +1225,29 @@ relaunch resumes does not show it.
   runs and the agent has not reported its session, the chat says that the
   agent is starting, and a message you send shows as **Queued · waits for the
   agent to start**. After 8 seconds the chat says that the agent may wait for
-  your answer in the terminal. **Show Terminal** shows the terminal. After
-  your answer there, the chat shows the notice for a draft in the terminal,
-  and **Send Anyway** types the waiting message.
+  your answer in the terminal. **Show Terminal** shows the terminal and gives
+  it the keyboard. After Claude Code's folder-trust question closes, messages
+  go through when Claude is ready.
+- **A Claude Code compaction offer.** When Claude Code offers to compact
+  earlier, messages wait while the offer is open, also while the wheel has
+  moved the offer out of Claude's page. Choose **Show Terminal** to answer
+  the offer: the arrow keys choose and Return confirms, a click on a choice
+  takes it, and Escape defers it. Messages go through when Claude returns
+  to its prompt, unless a terminal draft is still waiting. Any other key at
+  the offer, such as a letter or an arrow key with Shift, counts as a draft.
+- **A record of the keys after Show Terminal.** Toastty's log keeps the next
+  40 key presses after **Show Terminal** or **Terminal**, and after each
+  change of the reason why a message waits. Each line has the kind of key
+  and its modifiers, never a typed character, the view that had the
+  keyboard, what the terminal's view sent to Ghostty, and whether unfinished
+  composed text was in the way. The log also says which view has the
+  keyboard after the panel changed, and each change of why a message waits.
 - **A draft in the terminal.** When you typed in the terminal and did not
   send that text, messages and digests wait, and the chat says why. **Send
   Anyway** tells Toastty that the terminal's prompt is empty: the next
-  message is then typed there. The same holds after you answered a login or
-  a folder-trust question in the terminal before the agent started: Toastty
-  cannot tell those keys from a draft, so choose **Send Anyway**.
+  message is then typed there. A login or other terminal dialog can also
+  leave this notice. Check that the prompt is empty before choosing
+  **Send Anyway**.
 - **Copy and Reply.** Copy under your message or the coordinator's copies
   the whole message, and Reply under the coordinator's answers it. Both show
   while the pointer is over the message. After Reply the field shows
@@ -1766,6 +1788,9 @@ text.
   table. It suggests a rule for choosing a model that your own agent
   instruction files hold, such as a global `AGENTS.md`, then the history of
   your tasks, then a starter table that keeps the agent's default model.
+  It checks task history for the IDs of models named in imported rules or
+  chat. In a user turn it can also check official provider documentation
+  with its agent's web tool before it asks which model to use.
 - **Projects:** which work goes to which project, drafted from the history
   and your open projects. It asks only when that is unclear.
 - **Talking:** whether it answers questions itself or makes a task for each
@@ -2450,6 +2475,10 @@ checkbox.
 
 **Merge** on a task, from the Tasks view, the task space's top bar, its sidebar
 menu or `Option+Shift+M`, is your acceptance of its pull request as it is now.
+
+When running checks are the reason the top bar shows **Open PR**, the task
+header says **Checks running** beside the button. You can still request a
+merge from the button's arrow menu or with `Option+Shift+M`.
 
 1. Toastty sends the task's agent `Use the <merge_skill> skill.` when a
    `merge_skill` is set, then `merge_prompt` if one is set, then the pull
