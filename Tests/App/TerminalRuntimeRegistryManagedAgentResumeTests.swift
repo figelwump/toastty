@@ -54,11 +54,10 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.bind(store: store)
 
         var submittedCommand: String?
-        registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
-            XCTAssertTrue(submit)
+        registry.setRestoredManagedLaunchSubmitterForTesting { command, submittedPanelID in
             XCTAssertEqual(submittedPanelID, panelID)
             submittedCommand = command
-            return true
+            return .delivered
         }
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
@@ -187,11 +186,10 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.bind(store: store)
 
         var submittedCommand: String?
-        registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
-            XCTAssertTrue(submit)
+        registry.setRestoredManagedLaunchSubmitterForTesting { command, submittedPanelID in
             XCTAssertEqual(submittedPanelID, panelID)
             submittedCommand = command
-            return true
+            return .delivered
         }
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
@@ -336,11 +334,10 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
             registry.bind(store: store)
 
             var submittedCommand: String?
-            registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
-                XCTAssertTrue(submit, scenario.commandName)
+            registry.setRestoredManagedLaunchSubmitterForTesting { command, submittedPanelID in
                 XCTAssertEqual(submittedPanelID, panelID, scenario.commandName)
                 submittedCommand = command
-                return true
+                return .delivered
             }
 
             let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
@@ -657,18 +654,37 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
                 registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
                 registry.setCoordinatorLaunchEnvironment(["GIT_CEILING_DIRECTORIES": "/Users/someone/.toastty"])
                 registry.bind(store: store)
-                var submittedCommand: String?
-                registry.setRestoredManagedLaunchSubmitterForTesting { command, _, _ in
-                    submittedCommand = command
-                    return true
+                var promptState = TerminalPromptState.busy
+                let checkedPrompt = expectation(description: "Checked the starting shell: \(label)")
+                var didCheckPrompt = false
+                registry.setAutomationPromptStateHandlerForTesting { _ in
+                    if !didCheckPrompt {
+                        didCheckPrompt = true
+                        checkedPrompt.fulfill()
+                    }
+                    return promptState
+                }
+                let submitted = expectation(description: "Submitted the resume command: \(label)")
+                var submittedCommands: [String] = []
+                registry.setRestoredManagedLaunchSubmitterForTesting { command, _ in
+                    submittedCommands.append(command)
+                    submitted.fulfill()
+                    return .delivered
                 }
 
                 _ = registry.surfaceLaunchConfiguration(for: panelID)
                 registry.markInitialSurfaceLaunchCompleted(for: panelID)
-                await Task.yield()
-                await Task.yield()
+                await fulfillment(of: [checkedPrompt], timeout: 2)
+                if isCoordinator {
+                    // During shell startup, the terminal can accept bytes but
+                    // the PTY can truncate a pasted command before zsh reads it.
+                    XCTAssertTrue(submittedCommands.isEmpty, label)
+                }
+                promptState = .idleAtPrompt
+                await fulfillment(of: [submitted], timeout: 2)
 
-                let command = try XCTUnwrap(submittedCommand, label)
+                XCTAssertEqual(submittedCommands.count, 1, label)
+                let command = try XCTUnwrap(submittedCommands.first, label)
                 withExtendedLifetime((profileProvider, restoredManagedLaunchPlanner)) {}
                 XCTAssertTrue(
                     command.contains(agent == .codex ? "resume \(nativeSessionID)" : "--resume \(nativeSessionID)"),
