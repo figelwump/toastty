@@ -25,29 +25,28 @@ Read this skill before the first validation command. Agent-driven native builds,
 
 ## CI Coverage
 
-PR CI selects Linux Script and Web panel checks and hosted iOS checks from
-`.github/ci-paths.yml`. On iOS-related PRs, `Toastty CI` runs app and domain
-tests in Debug and Release on the pinned hosted Xcode. Debug also runs the four
-smoke UI cases. PR checks leave numeric performance budgets to full and
-controlled runs. Use toastty-mini for tests focused on the changed behavior
-and for live gateway or device checks. Use the full macOS suite on
-toastty-mini because the hosted Mac job builds without Ghostty.
+PR CI runs no tests for the change. On every PR, `Toastty CI` runs only the
+Linux CI workflow tests and the **CI gate** that branch protection requires;
+every test job runs only on manual dispatch. Your own checks are the
+verification: toastty-mini runs for native code (the macOS suite, and focused
+iOS Simulator tests with `--platform ios`), and the local script and web-panel
+commands in `docs/agents/automation.md` when a change touches those files.
+For push-worker changes, run `npm run check` in `workers/push`. Use the full
+macOS suite on toastty-mini because the hosted Mac job builds without Ghostty.
 
-Run the full hosted workflow in these cases:
+The toastty-mini Xcode can differ from the pinned hosted Xcode in
+`.github/ios-xcode-version`, and the hosted one has rejected code that the
+mini accepted. For changes to shared Swift or iOS code, say in the report
+which Xcode built it.
 
-- **Nightly.** At 2:17 a.m. Pacific, GitHub Actions checks the
-  `feat/task-system-coordinator` tip, or `main` after that branch closes.
-  It dispatches the full workflow if the iOS inputs changed since the latest
-  passing or active full run on that branch. A failed or canceled run can be
-  retried at the next nightly check. GitHub reads the schedule from `main`.
+Run the full hosted workflow only in these cases:
+
 - **TestFlight.** The release task finds a successful full manual dispatch on
   the exact `main` release commit or starts one if needed. Follow
   `docs/ios-release-ci.md`. The archive and upload gate requires this evidence.
-- **High-risk changes.** The task agent runs the full suite before merge for
-  SDK or Xcode upgrades, broad changes to shared UI, or cross-cutting changes
-  to the Mac–iPhone protocol. A reviewer can require it for additional risk.
-  Record why the full run applies. Ordinary PRs use the automatic selected
-  checks and focused tests.
+- **The user asks for it.** Do not start a full run on your own judgment; it
+  takes up to two hours. If a change has high iOS risk, such as an SDK or
+  Xcode upgrade, say so in the report and let the user decide.
 
 For an explicit full run, push the commit under review and use:
 
@@ -58,8 +57,8 @@ gh run watch <run-id> --exit-status
 ```
 
 Use the URL returned by the dispatch. Verify `headSha` before using the
-result, and link it in the PR and report. `gh pr checks` shows the automatic
-PR run. A required full run must pass before merge. A subsequent base merge
+result, and link it in the PR and report. `gh pr checks` shows only the
+PR's CI gate. A required full run must pass before merge. A subsequent base merge
 uses the rules below. Cancel a superseded run owned by this task if it can
 no longer establish that result. Full Debug can take over two hours.
 
@@ -102,15 +101,13 @@ for active work and waits; do not create another polling script.
 ### After A Base Merge
 
 When a task merges its base branch into its branch, rebuild on toastty-mini
-and rerun the focused tests for the PR's changed areas. The automatic PR
-workflow runs on the new head. If a full run was required, repeat it when the
+and rerun the focused tests for the PR's changed areas. If a full run was required, repeat it when the
 merge conflicts in or changes files the PR also changes, or changes build,
 project, or dependency settings. A base that moved ahead without a conflict
 is not by itself a reason to merge it or to rerun checks.
 
 The task that integrates shared branches owns the macOS suite and evaluates
-whether the combination is high risk for iOS. The nightly full run covers the
-shared tip after ordinary integration. TestFlight requires a full manual run
+whether the combination is high risk for iOS. TestFlight requires a full manual run
 on the exact `main` commit even when an earlier branch run passed.
 
 ### Unit Or Integration Test Changes
