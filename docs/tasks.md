@@ -1231,8 +1231,8 @@ relaunch resumes does not show it.
   from the click, also while its message waits; **Remove** on that waiting
   message gives the card its buttons back. When a newer list comes, the
   cards of the older list take no answer. You can still answer an offer in
-  your own words. The cards are in the Mac's chat; the coordinator's chat on
-  a paired iPhone shows the offers as the text of their block.
+  your own words. The coordinator's chat on a paired iPhone shows the same
+  cards (see [The Coordinator tab](remote-access.md#the-coordinator-tab)).
 - **Terminal.** The **Terminal** button in the full view's panel header
   shows the terminal in place of the chat, and **Chat** switches back. Use the
   terminal for logins, folder trust, permissions, and unsupported questions.

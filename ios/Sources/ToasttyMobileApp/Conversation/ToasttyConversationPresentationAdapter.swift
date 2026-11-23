@@ -46,6 +46,20 @@ enum ToasttyConversationPresentationAdapter {
         )
     }
 
+    /// The user's answers to the coordinator's offers, for the offer cards
+    /// of the coordinator's chat: those in `events`, then those of
+    /// `waitingMessages`, as sent, which the conversation does not show yet.
+    @MainActor
+    static func offerAnswers(
+        events: [CompatibleConversationEvent],
+        waitingMessages: [String] = []
+    ) -> ToasttyOfferAnswers {
+        ToasttyOfferAnswers(events: events.compactMap { event -> ConversationEvent? in
+            guard case .known(let value) = event else { return nil }
+            return value
+        }).adding(waitingMessages: waitingMessages)
+    }
+
     /// How the coordinator's chat on this phone shows the messages that
     /// Toastty typed: times as the phone writes them, the wake turns that
     /// the coordinator marked quiet folded under their digest's line, as on

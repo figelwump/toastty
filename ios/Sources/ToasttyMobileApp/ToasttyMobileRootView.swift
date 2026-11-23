@@ -837,6 +837,8 @@ struct ToasttyMobileRootView: View {
                 // answers another message.
                 reconcileAttachmentDrafts()
             },
+            offerAnswers: conversationOfferAnswers(for: conversationID),
+            sendOfferAnswers: conversationOfferAnswersSendAction(for: conversationID),
             newMessages: conversationNewMessages(for: conversationID)
         )
         .id(conversationID)
@@ -986,6 +988,7 @@ struct ToasttyMobileRootView: View {
                 quietTurns: fixtureCoordinatorQuietTurns,
                 attachedImages: fixtureCoordinatorAttachedImages,
                 wakeTurns: Self.fixtureCoordinatorWakeTurns,
+                offers: Self.fixtureCoordinatorOffers,
                 responses: fixtureIncoming?.responses ?? 0
             )
         }
@@ -1081,7 +1084,8 @@ struct ToasttyMobileRootView: View {
             hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
             quietTurns: fixtureCoordinatorQuietTurns,
             attachedImages: fixtureCoordinatorAttachedImages,
-            wakeTurns: Self.fixtureCoordinatorWakeTurns
+            wakeTurns: Self.fixtureCoordinatorWakeTurns,
+            offers: Self.fixtureCoordinatorOffers
         ).rows
         return CoordinatorChatReadPoint.marker(in: rows, after: sessionController.homeController.snapshot.coordinatorChatRead)
     }
@@ -1091,6 +1095,31 @@ struct ToasttyMobileRootView: View {
     private static let fixtureCoordinatorWakeTurns = Int(
         ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? ""
     ) ?? 0
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_OFFERS=1` ends the fixture
+    /// coordinator chat with a message that offers tasks and a rule.
+    static let fixtureCoordinatorOffers =
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_OFFERS"] == "1"
+
+    /// The fixture coordinator chat's answers to its offers: those in its
+    /// events, then those of the messages that wait, as the live chat
+    /// reads them.
+    private var fixtureCoordinatorOfferAnswers: ToasttyOfferAnswers {
+        guard Self.fixtureCoordinatorOffers else { return ToasttyOfferAnswers() }
+        let events = ToasttyConversationFixture.coordinatorEvents(
+            for: ToasttyMobileFixture.coordinatorConversationID,
+            hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
+            quietTurns: fixtureCoordinatorQuietTurns,
+            attachedImages: fixtureCoordinatorAttachedImages != .none,
+            wakeTurns: Self.fixtureCoordinatorWakeTurns,
+            offers: true,
+            responses: fixtureIncoming?.responses ?? 0
+        )
+        return ToasttyConversationPresentationAdapter.offerAnswers(
+            events: events.map(CompatibleConversationEvent.known),
+            waitingMessages: fixtureSendItems.map(\.text) + fixtureQueuedMessages.map(\.text)
+        )
+    }
 
     /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS=1`: the fixture
     /// coordinator chat has no transcript while it is closed and loads for a
@@ -1139,6 +1168,53 @@ struct ToasttyMobileRootView: View {
             return nil
         }
         return controller.coordinatorNewMessages
+    }
+
+    /// The user's answers to the coordinator's offers, for the offer cards
+    /// of the coordinator's chat.
+    private func conversationOfferAnswers(for conversationID: UUID) -> ToasttyOfferAnswers {
+#if DEBUG
+        if conversationID == ToasttyMobileFixture.coordinatorConversationID, fixtureScenario != nil {
+            return fixtureCoordinatorOfferAnswers
+        }
+#endif
+        guard let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else {
+            return ToasttyOfferAnswers()
+        }
+        return controller.offerAnswers
+    }
+
+    /// Send answers on the coordinator's offer cards: the answers go as one
+    /// message through the conversation's send path, apart from the draft,
+    /// which keeps its text and its reply. The message queues or steers as
+    /// the draft's Send would now. False, and the cards keep the choices,
+    /// while the composer takes no message or the draft is sending.
+    private func conversationOfferAnswersSendAction(
+        for conversationID: UUID
+    ) -> ([CoordinatorOfferAnswer], Date) -> Bool {
+        { answers, offeredAt in
+            guard answers.isEmpty == false,
+                  composerDrafts.isSubmitting(conversationID) == false,
+                  let composer = conversationComposer(for: conversationID),
+                  composer.gate.allowsInput else { return false }
+            let text = CoordinatorMessageHeader.answersMessage(
+                answers, time: CoordinatorChatTranscript.timeText(offeredAt)
+            )
+            let deliveryMode: RemoteMessageDeliveryMode? = composer.gate.isWorking
+                ? composer.workingDeliveryMode(queuedTurnEpoch: composerDrafts.state.queuedTurnEpochs[conversationID])
+                : nil
+            guard let controller = sessionController.liveController?.activeConversationController,
+                  controller.conversationID == conversationID else {
+                return fixtureSendOfferAnswers(text, conversationID: conversationID, deliveryMode: deliveryMode)
+            }
+            recordDiagnostic(.sendStarted)
+            Task { @MainActor in
+                let outcome = await controller.send(text, deliveryMode: deliveryMode)
+                recordDiagnostic(ToasttyAppDiagnosticProjection.event(for: outcome))
+            }
+            return true
+        }
     }
 
     private func conversationSendFeedback(for conversationID: UUID) -> ToasttyOutcomeFeedback? {
@@ -1724,25 +1800,10 @@ struct ToasttyMobileRootView: View {
                 finishSubmission(submission, outcome: .notEnqueued(.inputUnavailable))
                 return false
             }
-            fixtureQueueSubmissionCount += 1
-            if submission.conversationID == ToasttyMobileFixture.coordinatorConversationID {
-                fixtureCoordinatorLineCleared = true
-            }
-            let clientRequestID = "fixture-queued-\(fixtureQueueSubmissionCount)"
-            if deliveryMode == .steer {
-                fixtureSendItems.append(ToasttySendPresentationItem(
-                    clientRequestID: clientRequestID,
-                    text: submission.sentText,
-                    content: .optimistic(response: .accepted)
-                ))
-            } else {
-                fixtureQueuedMessages.append(RemoteQueuedMessage(
-                    clientRequestID: clientRequestID,
-                    text: submission.sentText,
-                    attachmentCount: submission.attachments.count,
-                    enqueuedAt: Date()
-                ))
-            }
+            let clientRequestID = fixtureSendIntoWorkingTurn(
+                submission.sentText, attachmentCount: submission.attachments.count,
+                deliveryMode: deliveryMode, conversationID: submission.conversationID
+            )
             finishSubmission(submission, outcome: .enqueued(clientRequestID: clientRequestID))
             return true
         }
@@ -1788,7 +1849,53 @@ struct ToasttyMobileRootView: View {
 #endif
     }
 
+    /// Send answers in the fixture's coordinator chat while it works, as a
+    /// draft's send there.
+    private func fixtureSendOfferAnswers(
+        _ text: String,
+        conversationID: UUID,
+        deliveryMode: RemoteMessageDeliveryMode?
+    ) -> Bool {
 #if DEBUG
+        guard isFixtureWorkingConversation(conversationID), fixtureTurnStopped == false else { return false }
+        _ = fixtureSendIntoWorkingTurn(text, attachmentCount: 0, deliveryMode: deliveryMode, conversationID: conversationID)
+        return true
+#else
+        return false
+#endif
+    }
+
+#if DEBUG
+    /// A message into the fixture's running turn: steered, or queued on the
+    /// fixture Mac. Returns its request ID.
+    private func fixtureSendIntoWorkingTurn(
+        _ text: String,
+        attachmentCount: Int,
+        deliveryMode: RemoteMessageDeliveryMode?,
+        conversationID: UUID
+    ) -> String {
+        fixtureQueueSubmissionCount += 1
+        if conversationID == ToasttyMobileFixture.coordinatorConversationID {
+            fixtureCoordinatorLineCleared = true
+        }
+        let clientRequestID = "fixture-queued-\(fixtureQueueSubmissionCount)"
+        if deliveryMode == .steer {
+            fixtureSendItems.append(ToasttySendPresentationItem(
+                clientRequestID: clientRequestID,
+                text: text,
+                content: .optimistic(response: .accepted)
+            ))
+        } else {
+            fixtureQueuedMessages.append(RemoteQueuedMessage(
+                clientRequestID: clientRequestID,
+                text: text,
+                attachmentCount: attachmentCount,
+                enqueuedAt: Date()
+            ))
+        }
+        return clientRequestID
+    }
+
     private struct ControlledFixtureSubmission {
         enum Phase {
             case awaitingOptimistic

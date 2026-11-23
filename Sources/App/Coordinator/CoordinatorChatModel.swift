@@ -974,10 +974,7 @@ final class CoordinatorChatModel: ObservableObject {
             transientNotice = .failure(Self.otherHeaderReplyRefusal)
             return
         }
-        replyTarget = CoordinatorReplyTarget(
-            text: CoordinatorMessageHeader.quoteText(CoordinatorMessageHeader.offerQuote(offer)),
-            time: CoordinatorMessageHeader.replyTime(Self.timeText(offeredAt))
-        )
+        replyTarget = CoordinatorReplyTarget(offer: offer, offeredAt: offeredAt)
         requestComposerFocus()
     }
 

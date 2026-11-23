@@ -255,6 +255,15 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         }
     }
 
+    /// The mode a send uses while the agent works: Steer unless the user
+    /// picked Queue for the running turn (`queuedTurnEpoch`, from the
+    /// draft), or the host does not allow steer. `.queue` when the agent
+    /// does not work.
+    func workingDeliveryMode(queuedTurnEpoch: RemoteInputEpoch?) -> RemoteMessageDeliveryMode {
+        guard let sendMode = gate.sendMode, sendMode != .prompt else { return .queue }
+        return sendMode.deliveryMode(queueSelected: queuedTurnEpoch != nil && queuedTurnEpoch == runningTurnEpoch)
+    }
+
     func canSubmit(draft: String, attachments: [RemoteMessageAttachment] = []) -> Bool {
         gate.allowsInput
             && (draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || attachments.isEmpty == false)
@@ -862,10 +871,12 @@ enum ToasttySendPresentationAdapter {
     }
 
     /// A message for the coordinator as its row in the coordinator's chat
-    /// will show it: a reply as the user's text under its quote. Edit and
-    /// Steer now still act on the text as sent, which the Mac's queue holds.
+    /// will show it: a reply as the user's text under its quote, and
+    /// answers to offers as one line for each. Edit and Steer now still act
+    /// on the text as sent, which the Mac's queue holds.
     static func coordinatorItem(_ item: ToasttySendPresentationItem) -> ToasttySendPresentationItem {
-        guard let quote = CoordinatorChatTranscript.quote(of: item.text) else { return item }
+        let quote = CoordinatorChatTranscript.quote(of: item.text)
+        guard quote != nil || CoordinatorMessageHeader.offerAnswers(of: item.text) != nil else { return item }
         return ToasttySendPresentationItem(
             clientRequestID: item.clientRequestID,
             text: CoordinatorMessageHeader.displayText(of: item.text),
