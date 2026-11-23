@@ -717,8 +717,16 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
                 try scenario.tasks.cancelMerge(taskID: scenario.taskID)
                 #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
                 #expect(!FileManager.default.fileExists(atPath: scenario.mergedMarker))
+                #expect(throws: TaskError.self) {
+                    try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+                }
                 scenario.reportAgent(.ready)
                 scenario.reportAgent(.working)
+                let cancelledAt = try #require(scenario.record?.mergeCancelledAt)
+                scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
+                    sessionID: "agent", agent: .claude, panelID: scenario.taskPanelID, workspaceID: scenario.taskSpaceID,
+                    cwd: scenario.worktree, isActive: true, isInTurn: true, turnStartedAt: cancelledAt.addingTimeInterval(1)
+                )
                 try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
                 await scenario.waitUntil("the preparation merge waits again") { scenario.isWaitingForChecks }
                 scenario.passChecks()
