@@ -105,7 +105,10 @@ struct ToasttyMarkdownText: View {
             ToasttyMarkdownTableView(table: table)
         case .offers(let group):
             if drawsOfferCards, offerRow != nil {
-                ToasttyOfferGroupView(group: group)
+                // A block with no offers only closes the cards before it.
+                if group.offers.isEmpty == false {
+                    ToasttyOfferGroupView(group: group)
+                }
             } else {
                 codeBlock(block.content, language: CoordinatorOfferGroup.codeLanguage)
             }

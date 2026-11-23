@@ -64,7 +64,8 @@ public struct ToasttyOfferAnswers: Equatable, Sendable {
     }
 
     /// The message at `sequence` holds the offers that are open now. An
-    /// older message's cards take no answer: a newer list replaced them.
+    /// older message's cards take no answer: a newer list replaced them,
+    /// also a list with no offers.
     public func takesAnswers(at sequence: UInt64) -> Bool {
         guard let newestOffersSequence else { return true }
         return sequence >= newestOffersSequence
@@ -404,8 +405,9 @@ struct ToasttyOfferGroupView: View {
         guard text.contains(CoordinatorOfferGroup.fenceMarker) else { return text }
         let blocks = ToasttyMarkdownText.blocks(text)
         guard blocks.contains(where: { if case .offers = $0.style { true } else { false } }) else { return text }
-        return blocks.map { block in
+        return blocks.compactMap { block in
             if case .offers(let group) = block.style {
+                if group.offers.isEmpty { return nil }
                 return group.offers.count == 1 ? "1 offer" : "\(group.offers.count) offers"
             }
             return String(block.content.characters)

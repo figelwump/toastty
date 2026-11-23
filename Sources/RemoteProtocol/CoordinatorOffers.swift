@@ -95,10 +95,12 @@ public struct CoordinatorOfferGroup: Equatable, Sendable {
     }
 
     /// Reads the text of a `toastty-offers` block: `{"offers": [...]}`, or
-    /// the array alone. `nil` when the text is not JSON, when it has no
-    /// offer, or when an offer has no title or no usable ID, or an ID that
-    /// another offer of the block has. The chat then shows the block as
-    /// the text it is, so a broken block stays visible.
+    /// the array alone. `nil` when the text is not JSON, or when an offer
+    /// has no title or no usable ID, or an ID that another offer of the
+    /// block has. The chat then shows the block as the text it is, so a
+    /// broken block stays visible. A block with no offers is a group: the
+    /// coordinator writes it when no offer is open, and it closes the cards
+    /// of the list before it.
     public init?(json: String) {
         guard let data = json.data(using: .utf8) else { return nil }
         let decoder = JSONDecoder()
@@ -110,7 +112,7 @@ public struct CoordinatorOfferGroup: Equatable, Sendable {
         } else {
             return nil
         }
-        guard decoded.isEmpty == false, decoded.count <= Self.maximumOfferCount else { return nil }
+        guard decoded.count <= Self.maximumOfferCount else { return nil }
         var seen: Set<String> = []
         var offers: [CoordinatorOffer] = []
         for wire in decoded {
@@ -208,8 +210,10 @@ extension CoordinatorMessageHeader {
     }
 
     /// The answers of a message as `answersMessage` wrote it. `nil` for any
-    /// other message, also when its first line promises more answers than
-    /// follow or a line is not an answer.
+    /// other message, also when its first line promises more or fewer
+    /// answers than follow, or a line is not an answer. A message with
+    /// other text after its answers is then a plain message, which the chat
+    /// shows whole.
     public static func offerAnswers(of message: String) -> [CoordinatorOfferAnswer]? {
         guard message.hasPrefix(answersPrefix) else { return nil }
         let lines = message.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
@@ -217,7 +221,8 @@ extension CoordinatorMessageHeader {
         guard let comma = first.range(of: ", ", options: .backwards) else { return nil }
         let countWords = first[comma.upperBound...].split(separator: " ")
         guard countWords.count == 2, countWords[1] == "answer" || countWords[1] == "answers",
-              let count = Int(countWords[0]), count > 0, lines.count > count else { return nil }
+              let count = Int(countWords[0]), count > 0, lines.count > count,
+              lines.dropFirst(count + 1).allSatisfy({ $0.allSatisfy(\.isWhitespace) }) else { return nil }
         var answers: [CoordinatorOfferAnswer] = []
         for line in lines.dropFirst().prefix(count) {
             guard let answer = offerAnswer(inLine: line) else { return nil }

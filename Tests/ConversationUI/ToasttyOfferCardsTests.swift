@@ -235,6 +235,15 @@ final class ToasttyOfferCardsTests: XCTestCase {
         XCTAssertFalse(state.takesAnswers(at: 1))
         XCTAssertTrue(state.takesAnswers(at: 4))
 
+        // A list with no offers closes the cards before it too.
+        let emptied = ToasttyOfferAnswers(events: [
+            offers(1, ["a"]),
+            event(2, .assistantMessage(.init(text: Self.message("{\"offers\": []}"), phase: .final))),
+        ])
+        XCTAssertFalse(emptied.takesAnswers(at: 1))
+        XCTAssertEqual(ToasttyOfferGroupView.spokenText(of: Self.message("{\"offers\": []}")),
+                       "2 items block work.\nThat is all.")
+
         // A second answer replaces the first for the newer list.
         let answered = ToasttyOfferAnswers(events: [
             offers(1, ["a"]), answers(2, [("a", .skip)]), offers(4, ["a"]), answers(5, [("a", .yes)]),

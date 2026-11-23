@@ -224,7 +224,7 @@ final class ConversationUIRenderTests: XCTestCase {
     ```toastty-offers
     {"offers": [
       {"id": "plain-send-task", "kind": "task", "title": "Plain `task send` leaves an occupied prompt untouched",
-       "what": "A plain `toastty task send` returns \"try again\" when the agent's prompt holds text.",
+       "what": "A plain `toastty task send` returns \\"try again\\" when the agent's prompt holds text.",
        "example": "You type half a message in a task's terminal, and another agent sends that task a message. Today the two texts can mix.",
        "why": "The third security finding before 0.10.0. You deferred it.",
        "yes": "A task in toastty from `main`: claude, claude-opus-5-5, xhigh.", "suggested": "yes", "list": 2, "lists": 3},

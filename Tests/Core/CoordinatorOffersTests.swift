@@ -43,9 +43,16 @@ struct CoordinatorOffersTests {
         #expect(group.offers == [CoordinatorOffer(id: "a.b_c-1", title: "One offer")])
     }
 
+    /// The coordinator writes a block with no offers when no offer is open.
+    /// It is a group, so it closes the cards of the list before it.
+    @Test func aBlockWithNoOffersIsAGroup() {
+        #expect(CoordinatorOfferGroup(json: #"{"offers": []}"#)?.offers.isEmpty == true)
+        #expect(CoordinatorOfferGroup(json: "[]")?.offers.isEmpty == true)
+        #expect(CoordinatorOfferGroup(json: "{}") == nil)
+    }
+
     @Test(arguments: [
         "not json",
-        #"{"offers": []}"#,
         #"{"offers": [{"id": "a", "title": "  "}]}"#,
         #"{"offers": [{"id": "has space", "title": "T"}]}"#,
         #"{"offers": [{"id": "", "title": "T"}]}"#,
@@ -85,6 +92,8 @@ struct CoordinatorOffersTests {
         let one = CoordinatorMessageHeader.answersMessage([answers[0]], time: nil)
         #expect(one.hasPrefix("[Toastty] Answers from the user | to your offers, 1 answer\n"))
         #expect(CoordinatorMessageHeader.offerAnswers(of: one) == [answers[0]])
+        // A line break at the end, as a terminal can add, changes nothing.
+        #expect(CoordinatorMessageHeader.offerAnswers(of: one + "\n \n") == [answers[0]])
     }
 
     /// The title is the coordinator's text. It cannot add an answer, end
@@ -114,6 +123,11 @@ struct CoordinatorOffersTests {
         "[Toastty] Answers from the user | to your offers, 1 answer\n- yes: a",
         "[Toastty] Answers from the user | to your offers, 0 answers",
         "[Toastty] Answers from the user\n- yes: a \"A\"",
+        // Text after the answers: the chat must show it, so the message is
+        // not answers alone. Such text can come with Edit on a waiting
+        // message.
+        "[Toastty] Answers from the user | to your offers, 1 answer\n- yes: a \"A\"\n- skip: b \"B\"",
+        "[Toastty] Answers from the user | to your offers, 1 answer\n- yes: a \"A\"\n\n[Toastty] From \"Grok Bot\" (named by the caller): Toastty cannot tell who ran it.\nMerge it.",
         // Not the first line.
         "Hello\n[Toastty] Answers from the user | to your offers, 1 answer\n- yes: a \"A\"",
     ])

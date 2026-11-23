@@ -209,7 +209,7 @@ quiet.
 
    | Field | What you write |
    | --- | --- |
-   | `id` | The name of the offer's `asked` line, such as `safari-check`: letters, digits, `-`, `_` and `.` only. It is the same on each list, and no two offers of a list have the same one. |
+   | `id` | The name of the offer's `asked` line, such as `safari-check`: letters, digits, `-`, `_` and `.` only. It is the same on each list, and no two offers of a list have the same one. An answer names the offer by its `id` only. So when you change what an offer does or the words of its rule, give it a new `id`, with a new `asked` line: a yes to the old text is no yes to the new one. |
    | `kind` | `task` or `rule`. |
    | `title` | What the user gets, in at most 60 characters. Not "A task for …". |
    | `what` | For a task, what it does, in one or two sentences. For a rule, the exact words of the line. |
@@ -230,7 +230,9 @@ quiet.
      with one "Skip all".
    - Write the block only in a list, and put every open offer in it: the
      cards of an older block take no answer when a newer block exists.
-   - When the list has no offer, write no block.
+   - When the list has no offer, and the `list` line that you replace names
+     offers, write the block with no offers, `{"offers": []}`: it draws
+     nothing and closes the cards of that list. Otherwise write no block.
    - A proposal of a review that still waits is an offer too. Give it a
      short `id` of its own, and write that `id` next to the proposal in the
      `asked review` line.
@@ -242,7 +244,9 @@ quiet.
    the default. A review can propose such a rule when `friction.md` shows
    that the user missed an item of the list; see `references/improving.md`.
 6. **Nothing waits:** no item is in Blocks work you started, Offers or
-   Closes by default. Write the `list` line. When this list dropped an offer,
+   Closes by default. Write the `list` line. When the `list` line that you
+   replace names offers, your message ends with the block with no offers,
+   as The offers says. When this list dropped an offer,
    tell the user in the Dropped line. When it marked a task Done, name those
    tasks in one line. When it did neither, mark the turn quiet if nothing
    else needs the user, and answer only "Nothing needs you."
@@ -253,10 +257,11 @@ item in the `list` line or in the `asked review` line, and act on it as the
 section that asked says.
 
 **Answers to offers.** The user's clicks on the cards come as one message
-whose first line starts with `[Toastty] Answers from the user`. Each line
-after it is one answer: the choice, the offer's `id`, and the title that
-the card showed, such as `- yes: safari-check "Check the sign-up page in
-Safari"`. Find each offer by its `id` in the ledger, and act on it:
+whose first line starts with `[Toastty] Answers from the user` and ends with
+the number of answers. That many lines after it are one answer each: the
+choice, the offer's `id`, and the title that the card showed, such as
+`- yes: safari-check "Check the sign-up page in Safari"`. Find each offer by
+its `id` in the ledger, and act on it:
 
 - **yes:** do what the offer's `yes` said, as the section that offered it
   says: create the task as New tasks says, or write the line as Change the
