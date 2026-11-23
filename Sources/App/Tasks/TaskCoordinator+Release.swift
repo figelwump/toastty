@@ -28,7 +28,13 @@ extension TaskCoordinator {
                   let workspace = store.state.workspacesByID[workspaceID],
                   workspace.taskID == record.id else { continue }
             let droppedOldRequest = merges?.discardReleaseMergeCleanup(workspaceID: workspaceID) == true
-            if record.doneAt == nil, droppedOldRequest || record.cleanup?.kind == .merge {
+            if let doneAt = record.doneAt {
+                // The merge coordinator can drop a stale wait before the
+                // task coordinator starts. Keep separately saved manual Done.
+                if workspace.doneAt == nil {
+                    _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: doneAt))
+                }
+            } else if droppedOldRequest || record.cleanup?.kind == .merge {
                 _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
             }
         }

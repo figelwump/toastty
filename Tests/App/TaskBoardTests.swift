@@ -983,8 +983,11 @@ struct TaskBoardTests {
         let defaultsSuite = "ReleasePRRestore.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
         defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+        let oldMergeLink = markedDone
+            ? try #require(WorkspacePullRequestLink(annotationURL: "https://github.com/example/toastty/pull/125"))
+            : link
         let oldRequest = WorkspaceMergeRequest(
-            pullRequest: link, repoPath: fixture.projectRoot,
+            pullRequest: oldMergeLink, repoPath: fixture.projectRoot,
             phase: .awaitingChecks(acceptedHead: "abc123", thenCleanUp: true)
         )
         let savedRequests = try JSONEncoder().encode([releaseSpace.uuidString: oldRequest])
@@ -994,7 +997,7 @@ struct TaskBoardTests {
             runner: gitHub, userDefaults: defaults, notify: { _, _ in }
         )
         fixture.coordinator.merges = merges
-        #expect(merges.request(workspaceID: releaseSpace) == oldRequest)
+        #expect(merges.request(workspaceID: releaseSpace) == (markedDone ? nil : oldRequest))
         fixture.coordinator.reconcileAfterLaunch()
         #expect(merges.request(workspaceID: releaseSpace) == nil)
 
@@ -1010,6 +1013,7 @@ struct TaskBoardTests {
         #expect(restored.mergeCommit == nil)
         #expect(restored.cleanup == nil)
         #expect(restored.doneAt == doneAt)
+        #expect(fixture.store.state.workspacesByID[releaseSpace]?.doneAt == doneAt)
         #expect(restored.shippedAt == shippedAt)
         #expect(restored.releaseTag == (shipped ? "v1.0.0" : nil))
         let item = try #require(board.items().first { $0.taskID == release.id })
