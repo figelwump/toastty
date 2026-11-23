@@ -102,11 +102,12 @@ struct CoordinatorQuestionAnswerTests {
 
         // A caller that names no session answers in its own words.
         let typed = try controller.answerOpenQuestion(
-            card: "claude:call:call-2", option: nil, text: "Build the billing page first.", from: .unknown
+            card: "claude:call:call-2", option: nil, text: "  Build the billing page first.\n", from: .unknown
         )
         #expect(typed.chosenOption == nil)
         #expect(received(second)
             == "[Toastty] From a terminal command: Toastty cannot tell who ran it.\nBuild the billing page first.")
+        #expect(typed.answer == received(second))
 
         // Without a sender, the answer is the user's, as the live check's
         // test instance gives it: a choice reaches Claude as the chat

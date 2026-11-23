@@ -2305,8 +2305,9 @@ final class CoordinatorController: ObservableObject {
         text: String?,
         from sender: CoordinatorMessageHeader.Sender?
     ) throws -> QuestionAnswer {
+        // Claude's hook trims the answer too, so `answer` is the text it receives.
         let trimmed = { (value: String?) -> String? in
-            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? value : nil
+            value.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
         }
         let option = trimmed(option), text = trimmed(text)
         guard (option == nil) != (text == nil) else {
