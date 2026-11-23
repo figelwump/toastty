@@ -193,6 +193,7 @@ final class CoordinatorController: ObservableObject {
     private let trustFolder: @MainActor (_ profileID: String, _ directory: String) async -> Void
     private let deliverText: (String, UUID) -> TerminalInputDeliveryResult
     private let promptState: (UUID) -> TerminalPromptState
+    private let managedAgentRestoreState: (UUID) -> TerminalManagedAgentRestoreState
     /// Scrolls a local-document panel to a line, from 1. See
     /// `WebPanelRuntimeRegistry.requestLocalDocumentReveal`.
     private let revealDocumentLine: (UUID, Int) -> Bool
@@ -494,6 +495,7 @@ final class CoordinatorController: ObservableObject {
         trustFolder: @escaping @MainActor (_ profileID: String, _ directory: String) async -> Void = { _, _ in },
         deliverText: @escaping (String, UUID) -> TerminalInputDeliveryResult,
         promptState: @escaping (UUID) -> TerminalPromptState,
+        managedAgentRestoreState: @escaping (UUID) -> TerminalManagedAgentRestoreState = { _ in .inactive },
         revealDocumentLine: @escaping (UUID, Int) -> Bool = { _, _ in false },
         terminalReadinessTimeout: Duration = .seconds(10),
         now: @escaping () -> Date = Date.init,
@@ -513,6 +515,7 @@ final class CoordinatorController: ObservableObject {
         self.trustFolder = trustFolder
         self.deliverText = deliverText
         self.promptState = promptState
+        self.managedAgentRestoreState = managedAgentRestoreState
         self.revealDocumentLine = revealDocumentLine
         self.terminalReadinessTimeout = terminalReadinessTimeout
         self.now = now
@@ -706,13 +709,11 @@ final class CoordinatorController: ObservableObject {
         )
     }
 
-    /// After a relaunch, Toastty resumes the agent of a restored terminal
-    /// when that terminal comes up. Until then the terminal has a saved
-    /// conversation to resume, no session and no surface. A second start in
-    /// that time would type into the same shell as the resume.
+    /// The terminal registry owns the restore from before surface creation
+    /// through command handoff. Its shell can show a prompt during that time.
     private func awaitsRestore(_ location: CoordinatorLocation) -> Bool {
-        guard let panelID = location.panelID, hasSavedConversation(location) else { return false }
-        return promptState(panelID) == .unavailable
+        guard let panelID = location.panelID else { return false }
+        return managedAgentRestoreState(panelID) == .pending
     }
 
     /// The coordinator's agent conversation is new, so it has no history:
@@ -1255,7 +1256,10 @@ final class CoordinatorController: ObservableObject {
             if self.location?.workspaceID == workspaceID {
                 failedStart = FailedStart(workspaceID: workspaceID, reason: reason)
             }
-            ToasttyLog.warning("The coordinator's agent did not start", category: .tasks, metadata: ["reason": reason])
+            ToasttyLog.warning("The coordinator's agent did not start", category: .tasks, metadata: [
+                "reason": reason,
+                "requested_action": replacingBusyTerminal ? "restart" : "open",
+            ])
             // Keeps the installed agent that a person can choose instead.
             throw error as? CoordinatorError ?? CoordinatorError(reason)
         }
@@ -1298,6 +1302,7 @@ final class CoordinatorController: ObservableObject {
             "session_id": result.sessionID,
             "panel_id": terminal.panelID.uuidString,
             "agent": config.agent,
+            "requested_action": replacingBusyTerminal ? "restart" : "open",
         ])
         return result.sessionID
     }
@@ -1315,8 +1320,9 @@ final class CoordinatorController: ObservableObject {
             let isBusy = sessionRuntimeStore.sessionRegistry.activeSession(for: panelID) != nil
                 || promptState(panelID) == .busy
                 || promptState(panelID) == .exited
-                // Closing the terminal also drops its pending resume.
-                || awaitsRestore(location)
+                // Closing the terminal also drops its pending resume or any
+                // text that may have been left there by an unconfirmed paste.
+                || managedAgentRestoreState(panelID) != .inactive
             if replacingBusyTerminal == false || isBusy == false {
                 return StartTerminal(panelID: panelID, tabID: nil, replacedPanelID: nil)
             }

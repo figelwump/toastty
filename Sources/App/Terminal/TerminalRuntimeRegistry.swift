@@ -59,10 +59,15 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 private struct RestoredManagedLaunch {
     let sessionID: String
-    let commandLine: String
     let configuration: TerminalSurfaceLaunchConfiguration
     var surfaceLaunchCompleted: Bool
     var commandSubmittedAt: Date?
+}
+
+enum TerminalManagedAgentRestoreState {
+    case inactive
+    case pending
+    case inputUncertain
 }
 
 @MainActor
@@ -74,8 +79,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     ) -> Void
 
     private static let restoredManagedLaunchSubmitTimeout: TimeInterval = 5.0
+    private static let restoredCoordinatorLaunchSubmitTimeout: TimeInterval = 30.0
     private static let restoredManagedLaunchSubmitRetryDelayNanoseconds: UInt64 = 100_000_000
     private static let restoredManagedLaunchPostSubmitGraceInterval: TimeInterval = 2.0
+    static let restoredAgentCommandEnvironmentKey = "TOASTTY_RESTORED_AGENT_COMMAND"
+    // Like a restore notice, the long payload goes in the surface's
+    // environment. Both this short line and Return fit in the PTY before
+    // the shell starts its line editor, even with no prompt marker.
+    private static let restoredAgentInput = " eval \"$\(restoredAgentCommandEnvironmentKey)\""
 
     private let focusCoordinator: TerminalFocusCoordinator
     private let activateApp: @MainActor () -> Void
@@ -105,6 +116,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private static let restoreNoticeFinishWindow: TimeInterval = 30
     private var restoredManagedLaunchesByPanelID: [UUID: RestoredManagedLaunch] = [:]
     private var restoredManagedLaunchSubmitTasksByPanelID: [UUID: Task<Void, Never>] = [:]
+    private var uncertainRestoredManagedLaunchPanelIDs: Set<UUID> = []
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     private var exitedTerminalPanelIDs: Set<UUID> = []
@@ -117,7 +129,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
     private var searchDispatchTaskByPanelID: [UUID: Task<Void, Never>] = [:]
     private var searchDispatchTokenByPanelID: [UUID: UUID] = [:]
-    private var restoredManagedLaunchSubmitterForTesting: ((String, Bool, UUID) -> Bool)?
+    private var restoredManagedLaunchSubmitterForTesting: ((String, UUID) -> TerminalInputDeliveryResult)?
     private var automationSendTextHandlerForTesting: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?
     private var automationSendInterruptHandlerForTesting: ((UUID) -> Bool)?
     private var automationPromptStateHandlerForTesting: ((UUID) -> TerminalPromptState)?
@@ -235,8 +247,28 @@ final class TerminalRuntimeRegistry: ObservableObject {
         restoredManagedLaunchPlanner = planner
     }
 
-    func setRestoredManagedLaunchSubmitterForTesting(_ submitter: ((String, Bool, UUID) -> Bool)?) {
+    func setRestoredManagedLaunchSubmitterForTesting(_ submitter: ((String, UUID) -> TerminalInputDeliveryResult)?) {
         restoredManagedLaunchSubmitterForTesting = submitter
+    }
+
+    func managedAgentRestoreState(panelID: UUID) -> TerminalManagedAgentRestoreState {
+        if restoredManagedLaunchesByPanelID[panelID] != nil {
+            return .pending
+        }
+        if uncertainRestoredManagedLaunchPanelIDs.contains(panelID) {
+            return .inputUncertain
+        }
+        if restoredTerminalPanelIDsAwaitingLaunch.contains(panelID),
+           let workspace = store?.state.workspaceSelection(containingPanelID: panelID)?.workspace,
+           case .terminal(let terminal)? = workspace.panelState(for: panelID),
+           terminal.resumeRecord != nil {
+            return .pending
+        }
+        return .inactive
+    }
+
+    func clearUncertainManagedRestoreInput(panelID: UUID) {
+        uncertainRestoredManagedLaunchPanelIDs.remove(panelID)
     }
 
     func setAutomationSendTextHandlerForTesting(_ handler: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?) {
@@ -474,6 +506,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         let livePanelIDs = liveTerminalPanelIDs(in: state)
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
+        uncertainRestoredManagedLaunchPanelIDs.formIntersection(livePanelIDs)
         restoreNoticeQueuedAtByPanelID = restoreNoticeQueuedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         for (panelID, launch) in restoredManagedLaunchesByPanelID where livePanelIDs.contains(panelID) == false {
             restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)?.cancel()
@@ -2057,19 +2090,22 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
             commandEnvironment["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] = record.agent.rawValue
             commandEnvironment["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"] = record.nativeSessionID
+            // Clear the payload for the launched command. Clear it inside
+            // the evaluated line so shells such as fish can expand it first.
+            commandEnvironment[Self.restoredAgentCommandEnvironmentKey] = ""
 
-            let commandLine = ShellCommandRenderer.render(
+            var shellEnvironment = fallbackConfiguration.environmentVariables
+            shellEnvironment[Self.restoredAgentCommandEnvironmentKey] = ShellCommandRenderer.render(
                 argv: plan.argv,
                 environment: commandEnvironment
             )
 
             let configuration = TerminalSurfaceLaunchConfiguration(
-                environmentVariables: fallbackConfiguration.environmentVariables,
+                environmentVariables: shellEnvironment,
                 workingDirectoryOverride: fallbackConfiguration.workingDirectoryOverride
             )
             restoredManagedLaunchesByPanelID[panelID] = RestoredManagedLaunch(
                 sessionID: plan.sessionID,
-                commandLine: commandLine,
                 configuration: configuration,
                 surfaceLaunchCompleted: false,
                 commandSubmittedAt: nil
@@ -2180,11 +2216,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             return
         }
         let sessionID = launch.sessionID
-        let deadline = Date().addingTimeInterval(Self.restoredManagedLaunchSubmitTimeout)
+        let isCoordinator = store?.state.coordinator?.panelID == panelID
+        let timeout = isCoordinator ? Self.restoredCoordinatorLaunchSubmitTimeout : Self.restoredManagedLaunchSubmitTimeout
+        let deadline = Date().addingTimeInterval(timeout)
         restoredManagedLaunchSubmitTasksByPanelID[panelID] = Task { @MainActor [weak self] in
             await self?.submitRestoredManagedLaunchCommand(
                 panelID: panelID,
                 sessionID: sessionID,
+                waitsForShellPrompt: isCoordinator,
                 deadline: deadline
             )
         }
@@ -2193,6 +2232,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     private func submitRestoredManagedLaunchCommand(
         panelID: UUID,
         sessionID: String,
+        waitsForShellPrompt: Bool,
         deadline: Date
     ) async {
         while Task.isCancelled == false {
@@ -2227,10 +2267,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 continue
             }
 
-            // The resume command is typed without waiting for the prompt, so
-            // the shell may still run its own startup.
-            let shellWasAtPrompt = promptState(panelID: panelID) == .idleAtPrompt
-            if sendRestoredManagedLaunchCommand(launch.commandLine, panelID: panelID) {
+            let currentPromptState = promptState(panelID: panelID)
+            let shellWasAtPrompt = currentPromptState == .idleAtPrompt
+            // The Coordinator waits for its first prompt. Ordinary panes
+            // also support shells that never report a prompt marker.
+            let delivery = waitsForShellPrompt && !shellWasAtPrompt
+                ? .unavailable
+                : sendRestoredManagedLaunchCommand(panelID: panelID)
+            if delivery != .unavailable {
                 var submittedLaunch = launch
                 submittedLaunch.commandSubmittedAt = now
                 restoredManagedLaunchesByPanelID[panelID] = submittedLaunch
@@ -2242,14 +2286,21 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     shellWasAtPrompt: shellWasAtPrompt,
                     at: now
                 )
-                ToasttyLog.info(
-                    "Submitted restored managed agent resume command",
-                    category: .terminal,
-                    metadata: [
-                        "panel_id": panelID.uuidString,
-                        "session_id": launch.sessionID,
-                    ]
-                )
+                let metadata = [
+                    "panel_id": panelID.uuidString,
+                    "session_id": launch.sessionID,
+                    "prompt_state": String(describing: currentPromptState),
+                    "input_bytes": String(Self.restoredAgentInput.utf8.count),
+                ]
+                if delivery == .uncertain {
+                    // The pasted text may still be on the prompt. Stop
+                    // retries and keep fresh launches out of this terminal
+                    // until the shell reports that a command finished.
+                    uncertainRestoredManagedLaunchPanelIDs.insert(panelID)
+                    ToasttyLog.warning("Could not confirm restored managed agent resume submission", category: .terminal, metadata: metadata)
+                } else {
+                    ToasttyLog.info("Submitted restored managed agent resume command", category: .terminal, metadata: metadata)
+                }
                 continue
             }
 
@@ -2263,6 +2314,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     metadata: [
                         "panel_id": panelID.uuidString,
                         "session_id": launch.sessionID,
+                        "prompt_state": String(describing: currentPromptState),
+                        "waiting_for_prompt": String(waitsForShellPrompt && !shellWasAtPrompt),
                     ]
                 )
                 return
@@ -2272,12 +2325,12 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         }
     }
 
-    private func sendRestoredManagedLaunchCommand(_ commandLine: String, panelID: UUID) -> Bool {
+    private func sendRestoredManagedLaunchCommand(panelID: UUID) -> TerminalInputDeliveryResult {
         if let restoredManagedLaunchSubmitterForTesting {
-            return restoredManagedLaunchSubmitterForTesting(commandLine, true, panelID)
+            return restoredManagedLaunchSubmitterForTesting(Self.restoredAgentInput, panelID)
         }
-        return sendManagedAgentCommand(
-            commandLine,
+        return sendManagedAgentCommandResult(
+            Self.restoredAgentInput,
             panelID: panelID,
             focusPolicy: .focusTarget
         )

@@ -1464,6 +1464,9 @@ struct ToasttyApp: App {
             promptState: { [weak terminalRuntimeRegistry] panelID in
                 terminalRuntimeRegistry?.promptState(panelID: panelID) ?? .unavailable
             },
+            managedAgentRestoreState: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.managedAgentRestoreState(panelID: panelID) ?? .inactive
+            },
             revealDocumentLine: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
                 webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
             },
