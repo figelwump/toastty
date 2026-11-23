@@ -35,6 +35,8 @@ struct TaskBoardItem: Identifiable, Equatable {
     var waitingOnTitle: String?
     var pullRequest: WorkspacePullRequestLink?
     var pullRequestState: TaskPullRequestState?
+    /// A release task's old link remains visible until its agent confirms it.
+    var allowsPullRequestActions = true
     /// Why GitHub has not answered about the pull request, while it has
     /// not: the task then waits for review only as far as Toastty can tell.
     var pullRequestLookupProblem: PullRequestLookupProblem? = nil
@@ -53,13 +55,14 @@ struct TaskBoardItem: Identifiable, Equatable {
     /// Whether the task's work merged: its own pull request, or for a task
     /// that finished through its child tasks, theirs.
     var hasMerged: Bool {
-        record?.mergedAt != nil || pullRequestState?.state == .merged || finishedThroughChildren
+        guard record?.release == nil else { return false }
+        return record?.mergedAt != nil || pullRequestState?.state == .merged || finishedThroughChildren
     }
 
     /// Whether the task has a pull request GitHub has not merged or closed.
     /// A link Toastty has not asked about yet counts as open.
     var hasOpenPullRequest: Bool {
-        pullRequest != nil && pullRequestState?.state != .merged && pullRequestState?.state != .closed
+        pullRequest != nil && record?.mergedAt == nil && pullRequestState?.state != .merged && pullRequestState?.state != .closed
     }
 
     /// Whether the task space's done checkbox may mark the task done. A
@@ -364,7 +367,9 @@ enum TaskBoard {
         let taskSpace = taskSpaceID.flatMap { state.workspacesByID[$0] }
         let statuses = taskSpaceID.map(inputs.statuses) ?? []
         let link = pullRequestLink(for: record, in: taskSpace)
-        let pullRequestState = link.flatMap(inputs.pullRequestState)
+        let allowsPullRequestActions = record.release == nil
+            || confirmedPullRequestLink(for: record, in: taskSpace) != nil
+        let pullRequestState = allowsPullRequestActions ? link.flatMap(inputs.pullRequestState) : nil
         let agent = agentActivity(statuses, in: taskSpace)
         let project = record.workspaceID.flatMap { state.workspacesByID[$0] }
         let root = record.projectRoot ?? project?.rootDirectory
@@ -399,7 +404,7 @@ enum TaskBoard {
                 taskSpaceOpen: taskSpace != nil,
                 agent: agent,
                 pullRequest: pullRequestState,
-                hasPullRequestLink: link != nil,
+                hasPullRequestLink: link != nil && allowsPullRequestActions && record.mergedAt == nil,
                 merge: merge,
                 cleanupProblem: cleanupProblem,
                 waitsOnTask: waitingOn != nil,
@@ -428,6 +433,7 @@ enum TaskBoard {
             waitingOnTitle: waitingOn,
             pullRequest: link,
             pullRequestState: pullRequestState,
+            allowsPullRequestActions: allowsPullRequestActions,
             pullRequestLookupProblem: pullRequestState == nil ? link.flatMap(inputs.pullRequestLookupProblem) : nil,
             branch: record.worktree.flatMap { $0.isDetached ? nil : $0.branch },
             parentTaskID: record.parentTaskID,
@@ -440,7 +446,7 @@ enum TaskBoard {
     /// Whether the task's done mark records a merge's acceptance rather
     /// than finished work.
     static func isInMergeFlow(_ record: TaskRecord, request: WorkspaceMergeRequest?) -> Bool {
-        record.mergeRequestedAt != nil || record.mergedAt != nil || request != nil
+        record.release == nil && (record.mergeRequestedAt != nil || record.mergedAt != nil || request != nil)
     }
 
     /// Where an accepted merge stands. The merge coordinator's request says
@@ -532,8 +538,15 @@ enum TaskBoard {
     }
 
     static func pullRequestLink(for record: TaskRecord, in workspace: WorkspaceState?) -> WorkspacePullRequestLink? {
-        guard record.release == nil else { return nil }
-        return workspace.flatMap(pullRequestLink) ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL)
+        workspace.flatMap(pullRequestLink) ?? WorkspacePullRequestLink(annotationURL: record.pullRequestURL)
+    }
+
+    static func confirmedPullRequestLink(for record: TaskRecord, in workspace: WorkspaceState?) -> WorkspacePullRequestLink? {
+        guard let release = record.release else { return pullRequestLink(for: record, in: workspace) }
+        if let workspace, workspace.taskID != record.id { return nil }
+        let link = workspace == nil ? WorkspacePullRequestLink(annotationURL: record.pullRequestURL) : workspace.flatMap(pullRequestLink)
+        guard let link, release.preparationPullRequestURL == link.url else { return nil }
+        return link
     }
 
     /// Whether tasks.toml sets `release_tags` for a project root, for one
@@ -897,11 +910,12 @@ final class TaskBoardStore: ObservableObject {
         for item in items() {
             // A closed pull request can be reopened, so only a merge stops
             // the checks.
-            let needsDestination = item.record?.mergedAt != nil && item.record?.mergeTarget == nil
+            let needsMergeDetails = item.record?.mergedAt != nil
+                && (item.record?.mergeTarget == nil || (item.record?.release != nil && item.record?.mergeCommit == nil))
                 && item.record?.archivedAt == nil && item.record?.doneAt == nil && item.record?.shippedAt == nil
-            guard item.stage.isFinished == false || needsDestination,
+            guard item.allowsPullRequestActions, item.stage.isFinished == false || needsMergeDetails,
                   let link = item.pullRequest,
-                  item.pullRequestState?.state != .merged || needsDestination else { continue }
+                  item.pullRequestState?.state != .merged || needsMergeDetails else { continue }
             if onlyIfDue {
                 pullRequests.refreshIfNeeded(link)
             } else {
@@ -997,8 +1011,9 @@ final class TaskBoardStore: ObservableObject {
         var links: [UUID: WorkspacePullRequestLink] = [:]
         for workspaceID in store.state.subspaceParentIDsByWorkspaceID().keys {
             guard let workspace = store.state.workspacesByID[workspaceID],
-                  workspace.taskID.flatMap(coordinator.records.record(id:))?.release == nil,
                   let link = TaskBoard.pullRequestLink(workspace) else { continue }
+            if let record = workspace.taskID.flatMap(coordinator.records.record(id:)),
+               TaskBoard.confirmedPullRequestLink(for: record, in: workspace) == nil { continue }
             links[workspaceID] = link
             if TaskBoard.agentActivity(sessionRuntimeStore.workspaceStatuses(for: workspaceID), in: workspace) == .working {
                 working.insert(workspaceID)
@@ -1020,6 +1035,7 @@ final class TaskBoardStore: ObservableObject {
         guard let records = coordinator?.records else { return }
         for record in records.records {
             var next = record
+            let workspace = record.taskSpaceWorkspaceID.flatMap { state.workspacesByID[$0] }
             if let workspaceID = record.taskSpaceWorkspaceID,
                let workspace = state.workspacesByID[workspaceID] {
                 if record.release == nil,
@@ -1036,13 +1052,14 @@ final class TaskBoardStore: ObservableObject {
                     next.doneAt = workspace.doneAt
                 }
             }
-            if let link = TaskBoard.pullRequestLink(for: next, in: nil),
+            if let link = TaskBoard.confirmedPullRequestLink(for: next, in: workspace),
                let answer = pullRequests?.state(for: link), answer.state == .merged {
                 if next.mergedAt == nil {
                     next.mergedAt = now()
                     next.mergeCommit = answer.mergeCommit
                     next.mergeFailure = nil
                 }
+                next.mergeCommit = next.mergeCommit ?? answer.mergeCommit
                 if let target = answer.mergeTarget {
                     next.mergeTarget = target
                 }
@@ -1125,6 +1142,12 @@ private struct BuiltBoard {
 }
 
 extension SessionRuntimeStore {
+    func workspaceAllowsPullRequestActions(_ workspace: WorkspaceState) -> Bool {
+        guard let record = workspace.taskID.flatMap({ taskCoordinator?.records.record(id: $0) }),
+              record.release != nil else { return true }
+        return TaskBoard.confirmedPullRequestLink(for: record, in: workspace) != nil
+    }
+
     /// Whether a task space's task has a merge its agent is checking, which
     /// the Merge button shows as under way.
     func isCheckingTaskMerge(workspaceID: UUID) -> Bool {

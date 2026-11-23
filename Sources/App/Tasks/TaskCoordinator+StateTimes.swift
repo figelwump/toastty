@@ -148,8 +148,10 @@ extension TaskCoordinator {
     /// answer for its head commit. A pull request Toastty has no answer for
     /// yet, also when every request failed, is unknown.
     private func checks(of record: TaskRecord) -> TaskAlertFacts.Checks {
-        guard let url = record.pullRequestURL, record.mergedAt == nil else { return .none }
-        guard let answer = board?.pullRequests?.entries[url]?.answer else { return .unknown }
+        let taskSpace = record.taskSpaceWorkspaceID.flatMap { store.state.workspacesByID[$0] }
+        guard let link = TaskBoard.confirmedPullRequestLink(for: record, in: taskSpace),
+              record.mergedAt == nil else { return .none }
+        guard let answer = board?.pullRequests?.entries[link.url]?.answer else { return .unknown }
         guard answer.state == .open else { return .none }
         switch answer.mergeability?.checks {
         case .failing?: return .failing

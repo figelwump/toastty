@@ -60,7 +60,7 @@ struct TaskAppControlTests {
         return state
     }
 
-    @Test func pullRequestAnnotationRequiresAnExplicitWorkspaceAndRefusesARelease() async throws {
+    @Test func pullRequestAnnotationRequiresAnExplicitWorkspaceAndTheReleaseAgentOwnsItsLink() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         let board = TaskBoardStore(
             coordinator: fixture.coordinator, store: fixture.store, sessionRuntimeStore: fixture.sessionRuntimeStore,
@@ -96,8 +96,11 @@ struct TaskAppControlTests {
             _ = try executor.runAction(id: "workspace.clear-annotation", args: args, context: caller)
         }
         args["workspaceID"] = .string(releaseSpace.uuidString)
-        await expectInvalidPayload("A release task cannot track a pull request") {
-            _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        let releaseCaller = context(try #require(fixture.record(release.id)?.currentSessionID))
+        for foreignCaller in [caller, context()] {
+            await expectInvalidPayload("Only a managed session in the release task space can link its preparation pull request") {
+                _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: foreignCaller)
+            }
         }
 
         args["workspaceID"] = .string(taskSpace.uuidString)
@@ -108,6 +111,21 @@ struct TaskAppControlTests {
         #expect(fixture.store.state.workspacesByID[releaseSpace]?.annotations["github-pr"] == nil)
         #expect(fixture.store.state.selectedWorkspaceSelection()?.workspaceID == releaseSpace)
         #expect(try executor.runAction(id: "workspace.clear-annotation", args: args, context: caller).didMutateState)
+        #expect(fixture.record(task.id)?.pullRequestURL == url)
+
+        let preparationURL = "https://github.com/example/toastty/pull/125"
+        args["workspaceID"] = .string(releaseSpace.uuidString)
+        args["url"] = .string(preparationURL)
+        #expect(try executor.runAction(id: "workspace.set-annotation", args: args, context: releaseCaller).didMutateState)
+        #expect(fixture.savedRecord(release.id)?.release?.preparationPullRequestURL == preparationURL)
+        #expect(try fixture.coordinator.mergeTarget(try #require(fixture.record(release.id))).pullRequest.url == preparationURL)
+        await expectInvalidPayload("Only a managed session in the release task space can link its preparation pull request") {
+            _ = try executor.runAction(id: "workspace.set-annotation", args: args, context: caller)
+        }
+        #expect(fixture.record(release.id)?.pullRequestURL == preparationURL)
+        #expect(try executor.runAction(id: "workspace.clear-annotation", args: args, context: releaseCaller).didMutateState)
+        #expect(fixture.record(release.id)?.pullRequestURL == nil)
+        #expect(fixture.savedRecord(release.id)?.release?.preparationPullRequestURL == nil)
     }
 
     @Test func createReturnsAtOnceAndGetReportsTheStartedTask() async throws {

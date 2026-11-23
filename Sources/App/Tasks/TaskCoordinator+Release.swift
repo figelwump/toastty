@@ -5,40 +5,50 @@ import Foundation
 extension TaskCoordinator {
     static let releaseCheckInterval: Duration = .seconds(15 * 60)
 
-    /// Older Toastty versions could copy a PR from a release's task space.
-    /// Remove the chip and its saved merge state before polling or watches run.
-    func clearReleasePullRequests() {
-        let key = SidebarSubspacePresentation.annotationKeyPullRequest
+    /// Save the release agent's explicit choice before applying its annotation.
+    @discardableResult
+    func setReleasePreparationPullRequest(_ link: WorkspacePullRequestLink?, for record: TaskRecord) throws -> Bool {
+        guard record.release?.preparationPullRequestURL != link?.url || record.pullRequestURL != link?.url else {
+            return false
+        }
+        try saveMergeState(taskID: record.id) {
+            $0.release?.preparationPullRequestURL = link?.url
+            $0.pullRequestURL = link?.url
+            Self.resetReleaseMerge(&$0)
+        }
+        return true
+    }
+
+    /// A saved cleanup from a release preparation merge used the ordinary
+    /// task path. End that request before it can act on the release checkout.
+    /// Keep the link so the release agent can confirm it again.
+    func reconcileReleaseMerges() {
         for record in records.records where record.release != nil {
             guard let workspaceID = record.taskSpaceWorkspaceID,
                   let workspace = store.state.workspacesByID[workspaceID],
                   workspace.taskID == record.id else { continue }
-            if record.doneAt == nil, record.cleanup?.kind == .merge || merges?.request(workspaceID: workspaceID) != nil {
-                // The workspace's mark was the merge's acceptance.
+            let droppedOldRequest = merges?.discardReleaseMergeCleanup(workspaceID: workspaceID) == true
+            if record.doneAt == nil, droppedOldRequest || record.cleanup?.kind == .merge {
                 _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: nil))
-            }
-            if workspace.annotations[key] != nil {
-                _ = store.send(.clearWorkspaceAnnotation(workspaceID: workspaceID, key: key))
-            }
-            // Dropping a wait can clear the workspace's done mark. Keep a
-            // completion the user explicitly saved to the release record.
-            if let doneAt = record.doneAt, workspace.doneAt != nil,
-               store.state.workspacesByID[workspaceID]?.doneAt == nil {
-                _ = store.send(.setWorkspaceDone(workspaceID: workspaceID, doneAt: doneAt))
             }
         }
         records.updateEach { record in
             guard record.release != nil else { return }
-            record.pullRequestURL = nil
-            record.mergedAt = nil
-            record.mergeCommit = nil
-            record.mergeTarget = nil
-            record.mergeRequestedAt = nil
-            record.mergeCancelledAt = nil
-            record.mergeFailure = nil
-            record.droppedMergeCleanupPullRequestURL = nil
+            if record.release?.preparationPullRequestURL == nil {
+                Self.resetReleaseMerge(&record)
+            }
             if record.cleanup?.kind == .merge { record.cleanup = nil }
         }
+    }
+
+    private static func resetReleaseMerge(_ record: inout TaskRecord) {
+        record.mergedAt = nil
+        record.mergeCommit = nil
+        record.mergeTarget = nil
+        record.mergeRequestedAt = nil
+        record.mergeCancelledAt = nil
+        record.mergeFailure = nil
+        record.droppedMergeCleanupPullRequestURL = nil
     }
 
     // MARK: - Release

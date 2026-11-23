@@ -213,7 +213,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Set or update a structured annotation chip under a workspace name. The github-pr key requires workspaceID and cannot be set on a release task.",
+                summary: "Set or update a structured annotation chip under a workspace name. The github-pr key requires workspaceID. A release task's own managed session can set its preparation PR.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [
                     .annotationKey(required: true),

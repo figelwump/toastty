@@ -61,6 +61,8 @@ enum WorkspaceMergePresentation: Equatable {
         }
         let pullRequest = "PR #\(link.number)"
         switch request?.phase {
+        case .awaitingChecks where request?.releasePreparation == true:
+            return .merging(pullRequest: pullRequest)
         case .merging,
              .awaitingMerge where workspace.doneAt != nil,
              .awaitingChecks(_, thenCleanUp: true) where workspace.doneAt != nil:
@@ -218,7 +220,7 @@ struct WorkspaceMergeController {
         )
     }
 
-    /// A task space merges its task's way, which always cleans up after;
+    /// A task space merges its task's way;
     /// `mode` applies to other subspaces. `route` picks the task's way.
     func requestMerge(workspaceID: UUID, mode: WorkspaceMergeMode, route: TaskMergeRoute? = nil) {
         guard let target = readyTarget(workspaceID: workspaceID, problemTitle: "Unable to Merge") else { return }
@@ -236,6 +238,9 @@ struct WorkspaceMergeController {
     /// Runs Close Without Merging after the user confirms it. It is offered
     /// only while the Merge button is ready, never through the shortcut.
     func requestClose(workspaceID: UUID) {
+        if sessionRuntimeStore.taskCoordinator?.records.record(taskSpaceWorkspaceID: workspaceID)?.release != nil {
+            return
+        }
         guard let target = readyTarget(workspaceID: workspaceID, problemTitle: "Unable to Close"),
               confirmClose(target.link) else {
             return
@@ -250,6 +255,7 @@ struct WorkspaceMergeController {
         problemTitle: String
     ) -> (pullRequest: String, link: WorkspacePullRequestLink, repoPath: String)? {
         guard let workspace = store.state.workspacesByID[workspaceID],
+              sessionRuntimeStore.workspaceAllowsPullRequestActions(workspace),
               case .ready(let pullRequest, _, _)? = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[workspaceID],
