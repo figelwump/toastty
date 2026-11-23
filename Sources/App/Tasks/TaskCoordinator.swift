@@ -78,6 +78,7 @@ struct TaskSessionInfo: Equatable {
     var isActive: Bool
     /// Working, or waiting for an approval.
     var isInTurn: Bool
+    var hasBackgroundWork = false
     /// The provider conversation Toastty confirmed for the session.
     var nativeConversationID: String?
     var title: String?
@@ -1050,9 +1051,9 @@ final class TaskCoordinator {
                 if let root = record.projectRoot, board != nil,
                    record.operation.worktree == nil, board?.repositoryRoots[root] == nil { continue }
             }
-            let releaseTagsConfigured = record.projectRoot.flatMap {
-                config.releaseWorkspace(forProjectRoot: $0, repositoryRoot: releaseRepositoryRoot(projectRoot: $0, record: record), homeDirectoryPath: homeDirectoryPath)?.releaseTags
-            } != nil
+            let releaseTagsConfigured = record.projectRoot.map {
+                config.releaseWorkspace(forProjectRoot: $0, repositoryRoot: releaseRepositoryRoot(projectRoot: $0, record: record), homeDirectoryPath: homeDirectoryPath)?.tracksShipping == true
+            } ?? false
             let taskSpaceOpen = record.taskSpaceWorkspaceID.map { store.state.workspacesByID[$0] != nil } ?? false
             let hasFiles = fileManager.fileExists(atPath: directoryURL.path)
             let step = TaskAttachmentRetention.step(

@@ -195,6 +195,11 @@ extension TaskCoordinator {
     /// cleanup's problem.
     private func runTeardown(taskID: UUID, kind: TaskCleanup.Kind, options: TaskArchiveOptions) async {
         guard let record = records.record(id: taskID) else { return }
+        if kind == .release {
+            guard record.release?.completion != nil, record.cleanup?.finishedAt == nil,
+                  record.archivedAt == nil, record.doneAt == nil,
+                  releaseHasOutstandingWork(record) == false else { return }
+        }
         var cleanup = record.cleanup?.kind == kind ? record.cleanup! : TaskCleanup(kind: kind)
         cleanup.problem = nil
         cleanup.finishedAt = nil
@@ -218,6 +223,32 @@ extension TaskCoordinator {
                 "reason": reason,
             ])
         }
+        if kind == .release {
+            var refusal: String?
+            if let taskSpaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[taskSpaceID] != nil {
+                do {
+                    let check = try await archiveCheck(taskID: taskID)
+                    refusal = Self.archiveRefusal(check, options: options)
+                } catch {
+                    refusal = error.localizedDescription
+                }
+            }
+            guard let current = records.record(id: taskID), let completion = current.release?.completion,
+                  current.cleanup == record.cleanup,
+                  current.archivedAt == nil, current.doneAt == nil, isTerminating == false,
+                  releaseHasOutstandingWork(current) == false else { return }
+            if current.shippedAt == nil {
+                do {
+                    try saveMergeState(taskID: taskID) {
+                        $0.shippedAt = self.now()
+                        $0.releaseTag = completion.tags.count == 1 ? completion.tags.first?.tag : nil
+                    }
+                } catch {
+                    return stop(error.localizedDescription)
+                }
+            }
+            if let refusal { return stop(refusal) }
+        }
         save()
 
         // 1. The pull request, only when the user chose to close it.
@@ -238,8 +269,8 @@ extension TaskCoordinator {
             if unsavedDocumentCount(taskSpaceID) > 0 {
                 return stop("The task space has unsaved documents. Save or close them, then try again.")
             }
-            if kind == .release, agentInTurn(workspaceID: taskSpaceID) {
-                return stop("The release shipped while its agent was working, so Toastty left the task space open.")
+            if kind == .release, let current = records.record(id: taskID), releaseHasOutstandingWork(current) {
+                return stop("The release still has work outstanding. Toastty left the task space open.")
             }
             let hadSessions = (sessions?.activeSessions(workspaceID: taskSpaceID).isEmpty == false)
             // An archive is the person finishing the task, so focus moves

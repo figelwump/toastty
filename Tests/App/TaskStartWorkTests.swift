@@ -222,7 +222,9 @@ struct TaskStartWorkTests {
         }
 
         func makeCoordinator(
-            records: TaskRecordStore, mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout
+            records: TaskRecordStore,
+            worktreeCreator: TaskWorktreeCreator = TaskGitTestRepository.creator(),
+            mergePromptTurnTimeout: Duration = TaskCoordinator.defaultMergePromptTurnTimeout
         ) -> TaskCoordinator {
             let coordinator = TaskCoordinator(
                 records: records,
@@ -232,7 +234,7 @@ struct TaskStartWorkTests {
                 attachmentsDirectoryURL: repository.root.appendingPathComponent("task-attachments"),
                 hasActiveSession: { _ in false },
                 grantScope: { _, _ in },
-                worktreeCreator: TaskGitTestRepository.creator(),
+                worktreeCreator: worktreeCreator,
                 terminalReadinessTimeout: .seconds(1),
                 mergePromptTurnTimeout: mergePromptTurnTimeout,
                 timing: .init(

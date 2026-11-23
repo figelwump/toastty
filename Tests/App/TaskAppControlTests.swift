@@ -119,6 +119,22 @@ struct TaskAppControlTests {
         #expect(outcome.result?["effort"] == .string("high"))
     }
 
+    @Test func releaseCompletionRejectsInvalidReportsAndUnmanagedCallers() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        await expectInvalidPayload("Expected a JSON report with tags, each with a tag name and a list of taskIDs.") {
+            _ = try await executor.runActionAsync(
+                id: "task.release-complete", args: ["report": .string("{}")], context: context()
+            )
+        }
+        await expectInvalidPayload("Only the release task's own agent can report its completion.") {
+            _ = try await executor.runActionAsync(
+                id: "task.release-complete", args: ["report": .string(#"{"tags":[{"tag":"v1","taskIDs":[]}]}"#)], context: context()
+            )
+        }
+        #expect(fixture.coordinator.records.records.isEmpty)
+    }
+
     /// The bug this guards: an agent's `workspace.set-done` finished its own
     /// task while the task's pull request was open, so the task skipped the
     /// merge and To ship. The done checkbox, on the Mac and on a phone,

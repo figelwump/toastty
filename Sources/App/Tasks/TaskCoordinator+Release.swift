@@ -1,6 +1,7 @@
 import CoreState
 import Darwin
 import Foundation
+import RemoteProtocol
 
 extension TaskCoordinator {
     static let releaseCheckInterval: Duration = .seconds(15 * 60)
@@ -11,8 +12,8 @@ extension TaskCoordinator {
     /// in a new worktree on no branch, at the remote default branch's
     /// commit fetched now, never in the project checkout, which can be old,
     /// dirty or on another branch. The agent gets `release_skill`,
-    /// `release_prompt` and the project's To ship tasks. Shipping is detected from release tags, not
-    /// from the agent, so a release made outside Toastty counts too.
+    /// `release_prompt` and the project's To ship tasks. The agent confirms
+    /// the release after all approved work and verification finish.
     /// `agent`, `model` and `effort` choose the release's agent, as for a
     /// create; `[defaults]` fills what they leave out.
     @discardableResult
@@ -65,12 +66,15 @@ extension TaskCoordinator {
         } else {
             lines.append("These merged tasks are waiting for it:")
             for child in children {
-                var line = "- \(child.title)"
+                var line = "- \(CoordinatorTaskLink.markdown(taskID: child.id, title: child.title))"
                 if let url = child.pullRequestURL { line += " — \(url)" }
                 if let commit = child.mergeCommit { line += " (merge \(commit.prefix(12)))" }
                 lines.append(line)
             }
         }
+        lines.append("""
+        After every approved lane and its verification finish, give your final report and run `toastty task release-complete --text-file <report.json>` as your last action. Write the file outside the worktree. The JSON lists each remote tag and the IDs from the task links it ships, for example `{"tags":[{"tag":"v1.2.3","taskIDs":[]}]}`. Use an empty taskIDs list for a tag that ships no tracked task. Report only tasks whose work was delivered by the listed tags. Keep the task open while any lane or background work remains.
+        """)
         var record = TaskRecord(
             createdAt: now(),
             text: lines.joined(separator: "\n"),
@@ -185,34 +189,128 @@ extension TaskCoordinator {
 
     // MARK: - Release monitor
 
-    /// Looks for release tags that contain the To ship tasks' merge
-    /// commits and the release tasks' commits, in every project with
-    /// `release_tags`. Only the remote's tags count: a tag that exists only
-    /// here was not released. A shipped release task then closes its
-    /// task space and removes its worktree, once its agent is at rest. A
-    /// merged task's task space closed at its merge, so it only becomes
-    /// Done.
+    /// Accepts a final report only from the task's own release agent. Every
+    /// reported tag and merge commit must check out before anything is saved.
+    func reportReleaseCompletion(caller: TaskCaller, tags: [TaskRelease.Tag]) async throws -> TaskRecord {
+        let record = try reportingRelease(caller)
+        if let completion = record.release?.completion {
+            guard tags == completion.tags else { throw TaskError("This release already has a different completion report.") }
+            return record
+        }
+        guard tags.isEmpty == false, Set(tags.map(\.tag)).count == tags.count,
+              tags.allSatisfy({ Set($0.taskIDs).count == $0.taskIDs.count }) else {
+            throw TaskError("Report at least one remote tag. List each tag once and each task at most once per tag.")
+        }
+        guard let root = record.projectRoot else { throw TaskError("This release has no project directory.") }
+        let checkout = try await worktreeCreator.checkout(for: releaseRepositoryRoot(projectRoot: root, record: record))
+        guard let remote = checkout.remote else { throw TaskError("The release repository has no Git remote.") }
+        let listed = try await worktreeCreator.git(["ls-remote", "--tags", remote], in: checkout.root)
+        let remoteTags = Self.remoteTagCommits(listed.output)
+        var taskMerges: [UUID: String] = [:]
+        var taskTags: [UUID: String] = [:]
+        for tag in tags {
+            guard let commit = remoteTags[tag.tag] else { throw TaskError("The remote does not have tag \(tag.tag).") }
+            try await requireCommit(commit, remote: remote, root: checkout.root, tag: tag.tag)
+            for id in tag.taskIDs {
+                let merge = try releaseMergeCommit(taskID: id, repositoryRoot: checkout.root)
+                guard taskMerges[id].map({ $0 == merge }) ?? true,
+                      try await containsCommit(merge, tagCommit: commit, root: checkout.root) else {
+                    throw TaskError("Tag \(tag.tag) does not contain task \(id.uuidString)'s merge commit.")
+                }
+                taskMerges[id] = merge
+                if taskTags[id] == nil { taskTags[id] = tag.tag }
+            }
+        }
+        // Git awaited. The task, its owner or its listed merges may have changed.
+        let current = try reportingRelease(caller)
+        guard current.id == record.id, current.projectRoot == record.projectRoot else {
+            throw TaskError("The release task changed while Toastty checked its tags.")
+        }
+        if let completion = current.release?.completion {
+            guard tags == completion.tags else { throw TaskError("This release already has a different completion report.") }
+            return current
+        }
+        for (id, merge) in taskMerges {
+            guard try releaseMergeCommit(taskID: id, repositoryRoot: checkout.root) == merge else {
+                throw TaskError("Task \(id.uuidString)'s merge changed while Toastty checked its tag.")
+            }
+        }
+        let reportedAt = now()
+        try records.saveEach { task in
+            if task.id == current.id {
+                task.release?.completion = TaskRelease.Completion(reportedAt: reportedAt, tags: tags)
+            } else if let tag = taskTags[task.id], task.shippedAt == nil {
+                task.shippedAt = reportedAt
+                task.releaseTag = tag
+            }
+        }
+        return records.record(id: current.id) ?? current
+    }
+
+    private func reportingRelease(_ caller: TaskCaller) throws -> TaskRecord {
+        guard let workspaceID = caller.workspaceID, let sessionID = caller.sessionID,
+              let record = records.record(taskSpaceWorkspaceID: workspaceID), record.release != nil,
+              liveAgentSession(of: record, ownAgentOnly: true)?.sessionID == sessionID else {
+            throw TaskError("Only the release task's own agent can report its completion.")
+        }
+        guard record.archivedAt == nil, record.doneAt == nil,
+              record.shippedAt == nil || record.release?.completion != nil else {
+            throw TaskError("This release task has already ended.")
+        }
+        return record
+    }
+
+    private func releaseMergeCommit(taskID: UUID, repositoryRoot: String) throws -> String {
+        guard let task = records.record(id: taskID), task.release == nil,
+              task.archivedAt == nil, task.doneAt == nil, task.mergedAt != nil,
+              task.mergeTarget?.waitsForRelease != false,
+              let root = task.projectRoot, let commit = task.mergeCommit,
+              TasksConfigFile.normalizedPath(releaseRepositoryRoot(projectRoot: root, record: task), homeDirectoryPath: homeDirectoryPath)
+                == TasksConfigFile.normalizedPath(repositoryRoot, homeDirectoryPath: homeDirectoryPath) else {
+            throw TaskError("Task \(taskID.uuidString) is not a release-eligible merge of this repository.")
+        }
+        return commit
+    }
+
+    private func requireCommit(_ commit: String, remote: String, root: String, tag: String) async throws {
+        guard (commit.count == 40 || commit.count == 64),
+              commit.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw TaskError("The remote returned an invalid object ID for tag \(tag).")
+        }
+        func objectType() async throws -> String {
+            try await worktreeCreator.git(["cat-file", "-t", commit], in: root, allowFailure: true)
+                .output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if try await objectType() == "commit" { return }
+        // Fetch only the advertised object. Leave local tags and FETCH_HEAD alone.
+        try await worktreeCreator.git(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, commit], in: root)
+        guard try await objectType() == "commit" else { throw TaskError("Remote tag \(tag) does not point to a Git commit.") }
+    }
+
+    /// Automatic shipping is for ordinary merges outside a managed release,
+    /// in projects that use a tag pattern as evidence for every change.
     func checkReleases() async {
+        finishReportedReleases()
         guard isCheckingReleases == false else { return }
         isCheckingReleases = true
         defer { isCheckingReleases = false }
         guard let config = try? configLoader() else { return }
         let candidates = records.records.filter { record in
-            guard record.shippedAt == nil, record.archivedAt == nil, record.projectRoot != nil else { return false }
-            if record.release != nil {
-                return record.setup.isStarted && record.operation.base != nil
-            }
+            guard record.release == nil, record.shippedAt == nil, record.archivedAt == nil,
+                  record.doneAt == nil, record.projectRoot != nil else { return false }
             return record.mergedAt != nil && record.mergeCommit != nil && record.mergeTarget?.waitsForRelease != false
         }
         for (root, tasks) in Dictionary(grouping: candidates, by: { $0.projectRoot! }) {
             await checkReleases(root: root, config: config, tasks: tasks)
         }
-        cleanUpShippedReleases()
     }
 
     private func checkReleases(root: String, config: TasksConfig, tasks: [TaskRecord]) async {
-        guard let checkout = try? await worktreeCreator.checkout(for: root),
-              let pattern = config.releaseWorkspace(forProjectRoot: root, repositoryRoot: checkout.root, homeDirectoryPath: homeDirectoryPath)?.releaseTags else { return }
+        let repository = releaseRepositoryRoot(projectRoot: root, record: tasks.first)
+        guard let checkout = try? await worktreeCreator.checkout(for: repository),
+              releaseUnderWay(projectRoot: checkout.root) == nil,
+              let workspace = config.releaseWorkspace(forProjectRoot: root, repositoryRoot: checkout.root, homeDirectoryPath: homeDirectoryPath),
+              workspace.releaseTracking != .reported, let pattern = workspace.releaseTags else { return }
         guard let remote = checkout.remote,
               let listed = try? await worktreeCreator.git(["ls-remote", "--tags", remote], in: checkout.root, allowFailure: true),
               listed.succeeded else {
@@ -230,8 +328,12 @@ extension TaskCoordinator {
         )
         let tags = await releaseTags(Self.remoteTagCommits(listed.output), matching: pattern, in: checkout.root)
         for task in tasks {
-            guard let commit = task.release != nil ? task.operation.base?.sha : task.mergeCommit,
-                  let tag = await firstTag(containing: commit, in: tags, root: checkout.root) else { continue }
+            guard let commit = task.mergeCommit,
+                  let tag = await firstTag(containing: commit, in: tags, root: checkout.root),
+                  releaseUnderWay(projectRoot: checkout.root) == nil,
+                  let current = records.record(id: task.id), current.mergeCommit == commit,
+                  current.shippedAt == nil, current.archivedAt == nil, current.doneAt == nil,
+                  current.mergeTarget?.waitsForRelease != false else { continue }
             records.update(id: task.id) {
                 $0.shippedAt = self.now()
                 $0.releaseTag = tag
@@ -276,16 +378,18 @@ extension TaskCoordinator {
     /// The oldest of `tags` whose commit contains `commit`.
     private func firstTag(containing commit: String, in tags: [(name: String, commit: String)], root: String) async -> String? {
         for tag in tags {
-            if tag.commit == commit { return tag.name }
-            if let result = try? await worktreeCreator.git(
-                ["merge-base", "--is-ancestor", commit, tag.commit],
-                in: root,
-                allowFailure: true
-            ), result.succeeded {
+            if (try? await containsCommit(commit, tagCommit: tag.commit, root: root)) == true {
                 return tag.name
             }
         }
         return nil
+    }
+
+    private func containsCommit(_ commit: String, tagCommit: String, root: String) async throws -> Bool {
+        if commit == tagCommit { return true }
+        return try await worktreeCreator.git(
+            ["merge-base", "--is-ancestor", commit, tagCommit], in: root, allowFailure: true
+        ).succeeded
     }
 
     /// `git ls-remote --tags` output as tag name to commit. An annotated
@@ -308,14 +412,18 @@ extension TaskCoordinator {
         return commits
     }
 
-    /// Closes the task spaces of shipped releases whose agents are at rest.
-    private func cleanUpShippedReleases() {
-        for record in records.records where record.release != nil && record.shippedAt != nil && record.cleanup == nil {
-            if let taskSpaceID = record.taskSpaceWorkspaceID,
-               store.state.workspacesByID[taskSpaceID] != nil,
-               agentInTurn(workspaceID: taskSpaceID) {
-                continue
-            }
+    func releaseHasOutstandingWork(_ record: TaskRecord) -> Bool {
+        if record.waiting != nil || record.replyRequest != nil || record.watches?.contains(where: \.isPending) == true { return true }
+        guard let workspaceID = record.taskSpaceWorkspaceID, store.state.workspacesByID[workspaceID] != nil else { return false }
+        guard let sessions else { return true }
+        return sessions.activeSessions(workspaceID: workspaceID).contains { $0.isInTurn || $0.hasBackgroundWork }
+    }
+
+    /// An old tag-derived shipped record is never sufficient for teardown.
+    func finishReportedReleases() {
+        guard isTerminating == false else { return }
+        for record in records.records where record.archivedAt == nil && record.doneAt == nil && record.cleanup == nil {
+            guard record.release?.completion != nil, releaseHasOutstandingWork(record) == false else { continue }
             startTeardown(taskID: record.id, kind: .release, options: TaskArchiveOptions())
         }
     }

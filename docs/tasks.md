@@ -2211,7 +2211,7 @@ stores the stage, so it never goes stale. The first rule that matches wins:
 | --- | --- |
 | Needs you | the cleanup after its merge, archive or release stopped: "Merged · clean up?" |
 | Archived | the task was closed without finishing |
-| Done | it was marked done or shipped; or it merged into a feature branch; or its repository has no `release_tags` |
+| Done | it was marked done or shipped, it merged into a feature branch, or its repository has no release tracking |
 | To ship | it merged into the repository's default branch, and release tracking is configured |
 | Needs you | it has no workspace, setup or the move into a worktree failed, its task space closed before it finished, or an agent asked for input or stopped with an error |
 | Starting | setup, or triage when it is on, is still running, or it is moving into a worktree. Lists show it with Running |
@@ -2659,15 +2659,15 @@ archived.
 
 ## Release
 
-With `release_tags` set, a task merged into the repository's default branch
-waits in To ship until a release tag contains its merge commit. A merge into
+With `release_tags` set or `release_tracking = "reported"`, a task merged into
+the repository's default branch waits in To ship until it ships. A merge into
 a feature branch is Done for that branch, which does not mean it shipped.
 The task that later merges the feature into the default branch owns the
 release wait. The actual PR destination decides, not the branch the task
 started from. Older merged records are refreshed from GitHub once to learn
 their destination; until it is known, an existing release wait stays in place.
 
-Related Git worktrees inherit `release_tags`, `release_skill` and
+Related Git worktrees inherit `release_tags`, `release_tracking`, `release_skill` and
 `release_prompt` from the repository's main checkout. An explicit value for
 the worktree takes precedence. Other task settings do not inherit this way.
 A release includes eligible merges from related project directories, and only
@@ -2688,14 +2688,22 @@ ship list is empty. The release agent is the `[defaults]` agent, model and
 effort. `toastty task release` can choose others with `--agent`, `--model` and
 `--effort`, as `task create` does.
 
-Toastty looks for release tags every 15 minutes and when the Tasks view opens:
-it fetches tags and counts only a tag the remote has at the same commit. A
-release made outside Toastty counts too. When a tag contains a task's merge
-commit, the task is Done, and the Tasks view shows the tag. The release adds
-no cleanup for the task: its merge already ran it. A parent whose children
-shipped becomes Done with them. A shipped release task
-closes its task space and removes its worktree once its agent is at rest,
-unless the worktree's commit is on no remote branch or tag.
+After all approved lanes and their verification finish, the release agent
+submits a report with `toastty task release-complete --text-file <report.json>`.
+The report lists each tag with the task IDs that tag ships. Toastty checks
+the tag on the remote and verifies that it contains every listed task's
+merge commit before saving the report and marking those tasks shipped.
+The release task finishes once the foreground turn, tracked background work
+and outstanding waits end. Cleanup keeps the task space open if it has
+unsaved documents or the worktree has local changes or commits it would lose.
+A parent whose children shipped becomes Done with them.
+
+For a repository where each matching tag ships all of its included work,
+`release_tags` also lets a release made outside Toastty count. Every 15 minutes
+and when the Tasks view opens, Toastty checks the remote's matching tags
+for pending merge commits. During a managed release, the agent's report
+controls shipping. For repositories with independently released components,
+use `release_tracking = "reported"` so only the tasks named in reports ship.
 
 ### Release one task right after it merges
 
@@ -2859,10 +2867,12 @@ branch_prefix = "feat"
   move fails with its last lines of output.
 - `branch_prefix` is the default first part of worktree branch names.
 - `release_tags` turns on To ship for merges into the repository's default
-  branch. The task waits until a tag matching this pattern, such as `"v*"`,
-  contains its merge commit. Feature-branch merges go to Done. Related Git
-  worktrees share release settings from the main checkout unless they set
-  their own values. See [Release](#release).
+  branch. In the default `"tags"` mode, a matching remote tag, such as `"v*"`,
+  can ship an included merge outside a managed release. See [Release](#release).
+- `release_tracking = "reported"` turns on To ship for default-branch merges
+  and requires the release agent to report which tasks each tag ships.
+  Use it when a tag ships one component of a repository. Feature-branch
+  merges go to Done in both modes.
 - `release_prompt` is text a release task's agent gets after the release
   skill line, such as `"Wait for my approval before any production change."`.
   A project with `release_skill`, `release_prompt` or both shows a Release

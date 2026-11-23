@@ -129,6 +129,15 @@ public struct TasksConfig: Equatable, Sendable {
         public var createHook: String?
         public var branchPrefix: String?
         public var releaseTags: String?
+        /// Requires the release agent to name the tasks each tag ships.
+        public var releaseTracking: ReleaseTracking?
+        public enum ReleaseTracking: String, Equatable, Sendable {
+            case tags, reported
+        }
+
+        public var tracksShipping: Bool {
+            releaseTags != nil || releaseTracking == .reported
+        }
         public var releasePrompt: String?
         public var merge: MergeMode?
         public var mergePrompt: String?
@@ -143,6 +152,7 @@ public struct TasksConfig: Equatable, Sendable {
             createHook: String? = nil,
             branchPrefix: String? = nil,
             releaseTags: String? = nil,
+            releaseTracking: ReleaseTracking? = nil,
             releasePrompt: String? = nil,
             merge: MergeMode? = nil,
             mergePrompt: String? = nil,
@@ -156,6 +166,7 @@ public struct TasksConfig: Equatable, Sendable {
             self.createHook = createHook
             self.branchPrefix = branchPrefix
             self.releaseTags = releaseTags
+            self.releaseTracking = releaseTracking
             self.releasePrompt = releasePrompt
             self.merge = merge
             self.mergePrompt = mergePrompt
@@ -210,6 +221,7 @@ public struct TasksConfig: Equatable, Sendable {
         guard own != nil || shared != nil else { return nil }
         var result = own ?? Workspace(path: projectRoot)
         result.releaseTags = own?.releaseTags ?? shared?.releaseTags
+        result.releaseTracking = own?.releaseTracking ?? shared?.releaseTracking
         result.releaseSkill = own?.releaseSkill ?? shared?.releaseSkill
         result.releasePrompt = own?.releasePrompt ?? shared?.releasePrompt
         return result
@@ -551,7 +563,7 @@ private struct TasksConfigParser {
             entries,
             table: table,
             allowed: [
-                "guidelines", "create_hook", "branch_prefix", "release_tags", "release_prompt", "merge", "merge_prompt",
+                "guidelines", "create_hook", "branch_prefix", "release_tags", "release_tracking", "release_prompt", "merge", "merge_prompt",
                 "start_prompt", "start_skill", "merge_skill", "release_skill",
             ]
         )
@@ -562,12 +574,23 @@ private struct TasksConfigParser {
                 message: "\(table.name) branch_prefix must be lowercase letters, digits and hyphens"
             )
         }
+        let releaseTracking: TasksConfig.Workspace.ReleaseTracking?
+        if let value = try Self.string("release_tracking", in: entries, table: table),
+           let line = entries["release_tracking"]?.line {
+            guard let mode = TasksConfig.Workspace.ReleaseTracking(rawValue: value) else {
+                throw TasksConfigParseError(line: line, message: "\(table.name) release_tracking must be \"tags\" or \"reported\"")
+            }
+            releaseTracking = mode
+        } else {
+            releaseTracking = nil
+        }
         return TasksConfig.Workspace(
             path: path,
             guidelines: try Self.text("guidelines", in: entries, table: table),
             createHook: try Self.string("create_hook", in: entries, table: table),
             branchPrefix: branchPrefix,
             releaseTags: try Self.string("release_tags", in: entries, table: table),
+            releaseTracking: releaseTracking,
             releasePrompt: try Self.text("release_prompt", in: entries, table: table),
             merge: try Self.mergeMode(in: entries, table: table),
             mergePrompt: try Self.text("merge_prompt", in: entries, table: table),

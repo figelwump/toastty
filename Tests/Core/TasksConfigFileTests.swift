@@ -190,6 +190,7 @@ struct TasksConfigFileTests {
         ("[workspace.\"repos/toastty\"]", 1, "absolute"),
         ("[workspace.\"/r\"]\nbranch_prefix = \"Fix\"", 2, "branch_prefix"),
         ("[workspace.\"/r\"]\nrelease_tag = \"v*\"", 2, "unknown key 'release_tag'"),
+        ("[workspace.\"/r\"]\nrelease_tracking = \"guess\"", 2, "release_tracking must be \"tags\" or \"reported\""),
         ("[defaults]\nstart_skill = \"task start\"", 2, "[defaults] start_skill must be a skill name with no spaces"),
         ("[defaults]\nmerge_skill = \"  \"", 2, "merge_skill is empty"),
         ("[defaults]\nrelease_skill = 3", 2, "release_skill must be a quoted string"),
@@ -234,17 +235,20 @@ struct TasksConfigFileTests {
         let config = try parse("""
         [workspace."~/repos/toastty"]
         release_tags = "v*"
+        release_tracking = "reported"
         release_skill = "release-app"
         release_prompt = "Publish it."
         start_prompt = "Main checkout only."
         [workspace."~/repos/coordinator"]
         start_prompt = "Coordinator only."
         release_tags = "preview-*"
+        release_tracking = "tags"
         """)
         let inherited = try #require(config.releaseWorkspace(
             forProjectRoot: "/Users/tester/repos/other-worktree", repositoryRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home
         ))
         #expect(inherited.releaseTags == "v*")
+        #expect(inherited.releaseTracking == .reported)
         #expect(inherited.releaseSkill == "release-app")
         #expect(inherited.releasePrompt == "Publish it.")
         #expect(inherited.startPrompt == nil)
@@ -252,6 +256,7 @@ struct TasksConfigFileTests {
             forProjectRoot: "/Users/tester/repos/coordinator", repositoryRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home
         ))
         #expect(explicit.releaseTags == "preview-*")
+        #expect(explicit.releaseTracking == .tags)
         #expect(explicit.releaseSkill == "release-app")
         #expect(explicit.startPrompt == "Coordinator only.")
         #expect(config.workspace(forProjectRoot: "/Users/tester/repos/other-worktree", homeDirectoryPath: home) == nil)

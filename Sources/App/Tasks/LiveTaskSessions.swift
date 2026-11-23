@@ -71,6 +71,9 @@ final class LiveTaskSessions: TaskSessionProviding {
             cwd: record.cwd,
             isActive: sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) != nil,
             isInTurn: [.working, .needsApproval].contains(record.status?.kind),
+            hasBackgroundWork: record.backgroundActivitiesByID.isEmpty == false
+                || record.pendingBackgroundTaskCount > 0
+                || (sessionRuntimeStore.panelStatus(for: record.panelID)?.projection ?? .none) != .none,
             nativeConversationID: binding?.nativeSessionID,
             title: record.displayTitleOverride ?? record.providerSessionName,
             status: record.status,
