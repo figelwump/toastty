@@ -203,15 +203,6 @@ def exercise(driver, app, binary, cli, runtime, socket, environment, evidence):
     require(width > 0 and height > 0, "The first-launch sheet has no visible frame")
     ax("frame", "whats-new.start")
     print(f"Found the first-launch sheet at {frame}", flush=True)
-    # The accessibility tree is the assertion. Retain a picture when the
-    # validation desktop also grants Screen Recording.
-    try:
-        capture = run("/usr/sbin/screencapture", "-x", "-R" + ",".join(frame.split()),
-                      evidence / "sheet.png", check=False)
-        if capture.returncode:
-            print(f"Screenshot unavailable: {capture.stderr.strip()}", flush=True)
-    except subprocess.TimeoutExpired:
-        print("Screenshot timed out", flush=True)
     ax("press", "whats-new.not-now")
     wait_for("Not Now to dismiss the sheet", lambda: sheet_text() is None, 10)
     print("Dismissed the sheet with Not Now", flush=True)

@@ -394,6 +394,8 @@ If the desktop or connection was unavailable, move any failed evidence
 directory aside and rerun the check with `first-launch/` as the destination
 inside that same release directory. The staged DMG and release metadata
 remain available for the retry.
+If macOS displays a crash alert for the failed candidate, dismiss it on the
+validation desktop before retrying.
 `sv exec` must provide `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` and `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY`; release builds fail if the generated project would embed empty diagnostics submit endpoint or upload-key settings.
 `sv exec` must also provide the production session push relay: `TUIST_TOASTTY_PUSH_RELAY_URL`, `TUIST_TOASTTY_PUSH_RELAY_ID`, and `TUIST_TOASTTY_PUSH_APNS_ENVIRONMENT=production`. The release fails before building when they are missing or not production, and after export when the app's `Info.plist` does not contain them. Without these values, the Mac sends no iPhone session alerts.
 Before the archive is built, the release workflow verifies the generated
