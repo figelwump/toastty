@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import signal
@@ -92,7 +93,11 @@ def clear_preferences(suite):
     result = run("/usr/bin/defaults", "delete", suite, check=False)
     require(result.returncode == 0 or f"Domain ({suite}) not found." in result.stderr,
             f"Could not remove disposable preferences {suite}: {result.stderr.strip()}")
-    require(not preference_file(suite).exists(), f"Disposable preferences still exist: {suite}")
+    path = preference_file(suite)
+    if path.exists():
+        # defaults can clear the domain and leave an empty plist on disk.
+        require(plistlib.loads(path.read_bytes()) == {}, f"Disposable preferences still contain values: {suite}")
+        path.unlink()
     print(f"Confirmed disposable preferences removed: {suite}", flush=True)
 
 
