@@ -89,6 +89,10 @@ open class NSView: NSResponder {
         _ = rect
         bitmapImageRep.capture()
     }
+
+    /// AppKit's frame view holds the content view. The window capture
+    /// already includes the GTK title bar, so there is no parent to draw.
+    open var superview: NSView? { nil }
 }
 
 /// Window proxy built from a `LinuxWindowSnapshot`.
@@ -128,6 +132,10 @@ open class NSWindow: NSResponder {
     }
 
     open func displayIfNeeded() {}
+
+    /// Panels name themselves through this on macOS; GTK windows name
+    /// themselves through `identifier`.
+    open func accessibilityIdentifier() -> String { "" }
 }
 
 @MainActor
@@ -227,6 +235,12 @@ public final class NSWorkspace {
     }
 
     public var accessibilityDisplayShouldReduceMotion: Bool { false }
+
+    /// AppKit posts sleep and wake here. Nothing posts on Linux yet, so
+    /// observers (the task webhook retry after wake) never fire and their
+    /// polling carries on as before.
+    public let notificationCenter = NotificationCenter()
+    public static let didWakeNotification = Notification.Name("NSWorkspaceDidWakeNotification")
 }
 
 public struct NSPasteboardType: RawRepresentable, Hashable, Sendable {
@@ -290,6 +304,12 @@ public final class NSButton {
     public init(title: String) {
         self.title = title
     }
+
+    /// AppKit's checkbox. Linux alerts do not show accessory views yet, so
+    /// a checkbox keeps its `state`.
+    public convenience init(checkboxWithTitle title: String, target: AnyObject?, action: OpaquePointer?) {
+        self.init(title: title)
+    }
 }
 
 public struct NSControlStateValue: RawRepresentable, Hashable, Sendable {
@@ -298,6 +318,13 @@ public struct NSControlStateValue: RawRepresentable, Hashable, Sendable {
     public static let off = NSControlStateValue(rawValue: 0)
     public static let on = NSControlStateValue(rawValue: 1)
     public static let mixed = NSControlStateValue(rawValue: -1)
+}
+
+/// The part of an alert's window that shared code sets.
+@MainActor
+public final class NSAlertWindow {
+    public private(set) var accessibilityIdentifier: String?
+    public func setAccessibilityIdentifier(_ identifier: String?) { accessibilityIdentifier = identifier }
 }
 
 /// `NSAlert` that presents through `LinuxPlatformServices`.
@@ -315,6 +342,8 @@ public final class NSAlert {
     public private(set) var buttons: [NSButton] = []
     public var showsSuppressionButton = false
     public private(set) lazy var suppressionButton: NSButton? = NSButton(title: "Do not show this message again")
+    /// AppKit's alert window, which tests find by accessibility identifier.
+    public let window = NSAlertWindow()
 
     public init() {}
 

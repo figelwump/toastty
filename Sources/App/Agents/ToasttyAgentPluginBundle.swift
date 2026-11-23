@@ -69,6 +69,23 @@ enum ToasttyAgentPluginBundle {
     }
     #endif
 
+    /// The `SKILL.md` of each skill in the app's plugin, by name and by the
+    /// plugin-qualified name the Skills sheet shows (`toastty:<name>`), for
+    /// a message to an agent that did not get the skills. Empty when the app
+    /// has no plugin.
+    static func skillFiles(bundle: Bundle = .main, fileManager: FileManager = .default) -> [String: String] {
+        guard let pluginURL = bundledPluginURL(bundle: bundle) else { return [:] }
+        var files: [String: String] = [:]
+        for skill in skills {
+            let file = pluginURL.appendingPathComponent("skills/\(skill.name)/SKILL.md", isDirectory: false)
+            if fileManager.fileExists(atPath: file.path) {
+                files[skill.name] = file.path
+                files["\(pluginName):\(skill.name)"] = file.path
+            }
+        }
+        return files
+    }
+
     static func read(
         pluginRootURL: URL,
         fileManager: FileManager = .default

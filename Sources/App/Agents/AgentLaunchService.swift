@@ -19,8 +19,13 @@ protocol TerminalCommandRouting: AnyObject {
         focusPolicy: TerminalInputFocusPolicy
     ) -> TerminalInputDeliveryResult
     func isReadyForManagedAgentCommand(panelID: UUID) -> Bool
+    func managedAgentRestoreState(panelID: UUID) -> TerminalManagedAgentRestoreState
     func readVisibleText(panelID: UUID) -> String?
     func promptState(panelID: UUID) -> TerminalPromptState
+}
+
+extension TerminalCommandRouting {
+    func managedAgentRestoreState(panelID: UUID) -> TerminalManagedAgentRestoreState { .inactive }
 }
 
 extension TerminalRuntimeRegistry: TerminalCommandRouting {}
@@ -303,12 +308,14 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         model: String? = nil,
         reasoningEffort: String? = nil,
         initialPrompt: String? = nil,
+        initialPromptWithoutSkills: String? = nil,
         initialCommands: [String] = [],
         forkFromSessionID: String? = nil,
         additionalDirectories: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
         parentSessionID: String? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget,
+        codexProjectDocMaxBytes: Int? = nil,
         beforeDispatch: (@MainActor () throws -> Void)? = nil
     ) async throws -> AgentLaunchResult {
         let preparation = try makeLaunchPreparation(
@@ -325,6 +332,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             additionalDirectories: additionalDirectories,
             parentSessionID: parentSessionID,
             focusPolicy: focusPolicy,
+            codexProjectDocMaxBytes: codexProjectDocMaxBytes,
             validatePromptState: false
         )
         guard let terminalCommandRouter else {
@@ -334,10 +342,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             panelID: preparation.target.panelID,
             terminalCommandRouter: terminalCommandRouter
         )
-        let plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
+        var plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
             preparation.request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )
+        // An agent that Toastty knows did not get its skills gets the first
+        // message that says where they are.
+        if plan.lacksShippedSkills, let initialPrompt, let initialPromptWithoutSkills,
+           (try? normalizedInitialPrompt(initialPromptWithoutSkills)) != nil {
+            plan = plan.replacingLastArgument(initialPrompt, with: initialPromptWithoutSkills)
+        }
         // The caller's last check runs here, after the final suspension, so
         // nothing can change between it and the command reaching the shell.
         if let beforeDispatch {
@@ -365,6 +379,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         additionalDirectories: [String],
         parentSessionID: String?,
         focusPolicy: TerminalInputFocusPolicy,
+        codexProjectDocMaxBytes: Int? = nil,
         validatePromptState: Bool = true
     ) throws -> AgentLaunchPreparation {
         guard let terminalCommandRouter else {
@@ -405,6 +420,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             applyingModel: model,
             applyingReasoningEffort: reasoningEffort,
             applyingInitialPrompt: initialPrompt,
+            applyingCodexProjectDocMaxBytes: codexProjectDocMaxBytes,
             forkRecord: forkRecord,
             cwd: explicitCWD,
             additionalDirectories: directories
@@ -437,7 +453,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 argv: launchArgv,
                 cwd: explicitCWD ?? target.cwd,
                 environment: validatedEnvironment,
-                parentSessionID: parentSessionID ?? forkFromSessionID
+                parentSessionID: parentSessionID ?? forkFromSessionID,
+                startsWithPrompt: try normalizedInitialPrompt(initialPrompt) != nil
             )
         )
     }
@@ -498,8 +515,6 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
             throw AgentLaunchError.commandDeliveryUncertain(panelID: preparation.target.panelID)
         }
-        store?.recordSuccessfulAgentLaunch()
-
         return AgentLaunchResult(
             agent: preparation.agent,
             displayName: preparation.displayName,
@@ -549,6 +564,21 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     func cancelNativeSessionObservation(sessionID: String) {
         managedLaunchPlanner.cancelNativeSessionObservation(sessionID: sessionID)
+    }
+
+    func lacksShippedSkills(sessionID: String) -> Bool {
+        managedLaunchPlanner.lacksShippedSkills(sessionID: sessionID)
+    }
+
+    /// The argv of a Codex profile whose arguments cannot take the raised
+    /// `project_doc_max_bytes` that the coordinator's start and resume
+    /// add. `nil` when they can, or when the profile is not Codex's.
+    func codexArgvLackingProjectDocMaxBytes(profileID: String) -> [String]? {
+        guard let profile = resolvedLaunchProfile(profileID: profileID),
+              AgentKind(rawValue: profile.id) == .codex,
+              AgentLaunchArgumentOverrideAdapter.canApplyCodexProjectDocMaxBytes(to: profile.argv, profileID: profile.id) == false
+        else { return nil }
+        return profile.argv
     }
 
     private func resolvedLaunchProfile(profileID: String) -> AgentProfile? {
@@ -655,15 +685,23 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     /// What a caller that offers profiles to a person needs to know about
     /// each configured profile, resolved the same way a launch resolves it.
+    /// With no profile in agents.toml, as on a fresh install, these are the
+    /// built-in agents that are installed, which a launch accepts by name.
     func launchProfileSummaries() -> [AgentLaunchProfileSummary] {
-        agentCatalogProvider.catalog.profiles.compactMap { profile in
+        let configured = agentCatalogProvider.catalog.profiles
+        let profiles = configured.isEmpty ? Self.implicitProfileAgents.map(Self.implicitProfile(for:)) : configured
+        return profiles.compactMap { profile in
             guard let agent = AgentKind(rawValue: profile.id) else { return nil }
             let executable = try? profileExecutableState(profileID: profile.id)
+            let isInstalled = executable?.executablePath != nil
+            // A configured profile shows even when its command is missing, so
+            // the user sees it; a built-in agent shows only when installed.
+            guard isInstalled || configured.isEmpty == false else { return nil }
             return AgentLaunchProfileSummary(
                 profileID: profile.id,
                 displayName: profile.displayName,
                 agent: agent,
-                isInstalled: executable?.executablePath != nil,
+                isInstalled: isInstalled,
                 acceptsInitialPrompt: initialPromptPlacement(for: profile, agent: agent) == .trailing,
                 acceptsLeadingDashPrompt: Self.argvRunsFirstPartyPromptCommand(profile.argv, for: agent),
                 supportsModel: AgentLaunchArgumentOverrideAdapter.modelSupportedAgents.contains(agent),
@@ -672,14 +710,13 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         }
     }
 
+    /// The built-in agents a launch accepts without a profile, in the order
+    /// Toastty offers them. Claude Code is first because the coordinator
+    /// runs it by default.
+    private static let implicitProfileAgents: [AgentKind] = [.claude, .codex, .cursor, .grok, .mimocode, .opencode, .pi]
+
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
-        agent == .codex
-            || agent == .claude
-            || agent == .cursor
-            || agent == .grok
-            || agent == .mimocode
-            || agent == .opencode
-            || agent == .pi
+        implicitProfileAgents.contains(agent)
     }
 
     private static func implicitProfile(for agent: AgentKind) -> AgentProfile {
@@ -844,14 +881,20 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         applyingModel model: String?,
         applyingReasoningEffort reasoningEffort: String?,
         applyingInitialPrompt initialPrompt: String?,
+        applyingCodexProjectDocMaxBytes codexProjectDocMaxBytes: Int? = nil,
         forkRecord: ManagedAgentResumeRecord? = nil,
         cwd: String? = nil,
         additionalDirectories: [String] = []
     ) throws -> [String] {
-        let selectedArgv = try AgentLaunchArgumentOverrideAdapter.applying(
-            model: model,
-            reasoningEffort: reasoningEffort,
-            to: profile.argv,
+        let selectedArgv = AgentLaunchArgumentOverrideAdapter.applying(
+            codexProjectDocMaxBytes: codexProjectDocMaxBytes,
+            to: try AgentLaunchArgumentOverrideAdapter.applying(
+                model: model,
+                reasoningEffort: reasoningEffort,
+                to: profile.argv,
+                agent: agent,
+                profileID: profile.id
+            ),
             agent: agent,
             profileID: profile.id
         )
@@ -899,7 +942,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         return initialPrompt
     }
 
-    private static let maximumInitialPromptUTF8Count = 64 * 1024
+    static let maximumInitialPromptUTF8Count = 64 * 1024
 
     private func initialPromptPlacement(
         for profile: AgentProfile,
@@ -1019,7 +1062,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         panelID: UUID,
         terminalCommandRouter: any TerminalCommandRouting
     ) throws {
-        guard terminalCommandRouter.promptState(panelID: panelID).isIdleAtPrompt else {
+        guard terminalCommandRouter.managedAgentRestoreState(panelID: panelID) == .inactive,
+              terminalCommandRouter.promptState(panelID: panelID).isIdleAtPrompt else {
             throw AgentLaunchError.panelBusy(runningCommand: nil)
         }
     }
@@ -1050,9 +1094,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 try await Task.sleep(for: Self.asyncPromptReadinessPollInterval)
                 continue
             }
-            guard promptState.isIdleAtPrompt else {
-                throw AgentLaunchError.panelBusy(runningCommand: nil)
-            }
+            try ensurePanelAppearsInteractive(panelID: panelID, terminalCommandRouter: terminalCommandRouter)
             return
         }
     }

@@ -1,3 +1,4 @@
+@testable import ConversationUI
 import Foundation
 import RemoteProtocol
 import XCTest
@@ -252,6 +253,290 @@ final class ToasttyTurnPresentationTests: XCTestCase {
         )
     }
 
+    /// Where the host folds running work, as the coordinator's chats do, a
+    /// running turn stays folded from its start to its end. The reader can
+    /// still open it, and work that was on screen before a prepend still
+    /// does not vanish.
+    func testFoldStateKeepsRunningWorkFoldedWhereTheHostFoldsIt() {
+        let settled = turnStub(id: 2, workSequences: [3, 4], hasResponse: true)
+        let live = turnStub(id: 8, workSequences: [9], hasResponse: false)
+        var fold = ToasttyTurnFoldState()
+
+        for revision in [ToasttyTranscriptRevision.initial, .appended, .metadataOnly, .rebuilt] {
+            fold.reconcile(
+                turns: [settled, live], settledIDs: [settled.id], revision: revision,
+                previousBoundarySequence: nil, opensRunningTurns: false
+            )
+            XCTAssertFalse(fold.isExpanded(live.id), "\(revision)")
+            XCTAssertFalse(fold.isExpanded(settled.id), "\(revision)")
+        }
+
+        fold.toggle(live.id)
+        fold.reconcile(
+            turns: [settled, live], settledIDs: [settled.id], revision: .appended,
+            previousBoundarySequence: nil, opensRunningTurns: false
+        )
+        XCTAssertTrue(fold.isExpanded(live.id), "The reader's open survives later work")
+
+        var history = ToasttyTurnFoldState()
+        history.reconcile(turns: [], settledIDs: [], revision: .initial, previousBoundarySequence: nil,
+                          opensRunningTurns: false)
+        let spanning = turnStub(id: 8, workSequences: [9, 10], hasResponse: false)
+        history.reconcile(
+            turns: [spanning], settledIDs: [], revision: .prepended,
+            previousBoundarySequence: 9, opensRunningTurns: false
+        )
+        XCTAssertTrue(history.isExpanded(spanning.id), "Work that was on screen must not vanish on prepend")
+        history.reconcile(
+            turns: [spanning], settledIDs: [], revision: .appended,
+            previousBoundarySequence: nil, opensRunningTurns: false
+        )
+        XCTAssertTrue(history.isExpanded(spanning.id), "Work that was on screen must not vanish on the next update")
+    }
+
+    /// One place shows that the agent works: the end of the running turn.
+    /// With folded work that is the turn's own line, or the line of a
+    /// digest that was typed and is not in the transcript yet. Otherwise,
+    /// it is the working row: while the reader has the turn open, and after
+    /// the turn's answer, when the agent works on a message that the
+    /// transcript does not show yet. A failed send's receipt changes
+    /// nothing.
+    func testTheWorkingLineSitsAtTheEndOfTheRunningTurn() {
+        let live = rowID(8)
+        let running = turnStub(id: 8, workSequences: [9], hasResponse: false)
+        let answered = turnStub(id: 8, workSequences: [9], hasResponse: true)
+        let receipt = ToasttySendPresentationItem(
+            clientRequestID: "failed", text: "Merge it", content: .receipt(.init(kind: .rejected(.promptNotOpen)))
+        )
+        let typedDigest = ToasttySendPresentationItem(
+            clientRequestID: "wake", text: "[Toastty] Wake", content: .optimistic(response: .accepted),
+            hostMessage: ToasttyHostMessagePresentation(summary: "Toastty · 1 update · 2:01 PM", text: "[Toastty] Wake")
+        )
+        let typedSender = ToasttySendPresentationItem(
+            clientRequestID: "send", text: "[Toastty] From task", content: .optimistic(response: .accepted),
+            hostMessage: ToasttyHostMessagePresentation(
+                summary: "From task · 2:01 PM", text: "Done", style: .sender(name: "task", timeText: "2:01 PM")
+            )
+        )
+        let typedByUser = ToasttySendPresentationItem(
+            clientRequestID: "user", text: "Also check CI", content: .optimistic(response: .accepted)
+        )
+        let waitingDigest = ToasttySendPresentationItem(
+            clientRequestID: "later", text: "[Toastty] Wake",
+            content: .queued(ToasttyQueuedSendPresentation(position: 1, attachmentCount: 0, isPaused: false, canSteer: false)),
+            hostMessage: typedDigest.hostMessage
+        )
+        func place(
+            isWorking: Bool = true, folds: Bool = true, sends: [ToasttySendPresentationItem] = [],
+            liveTurn: ToasttyTranscriptTurn? = running, expanded: Bool = false
+        ) -> ToasttyTranscriptWorkingLine {
+            .place(isWorking: isWorking, foldsRunningWork: folds, sendItems: sends,
+                   liveTurn: liveTurn, isLiveTurnExpanded: expanded)
+        }
+
+        XCTAssertEqual(place(isWorking: false), .none)
+        XCTAssertEqual(place(folds: false), .row, "Open work ends with the working row")
+        XCTAssertEqual(place(folds: false, sends: [typedDigest]), .row)
+        XCTAssertEqual(place(), .turn(live))
+        XCTAssertEqual(place(expanded: true), .row, "An open turn's end is the row under its work")
+        XCTAssertEqual(place(liveTurn: nil), .row, "Before the turn's message comes")
+        XCTAssertEqual(place(sends: [typedDigest]), .send("wake"))
+        XCTAssertEqual(place(sends: [typedDigest, waitingDigest]), .send("wake"), "Waiting messages come after it")
+        XCTAssertEqual(place(sends: [waitingDigest]), .turn(live))
+        XCTAssertEqual(place(sends: [typedSender]), .row, "A card is not a line")
+        XCTAssertEqual(place(sends: [typedDigest, typedByUser]), .row)
+        XCTAssertEqual(place(liveTurn: answered), .row, "After its answer the turn may not be the one that runs")
+        XCTAssertEqual(place(sends: [receipt]), .turn(live))
+        XCTAssertEqual(place(sends: [typedDigest, receipt]), .send("wake"))
+    }
+
+    /// A digest's line is its turn's line where running work folds: no work
+    /// strip, and a click opens the digest and the work. A sender's card and
+    /// the user's message do not stand in for the strip. A quiet turn's
+    /// line opens it in every chat.
+    func testADigestsLineStandsInForTheWorkStripWhereRunningWorkFolds() {
+        let rows: [ToasttyTranscriptRow] = [
+            row(1, .hostMessage(.init(summary: "Toastty · 1 update · 2:01 PM", text: "[Toastty] Wake"))),
+            row(2, .toolStarted(callID: "a", name: "Bash", detail: "toastty task list")),
+            row(3, .assistantMessage(text: "Ready for review.", phase: .final)),
+            row(4, .hostMessage(.init(summary: "From task · 2:02 PM", text: "Done",
+                                      style: .sender(name: "task", timeText: "2:02 PM")))),
+            row(5, .toolStarted(callID: "b", name: "Bash", detail: "gh pr view")),
+            row(6, .assistantMessage(text: "Noted.", phase: .final)),
+            row(7, .hostMessage(.init(summary: "Toastty · 1 update · 2:05 PM", text: "[Toastty] Wake", foldsTurn: true))),
+            row(8, .toolStarted(callID: "c", name: "Bash", detail: "toastty task list")),
+            row(9, .userMessage(text: "Status?", origin: .local)),
+            row(10, .toolStarted(callID: "d", name: "Bash", detail: "toastty task list")),
+        ]
+        let turns = ToasttyConversationPresentationState(
+            rows: rows, phase: .live, revision: .initial, historyTruncated: false
+        ).turns
+
+        XCTAssertEqual(turns.map(\.anchorIsLine), [true, false, true, false])
+        XCTAssertEqual(turns.map { $0.opensFromAnchorLine(foldsRunningWork: true) }, [true, false, true, false])
+        XCTAssertEqual(turns.map { $0.opensFromAnchorLine(foldsRunningWork: false) }, [false, false, true, false])
+        XCTAssertFalse(turns[0].workBlockIDs.contains { $0.rowID.sequence == 3 }, "A digest turn's answer stays out")
+    }
+
+    /// Quiet wake turns join into one row only when nothing shows between
+    /// their lines. Anything that shows ends the row: a message of the
+    /// user, an answer that is not quiet, a sender's card. A quiet turn with
+    /// a question card keeps its own line. A row needs two turns. Rows of a
+    /// history page that starts inside a turn belong to no row.
+    func testQuietTurnsJoinOnlyWhenNothingShowsBetweenThem() {
+        func quiet(_ sequence: UInt64) -> ToasttyTranscriptRow {
+            row(sequence, .hostMessage(.init(summary: "Toastty · 1 update", text: "[Toastty] Wake", foldsTurn: true)))
+        }
+        func answer(_ sequence: UInt64, _ text: String = "Nothing needs you.") -> ToasttyTranscriptRow {
+            row(sequence, .assistantMessage(text: text, phase: .final))
+        }
+        let rows: [ToasttyTranscriptRow] = [
+            answer(1),  // the end of a turn that starts on an older page
+            quiet(2), row(3, .toolStarted(callID: "a", name: "Bash", detail: nil)), answer(4),
+            quiet(5), answer(6),
+            quiet(7), answer(8),
+            row(9, .userMessage(text: "Status?", origin: .local)), answer(10, "All good."),
+            quiet(11), answer(12),
+            row(13, .hostMessage(.init(summary: "Toastty · 1 update", text: "[Toastty] Wake"))), answer(14, "Ready."),
+            quiet(15), answer(16),
+            row(17, .hostMessage(.init(summary: "From task", text: "Done", style: .sender(name: "task", timeText: "")))),
+            answer(18, "Noted."),
+            quiet(19), answer(20),
+            quiet(21), row(22, .interaction(ToasttyInteractionPresentation(interaction: pendingInteraction))), answer(23),
+            quiet(24), answer(25),
+            quiet(26), answer(27),
+        ]
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+
+        let runs = state.quietCheckRuns(runningTurnID: nil)
+        XCTAssertEqual(runs.map { $0.turnIDs.map(\.sequence) }, [[2, 5, 7], [24, 26]])
+        XCTAssertEqual(runs.first?.firstTime, Date(timeIntervalSince1970: 2), "The first check's digest time")
+        XCTAssertEqual(runs.first?.lastTime, Date(timeIntervalSince1970: 7), "The last check's digest time")
+
+        // The turn that runs keeps its own line until it ends; a row that
+        // it leaves with one turn is no row.
+        XCTAssertEqual(state.quietCheckRuns(runningTurnID: rowID(26)).map { $0.turnIDs.map(\.sequence) }, [[2, 5, 7]])
+        let threeAndRunning = ToasttyConversationPresentationState(
+            rows: Array(rows[0..<8]), phase: .live, revision: .initial, historyTruncated: false
+        )
+        XCTAssertEqual(threeAndRunning.quietCheckRuns(runningTurnID: rowID(7)).map { $0.turnIDs.map(\.sequence) }, [[2, 5]])
+        XCTAssertEqual(threeAndRunning.quietCheckRuns(runningTurnID: rowID(7)).first?.lastTime, Date(timeIntervalSince1970: 5))
+    }
+
+    /// A row's times are in the format of each check's own line. On one day
+    /// they show as one range; on two days as the two times, without dates,
+    /// as each check's own line shows them. One time shows once.
+    func testAQuietRowsTimesReadAsTheChecksOwnTimes() throws {
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_US")
+        func run(_ first: TimeInterval, _ last: TimeInterval) -> ToasttyQuietCheckRun {
+            ToasttyQuietCheckRun(checks: [
+                .init(turnID: rowID(1), time: Date(timeIntervalSince1970: first)),
+                .init(turnID: rowID(2), time: Date(timeIntervalSince1970: last)),
+            ])
+        }
+        func text(_ run: ToasttyQuietCheckRun) -> String {
+            run.timeRangeText(locale: locale, calendar: Calendar(identifier: .gregorian), timeZone: utc)
+        }
+        func time(_ seconds: TimeInterval) -> String {
+            Date(timeIntervalSince1970: seconds).formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: utc))
+        }
+        // 2026-11-19 17:16 and 17:52 UTC.
+        let evening: TimeInterval = 1_795_108_560
+        let sameDay = text(run(evening, evening + 36 * 60))
+        XCTAssertTrue(sameDay.contains("5:16") && sameDay.contains("5:52") && sameDay.contains("PM"), sameDay)
+        XCTAssertFalse(sameDay.contains("2026") || sameDay.contains("11/"), "A range on one day has no date: \(sameDay)")
+        // 23:40 to 07:05 the next day.
+        let late = evening + (6 * 60 + 24) * 60
+        let early = late + (7 * 60 + 25) * 60
+        XCTAssertEqual(text(run(late, early)), "\(time(late)) – \(time(early))")
+        XCTAssertEqual(text(run(early, late)), "\(time(late)) – \(time(early))", "Times out of order still make a range")
+        XCTAssertEqual(text(run(evening, evening + 20)), time(evening))
+        XCTAssertEqual(
+            CoordinatorDigestFold.quietChecksSummary(count: 3, timeRange: "1:40 – 2:01 PM"),
+            "Toastty · 3 quiet checks · 1:40 – 2:01 PM"
+        )
+    }
+
+    /// A row of quiet checks starts closed. Opened, it stays open when a
+    /// check joins it at its end or in front, and a click closes all of
+    /// it. A check whose line the reader opened while it ran opens the row
+    /// it joins, so the open check does not vanish; a check opened inside a
+    /// row does not reopen the row once the reader closed it. A new
+    /// transcript closes the rows again.
+    func testAnOpenQuietRowStaysOpenWhenAChecksJoinsIt() {
+        func run(_ sequences: [UInt64]) -> ToasttyQuietCheckRun {
+            ToasttyQuietCheckRun(checks: sequences.map { .init(turnID: rowID($0), time: Date(timeIntervalSince1970: 0)) })
+        }
+        var fold = ToasttyQuietCheckFoldState()
+        fold.reconcile(runs: [run([2, 5])], revision: .initial, expandedTurnIDs: [])
+        XCTAssertFalse(fold.isOpen(run([2, 5])))
+        fold.toggle(run([2, 5]))
+        XCTAssertTrue(fold.isOpen(run([2, 5])))
+        fold.reconcile(runs: [run([2, 5, 7])], revision: .appended, expandedTurnIDs: [])
+        XCTAssertTrue(fold.isOpen(run([2, 5, 7])), "A check that ends quiet joins the open row")
+        fold.reconcile(runs: [run([1, 2, 5, 7])], revision: .prepended, expandedTurnIDs: [])
+        XCTAssertTrue(fold.isOpen(run([1, 2, 5, 7])), "An older check that loads joins the open row")
+        XCTAssertFalse(fold.isOpen(run([9, 11])), "Another row stays closed")
+        // Toastty keeps the newest 200 quiet marks: the row's first checks
+        // can leave it, and the rest stays open.
+        fold.reconcile(runs: [run([5, 7])], revision: .appended, expandedTurnIDs: [])
+        XCTAssertTrue(fold.isOpen(run([5, 7])), "The row closed when its first checks left it")
+        fold.reconcile(runs: [run([1, 2, 5, 7])], revision: .appended, expandedTurnIDs: [])
+        fold.toggle(run([1, 2, 5, 7]))
+        XCTAssertFalse(fold.isOpen(run([1, 2, 5, 7])))
+        XCTAssertFalse(fold.isOpen(run([7, 9])), "Closing the row forgets every check in it")
+
+        // The reader opened check 9 while it ran; it ends quiet and joins.
+        fold.reconcile(runs: [run([1, 2, 5, 7, 9])], revision: .appended, expandedTurnIDs: [rowID(9)])
+        XCTAssertTrue(fold.isOpen(run([1, 2, 5, 7, 9])), "The open check that joined opens its row")
+        // Closed again with check 9 still open inside: it stays closed.
+        fold.toggle(run([1, 2, 5, 7, 9]))
+        fold.reconcile(runs: [run([1, 2, 5, 7, 9])], revision: .metadataOnly, expandedTurnIDs: [rowID(9)])
+        XCTAssertFalse(fold.isOpen(run([1, 2, 5, 7, 9])), "An open check inside reopened the row the reader closed")
+
+        fold.open(run([2, 5]))
+        fold.reconcile(runs: [run([2, 5])], revision: .rebuilt, expandedTurnIDs: [])
+        XCTAssertFalse(fold.isOpen(run([2, 5])), "A rebuilt transcript closes the rows")
+    }
+
+    /// The coordinator's chat shows each tool call as one line: a call's end
+    /// updates the line its start made, and the calls keep their order.
+    func testToolCallsMergeTheirStartAndEnd() {
+        let calls = ToasttyToolCall.calls(in: [
+            row(1, .toolStarted(callID: "a", name: "Bash", detail: "toastty task list")),
+            row(2, .toolStarted(callID: "b", name: "Read", detail: "policy.md")),
+            row(3, .toolFinished(callID: "a", name: "Bash", outcome: .failed, detail: "exit 1")),
+            row(4, .toolFinished(callID: "c", name: "Tool", outcome: .succeeded, detail: nil)),
+            row(5, .toolFinished(callID: "b", name: "Read", outcome: .succeeded, detail: "policy.md")),
+        ])
+        XCTAssertEqual(calls.map(\.id), ["a", "b", "c"])
+        XCTAssertEqual(calls.map(\.name), ["Bash", "Read", "Tool"])
+        XCTAssertEqual(calls.map(\.outcome), [.failed, .succeeded, .succeeded])
+        XCTAssertEqual(calls.map(\.details), [["toastty task list", "exit 1"], ["policy.md"], []])
+
+        let running = ToasttyToolCall.calls(in: [row(1, .toolStarted(callID: "a", name: "Bash", detail: nil))])
+        XCTAssertEqual(running.map(\.outcome), [nil])
+
+        // An approval between a call's start and its end splits them into
+        // two batches: the call shows once, where it starts, with its end.
+        let state = ToasttyConversationPresentationState(rows: [
+            row(1, .userMessage(text: "Merge it", origin: .local)),
+            row(2, .toolStarted(callID: "merge", name: "Bash", detail: "toastty task request-merge")),
+            row(3, .interaction(ToasttyInteractionPresentation(interaction: pendingInteraction))),
+            row(4, .toolFinished(callID: "merge", name: "Bash", outcome: .succeeded, detail: nil)),
+        ], phase: .live, revision: .initial, historyTruncated: false)
+        let batches = state.blocks.compactMap { block -> ToasttyTranscriptBlockID? in
+            if case .toolBatch = block.content { return block.id }
+            return nil
+        }
+        XCTAssertEqual(batches.count, 2)
+        let split = batches.map { state.preparedTranscript.toolCallsByBlock[$0] ?? [] }
+        XCTAssertEqual(split[0].map(\.outcome), [.succeeded])
+        XCTAssertEqual(split[0].map(\.details), [["toastty task request-merge"]])
+        XCTAssertEqual(split[1], [])
+    }
+
     private func turnStub(
         id sequence: UInt64,
         workSequences: [UInt64],
@@ -276,6 +561,24 @@ final class ToasttyTurnPresentationTests: XCTestCase {
             provider: .codex,
             content: content
         )
+    }
+
+    /// The transcript's working row and the session list show one turn age,
+    /// so both must format it the same way.
+    func testWorkingRowElapsedLabelMatchesTheSessionList() {
+        let hundredYears = Int(MobileConversation.maximumDurationSeconds)
+        for seconds in [0, 59, 60, 61, 3_599, 3_600, hundredYears, hundredYears + 5] {
+            let age = MobileActivityAge(secondsAtReceipt: seconds, receivedAtMonotonicTime: 100)
+            let indicator = ToasttyTranscriptWorkingIndicator(turnElapsed: .init(age))
+            for now in [40.0, 100, 100.9, 161.5, .infinity] {
+                XCTAssertEqual(
+                    indicator.elapsedLabel(atMonotonicTime: now),
+                    MobileConversation.durationLabel(seconds: TimeInterval(age.seconds(atMonotonicTime: now))),
+                    "\(seconds) s at \(now)"
+                )
+            }
+        }
+        XCTAssertNil(ToasttyTranscriptWorkingIndicator(turnElapsed: nil).elapsedLabel(atMonotonicTime: 1))
     }
 
     private func rowID(_ sequence: UInt64) -> ToasttyTranscriptRowID {

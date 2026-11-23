@@ -22,9 +22,9 @@ check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 resources="$prefix/lib/toastty/share/toastty/Resources"
 bundle="$resources/ToasttyAgentPluginBundle"
 check "install bundles the Codex marketplace manifest" "[ -f '$bundle/.agents/plugins/marketplace.json' ]"
-check "install bundles the five shipped Toastty skills" \
-  "[ \$(ls '$bundle/plugins/toastty/skills' | grep -c '^toastty-') -eq 5 ] && [ -f '$bundle/plugins/toastty/.claude-plugin/plugin.json' ]"
-check "install bundles the workflow example skills" "[ -f '$resources/WorkflowExamples/skills/worktree-create/SKILL.md' ]"
+shipped_skills=$(ls "$repo_root/plugins/toastty/skills" | grep -c '^toastty-')
+check "install bundles the $shipped_skills shipped Toastty skills" \
+  "[ \$(ls '$bundle/plugins/toastty/skills' | grep -c '^toastty-') -eq $shipped_skills ] && [ -f '$bundle/plugins/toastty/.claude-plugin/plugin.json' ]"
 check "install bundles the web panels" "[ -d '$resources/WebPanels' ]"
 
 TOASTTY_LINUX_E2E_BIN="$prefix/lib/toastty/bin" "$repo_root/scripts/linux/e2e-app-logic.sh" || fail=1

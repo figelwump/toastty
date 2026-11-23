@@ -8,6 +8,7 @@ SCHEME_NAME="ToasttyMobileApp-Release"
 APP_TARGET_NAME="ToasttyMobileApp"
 DOMAIN_TARGET_NAME="ToasttyMobileDomain"
 PROTOCOL_TARGET_NAME="RemoteProtocol"
+CONVERSATION_UI_TARGET_NAME="ConversationUI"
 CONFIGURATION="Release"
 RELEASE_BUNDLE_ID="com.giantthings.toastty.mobile"
 APP_PRODUCT_NAME="Toastty"
@@ -443,11 +444,13 @@ assert_ci_signing_build_settings() {
   local app_settings_path="$OUTPUT_DIR/app-build-settings.txt"
   local framework_settings_path="$OUTPUT_DIR/framework-build-settings.txt"
   local protocol_settings_path="$OUTPUT_DIR/protocol-build-settings.txt"
+  local conversation_ui_settings_path="$OUTPUT_DIR/conversation-ui-build-settings.txt"
   local extension_settings_path="$OUTPUT_DIR/share-extension-build-settings.txt"
 
   xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$APP_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$app_settings_path"
   xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$DOMAIN_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$framework_settings_path"
   xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$PROTOCOL_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$protocol_settings_path"
+  xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$CONVERSATION_UI_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$conversation_ui_settings_path"
   xcodebuild -project "$IOS_ROOT/ToasttyMobile.xcodeproj" -target "$SHARE_EXTENSION_TARGET_NAME" -configuration "$CONFIGURATION" -showBuildSettings >"$extension_settings_path"
 
   assert_release_build_setting "$app_settings_path" "    PRODUCT_BUNDLE_IDENTIFIER = $RELEASE_BUNDLE_ID" "production bundle identifier"
@@ -461,10 +464,10 @@ assert_ci_signing_build_settings() {
   assert_release_build_setting "$extension_settings_path" "    PROVISIONING_PROFILE_SPECIFIER = $SHARE_EXTENSION_PROFILE_NAME" "share extension provisioning profile"
   assert_release_build_setting "$extension_settings_path" "    OTHER_CODE_SIGN_FLAGS = --keychain $SIGNING_KEYCHAIN_PATH" "share extension temporary keychain"
 
-  if grep -Fq "PROVISIONING_PROFILE_SPECIFIER =" "$framework_settings_path" "$protocol_settings_path"; then
+  if grep -Fq "PROVISIONING_PROFILE_SPECIFIER =" "$framework_settings_path" "$protocol_settings_path" "$conversation_ui_settings_path"; then
     fail "framework targets must not receive the app provisioning profile"
   fi
-  if grep -Fq "OTHER_CODE_SIGN_FLAGS = --keychain" "$framework_settings_path" "$protocol_settings_path"; then
+  if grep -Fq "OTHER_CODE_SIGN_FLAGS = --keychain" "$framework_settings_path" "$protocol_settings_path" "$conversation_ui_settings_path"; then
     fail "framework targets must not receive the app temporary-keychain signing flag"
   fi
 }

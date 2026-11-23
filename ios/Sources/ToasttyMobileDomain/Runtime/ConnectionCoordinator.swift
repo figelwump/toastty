@@ -570,7 +570,8 @@ public actor ConnectionCoordinator {
         guard let admission = await runtime.sendReconciliation.enqueue(
             clientRequestID: clientRequestID,
             text: request.displayText,
-            projectionRunID: composerStamp.projectionRunID
+            projectionRunID: composerStamp.projectionRunID,
+            deliveryMode: composerStamp.deliveryMode
         ) else {
             rollbackUnadmittedClaim(clientRequestID: clientRequestID)
             await publishComposerAuthority(for: conversationID, runtime: runtime)
@@ -908,10 +909,143 @@ public actor ConnectionCoordinator {
         return try await gateway.startSession(request)
     }
 
+    /// Asks the Mac to run a task action, only while live against a host
+    /// that advertises task actions. `nil` means nothing was sent, so the
+    /// caller may repeat the request with the same `clientRequestID`.
+    public func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.taskActions) else {
+            return nil
+        }
+        // A task action changes the Mac. When this device is known to have
+        // lost send access, answer as the Mac would without asking it.
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteTaskActionResponse(result: .rejected(reason: .permissionDenied, message: nil))
+        }
+        return try await gateway.taskAction(request)
+    }
+
+    /// Reads what archiving a task would end and lose, with the same gating
+    /// as `taskAction`.
+    public func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.taskActions) else {
+            return nil
+        }
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteTaskArchiveCheckResponse(result: .rejected(reason: .permissionDenied, message: nil))
+        }
+        return try await gateway.taskArchiveCheck(request)
+    }
+
+    /// Asks which workspaces and agents a new task can use, only while live
+    /// against a host that advertises task creation. `nil` is a
+    /// capability/lifecycle refusal, not a transport failure.
+    public func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.taskCreate) else {
+            return nil
+        }
+        return try await gateway.taskCreateOptions(request)
+    }
+
+    /// Creates a task, with the same gating as the options. `nil` means
+    /// nothing was sent, so the caller may repeat the request with the same
+    /// `clientRequestID`.
+    public func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.taskCreate) else {
+            return nil
+        }
+        // A task's first message is a send. When this device is known to
+        // have lost send access, answer as the Mac would without asking it.
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteTaskCreateResponse(result: .rejected(reason: .permissionDenied, message: nil))
+        }
+        return try await gateway.createTask(request)
+    }
+
+    /// Sends a quick entry message to the coordinator, only while live
+    /// against a host that advertises it. `nil` means nothing was sent, so
+    /// the caller may repeat the request with the same `clientRequestID`.
+    public func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorSend) else {
+            return nil
+        }
+        // When this device is known to have lost send access, answer as the
+        // Mac would without asking it.
+        guard deviceScopes.contains(.send), sendScopeDeniedByHost == false else {
+            return RemoteCoordinatorSendResponse(result: .rejected(reason: .permissionDenied, message: nil))
+        }
+        return try await gateway.sendToCoordinator(request)
+    }
+
+    /// Tells the Mac that this phone showed the coordinator's chat through
+    /// a row, only while live against a host that advertises the shared
+    /// read point. `nil` means nothing was sent. The conversation need not
+    /// be open: a read is sent once more as the chat closes.
+    public func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorChatRead) else {
+            return nil
+        }
+        return try await gateway.readCoordinatorChat(request)
+    }
+
+    /// Reads which of the coordinator's wake turns are quiet, only while
+    /// live against a host that advertises them. `nil` means nothing was
+    /// asked.
+    public func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorQuietDigests) else {
+            return nil
+        }
+        return try await gateway.coordinatorQuietDigests()
+    }
+
+    /// Reads the coordinator's own queue, only while live against a host
+    /// that shares it. `nil` means nothing was asked.
+    public func coordinatorQueue() async throws -> RemoteCoordinatorQueue? {
+        guard state.phase == .live,
+              activeCapabilities.contains(.coordinatorQueue) else {
+            return nil
+        }
+        return try await gateway.coordinatorQueue()
+    }
+
+    /// Reads the Mac's recent Done and archived tasks, only while live. A
+    /// Mac shares them when its task board names their revision, so no
+    /// capability gates the read. `nil` means nothing was asked.
+    public func finishedTasks() async throws -> RemoteFinishedTasks? {
+        guard state.phase == .live else { return nil }
+        return try await gateway.finishedTasks()
+    }
+
     /// Loads one bounded retained-history slice for an open conversation.
     /// Unknown-only pages may be skipped in a small bounded loop so one user
     /// action normally reveals content without permitting unbounded work.
     public func loadOlder(_ conversationID: RemoteConversationID) async {
+        // A page publishes its end before its operation retires. A request
+        // that came after that end waits for the retirement, so it starts
+        // the next page instead of being dropped.
+        if let previous = conversationOlderTasks[conversationID],
+           let runtime = conversationRuntimes[conversationID],
+           await runtime.currentState().isLoadingOlder == false {
+            await previous.task.value
+        }
         guard state.phase == .live,
               activeCapabilities.contains(.conversationBackwardPaging),
               activeConversationIDs.contains(conversationID),

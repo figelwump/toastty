@@ -14,6 +14,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     @discardableResult
     func openSearchSelectionURL(_ url: URL, from panelID: UUID) -> Bool
 
+    func newTaskFromSelection(_ selectionText: String, from panelID: UUID)
+
     func prepareFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedFileDrop?
 
     @discardableResult
@@ -24,6 +26,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     /// Local keyboard/paste input reached the panel's surface. Used by
     /// remote-access to invalidate an open remote-send epoch. Must be cheap.
     func handleLocalInput(for panelID: UUID, kind: TerminalLocalInputKind)
+    /// What the panel's view did with a key press. Must be cheap.
+    func reportKeyPress(_ press: TerminalKeyPress, for panelID: UUID)
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState
@@ -47,6 +51,11 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
 }
 
 extension TerminalSurfaceControllerDelegate {
+    func reportKeyPress(_ press: TerminalKeyPress, for panelID: UUID) {
+        _ = press
+        _ = panelID
+    }
+
     @discardableResult
     func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
         _ = panelID
@@ -66,6 +75,11 @@ extension TerminalSurfaceControllerDelegate {
         _ = url
         _ = panelID
         return false
+    }
+
+    func newTaskFromSelection(_ selectionText: String, from panelID: UUID) {
+        _ = selectionText
+        _ = panelID
     }
 }
 

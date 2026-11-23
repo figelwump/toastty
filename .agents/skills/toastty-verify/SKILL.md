@@ -1,6 +1,6 @@
 ---
 name: toastty-verify
-description: Use this skill when selecting, running, or reporting Toastty verification after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes, on macOS or the Linux port. It chooses the right mix of remote smoke validation, remote xcodebuild tests, local helpers, live GUI checks, Computer Use, and Linux offscreen (Broadway) and real-window checks, including deeper user-perspective checks through the real app.
+description: Read before the first Toastty validation command after code, project, dependency, build, test, UI/runtime, menu, shortcut, automation, or agent-instruction changes. Choose remote native builds, tests, smoke, and Computer Use checks, with cheap source checks allowed locally; on the Linux port, choose local offscreen (Broadway) and real-window checks.
 ---
 
 # Toastty Verify
@@ -9,9 +9,11 @@ description: Use this skill when selecting, running, or reporting Toastty verifi
 
 Use this as the Toastty verification decision layer. Keep detailed command semantics in `docs/agents/automation.md`; use this skill to choose the right validation path, run it with the project guardrails, and report what was actually verified.
 
+Read this skill before the first validation command. Agent-driven native builds, macOS test suites, focused iOS Simulator runs, and GUI checks must run on toastty-mini; the full iOS suite runs on hosted CI (see CI Coverage). Cheap source checks and read-only inspection may run locally. If the mini is unavailable, wait or report the blocked checks; do not fall back to the user's Mac. An explicit user request for a local run permits that run only.
+
 ## Platform
 
-The workflow, scopes, decision tree and handoff apply to both apps. The commands below are for macOS. For Linux code (`linux/`, `scripts/linux/`, or the Linux behaviour of shared code), read `references/linux.md`. Linux validation is local: offscreen on a private Broadway display for everything, plus a runtime-isolated real window (`TOASTTY_LINUX_NON_UNIQUE=1`) for OpenGL-sensitive changes (Ghostty GL/DMA-BUF rendering, WebKit GPU rendering, frame timing, scaling), because Broadway always uses the offscreen renderer. Tell the user before a real window opens, and say in the handoff which checks ran where. Never run `gnome-shell --headless` or drive the user's installed Toastty. The remote, `sv`, Peekaboo and Computer Use steps are macOS-only.
+The workflow, scopes, decision tree and handoff apply to both apps. The toastty-mini rule above and the commands below are for macOS and iOS. For Linux code (`linux/`, `scripts/linux/`, or the Linux behaviour of shared code), read `references/linux.md`. Linux validation is local: offscreen on a private Broadway display for everything, plus a runtime-isolated real window (`TOASTTY_LINUX_NON_UNIQUE=1`) for OpenGL-sensitive changes (Ghostty GL/DMA-BUF rendering, WebKit GPU rendering, frame timing, scaling), because Broadway always uses the offscreen renderer. Tell the user before a real window opens, and say in the handoff which checks ran where. Never run `gnome-shell --headless` or drive the user's installed Toastty. The remote, `sv`, Peekaboo and Computer Use steps are macOS-only.
 
 ## Core Workflow
 
@@ -23,19 +25,52 @@ The workflow, scopes, decision tree and handoff apply to both apps. The commands
 3. List the scenarios a user could hit for the changed behavior, not only the main path: state combinations, relaunch and restore, interruption and cancellation, failure and retry paths, concurrent or repeated actions, boundary inputs, and interaction with adjacent features such as other panels, sessions, or the iOS client. Add any "Scenarios to verify" from a second-opinion review.
 4. Choose checks from the decision tree below that together cover each scenario with a real impact. Prefer deterministic tests and smoke scripts; use live GUI checks or Computer Use for scenarios only the real surface shows. When a scenario fails, fix the root cause instead of adding guards.
 5. Run commands through `sv exec --` whenever the documented wrapper needs secret-backed or service-injected environment, especially remote GUI/test wrappers. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI/test environment is injected there.
-6. Report the exact command family, scope, remote/local target, fallback status, result, and any artifact paths. List the scenarios and say which checks covered them, and which were not covered and why.
+6. Report the exact command family, scope, execution target, any explicit local authorization, result, and artifact paths. List the scenarios and say which checks covered them, and which were not covered and why.
 
 ## CI Coverage
 
-PR CI runs selected Linux script and web-panel checks. It does not build or test
-native apps, and merged commits do not trigger another CI run. Continue to select
-native build, test, and runtime checks below for the changed behavior. A green
-`CI gate` on a PR does not replace this verification.
+PR CI runs no tests for the change. On every PR, `Toastty CI` runs only the
+Linux CI workflow tests and the **CI gate** that branch protection requires;
+every test job runs only on manual dispatch. Your own checks are the
+verification: toastty-mini runs for native code (the macOS suite, and focused
+iOS Simulator tests with `--platform ios`), and the local script and web-panel
+commands in `docs/agents/automation.md` when a change touches those files.
+For push-worker changes, run `npm run check` in `workers/push`. Use the full
+macOS suite on toastty-mini because the hosted Mac job builds without Ghostty.
 
-Full hosted native validation is available by manually dispatching `Toastty CI`.
-Before TestFlight, that full run must pass on the exact `main` release commit;
-follow `docs/ios-release-ci.md`. It retains macOS checks and both iOS
-configurations, including full Debug UI and performance budgets.
+The toastty-mini Xcode can differ from the pinned hosted Xcode in
+`.github/ios-xcode-version`, and the hosted one has rejected code that the
+mini accepted. For changes to shared Swift or iOS code, say in the report
+which Xcode built it.
+
+Run the full hosted workflow only in these cases:
+
+- **TestFlight.** The release task finds a successful full manual dispatch on
+  the exact `main` release commit or starts one if needed. Follow
+  `docs/ios-release-ci.md`. The archive and upload gate requires this evidence.
+- **The user asks for it.** Do not start a full run on your own judgment; it
+  takes up to two hours. If a change has high iOS risk, such as an SDK or
+  Xcode upgrade, say so in the report and let the user decide.
+
+For an explicit full run, push the commit under review and use:
+
+```bash
+gh workflow run mobile-ios.yml --ref <branch>
+gh run view <run-id> --json headSha,status,conclusion,url
+gh run watch <run-id> --exit-status
+```
+
+Use the URL returned by the dispatch. Verify `headSha` before using the
+result, and link it in the PR and report. `gh pr checks` shows only the
+PR's CI gate. A required full run must pass before merge. A subsequent base merge
+uses the rules below. Cancel a superseded run owned by this task if it can
+no longer establish that result. Full Debug can take over two hours.
+
+Hosted XCTest already retries a failed case once. Read the log and compare
+the failure against the PR and its base before dispatching another full job.
+For a runner fault or a known failure outside the PR, rerun the affected job
+once when it is needed for the gate. Use focused verification to diagnose a
+repeated test failure, and report the remaining failed check.
 
 ## Decision Tree
 
@@ -61,39 +96,57 @@ If the docs change alters build, release, automation, or validation behavior, al
 
 ### Build, Project, Or Dependency Changes
 
-After any code, project, dependency, or merge-related change, ensure the generated Xcode project is current and the app builds cleanly before handoff.
+After any code, project, dependency, or merge-related change, ensure the generated Xcode project is current and the app builds cleanly on toastty-mini before handoff. The remote wrapper bootstraps its disposable worktree.
 
-Use the full local gate when the change is broad or touches generation/build settings:
+Use the remote macOS suite when the change is broad or touches generation/build settings:
 
 ```bash
-./scripts/automation/check.sh
+sv exec -- scripts/remote/test.sh --scope working-tree
 ```
 
-Use narrower build/test commands only when the change scope is clearly narrow and the selected checks cover the risk. Set `ARCH=arm64` explicitly for agent/remote runs unless intentionally validating Rosetta; do not derive `ARCH` from `uname -m` inside `sv exec`.
+Use narrower remote build/test checks only when the change scope is clearly narrow and the selected checks cover the risk. Set `ARCH=arm64` explicitly for agent/remote runs unless intentionally validating Rosetta; do not derive `ARCH` from `uname -m` inside `sv exec`. The full local gate, `./scripts/automation/check.sh`, is only for an explicit user request for that local run.
+
+For a build without tests, use `sv exec -- scripts/remote/test.sh --build-only --scope working-tree`.
+The wrapper gives that build a compute slot. Inspect `sv exec -- scripts/remote/status.sh`
+for active work and waits; do not create another polling script.
+
+### After A Base Merge
+
+When a task merges its base branch into its branch, rebuild on toastty-mini
+and rerun the focused tests for the PR's changed areas. If a full run was required, repeat it when the
+merge conflicts in or changes files the PR also changes, or changes build,
+project, or dependency settings. A base that moved ahead without a conflict
+is not by itself a reason to merge it or to rerun checks.
+
+The task that integrates shared branches owns the macOS suite and evaluates
+whether the combination is high risk for iOS. TestFlight requires a full manual run
+on the exact `main` commit even when an earlier branch run passed.
 
 ### Unit Or Integration Test Changes
 
-Agent-driven `xcodebuild test` should start with the remote wrapper:
+Run agent-driven `xcodebuild test` through the remote wrapper:
 
 ```bash
 sv exec -- scripts/remote/test.sh --scope working-tree -- ...
 ```
 
-Pass `xcodebuild` flags after `--`. Prefer omitting `-destination`; if needed, use `platform=macOS,arch=arm64` unless intentionally validating Rosetta. Remote `x86_64` test destinations are blocked by default.
+Pass `xcodebuild` flags after `--`. macOS suites own the shared desktop by default. Use `--resource compute` only for selected tests verified to avoid shared GUI, focus, clipboard and input state. Batch the required suites for one source revision into one invocation when practical. Prefer omitting `-destination`; if needed, use `platform=macOS,arch=arm64` unless intentionally validating Rosetta. Remote `x86_64` test destinations are blocked by default.
 
-Use local `xcodebuild test` only when the user explicitly wants a local run, the check is local-only, or the remote wrapper is unavailable and you intentionally continue locally.
+Use local `xcodebuild test` only when the user explicitly requests that local run. A local-only check or unavailable remote wrapper is a blocker, not permission to run locally.
 
 ### Native iOS Surface
 
 Treat `ios/` as a separate Tuist graph from the root macOS project. Choose the tier that matches the change:
 
-- Baseline/dispatcher: run the dispatcher tests, then `node ios/scripts/toastty-ios.mjs test`. The dispatcher installs and generates the `ios/` graph; build and test select a compatible iPhone Simulator and keep per-run DerivedData isolated.
-- Agent-driven simulator: start with `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree`. The remote wrapper generates the iOS graph before `xcodebuild`, resolves a compatible simulator when no destination was supplied, and copies the log, result JSON, and xcresult back under `artifacts/remote-tests/`.
+- Baseline/dispatcher: cheap dispatcher source checks may run locally if they do not build a native app or start a simulator.
+- Agent-driven simulator: for focused tests, use `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree -- -only-testing:<target>/<class>`. Run the full iOS suite on hosted CI (see CI Coverage). The remote wrapper generates the iOS graph before `xcodebuild`, resolves a compatible simulator when no destination was supplied, and copies the log, result JSON, and xcresult back under `artifacts/remote-tests/`.
 - User surface: use remote simulator screenshots or a live paired phone check. State explicitly whether evidence came from fixtures, an iOS Simulator, or a physical device.
 
 Changes to `Sources/RemoteProtocol/` or its fixtures must validate both graphs: root macOS generation/build/tests and the native iOS test tier. Do not treat a green iOS run as proof that the macOS host still compiles the shared contract.
 
-Do not boot or interact with a local iOS Simulator when the user has requested remote-only validation. Pass `--platform ios`; merely supplying an iOS workspace without that mode is intentionally insufficient because the wrapper must select the correct bootstrap path.
+Both graphs also compile `Sources/ConversationUI/`, the SwiftUI conversation transcript views. A change there must build on both platforms and pass the native iOS test tier, which covers the views on the iPhone. On macOS, `ToasttyAppTests/ConversationUIRenderTests` hosts the views and keeps a PNG on the test result.
+
+Do not boot or interact with a local iOS Simulator unless the user explicitly requests that local run. Pass `--platform ios`; merely supplying an iOS workspace without that mode is intentionally insufficient because the wrapper must select the correct bootstrap path.
 
 ### UI, Runtime, Menu, Or Shortcut Changes
 
@@ -105,7 +158,7 @@ do not verify provider transcript formats. See **Remote input control** in
 Start with remote smoke validation through the wrapper:
 
 ```bash
-sv exec -- scripts/remote/validate.sh --scope working-tree --smoke-test smoke-ui
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree --smoke-test smoke-ui
 ```
 
 Supported smoke tests:
@@ -116,9 +169,9 @@ Supported smoke tests:
 - `shortcut-hints`: visible shortcut hints or screenshot/state artifacts.
 - `shortcut-trace`: real AppKit keyboard shortcut tracing.
 
-Use `--require-remote` when the remote path itself is under validation. With `--require-remote`, a remote preflight or execution failure is a validation failure; stop and report the blocker instead of continuing locally. Otherwise, `validate.sh` may fall back to a local smoke run if remote preflight fails; report that fallback clearly.
+Always pass `--require-remote` for agent-driven validation. A remote preflight or execution failure is a validation failure; wait or report the blocker instead of continuing locally.
 
-Prefer `shortcut-trace` or `shortcut-hints` before local focus-stealing checks when the change is about keyboard shortcuts, menu-advertised hints, screenshots, or state artifacts.
+Use remote `shortcut-trace` or `shortcut-hints` when the change is about keyboard shortcuts, menu-advertised hints, screenshots, or state artifacts.
 
 Read `docs/agents/menu-performance.md` before validating or changing menu rebuilds, hidden system menu items, workspace shortcuts, or `Cmd+W` handling.
 
@@ -128,7 +181,7 @@ Use `.agents/skills/toastty-dev-run/SKILL.md` when a task needs a live app insta
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond supported smoke tests, such as modal navigation, onboarding, visual/focus checks, menu flows, or ambiguous reproduction steps.
 
-Before required local Peekaboo interaction, run:
+Only after an explicit user request for local validation, and before required local Peekaboo interaction, run:
 
 ```bash
 peekaboo permissions --json
@@ -149,7 +202,7 @@ Do not use this check as a substitute for relevant deterministic tests.
 
 ## Local Helpers
 
-Use local smoke helpers only when the user explicitly wants a local run, the check is local-only, or the remote wrapper has already fallen back or failed and you are intentionally continuing locally. See `docs/agents/automation.md` for details.
+Use local smoke helpers only when the user explicitly requests that local run. A local-only check or remote failure is a blocker, not permission to run locally. See `docs/agents/automation.md` for details.
 
 Common helpers:
 
@@ -167,7 +220,7 @@ For any local dev/debug/test app run, use runtime isolation and target the exact
 State:
 
 - What scope was validated: `working-tree`, `head`, or `ref`.
-- Which commands or skills ran, with remote/local/fallback status.
+- Which commands or skills ran, with execution targets and any explicit local authorization.
 - Whether generated project/build currency was validated when applicable.
 - Whether remote GUI/test environment was accessed only through `sv exec --`.
 - Whether a deeper user-perspective check was run, skipped as unnecessary, or blocked, with the reason.

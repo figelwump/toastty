@@ -1,41 +1,39 @@
+import ConversationUI
 import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
+import UIKit
 
 struct ToasttyConversationScreen: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
-    @State private var isLoadingAttachments = false
+    @Environment(\.toasttyPreviewService) private var previewService
     @State private var selectedPreview: ToasttyPreviewSelection?
+    /// The attached image that the full-screen view shows.
+    @State private var openedImage: ToasttyAttachedImage?
     @State private var isComposerFocused = false
     @State private var composerFocusLifecycle = ToasttyComposerFocusLifecyclePolicy()
     @State private var jumpToLiveEdgeRequest: UInt64 = 0
-    /// Queue is a per-draft choice for one running turn: Steer is the
-    /// default while the agent works. The choice clears when the draft is
-    /// sent (the draft empties) and does not apply to a later turn. A failed
-    /// send or a brief connection check keeps it.
-    @State private var queueSelection: QueueSelection?
-    /// The draft epoch shown when Release was tapped; confirming releases
-    /// exactly that draft.
-    @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
     @State private var isShowingDetails = false
+    /// The task detail that ⓘ opened, for a session in a task space, or that
+    /// a task chip opened for a task with no task space to open.
+    @State private var taskDetail: ToasttyTaskDetailSelection?
+    /// The coordinator chat's list of tasks to mention. Only the list and
+    /// the message field read it, so a key that changes the search does not
+    /// update this screen.
+    @State private var mentionPicker = ToasttyMentionPicker()
 
     let conversationID: UUID
     let controller: HomeScreenController
     let presentation: ToasttyConversationPresentationState?
     let composer: ToasttyComposerPresentation?
-    let draft: String
-    let draftGeneration: UUID?
-    let draftEditRevision: UInt64
-    let draftReplacement: ToasttyComposerReplacement?
+    /// The drafts. This view reads only whether a send is under way; the
+    /// composer reads the rest, so typing does not update this view.
+    let drafts: ToasttyComposerDraftStore
     let draftDidChange: (String, UInt64) -> Void
     let draftReplacementCompleted: (ToasttyComposerReplacementResult) -> Void
-    let isSubmitting: Bool
-    let attachments: [RemoteMessageAttachment]
     let supportsAttachments: Bool
     let addAttachments: ([RemoteMessageAttachment]) -> String?
     let removeAttachment: (UUID) -> Void
-    let attachmentRecoveryMessage: String?
     let loadOlder: () -> Void
     /// The mode matters only while the agent works; nil at an open prompt.
     let submitDraft: (RemoteMessageDeliveryMode?) -> Bool
@@ -49,24 +47,31 @@ struct ToasttyConversationScreen: View {
     let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
     let canAcknowledgeRead: Bool
     let onVisibleLiveEdge: (MobileSessionStatus) -> Void
+    /// Leaves this conversation for a task space.
+    let openTaskSpace: (UUID) -> Void
+    /// The coordinator's chat as the Coordinator tab's own screen: its
+    /// title shows Toasty, and the tab bar stays, because Back has nowhere
+    /// to go. Its messages have Copy, and the coordinator's have Reply, as
+    /// in the Mac's coordinator chat.
+    let isCoordinatorRoot: Bool
+    /// Reply on a coordinator's message. False when the draft cannot
+    /// become a reply; `replyNotice` then says why.
+    let replyToMessage: (CoordinatorReplyTarget) -> Bool
+    let cancelReply: () -> Void
+    /// The coordinator chat's New line, from the read point the Mac shares.
+    let newMessages: ToasttyNewMessagesMarker?
 
     init(
         conversationID: UUID,
         controller: HomeScreenController,
         presentation: ToasttyConversationPresentationState? = nil,
         composer: ToasttyComposerPresentation? = nil,
-        draft: String = "",
-        draftGeneration: UUID? = nil,
-        draftEditRevision: UInt64 = 0,
-        draftReplacement: ToasttyComposerReplacement? = nil,
+        drafts: ToasttyComposerDraftStore,
         draftDidChange: @escaping (String, UInt64) -> Void = { _, _ in },
         draftReplacementCompleted: @escaping (ToasttyComposerReplacementResult) -> Void = { _ in },
-        isSubmitting: Bool = false,
-        attachments: [RemoteMessageAttachment] = [],
         supportsAttachments: Bool = false,
         addAttachments: @escaping ([RemoteMessageAttachment]) -> String? = { _ in nil },
         removeAttachment: @escaping (UUID) -> Void = { _ in },
-        attachmentRecoveryMessage: String? = nil,
         loadOlder: @escaping () -> Void = {},
         submitDraft: @escaping (RemoteMessageDeliveryMode?) -> Bool = { _ in false },
         interrupt: @escaping () -> Void = {},
@@ -81,24 +86,23 @@ struct ToasttyConversationScreen: View {
         ) -> Void = { _, _ in },
         submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
         canAcknowledgeRead: Bool,
-        onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in }
+        onVisibleLiveEdge: @escaping (MobileSessionStatus) -> Void = { _ in },
+        openTaskSpace: @escaping (UUID) -> Void = { _ in },
+        isCoordinatorRoot: Bool = false,
+        replyToMessage: @escaping (CoordinatorReplyTarget) -> Bool = { _ in false },
+        cancelReply: @escaping () -> Void = {},
+        newMessages: ToasttyNewMessagesMarker? = nil
     ) {
         self.conversationID = conversationID
         self.controller = controller
         self.presentation = presentation
         self.composer = composer
-        self.draft = draft
-        self.draftGeneration = draftGeneration
-        self.draftEditRevision = draftEditRevision
-        self.draftReplacement = draftReplacement
+        self.drafts = drafts
         self.draftDidChange = draftDidChange
         self.draftReplacementCompleted = draftReplacementCompleted
-        self.isSubmitting = isSubmitting
-        self.attachments = attachments
         self.supportsAttachments = supportsAttachments
         self.addAttachments = addAttachments
         self.removeAttachment = removeAttachment
-        self.attachmentRecoveryMessage = attachmentRecoveryMessage
         self.loadOlder = loadOlder
         self.submitDraft = submitDraft
         self.interrupt = interrupt
@@ -111,14 +115,34 @@ struct ToasttyConversationScreen: View {
         self.submitInteractionAnswer = submitInteractionAnswer
         self.canAcknowledgeRead = canAcknowledgeRead
         self.onVisibleLiveEdge = onVisibleLiveEdge
+        self.openTaskSpace = openTaskSpace
+        self.isCoordinatorRoot = isCoordinatorRoot
+        self.replyToMessage = replyToMessage
+        self.cancelReply = cancelReply
+        self.newMessages = newMessages
     }
 
+    /// The coordinator's chat has Copy under each message, always shown on
+    /// a phone, as the Mac's coordinator chat has it under the pointer. As
+    /// on the Mac, a turn's work stays folded under one line while it runs.
+    static let coordinatorTranscriptOptions = ToasttyTranscriptOptions(
+        showsMessageCopyButton: true,
+        foldsRunningWork: true
+    )
+
     var body: some View {
+        let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard, finished: controller.finishedTasks)
+        // The coordinator's chat mentions tasks, as the Mac's does. A task's
+        // session keeps its plain field.
+        let mentionCandidates = isCoordinatorRoot
+            ? CoordinatorMentionCandidate.candidates(
+                from: controller.snapshot.taskBoard, finished: controller.finishedTasks
+            ) : []
         Group {
             if let conversation = controller.conversation(id: conversationID) {
                 ToasttyTranscriptView(
                     state: resolvedPresentation,
-                    isSubmitting: isSubmitting,
+                    isSubmitting: drafts.isSubmitting(conversationID),
                     loadOlder: loadOlder,
                     dismissSendReceipt: dismissSendReceipt,
                     queuedMessageAction: { action in
@@ -130,16 +154,74 @@ struct ToasttyConversationScreen: View {
                     interactionAnswerStates: interactionAnswerStates,
                     editInteractionAnswer: editInteractionAnswer,
                     submitInteractionAnswer: submitInteractionAnswer,
-                    readAcknowledgementEpoch: conversation.state,
+                    interactionAnswerFeedback: ToasttyHapticFeedback.interactionAnswer,
+                    readAcknowledgementEpoch: ToasttyTranscriptSessionStatus(conversation.state),
                     workingIndicator: transcriptWorkingIndicator(conversation),
                     jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
                     canAcknowledgeRead: canAcknowledgeRead,
                     onVisibleLiveEdge: {
                         onVisibleLiveEdge(conversation.state)
-                    }
+                    },
+                    options: isCoordinatorRoot ? Self.coordinatorTranscriptOptions : ToasttyTranscriptOptions(),
+                    replyToMessage: isCoordinatorRoot ? { request in
+                        // The field takes the keyboard, as on the Mac.
+                        if replyToMessage(CoordinatorReplyTarget(request)) { isComposerFocused = true }
+                    } : nil,
+                    newMessages: newMessages
                 )
+                // The phone has a transcript only while the conversation is
+                // open, and each opening loads it again; another tab, or a
+                // screen pushed over it, closes it. Each load gets a new
+                // transcript view, which opens where a chat opens. The old
+                // view kept the position of the emptied transcript: its top.
+                .id(presentation != nil)
+                // The tasks to mention, above the composer and over the
+                // chat. In the chat's safe area, so the list ends at the
+                // composer and does not move the chat.
+                .overlay(alignment: .bottom) {
+                    if isCoordinatorRoot {
+                        ToasttyMentionListOverlay(picker: mentionPicker)
+                    }
+                }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    composerBar(conversation)
+                    ToasttyConversationComposerBar(
+                        conversation: conversation,
+                        composer: composer ?? Self.lockedComposerFallback(conversation),
+                        isLastReported: controller.freshness != .live,
+                        drafts: drafts,
+                        draftDidChange: draftDidChange,
+                        draftReplacementCompleted: draftReplacementCompleted,
+                        supportsAttachments: supportsAttachments,
+                        addAttachments: addAttachments,
+                        removeAttachment: removeAttachment,
+                        submitDraft: submitDraft,
+                        interrupt: interrupt,
+                        releaseLocalDraft: releaseLocalDraft,
+                        isCoordinatorRoot: isCoordinatorRoot,
+                        cancelReply: cancelReply,
+                        isComposerFocused: $isComposerFocused,
+                        jumpToLiveEdgeRequest: $jumpToLiveEdgeRequest,
+                        mentionPicker: isCoordinatorRoot ? mentionPicker : nil,
+                        mentionCandidates: mentionCandidates
+                    )
+                }
+                // The task bar, like the Mac's top bar, for a session in a
+                // task space.
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if let task = task(for: conversation) {
+                        VStack(spacing: 0) {
+                            ToasttyTaskBar(task: task, controller: controller)
+                            if conversation.agent == .codex, conversation.state.bucket == .needsApproval,
+                               controller.freshness == .live {
+                                Label("Open this task’s terminal on your Mac to answer.", systemImage: "macwindow")
+                                    .font(.footnote)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(.bar)
+                            }
+                        }
+                    }
                 }
             } else {
                 ContentUnavailableView(
@@ -150,7 +232,24 @@ struct ToasttyConversationScreen: View {
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
             }
         }
+        .environment(\.conversationLinkPresenter, taskChips.presenter)
         .environment(\.openURL, OpenURLAction { url in
+            if CoordinatorTaskLink.isToasttyURL(url) {
+                // The text is an agent's: only a task chip opens anything. It
+                // opens the task's space as its row does (its one session, or
+                // its screen), or the task's detail when the phone has no
+                // task space to open, as for a Done or archived task.
+                guard let taskID = taskChips.taskID(for: url) else { return .discarded }
+                let task = controller.snapshot.taskBoard?.task(id: taskID)
+                if let task, let taskSpaceID = controller.snapshot.openableTaskSpaceID(of: task) {
+                    openTaskSpace(taskSpaceID)
+                } else {
+                    taskDetail = ToasttyTaskDetailSelection(
+                        id: taskID, fallback: task ?? controller.finishedTasks.summary(id: taskID)
+                    )
+                }
+                return .handled
+            }
             guard let reference = ToasttyPreviewURLPolicy.localFileReference(url) else { return .systemAction }
             selectedPreview = ToasttyPreviewSelection(
                 target: .conversationFile(conversationID: RemoteConversationID(rawValue: conversationID), fileReference: reference),
@@ -160,10 +259,23 @@ struct ToasttyConversationScreen: View {
         .sheet(item: $selectedPreview) { selection in
             ToasttyPreviewSheet(selection: selection, detents: previewDetents(for: selection))
         }
+        // The images attached to the coordinator chat's messages come from
+        // the Mac. Other chats show the files by name.
+        .environment(\.toasttyAttachmentImageSource, attachmentImageSource)
+        .environment(\.toasttyOpenAttachedImage, { openedImage = $0 })
+        .fullScreenCover(item: $openedImage) { image in
+            ToasttyAttachmentImageViewer(image: image, source: attachmentImageSource)
+        }
         .background(ToasttyDesignTokens.elevatedSurface)
         .sensoryFeedback(trigger: sendFeedback) { _, new in new?.sensoryFeedback }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        // A session takes the whole screen, as a chat does. The tab bar
+        // comes back on the list that Back returns to. The coordinator's
+        // chat is its tab's own screen, so it keeps the bar. It leaves the
+        // bar to the default rather than `.visible`, which would also show
+        // the bar over a session pushed onto the chat.
+        .toolbar(isCoordinatorRoot ? .automatic : .hidden, for: .tabBar)
         .toolbarBackground(ToasttyDesignTokens.elevatedSurface, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -172,14 +284,69 @@ struct ToasttyConversationScreen: View {
                 }
             }
             // Next sits rightmost, with Panels just inside it. Each shows
-            // only when it has somewhere to go.
+            // only when it has somewhere to go. The coordinator's tab has a
+            // … menu in Panels' place, which also lists the panels.
             ToolbarItemGroup(placement: .topBarTrailing) {
-                panelsButton
+                taskDetailButton
+                if isCoordinatorRoot {
+                    coordinatorMenuButton
+                } else {
+                    panelsButton
+                }
                 nextSessionButton
             }
         }
+        .sheet(item: $taskDetail) { selection in
+            // The task as the Mac lists it now: on the board, or among its
+            // finished tasks; else as it was when the sheet opened.
+            if let task = controller.snapshot.taskBoard?.task(id: selection.id)
+                ?? controller.finishedTasks.summary(id: selection.id) ?? selection.fallback {
+                ToasttyTaskDetailSheet(
+                    task: task,
+                    canOpenTaskSpace: false,
+                    openTaskSpace: { _ in },
+                    controller: controller
+                )
+            }
+        }
+        .toasttyTaskActionPresenter(controller)
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
+        }
+    }
+
+    /// Asks the Mac for an attached image by its message and its place in
+    /// the message's list of files.
+    private var attachmentImageSource: ToasttyAttachmentImageSource {
+        let service = previewService
+        return .remote { image, size in
+            guard let conversationID = image.conversationID, let eventID = image.eventID else { return nil }
+            return try? await service.attachmentImage(RemoteCoordinatorAttachmentImageRequest(
+                conversationID: RemoteConversationID(rawValue: conversationID),
+                eventID: eventID,
+                attachmentIndex: image.index,
+                size: size == .full ? .full : .thumbnail
+            ))
+        }
+    }
+
+    /// The task whose task space holds this session.
+    private func task(for conversation: MobileConversation) -> RemoteTaskSummary? {
+        controller.snapshot.taskBoard?.task(taskSpaceID: conversation.workspaceID)
+    }
+
+    /// ⓘ opens the task's detail, with its actions.
+    @ViewBuilder
+    private var taskDetailButton: some View {
+        if let conversation = controller.conversation(id: conversationID), let task = task(for: conversation) {
+            Button {
+                taskDetail = ToasttyTaskDetailSelection(id: task.id)
+            } label: {
+                Label("Task Details", systemImage: "info.circle")
+            }
+            .tint(ToasttyDesignTokens.amber)
+            .accessibilityHint("Shows the task\u{2019}s stage and actions")
+            .accessibilityIdentifier("toastty-conversation-task-detail")
         }
     }
 
@@ -203,26 +370,71 @@ struct ToasttyConversationScreen: View {
             .accessibilityIdentifier("toastty-conversation-panels")
         } else if panels.count > 1 {
             Menu {
-                ForEach(sections) { section in
-                    Section {
-                        ForEach(section.panels) { panel in
-                            Button { openPanel(panel) } label: {
-                                Label(panel.panel.title,
-                                      systemImage: ToasttyWorkspacePanels.symbol(for: panel.panel.kind))
-                                if let folderHint = panel.folderHint {
-                                    Text(folderHint)
-                                }
-                            }
-                        }
-                    } header: {
-                        // Only a menu that spans workspaces names them.
-                        if sections.count > 1 { Text(section.workspaceTitle) }
-                    }
+                panelMenuSections(sections) { section in
+                    // Only a menu that spans workspaces names them.
+                    sections.count > 1 ? section.workspaceTitle : nil
                 }
             } label: {
                 Label("Panels", systemImage: "square.on.square")
             }
             .accessibilityIdentifier("toastty-conversation-panels")
+        }
+    }
+
+    @ViewBuilder
+    private func panelMenuSections(
+        _ sections: [ToasttyConversationPanelSection],
+        header: @escaping (ToasttyConversationPanelSection) -> String?
+    ) -> some View {
+        ForEach(sections) { section in
+            Section {
+                ForEach(section.panels) { panel in
+                    Button { openPanel(panel) } label: {
+                        Label(panel.panel.title,
+                              systemImage: ToasttyWorkspacePanels.symbol(for: panel.panel.kind))
+                        if let folderHint = panel.folderHint {
+                            Text(folderHint)
+                        }
+                    }
+                }
+            } header: {
+                if let title = header(section) { Text(title) }
+            }
+        }
+    }
+
+    /// The coordinator tab's … menu: the coordinator's policy, ledger and
+    /// friction notes, read-only, then the panels the Panels button would
+    /// list. A panel that already shows one of the three files is left out
+    /// while the menu lists the file. The Mac finds the files in the
+    /// session's working folder, so without that folder, or without the
+    /// Mac's file previews, the menu lists only the panels.
+    @ViewBuilder
+    private var coordinatorMenuButton: some View {
+        let conversation = controller.conversation(id: conversationID)
+        let folder = controller.hostSupportsLocalFilePreview ? conversation?.cwd : nil
+        let showsFiles = folder != nil
+        let all = ToasttyConversationPanels.sections(in: controller.snapshot, for: conversationID)
+        let sections = folder.map { ToasttyConversationPanels.withoutCoordinatorFiles(all, folder: $0) } ?? all
+        if showsFiles || !sections.isEmpty {
+            Menu {
+                if showsFiles {
+                    Section {
+                        ForEach(ToasttyCoordinatorFile.allCases) { file in
+                            Button { openCoordinatorFile(file) } label: {
+                                Label(file.title, systemImage: file.symbol)
+                                Text(file.subtitle)
+                            }
+                        }
+                    }
+                }
+                panelMenuSections(sections) { section in
+                    section.workspaceID == conversation?.workspaceID ? "Panels" : section.workspaceTitle
+                }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+            .accessibilityIdentifier("toastty-coordinator-menu")
         }
     }
 
@@ -291,12 +503,27 @@ struct ToasttyConversationScreen: View {
               let current = ToasttyConversationPanels.sections(in: controller.snapshot, for: conversationID)
                 .lazy.flatMap(\.panels)
                 .first(where: { $0.workspaceID == panel.workspaceID && $0.id == panel.id }) else { return }
+        presentPreview(current.selection)
+    }
+
+    private func openCoordinatorFile(_ file: ToasttyCoordinatorFile) {
+        guard selectedPreview == nil else { return }
+        presentPreview(file.selection(conversationID: conversationID))
+    }
+
+    private func presentPreview(_ selection: ToasttyPreviewSelection) {
         isComposerFocused = false
-        selectedPreview = current.selection
+        // The composer drops the keyboard only after the next view update,
+        // and the sheet opens in that update. UIKit gives the focus back to
+        // the responder that had it when a sheet opened, so drop the keyboard
+        // now: this action runs outside any view update.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        selectedPreview = selection
     }
 
     private func previewDetents(for selection: ToasttyPreviewSelection) -> Set<PresentationDetent> {
-        switch selection.target {
+        if selection.coordinatorFile != nil { return [.large] }
+        return switch selection.target {
         case .panel: [.large]
         case .conversationFile: [.medium, .large]
         }
@@ -305,25 +532,33 @@ struct ToasttyConversationScreen: View {
     private func navigationBarHeader(_ conversation: MobileConversation) -> some View {
         VStack(spacing: 2) {
             HStack(spacing: 3) {
-                Text(conversation.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(ToasttyDesignTokens.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityHint("Shows session details")
-                    .accessibilityAction { isShowingDetails = true }
-                    .accessibilityIdentifier("toastty-mobile-conversation-title")
+                if isCoordinatorRoot {
+                    ToasttyCoordinatorTitle(mark: MobileCoordinatorMark(session: conversation))
+                        .accessibilityHint("Shows session details")
+                        .accessibilityAction { isShowingDetails = true }
+                } else {
+                    Text(conversation.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityHint("Shows session details")
+                        .accessibilityAction { isShowingDetails = true }
+                        .accessibilityIdentifier("toastty-mobile-conversation-title")
+                }
                 Image(systemName: "chevron.down")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
                     .accessibilityHidden(true)
             }
-            // The trailing Panels and Next buttons narrow the title area;
-            // the agent name goes first when the full line no longer fits.
+            // The trailing ⓘ, Panels and Next buttons narrow the title area;
+            // the agent name goes first when the full line no longer fits,
+            // then the workspace, so the status never wraps.
             ViewThatFits(in: .horizontal) {
                 headerStatusLine(conversation, metadata: headerMetadata(conversation))
-                headerStatusLine(conversation, metadata: conversation.workspaceTitle)
+                headerStatusLine(conversation, metadata: isCoordinatorRoot ? "" : conversation.workspaceTitle)
+                headerStatusLine(conversation, metadata: "")
             }
         }
         // The inline navigation bar cannot grow with accessibility type
@@ -366,18 +601,11 @@ struct ToasttyConversationScreen: View {
     }
 
     private func headerMetadata(_ conversation: MobileConversation) -> String {
-        [conversation.workspaceTitle, conversation.agent.displayName]
+        // The coordinator's workspace is named after it, as the title is.
+        if isCoordinatorRoot { return conversation.agent.displayName }
+        return [conversation.workspaceTitle, conversation.agent.displayName]
             .filter { $0.isEmpty == false }
             .joined(separator: " · ")
-    }
-
-    /// The composer is a one-line field until it has focus or content; then it
-    /// grows into a card with a button bar underneath the text. While input
-    /// stays open, the agent's working state lives at the transcript's tail,
-    /// not under the field.
-    private func isExpandedComposer(_ presentation: ToasttyComposerPresentation) -> Bool {
-        presentation.gate.allowsInput
-            && (isComposerFocused || !draft.isEmpty || !attachments.isEmpty)
     }
 
     /// Shown while the agent works, unless a locked composer already says so
@@ -386,13 +614,99 @@ struct ToasttyConversationScreen: View {
         _ conversation: MobileConversation
     ) -> ToasttyTranscriptWorkingIndicator? {
         guard conversation.state.bucket == .working, controller.freshness == .live else { return nil }
-        let gate = (composer ?? lockedComposerFallback(conversation)).gate
+        let gate = (composer ?? Self.lockedComposerFallback(conversation)).gate
         if gate == .disabled(.prompt(.working)) { return nil }
-        return ToasttyTranscriptWorkingIndicator(turnElapsed: conversation.turnElapsed)
+        return ToasttyTranscriptWorkingIndicator(turnElapsed: conversation.turnElapsed.map { .init($0) })
+    }
+
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        var lifecycle = composerFocusLifecycle
+        isComposerFocused = lifecycle.focus(
+            afterTransitionTo: newPhase,
+            currentFocus: isComposerFocused
+        )
+        composerFocusLifecycle = lifecycle
+    }
+
+    static func lockedComposerFallback(
+        _ conversation: MobileConversation
+    ) -> ToasttyComposerPresentation {
+        ToasttyComposerPresentation.makeLockedFallback(
+            agentDisplayName: conversation.agent.displayName.capitalized,
+            inputAvailability: conversation.inputAvailability
+        )
+    }
+}
+
+/// The composer under the transcript: the field, its buttons and its status
+/// line. It is its own view and reads the draft from `drafts`, so that a
+/// keystroke updates this view only, and not the conversation screen with
+/// its transcript, the root view or the other tabs.
+private struct ToasttyConversationComposerBar: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var isLoadingAttachments = false
+    /// The draft epoch shown when Release was tapped; confirming releases
+    /// exactly that draft.
+    @State private var confirmingLocalDraftReleaseEpoch: RemoteInputEpoch?
+
+    let conversation: MobileConversation
+    let composer: ToasttyComposerPresentation
+    /// The status is the last one the Mac reported.
+    let isLastReported: Bool
+    let drafts: ToasttyComposerDraftStore
+    let draftDidChange: (String, UInt64) -> Void
+    let draftReplacementCompleted: (ToasttyComposerReplacementResult) -> Void
+    let supportsAttachments: Bool
+    let addAttachments: ([RemoteMessageAttachment]) -> String?
+    let removeAttachment: (UUID) -> Void
+    /// The mode matters only while the agent works; nil at an open prompt.
+    let submitDraft: (RemoteMessageDeliveryMode?) -> Bool
+    let interrupt: () -> Void
+    let releaseLocalDraft: (RemoteInputEpoch) -> Void
+    /// The coordinator's chat shows the message that the draft answers.
+    let isCoordinatorRoot: Bool
+    let cancelReply: () -> Void
+    @Binding var isComposerFocused: Bool
+    @Binding var jumpToLiveEdgeRequest: UInt64
+    /// The coordinator chat's @ mentions; `nil` in a task's session.
+    let mentionPicker: ToasttyMentionPicker?
+    let mentionCandidates: [CoordinatorMentionCandidate]
+
+    var body: some View {
+        composerBar(conversation)
+    }
+
+    private var conversationID: UUID { conversation.id }
+    private var draft: String { drafts.state.draft(for: conversationID) }
+    private var attachments: [RemoteMessageAttachment] { drafts.state.attachments(for: conversationID) }
+    private var isSubmitting: Bool { drafts.state.isSubmitting(conversationID) }
+    private var attachmentRecoveryMessage: String? { drafts.state.attachmentRecoveryMessages[conversationID] }
+    /// The coordinator's message that the draft answers.
+    private var reply: CoordinatorReplyTarget? { isCoordinatorRoot ? drafts.state.replies[conversationID] : nil }
+    /// Why the last Reply or Edit could not make a reply.
+    private var replyNotice: String? { isCoordinatorRoot ? drafts.state.replyNotices[conversationID] : nil }
+
+    /// The composer is a one-line field until it has focus or content; then it
+    /// grows into a card with a button bar underneath the text. While input
+    /// stays open, the agent's working state lives at the transcript's tail,
+    /// not under the field.
+    private func isExpandedComposer(_ presentation: ToasttyComposerPresentation) -> Bool {
+        fieldTakesText(presentation)
+            && (isComposerFocused || !draft.isEmpty || !attachments.isEmpty)
+    }
+
+    /// The field takes text while the Mac allows input, and keeps taking it
+    /// while the user is in it. The gate closes for reasons that have nothing
+    /// to do with typing; the Mac holds a Claude prompt closed for 500 ms
+    /// after each turn, for example. Only the user's own actions take the
+    /// keyboard away (Send, a dismissal, leaving the chat, the background);
+    /// Send waits for the gate.
+    private func fieldTakesText(_ presentation: ToasttyComposerPresentation) -> Bool {
+        presentation.gate.allowsInput || isComposerFocused
     }
 
     private func composerBar(_ conversation: MobileConversation) -> some View {
-        let presentation = composer ?? lockedComposerFallback(conversation)
+        let presentation = composer
         let allowsAttachmentInput = presentation.gate.allowsInput && !isSubmitting
         let isExpanded = isExpandedComposer(presentation)
         let isWorking = presentation.gate.isWorking
@@ -400,8 +714,18 @@ struct ToasttyConversationScreen: View {
             ToasttyComposerMetadataView(
                 profile: conversation.executionProfile,
                 tabTitle: conversation.workspaceTabTitle,
-                isLastReported: controller.freshness != .live
+                isLastReported: isLastReported
             )
+            if let reply {
+                ToasttyComposerReplyBar(reply: reply, canCancel: !isSubmitting, cancel: cancelReply)
+            }
+            if let replyNotice {
+                Label(replyNotice, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(ToasttyDesignTokens.amberText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("toastty-mobile-composer-reply-notice")
+            }
             if ToasttyAttachmentTray.isVisible(
                 attachments: attachments,
                 supportsAttachments: supportsAttachments,
@@ -458,9 +782,6 @@ struct ToasttyConversationScreen: View {
                 }
             }
             .layoutPriority(usesCompactAttachmentComposer ? 1 : 0)
-            .onChange(of: draft.isEmpty && attachments.isEmpty) { _, isEmpty in
-                if isEmpty { queueSelection = nil }
-            }
 
             if presentation.canReleaseLocalDraft {
                 localDraftReleaseStatus(presentation)
@@ -573,19 +894,21 @@ struct ToasttyConversationScreen: View {
         ToasttyComposerTextView(
             text: draft,
             onTextChange: draftDidChange,
-            editRevision: draftEditRevision,
-            replacement: draftReplacement,
+            editRevision: drafts.state.editRevisions[conversationID, default: 0],
+            replacement: drafts.state.replacements[conversationID],
             onReplacementCompleted: draftReplacementCompleted,
             isFocused: $isComposerFocused,
             placeholder: presentation.placeholder,
-            isEnabled: presentation.gate.allowsInput,
+            isEnabled: fieldTakesText(presentation),
             accessibilityLabel: "Message \(presentation.agentDisplayName)",
             accessibilityHint: presentation.gate.allowsInput
                 ? "Enter a message, then use the Send button"
                 : disabledAccessibilityHint(presentation),
-            maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5
+            maximumVisibleLines: usesCompactAttachmentComposer ? 2 : 5,
+            mentionPicker: mentionPicker,
+            mentionCandidates: mentionCandidates
         )
-            .id(draftGeneration)
+            .id(drafts.generation)
             .id(conversationID)
             // Keep the measured UIKit text height when attachments and the
             // keyboard compete for space; the preview list can shrink instead.
@@ -623,7 +946,13 @@ struct ToasttyConversationScreen: View {
                 }
             }
             .animation(.easeOut(duration: 0.18), value: isComposerFocused)
-            .disabled(presentation.gate.allowsInput == false)
+            .disabled(fieldTakesText(presentation) == false)
+    }
+
+    /// The paperclip's Mention a Task, in the coordinator's chat.
+    private var mentionTask: (@MainActor @Sendable () -> Void)? {
+        guard let mentionPicker else { return nil }
+        return { mentionPicker.beginMention() }
     }
 
     private func attachmentPicker(_ presentation: ToasttyComposerPresentation) -> some View {
@@ -632,7 +961,9 @@ struct ToasttyConversationScreen: View {
             supportsAttachments: supportsAttachments,
             allowsInput: presentation.gate.allowsInput && !isSubmitting,
             isLoading: $isLoadingAttachments,
-            addAttachments: addAttachments
+            addAttachments: addAttachments,
+            mentionTask: mentionTask,
+            allowsMention: fieldTakesText(presentation) && !isSubmitting
         )
         .id(conversationID)
     }
@@ -665,15 +996,8 @@ struct ToasttyConversationScreen: View {
     /// picked Queue or the host does not allow steer right now.
     private func effectiveDeliveryMode(_ presentation: ToasttyComposerPresentation) -> RemoteMessageDeliveryMode {
         guard let sendMode = presentation.gate.sendMode, sendMode != .prompt else { return .queue }
-        return sendMode.deliveryMode(queueSelected: queueSelected(presentation))
-    }
-
-    private struct QueueSelection: Equatable {
-        let turnEpoch: RemoteInputEpoch?
-    }
-
-    private func queueSelected(_ presentation: ToasttyComposerPresentation) -> Bool {
-        queueSelection == QueueSelection(turnEpoch: presentation.runningTurnEpoch)
+        let selected = drafts.state.queuedTurnEpochs[conversationID]
+        return sendMode.deliveryMode(queueSelected: selected != nil && selected == presentation.runningTurnEpoch)
     }
 
     /// Steer is the default; the chip takes the accent only in Queue, so
@@ -683,7 +1007,7 @@ struct ToasttyConversationScreen: View {
         let isSteer = effectiveDeliveryMode(presentation) == .steer
         return Menu {
             Button {
-                queueSelection = nil
+                drafts.update { $0.queuedTurnEpochs[conversationID] = nil }
             } label: {
                 Label("Steer", systemImage: "arrow.triangle.merge")
                 Text("Adds to the running turn")
@@ -691,7 +1015,7 @@ struct ToasttyConversationScreen: View {
             .disabled(!canSteer)
             .accessibilityIdentifier("toastty-mobile-composer-mode-steer")
             Button {
-                queueSelection = QueueSelection(turnEpoch: presentation.runningTurnEpoch)
+                drafts.update { $0.queuedTurnEpochs[conversationID] = presentation.runningTurnEpoch }
             } label: {
                 Label("Queue", systemImage: "text.append")
                 Text("Sends after this turn")
@@ -806,28 +1130,10 @@ struct ToasttyConversationScreen: View {
         }
     }
 
-    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
-        var lifecycle = composerFocusLifecycle
-        isComposerFocused = lifecycle.focus(
-            afterTransitionTo: newPhase,
-            currentFocus: isComposerFocused
-        )
-        composerFocusLifecycle = lifecycle
-    }
-
     private func canSubmit(_ presentation: ToasttyComposerPresentation) -> Bool {
         isSubmitting == false && isLoadingAttachments == false
             && (attachments.isEmpty || supportsAttachments)
             && presentation.canSubmit(draft: draft, attachments: attachments)
-    }
-
-    private func lockedComposerFallback(
-        _ conversation: MobileConversation
-    ) -> ToasttyComposerPresentation {
-        ToasttyComposerPresentation.makeLockedFallback(
-            agentDisplayName: conversation.agent.displayName.capitalized,
-            inputAvailability: conversation.inputAvailability
-        )
     }
 
     private func composerStatusColor(
@@ -891,5 +1197,63 @@ struct ToasttyComposerFocusLifecyclePolicy: Equatable {
         @unknown default:
             return currentFocus
         }
+    }
+}
+
+/// The coordinator's message that the draft answers, above the field, as
+/// the Mac's reply bar shows it: who and when, the start of the message on
+/// two lines, and ✕. The text follows the phone's text size, and ✕ is a
+/// finger's size.
+private struct ToasttyComposerReplyBar: View {
+    let reply: CoordinatorReplyTarget
+    let canCancel: Bool
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label {
+                    Text(reply.time.map { "Replying to the coordinator · \($0)" } ?? "Replying to the coordinator")
+                } icon: {
+                    Image(systemName: "arrowshape.turn.up.left")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                .lineLimit(1)
+                Text(ToasttyMessageQuote.excerpt(of: reply.text))
+                    .font(.caption)
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .accessibilityIdentifier("toastty-mobile-composer-reply-excerpt")
+            }
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: cancel) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(ToasttyDesignTokens.mutedText)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(canCancel == false)
+            .accessibilityLabel("Remove reply")
+            .accessibilityHint("Sends the message as a new message")
+            .accessibilityIdentifier("toastty-mobile-composer-reply-cancel")
+        }
+        .padding(.leading, 12)
+        .background(
+            ToasttyDesignTokens.amber.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: ToasttyDesignTokens.controlCornerRadius, style: .continuous)
+        )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(ToasttyDesignTokens.amber)
+                .frame(width: 3)
+                .padding(.vertical, 4)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("toastty-mobile-composer-reply")
     }
 }

@@ -50,6 +50,26 @@ final class TerminalHostViewInteractionTests: TerminalHostViewTestCase {
         XCTAssertEqual(menu.items[2].action, #selector(TerminalHostView.searchWithGoogle(_:)))
     }
 
+    func testNewTaskFromSelectionCarriesTheSelectionReadWhenTheMenuOpened() throws {
+        let hostView = TerminalHostView()
+        var received: [String] = []
+        hostView.newTaskFromSelection = { received.append($0) }
+
+        let menu = hostView.makeContextMenu(
+            copyEnabled: true,
+            pasteEnabled: true,
+            selectionText: "error: socket closed"
+        )
+        let item = try XCTUnwrap(menu.items.last)
+        XCTAssertEqual(item.title, TerminalHostView.newTaskFromSelectionMenuItemTitle)
+
+        hostView.createTaskFromSelection(item)
+        XCTAssertEqual(received, ["error: socket closed"])
+
+        let emptySelectionMenu = hostView.makeContextMenu(copyEnabled: false, pasteEnabled: true, selectionText: nil)
+        XCTAssertFalse(emptySelectionMenu.items.contains { $0.title == TerminalHostView.newTaskFromSelectionMenuItemTitle })
+    }
+
     func testMakeContextMenuOmitsSearchWithGoogleForWhitespaceOnlySelection() {
         let hostView = TerminalHostView()
 

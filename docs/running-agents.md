@@ -5,7 +5,7 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 ## Quick start
 
 1. If you want to type `codex`, `cdx`, `claude`, `cursor-agent`, `grok`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, open the Getting Started panel with the top-bar `Get Started…` button, then use `Toastty > Install Shell Integration…` for automatic setup or copy the panel's manual setup command. Toastty never intercepts Cursor's generic `agent` alias.
-2. Toastty automatically exposes five session-only skills to supported managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches; no skills setup is required. You can also add your own skills under `~/.toastty/skills` (see [User-created skills](#user-created-skills))
+2. Toastty automatically exposes eight session-only skills to supported managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches; no skills setup is required. You can also add your own skills under `~/.toastty/skills` (see [User-created skills](#user-created-skills))
 3. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…`; it opens the Getting Started panel's Codex hooks section
 4. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or use the Getting Started panel's `Open agents.toml` link
 5. Uncomment or add a profile in `~/.toastty/agents.toml`
@@ -14,10 +14,16 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
+To hand an agent a piece of work instead, press `Option+Shift+T` from any app and create a task: Toastty starts the agent in a task space of its own, and the shipped skills take the work to a pull request and Merge. See [Your first task](tasks.md#your-first-task).
+
 Automation can also launch managed `codex`, `claude`, `cursor`, `grok`, `opencode`, `mimocode`, or `pi` sessions through
-`agent.launch` without an `agents.toml` profile. Configure `agents.toml` when
+`agent.launch` without an `agents.toml` profile. While `agents.toml` has no
+profile, [tasks](tasks.md) also offer the installed built-in agents that take a
+first message (Claude Code, Codex, Cursor, Grok Build and Pi), and Toastty
+Mobile the installed ones whose sessions it can show. Configure `agents.toml` when
 you want manual UI launch entries, shortcuts, custom argv, wrapper shim names,
-or custom initial-prompt support.
+or custom initial-prompt support. Once it has a profile, tasks and Toastty
+Mobile offer only its profiles.
 
 ## agents.toml
 
@@ -316,15 +322,19 @@ additional limitation on typing shell functions directly.
 
 When the profile ID is `codex`, Toastty:
 
-1. **Automatically enables five Toastty skills only for the managed process**. Toastty populates a Toastty-owned plugin cache at `$CODEX_HOME/plugins/cache/toastty/toastty/` (installed through the local Codex CLI against a throwaway Codex home, digest-verified, then swapped in atomically), writes a Toastty-owned profile overlay at `$CODEX_HOME/toastty-managed.config.toml` that enables that cached plugin, and injects `--profile toastty-managed` after the resolved Codex executable. This activates `toastty-capabilities`, `toastty-open-markdown`, `toastty-read-terminal`, `toastty-scratchpad`, and `toastty-send-diagnostics` for exactly the flagged process across direct `codex`/`cdx`, resume, fork, and documented wrapper-prefix launch shapes. The overlay's exact full-line Toastty marker establishes ownership wherever it appears; Codex may prepend profile settings, which Toastty preserves along with unrelated TOML content. An existing file without that marker is treated as foreign and is never overwritten. Cache receipts verify the installed plugin bytes but do not determine profile ownership. The user's `config.toml` is never written, and ordinary Codex sessions see no Toastty skills. Injection fails open with no skills when the caller already passes a `--profile` or `-p` flag, when the argv shape is opaque, or when the launch sets a `CODEX_HOME` different from the one Toastty provisioned. Provisioning is fail-open and capped at four seconds; verified installs are reused on later launches through cheap byte checks against receipts under `~/.toastty/agent-plugins/codex/`. A changed bundled version installs immediately, even while other Codex sessions run; existing processes pick up the change after restart. Restored sessions prepare the current bundle before their resume command is submitted, fall back to an older verified cache (reported as stale) when a refresh fails, and launch without skills when nothing verifies. The first provisioning after updating from an older Toastty also removes the retired marketplace-based install through Codex, and surgically deletes the retired mechanism's disabled `toastty:*` `[[skills.config]]` entries from the user's `config.toml` (they would otherwise silently suppress the profile-delivered skills), preserving every other line and writing a timestamped backup under `~/.toastty/agent-plugins/codex/` first. `Toastty > Manage Toastty Skills…` shows delivery statuses for Codex and the shared Claude Code/Cursor/Grok/Pi/OpenCode/MiMo Code card, all five skill summaries, your user-created skills, manual duplicate guidance, plus Codex status and a Repair control.
+1. **Automatically enables eight Toastty skills only for the managed process**. Toastty populates a Toastty-owned plugin cache at `$CODEX_HOME/plugins/cache/toastty/toastty/` (installed through the local Codex CLI against a throwaway Codex home, digest-verified, then swapped in atomically), writes a Toastty-owned profile overlay at `$CODEX_HOME/toastty-managed.config.toml` that enables that cached plugin, and injects `--profile toastty-managed` after the resolved Codex executable. This activates `toastty-capabilities`, `toastty-coordinator`, `toastty-open-markdown`, `toastty-read-terminal`, `toastty-scratchpad`, `toastty-send-diagnostics`, `toastty-task-merge`, and `toastty-task-start` for exactly the flagged process across direct `codex`/`cdx`, resume, fork, and documented wrapper-prefix launch shapes. The overlay's exact full-line Toastty marker establishes ownership wherever it appears; Codex may prepend profile settings, which Toastty preserves along with unrelated TOML content. An existing file without that marker is treated as foreign and is never overwritten. Cache receipts verify the installed plugin bytes but do not determine profile ownership. The user's `config.toml` is never written, and ordinary Codex sessions see no Toastty skills. Injection fails open with no skills when the caller already passes a `--profile` or `-p` flag, when the argv shape is opaque, or when the launch sets a `CODEX_HOME` different from the one Toastty provisioned. Provisioning is fail-open and capped at four seconds; verified installs are reused on later launches through cheap byte checks against receipts under `~/.toastty/agent-plugins/codex/`. A changed bundled version installs immediately, even while other Codex sessions run; existing processes pick up the change after restart. Restored sessions prepare the current bundle before their resume command is submitted, fall back to an older verified cache (reported as stale) when a refresh fails, and launch without skills when nothing verifies. The first provisioning after updating from an older Toastty also removes the retired marketplace-based install through Codex, and surgically deletes the retired mechanism's disabled `toastty:*` `[[skills.config]]` entries from the user's `config.toml` (they would otherwise silently suppress the profile-delivered skills), preserving every other line and writing a timestamped backup under `~/.toastty/agent-plugins/codex/` first. `Toastty > Manage Toastty Skills…` shows delivery statuses for Codex and the shared Claude Code/Cursor/Grok/Pi/OpenCode/MiMo Code card, all eight skill summaries, your user-created skills, manual duplicate guidance, plus Codex status and a Repair control.
 2. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default. Skills provisioning never adds, removes, or changes hooks.
 3. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, native resume metadata, and Codex collaboration-agent rows for managed Codex sessions. A recognized `PreToolUse` spawn event also captures the delegated task name and any plaintext description Codex exposes. Newer Codex builds leave the task name readable but may provide the message as opaque ciphertext, which Toastty discards. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval. When the reviewer field is omitted in a resumed session, Toastty treats the permission request as ambiguous instead of immediately showing **Needs approval**.
 4. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
 5. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 6. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and permits Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=0` so fullscreen selections can receive `Cmd+C`. The explicit value overrides the disabling setting inherited from older managed sessions. Codex owns its keyboard-mode setup and exit cleanup; existing sessions must restart after updating Toastty.
 7. **Starts local session watchers**. Toastty polls the durable per-launch TUI session log (every 250 ms) for Codex root-turn and auto-review approval context; when hooks are unavailable, that log also provides the compatibility status fallback. A Codex `PermissionRequest` hook can precede automatic review. If its approval context is missing or its reviewer is unknown, Toastty keeps the request pending and does not send approval alerts merely because time passed. Approval alerts require context that confirms human review. After Codex reports native resume metadata, Toastty separately watches that session's native rollout JSONL for collaboration-agent lifecycle and the spawn-tool-to-child-agent identity mapping. When hooks are installed, hooks remain authoritative for collaboration lifecycle, while rollout events provide correlation metadata and a task-label fallback. Toastty joins that mapping with available `PreToolUse` metadata regardless of arrival order. When hooks are unavailable, the rollout watcher also provides the compatibility collaboration-lifecycle fallback.
-8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
+8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves. For sessions tracked by hooks, pressing Esc or Ctrl-C keeps the current status until Codex confirms the outcome. A `turn_aborted` event in the native rollout for the current root turn sets the session to **Idle**.
 9. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the durable per-launch artifacts directory.
+
+Computer Use requests app access through MCP elicitation. When Codex shows its
+app approval menu in the terminal, Toastty uses that menu to show the task in
+**Needs you**. Use the Codex menu to answer the request.
 
 To remove Toastty's Codex state by hand (for example after deleting the app),
 delete the plugin cache subtrees under `$CODEX_HOME/plugins/cache/toastty/` and
@@ -350,21 +360,22 @@ launches when Toastty's managed command shims are enabled.
 
 When the profile ID is `claude`, Toastty:
 
-1. **Adds the five Toastty skills without installing into Claude's user state**. Toastty stages an immutable validated plugin copy and passes it to supported managed launches with an additive `--plugin-dir`. When user-created skills are accepted, Toastty passes a second additive `--plugin-dir` pointing at the immutable user-skills snapshot; user-plugin failures never affect the shipped Toastty skills. Existing user `--plugin-dir` arguments remain in place. After an app update, restored sessions stage the current bundle before the resume command is submitted. If staging fails or the launch shape is opaque, Claude still launches without Toastty skills.
+1. **Adds the eight Toastty skills without installing into Claude's user state**. Toastty stages an immutable validated plugin copy and passes it to supported managed launches with an additive `--plugin-dir`. When user-created skills are accepted, Toastty passes a second additive `--plugin-dir` pointing at the immutable user-skills snapshot; user-plugin failures never affect the shipped Toastty skills. Existing user `--plugin-dir` arguments remain in place. After an app update, restored sessions stage the current bundle before the resume command is submitted. If staging fails or the launch shape is opaque, Claude still launches without Toastty skills.
 2. **Creates a hook script** that calls `toastty session ingest-agent-event --source claude-hooks`
 3. **Resolves existing Claude settings** — if the profile's `argv` includes `--settings`, Toastty reads and merges with those settings rather than replacing them
 4. **Injects lifecycle hooks** into the merged Claude settings JSON under `hooks`:
    - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume. A `compact` start, including Claude's idle compaction, continues the same conversation, so it refreshes this metadata without resetting the paired-device conversation feed or closing its open prompt
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
+   - `StopFailure` — fires in place of `Stop` when an API error (rate limit, overload, authentication, output limit) ends the turn. Toastty shows **Error** with Claude's error text and ends the turn, so the next message can be typed
    - `PostToolUse` — tracks launched subagents and named teammates with available metadata; child tool completion clears that child's approval
    - `PostToolUseFailure` — clears completed child approvals and question requests
    - `SubagentStart` — tracks Workflow children and resumes known teammates
    - `SubagentStop` — removes completed Claude subagent rows
    - `TeammateIdle` — removes an idle teammate's active row when Claude supplies its agent ID
-   - `PreToolUse` (wildcard matcher) — fires before any tool use
+   - `PreToolUse` (wildcard matcher) — fires before any tool use. A main-agent tool call shows **Working**. A tool call from an agent that Toastty does not track shows **Working** only during a main turn; see below
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
-   - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
+   - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready** (except after a failed turn, whose **Error** stays until the next turn), `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
 5. **Writes a private process-lifetime settings file** and passes `--settings <path>` to Claude
 
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). `SessionStart` also persists Claude native resume metadata so restored managed Claude panels can run `claude --resume <session-id>` instead of starting a fresh session. Non-actionable notifications such as `auth_success` are ignored.
@@ -408,7 +419,7 @@ When the profile ID is `opencode` or `mimocode`, Toastty:
 
 1. **Creates a temporary OpenCode-compatible plugin** inside the per-session launch artifacts directory. Toastty does not write to `.opencode`, `.mimocode`, or global provider config files.
 2. **Injects the plugin through provider config content**. OpenCode launches receive `OPENCODE_CONFIG_CONTENT`; MiMo Code launches receive `MIMOCODE_CONFIG_CONTENT`. If a launch environment already sets the matching config-content variable, Toastty does not overwrite it and launches without status instrumentation.
-3. **Adds the five Toastty skills through the same config content**. Toastty extends that JSON blob with a `"skills": {"paths": [...]}` entry (plain absolute paths, never `file://`) pointing at the same staged shipped-skills tree used for Claude's `--plugin-dir` and, when user-created skills are accepted, the same staged user-skills snapshot — no new staging, caches, or config files. Because opencode and mimocode replace the `skills` object wholesale across config layers rather than merging it, a user's own `skills.paths` entries in global or project config are shadowed for the duration of a managed session (the `plugin` and `instructions` arrays in the same blob still merge normally). A discovered skill of the same name elsewhere in opencode/mimocode's discovery locations can win or lose against Toastty's injected copy nondeterministically, run to run. This collision is real in practice: repositories that mirror the shipped skills into `.agents/skills` (Toastty's own repos do), or home-level copies such as `~/.agents/skills/toastty-scratchpad`, collide with the injected set by name — harmless when the copies carry the same content, unpredictable when they diverge. The skills sheet's duplicate guidance covers removing stale copies. MiMo Code also auto-discovers project `.opencode/skills`, `.claude/skills`, `.agents/skills`, and `.mimocode/skills`, plus those same four directories and `~/.codex/skills` under `$HOME`, independent of anything Toastty injects.
+3. **Adds the eight Toastty skills through the same config content**. Toastty extends that JSON blob with a `"skills": {"paths": [...]}` entry (plain absolute paths, never `file://`) pointing at the same staged shipped-skills tree used for Claude's `--plugin-dir` and, when user-created skills are accepted, the same staged user-skills snapshot — no new staging, caches, or config files. Because opencode and mimocode replace the `skills` object wholesale across config layers rather than merging it, a user's own `skills.paths` entries in global or project config are shadowed for the duration of a managed session (the `plugin` and `instructions` arrays in the same blob still merge normally). A discovered skill of the same name elsewhere in opencode/mimocode's discovery locations can win or lose against Toastty's injected copy nondeterministically, run to run. This collision is real in practice: repositories that mirror the shipped skills into `.agents/skills` (Toastty's own repos do), or home-level copies such as `~/.agents/skills/toastty-scratchpad`, collide with the injected set by name — harmless when the copies carry the same content, unpredictable when they diverge. The skills sheet's duplicate guidance covers removing stale copies. MiMo Code also auto-discovers project `.opencode/skills`, `.claude/skills`, `.agents/skills`, and `.mimocode/skills`, plus those same four directories and `~/.codex/skills` under `$HOME`, independent of anything Toastty injects.
 4. **Reports status through** `toastty session ingest-agent-event --source opencode-plugin` or `--source mimocode-plugin`. Toastty maps `session.status`, `session.idle`, `permission.asked`, `permission.replied`, and `session.error` into sidebar **Working**, **Ready**, **Needs approval**, and **Error** states.
 5. **Tracks direct provider sub-sessions** after the root session identity is known. Direct children appear as sidebar child rows, receive model updates from their own assistant-message metadata, and are removed on child or root termination. Nested descendants are intentionally not projected onto the root. Recognized effort-named model variants such as `low`, `medium`, `high`, and `xhigh` appear as reasoning effort; arbitrary custom variant names are omitted instead of being presented as an effort level.
 6. **Captures native resume metadata** when plugin hooks expose a provider session ID. An explicit `--session` / `-s` launch argument seeds an initial root-identity hint, which the first root message or root-creation event confirms or replaces; fresh launches claim the same identity from those hooks. The plugin writes a Toastty-owned per-session marker under `~/.toastty/managed-agent-resume/` (or `<runtime-home>/managed-agent-resume/` for isolated runs) and reports only the native session ID, marker path, and working directory back to Toastty.
@@ -423,7 +434,7 @@ Typed `opencode`, `mimo`, and `mimocode` launches use the same instrumentation p
 When the profile ID is `pi`, Toastty:
 
 1. **Injects a bundled Toastty-owned Pi extension** with `--extension <toastty-pi-extension.js>`. Toastty does not install files into Pi's user extension directories.
-2. **Adds the five Toastty skills through repeatable `--skill` flags**. Toastty inserts `--skill <shipped skills tree>` and, when user-created skills are accepted, `--skill <user skills snapshot tree>` at the same insertion point as its extension flag — the same staged trees used for Claude's `--plugin-dir`, no new staging. Injection is skipped, fail open, when the caller's argv already contains `--no-skills` or `-ns`, or when the launch shape is opaque; a caller-supplied `--skill` flag is left in place and Toastty's own flags are additive. Pi auto-discovers skills from `<cwd>/.pi/skills`, `.agents/skills` in `cwd` and every ancestor directory up to the enclosing git root, `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`), and `~/.agents/skills`; a same-named discovered skill silently wins over an injected `--skill`, with no visible diagnostic in non-interactive mode. Pi also only surfaces injected (and discovered) skills to the model when the `read` tool is enabled — a `--tools` allowlist that omits `read` makes them invisible even though they still loaded.
+2. **Adds the eight Toastty skills through repeatable `--skill` flags**. Toastty inserts `--skill <shipped skills tree>` and, when user-created skills are accepted, `--skill <user skills snapshot tree>` at the same insertion point as its extension flag — the same staged trees used for Claude's `--plugin-dir`, no new staging. Injection is skipped, fail open, when the caller's argv already contains `--no-skills` or `-ns`, or when the launch shape is opaque; a caller-supplied `--skill` flag is left in place and Toastty's own flags are additive. Pi auto-discovers skills from `<cwd>/.pi/skills`, `.agents/skills` in `cwd` and every ancestor directory up to the enclosing git root, `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`), and `~/.agents/skills`; a same-named discovered skill silently wins over an injected `--skill`, with no visible diagnostic in non-interactive mode. Pi also only surfaces injected (and discovered) skills to the model when the `read` tool is enabled — a `--tools` allowlist that omits `read` makes them invisible even though they still loaded.
 3. **Preserves user extensions**. User-provided `--extension` / `-e` arguments remain in `argv`; Pi treats extensions as additive, so Toastty adds its extension alongside them.
 4. **Respects Pi extension opt-out flags**. If `--no-extensions` or `-ne` appears before `--`, Toastty does not inject its Pi extension for that launch.
 5. **Reports compact telemetry** through `toastty session ingest-agent-event --source pi-extension`, covering the submitted prompt, final assistant summary, semantic tool-call progress, tool errors, and changed-file paths when Pi exposes them. Successful tool results update changed-file metadata without replacing the sidebar with generic `Finished ...` messages.
@@ -450,7 +461,7 @@ checks the exact Toastty session ID and producer PID against the recorded owner
 before forwarding events; skipped events are drained so other sessions and
 nested Grok processes can continue normally.
 
-Toastty also copies its five built-in skills and your accepted user skills into
+Toastty also copies its eight built-in skills and your accepted user skills into
 the private launch directory. Grok discovers these through its workspace-user
 directory, selected by `XAI_ROOT` and `XAI_USER` for that process. The launcher
 preserves either variable if already set and skips skill delivery for that
@@ -489,67 +500,64 @@ launch's `hooks.json`.
 
 ## Worktree tasks
 
-The optional [personal workflow skills](../examples/skills/README.md) show how to
-build your own development workflow with Toastty. Toastty bundles them with the
-app: ask an agent to set up the worktree handoff, during onboarding or later, and
-it reads `"$TOASTTY_CLI_PATH" setup guide --topic workflows`, then copies and
-adapts the packages into `~/.toastty/skills`. You can also copy them by hand.
-The same guide gives an agent ideas and rules for writing a workflow of your own. `worktree-create` continues an agreed task in its own Git
-worktree and background Toastty workspace. It preserves the plan and local task
-identity; the child session then designs, implements, reviews, and verifies the
-change there under the repository's review and testing instructions, and
-presents its verification evidence as an HTML report in the task workspace's
-right panel. The workspace shows a PR chip once the task publishes one. After a
-verified handoff, the launching session exits by default.
+A task can move into its own Git worktree without a handoff. The shipped
+`toastty-task-start` skill tells managed agents how: when you tell an agent in
+a task to implement the work, it runs `toastty task start-work` and ends its
+turn. Toastty then works through these steps, saving each one so that Retry
+continues where a failure stopped:
 
-The skill's `open-toastty-worktree-session.sh` helper drives a normal running
-Toastty instance through the CLI. It resolves the current Toastty window, scopes
-the current parent session to its workspace when the parent is unrestricted,
-creates a background workspace, opens `WORKTREE_HANDOFF.md` as a local-document
-panel using Toastty's default Markdown placement, and launches the new agent
-with structured `agent.launch` arguments for `cwd`, environment,
-`initialPrompt`, and optional setup commands (`--initial-command`). Fully
-custom startup commands remain available through the helper's explicit
-`--startup-command` path.
+1. It fetches the base, the remote's default branch unless the agent passed
+   `--base`, and pins the commit that the fetch returned. Starts from the same
+   repository take turns at this step, so they never read each other's
+   `FETCH_HEAD`.
+2. It adds the worktree next to the repository's main checkout, named
+   `<repository>-<slug>`, on the branch `<prefix>/<slug>`. A name that is taken
+   locally or on the remote gets `-2`, `-3` and so on.
+3. It runs the project's `create_hook` from `~/.toastty/tasks.toml` in the
+   worktree.
+4. When the agent's turn ends, it forks the Codex or Claude Code conversation
+   into a new terminal tab of the same task space, working in the worktree.
+5. Once the fork reports a conversation of its own, it closes the old session's
+   pane. The old session stays if someone typed into it after the move began,
+   if it started new work, or if the fork does not start within 60 seconds.
 
-Before branching, the launcher honors an explicit base or continuation; otherwise
-it fetches the intended landing branch and compares it with the local branch. It
-resolves local-only or divergent commits against task intent, pins the selected
-commit, and records the choice and fetch status in the handoff. It leaves the
-parent checkout unchanged and uses a stale fallback only with explicit permission.
+Other agents start fresh in the worktree with the task text, and their old
+session stays. An agent can also split agreed work into new tasks that start in
+their own worktrees with `toastty task create --start-work`. See
+[Tasks](tasks.md#work-in-a-git-worktree) for the commands and settings.
 
-Before launch, the parent explicitly chooses the child's model and reasoning effort
-from the target provider's available options. It preserves Codex versus Claude by
-default, honors user choices, and considers uncertainty, implementation complexity,
-and verification difficulty. The handoff and launch summary record the selection
-and rationale. The helper passes `--model` and `--reasoning-effort` through the
-managed launch API and rejects unsupported overrides before creating a workspace;
-it does not silently fall back to defaults. Existing personal copies need the
-updated skill and helper to adopt this behavior.
+The task's agent completes required review and automated checks and publishes a
+PR for the user's testing. A ready PR does not authorize merging.
 
-The personal task workflow uses three skills: `worktree-create`,
-`worktree-done`, and `worktree-cleanup`. Create a task workspace and worktree at
-the start of the task, then keep design, implementation and user testing in the
-same conversation. When planning already happened elsewhere, the launcher can fork
-a verified Codex/Claude conversation into the worktree through `agent.launch`.
-It sets an explicit cwd and creates a distinct session; later parent messages
-do not transfer. Requested forks never silently fall back to a fresh summary.
-
-The child completes required review and automated checks and publishes a PR for
-the user's testing. A ready PR does not authorize merging.
-
-The user's `worktree-done` request, made in the task workspace, accepts the
-reviewed version. The skill checks that the worktree is clean at exactly the PR
-head, then enables GitHub auto-merge so the PR lands when required checks pass,
-and marks the workspace done with `workspace.set-done`, which shows as a check
-on its task space row. New work in the workspace clears the check; new commits
-need the user's review and a new `worktree-done` request.
+The user accepts the reviewed version with **Merge** on the task. Toastty then
+sends the task's agent `Use the toastty-task-merge skill.`, unless the
+project's `merge_skill` or `merge_prompt` in `~/.toastty/tasks.toml` says
+otherwise. The shipped
+`toastty-task-merge` skill checks review threads, merge prerequisites, tasks that
+must land first, and CI, then runs `toastty task merge`, or reports what blocks
+the merge. Saying "merge it" in the session runs the same skill. See
+[Tasks](tasks.md#merge-a-task) for the whole flow.
 
 ### Merging a task's pull request
 
-The Merge button, its context menu items, and `Option+Shift+M` are off by
-default while task lifecycle hooks are built to replace them. To turn them on,
-run `defaults write com.GiantThings.toastty toastty.workspaceMergeEnabled -bool true`
+A task space that has a task record and a pull request shows the Merge button.
+Its Merge goes through the task: the agent checks the pull request first unless the
+project sets `merge = "direct"`, Toastty always cleans up after the merge, and
+the arrow menu offers **Merge Without Checks** and **Archive Task…** instead of
+the modes below. See [Tasks](tasks.md#merge-a-task).
+
+Without a pull request, a task that is Ready for review offers a green
+**Complete Task** button. After you confirm, Toastty marks the task Done,
+closes its task space and ends the agent sessions there. Any worktree stays.
+See [Finish without a pull request](tasks.md#finish-without-a-pull-request).
+Active work or a reply request takes priority over an earlier ready mark.
+At other stages, the header offers **Archive Task…**.
+Archive remains available in the task menu. Archiving asks for confirmation
+and keeps the existing checks for unsaved work.
+
+For other subspaces, the Merge button, its context menu items, and
+`Option+Shift+M` are off by default. To turn them on, run
+`defaults write com.GiantThings.toastty toastty.workspaceMergeEnabled -bool true`
 and relaunch Toastty.
 
 A task space with a `github-pr` annotation shows a **Merge PR #N** button under
@@ -578,12 +586,12 @@ anything:
 
 - The workspace's checkout must be the pull request's worktree, and the
   worktree must be clean and at exactly the pull request's head commit. The
-  pull request must target the repository's default branch.
+  merge uses the pull request's current target branch, including a feature
+  branch. That branch does not need to merge into the default branch first.
 - Toastty refuses a pull request with merge conflicts, failing checks, or a
-  branch that GitHub requires to be updated first. It also refuses one whose
-  description lists merge prerequisites: an "Activation order", "Merge order",
-  "Rollout", or "Depends on" section, or a link to a pull request in another
-  repository. Merge that pull request yourself once its prerequisites are done.
+  branch that GitHub requires to be updated first. It does not read the
+  description: check its merge prerequisites before you click. For a task,
+  the merge skill does that check.
 - Toastty also refuses a pull request that already has auto-merge on, because
   GitHub would merge commits pushed later too. Turn auto-merge off on GitHub
   first. Branches that require a merge queue are not supported.
@@ -595,25 +603,35 @@ still running, or GitHub is waiting on a required review, Toastty waits and
 tries again every 30 seconds. It never turns on GitHub auto-merge, because
 GitHub would then also merge commits pushed after your click. Toastty merges
 only the commit you accepted, and GitHub refuses that merge if the branch has
-moved. Toastty marks the workspace done when you click, so a Merge Only shows
+moved. Toastty saves the target branch with a waiting merge and stops if the
+pull request is retargeted. A saved wait from an older version that did not
+record the target requires a new merge acceptance. Toastty marks the workspace done when you click, so a Merge Only shows
 **Done · PR #N** while it waits.
 
 - A waiting merge needs Toastty to be running. It is kept across launches and
   resumes after a relaunch.
 - To cancel a waiting merge, clear the workspace's done mark in the sidebar.
-  New agent work in the workspace clears it too.
+  A notification says that the pull request was not merged, and why. New
+  agent work in the workspace keeps the mark while the merge waits, because
+  the merge is of the commit you accepted.
 - If the merge can no longer happen, for example because new commits were
-  pushed, a check failed, or `gh` failed three times in a row, Toastty stops
+  pushed or made in the worktree, a check failed, or `gh` failed three times
+  in a row, Toastty stops
   waiting, clears the done mark so the Merge button comes back, and a
   notification gives the reason. A refusal at the click shows an alert and
   changes nothing.
-- Top-level workspaces do not show the button, because only a task space holds a
-  done mark.
+- Top-level workspaces do not show the button, because only a subspace row
+  shows a done mark. A subspace that moves to top level, for example when its
+  parent workspace closes, loses its mark, and a merge waiting there stops
+  with a notification. A task's task space keeps its mark at top level, so
+  its waiting merge and cleanup continue.
 
 After a Merge and Clean, the button reads **Merging PR #N…** until the merge is
 done, and **Cleaning Up PR #N…** while Toastty cleans up. Toastty confirms with `gh pr view` that the pull request
-merged, then closes the workspace, removes the worktree, and deletes the local
-and remote branch, and a notification reports the result.
+merged, waits until no agent in the workspace is in a turn, then closes the
+workspace, removes the worktree, and deletes the local and remote branch, and a
+notification reports the result. Waiting for the turn lets an agent that merged
+with `toastty task merge` finish its reply.
 
 - Toastty checks again before it cleans up. It skips the cleanup when the
   worktree has uncommitted changes or is not at the PR head, when the
@@ -631,9 +649,20 @@ and remote branch, and a notification reports the result.
   reason. Its menu offers **Retry Clean Up** and **Don't Clean Up**. A cleanup
   that closes the workspace and then cannot remove the worktree or a branch
   reports what it kept in a notification. A pull request that closes without
-  merging, or three failed `gh` checks in a row, also stops the cleanup.
+  merging also stops the cleanup.
+- A cleanup that fails for a cause that can pass, such as no network, a
+  GitHub error, or Toastty not answering the script's workspace list in time,
+  runs again by itself: after 1, 5, 15 and 30 minutes. This
+  applies when the cleanup script ends with an error instead of its report, or
+  when three `gh` checks of the merged pull request in a row fail. While a
+  failed script run waits, the button reads **Done · PR #N** and a task's
+  status line says when its task space closes; while a failed check waits,
+  the button keeps **Merging PR #N…**. Only after the last retry fails does the button read
+  **Cleanup Stopped · PR #N**. A cleanup that Toastty skips for one of the
+  reasons above stops at once, because it needs you.
 - New work in the workspace clears its done mark and drops the cleanup, because
-  the merge is no longer the version you accepted.
+  the merge is no longer the version you accepted. Toastty checks the mark again
+  in the same step that closes the workspace.
 - A pending cleanup is kept across launches.
 
 To abandon a task instead, choose **Close Without Merging…** from the arrow
@@ -654,28 +683,29 @@ meanwhile.
 - A pull request that is already closed is cleaned up the same way. A merged
   pull request is refused.
 
-For pull requests merged another way, run `worktree-cleanup` from an outside
-project workspace. Its status script lists
-each task PR as ready, merged and awaiting cleanup, or blocked with a reason. It
-merges only PRs the user names. With `--cleanup-merged`, it closes the task
-workspace, removes the worktree and deletes the branches for merged PRs, using the
-`workspace.list` query to find each workspace. Closing a workspace ends its agent
-sessions and running terminal commands, and the cleanup report names what it
-ended; a workspace with unsaved documents is skipped. The same detached-worktree
-checks apply here. This cleans up release worktrees; it does not perform a release
-or deployment.
+A task's pull request merged on GitHub is your acceptance too. Toastty cleans up
+its task space the same way when its agent is at rest, and the worktree is
+clean at the merged head. Otherwise the task shows **Merged · clean up?** in
+Needs you, with **Clean Up** and **Keep As Is** in the Tasks view. Subspaces
+without a task record are never cleaned up on their own.
 
 ## User-created skills
 
-Alongside the five shipped skills, Toastty delivers your own skills to managed
+Alongside the eight shipped skills, Toastty delivers your own skills to managed
 Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi sessions.
 
-See [examples/skills/](../examples/skills/README.md) for the complete worktree
-packages, installation instructions, and guidance on customizing
-their workflow. Toastty bundles them with the app, and the workflow guide
-(`setup guide --topic workflows`) tells agents where they are. As of plugin 0.4.2, `worktree-create` is an opt-in personal skill;
-it is no longer included in the shipped plugin. Existing custom copies are yours
-to keep and edit. `worktree-done` and `worktree-cleanup` are also personal examples.
+Running and merging a task are built in, through the shipped
+`toastty-task-start` and `toastty-task-merge` skills, so the earlier
+`worktree-create`, `worktree-done` and `worktree-cleanup` examples are gone.
+Delete your personal copies of them from `~/.toastty/skills`. They still load
+and still work, so they compete with the task skills: an agent can pick
+`worktree-create` in place of `toastty-task-start`, and `worktree-done` turns
+on GitHub auto-merge (`gh pr merge --auto`), which the task merge never does.
+See [Updating from 0.9.x](tasks.md#updating-from-09x). To add rules that apply only to tasks, set `start_prompt` in
+`~/.toastty/tasks.toml`. To merge with your own skill, name it in the project's
+`merge_skill`. The workflow guide
+(`setup guide --topic workflows`) gives an agent rules for writing a workflow
+of your own.
 
 - **Authoring**: create `~/.toastty/skills/<name>/SKILL.md` with YAML
   frontmatter containing `name` and a non-empty `description`. The directory
@@ -865,7 +895,7 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
 | `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude, Codex, Cursor, OpenCode, MiMo Code, and Pi helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
 | `TOASTTY_CLI_PATH` | Path to this Toastty instance's staged `toastty` CLI copy |
-| `TOASTTY_AGENT` | Managed provider ID. The `worktree-create` skill preserves `codex` or `claude` when it launches the handoff session. |
+| `TOASTTY_AGENT` | Managed provider ID, such as `codex` or `claude` |
 | `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
 | `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
 | `TOASTTY_SKILLS_ROOT` | Delivered shipped Toastty plugin `skills/` path for supported managed Codex, Claude Code, Cursor, Grok Build, OpenCode, MiMo Code, and Pi launches (the verified Toastty-owned Codex plugin cache, or the immutable staged plugin copy also reused for Claude/Cursor `--plugin-dir`, pi's `--skill`, and OpenCode/MiMo Code `skills.paths`, or Grok’s process-owned copy); set only when the shipped tree was actually injected, absent when preparation, verification, or safe argument/config insertion is unavailable. Reserved and read-only for agents; never write into it |
@@ -1071,6 +1101,15 @@ When the child continues or finishes, Toastty restores the prior main status
 unless a newer main event has replaced it. New managed launches receive the
 updated hooks; an already-running Claude process must be relaunched to use them.
 
+A tool event from an agent ID that Toastty does not track (not a known teammate
+and not a tracked background sub-agent) sets the main session to **Working**
+only while the main session is in a turn, including an approval pause. Outside
+a turn, Toastty ignores it. Claude Code runs side queries, such as the away
+summary (recap) when the terminal loses focus and prompt suggestions, under a
+new agent ID. Such a query can send `PreToolUse`, and no later hook ends it, so
+it is not the agent's turn. Verified with Claude Code 2.1.325. A tool event from
+a tracked background sub-agent still sets the main session to **Working**.
+
 Toastty-owned provider integrations report this activity through internal
 provider events such as `session.claude_subagent_event`, or through the
 `session background-activity` CLI command and `session.background_activity`
@@ -1081,7 +1120,7 @@ socket event. Custom agents should normally use the ordinary `session status`,
 
 Use `Cmd+Shift+L` to flag or clear the focused managed session for later follow-up.
 
-Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
+Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then open task spaces ready for review, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
 
 Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
 
@@ -1098,7 +1137,8 @@ agent started, or since Toastty relaunched, also asks.
 When the session's tab is the only tab in its workspace, closing it also
 closes the workspace, so Toastty always asks first. One **Close Workspace**
 confirmation covers stopping a running agent too. Closing the workspace does
-not clean up an associated git worktree; use `worktree-cleanup` for that.
+not clean up an associated git worktree; archive the task instead, which also
+removes its worktree.
 
 Toastty refuses to close a session whose tab holds a right-panel document with
 unsaved changes. Save or close the document first.
@@ -1111,8 +1151,8 @@ typed into its terminal after the exit, when it is its workspace's only tab, or
 when it holds an unsaved document. Toastty remembers these tabs until it quits.
 
 An agent can ask to exit when its current turn completes with the
-`session.exit-after-turn` action; the `worktree-create` skill uses it so the
-launching session exits after its handoff. Toastty then types the agent's native
+`session.exit-after-turn` action, for example so a session exits after it hands
+its work to another. Toastty then types the agent's native
 `/exit`. It supports Claude Code and Codex, in top-level workspaces only: a
 task space is marked done when its work is finished, so its sessions do not exit
 on request. It skips the exit when anyone typed
@@ -1143,9 +1183,12 @@ launch option disables hooks. A later accepted managed status takes priority
 again. A quiet agent does not cause a switch. Hook settings outside the supplied
 launch settings are not inspected. A manual process watch also keeps priority.
 
-The sidebar expands to its session width when the first program row appears
-in a window. Wider widths and later manual resizing are preserved. Explicit
-progress percentages use blue text.
+Managed Codex sessions also use a terminal permission report to show a live
+wait, including Computer Use requests. Codex handles the decision in its
+terminal. Toastty uses the visible Computer Use menu on older Codex versions
+that lack the report.
+
+Explicit progress percentages use blue text.
 
 A shell prompt or terminal process exit clears working, blocked, and idle
 records. Programs should send `state=done` or `state=error` before exiting.

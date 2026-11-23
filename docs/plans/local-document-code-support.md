@@ -1,5 +1,9 @@
 # broader local-document code support
 
+> **Historical plan.** It records the design as planned when it was written and is
+> not kept up to date. For current behavior, see the reference documents listed in
+> [the README](../../README.md#documentation).
+
 Date: 2026-04-20
 
 ## goal

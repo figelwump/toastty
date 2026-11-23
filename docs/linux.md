@@ -603,10 +603,33 @@ RGBA bitmap/PNG. Push relay configuration comes from
   The fuzzy scorer, file search engine, file-open provider, usage tracker, and
   context compile.
 - Sparkle updates; `RemoteAccessPairingQRCode` (Linux replacement).
+- Tasks, Coordinator and Quick Entry UI (macOS 0.10 task system): the
+  SwiftUI and AppKit views (`TasksView`, `TaskSetupCard`,
+  `TaskWebhookApprovalViews`, `TaskContextMenuItems`, `TaskMarks`, the
+  coordinator chat, composer, dock, mentions and panel chrome,
+  `WhatsNewSheet`, the sidebar's task rows and coordinator row,
+  `LiveColumnResize`, `ToastyIcon+Mac`, the quick entry panel, picker panel,
+  text editor and global hot key, and the draft-attachment views) and their
+  view models (`CoordinatorChatModel`, `QuickEntryModel`,
+  `QuickEntryController`, `DraftAttachments`), plus the AppKit key monitor
+  `CoordinatorTerminalKeyLog`. The task logic compiles: `TaskBoard`,
+  `TaskCoordinator` (start work, merge, archive, release, adopt, fork),
+  `TaskRecordStore`, `TaskCommandRunner`, `TaskWebhookService`,
+  `CoordinatorController` (the coordinator works through its terminal; its
+  chat stays nil), the quick entry picker, preset usage and workspace
+  folders, and the Remote Access task board, task actions, task creation and
+  coordinator queue. Linux has no task UI yet.
+- `Sources/ConversationUI` (the shared SwiftUI conversation module) is not
+  built; `import ConversationUI` is dropped by the mirror, and
+  `Compat/ConversationUIStubs.swift` restates the rule included logic uses
+  (`CoordinatorChatReadPoint.isNewer`).
 - Tiny pieces of excluded files that included logic needs are restated in
   `linux/Sources/ToasttyAppLogic/Compat/ExcludedViewStubs.swift`
   (`CursorDiagnostics`, `SessionStatusIndicatorState`, `ToastyTheme` metrics,
-  `DisplayShortcutConfig` counts); keep them in step with macOS.
+  `DisplayShortcutConfig` counts, `TerminalKeyPress`, and inert
+  `CoordinatorTerminalKeyLog`, `CoordinatorChatModel`, `QuickEntryController`,
+  `QuickEntryChoices` and `QuickEntryModel.Option`); keep them in step with
+  macOS.
 
 ## Terminal integration (Ghostty)
 
@@ -983,7 +1006,7 @@ code hops back to the main thread with `MainLoop.dispatch` (g_idle_add), not
   `lib`, the Swift crash backtracer in `libexec/swift/linux` so crashes
   print a backtrace to the journal, `Resources` incl. WebPanels, the Toastty agent skills as
   `ToasttyAgentPluginBundle/{.agents/plugins/marketplace.json,plugins/toastty}`
-  and `WorkflowExamples/skills` laid out as on macOS, Ghostty
+  laid out as on macOS, Ghostty
   `share/{ghostty,terminfo}`),
   symlinks `PREFIX/bin/{toastty-linux,toastty}`, installs the desktop file
   (absolute Exec), metainfo and hicolor icons, and refreshes the desktop
@@ -1077,6 +1100,15 @@ code (macOS branches unchanged); run a macOS build
 | `Sources/Core/Automation/AutomationSocketDirectory.swift` (new; used by `AutomationSocketLocator`, `AutomationSocketServer` and `ToasttySocketClient`) | (unguarded, applies to macOS too) the server never binds in another user's socket directory; clients ignore discovery data in a directory that is not theirs or that others can write to, and refuse sockets owned by another user. Linux needed it because the socket directory could fall back to the shared `/tmp`. New file: `tuist generate` on macOS |
 | `Sources/CLIKit/DiagnosticsSocketProbe.swift` | socket directory comes from `AutomationSocketLocator` on Linux |
 | `Sources/Core/RemoteAccess/RemotePreviewFileReader.swift` | no `/private` aliases for `/tmp`, `/var`, `/etc`; descriptor path via `/proc/self/fd` instead of `F_GETPATH` |
+| `Sources/Core/RemoteAccess/RemoteCoordinatorAttachmentImageReader.swift` | no ImageIO on Linux: `image(atRecordedPath:…)` throws `unsupported`, so a device shows coordinator-chat image attachments without a thumbnail; `encodedImage` is macOS-only |
+| `Sources/App/Tasks/TaskCommandRunner.swift` | Glibc spawn types are structs; `posix_spawn_file_actions_addchdir_np` and `addclosefrom_np(3)` stand in for `addchdir` and `POSIX_SPAWN_CLOEXEC_DEFAULT`; signal sets come from `sigfillset`/`sigemptyset` |
+| `Sources/App/Tasks/TaskActions.swift` | the archive alert has no accessory view on Linux, so its "close the pull request" and "delete unpushed commits" boxes stay unchecked |
+| `Sources/App/Coordinator/ClaudeConfigTrustEdit.swift` | the check of the edited `~/.claude.json` compares the parsed objects itself on Linux, matching keys by Unicode scalars: corelibs `NSDictionary` finds a non-ASCII `NSString` key only for some hash seeds (a folder path with `é` failed about one run in three); `isBoolean` reads `objCType` (no `CFGetTypeID`) |
+| `Sources/App/Coordinator/ClaudeFolderTrust.swift` | (mirror `textRewrites`) Linux `stat` has no birth time: the lock directory's identity uses `st_ctim` with its inode |
+| `Sources/App/HoverTipModels.swift`, `CoordinatorDockPresentation.swift`, `SidebarStatusSections.swift`, `Tasks/TasksViewSections.swift`, `Tasks/TaskContextMenuItems.swift`, `Tasks/TaskMarks.swift` | (unguarded moves, no behaviour change) logic split from SwiftUI view files so Linux compiles it without the views: the hover tip models (`StatusDotColorKind.color` stays in `HoverTipPresenter.swift`), `CoordinatorDockPresentation` (from `CoordinatorDock.swift`; `toggleIconStatus` stays), `SidebarStatusSections`/`SidebarRecentToShip`/`TaskAge` (from `SidebarStatusSegment.swift`; `toShipLabel` stays), `TasksViewSections` (from `TasksView.swift`); the views `TaskContextMenuItems` (from `TaskActions.swift`) and the task glyphs and marks (from `TaskBoardPresentation.swift`) moved out instead. New files: `tuist generate` on macOS |
+| `Sources/App/Tasks/PullRequestStateCache.swift` | stores its `objectWillChange` on Linux: OpenCombine's default for an `ObservableObject` without `@Published` properties returns a new publisher on each read, so the cache's own `objectWillChange.send()` reached no subscriber |
+| `Sources/RemoteProtocol/AgentPasteText.swift` | (unguarded, same result on macOS) splits a paste into lines on the newline scalar: corelibs `components(separatedBy: "\n")` keeps `\r\n` text in one line, since Swift reads CRLF as one character |
+| `Sources/App/Tasks/TaskWebhookSecretStore.swift`, `TaskWebhookService.swift` | no Keychain (`Security`) on Linux: `KeychainTaskWebhookSecretStore` and `TaskWebhookService.init(runtimePaths:)` are macOS-only (only `ToasttyApp.swift` creates the service) |
 | `Sources/Core/RemoteAccess/RemoteMessageAttachmentStore.swift` | `discard` compares paths: corelibs URL equality is trailing-slash sensitive |
 | `Sources/Core/Diagnostics/DiagnosticsChecks.swift` | parent PID from `/proc/<pid>/stat` instead of `proc_pidinfo` |
 | `Sources/Core/Diagnostics/DiagnosticsCollector.swift` | hardware model from DMI/device tree instead of `sysctlbyname("hw.model")` |
@@ -1095,7 +1127,6 @@ code (macOS branches unchanged); run a macOS build
 | `Tests/App/CodexManagedLaunchIntegrationResolverTests.swift`, `CodexPluginCLIClientTests.swift`, `AgentShimExecutableTests.swift` | (unguarded, platform-neutral) merged-/usr PATH expectations |
 | `Tests/App/ProfileShellIntegrationInstallerTests.swift` | (unguarded) skips shell tests whose shell is not installed (`/bin/zsh` is absent on stock Ubuntu) |
 | `Tests/App/WorkspaceMergeEndToEndTests.swift` | Linux CLI path next to the test runner; the pull-request script comes from the resolved app resources (the test runner has no bundle resources) |
-| `Tests/App/SystemNotificationSenderTests.swift` | `tearDown` hops onto the main actor explicitly under corelibs XCTest |
 | `Sources/App/Agents/ToasttyAgentPluginBundle.swift` | `bundleRootURL(bundle:)` (macOS value unchanged: `<resources>/ToasttyAgentPluginBundle`) backs `bundledPluginURL`; on Linux, for `Bundle.main`, `linuxBundleRootURL` looks in `TOASTTY_APP_RESOURCES_PATH` (install) and then the checkout root (same layout) |
 | `Sources/App/Agents/ManagedAgentHelperInstaller.swift` | staging the CLI and agent shim into a runtime home also links the `lib*.so*` files beside the source executables: an installed helper finds the Swift runtime only through `$ORIGIN` |
 | `Tests/App/ManagedAgentResumeResolverTests.swift` | (unguarded, platform-neutral) the transcript-path assertion compares symlink-resolved paths (`/var` vs `/private/var` on macOS) |
@@ -1106,13 +1137,12 @@ code (macOS branches unchanged); run a macOS build
 | `plugins/toastty/skills/toastty-capabilities/SKILL.md` | (text, ships on macOS too) "Testing A Web App In A Browser Panel (Linux)" section for `toastty browser` |
 | `Sources/App/Agents/BundledResourceCopier.swift` (new; used by `ClaudeSkillsBundleManager.swift` and `CodexSkillsManager.swift` to stage the bundled agent plugin) | on Linux, copies a directory tree without keeping ownership: corelibs `copyItem` calls `fchown` on each copied directory, which fails with `EPERM` for the root-owned resources of an AppImage or an installed `.deb`, so Claude and Codex launched without Toastty's skills. macOS still calls `copyItem`. New file: `tuist generate` on macOS |
 | `Sources/App/Agents/CodexDaemonOptOutProbe.swift` (new), `AgentLaunchInstrumentation.swift`, `CodexManagedLaunchSkillsResolver.swift`, `ManagedAgentLaunchPlanner.swift` | (unguarded, applies to macOS too) managed Codex launches pass `--no-daemon` when `codex --help` lists it, so Codex 0.157+ cannot run the session in its shared app-server daemon, whose hooks carry the environment of whichever session started it. On macOS the `--profile` Toastty adds kept Codex in-process whenever skills were delivered; this also covers launches without the profile. New file: `tuist generate` on macOS |
-| `Sources/CLIKit/SetupResourceResolver.swift` | Linux checkout builds fall back to `<checkout>/examples/skills` when the resources have no `WorkflowExamples/skills` |
 | `plugins/toastty/skills/toastty-read-terminal/SKILL.md` | (text, ships on macOS too) the pane-by-number example says "pane 3" (Option+Shift+3; Alt+Shift+3 on Linux) instead of "⌘3", which switches tabs on macOS |
 | `WebPanels/LocalDocumentApp/src/{LocalDocumentPanelApp.tsx,styles.css}` + regenerated `Sources/App/Resources/WebPanels/local-document-panel/*` | Edit button shows `Ctrl+E` outside Apple platforms; editor text uses `--pre-text` (light theme previously drew dark text on the dark editor background, macOS included). `npm test` in `WebPanels/LocalDocumentApp` passes (71) |
 
 ## Tests guarded off on Linux
 
-Shared-core: none; all shared tests run on Linux.
+Shared-core: `Tests/Core/RemoteAccess/RemoteCoordinatorAttachmentImageGatewayTests.swift` is not mirrored (`CoreStateTests` `exclude`): it builds and decodes its images with ImageIO, which the Linux reader does not use. All other shared tests run on Linux.
 
 App layer (`ToasttyAppLogicTests`). Test files for code that is not compiled
 on Linux are not mirrored (SwiftUI views and scenes, Ghostty host views and
@@ -1123,7 +1153,7 @@ list). Inside mirrored files, these are guarded (`#if os(macOS)` or
 
 | Test | Why |
 |---|---|
-| `AppStoreUnreadNavigation{SpatialOrder,StateChange}Tests` (3 assertions), `ProcessWatchCommandControllerTests` (1 assertion), `SessionRuntimeStoreCodexSubagentCorrelationTests` (hover-tip assertion), `SidebarSubspacePresentationTests.testWorkspaceMoveIndicesSkipSubspacesInTheWindowOrder`, `SidebarSessionPresentationTests.testDurationTextStaysWithinTheReservedElapsedTemplate`, 7 banner/sheet-copy tests in `CodexSkillsManagementSheetTests` | call into SwiftUI view types (`ToasttyCommandMenus`, `AppWindowView`, `SidebarView`, the skills sheet) |
+| `AppStoreUnreadNavigation{SpatialOrder,StateChange}Tests` (3 assertions), `SessionRuntimeStoreCodexSubagentCorrelationTests` (hover-tip assertion), `SidebarSubspacePresentationTests.testWorkspaceMoveIndicesSkipSubspacesInTheWindowOrder`, `SidebarSessionPresentationTests.testDurationTextStaysWithinTheReservedElapsedTemplate`, 7 banner/sheet-copy tests in `CodexSkillsManagementSheetTests` | call into SwiftUI view types (`ToasttyCommandMenus`, `AppWindowView`, `SidebarView`, the skills sheet) |
 | `ToasttyAppDefaultsTests` (3), `ToasttySettingsStoreTests` (1), `GettingStartedEligibilityTests` (1) | `AppKitDefaultPreferences` (AppKit tooltip/window-restoration defaults) |
 | `TerminalCommandClickTargetResolverTests` app-bundle tests (2) | macOS app bundles; Linux has no package directories |
 | `SidebarSessionPresentationTests` (2 assertions) | swift-foundation `AttributedString` has no presentation intents |

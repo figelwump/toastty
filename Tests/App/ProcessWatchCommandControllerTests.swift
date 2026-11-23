@@ -89,23 +89,6 @@ final class ProcessWatchCommandControllerTests: XCTestCase {
         )
         XCTAssertEqual(record.displayTitleOverride, "tmp/project")
     }
-
-    func testWatchFocusedProcessEnablesExpandedSessionSidebarWidthMode() throws {
-        let fixture = try makeFixture()
-
-        XCTAssertTrue(
-            fixture.controller.watchFocusedProcess(preferredWindowID: fixture.windowID)
-        )
-
-        XCTAssertTrue(fixture.store.hasEverLaunchedAgent)
-        #if os(macOS)
-        // AppWindowView is the SwiftUI window; Linux's sidebar width lives in GTK.
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: fixture.store.hasEverLaunchedAgent),
-            280
-        )
-        #endif
-    }
 }
 
 private extension ProcessWatchCommandControllerTests {

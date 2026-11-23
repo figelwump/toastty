@@ -179,6 +179,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return false }
             return self.delegate?.openSearchSelectionURL(url, from: self.panelID) ?? false
         }
+        terminalHostView.newTaskFromSelection = { [weak self] selectionText in
+            guard let self else { return }
+            self.delegate?.newTaskFromSelection(selectionText, from: self.panelID)
+        }
         terminalHostView.resolveFileDrop = { [weak self] urls in
             guard let self else { return nil }
             return self.delegate?.prepareFileDrop(from: urls, targetPanelID: self.panelID)
@@ -194,6 +198,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         terminalHostView.handleLocalInput = { [weak self] kind in
             guard let self else { return }
             self.delegate?.handleLocalInput(for: self.panelID, kind: kind)
+        }
+        terminalHostView.reportKeyPress = { [weak self] press in
+            guard let self else { return }
+            self.delegate?.reportKeyPress(press, for: self.panelID)
         }
         #else
         hostedView = fallbackView
@@ -725,6 +733,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         terminalHostView.activatePanelIfNeeded = nil
         terminalHostView.openCommandClickLink = nil
         terminalHostView.openSearchSelectionURL = nil
+        terminalHostView.newTaskFromSelection = nil
         #endif
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
@@ -738,14 +747,37 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     func applyGhosttyScrollbarPreferenceChange() {}
     #endif
 
+    /// The view that takes the keyboard for this terminal.
+    private var keyboardFocusTarget: NSView {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        return terminalHostView
+        #else
+        return hostedView
+        #endif
+    }
+
+    /// Whether this terminal has the keyboard in its window.
+    var hasKeyboardFocus: Bool {
+        hostedView.window?.firstResponder === keyboardFocusTarget
+    }
+
+    func isKeyboardFocusTarget(_ responder: NSResponder) -> Bool {
+        responder === keyboardFocusTarget
+    }
+
+    var hostWindow: NSWindow? { hostedView.window }
+
+    func focusVisibleHostViewIfNeeded() -> Bool {
+        let target = keyboardFocusTarget
+        guard target.window?.isKeyWindow == true,
+              !target.isHidden, !target.hasHiddenAncestor, !target.visibleRect.isEmpty else { return false }
+        return focusHostViewIfNeeded() && hasKeyboardFocus
+    }
+
     @discardableResult
     func focusHostViewIfNeeded() -> Bool {
         guard let window = hostedView.window else { return false }
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        let focusTarget = terminalHostView
-        #else
-        let focusTarget = hostedView
-        #endif
+        let focusTarget = keyboardFocusTarget
         let didFocus: Bool
         if window.firstResponder === focusTarget {
             didFocus = true
@@ -891,6 +923,23 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     /// viewport) when `includeScrollback` is set.
     func automationReadVisibleText(includeScrollback: Bool = false) -> String? {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        return readText(in: includeScrollback ? GHOSTTY_POINT_SCREEN : GHOSTTY_POINT_VIEWPORT)
+        #else
+        return nil
+        #endif
+    }
+
+    /// Reads the active terminal page even when the user has scrolled back.
+    func readActiveScreenText() -> String? {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        return readText(in: GHOSTTY_POINT_ACTIVE)
+        #else
+        return nil
+        #endif
+    }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    private func readText(in region: ghostty_point_tag_e) -> String? {
         guard let ghosttySurface else {
             return nil
         }
@@ -898,15 +947,13 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         var textPayload = ghostty_text_s()
         let selection = ghostty_selection_s(
             top_left: ghostty_point_s(
-                tag: includeScrollback ? GHOSTTY_POINT_SCREEN : GHOSTTY_POINT_VIEWPORT,
+                tag: region,
                 coord: GHOSTTY_POINT_COORD_TOP_LEFT,
                 x: 0,
                 y: 0
             ),
             bottom_right: ghostty_point_s(
-                // The screen bottom, not the viewport bottom, so a user who has
-                // scrolled up does not hide the newest output from the reader.
-                tag: includeScrollback ? GHOSTTY_POINT_SCREEN : GHOSTTY_POINT_VIEWPORT,
+                tag: region,
                 coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
                 x: 0,
                 y: 0
@@ -927,11 +974,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let bytePointer = UnsafeRawPointer(textPointer).assumingMemoryBound(to: UInt8.self)
         let buffer = UnsafeBufferPointer(start: bytePointer, count: Int(textPayload.text_len))
         return String(decoding: buffer, as: UTF8.self)
-        #else
-        _ = includeScrollback
-        return nil
-        #endif
     }
+    #endif
 
     @discardableResult
     func performSearchAction(_ action: String) -> Bool {
@@ -1749,11 +1793,7 @@ extension TerminalSurfaceController {
         guard focused else { return }
         guard let window = hostedView.window else { return }
         guard window.isKeyWindow else { return }
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        let focusTarget = terminalHostView
-        #else
-        let focusTarget = hostedView
-        #endif
+        let focusTarget = keyboardFocusTarget
         let firstResponder = window.firstResponder
         guard firstResponder !== focusTarget else { return }
         guard !TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus(

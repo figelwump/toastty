@@ -326,41 +326,6 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
 
     // MARK: - Snapshot preparation
 
-    func testWorkflowExamplesLoadAsUserSkillsWithExecutableHelpers() throws {
-        let fixture = try makeFixture(named: "worktree-examples")
-        defer { fixture.cleanup() }
-        let examplesURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("examples/skills", isDirectory: true)
-        let names = ["worktree-cleanup", "worktree-create", "worktree-done"]
-        for name in names {
-            try FileManager.default.copyItem(
-                at: examplesURL.appendingPathComponent(name),
-                to: fixture.skillsRootURL.appendingPathComponent(name)
-            )
-        }
-
-        let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
-        XCTAssertEqual(snapshot.acceptedPackageNames, names)
-        for name in names {
-            XCTAssertEqual(
-                try Data(contentsOf: snapshot.skillsRootURL.appendingPathComponent("\(name)/SKILL.md")),
-                try Data(contentsOf: examplesURL.appendingPathComponent("\(name)/SKILL.md"))
-            )
-        }
-        let statusURL = snapshot.skillsRootURL
-            .appendingPathComponent("worktree-cleanup/scripts/worktree-status.py")
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: statusURL.path))
-        let helperURL = snapshot.skillsRootURL
-            .appendingPathComponent("worktree-create/scripts/create-worktree.sh")
-        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: helperURL.path))
-        let result = try runProcess(helperURL.path, arguments: ["--help"])
-        XCTAssertEqual(result.status, 0, result.stderr)
-        XCTAssertTrue(result.stderr.contains("--repo-root"))
-    }
-
     func testPrepareSnapshotBuildsExpectedLayoutAndReusesImmutably() throws {
         let fixture = try makeFixture(named: "snapshot")
         defer { fixture.cleanup() }
@@ -1086,7 +1051,7 @@ private extension UserSkillCatalogState {
 
 /// Replaces the target regular file with a FIFO the moment the validator's
 /// readability probe touches it, reproducing a scan-to-copy swap race.
-private final class FifoSwappingFileManager: FileManager, @unchecked Sendable {
+private final class FifoSwappingFileManager: FileManager {
     private let lock = NSLock()
     private var targetPath: String?
     private var swapped = false

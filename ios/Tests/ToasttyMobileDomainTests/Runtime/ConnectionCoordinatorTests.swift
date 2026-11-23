@@ -736,6 +736,57 @@ final class ConnectionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testTaskCreateIsSentOnlyWhileLiveToAHostThatAdvertisesIt() async throws {
+        let run = runID(4)
+        let createRequest = RemoteTaskCreateRequest(
+            clientRequestID: "request-1", workspaceID: UUID(), profileID: "codex", text: "Fix the composer"
+        )
+        for (capabilities, expectsRequest) in [
+            ([RemoteGatewayCapability.sessionStart], false),
+            ([.sessionStart, .taskCreate], true),
+        ] {
+            let operations = OperationLog()
+            let gateway = ScriptedGateway(
+                operations: operations,
+                hello: [.success(RemoteGatewayHelloResponse(capabilities: capabilities))],
+                sessions: [.success(snapshot(runID: run, title: "Seed"))],
+                events: []
+            )
+            let subscription = ScriptedSubscription()
+            let coordinator = ConnectionCoordinator(
+                gateway: gateway,
+                eventStream: ScriptedEventStream(
+                    operations: operations,
+                    connections: [.success(subscription)]
+                ),
+                deviceScopes: [.read, .send]
+            )
+            let earlyOptions = try await coordinator.taskCreateOptions(RemoteTaskCreateOptionsRequest())
+            let earlyCreate = try await coordinator.createTask(createRequest)
+            XCTAssertNil(earlyOptions)
+            XCTAssertNil(earlyCreate)
+
+            await coordinator.connectIfNeeded()
+            await subscription.send(.sessionList(snapshot(runID: run, title: "Fresh")))
+            _ = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
+            let options = try await coordinator.taskCreateOptions(RemoteTaskCreateOptionsRequest())
+            let create = try await coordinator.createTask(createRequest)
+            XCTAssertEqual(options?.permission, expectsRequest ? .allowed : nil)
+            XCTAssertEqual(create?.result, expectsRequest ? .rejected(reason: .busy, message: nil) : nil)
+            let sent = await gateway.recordedTaskCreateRequests()
+            XCTAssertEqual(sent, expectsRequest ? [createRequest] : [])
+
+            // Send access removed while the sheet is open: the create is
+            // refused here without asking the Mac.
+            await coordinator.updateDeviceScopes([.read])
+            let denied = try await coordinator.createTask(createRequest)
+            XCTAssertEqual(denied?.result, expectsRequest ? .rejected(reason: .permissionDenied, message: nil) : nil)
+            let sentAfterDenial = await gateway.recordedTaskCreateRequests()
+            XCTAssertEqual(sentAfterDenial, sent)
+            await coordinator.suspend()
+        }
+    }
+
     func testWorkspaceDoneIsSentOnlyToAHostThatAdvertisesIt() async throws {
         let run = runID(4)
         let request = RemoteWorkspaceDoneRequest(workspaceID: UUID(), done: true)
@@ -2721,6 +2772,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
     private var interruptRequests: [RemoteConversationInterruptRequest] = []
     private var localDraftReleaseRequests: [RemoteConversationLocalDraftReleaseRequest] = []
     private var sessionStartRequests: [RemoteSessionStartRequest] = []
+    private var taskCreateRequests: [RemoteTaskCreateRequest] = []
 
     init(
         operations: OperationLog,
@@ -2852,6 +2904,19 @@ private actor ScriptedGateway: GatewayClientProtocol {
         return RemoteSessionStartResponse(result: .rejected(reason: .busy))
     }
 
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse {
+        RemoteTaskCreateOptionsResponse(permission: .allowed)
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse {
+        taskCreateRequests.append(request)
+        return RemoteTaskCreateResponse(result: .rejected(reason: .busy, message: nil))
+    }
+
     func recordedConversationFlagRequests() -> [RemoteConversationFlagRequest] { conversationFlagRequests }
     func recordedConversationCloseRequests() -> [RemoteConversationCloseRequest] { conversationCloseRequests }
     func recordedQueueUpdateRequests() -> [RemoteConversationQueueUpdateRequest] { queueUpdateRequests }
@@ -2860,6 +2925,7 @@ private actor ScriptedGateway: GatewayClientProtocol {
         localDraftReleaseRequests
     }
     func recordedSessionStartRequests() -> [RemoteSessionStartRequest] { sessionStartRequests }
+    func recordedTaskCreateRequests() -> [RemoteTaskCreateRequest] { taskCreateRequests }
     func recordedWorkspaceDoneRequests() -> [RemoteWorkspaceDoneRequest] { workspaceDoneRequests }
     func helloCallCount() -> Int { helloCalls }
     func recordedEventCursors() -> [ConversationEventCursor?] { eventCursors }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,9 +13,11 @@ const fixtureHost = "runner-fixture.invalid";
 const realGit = ["/Applications/Xcode.app/Contents/Developer/usr/bin/git", "/Library/Developer/CommandLineTools/usr/bin/git", "/usr/bin/git"].find(existsSync);
 const fixtureExecution = [
   "set -euo pipefail",
+  'if [[ -n "${FIXTURE_GATE:-}" ]]; then while [[ ! -e "$FIXTURE_GATE" ]]; do sleep 0.1; done; fi',
+  "echo fixture session output",
   'test -f "$3/scripts/remote/run-support.sh"',
   'schema_version=2',
-  '[[ "$4" != scripts/remote/validate.sh ]] || schema_version=1',
+  '[[ "$4" != */scripts/remote/validate.sh ]] || schema_version=1',
   'case "${FIXTURE_RESULT_MODE:-valid}" in',
   `  valid) printf '{"schemaVersion":%s,"status":"pass","executionTarget":"remote","cleanupFailureSummary":null}\\n' "$schema_version" >"$2/result.json" ;;`,
   `  malformed) printf '%s' '{"status":' >"$2/result.json" ;;`,
@@ -24,16 +26,22 @@ const fixtureExecution = [
   '  *) exit 78 ;;',
   'esac',
   `printf 'remote evidence\\n' >"$2/evidence.log"`,
+  `printf '%s' '{"state":"finished"}' >"$2/admission.json"`,
   'case "$4" in',
-  '  scripts/remote/test.sh) : >"$2/COMPLETED" ;;',
-  '  scripts/remote/validate.sh) : >"$2/EXECUTION_FINISHED" ;;',
+  '  */scripts/remote/test.sh) : >"$2/COMPLETED" ;;',
+  '  */scripts/remote/validate.sh) : >"$2/EXECUTION_FINISHED"; : >"$2/CLEANUP_CONFIRMED" ;;',
   '  *) exit 78 ;;',
   'esac',
+  'if [[ "${FIXTURE_UNCONFIRMED_GUI:-0}" == 1 ]]; then',
+  '  : >"$2/desktop-active"; : >"$2/CLEANUP_FAILED"',
+  `  printf '%s' '{"state":"blocked"}' >"$2/admission.json"`,
+  '  exit 78',
+  'fi',
 ].join("\n");
 const scripts = [
   "scripts/remote/test.sh",
   "scripts/remote/validate.sh",
-  "scripts/remote/run-support.sh",
+  "scripts/remote/run-support.sh", "scripts/remote/admission.py",
   "scripts/remote/live-gateway-test-environment.sh",
   "scripts/remote/ios-simulator-run.sh",
   "scripts/automation/runtime-ownership.sh",
@@ -93,6 +101,7 @@ const script = readFileSync(0, "utf8");
 const execution = script.includes('script_path="$4"');
 const phase = execution ? "execute" : script.includes("toastty_allocate_remote_run") ? "allocate" : script.includes("worktree remove") ? "cleanup" : "preflight";
 appendFileSync(process.env.FIXTURE_TRANSPORT_LOG, phase + "\\n");
+if (execution && process.env.FIXTURE_SSH_PID) require("node:fs").writeFileSync(process.env.FIXTURE_SSH_PID, String(process.pid));
 const fixtureExecution = ${JSON.stringify(fixtureExecution)};
 // Keep command joining faithful while excluding machine-specific login files.
 const command = args.slice(hostIndex + 1);
@@ -113,8 +122,14 @@ const removalFailure = failRemoval ? [
   '  command git "$@"',
   '}',
 ].join("\\n") + "\\n" : "";
+// With FIXTURE_DETACH, keep the real detach-and-follow launcher and replace
+// only the session it runs.
+const session = /(<<'TOASTTY_REMOTE_SESSION'\\n)[\\s\\S]*?(\\nTOASTTY_REMOTE_SESSION\\n)/;
+const body = !execution ? script : process.env.FIXTURE_DETACH === "1"
+  ? script.replace(session, (_, open, close) => open + fixtureExecution + close)
+  : fixtureExecution;
 const result = spawnSync("/bin/bash", ["-c", command.join(" ")], {
-  input: toolPath + removalFailure + (execution ? fixtureExecution : script), env: process.env, stdio: ["pipe", "inherit", "inherit"],
+  input: toolPath + removalFailure + body, env: process.env, stdio: ["pipe", "inherit", "inherit"],
 });
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);
@@ -171,12 +186,29 @@ process.exit(0);
     if (kind === "validate") args.push("--validation-command", "true");
     return spawnSync("/bin/bash", args, { cwd: repo, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 30_000 });
   }
+  function start(extraEnv = {}) {
+    const args = [join(repo, `scripts/remote/${kind}.sh`), "--scope", "working-tree", "--run-label", label];
+    if (kind === "validate") args.push("--validation-command", "true");
+    const child = spawn("/bin/bash", args, { cwd: repo, env: { ...env, ...extraEnv }, detached: true, stdio: "ignore" });
+    child.finished = new Promise((resolve) => child.on("exit", resolve));
+    return child;
+  }
   function phases() { return readFileSync(transportLog, "utf8").trim().split("\n"); }
   function metadata() { return JSON.parse(readFileSync(join(localArtifacts, "run-metadata.json"), "utf8")); }
-  return { run, phases, metadata, localArtifacts, remoteRun, remoteWorktree, remoteRepo };
+  return { run, start, phases, metadata, localArtifacts, remoteRun, remoteWorktree, remoteRepo, repo, root };
 }
 
 for (const kind of ["test", "validate"]) {
+  test(`${kind}.sh preserves blocked admission and its marker even when a pass result exists`, (t) => {
+    const context = fixture(t, kind);
+    const result = context.run({ FIXTURE_UNCONFIRMED_GUI: "1" });
+    assert.notEqual(result.status, 0);
+    assert.ok(existsSync(join(context.remoteRun, "desktop-active")));
+    assert.ok(existsSync(context.remoteWorktree));
+    assert.equal(context.metadata().remoteRemoved, false);
+    assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "fail");
+    assert.ok(!context.phases().includes("cleanup"));
+  });
   test(`${kind}.sh retains remote evidence and fails when copying a pass result fails`, (t) => {
     const context = fixture(t, kind);
     const result = context.run({ FIXTURE_FAIL_ARTIFACT_COPY: "1" });
@@ -187,7 +219,7 @@ for (const kind of ["test", "validate"]) {
     assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "fail");
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
     const metadata = context.metadata();
     assert.equal(metadata.status, "fail");
     assert.notEqual(metadata.exitCode, 0);
@@ -233,7 +265,7 @@ for (const kind of ["test", "validate"]) {
     assert.equal(existsSync(context.remoteRun), false);
     assert.equal(existsSync(context.remoteWorktree), false);
     assert.equal(git(context.remoteRepo, "worktree", "list", "--porcelain").includes(context.remoteWorktree), false);
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy", "cleanup"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "cleanup"]);
     assert.equal(context.metadata().status, "pass");
     assert.equal(context.metadata().remoteRemoved, true);
   });
@@ -249,7 +281,7 @@ for (const kind of ["test", "validate"]) {
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
     assert.equal(git(context.remoteRepo, "worktree", "list", "--porcelain").includes(context.remoteWorktree), true);
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy", "cleanup"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "cleanup"]);
     assert.equal(context.metadata().status, "fail");
     assert.equal(context.metadata().remoteRemoved, false);
   });
@@ -266,7 +298,7 @@ for (const [mode, rawResult] of [["malformed", '{"status":'], ["partial", '{"sta
     assert.equal(readFileSync(join(context.remoteRun, "result.json"), "utf8"), rawResult);
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
     assert.equal(context.metadata().status, "fail");
     assert.equal(context.metadata().remoteRemoved, false);
   });
@@ -283,7 +315,77 @@ test("test.sh cannot authorize remote removal from COMPLETED and a synthesized m
   assert.equal(existsSync(join(context.remoteRun, "result.json")), false);
   assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
   assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-  assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "execute", "artifact-copy"]);
+  assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
   assert.equal(context.metadata().status, "fail");
   assert.equal(context.metadata().remoteRemoved, false);
 });
+
+async function until(check, ms = 15000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.fail("condition not reached");
+}
+
+for (const kind of ["test", "validate"]) {
+  test(`${kind}.sh keeps a remote run going after its wrapper stops, and the same command reattaches`, { timeout: 60000 }, async (t) => {
+    const context = fixture(t, kind);
+    const gate = join(context.root, "gate");
+    const detach = { FIXTURE_DETACH: "1", FIXTURE_GATE: gate };
+    const first = context.start(detach);
+    await until(() => existsSync(join(context.remoteRun, "detached.json")));
+    // Toastty quitting sends TERM to the wrapper and its SSH session.
+    process.kill(-first.pid, "SIGTERM");
+    await first.finished;
+    assert.equal(existsSync(join(context.localArtifacts, "result.json")), false);
+    assert.equal(existsSync(join(context.localArtifacts, "attach.env")), true);
+    assert.equal(existsSync(join(context.remoteRun, "detached-exit.json")), false);
+    writeFileSync(gate, "");
+    await until(() => existsSync(join(context.remoteRun, "detached-exit.json")));
+    const second = context.run(detach);
+    succeeds(second);
+    assert.match(second.stdout + second.stderr, /Reattaching to remote run explicit-run-label/);
+    assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "pass");
+    assert.match(readFileSync(join(context.localArtifacts, "remote-stdout.log"), "utf8"), /fixture session output/);
+    assert.equal(existsSync(context.remoteRun), false);
+    assert.equal(context.metadata().remoteRemoved, true);
+  });
+
+  test(`${kind}.sh does not reattach to a stopped run after the source changed`, { timeout: 60000 }, async (t) => {
+    const context = fixture(t, kind);
+    const gate = join(context.root, "gate");
+    const first = context.start({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate });
+    await until(() => existsSync(join(context.remoteRun, "detached.json")));
+    process.kill(-first.pid, "SIGTERM");
+    await first.finished;
+    put(join(context.repo, "changed.txt"), "new source\n");
+    const second = context.run({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate });
+    assert.notEqual(second.status, 0);
+    assert.doesNotMatch(second.stdout + second.stderr, /Reattaching/);
+    assert.match(second.stderr, /already exists/);
+    // Let the earlier detached run end so that no process outlives the test.
+    writeFileSync(gate, "");
+    await until(() => existsSync(join(context.remoteRun, "detached-exit.json")));
+  });
+}
+
+for (const kind of ["test", "validate"]) {
+  test(`${kind}.sh stops without a result when only its connection drops, and a rerun reattaches`, { timeout: 90000 }, async (t) => {
+    const context = fixture(t, kind);
+    const gate = join(context.root, "gate"), sshPid = join(context.root, "ssh.pid");
+    const first = context.start({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate, FIXTURE_SSH_PID: sshPid });
+    await until(() => existsSync(join(context.remoteRun, "detached.json")) && existsSync(sshPid));
+    process.kill(Number(readFileSync(sshPid, "utf8")), "SIGKILL");
+    assert.notEqual(await first.finished, 0);
+    assert.equal(existsSync(join(context.localArtifacts, "result.json")), false);
+    assert.equal(existsSync(join(context.remoteRun, "detached-exit.json")), false);
+    writeFileSync(gate, "");
+    const second = context.run({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate });
+    succeeds(second);
+    assert.match(second.stdout + second.stderr, /Reattaching to remote run explicit-run-label/);
+    assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "pass");
+    assert.equal(existsSync(context.remoteRun), false);
+  });
+}

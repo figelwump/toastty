@@ -53,7 +53,7 @@ body {
   min-width: 0;
   min-height: 0;
   border: 0;
-  background: white;
+  background: Canvas;
 }
 
 .scratchpad-empty {

@@ -169,3 +169,91 @@ private final class CombineLatestSubscription<A: Publisher, B: Publisher, S: Sub
         upstreams.forEach { $0?.cancel() }
     }
 }
+
+extension Publishers {
+    /// Apple's `Merge3`: the values of three upstreams of one type, as they
+    /// come; finishes when all three finish; fails when one fails. OpenCombine
+    /// has no `Merge`; this one asks each upstream for unlimited values and
+    /// passes them on through a subject, which honours downstream demand.
+    public struct Merge3<A: Publisher, B: Publisher, C: Publisher>: Publisher
+        where A.Output == B.Output, B.Output == C.Output, A.Failure == B.Failure, B.Failure == C.Failure {
+        public typealias Output = A.Output
+        public typealias Failure = A.Failure
+
+        public let a: A
+        public let b: B
+        public let c: C
+
+        public init(_ a: A, _ b: B, _ c: C) {
+            self.a = a
+            self.b = b
+            self.c = c
+        }
+
+        public func receive<S: Subscriber>(subscriber: S) where S.Input == Output, S.Failure == Failure {
+            let merger = MergeAll<Output, Failure>(upstreamCount: 3)
+            merger.subject
+                .handleEvents(receiveCancel: { [merger] in merger.cancel() })
+                .receive(subscriber: subscriber)
+            merger.attach(a)
+            merger.attach(b)
+            merger.attach(c)
+        }
+    }
+}
+
+private final class MergeAll<Output, Failure: Error>: @unchecked Sendable {
+    let subject = PassthroughSubject<Output, Failure>()
+    private let lock = NSLock()
+    private var remaining: Int
+    private var cancellables: [AnyCancellable] = []
+    private var isDone = false
+
+    init(upstreamCount: Int) {
+        remaining = upstreamCount
+    }
+
+    func attach<P: Publisher>(_ upstream: P) where P.Output == Output, P.Failure == Failure {
+        let cancellable = upstream.sink(
+            receiveCompletion: { [weak self] completion in self?.complete(completion) },
+            receiveValue: { [weak self] value in
+                guard let self, self.lock.withLock({ self.isDone }) == false else { return }
+                self.subject.send(value)
+            }
+        )
+        let keep = lock.withLock { () -> Bool in
+            guard isDone == false else { return false }
+            cancellables.append(cancellable)
+            return true
+        }
+        if keep == false { cancellable.cancel() }
+    }
+
+    func cancel() {
+        let toCancel = lock.withLock { () -> [AnyCancellable] in
+            isDone = true
+            defer { cancellables = [] }
+            return cancellables
+        }
+        toCancel.forEach { $0.cancel() }
+    }
+
+    private func complete(_ completion: Subscribers.Completion<Failure>) {
+        let finish: Subscribers.Completion<Failure>? = lock.withLock {
+            guard isDone == false else { return nil }
+            switch completion {
+            case .failure:
+                isDone = true
+                return completion
+            case .finished:
+                remaining -= 1
+                guard remaining == 0 else { return nil }
+                isDone = true
+                return completion
+            }
+        }
+        guard let finish else { return }
+        subject.send(completion: finish)
+        if case .failure = finish { cancel() }
+    }
+}

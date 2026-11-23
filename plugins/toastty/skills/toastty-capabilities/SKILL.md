@@ -17,7 +17,8 @@ In a Toastty-launched agent terminal, expect:
   this variable, so it is not proof of a managed session.
 - `TOASTTY_USER_SKILLS_ROOT`: absolute path to the user's Toastty skill-package
   source directory. It may not exist yet.
-- `TOASTTY_CLI_PATH`: absolute path to the bundled `toastty` CLI.
+- `TOASTTY_CLI_PATH`: absolute path to the bundled `toastty` CLI. Toastty also
+  puts that CLI on `PATH` as `toastty`.
 - `TOASTTY_PANEL_ID`: current terminal panel ID.
 - `TOASTTY_SESSION_ID`: current managed session ID when the agent was launched by Toastty.
 - `TOASTTY_SOCKET_PATH`: resolved socket path for the owning app instance.
@@ -35,10 +36,12 @@ if [[ -z "${TOASTTY_CLI_PATH:-}" || ! -x "$TOASTTY_CLI_PATH" || -z "${TOASTTY_PA
 fi
 ```
 
-Always invoke the injected CLI:
+Run the CLI as `toastty`, with `--json` after the command words, as in the
+examples here: the user's allow rules match this form. If `toastty` is not
+found, run `"$TOASTTY_CLI_PATH"` in its place. Probe the current panel:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run terminal.state --panel "$TOASTTY_PANEL_ID"
+toastty query run terminal.state --json --panel "$TOASTTY_PANEL_ID"
 ```
 
 If `TOASTTY_CLI_PATH` is missing, not executable, or the probe fails, do not guess which Toastty instance to target. Ask the user to run you from a Toastty pane or provide an explicit socket path.
@@ -48,8 +51,8 @@ If `TOASTTY_CLI_PATH` is missing, not executable, or the probe fails, do not gue
 Discover the live app-control surface before composing a workflow:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action list
-"$TOASTTY_CLI_PATH" --json query list
+toastty action list --json
+toastty query list --json
 ```
 
 Use the returned descriptors for canonical IDs, selectors, parameters, aliases,
@@ -160,7 +163,7 @@ Reload an existing browser by its explicit panel ID without selecting its
 workspace/tab or changing focus:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.browser.reload --panel "$PANEL_ID"
+toastty action run panel.browser.reload --json --panel "$PANEL_ID"
 ```
 
 This starts loading even for an unmounted browser and restarts any in-progress
@@ -171,7 +174,7 @@ requested; use `panel.browser.state` below to check completion or failure.
 Query a browser by its explicit panel ID without selecting its workspace or tab:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run panel.browser.state --panel "$PANEL_ID"
+toastty query run panel.browser.state --json --panel "$PANEL_ID"
 ```
 
 This query can create the browser runtime and start loading its configured
@@ -215,15 +218,19 @@ target a browser in this terminal's workspace, or `--panel <id>`; they never
 change selection or focus.
 
 ```bash
-B() { "$TOASTTY_CLI_PATH" browser "$@"; }
-B open http://localhost:3000     # right panel; waits for the load; creates a browser if none
-B snapshot                       # outline with refs: - button "Save" [ref=e7]
-B fill e4 "Buy milk"; B press Enter --target e4
-B click 'role=button[name="Save"]'; B check 'label=Remember me'; B select '#size' Large
-B wait text "Saved"              # or: wait visible|hidden <target>, wait url '*/done', wait idle
-B text '#status'; B eval 'document.querySelectorAll(".todo-list li").length'
-B console --errors; B network --failed
-B screenshot --out /tmp/page.png # then read the PNG to look at the page
+toastty browser open http://localhost:3000   # right panel; waits for the load; creates a browser if none
+toastty browser snapshot                     # outline with refs: - button "Save" [ref=e7]
+toastty browser fill e4 "Buy milk"
+toastty browser press Enter --target e4
+toastty browser click 'role=button[name="Save"]'
+toastty browser check 'label=Remember me'
+toastty browser select '#size' Large
+toastty browser wait text "Saved"            # or: wait visible|hidden <target>, wait url '*/done', wait idle
+toastty browser text '#status'
+toastty browser eval 'document.querySelectorAll(".todo-list li").length'
+toastty browser console --errors
+toastty browser network --failed
+toastty browser screenshot --out /tmp/page.png   # then read the PNG to look at the page
 ```
 
 - Name elements by a `snapshot` ref (`e12`), a CSS selector, XPath (`//…`), or
@@ -282,7 +289,7 @@ process. Resolve the target workspace first and pass it explicitly.
   termination is authorized; a document save in progress cannot be forced.
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.close \
+toastty action run panel.close --json \
   --workspace "<workspace-id>"
 ```
 
@@ -306,6 +313,11 @@ exists, omit color or repeat the claim; attempting to replace it fails. Examples
 - GitHub pull request: `key=github-pr`, `text="PR #1931"`, and
   `url=<verified GitHub pull URL>` when available. Use `PR #<number>` for all
   pull request chips, including primary annotations in task space rows.
+  Toastty reads a task's pull request only from a `github-pr` URL of the form
+  `https://github.com/<owner>/<repo>/pull/<number>`. For a pull or merge
+  request on another host, use another key, such as `merge-request`; Toastty
+  does not track it, so a task with one follows `toastty-task-start` for a
+  pull request that is not on GitHub.
 - GitHub issue: `key=github-issue`, `text="Issue #482"`, and
   `url=<verified GitHub issue URL>` when available.
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; omit `url` unless a
@@ -340,9 +352,14 @@ short, around 12 characters or fewer (`PR #1234`, `ENG-512`), because the row
 truncates longer text. Leave `primary` out for secondary annotations such as a
 branch name or agent label.
 
-Mark a finished task space task with `workspace.set-done`, not an annotation.
-With no workspace given it marks the calling agent's own workspace, and the
-task space row shows a check. The mark clears when an agent in that workspace
+In a Toastty task, never run `workspace.set-done`: the task board reads its
+mark as the task's Done time, and only the user's acceptance finishes a task.
+`toastty task get` with no task ID succeeds only in a task's
+session; there, follow `toastty-task-start` to set the task's status.
+
+Outside a task, mark a finished task space with `workspace.set-done`, not an
+annotation. With no workspace given it marks the calling agent's own
+workspace, and the task space row shows a check. The mark clears when an agent in that workspace
 starts new work, so do not clear it yourself before continuing. A top-level
 workspace has no check and `workspace.set-done` rejects it; mark it with a
 `task-status` annotation with text `DONE` instead, and clear that annotation
@@ -394,10 +411,10 @@ Exact child scoping is necessarily a post-launch narrowing step because `agent.l
 Use scope intentionally:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json session scope set-current
-"$TOASTTY_CLI_PATH" --json session scope show
-"$TOASTTY_CLI_PATH" --json session scope add --workspace "<workspace-id>"
-"$TOASTTY_CLI_PATH" --json session scope clear
+toastty session scope set-current --json
+toastty session scope show --json
+toastty session scope add --json --workspace "<workspace-id>"
+toastty session scope clear --json
 ```
 
 Treat `scope_denied` as a boundary signal. Do not retry with broader targets unless the user explicitly assigned that workspace or the workflow already authorized scope expansion. Explain what was denied and ask before expanding.
@@ -479,7 +496,7 @@ report_launch_failure() {
   fi
 
   if [ "$parent_began_unrestricted" = "true" ]; then
-    if "$TOASTTY_CLI_PATH" --json session scope clear \
+    if toastty session scope clear --json \
       --session "$TOASTTY_SESSION_ID" >/dev/null
     then
       echo "Restored the parent session to its previous unrestricted state" >&2
@@ -493,7 +510,7 @@ report_launch_failure() {
 trap report_launch_failure EXIT
 
 parent_scope_json="$(
-  run_json "inspect parent scope" "$TOASTTY_CLI_PATH" --json session scope show \
+  run_json "inspect parent scope" toastty session scope show --json \
     --session "$TOASTTY_SESSION_ID"
 )"
 last_successful_response="$parent_scope_json"
@@ -506,21 +523,21 @@ parent_is_scoped="$(
 if [ "$parent_is_scoped" = "false" ]; then
   parent_began_unrestricted="true"
   parent_scope_set_json="$(
-    run_json "scope parent session" "$TOASTTY_CLI_PATH" --json session scope set-current \
+    run_json "scope parent session" toastty session scope set-current --json \
       --session "$TOASTTY_SESSION_ID"
   )"
   last_successful_response="$parent_scope_set_json"
 fi
 
 terminal_state_json="$(
-  run_json "resolve parent window" "$TOASTTY_CLI_PATH" --json query run terminal.state \
+  run_json "resolve parent window" toastty query run terminal.state --json \
     --panel "$TOASTTY_PANEL_ID"
 )"
 last_successful_response="$terminal_state_json"
 window_id="$(printf '%s\n' "$terminal_state_json" | result_field windowID)"
 
 workspace_json="$(
-  run_json "create workspace" "$TOASTTY_CLI_PATH" --json action run workspace.create \
+  run_json "create workspace" toastty action run workspace.create --json \
     --window "$window_id" \
     title="Review" \
     activate=false
@@ -530,7 +547,7 @@ workspace_id="$(printf '%s\n' "$workspace_json" | result_field workspaceID)"
 
 launch_attempted="true"
 launch_json="$(
-  run_json "launch child agent" "$TOASTTY_CLI_PATH" --json action run agent.launch \
+  run_json "launch child agent" toastty action run agent.launch --json \
     --workspace "$workspace_id" \
     profileID=codex \
     cwd="$PWD" \
@@ -548,14 +565,14 @@ if [ "$child_workspace_id" != "$workspace_id" ] || [ -z "$child_panel_id" ]; the
 fi
 
 child_scope_set_json="$(
-  run_json "scope child session" "$TOASTTY_CLI_PATH" --json session scope set \
+  run_json "scope child session" toastty session scope set --json \
     --session "$child_session_id" \
     --workspace "$workspace_id"
 )"
 last_successful_response="$child_scope_set_json"
 
 child_scope_json="$(
-  run_json "verify child scope" "$TOASTTY_CLI_PATH" --json session scope show \
+  run_json "verify child scope" toastty session scope show --json \
     --session "$child_session_id"
 )"
 last_successful_response="$child_scope_json"
@@ -574,11 +591,11 @@ If launch, child scoping, or verification fails after `agent.launch` returns, st
 ### Open Browser And Local Document Panels
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.create.browser \
+toastty action run panel.create.browser --json \
   --workspace "$workspace_id" \
   url="https://example.com"
 
-"$TOASTTY_CLI_PATH" --json action run panel.create.local-document \
+toastty action run panel.create.local-document --json \
   --workspace "$workspace_id" \
   filePath="$PWD/docs/plan.md"
 ```
@@ -593,7 +610,7 @@ List open session-bound Scratchpads first when updating an existing artifact.
 Use the selected `documentID` on subsequent calls:
 
 ```bash
-"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.set-content \
+toastty action run panel.scratchpad.set-content --json \
   --stdin content \
   "sessionID=$TOASTTY_SESSION_ID" \
   "documentID=<document-id>" \
@@ -610,7 +627,7 @@ export the selected document or query its state first and then use
 Use notifications for ready, needs-approval, or error states:
 
 ```bash
-"$TOASTTY_CLI_PATH" notify "Review ready" "The background review is complete." \
+toastty notify "Review ready" "The background review is complete." \
   --workspace "$workspace_id" \
   --panel "$panel_id"
 ```
@@ -639,4 +656,4 @@ proactively.
 
 If the user asks for a recurring Toastty workflow, write a narrow, workflow-specific skill that extends these general capabilities instead of creating another general Toastty orchestration or capability skill. Describe the workflow intent, required Toastty context, scope policy, live discovery steps, actions and queries to use, validation, and failure handling.
 
-Before designing one, read `"$TOASTTY_CLI_PATH" setup guide --topic workflows`. It lists example workflows to suggest, the rules workflow skills follow, and where Toastty's bundled example skills are, such as the worktree handoff, to copy and adapt.
+Before designing one, read `toastty setup guide --topic workflows`. It lists example workflows to suggest, the rules workflow skills follow, and a worked example: the task lifecycle that the shipped `toastty-task-start` and `toastty-task-merge` skills run.

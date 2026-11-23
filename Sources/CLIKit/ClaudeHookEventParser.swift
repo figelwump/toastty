@@ -152,6 +152,40 @@ enum ClaudeHookEventParser {
             }
             return commands
 
+        case "StopFailure":
+            // Claude Code fires this in place of Stop when an API error
+            // (rate limit, overload, authentication, output limit) ends the
+            // turn. Claude is back at its prompt, so the turn is over. A
+            // child's failure is not the end of the main turn.
+            guard normalizedString(object["agent_id"]) == nil else { return [] }
+            var commands: [CLICommand] = [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .error,
+                    summary: "Error",
+                    // Here this field holds the error text that Claude shows.
+                    detail: normalizedSummaryText(object["last_assistant_message"])
+                        ?? normalizedSummaryText(object["error_details"])
+                        ?? "Claude Code could not complete the turn"
+                ),
+            ]
+            // The turn did not complete, so it ends as an aborted turn: the
+            // conversation opens the prompt again after its settle time.
+            if let command = lifecycleObservationCommand(
+                sessionID: sessionID,
+                panelID: panelID,
+                object: object,
+                eventID: "turn-failed:\(normalizedString(object["turn_id"]) ?? UUID().uuidString)",
+                payload: .turnEnded(
+                    turnID: normalizedString(object["turn_id"]),
+                    reason: .aborted
+                )
+            ) {
+                commands.append(command)
+            }
+            return commands
+
         case "SubagentStart":
             guard let agentID = normalizedString(object["agent_id"]) else { return [] }
             // Workflow children retain their existing one-shot lifecycle. Only

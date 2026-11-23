@@ -1,3 +1,4 @@
+import ConversationUI
 import SwiftUI
 import ToasttyMobileDomain
 
@@ -30,29 +31,71 @@ struct ToasttyConnectionPill: View {
     }
 }
 
-/// The app-wide activity spinner, matching the desktop app's
-/// `SessionStatusIndicator`: a trimmed arc rotating once every 0.9 seconds.
-struct ToasttySpinner: View {
-    var size: CGFloat = 8
-    var lineWidth: CGFloat = 1.5
-    var color: Color = ToasttyDesignTokens.amber
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// Why the lists may be out of date while the connection is not live, with
+/// Retry while Toastty reconnects. Home and the Tasks tab show it above
+/// their lists; it draws nothing while the connection is live.
+struct ToasttyConnectionNotice: View {
+    let controller: HomeScreenController
+    let refresh: () async -> Void
+
+    @State private var isRetryingConnection = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { context in
-            Circle()
-                .trim(from: 0.16, to: 0.9)
-                .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .rotationEffect(reduceMotion ? .zero : angle(at: context.date))
+        if let message = controller.connectionNoticeMessage {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 9) {
+                    indicator
+                    Text(message)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
+                .accessibilityValue(showsProgressIndicator ? "In progress" : "")
+                .accessibilityIdentifier("toastty-mobile-connection-notice")
+
+                if controller.freshness == .reconnecting {
+                    Button("Retry", action: retryConnection)
+                        .buttonStyle(.bordered)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .disabled(isRetryingConnection)
+                        .accessibilityLabel("Retry connection")
+                        .accessibilityIdentifier("toastty-mobile-connection-retry")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(controller.freshness == .unreachable
+                ? ToasttyDesignTokens.red
+                : ToasttyDesignTokens.amberText)
+            .toasttyCard()
         }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
     }
 
-    private func angle(at date: Date) -> Angle {
-        let phase = date.timeIntervalSinceReferenceDate
-            .truncatingRemainder(dividingBy: 0.9) / 0.9
-        return .degrees(phase * 360)
+    private func retryConnection() {
+        guard isRetryingConnection == false else { return }
+        isRetryingConnection = true
+        Task { @MainActor in
+            await refresh()
+            isRetryingConnection = false
+        }
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        if showsProgressIndicator {
+            ProgressView()
+                .controlSize(.small)
+                .tint(ToasttyDesignTokens.amber)
+        } else {
+            Image(systemName: controller.freshness == .unreachable
+                ? "wifi.slash"
+                : "arrow.trianglehead.2.clockwise.rotate.90")
+        }
+    }
+
+    private var showsProgressIndicator: Bool {
+        controller.freshness == .reconnecting || controller.freshness == .connecting
     }
 }
 

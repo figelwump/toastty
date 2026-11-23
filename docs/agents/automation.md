@@ -6,35 +6,132 @@ The smoke scripts (`smoke-ui`, `workspace-tabs`, `workspace-scope`, `smoke-cli-l
 
 ## GitHub CI
 
-`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. It starts on every PR and manual dispatch. It does not run on pushes to `main`. A newer PR commit cancels that PR's older run; manual runs have separate groups and are not cancelled.
+`.github/workflows/mobile-ios.yml` displays as **Toastty CI**. Hosted CI is mostly manual: one developer works on Toastty, and the task's own toastty-mini runs are the review check.
 
-PRs run short checks on disposable Linux runners. `.github/ci-paths.yml` selects:
+- **On every PR**, Toastty CI runs only **CI workflow tests** (`npm test --prefix Tests/CI` on Linux, about a minute) and the **CI gate**. Branch protection on `main` requires the **CI gate** check, so this part must stay. A newer PR commit cancels that PR's older run.
+- **On manual dispatch**, it runs every job: **Script tests**, **Web panel tests**, **macOS contract tests**, and **iOS tests** in Debug and Release. Full dispatches have separate groups so they can retain evidence for their own source.
+- There is no nightly schedule.
 
-- **Script tests** for iOS, script, remote runner fixture, and CI configuration changes. These run portable dispatcher, release-evidence, and remote runner contracts with fake tools. They do not build or launch either app.
-- **Web panel tests** for web-panel sources, generated bundles, and shared CI configuration. Each package's `npm test` also checks generated bundle synchronization.
-- Documentation-only and native macOS source changes skip these jobs. CI selection and gate tests still run on every PR.
+The **CI gate** requires the workflow tests on every run. On a PR it also requires every test job to be skipped; on a manual run it requires every job to pass. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` runs the gate's shell logic locally without launching an app.
 
-The separate `.github/workflows/push-worker.yml` runs the existing checks and bundle dry runs for affected push-worker PRs, or by manual dispatch. It does not run again after merge. The `iOS TestFlight` archive/upload workflow is also manual-only.
+The separate `.github/workflows/push-worker.yml` runs the push-worker checks and bundle dry runs only by manual dispatch (`gh workflow run push-worker.yml --ref <branch>`). For push-worker changes, run `npm run check` in `workers/push` locally or start the workflow. The `iOS TestFlight` archive/upload workflow is also manual-only.
 
-Branch protection on `main` still requires the **CI gate** check. For PRs, it requires selection and the selected Linux checks to pass. For manual runs, it requires all jobs, including both native platforms. Failed, cancelled, or missing selected jobs block the gate. `npm ci --prefix Tests/CI && npm test --prefix Tests/CI` checks selection and runs the gate's shell logic locally without launching an app.
+Because PRs run no test jobs, run the checks that match a change yourself: toastty-mini runs for native code (see `.agents/skills/toastty-verify/SKILL.md`), and these local Linux-portable checks for scripts and web panels:
+
+- Script tests: `node --test ios/Tests/ScriptTests/native-device.test.mjs ios/Tests/ScriptTests/physical-device.test.mjs ios/Tests/ScriptTests/toastty-ios.test.mjs ios/Tests/ReleaseScriptTests/require-ios-ci.test.mjs ios/Tests/ReleaseScriptTests/select-ios-xcode.test.mjs Tests/RemoteScripts/*Tests.mjs`
+- Web panel tests: `npm ci --prefix <panel> && npm test --prefix <panel>` for `WebPanels/LocalDocumentApp` and `WebPanels/ScratchpadApp`.
 
 Use **Run workflow** to request full validation on a branch or the exact `main` release commit. Mac-only release-script and device-plist fixtures use `sips` and Apple plist tools, so they stay in the manual macOS job. The workflow tests check that every script fixture is assigned to Linux or manual macOS coverage.
 
 A manual run includes the Linux checks, macOS Debug tests and an unsigned Release build, and iOS Debug and Release simulator tests. Debug includes the full UI suite; both iOS configurations include the provisional performance budget. Before TestFlight, run full `Toastty CI` on `main`, wait for success, and confirm its source SHA matches the release. A green PR gate does not qualify as release evidence. See [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow).
 
-Native implementation checks still follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. A green lightweight PR gate does not establish native build or runtime coverage. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
+Native implementation checks follow the remote workflows below and `.agents/skills/toastty-verify/SKILL.md`. A green PR gate shows only that the CI workflow tests passed; it is not evidence for the change. For push manifest or build-configuration changes, run `node --test Tests/BuildConfig/PushManifestTests.mjs` on a Mac with Tuist, or include it in a full manual CI run.
 
 GitHub jobs use disposable runners and no production host. Manual macOS jobs build/test the `ToasttyApp` scheme with `TUIST_DISABLE_GHOSTTY=1`; Release uses `CODE_SIGNING_ALLOWED=NO` and does not archive or publish. This arm64 Release compile check does not cover Intel compilation, signing, the embedded Ghostty runtime, or GUI smoke flows. Ghostty-backed pre-release validation still uses the existing remote workflows below with the required local artifact.
 
-## Remote Smoke Validation
+## Remote worker capacity
 
-Agent-driven smoke validation should start with:
+Agent-driven native builds, macOS suites, focused iOS Simulator tests and GUI
+checks run on toastty-mini. The full iOS suite runs on hosted CI (see CI
+Coverage in `.agents/skills/toastty-verify/SKILL.md`). Cheap source checks and read-only inspection may run locally;
+remote failures never authorize local native execution.
+
+The wrappers share two worker slots and one desktop reservation. macOS tests,
+smoke checks, custom validation commands and Computer Use need the desktop by
+default. A macOS test run and a custom validation build first as compute work
+(`build-for-testing`, or the app build); they take the desktop only when the
+build passed, for the tests or the app launch and its cleanup, and keep their
+first place in the queue while they wait for it. Smoke checks and Computer Use
+hold the desktop for their whole run. Compute work can use the other slot while
+the desktop is occupied, but while the desktop is free and desktop work waits,
+compute work does not take the last free slot. Build-only and iOS runs default
+to compute; iOS runs keep separate owned simulators. This bounds resources, not
+performance: full iOS/UI/performance runs may still need a quiet host.
+
+A remote run is detached from its SSH session. When the local wrapper stops,
+for example because Toastty quit, the remote run keeps its place in the queue
+and keeps running. Run the same command again from the same worktree to
+reattach: the wrapper finds the earlier run when the worktree, the selected
+source content and the options match, follows its output, then copies its
+evidence and removes it as usual. With `--run-label`, only that label is
+reattached. A run whose source or options differ starts as a new run. A run
+that waits for a slot with nobody following it for 15 minutes gives up without
+starting. Stop a detached run on purpose with
+`sv exec -- scripts/remote/cancel.sh <run-label>`; its own cleanup still runs.
+Runs with `--live-gateway` stay attached to SSH, because their session holds
+the gateway credential and is never written to disk.
 
 ```bash
-sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui
+# Read-only view of active, waiting and blocked work on the existing mini.
+sv exec -- scripts/remote/status.sh
+
+# Build a disposable source export on the mini without running its tests.
+sv exec -- scripts/remote/test.sh --build-only --scope working-tree
+
+# Eligible logic-only tests can share the host without owning its desktop.
+sv exec -- scripts/remote/test.sh --resource compute --scope working-tree -- \
+  -scheme CoreState -only-testing:CoreStateTests/TaskStageTests
 ```
 
-Use `--require-remote` when the remote path itself must succeed. Supported smoke tests are:
+`--resource compute` is an explicit assertion that the selected macOS tests do
+not depend on shared GUI state, focus, clipboard, or input. Do not infer this
+from a target being called a unit test. Leave the default desktop reservation
+for broad `ToasttyApp` suites. Tests remain responsible for isolated files,
+ports and other process-wide or user-wide state.
+
+`TOASTTY_REMOTE_QUEUE_TIMEOUT_SECONDS` bounds admission waiting (default 3600).
+It is separate from `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS`, which starts when
+xcodebuild runs. A queue timeout fails without starting native work.
+`TOASTTY_REMOTE_BUILD_JOBS` sets the test/build wrapper's default `-jobs` limit
+(default 4); an explicit `-jobs` after `--` wins. Custom validation and Computer
+Use builds use four build jobs. Keep parallelism bounded when comparing worker
+counts. Status reports elapsed waits and queue positions, not an estimated
+completion time.
+
+The shared `.admission/` directory is outside disposable source exports. Open
+file locks prove that requests are live; stale files alone do not reserve a
+worker. A retained `desktop-active` marker means GUI cleanup is unconfirmed and
+keeps that reservation blocked. Cleanup waits up to 15 seconds for the run's
+processes to exit before it keeps the marker. Admission then releases the
+reservation by itself when the run's lease has closed for 2 minutes and no
+process refers to the run folder or its worktree; it writes
+`DESKTOP_RELEASED` in the run folder. A run that owns a simulator clone stays
+blocked for inspection. Never remove a marker, kill an unrelated process, or
+run locally just to bypass waiting.
+
+During migration, status also identifies `unmanaged` native jobs from older
+wrappers whose executable or DerivedData path belongs to the configured remote
+validation root. They consume capacity conservatively as desktop work. Jobs
+outside that root cannot be discovered by this guard; wrappers using another
+root or login need separate coordination. Use the shared status command instead
+of task-specific process-polling scripts.
+
+Each run stages its current controller scripts under the run's `controller/`
+directory, separate from the selected source. `head` and `ref` source exports
+therefore remain unchanged even when checking older code. `run-metadata.json`
+records source and controller identities separately. `admission.json` records
+resource selection, queue time and exit status, and for a run that built first,
+`buildSeconds` and `desktopQueueSeconds`; it is retained with the evidence.
+
+The remote root can live on an external SSD through the existing
+`TOASTTY_REMOTE_GUI_ROOT` configuration. Its worktrees and per-run DerivedData
+then follow that root. Moving an existing root requires a separate migration:
+wait for active work to finish, preserve ownership/evidence, update the configured
+root and cleanup service together, and validate before removing the old copy.
+The scheduled cleaner handles manifest-owned `test-runs` and legacy simulator
+cleanup; it does not clear arbitrary `runs`, orphan worktrees, Xcode DerivedData,
+ordinary simulator devices or installed runtimes. Review those categories before
+any deletion. More storage does not add CPU/RAM or independent GUI desktops.
+
+## Remote Smoke Validation
+
+Agent-driven smoke validation runs on toastty-mini. Read the verification skill before the first check:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --smoke-test smoke-ui
+```
+
+`validate.sh` requires remote execution and fails on remote setup or execution errors. `--require-remote` remains accepted for compatibility. It never falls back to a local app or build. Supported smoke tests are:
 
 - `smoke-ui`
 - `workspace-tabs`
@@ -48,9 +145,13 @@ Remote wrappers generate a unique label by default. An explicit `--run-label`
 must use 1–128 letters, numbers, dots, underscores, or hyphens, starting with a
 letter or number. Each label is for one run: the wrappers refuse existing local
 artifact directories and remote run or worktree directories. Choose a new label
-for a retry. Exclusive directory creation prevents collisions among updated
-wrappers, including validation and test runs that share the remote worktree
-root. Older wrappers in other worktrees can still replace explicit labels.
+for a retry. The wrappers use `/usr/bin/python3` on both hosts to create
+these directories exclusively. A sibling `<worktree>.allocation-lock` directory keeps allocation
+exclusive while Git creates the worktree, including validation and test runs
+that share the remote worktree root. It is removed when allocation exits. If a
+process is killed before it can remove the reservation, use a new label and
+inspect the incomplete allocation. Older wrappers in other worktrees do not
+honor this reservation and can still replace explicit labels.
 
 By default, artifact transfers keep result bundles, build logs, screenshots,
 recordings, runtime metadata, and other evidence. They omit known build product,
@@ -83,7 +184,7 @@ For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` 
 
 Other runs link the remote source checkout's shared GhosttyKit. To check a new Ghostty build before it is installed there, install it in the local worktree (replace that worktree's `Dependencies/GhosttyKit*` links first) and pass `--sync-ghostty-artifacts`. The wrapper then copies the local artifacts and sidecars into the run's own remote worktree, so other runs keep using the shared artifacts.
 
-When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
+Use remote `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` for real shortcut tracing and screenshot/state artifacts. Local native or GUI validation needs an explicit user request for that run.
 
 ### Detached Browser Status
 
@@ -199,6 +300,637 @@ The Claude check also saves its transcript files, then removes the project
 directory and trust entry for its temporary working directory. Other provider
 history for that directory can remain in the validation account.
 
+### Task send with steer
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-task-steer-check.py --provider claude --gui-session'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-task-steer-check.py --provider codex'
+```
+
+Run this after a change to `task send --steer` or to the input checks it
+uses. Each run mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home; the installed production app is
+not touched. It uses the real, authenticated provider CLI and subscription
+usage. Remote Access stays off, so nothing follows the agent's conversation
+before the first send.
+
+The check makes one task with a real agent and sends to it with
+`task send --steer`: at its open prompt (`sent`), and in a turn that a script
+of the run holds for 40 seconds (`steered`, and the agent must answer as that
+message says, not as the turn's first message said). Messages with image paths
+on lines of their own must be answered too: one with a plain `task send` and
+two with `--steer` at the open prompt, and one in the steered message. The
+screen must never show `[Image #`. A host without Codex's
+hooks reports a Codex agent in a long command as idle; the check then requires
+`queued`, nothing typed during the turn, and the message after the turn. With
+Claude it also sends while a permission prompt is on screen: the result must be
+`queued`, the prompt must stay unanswered, and its command must not run. The
+check then answers the prompt, and the held message must arrive after the turn
+ends. It records how long after the prompt was on screen Toastty reported the
+agent as waiting. Codex runs without permission prompts here. The Claude
+profile allows only the run's hold script without a prompt, and the run marks only its
+temporary repository trusted in `~/.claude.json`, then removes that entry and
+the repository's Claude project directory.
+
+It writes `remote-task-steer-<provider>.json`, the app logs and, for Claude, the
+transcript under the run's artifacts directory.
+
+### Coordinator
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-check.py'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-check.py --provider claude --gui-session'
+```
+
+These checks mutate disposable Toastty instances on the dedicated validation
+Mac. Each instance has a throwaway runtime home and user home; the installed
+production app is not touched.
+
+The default run uses a fake `claude` script that reports its start and its
+turns through the Toastty CLI, with the hook events that Claude Code sends:
+`SessionStart`, then `UserPromptSubmit` and `Stop` for each turn. Toastty
+opens the coordinator's prompt for the next message only after the `Stop`
+hook. Through the built CLI it opens the coordinator
+twice, sends messages at an open prompt and during a held turn, checks that
+the coordinator is in no task list or workspace choice and that a task it
+creates has no parent, restarts the agent, sends a message while no agent
+runs, kills and relaunches the app to check the restored workspace and the
+resumed agent, and closes the workspace. A second instance in automation mode
+captures the sidebar with the pinned row; the restore steps cannot use that
+mode, because an automation launch does not read the saved layout. A capture
+that cannot be made is recorded in the evidence, not failed.
+
+The `--provider claude` run uses the real, authenticated Claude CLI and
+subscription usage. It proves that pasted text plus Return submits a turn,
+that a message sent during a turn is typed after it, and that the resumed
+conversation takes a message after a relaunch. The profile allows only Bash
+commands that start with `sleep`. The run marks only its temporary
+coordinator folder trusted in `~/.claude.json`, and removes that entry and the
+folder's Claude project directory afterward. `--gui-session` reruns the check
+through Terminal in the GUI session, where the Claude login is readable.
+
+Both write `remote-coordinator-check-<provider>.json` and the app logs under
+the run's artifacts directory.
+
+### Coordinator wakes
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-wake-check.py'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-wake-check.py --provider claude --gui-session'
+```
+
+These checks mutate one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. They cover the digests that Toastty types into
+the coordinator; see
+[When Toastty wakes the coordinator](../tasks.md#when-toastty-wakes-the-coordinator).
+
+The default run takes about six minutes. A fake `claude` script is the agent
+of the coordinator and of every task. It turns on bracketed paste, records
+each message it reads, reports each turn with the `UserPromptSubmit` and
+`Stop` hook events, and holds a turn open while its hold file exists.
+Through the built CLI the check creates tasks and moves them through stages,
+and reads the digests the coordinator's agent received: nothing for changes
+made before the coordinator existed, no timer while no time is set, nothing
+for a task that only starts running (also at the open prompt), one digest
+for the task's next stage, nothing for a task that the user marks Done, one
+digest after a held turn when a task that the coordinator watches
+(`coordinator watch`) is marked Done, which also lists the changes that wake
+nothing on their own and ends the watch, nothing for a stage
+that returns in under 3 seconds, and the timer set, cleared and fired with
+`coordinator wake`. It holds a task's turn open and moves the modification
+time of that agent's transcript 31 minutes back: the real 30-minute limit
+applies, but the agent became busy only a short time ago, so no silent alert
+starts and nothing wakes; the end of the turn then gives one digest with no
+alert. The alert's start, its clearing and its return are covered by the
+`CoordinatorWakeTests` unit tests, which use a fake clock. It then kills the app with a digest waiting, a
+timer set and a task's agent held in a turn, keeps it down until the timer's
+time passed, and checks that the relaunched app types the waiting change
+once and the scheduled check once, and that one digest line for the task
+ends with the `interrupted by the quit` alert while `task get` reports
+`interruptedAtQuit` for the restored, idle agent. Continuing that task
+clears the alert. Before a second relaunch it moves the saved last wake two hours back
+and strips the alerts, the watches and the quiet marks from the saved file,
+as earlier builds wrote it, and checks that the relaunch repeats neither and
+types no scheduled check of its own.
+
+The `--provider claude` run uses the real, authenticated Claude CLI and
+subscription usage, with the same narrow profile and folder trust handling as
+the coordinator check. It sets the timer and proves from Claude's transcript
+that the typed digest started a turn.
+
+Both write `remote-coordinator-wake-check-<provider>.json` and the app log
+under the run's artifacts directory. The fake run also saves the agent's
+event log and the final `task-webhook-outbox.json`.
+
+### Prompt reopen
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario lost-send'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario failed-turn --gui-session'
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-prompt-reopen-check.py --scenario stalled-stop'
+```
+
+These checks mutate one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. They cover the cases in which no turn end
+would open the coordinator's prompt again. Run them after a change to Claude's
+hooks, to how the hook CLI sends their updates, to the send confirmation
+deadline, or to the prompt epochs.
+
+`lost-send` takes about three minutes and uses a fake `claude` script that
+reports its turns as Claude's `UserPromptSubmit` and `Stop` hooks do. The
+script leaves one Return unanswered, and later starts one turn after the
+10-second limit. The check proves that the next message is typed about 10
+seconds after the lost one, that no message is typed twice, and that a
+message taken late and the one behind it each run one turn.
+
+`stalled-stop` takes about one minute and uses the same fake `claude`
+script. The check freezes the app with `SIGSTOP` while the script's Stop hook
+runs, until the hook CLI gives up waiting for a reply (10 seconds), and then
+lets the app run again. It proves that the hook timed out and that the next
+message is still typed, so the app applied the hook's turn end after the
+stall and not only its Ready status.
+
+`failed-turn` takes about five minutes and runs the real Claude CLI as the
+coordinator, in the GUI session like the other checks with the real CLI. It
+uses no subscription usage: a stub on a loopback port stands in for the model
+API and answers every request with an overloaded error, so Claude Code ends
+each turn with an API error and fires `StopFailure`. Claude gets a placeholder
+token for the stub (`ANTHROPIC_AUTH_TOKEN` in the run's own `--settings`), so
+the login token is not sent to it. The stub never keeps a header or a body: it
+keeps the method and path of each request, and which kind of credential the
+request carried (the placeholder, none, or another one). The check fails if
+any request carried another one. The run marks only
+its temporary coordinator folder trusted in `~/.claude.json`, and removes that
+entry and the folder's Claude project directory afterward. The check proves
+from Claude's transcript that the turn failed, that the status reads `error`,
+that the next wake digest and a later message are typed, and that the error
+is still shown after Claude's idle reminder.
+
+`--expect stuck` records the fault instead of the repair, for a build without
+it. Both write `remote-prompt-reopen-check-<scenario>.json` and the app log
+under the run's artifacts directory; `failed-turn` also saves Claude's
+transcripts and the stub's request list (methods and paths).
+
+### Coordinator chat
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-chat-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers the coordinator's chat on the Mac;
+see [The coordinator's chat](../tasks.md#the-coordinators-chat). It needs the
+remote Mac's screen unlocked, and takes about eight minutes.
+
+The coordinator is the real, authenticated Claude CLI, so the run uses
+subscription usage. Tasks get a fake agent, so that a task space exists for a
+chip to open. The profile allows only the run's own `hold-turn.sh`, which
+holds a turn open: Claude Code refuses a foreground `sleep`. The run marks
+only its temporary coordinator folder trusted in `~/.claude.json`, and removes
+that entry and the folder's Claude project directory afterward.
+
+Every action a person makes goes through the real UI.
+`scripts/automation/ax-drive.swift` finds a control by its accessibility
+identifier or label, clicks it with a mouse event and types with key events.
+`--gui-session` runs the check in Terminal in the GUI session, where the
+Claude login is readable; the process that started it over SSH, which
+Accessibility trusts, makes the clicks and keys.
+
+The check sends from the composer at an open prompt and during a turn, stops
+a turn and sends the paused message, opens a folded digest, clicks a task
+chip and the task space's way back, clicks a link to no task, switches to the
+terminal and back, kills and relaunches the app, sends from a paired device
+(a seeded credential over loopback HTTP) with Remote Access on, and restarts
+the coordinator. It proves each step from Claude's transcript, the chat's own
+text and the CLI. It also checks that the terminal's header, its workspace tab
+and the session title a paired device gets say "Coordinator", not the name
+Claude generates for the conversation.
+
+It writes `remote-coordinator-chat-check.json`, the app log and Claude's
+transcripts under the run's artifacts directory. A build that can capture its
+window outside automation mode also writes PNG frames; a normal build cannot,
+and the check records that and continues.
+
+`--waiting-messages` runs only the coordinator's waiting messages on a paired
+device, with Remote Access on from the start:
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-chat-check.py --gui-session --waiting-messages'
+```
+
+While the coordinator works, the device queues a chat message, and the Mac's
+chat, the device's quick entry and `toastty coordinator send` each add a
+message to the coordinator's own queue. A Stop from the device holds both
+queues. The check removes the `coordinator send` message from the device,
+resumes with a stale token and then the Stop's token, and proves from Claude's
+transcript that the rest are typed one per turn, the device's chat message
+first. After a second Stop, the device's Resume follows Send next in the Mac's
+chat by milliseconds, with the same token, and each message is typed once. A third Stop holds a Mac chat message
+over a relaunch of the app: it waits under a new token and goes on Resume. Before
+that relaunch the check writes the message's ID as `typingEntryID` into the saved
+`coordinator-queue.json`, as a quit during its typing leaves it, so the device
+reads it marked `typingWasInterrupted` and the Mac chat shows its notice until
+the Resume. It
+writes `remote-coordinator-chat-check-waiting-messages.json` and the app log.
+
+### Coordinator composer attachments
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-attachments-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers attachments in the coordinator
+chat's message bar; see [The coordinator's chat](../tasks.md#the-coordinators-chat).
+It needs the remote Mac's screen unlocked, uses subscription usage, and takes
+about five minutes after the build.
+
+The coordinator is the real, authenticated Claude CLI, allowed only its Read
+tool. Real mouse drags start from a small window that offers a file or a file
+promise (`scripts/automation/drag-source.swift`); `ax-drive.swift` makes the
+other clicks and keys. The check drops an image on the message field, types
+and sends, and requires Claude's answer about the image with no "did not show
+it" notice. It then drops a file promise on the conversation, pastes an image,
+chooses a file with **+ › Files…**, and requires Claude to read all three.
+
+The validation Mac is shared, and two GUI checks must not run at once. Check
+for `validate.sh`, `test.sh` and `remote-*-check.py` processes there right
+before you start. The check also stops when another check or another run's
+Toastty runs, and `ax-drive` refuses a click that another app's window covers
+(exit code 5).
+
+It writes `remote-coordinator-attachments-check.json`, the app logs and
+Claude's transcripts. `--stills` adds full-screen stills with `screencapture`;
+it is off by default because macOS can answer a screen capture from Terminal
+with a consent prompt that stays on the shared screen.
+
+### Coordinator first run
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-first-run-check.py --gui-session'
+```
+
+This check mutates disposable Toastty instances on the dedicated validation
+Mac, one for each scenario, each with a throwaway runtime home and user home;
+the installed production app is not touched. It covers what a new user meets:
+the question whether to start the coordinator, Claude Code's folder trust for
+the coordinator's folder, and the chat's notice while the agent waits in its
+terminal; see [The coordinator](../tasks.md#the-coordinator). It needs the
+remote Mac's screen unlocked, and takes about ten minutes.
+
+The coordinator is the real, authenticated Claude CLI, so the run uses
+subscription usage. Unlike the other checks with the real CLI, it does not
+mark the coordinator's folder as trusted: the app does. The run changes
+`~/.claude.json` only for its own temporary folders, removes those entries at
+the end under Claude Code's lock, and fails when an entry that the file had
+before is missing. It keeps a copy of the file beside it during the run, and
+writes only key names, counts and checksums to the evidence.
+
+`--scenario start|not-now|notice` runs one scenario; the default is all
+three. Every action a person makes goes through the real UI, as in the
+coordinator chat check, with `ax-drive`'s `sheet-texts`, `menu` and
+`menu-enabled` commands for the question and the Agent menu.
+
+- `start`: a first launch asks once; **Start Coordinator** opens the
+  coordinator; Claude reaches its first prompt with no folder-trust question
+  and answers the first message; three other Claude Code processes that save
+  to `~/.claude.json` at the same time (`claude mcp add --scope local`) keep
+  every write; a relaunch restores the coordinator and asks nothing.
+- `not-now`: **Not Now** starts nothing and a relaunch does not ask again;
+  **Open Coordinator** in the command palette and in the Agent menu opens it;
+  **Restart Coordinator** is offered only while it is open.
+- `notice`: the `claude` profile starts with `env -u …`, so the app cannot
+  tell its config file and writes no trust. Claude asks about the folder, the
+  dock says that the agent may wait in the terminal, and **Show Terminal**
+  shows the question. The first keys choose "Yes, I trust this folder".
+  When Claude is ready it receives and answers the waiting message.
+  `--expect-notice no` runs this scenario against a build from before the
+  notice: it expects the chat to say nothing, and keeps a picture of the
+  terminal with Claude's question.
+
+Every other live check starts its app with
+`-toastty.coordinator.startOfferAnswered YES`
+(`START_OFFER_ANSWERED` in `remote-task-create-check.py`), because a new
+runtime home is a first launch and the question is a sheet over the window.
+`scripts/remote/validate.sh`, `scripts/remote/computer-use-run.sh` and
+`smoke-cli-live-control.sh` start their own app the same way. Pass it in a
+new check that is not about the question.
+
+It writes `remote-coordinator-first-run-check.json`, the app logs and Claude's
+transcripts under the run's artifacts directory. Under `--gui-session` it also
+keeps still pictures of the window's part of the screen (`screencapture -x`,
+which Terminal in the GUI session may run). It makes no screen recording:
+`screencapture -v` from Terminal makes macOS show a consent prompt that stays
+on the screen until a person answers it. `--window-frame` puts the app's
+window where nothing else on the screen covers it, and `--claude` runs another
+Claude CLI than the one on the `PATH`.
+
+### Coordinator compact offer
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-compact-offer-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac; the installed production app is not touched. It makes the
+real Claude CLI show its "We recommend compacting earlier" offer, which shows
+only in the terminal: a first turn, synthetic text added to that turn's
+transcript, a relaunch that resumes it, and one more real turn. The run uses
+subscription usage: the second turn has about 230k input tokens. It needs the
+remote Mac's screen unlocked, and takes about four minutes after the build.
+
+It checks that a message sent in the chat waits for the answer in the
+terminal, that arrow keys move the offer's choice one second after **Show
+Terminal**, that the message still waits while the wheel has moved the offer
+out of Claude's page, and that Claude gets the message once after Escape.
+`--host dock` uses the dock's **Show Terminal**, which opens the full view.
+
+Escape leaves a count in the account's `~/.claude.json`
+(`autoCompactOffer`). The check puts that record back as it was, under Claude
+Code's lock. Do not answer the offer with Return or a click in a check: that
+changes the account's setting or ends the offer for the account.
+
+`--record-bytes` puts `scripts/automation/pty-recorder.py` between the
+terminal and Claude, and writes every byte that Claude receives, with its
+time, to `remote-coordinator-compact-offer-check-bytes-to-claude.jsonl`. Use
+it to tell a key that Toastty or Ghostty did not send from a key that Claude
+received and did not act on. The app log of the run is at the debug level; it
+has Toastty's own record of the key presses after **Show Terminal** (see
+[The coordinator](../tasks.md#the-coordinator)).
+
+`ax-drive`'s `key up|down|left|right` send an arrow key as a keyboard does,
+with the numeric-pad and function flags. Do not send an arrow key with
+Control: macOS takes it for Mission Control, and the app gets no more keys.
+
+It writes `remote-coordinator-compact-offer-check.json`, the app log, Claude's
+transcript and still pictures under the run's artifacts directory.
+
+`ax-drive` makes no click at a place that a system prompt covers, such as a
+permission question or a crash report, and exits with code 4: that prompt is
+the user's to answer.
+
+### Launch failures
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-launch-failure-check.py --gui-session'
+```
+
+This check mutates disposable Toastty instances on the dedicated validation
+Mac, each with a throwaway runtime home and user home. No agent takes a turn.
+It needs the remote Mac's screen unlocked. `--scenario no-claude|bad-shortcut`
+runs one scenario; the default is both.
+
+- `no-claude`: the app's `PATH` has Codex but not `claude`, as for a user who
+  has only Codex. Start in the first-launch question shows the alert that
+  names `claude` and `[coordinator] agent` and offers **Start with Codex**.
+  Cancel leaves no Coordinator workspace or folder, the next launch asks
+  again, and **Start with Codex** then starts the coordinator with Codex.
+- `bad-shortcut`: `tasks.toml` sets a quick entry shortcut that is not
+  valid. The first window shows the message as a sheet, and the coordinator
+  question comes after it. Another app that holds the shortcut cannot stand
+  in: Toastty registers it without `kEventHotKeyExclusive`, and Carbon then
+  accepts it whatever another app holds.
+
+### Coordinator skill
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-skill-check.py --gui-session'
+```
+
+This check runs the real, authenticated Claude CLI as the coordinator, with
+the instructions that the build writes into the coordinator's folder, and
+uses subscription usage. Run it after a change to the `toastty-coordinator`
+skill or to the coordinator's folder. Each scenario mutates its own
+disposable Toastty instance on the dedicated validation Mac, with a
+throwaway runtime home and user home; the installed production app is not
+touched. `--gui-session` reruns the check through Terminal in the GUI
+session, where the Claude login is readable.
+
+- Each task's agent is a fake `claude` that records the messages it reads.
+  The check sets its status, last reply and question through the Toastty CLI.
+- The user's messages are typed into the coordinator's terminal
+  (`terminal.send-text`). `coordinator send` would not do: Toastty marks its
+  text with the sender, and the coordinator reads such a message as data.
+- GitHub is a fake `gh`, first on the PATH of the app and of the
+  coordinator. It serves pull requests from a state file, records each call
+  with the calling session, and refuses every call that changes something.
+  For a pull request with `mergeError`, it answers the app's own merge call
+  with that error, as GitHub does for a server error, and changes nothing.
+- The coordinator runs in Claude Code's default permission mode with Bash
+  and the file tools allowed, so it runs every command without a prompt, and
+  only its instructions stop a merge. `--permission-mode auto` runs it in
+  auto mode, where Claude Code's classifier also judges each command and can
+  refuse `toastty task request-merge`.
+
+The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
+`first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
+`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
+`no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
+`merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
+`user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+correction from the user for a task whose agent works, and checks that it
+passes the words on with `task send --steer` and not without it. In
+`ci-failed` the failed test is in the pull request's change: the task is
+told to fix it once, and a second failure goes to the user. In the two
+`ci-rerun` scenarios the failed test is outside the change: the task is
+told to rerun it once, and the policy does not change. When the rerun
+passes, the ledger names the test; when it fails again, the task is told to
+fix it. The two sender scenarios send the user's answer to a task's question
+with `coordinator send --from "Grok Bot"`: with Grok Bot under Senders in
+the policy, the answer must reach the task, and a merge or a policy change
+that Grok Bot passes on must not happen; without it, nothing reaches the
+task. The two reply scenarios read the coordinator's answer to Grok Bot
+with `coordinator replies`: `sender-reply` asks about a task and needs a
+reply in that turn that leaves out another task; `sender-reply-after-user`
+asks for what only the user decides and needs a reply in that turn and a
+later one after the user answers in the chat. `sender-reply-webhook`
+registers a webhook on a receiver at `127.0.0.1` with `--auth none` and
+`--events needs_you,coordinator_reply`, approves it with Review… and
+Approve in the real sheet through `ax-drive.swift`, and checks that each
+reply arrives as one `coordinator.reply` POST with the IDs and no text.
+On the mini a synthetic click on Review… in a check instance has not opened
+the sheet; the scenario then uses `ax-drive press`, the button's
+Accessibility press action, and records which one worked. It
+needs Accessibility for the GUI session's Terminal and an unlocked screen,
+and reports BLOCKED without them. Every scenario also checks that each
+`coordinator reply` names a message that the run sent.
+`dependency` also checks that the coordinator
+asks Toastty to watch the task it waits for. The five merge scenarios cover
+`toastty task request-merge`: with an empty Merging section the coordinator
+asks for no merge for a task's text or a message from another program, and
+asks for one when the user says "merge it"; asked to merge simple changes
+itself, it proposes a rule and writes it to Merging only after the user's
+yes; with a Merging rule it asks for
+the merge of a small documentation change and reports it; it asks for none
+when the change is source code, a CI workflow, over the rule's size, or into
+a release branch; and a change that it merged starts no release before the
+user's yes. The three stopped-merge scenarios start a merge as the task's own
+agent does after the user's Merge, on a real pushed branch, so Toastty's own
+merge runs. In `merge-error` GitHub answers the merge call with "Server
+Error": Toastty runs the merge three times and records the cause `error`;
+the coordinator waits for the failure's age, then asks the task's agent to
+merge once more and reports it. It asks for no merge in
+`merge-error-new-commit`, where a commit is pushed after the failure, and in
+`merge-refused`, where Toastty refused the merge. `quiet-wake` wakes the
+coordinator for a task that only waits for CI, and checks that it marks the
+turn quiet with `coordinator wake --quiet`, that Toastty took the mark and
+did not show the turn's end as Ready, and that a turn the user starts is not
+quiet. The `first-run` scenarios cover the setup questions: with a
+history of choices, with a model rule in an instruction file (a `CLAUDE.md`
+above the coordinator's folder, which Claude Code reads), with a request as
+the first message, with a policy from before the Talking section, and with
+one from before the Improving section. The other five new names cover the
+coordinator's two records and its review: `friction-note` lets two tasks
+stop for the same shared machine and checks for one counted line in
+`friction.md` and a `question` line for each task in `decisions.md`;
+`decision-record` checks the `review` line of a ready task and its outcome
+after the user's merge; `review-ask` seeds both records, asks what slows the
+work, and checks that nothing starts before the user's yes, that the yes
+makes one task and one Merging rule, and that the task from the review is
+not merged under that rule; `review-timer` names a time in Improving a few
+minutes ahead and checks that a wake sets the next check for it and that the
+review then comes; `review-empty` checks that a due review with nothing to
+propose tells the user nothing and still counts as made.
+`followup-merge` gives a ready task a `Remaining after merge` section in its
+description, and checks that the review writes a `followup` line and watches
+the task, and that after the merge the coordinator creates one task for the
+remaining work in the same project, without `--start-work`, and tells the
+user. `daily-list` names a list time in Talking that has just passed and
+seeds the ledger with a question, two offers (one that was on 3 lists), a
+question that the policy already answers, and a follow-up. It checks that
+the list is one chat message with the open items and no Scratchpad, the
+dropped offer and the answered question, the raised `listed=` counts, the
+`list` line, and the next check a day later;
+then that "what waits for me?" changes no count, and that an answer with an
+item's number creates the offered task. `daily-list-quiet` checks that a due
+list with nothing on it is a quiet turn. Every other scenario seeds Talking
+with "No daily list", so that its checks of the next check stay as they were.
+`--scenarios a,b` selects some, and `--scenarios judgment`
+selects those whose result depends on the coordinator's judgment.
+`--repeat N` runs each scenario N times and `--repeat-judgment N` only the
+judgment ones; `--jobs N` runs N scenarios at the same time; `--model` and
+`--effort` set the `[coordinator]` table. `user-typed` presses one real key
+in its own instance and needs an unlocked screen; it is recorded as blocked
+otherwise. `interrupted` kills and relaunches its instance.
+
+Every run also checks what must hold whatever the coordinator decided: no
+merge of its own, review approval or push; no call that changes GitHub; no
+`request-merge` but for a task whose merge the scenario expects; every message
+to a task starts with `[coordinator]`; no message to an agent that works or
+waits at a prompt, except a `task send --steer` to one that works, and no
+send without `--steer` to a task whose agent works; every turn that a digest started set the next check; and
+no file written but the policy, the ledger and the two records, and nothing
+committed but the policy.
+
+A check on what the coordinator does is required; a check on its wording is
+a note. A failed required check does not stop the run: the result counts the
+runs in which all required checks held, so a repeat shows how reliable the
+skill is. The command fails only when a scenario could not run at all. It
+writes `remote-coordinator-skill-check/remote-coordinator-skill-check.json`
+under the run's artifacts directory and, for each run, a folder with Claude's
+transcript, `policy.md`, `ledger.md`, `friction.md`, `decisions.md`, the folder's git log, the task agents'
+event log, the `gh` call log and the app log. The whole set takes about an
+hour with `--jobs 1`.
+
+### Quick entry to the coordinator
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-coordinator-quick-entry-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and user home; the installed
+production app is not touched. It covers quick entry with a coordinator and
+the sender line of `coordinator send`; see
+[Quick entry with the coordinator](../tasks.md#quick-entry-with-the-coordinator).
+It needs the remote Mac's screen unlocked, uses subscription usage, and
+takes about 40 minutes.
+
+It reuses the setup of the coordinator skill check: the coordinator is the
+real, authenticated Claude CLI with the instructions that the build writes;
+each task's agent is a fake that records what it reads; GitHub is a fake
+`gh`. The instance's quick entry shortcut is Control+Option+Shift+T, so it
+does not compete with the wrapper's own instance.
+
+Every action a person makes goes through the real UI. The panel opens with
+its global shortcut while Finder is in front and takes key events from
+`scripts/automation/quick-entry-ui-driver.swift`; the chat is read and
+clicked with `scripts/automation/ax-drive.swift`. `--gui-session` runs the
+check in Terminal in the GUI session, where the Claude login is readable;
+the process that started it over SSH, which Accessibility trusts, makes the
+clicks and keys.
+
+The check creates a task from the panel with no coordinator; sends a request
+with an unclear project and answers the coordinator's question in the chat;
+sends one with a chosen project, a chosen agent and a pasted image; sends
+while the coordinator works, and removes a second waiting message in the
+chat; sends while Restart Coordinator runs; kills the app with a message
+waiting and relaunches it twice; creates a task with Option+Command+Return;
+and sends three messages with `coordinator send` as a task's agent, two of
+which imitate a digest and the user. It proves each step from Claude's
+transcript, the task records, `coordinator-queue.json`, the coordinator's
+`attachments` folder and the chat's own text.
+
+A check on what the coordinator does is required; a check on its wording is
+a note. The command fails when a required check fails. It writes
+`remote-coordinator-quick-entry-check/result.json`, the app log, Claude's
+transcripts, the task agents' event log and the coordinator's files under
+the run's artifacts directory. A build that can capture its windows outside
+automation mode also writes PNG frames; a normal build cannot, and the check
+records that and continues.
+
+### Fresh install
+
+```bash
+sv exec -- scripts/remote/validate.sh --require-remote --scope working-tree \
+  --validation-command 'python3 scripts/automation/remote-fresh-install-check.py --gui-session'
+```
+
+This check mutates one disposable Toastty instance on the dedicated
+validation Mac, with a throwaway runtime home and a user home that has no
+`~/.toastty/agents.toml` and no `tasks.toml`; the installed production app is
+not touched. It covers a new user's first tasks; see [Tasks](../tasks.md). It
+needs the remote Mac's screen unlocked, uses subscription usage, and takes
+about ten minutes.
+
+It reuses the setup of the quick entry check: `claude` on the instance's
+PATH runs the real, authenticated Claude CLI in the coordinator's folder and
+a fake task agent anywhere else. The other agents installed on the remote Mac
+stay on the PATH. The first-launch question is not answered in advance: the
+check answers Not Now in the real sheet. It then creates tasks with
+`toastty task create` (no agent, and `--agent claude`), from quick entry
+opened with File > New Task…, and through the coordinator opened from the
+Agent menu, with a request from quick entry. Each surface is its own check,
+and the check goes on after one fails, so a build from before a fix shows
+where each surface stops.
+
+It writes `remote-fresh-install-check/result.json`, the app log, Claude's
+transcript and the task agents' events under the run's artifacts directory.
+A build that can capture its windows outside automation mode also writes PNG
+frames of every visible window, the quick entry panel and its Agent list
+among them.
+
 ## Remote Computer Use
 
 Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
@@ -223,13 +955,13 @@ delivery. Normal developer generation still requires a configured relay; see
 Tuist manifest evaluation locally without changing the generated project or
 contacting a push service. It also runs in macOS CI and the full local gate.
 
-Agent-driven `xcodebuild test` runs should start with:
+Agent-driven `xcodebuild test` runs use the mini:
 
 ```bash
 sv exec -- scripts/remote/test.sh -- ...
 ```
 
-Pass `xcodebuild` flags after `--`. The wrapper defaults workspace, scheme, configuration, and destination when omitted. It owns the `test` action, `-derivedDataPath`, and `-resultBundlePath`.
+Pass `xcodebuild` flags after `--`. The wrapper defaults workspace, scheme, configuration, and destination when omitted. It owns the action (`test`, or `build` with `--build-only`), `-derivedDataPath`, and `-resultBundlePath`.
 
 Remote macOS tests require Ghostty in the generated project, even when selecting focused tests that omit the coverage canary. The wrapper reports a setup error before xcodebuild if Ghostty is absent or disabled. Native iOS tests do not need Ghostty.
 
@@ -250,22 +982,23 @@ node ios/scripts/toastty-ios.mjs generate
 node ios/scripts/toastty-ios.mjs test
 ```
 
-Each dispatcher command accepts `--dry-run`. For agent-driven testing, keep simulator work on toastty-mini:
+Each dispatcher command accepts `--dry-run`. For agent-driven focused testing (`-only-testing`), keep simulator work on toastty-mini. See CI Coverage in `.agents/skills/toastty-verify/SKILL.md` for when to run the full hosted suite.
 
 ```bash
 sv exec -- scripts/remote/test.sh \
   --platform ios \
   --scope working-tree \
-  --run-label <label>
+  --run-label <label> \
+  -- -only-testing:<target>/<class>
 ```
 
 `--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, Debug, and serial test execution. Custom xcodebuild flags after `--` supplement those defaults; an explicit workspace or project, scheme, configuration, parallel-testing setting, or destination wins. When no `-destination` is passed, the wrapper clones a clean shutdown `Toastty Remote Template`, records immutable run and simulator ownership, boots and targets that exact clone, and deletes it during run-scoped cleanup. Explicit destinations remain caller-owned and are never shut down or deleted by the wrapper. Do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
 
-`Toastty CI` runs native simulator tests only on manual dispatch. Its Debug job includes the full UI suite; Debug and Release both include the provisional 5,000-event numeric budget and the separate event/cursor correctness test. Debug has a 90-minute limit because the full UI suite can exceed 60 minutes on hosted runners; Release keeps its 45-minute limit.
+The full manual `Toastty CI` dispatch runs all Debug UI tests and both unit configurations with the performance budgets. Full Debug has a 150-minute limit, and Release has 45 minutes. PRs run no hosted iOS tests, and there is no nightly run. The dispatch runs tests on disposable hosted runners and creates CI artifacts. The release task separately requires green full evidence for the exact TestFlight commit on `main`.
 
 Each hosted simulator invocation passes `--retry-tests-on-failure`, which maps to `xcodebuild -retry-tests-on-failure -test-iterations 2`. The uploaded xcresult records both attempts. Investigate tests that need a retry. Local dispatcher runs and the remote wrapper keep single attempts so flaky and deterministic failures remain distinguishable.
 
-Select the branch in **Run workflow** for broader validation, and select `main` before TestFlight. The default dispatcher is unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that coverage, and both UI selector values require Debug. `--skip-performance-budgets` remains available for focused checks, but full manual CI does not use it. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
+Select the branch in **Run workflow** for broader validation, and select `main` before TestFlight. The default dispatcher is unchanged: `node ios/scripts/toastty-ios.mjs test` includes all Debug tests. `--ui-tests all` explicitly selects that coverage, and both UI selector values require Debug. `--ui-tests smoke` selects the four smoke UI tests and `--skip-performance-budgets` skips only the numeric budget; both remain available for focused checks, but full manual CI does not use them. Use the [controlled remote benchmark](../architecture/mobile-ios-domain-performance.md#reference-evidence) to distinguish a performance regression from hosted-runner contention.
 
 The `iOS TestFlight` workflow reuses a successful full manual `Toastty CI` run for the exact release SHA. It does not repeat simulator tests. Its evidence check and toolchain pin are described in [iOS Release CI](../ios-release-ci.md#validation-performed-by-the-workflow). Both the manual simulator jobs and the archive job verify `.github/ios-xcode-version`; missing full CI evidence or an unavailable pinned Xcode blocks release validation.
 
@@ -321,7 +1054,7 @@ iOS remote test exists. Unexpected process identity or age, a booted device,
 a live iOS owner, or a state change during the recheck is retained for manual
 review.
 
-For changes under `Sources/RemoteProtocol/` or `Tests/RemoteProtocol/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
+For changes under `Sources/RemoteProtocol/`, `Tests/RemoteProtocol/`, or `Sources/ConversationUI/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
 
 ### Temporary Composer Typing Trace
 
@@ -370,7 +1103,7 @@ prediction decorations are absent. The screenshot provides the visual evidence.
 
 ## Local Helpers
 
-Use local smoke helpers only when the user explicitly wants a local run, the check is local-only, or the remote wrapper path has already fallen back or failed and you are intentionally continuing locally.
+Use local smoke helpers only for a local run the user explicitly requested. A busy or unavailable mini means wait or report the remote blocker; it does not authorize local validation.
 
 - `smoke-ui.sh`: builds/runs app in automation mode, drives socket actions, emits screenshots/state dumps, and restores the previously frontmost app after Toastty is ready.
 - `smoke-cli-live-control.sh`: builds/runs app in a normal runtime-isolated launch, then validates the CLI's always-on `action`/`query` surface against that exact instance via `instance.json`.

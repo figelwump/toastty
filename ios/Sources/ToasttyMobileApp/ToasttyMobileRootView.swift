@@ -1,3 +1,4 @@
+import ConversationUI
 import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
@@ -7,28 +8,51 @@ struct ToasttyMobileRootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sessionController: AppSessionController
     @State private var appIconBadgeController: AppIconBadgeController?
-    @State private var navigationPath: [ToasttyMobileRoute] = []
+    /// The selected tab and each tab's stack. Without the Mac's task system
+    /// there is no tab bar, and Home's stack is the only one.
+    @State private var tabs = ToasttyMobileTabState()
+    @State private var tasksScrollRequest: ToasttyTasksScrollRequest?
     @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
     @State private var presentedSheet: ToasttyMobileSheet?
-    /// The new-session sheet for content shared from another app.
+    /// The new-session sheet for content shared from another app, when the
+    /// Mac cannot create tasks.
     @State private var sharedNewSession: ToasttyNewSessionModel?
+    /// The New Task sheet for content shared from another app.
+    @State private var sharedNewTask: ToasttyNewTaskModel?
     /// A notification or link opened something during this activation, so a
     /// waiting shared draft does not cover it.
     @State private var routedDestinationSinceActivation = false
     @State private var fixtureHasLoadedOlderTranscript = false
-    @State private var composerDraftState = ToasttyComposerDraftState()
+    /// Only the composer reads the drafts' state, so typing does not update
+    /// this view, its tabs or the transcript.
+    @State private var composerDrafts = ToasttyComposerDraftStore()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
     @State private var fixtureComposerIsReserved = false
     @State private var fixtureQueuedMessages: [RemoteQueuedMessage] = []
     @State private var fixtureQueueSubmissionCount = 0
     @State private var fixtureQueuePaused = false
     @State private var fixtureTurnStopped = false
+    /// The fixture coordinator's own queue
+    /// (`TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE`), and the token of the
+    /// Stop that holds its messages.
+    @State private var fixtureCoordinatorQueueEntries: [RemoteCoordinatorQueueEntry] = []
+    @State private var fixtureCoordinatorHeldSetToken: String?
+    /// The fixture's entries whose Remove the Mac refused
+    /// (`TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_REMOVE_FAILS`).
+    @State private var fixtureCoordinatorRemoveFailures: Set<String> = []
     @State private var fixtureLocalDraftReleaseAttempts = 0
 #if DEBUG
     @State private var fixtureEntryLoadStep = 0
     @State private var controlledFixtureSubmission: ControlledFixtureSubmission?
     @State private var fixtureSentText: String?
     @State private var fixtureSendUpdateCount = 0
+    /// A send in the fixture coordinator chat removed its New line.
+    @State private var fixtureCoordinatorLineCleared = false
+    /// What the Mac sends while the user types, from TOASTTY_MOBILE_FIXTURE_INCOMING=1.
+    @State private var fixtureIncoming: ToasttyIncomingFixture?
+    /// The fixture coordinator chat finished loading since it last opened,
+    /// with `TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS=1`.
+    @State private var fixtureCoordinatorIsLoaded = false
 #endif
     @State private var fixtureInteractionAnswerState: ToasttyInteractionAnswerState?
     @State private var fixtureInteractionAcceptedAnswers: [RemoteInteractionAnswer]?
@@ -40,6 +64,10 @@ struct ToasttyMobileRootView: View {
     private let entryLoadFixture: ToasttyConversationFixture.EntryLoad?
     private let controlsFixtureSubmission: Bool
     private let fixtureSendEventOrder: ToasttyConversationFixture.SendEventOrder?
+    private let showsNotificationTapButtons: Bool
+    /// `TOASTTY_MOBILE_FIXTURE_RENDER_COUNTS=1`: UI tests read how many times
+    /// a transcript's body ran.
+    private let showsTranscriptBodyCount: Bool
 #endif
     private let deepLinkParser: DeepLinkParser?
     private let sharedDraftStore: ToasttySharedDraftStore?
@@ -66,7 +94,7 @@ struct ToasttyMobileRootView: View {
                 )
             }
             _ = draft.addAttachments(attachments, for: Self.fixtureOpenPromptConversationID)
-            _composerDraftState = State(initialValue: draft)
+            _composerDrafts = State(initialValue: ToasttyComposerDraftStore(draft))
         }
         if configuration.fixtureScenario == .interactionAnswer {
             let key = ToasttyInteractionAnswerKey(
@@ -89,12 +117,32 @@ struct ToasttyMobileRootView: View {
         fixtureScenario = configuration.fixtureScenario
 #if DEBUG
         entryLoadFixture = configuration.entryLoadFixture
+        showsNotificationTapButtons = configuration.showsNotificationTapButtons
+        showsTranscriptBodyCount = configuration.fixtureScenario != nil
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_RENDER_COUNTS"] == "1"
         controlsFixtureSubmission = configuration.fixtureScenario == .gatedSend
             && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_CONTROLLED_SUBMIT"] == "1"
         fixtureSendEventOrder = configuration.fixtureScenario == .gatedSend
             ? ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_SEND_EVENT_ORDER"]
                 .flatMap(ToasttyConversationFixture.SendEventOrder.init(rawValue:))
             : nil
+        _fixtureIncoming = State(initialValue: configuration.fixtureScenario == .home
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_INCOMING"] == "1"
+            ? ToasttyIncomingFixture() : nil)
+        if configuration.fixtureScenario == .home, Self.fixtureCoordinatorQueueMode != nil {
+            _fixtureQueuedMessages = State(initialValue: ToasttyConversationFixture.coordinatorChatQueue)
+            if Self.fixtureCoordinatorQueueMode == .shared {
+                let environment = ProcessInfo.processInfo.environment
+                let isInterrupted = environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_INTERRUPTED"] == "1"
+                _fixtureCoordinatorQueueEntries = State(initialValue: ToasttyConversationFixture.coordinatorOwnQueue(
+                    hasLongMessage: environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_LONG"] == "1",
+                    hasInterruptedMessage: isInterrupted
+                ))
+                // As after a relaunch of the Mac: the interrupted message
+                // waits, held, under a new token.
+                _fixtureCoordinatorHeldSetToken = State(initialValue: isInterrupted ? UUID().uuidString : nil)
+            }
+        }
 #endif
         deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
         sharedDraftStore = configuration.sharedDraftStore
@@ -165,7 +213,7 @@ struct ToasttyMobileRootView: View {
                 resetComposerPresentation()
                 if newState != .restoring, newState != .keychainLocked {
                     pendingDeepLinkDestination = nil
-                    navigationPath.removeAll(keepingCapacity: false)
+                    tabs = ToasttyMobileTabState()
                 }
             } else {
                 routePendingDeepLinkIfAvailable()
@@ -185,6 +233,7 @@ struct ToasttyMobileRootView: View {
         }
         .onChange(of: sessionController.pushController?.canIntroduce) { presentNotificationIntroIfNeeded() }
         .onChange(of: sessionController.pushController?.pendingConversationID) { handleNotificationTap() }
+        .onChange(of: sessionController.pushController?.pendingTaskTap) { handleNotificationTap() }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
@@ -200,7 +249,23 @@ struct ToasttyMobileRootView: View {
             }
         }
         .onOpenURL(perform: handleDeepLink)
+#if DEBUG
+        .overlay(alignment: .topLeading) {
+            if showsTranscriptBodyCount {
+                ToasttyTranscriptBodyCountElement()
+                    .frame(width: 2, height: 2)
+            }
+        }
+#endif
         .preferredColorScheme(.dark)
+#if DEBUG
+        .toasttyIncomingKeyboardLog($fixtureIncoming)
+        .modifier(FixtureCoordinatorReopenLoad(
+            isEnabled: Self.fixtureCoordinatorReopens,
+            selectedConversationID: sessionController.homeController.selectedConversationPresentation?.id,
+            isLoaded: $fixtureCoordinatorIsLoaded
+        ))
+#endif
     }
 
     private var sessionGate: some View {
@@ -226,33 +291,7 @@ struct ToasttyMobileRootView: View {
     }
 
     private func pairedApp(presentation: PairedConnectionPresentation) -> some View {
-        NavigationStack(path: $navigationPath) {
-            ToasttyHomeView(
-                controller: sessionController.homeController,
-                refresh: sessionController.refreshLiveSessions,
-                onSettings: { presentedSheet = .settings },
-                openWorkspace: openWorkspace,
-                // Reinstall advice outlasts the relay cooldown error that usually follows it.
-                notificationError: sessionController.pushController?.configuration == nil
-                    ? nil : sessionController.pushController.flatMap { $0.deliveryHint ?? $0.errorMessage },
-                retryNotifications: sessionController.pushController?.deliveryHint != nil
-                    ? nil : { sessionController.pushController?.retry() }
-            )
-                .navigationDestination(for: ToasttyMobileRoute.self) { route in
-                    switch route {
-                    case .workspace(let workspaceID):
-                        ToasttyWorkspaceView(
-                            workspaceID: workspaceID,
-                            controller: sessionController.homeController,
-                            openWorkspace: openWorkspace
-                        )
-                    case .conversation(let conversationID):
-                        conversationScreen(for: conversationID)
-                    case .panelPreview(let workspaceID, let panelID):
-                        workspacePreview(workspaceID: workspaceID, panelID: panelID)
-                    }
-                }
-        }
+        tabContent
         .tint(ToasttyDesignTokens.amber)
         .background(ToasttyDesignTokens.background.ignoresSafeArea())
         // Once for the whole stack: Home stays in it under a pushed
@@ -265,21 +304,44 @@ struct ToasttyMobileRootView: View {
             // The stack can be (re)inserted while a selection already exists,
             // e.g. after a keychain-lock cycle; onChange alone would miss it.
             syncNavigationPath(with: sessionController.homeController.selectedConversationPresentation)
+            sessionController.pushController?.setOpenConversation(screenConversationID)
             handleNotificationTap()
             presentNotificationIntroIfNeeded()
         }
         .onChange(of: sessionController.homeController.selectedConversationPresentation) { _, selection in
             syncNavigationPath(with: selection)
         }
+        // Leaving the task system closes the Tasks and Coordinator tabs and
+        // their stacks.
+        .onChange(of: showsTasksTab) { _, showsTasksTab in
+            guard showsTasksTab == false else { return }
+            selectTab(.home)
+            tabs.paths[.tasks] = nil
+            tabs.paths[.coordinator] = nil
+        }
+        // A closed coordinator closes its tab.
+        .onChange(of: showsCoordinatorTab) { _, showsCoordinatorTab in
+            guard showsCoordinatorTab == false else { return }
+            if tabs.selected == .coordinator { selectTab(.home) }
+            tabs.paths[.coordinator] = nil
+        }
         .onChange(of: navigationPath) { _, newPath in
-            sessionController.pushController?.setOpenConversation(newPath.last?.conversationID)
             presentNotificationIntroIfNeeded()
             // A back swipe or back button pops the conversation route without
             // going through the controller; mirror the pop into selection so
-            // the live conversation runtime closes.
-            if newPath.containsConversation == false,
-               sessionController.homeController.selectedConversationPresentation != nil {
-                sessionController.homeController.dismissConversation()
+            // the live conversation runtime closes, or, back on the
+            // Coordinator tab's own screen, opens the coordinator's.
+            if newPath.containsConversation == false {
+                openScreenConversation()
+            }
+        }
+        // Also when the tab changes, or the coordinator's session comes or
+        // goes: only the screen on top of the tab on screen has an open
+        // conversation.
+        .onChange(of: screenConversationID) { _, conversationID in
+            sessionController.pushController?.setOpenConversation(conversationID)
+            if navigationPath.containsConversation == false {
+                openScreenConversation()
             }
         }
         // A shared draft waits for these sheets to close before its own opens.
@@ -301,6 +363,7 @@ struct ToasttyMobileRootView: View {
             }
         }
         .toasttyNewSessionSheet($sharedNewSession, controller: sessionController.homeController)
+        .toasttyNewTaskSheet($sharedNewTask, controller: sessionController.homeController)
         .onChange(of: presentedSheet) { _, sheet in
             guard sheet == .settings else { presentNotificationIntroIfNeeded(); return }
             Task {
@@ -322,6 +385,198 @@ struct ToasttyMobileRootView: View {
             .easeInOut(duration: 0.25),
             value: sessionController.homeController.removedSelectionMessage
         )
+#if DEBUG
+        .overlay(alignment: .topTrailing) {
+            if showsNotificationTapButtons, let push = sessionController.pushController {
+                // A notification tap, delivered as the system delivers one.
+                VStack(alignment: .trailing, spacing: 6) {
+                    Button("Coordinator alert") {
+                        push.receiveFixtureSessionTap(conversationID: ToasttyMobileFixture.coordinatorConversationID)
+                    }
+                    .accessibilityIdentifier("toastty-mobile-fixture-tap-coordinator-notification")
+                    Button("Session alert") {
+                        push.receiveFixtureSessionTap(conversationID: Self.fixtureWorkingConversationID)
+                    }
+                    .accessibilityIdentifier("toastty-mobile-fixture-tap-session-notification")
+                }
+                .font(.caption2.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 120)
+                .padding(.trailing, 8)
+            }
+        }
+#endif
+    }
+
+    /// Home and Tasks tabs while the Mac sends a task board, and Coordinator
+    /// between them while it also has a coordinator; otherwise Home alone,
+    /// with no tab bar.
+    @ViewBuilder
+    private var tabContent: some View {
+        if showsTasksTab {
+            // A closure, not the method itself: Swift 6.3 crashes making the
+            // isolated thunk for a method passed as `set`.
+            TabView(selection: Binding(get: { tabs.selected }, set: { selectTab($0) })) {
+                Tab("Home", systemImage: "house", value: ToasttyMobileTab.home) {
+                    navigationStack(.home) { homeView }
+                }
+                // Second, between Home and Tasks, while the Mac has one.
+                if showsCoordinatorTab {
+                    Tab(value: ToasttyMobileTab.coordinator) {
+                        navigationStack(.coordinator) { coordinatorRoot }
+                    } label: {
+                        Label {
+                            Text(ToasttyCoordinatorTabPresentation.title)
+                        } icon: {
+                            Image(uiImage: ToasttyCoordinatorTabPresentation.tabImage)
+                        }
+                    }
+                    .badge(ToasttyCoordinatorTabPresentation.badge(
+                        sessionController.homeController.snapshot.coordinatorMark,
+                        isOnScreen: tabs.selected == .coordinator
+                    ).map { Text($0) })
+                }
+                Tab("Tasks", systemImage: "checklist", value: ToasttyMobileTab.tasks) {
+                    navigationStack(.tasks) {
+                        ToasttyTasksTabView(
+                            controller: sessionController.homeController,
+                            refresh: sessionController.refreshLiveSessions,
+                            openWorkspace: openWorkspace,
+                            scrollRequest: $tasksScrollRequest
+                        )
+                    }
+                }
+            }
+        } else {
+            navigationStack(.home) { homeView }
+        }
+    }
+
+    private var showsTasksTab: Bool {
+        sessionController.homeController.snapshot.taskBoard != nil
+    }
+
+    /// The snapshot sets the coordinator's workspace apart only with a task
+    /// board, so this tab comes and goes with the tab bar.
+    private var showsCoordinatorTab: Bool {
+        sessionController.homeController.snapshot.coordinator != nil
+    }
+
+    /// The coordinator's session while the Coordinator tab shows.
+    private var coordinatorConversationID: UUID? {
+        sessionController.homeController.snapshot.coordinatorConversation?.id
+    }
+
+    /// The conversation that the screen on top of the tab on screen shows.
+    private var screenConversationID: UUID? {
+        tabs.openConversationID(in: tabs.selected, coordinatorConversationID: coordinatorConversationID)
+    }
+
+    /// The Coordinator tab's own screen: the coordinator's chat, or what
+    /// shows while its workspace lists no session.
+    @ViewBuilder
+    private var coordinatorRoot: some View {
+        if let coordinatorConversationID {
+            conversationScreen(for: coordinatorConversationID, isCoordinatorRoot: true)
+        } else {
+            ToasttyCoordinatorUnavailableView(isLive: sessionController.homeController.freshness == .live)
+        }
+    }
+
+    private var homeView: some View {
+        ToasttyHomeView(
+            controller: sessionController.homeController,
+            refresh: sessionController.refreshLiveSessions,
+            onSettings: { presentedSheet = .settings },
+            openWorkspace: openWorkspace,
+            // Reinstall advice outlasts the relay cooldown error that usually follows it.
+            notificationError: sessionController.pushController?.configuration == nil
+                ? nil : sessionController.pushController.flatMap { $0.deliveryHint ?? $0.errorMessage },
+            retryNotifications: sessionController.pushController?.deliveryHint != nil
+                ? nil : { sessionController.pushController?.retry() },
+            showTasks: showTasks
+        )
+    }
+
+    private func navigationStack<Root: View>(_ tab: ToasttyMobileTab, @ViewBuilder root: () -> Root) -> some View {
+        NavigationStack(path: Binding(get: { tabs.paths[tab] ?? [] }, set: { tabs.paths[tab] = $0 })) {
+            root()
+                .navigationDestination(for: ToasttyMobileRoute.self) { route in
+                    switch route {
+                    case .workspace(let workspaceID):
+                        ToasttyWorkspaceView(
+                            workspaceID: workspaceID,
+                            controller: sessionController.homeController,
+                            openWorkspace: openWorkspace
+                        )
+                    case .conversation(let conversationID):
+                        conversationScreen(for: conversationID)
+                    case .panelPreview(let workspaceID, let panelID):
+                        workspacePreview(workspaceID: workspaceID, panelID: panelID)
+                    }
+                }
+        }
+    }
+
+    /// The stack of the tab on screen. Routing, deep links and the selected
+    /// conversation all act on it.
+    private var navigationPath: [ToasttyMobileRoute] {
+        get { tabs.selectedPath }
+        nonmutating set { tabs.selectedPath = newValue }
+    }
+
+    /// Shows a tab with its stack as the user left it. The open conversation
+    /// follows the tab on screen: a conversation on top of the new tab's
+    /// stack opens again, and one left behind in the other tab closes until
+    /// that tab shows again.
+    private func selectTab(_ tab: ToasttyMobileTab) {
+        guard tabs.selected != tab else { return }
+        tabs.selected = tab
+        openScreenConversation()
+    }
+
+    /// Opens the conversation the top screen shows, or closes the open one
+    /// when that screen shows none.
+    private func openScreenConversation() {
+        let home = sessionController.homeController
+        if let conversationID = screenConversationID {
+            if home.selectedConversationPresentation?.id != conversationID,
+               home.openConversation(id: conversationID) == false {
+                navigationPath = navigationPath.synchronized(with: nil)
+            }
+        } else if home.selectedConversationPresentation != nil {
+            home.dismissConversation()
+        }
+    }
+
+    /// The coordinator's chat on its tab's own screen, from a notification
+    /// or a link. A screen pushed over the chat closes.
+    private func openCoordinatorTab() {
+        tabs.paths[.coordinator] = []
+        tabs.selected = .coordinator
+        openScreenConversation()
+    }
+
+    /// From a card's To ship line or Done count: the Tasks tab's list, at
+    /// that group.
+    private func showTasks(_ target: ToasttyTasksTabTarget) {
+        tabs.paths[.tasks] = []
+        selectTab(.tasks)
+        tasksScrollRequest = ToasttyTasksScrollRequest(target: target)
+    }
+
+    /// A link or a notification opens its conversation in Home's stack,
+    /// also when the Tasks tab already shows it, which leaves the selection
+    /// as it was.
+    private func openInHome(conversationID: UUID) {
+        // Home does not list the coordinator's session; its tab shows it.
+        if showsCoordinatorTab, conversationID == coordinatorConversationID {
+            openCoordinatorTab()
+            return
+        }
+        tabs.selected = .home
+        sessionController.homeController.openConversation(id: conversationID)
+        syncNavigationPath(with: sessionController.homeController.selectedConversationPresentation)
     }
 
     /// Pushes a workspace from a row or menu, which cannot use a
@@ -329,6 +584,27 @@ struct ToasttyMobileRootView: View {
     private func openWorkspace(_ workspaceID: UUID) {
         guard navigationPath.last != .workspace(workspaceID) else { return }
         navigationPath.append(.workspace(workspaceID))
+    }
+
+    /// Opens a task space from a task chip in a conversation, by the rule a
+    /// task space row uses: a task space with one session and no task
+    /// spaces of its own opens that session, else the task space's screen.
+    /// The conversation route always sits on top of the stack, so either
+    /// takes the conversation's place, and Back goes to the screen under
+    /// it. On the Coordinator tab's own screen nothing is under the chat,
+    /// so the session or task space is pushed over it.
+    private func openTaskSpaceInPlaceOfConversation(_ workspaceID: UUID) {
+        let home = sessionController.homeController
+        if let row = home.snapshot.subspaceRow(id: workspaceID),
+           let session = ToasttySubspaceGroupPresentation.directConversation(for: row, in: home.snapshot) {
+            // The selection change puts the session in the conversation's
+            // place (`syncNavigationPath`).
+            if session.id == screenConversationID || home.openConversation(id: session.id) { return }
+        }
+        home.dismissConversation()
+        var path = navigationPath.synchronized(with: nil)
+        if path.last != .workspace(workspaceID) { path.append(.workspace(workspaceID)) }
+        navigationPath = path
     }
 
     private func handleDeepLink(_ url: URL) {
@@ -353,10 +629,11 @@ struct ToasttyMobileRootView: View {
 
         switch destination {
         case .conversation(let conversationID):
-            guard sessionController.homeController.openConversation(id: conversationID) else {
+            guard sessionController.homeController.conversation(id: conversationID) != nil else {
                 discardPendingDeepLinkAfterLiveSnapshot()
                 return
             }
+            openInHome(conversationID: conversationID)
             pendingDeepLinkDestination = nil
             presentedSheet = nil
             routedDestinationSinceActivation = true
@@ -366,28 +643,63 @@ struct ToasttyMobileRootView: View {
                 return
             }
             pendingDeepLinkDestination = nil
-            sessionController.homeController.dismissConversation()
-            navigationPath = [.workspace(workspaceID)]
+            if workspaceID == sessionController.homeController.snapshot.coordinator?.id {
+                openCoordinatorTab()
+            } else {
+                tabs.selected = .home
+                sessionController.homeController.dismissConversation()
+                navigationPath = [.workspace(workspaceID)]
+            }
             presentedSheet = nil
             routedDestinationSinceActivation = true
-        case .newSession(let draftID):
+        case .sharedDraft(let draftID):
             routeSharedDraft(draftID)
+        case .task(let taskID, let conversationID):
+            routeTaskAlert(taskID: taskID, conversationID: conversationID)
         }
     }
 
-    /// Opens the new-session sheet with a draft the share extension saved,
-    /// over whatever screen is showing, in the workspace Home would use. A
-    /// draft that cannot open yet stays saved for `queueWaitingSharedDraft`.
+    /// A task alert opens the task's session while its task space is open,
+    /// else the task's detail.
+    private func routeTaskAlert(taskID: UUID, conversationID: UUID?) {
+        let home = sessionController.homeController
+        switch home.taskAlertRoute(taskID: taskID, conversationID: conversationID) {
+        case .conversation(let id):
+            guard home.conversation(id: id) != nil else { return }
+            openInHome(conversationID: id)
+            pendingDeepLinkDestination = nil
+            presentedSheet = nil
+            routedDestinationSinceActivation = true
+        case .taskDetail(let id):
+            pendingDeepLinkDestination = nil
+            tabs.selected = .home
+            home.dismissConversation()
+            navigationPath = []
+            presentedSheet = nil
+            home.requestedTaskDetailID = id
+            routedDestinationSinceActivation = true
+        case .waitForLiveSnapshot:
+            break
+        case .unavailable:
+            pendingDeepLinkDestination = nil
+        }
+    }
+
+    /// Opens a draft the share extension saved over whatever screen is
+    /// showing: in the New Task sheet, or in the new-session sheet, in the
+    /// workspace Home would use, when the Mac cannot create tasks. A draft
+    /// that cannot open yet stays saved for `queueWaitingSharedDraft`.
     private func routeSharedDraft(_ draftID: UUID) {
         let home = sessionController.homeController
         let preferences = ToasttyNewSessionPreferences()
-        guard home.canStartSessions,
-              let workspace = home.defaultSessionStartWorkspace(lastUsed: preferences.lastWorkspaceID) else {
+        let sessionWorkspace = home.defaultSessionStartWorkspace(lastUsed: preferences.lastWorkspaceID)
+        guard home.canCreateTasks || (home.canStartSessions && sessionWorkspace != nil) else {
             discardPendingDeepLinkAfterLiveSnapshot()
             return
         }
         // One sheet at a time. Settings closes for the draft; an open
-        // new-session form keeps its own draft, and this one waits for it.
+        // New Task or new-session form keeps its own draft, and this one
+        // waits for it.
         guard home.isShowingNewSessionForm == false else { return }
         guard presentedSheet == nil else {
             presentedSheet = nil
@@ -395,15 +707,24 @@ struct ToasttyMobileRootView: View {
         }
         pendingDeepLinkDestination = nil
         guard let draft = sharedDraftStore?.take(id: draftID) else { return }
-        sharedNewSession = ToasttyNewSessionModel(
-            workspaceID: workspace.id,
-            workspaceTitle: workspace.title,
-            host: home,
-            preferences: preferences,
-            message: draft.text,
-            attachments: draft.attachments,
-            notice: draft.skippedItemsNotice
-        )
+        if home.canCreateTasks {
+            sharedNewTask = ToasttyNewTaskModel(
+                host: home,
+                text: draft.text,
+                attachments: draft.attachments,
+                notice: draft.skippedItemsNotice
+            )
+        } else if let workspace = sessionWorkspace {
+            sharedNewSession = ToasttyNewSessionModel(
+                workspaceID: workspace.id,
+                workspaceTitle: workspace.title,
+                host: home,
+                preferences: preferences,
+                message: draft.text,
+                attachments: draft.attachments,
+                notice: draft.skippedItemsNotice
+            )
+        }
     }
 
     /// Opens a shared draft that its link did not open: the extension could
@@ -414,8 +735,9 @@ struct ToasttyMobileRootView: View {
         guard pendingDeepLinkDestination == nil,
               routedDestinationSinceActivation == false,
               sessionController.pushController?.pendingConversationID == nil,
+              sessionController.pushController?.pendingTaskTap == nil,
               let draftID = sharedDraftStore.waitingDraftID() else { return }
-        pendingDeepLinkDestination = .newSession(draftID)
+        pendingDeepLinkDestination = .sharedDraft(draftID)
         routePendingDeepLinkIfAvailable()
     }
 
@@ -426,14 +748,22 @@ struct ToasttyMobileRootView: View {
     }
 
     private func handleNotificationTap() {
-        guard let push = sessionController.pushController, let id = push.pendingConversationID else { return }
-        pendingDeepLinkDestination = .conversation(id)
-        push.consumedConversationTap()
+        guard let push = sessionController.pushController else { return }
+        if let tap = push.pendingTaskTap {
+            pendingDeepLinkDestination = .task(tap.taskID, conversationID: tap.conversationID)
+            push.consumedTaskTap()
+        } else if let id = push.pendingConversationID {
+            pendingDeepLinkDestination = .conversation(id)
+            push.consumedConversationTap()
+        } else {
+            return
+        }
         routePendingDeepLinkIfAvailable()
     }
 
     private func presentNotificationIntroIfNeeded() {
-        guard presentedSheet == nil, sharedNewSession == nil, navigationPath.isEmpty,
+        guard presentedSheet == nil, sharedNewSession == nil, sharedNewTask == nil, navigationPath.isEmpty,
+              screenConversationID == nil,
               pendingDeepLinkDestination == nil,
               sessionController.state == .paired(.live),
               sessionController.pushController?.canIntroduce == true else { return }
@@ -441,14 +771,17 @@ struct ToasttyMobileRootView: View {
     }
 
     private func syncNavigationPath(with selection: SelectedConversationPresentation?) {
-        let updated = navigationPath.synchronized(with: selection)
+        // The coordinator's chat is its tab's own screen, never a pushed one.
+        let updated = tabs.selected == .coordinator && selection != nil && selection?.id == coordinatorConversationID
+            ? []
+            : navigationPath.synchronized(with: selection)
         if updated != navigationPath {
             navigationPath = updated
         }
     }
 
-    private func conversationScreen(for conversationID: UUID) -> some View {
-        let generation = composerDraftState.generation
+    private func conversationScreen(for conversationID: UUID, isCoordinatorRoot: Bool = false) -> some View {
+        let generation = composerDrafts.generation
         let liveConversation = sessionController.liveController?.activeConversationController
         let supportsAttachments = liveConversation?.conversationID == conversationID
             ? liveConversation?.supportsAttachments == true
@@ -458,32 +791,26 @@ struct ToasttyMobileRootView: View {
             controller: sessionController.homeController,
             presentation: conversationPresentation(for: conversationID),
             composer: conversationComposer(for: conversationID),
-            draft: composerDraftState.draft(for: conversationID),
-            draftGeneration: generation,
-            draftEditRevision: composerDraftState.editRevisions[conversationID, default: 0],
-            draftReplacement: composerDraftState.replacements[conversationID],
+            drafts: composerDrafts,
             draftDidChange: conversationDraftChange(for: conversationID, generation: generation),
             draftReplacementCompleted: { result in
-                guard composerDraftState.generation == generation,
+                guard composerDrafts.generation == generation,
                       sessionController.homeController.conversation(id: conversationID) != nil else { return }
-                composerDraftState.completeReplacement(result, for: conversationID)
+                composerDrafts.update { $0.completeReplacement(result, for: conversationID) }
                 reconcileAttachmentDrafts()
             },
-            isSubmitting: composerDraftState.isSubmitting(conversationID),
-            attachments: composerDraftState.attachments(for: conversationID),
             supportsAttachments: supportsAttachments,
             addAttachments: { additions in
-                guard composerDraftState.generation == generation,
+                guard composerDrafts.generation == generation,
                       sessionController.homeController.conversation(id: conversationID) != nil else {
                     return "This conversation is no longer available."
                 }
-                return composerDraftState.addAttachments(additions, for: conversationID)
+                return composerDrafts.update { $0.addAttachments(additions, for: conversationID) }
             },
-            removeAttachment: {
-                composerDraftState.removeAttachment($0, for: conversationID)
+            removeAttachment: { attachmentID in
+                composerDrafts.update { $0.removeAttachment(attachmentID, for: conversationID) }
                 reconcileAttachmentDrafts()
             },
-            attachmentRecoveryMessage: composerDraftState.attachmentRecoveryMessages[conversationID],
             loadOlder: conversationLoadOlderAction(for: conversationID),
             submitDraft: conversationSubmitAction(for: conversationID),
             interrupt: conversationInterruptAction(for: conversationID),
@@ -496,7 +823,21 @@ struct ToasttyMobileRootView: View {
             submitInteractionAnswer: conversationInteractionSubmitAction(for: conversationID),
             canAcknowledgeRead: liveConversation?.conversationID == conversationID
                 && liveConversation?.canAcknowledgeRead == true,
-            onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID)
+            onVisibleLiveEdge: conversationVisibleLiveEdgeAction(for: conversationID),
+            openTaskSpace: openTaskSpaceInPlaceOfConversation,
+            isCoordinatorRoot: isCoordinatorRoot,
+            replyToMessage: { target in
+                guard composerDrafts.generation == generation else { return false }
+                return composerDrafts.update { $0.reply(to: target, for: conversationID) }
+            },
+            cancelReply: {
+                guard composerDrafts.generation == generation else { return }
+                composerDrafts.update { $0.cancelReply(for: conversationID) }
+                // A rejected message with files waits while the draft
+                // answers another message.
+                reconcileAttachmentDrafts()
+            },
+            newMessages: conversationNewMessages(for: conversationID)
         )
         .id(conversationID)
 #if DEBUG
@@ -555,6 +896,13 @@ struct ToasttyMobileRootView: View {
                 .padding(8)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if let fixtureIncoming, fixtureIncomingTurn(for: conversationID) != nil {
+                ToasttyIncomingFixtureControls(fixture: fixtureIncoming) { step in
+                    applyFixtureIncoming(step, in: conversationID)
+                }
+            }
+        }
 #endif
     }
 
@@ -609,10 +957,45 @@ struct ToasttyMobileRootView: View {
                 for: conversationID, mode: entryLoadFixture, step: fixtureEntryLoadStep
             )
         }
+        if isFixtureTaskSession(conversationID) {
+            return ToasttyConversationFixture.gatedSendPresentation(
+                for: conversationID, sendItems: fixtureSendItems, responses: fixtureIncoming?.responses ?? 0
+            )
+        }
+        if conversationID == ToasttyMobileFixture.coordinatorConversationID {
+            // As the live app: a closed chat has no transcript, and each
+            // opening loads it again.
+            if Self.fixtureCoordinatorReopens {
+                guard sessionController.homeController.selectedConversationPresentation?.id == conversationID
+                else { return nil }
+                if fixtureCoordinatorIsLoaded == false { return .loading }
+            }
+            return ToasttyConversationFixture.coordinatorPresentation(
+                for: conversationID,
+                sendItems: isFixtureWorkingConversation(conversationID)
+                    ? ToasttySendPresentationAdapter.makeItems(
+                        from: SendReconciliationState(),
+                        inputControl: fixtureInputControl,
+                        readsCoordinatorMessages: true,
+                        coordinatorQueue: fixtureCoordinatorQueue
+                    ) + fixtureSendItems.map(ToasttySendPresentationAdapter.coordinatorItem)
+                    : [],
+                hasLongMessage: ProcessInfo.processInfo.environment[
+                    "TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"
+                ] == "1",
+                quietTurns: fixtureCoordinatorQuietTurns,
+                attachedImages: fixtureCoordinatorAttachedImages,
+                wakeTurns: Self.fixtureCoordinatorWakeTurns,
+                responses: fixtureIncoming?.responses ?? 0
+            )
+        }
         switch fixtureScenario {
         case .home, .reconnecting:
             let hasWork = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_WORK"] == "1"
             let hasLongHistory = ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_READY_HISTORY"] == "1"
+            if ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_TASK_LINKS"] == "1" {
+                return ToasttyConversationFixture.taskLinkPresentation(for: conversationID)
+            }
             if hasWork || hasLongHistory {
                 return ToasttyConversationFixture.responseEntryPresentation(
                     for: conversationID, hasWork: hasWork, hasLongHistory: hasLongHistory
@@ -684,6 +1067,80 @@ struct ToasttyMobileRootView: View {
         return controller.transcriptPresentation
     }
 
+#if DEBUG
+    /// The fixture coordinator chat's New line: the shared rule over the
+    /// fixture's rows and the fixture Mac's read point, until a send.
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_CHAT_READ=unsupported` is a Mac
+    /// that does not share the read point.
+    private var fixtureCoordinatorNewMessages: ToasttyNewMessagesMarker? {
+        guard fixtureCoordinatorLineCleared == false,
+              ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_CHAT_READ"] != "unsupported"
+        else { return nil }
+        let rows = ToasttyConversationFixture.coordinatorPresentation(
+            for: ToasttyMobileFixture.coordinatorConversationID,
+            hasLongMessage: ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_LONG_MESSAGE"] == "1",
+            quietTurns: fixtureCoordinatorQuietTurns,
+            attachedImages: fixtureCoordinatorAttachedImages,
+            wakeTurns: Self.fixtureCoordinatorWakeTurns
+        ).rows
+        return CoordinatorChatReadPoint.marker(in: rows, after: sessionController.homeController.snapshot.coordinatorChatRead)
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS=<n>` adds n wake
+    /// turns to the fixture coordinator chat, for a long chat.
+    private static let fixtureCoordinatorWakeTurns = Int(
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_WAKE_TURNS"] ?? ""
+    ) ?? 0
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS=1`: the fixture
+    /// coordinator chat has no transcript while it is closed and loads for a
+    /// moment each time it opens, as the live app's does.
+    private static let fixtureCoordinatorReopens =
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS"] == "1"
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS=1` ends the fixture
+    /// coordinator chat with two quiet wake turns, from a Mac that shares
+    /// the marks; `unsupported` is an older Mac that does not.
+    private var fixtureCoordinatorQuietTurns: ToasttyConversationFixture.CoordinatorQuietTurns {
+        switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUIET_TURNS"] {
+        case "1": .shared
+        case "unsupported": .unshared
+        default: .none
+        }
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES=1` adds a message with
+    /// images to the fixture coordinator chat, from a Mac that serves them;
+    /// `unsupported` is an older Mac that does not.
+    private var fixtureCoordinatorAttachedImages: ToasttyConversationFixture.CoordinatorAttachedImages {
+        switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_IMAGES"] {
+        case "1": .served
+        case "unsupported": .notServed
+        default: .none
+        }
+    }
+#endif
+
+    /// The coordinator chat's New line, from the read point the Mac shares.
+    private func conversationNewMessages(for conversationID: UUID) -> ToasttyNewMessagesMarker? {
+#if DEBUG
+        if conversationID == ToasttyMobileFixture.coordinatorConversationID, fixtureScenario != nil {
+            // As the live app: no line while the chat is closed or loads.
+            if Self.fixtureCoordinatorReopens,
+               fixtureCoordinatorIsLoaded == false
+                || sessionController.homeController.selectedConversationPresentation?.id != conversationID {
+                return nil
+            }
+            return fixtureCoordinatorNewMessages
+        }
+#endif
+        guard let controller = sessionController.liveController?.activeConversationController,
+              controller.conversationID == conversationID else {
+            return nil
+        }
+        return controller.coordinatorNewMessages
+    }
+
     private func conversationSendFeedback(for conversationID: UUID) -> ToasttyOutcomeFeedback? {
         guard let controller = sessionController.liveController?.activeConversationController,
               controller.conversationID == conversationID else {
@@ -721,9 +1178,9 @@ struct ToasttyMobileRootView: View {
 
     private func conversationDraftChange(for conversationID: UUID, generation: UUID) -> (String, UInt64) -> Void {
         { text, editRevision in
-            guard composerDraftState.generation == generation,
+            guard composerDrafts.generation == generation,
                   sessionController.homeController.conversation(id: conversationID) != nil else { return }
-            composerDraftState.updateDraft(text, for: conversationID, editRevision: editRevision)
+            composerDrafts.update { $0.updateDraft(text, for: conversationID, editRevision: editRevision) }
             reconcileAttachmentDrafts()
             if let controller = sessionController.liveController?.activeConversationController,
                controller.conversationID == conversationID {
@@ -734,9 +1191,7 @@ struct ToasttyMobileRootView: View {
 
     private func conversationSubmitAction(for conversationID: UUID) -> (RemoteMessageDeliveryMode?) -> Bool {
         { deliveryMode in
-            guard let submission = composerDraftState.beginSubmission(
-                for: conversationID
-            ) else {
+            guard let submission = composerDrafts.update({ $0.beginSubmission(for: conversationID) }) else {
                 return false
             }
             recordDiagnostic(.sendStarted)
@@ -746,7 +1201,7 @@ struct ToasttyMobileRootView: View {
             }
             Task { @MainActor in
                 let outcome = await controller.send(
-                    submission.text,
+                    submission.sentText,
                     attachments: submission.attachments,
                     deliveryMode: deliveryMode
                 )
@@ -798,18 +1253,25 @@ struct ToasttyMobileRootView: View {
 #endif
                 return
             }
+            // The bubble can show other text than was sent, such as a reply
+            // without its first line and quote; the Mac's queue holds it.
+            let readsReplies = conversationID == coordinatorConversationID
             Task { @MainActor in
                 switch action {
                 case .remove(let clientRequestID):
                     _ = await controller.removeQueuedMessage(clientRequestID)
-                case .edit(let clientRequestID, let text):
-                    guard await controller.removeQueuedMessage(clientRequestID) else { return }
-                    composerDraftState.restoreDraft(text, for: conversationID)
-                case .steer(let clientRequestID, let text):
+                case .edit(let clientRequestID, let shown):
+                    let text = controller.queuedMessageText(clientRequestID) ?? shown
+                    let turnEpoch = controller.inputControl?.turnEpoch
+                    guard queuedEditIsAllowed(text, readsReplies: readsReplies, for: conversationID),
+                          await controller.removeQueuedMessage(clientRequestID) else { return }
+                    restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID, queueForTurn: turnEpoch)
+                case .steer(let clientRequestID, let shown):
+                    let text = controller.queuedMessageText(clientRequestID) ?? shown
                     guard await controller.removeQueuedMessage(clientRequestID) else { return }
                     let outcome = await controller.send(text, deliveryMode: .steer)
                     if case .notEnqueued = outcome {
-                        composerDraftState.restoreDraft(text, for: conversationID)
+                        restoreQueuedMessage(text, readsReplies: readsReplies, for: conversationID)
                     }
                 case .resume:
                     await controller.resumeQueue()
@@ -818,11 +1280,38 @@ struct ToasttyMobileRootView: View {
         }
     }
 
+    /// In the coordinator's chat the draft answers one message at most, so
+    /// Edit leaves a waiting reply where it is while the draft answers
+    /// another, and says why.
+    private func queuedEditIsAllowed(_ text: String, readsReplies: Bool, for conversationID: UUID) -> Bool {
+        guard readsReplies, let refusal = composerDrafts.state.queuedReplyEditRefusal(text, for: conversationID) else {
+            return true
+        }
+        composerDrafts.update { $0.showReplyNotice(refusal, for: conversationID) }
+        return false
+    }
+
+    /// A waiting message back in the draft. In the coordinator's chat a
+    /// reply comes back as a reply.
+    private func restoreQueuedMessage(
+        _ text: String, readsReplies: Bool, for conversationID: UUID, queueForTurn: RemoteInputEpoch? = nil
+    ) {
+        composerDrafts.update { draft in
+            guard !draft.isSubmitting(conversationID) else { return }
+            if readsReplies {
+                draft.restoreQueuedReply(text, for: conversationID)
+            } else {
+                draft.restoreDraft(text, for: conversationID)
+            }
+            if let queueForTurn { draft.queuedTurnEpochs[conversationID] = queueForTurn }
+        }
+    }
+
     private func conversationReceiptDismissAction(
         for conversationID: UUID
     ) -> (String) -> Void {
         { clientRequestID in
-            composerDraftState.discardAttachmentRecovery(clientRequestID: clientRequestID, for: conversationID)
+            composerDrafts.update { $0.discardAttachmentRecovery(clientRequestID: clientRequestID, for: conversationID) }
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
                 fixtureDismissReceipt(clientRequestID)
@@ -932,7 +1421,7 @@ struct ToasttyMobileRootView: View {
         )
     }
 
-    private func fixtureQueueSteerComposer() -> ToasttyComposerPresentation {
+    private func fixtureQueueSteerComposer(agentDisplayName: String = "Codex") -> ToasttyComposerPresentation {
         let control = fixtureInputControl
         let authority: ConversationComposerAuthority
         if let turnEpoch = control.turnEpoch {
@@ -960,7 +1449,7 @@ struct ToasttyMobileRootView: View {
                 inputControl: control
             )
         }
-        return ToasttyComposerPresentation.make(agentDisplayName: "Codex", authority: authority)
+        return ToasttyComposerPresentation.make(agentDisplayName: agentDisplayName, authority: authority)
     }
 
     private func fixtureReleaseLocalDraft(_ conversationID: UUID) {
@@ -1003,21 +1492,145 @@ struct ToasttyMobileRootView: View {
         )
     }
 
+    /// The conversation whose turn the queue and steer fixture runs: the
+    /// working session of that scenario, or the coordinator's chat while
+    /// the fixture coordinator works.
+    private func isFixtureWorkingConversation(_ conversationID: UUID) -> Bool {
+        switch fixtureScenario {
+        case .queueSteer:
+            conversationID == Self.fixtureWorkingConversationID
+        case .home:
+            if let turn = fixtureIncomingTurn(for: conversationID) {
+                turn == .working
+            } else {
+                conversationID == ToasttyMobileFixture.coordinatorConversationID
+                    && sessionController.homeController.snapshot.coordinatorMark == .working
+            }
+        default:
+            false
+        }
+    }
+
+    /// The incoming fixture's turn in the coordinator's chat or the task
+    /// fixture's session; nil elsewhere and without the fixture.
+    private func fixtureIncomingTurn(for conversationID: UUID) -> ToasttyIncomingFixture.Turn? {
+        guard let fixtureIncoming,
+              conversationID == ToasttyMobileFixture.coordinatorConversationID
+                || isFixtureTaskSession(conversationID) else { return nil }
+        return fixtureIncoming.turn
+    }
+
+    /// Applies one step of what the Mac sends. A status change and a turn's
+    /// end also change the coordinator's status in the home snapshot, as the
+    /// Mac's session list does.
+    private func applyFixtureIncoming(_ step: ToasttyIncomingFixture.Step, in conversationID: UUID) {
+        fixtureIncoming?.apply(step)
+        let snapshot = sessionController.homeController.snapshot
+        let status: RemoteSessionPresentationStatus
+        switch step {
+        case .status:
+            status = snapshot.coordinatorMark == .working ? .ready : .working
+        case .turnEnd where conversationID == ToasttyMobileFixture.coordinatorConversationID:
+            status = .ready
+        default:
+            return
+        }
+        guard snapshot.coordinatorMark != nil else { return }
+        let base = MobileHomeSnapshot(
+            hostName: snapshot.hostName,
+            workspaces: snapshot.workspaces.filter { $0.isCoordinator == false },
+            taskBoard: snapshot.taskBoard
+        )
+        sessionController.homeController.update(
+            snapshot: ToasttyMobileFixture.withCoordinator(base, status: status, chatRead: snapshot.coordinatorChatRead),
+            connectionState: .live,
+            freshness: .live
+        )
+    }
+
+    /// The session in the task fixture's early-session-titles task space
+    /// takes messages at an open prompt with
+    /// TOASTTY_MOBILE_FIXTURE_TASK_SESSION_SEND=1, so a test can send from a
+    /// task's session, under its task bar.
+    private func isFixtureTaskSession(_ conversationID: UUID) -> Bool {
+        conversationID == Self.fixtureTaskSessionConversationID
+            && ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_TASK_SESSION_SEND"] == "1"
+    }
+
     private func fixtureInterrupt(_ conversationID: UUID) {
-        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        guard isFixtureWorkingConversation(conversationID) else { return }
         fixtureTurnStopped = true
         fixtureQueuePaused = !fixtureQueuedMessages.isEmpty
+        // As the Mac: the Stop sets the coordinator's waiting messages
+        // aside too, and names what it holds.
+        if conversationID == ToasttyMobileFixture.coordinatorConversationID, Self.fixtureCoordinatorQueueMode == .shared {
+            fixtureCoordinatorQueueEntries = fixtureCoordinatorQueueEntries.map {
+                var entry = $0
+                entry.isHeld = true
+                return entry
+            }
+            fixtureCoordinatorHeldSetToken = fixtureQueuePaused || fixtureCoordinatorQueueEntries.isEmpty == false
+                ? UUID().uuidString : nil
+        }
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE`: `1` is a Mac that shares
+    /// the coordinator's own queue, with messages waiting in both of the
+    /// coordinator's queues; `unsupported` is an older Mac, whose chat lists
+    /// only the conversation's own queue.
+    enum FixtureCoordinatorQueueMode {
+        case shared, unshared
+    }
+
+    static var fixtureCoordinatorQueueMode: FixtureCoordinatorQueueMode? {
+        switch ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE"] {
+        case "1": .shared
+        case "unsupported": .unshared
+        default: nil
+        }
+    }
+
+    private var fixtureCoordinatorQueue: ToasttySendPresentationAdapter.CoordinatorQueue? {
+        guard Self.fixtureCoordinatorQueueMode == .shared else { return nil }
+        return .init(
+            queue: RemoteCoordinatorQueue(
+                revision: "fixture",
+                conversationID: RemoteConversationID(rawValue: ToasttyMobileFixture.coordinatorConversationID),
+                heldSetToken: fixtureCoordinatorHeldSetToken,
+                entries: fixtureCoordinatorQueueEntries
+            ),
+            mayChange: true,
+            removeFailures: fixtureCoordinatorRemoveFailures
+        )
+    }
+
+    /// `TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_REMOVE_FAILS=1`: the Mac
+    /// cannot save its queue, so it answers each Remove of the
+    /// coordinator's own messages with `failed`.
+    private static var fixtureCoordinatorRemoveFails: Bool {
+        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_FIXTURE_COORDINATOR_QUEUE_REMOVE_FAILS"] == "1"
     }
 
     private func fixtureQueuedMessageAction(_ action: ToasttyQueuedMessageAction, conversationID: UUID) {
-        guard fixtureScenario == .queueSteer, conversationID == Self.fixtureWorkingConversationID else { return }
+        guard isFixtureWorkingConversation(conversationID) else { return }
         switch action {
         case .remove(let clientRequestID):
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
-        case .edit(let clientRequestID, let text):
+            if Self.fixtureCoordinatorRemoveFails, fixtureCoordinatorQueueEntries.contains(where: { $0.id == clientRequestID }) {
+                fixtureCoordinatorRemoveFailures.insert(clientRequestID)
+            } else {
+                fixtureCoordinatorQueueEntries.removeAll { $0.id == clientRequestID }
+            }
+        case .edit(let clientRequestID, let shown):
+            let text = fixtureQueuedMessages.first { $0.clientRequestID == clientRequestID }?.text ?? shown
+            let readsReplies = conversationID == coordinatorConversationID
+            guard queuedEditIsAllowed(text, readsReplies: readsReplies, for: conversationID) else { return }
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
-            composerDraftState.restoreDraft(text, for: conversationID)
-        case .steer(let clientRequestID, let text):
+            restoreQueuedMessage(
+                text, readsReplies: readsReplies, for: conversationID, queueForTurn: fixtureInputControl.turnEpoch
+            )
+        case .steer(let clientRequestID, let shown):
+            let text = fixtureQueuedMessages.first { $0.clientRequestID == clientRequestID }?.text ?? shown
             fixtureQueuedMessages.removeAll { $0.clientRequestID == clientRequestID }
             fixtureSendItems.append(ToasttySendPresentationItem(
                 clientRequestID: "fixture-steered-\(fixtureSendItems.count + 1)",
@@ -1026,8 +1639,20 @@ struct ToasttyMobileRootView: View {
             ))
         case .resume:
             fixtureQueuePaused = false
+            // One Resume lets go what the Stop holds in both queues. The
+            // user sends an interrupted message again: it is typed as any
+            // other.
+            fixtureCoordinatorQueueEntries = fixtureCoordinatorQueueEntries.map {
+                var entry = $0
+                entry.isHeld = false
+                entry.typingWasInterrupted = false
+                return entry
+            }
         }
         if fixtureQueuedMessages.isEmpty { fixtureQueuePaused = false }
+        if fixtureQueuePaused == false, fixtureCoordinatorQueueEntries.allSatisfy({ $0.isHeld == false }) {
+            fixtureCoordinatorHeldSetToken = nil
+        }
     }
 #endif
 
@@ -1036,11 +1661,24 @@ struct ToasttyMobileRootView: View {
         if fixtureScenario == .queueSteer {
             return conversationID == Self.fixtureWorkingConversationID ? fixtureQueueSteerComposer() : nil
         }
+        if fixtureIncomingTurn(for: conversationID) == .closing {
+            return ToasttyIncomingFixture.closingComposer
+        }
+        // The coordinator's chat while the fixture coordinator works.
+        if isFixtureWorkingConversation(conversationID) {
+            return fixtureQueueSteerComposer(agentDisplayName: "Claude")
+        }
         if fixtureScenario == .localDraftRelease {
             return conversationID == Self.fixtureLocalDraftConversationID ? fixtureLocalDraftComposer() : nil
         }
-        guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
-              conversationID == Self.fixtureOpenPromptConversationID else { return nil }
+        // The coordinator's chat takes messages, as in the proposal's mockup,
+        // and so does a task's session when a test asks for it.
+        let isOpenClaudeSession = fixtureScenario == .home
+            && (conversationID == ToasttyMobileFixture.coordinatorConversationID
+                || isFixtureTaskSession(conversationID))
+        guard isOpenClaudeSession
+            || (fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt)
+            && conversationID == Self.fixtureOpenPromptConversationID else { return nil }
         let epoch = RemoteInputEpoch(
             bindingID: UUID(uuidString: "F1000000-0000-0000-0000-000000000001")!,
             counter: 4
@@ -1067,7 +1705,7 @@ struct ToasttyMobileRootView: View {
                 inputAvailability: availability
             )
         return ToasttyComposerPresentation.make(
-            agentDisplayName: "Codex",
+            agentDisplayName: isOpenClaudeSession ? "Claude" : "Codex",
             authority: authority
         )
 #else
@@ -1080,28 +1718,41 @@ struct ToasttyMobileRootView: View {
         deliveryMode: RemoteMessageDeliveryMode?
     ) -> Bool {
 #if DEBUG
-        if fixtureScenario == .queueSteer {
-            guard submission.conversationID == Self.fixtureWorkingConversationID,
+        if fixtureScenario == .queueSteer || isFixtureWorkingConversation(submission.conversationID) {
+            guard isFixtureWorkingConversation(submission.conversationID),
                   fixtureTurnStopped == false else {
                 finishSubmission(submission, outcome: .notEnqueued(.inputUnavailable))
                 return false
             }
             fixtureQueueSubmissionCount += 1
+            if submission.conversationID == ToasttyMobileFixture.coordinatorConversationID {
+                fixtureCoordinatorLineCleared = true
+            }
             let clientRequestID = "fixture-queued-\(fixtureQueueSubmissionCount)"
             if deliveryMode == .steer {
                 fixtureSendItems.append(ToasttySendPresentationItem(
                     clientRequestID: clientRequestID,
-                    text: submission.text,
+                    text: submission.sentText,
                     content: .optimistic(response: .accepted)
                 ))
             } else {
                 fixtureQueuedMessages.append(RemoteQueuedMessage(
                     clientRequestID: clientRequestID,
-                    text: submission.text,
+                    text: submission.sentText,
                     attachmentCount: submission.attachments.count,
                     enqueuedAt: Date()
                 ))
             }
+            finishSubmission(submission, outcome: .enqueued(clientRequestID: clientRequestID))
+            return true
+        }
+        if isFixtureTaskSession(submission.conversationID) {
+            let clientRequestID = "fixture-task-session-\(fixtureSendItems.count + 1)"
+            fixtureSendItems.append(ToasttySendPresentationItem(
+                clientRequestID: clientRequestID,
+                text: submission.text,
+                content: .optimistic(response: .accepted)
+            ))
             finishSubmission(submission, outcome: .enqueued(clientRequestID: clientRequestID))
             return true
         }
@@ -1159,7 +1810,7 @@ struct ToasttyMobileRootView: View {
         }
         fixtureSendItems.append(ToasttySendPresentationItem(
             clientRequestID: clientRequestID,
-            text: submission.text,
+            text: submission.sentText,
             content: .optimistic(response: .accepted)
         ))
         fixtureComposerIsReserved = true
@@ -1187,7 +1838,7 @@ struct ToasttyMobileRootView: View {
             })
         }
         home.update(
-            snapshot: MobileHomeSnapshot(hostName: home.snapshot.hostName, workspaces: workspaces),
+            snapshot: home.snapshot.withWorkspaces(workspaces),
             connectionState: home.connectionState, freshness: home.freshness
         )
     }
@@ -1232,13 +1883,18 @@ struct ToasttyMobileRootView: View {
         uuidString: "B1000000-0000-0000-0000-000000000002"
     )!
 
+    /// The task fixture's one session in early-session-titles.
+    private static let fixtureTaskSessionConversationID = UUID(
+        uuidString: "B1000000-0000-0000-0000-000000000010"
+    )!
+
     /// The fixture home's Claude session paused by a Mac draft ("Smoke test triage").
     private static let fixtureLocalDraftConversationID = UUID(
         uuidString: "B1000000-0000-0000-0000-000000000008"
     )!
 
     private func resetComposerPresentation() {
-        composerDraftState.reset()
+        composerDrafts.update { $0.reset() }
 #if DEBUG
         controlledFixtureSubmission = nil
 #endif
@@ -1247,6 +1903,9 @@ struct ToasttyMobileRootView: View {
         fixtureQueuedMessages.removeAll(keepingCapacity: false)
         fixtureQueuePaused = false
         fixtureTurnStopped = false
+        fixtureCoordinatorQueueEntries.removeAll(keepingCapacity: false)
+        fixtureCoordinatorHeldSetToken = nil
+        fixtureCoordinatorRemoveFailures.removeAll()
         fixtureLocalDraftReleaseAttempts = 0
     }
 
@@ -1265,14 +1924,14 @@ struct ToasttyMobileRootView: View {
         _ submission: ToasttyComposerSubmission,
         outcome: ConversationSendOutcome
     ) {
-        composerDraftState.finishSubmission(submission, outcome: outcome)
+        composerDrafts.update { $0.finishSubmission(submission, outcome: outcome) }
         reconcileAttachmentDrafts()
         recordDiagnostic(ToasttyAppDiagnosticProjection.event(for: outcome))
     }
 
     private func reconcileAttachmentDrafts() {
         guard let controller = sessionController.liveController?.activeConversationController else { return }
-        composerDraftState.reconcileAttachments(controller.sendReconciliation, for: controller.conversationID)
+        composerDrafts.update { $0.reconcileAttachments(controller.sendReconciliation, for: controller.conversationID) }
     }
 
     private func recordDiagnostic(_ event: ToasttyConnectionDiagnosticEvent) {
@@ -1283,7 +1942,7 @@ struct ToasttyMobileRootView: View {
         let conversationIDs = Set(
             snapshot.workspaces.flatMap(\.conversations).map(\.id)
         )
-        composerDraftState.retainConversations(conversationIDs)
+        composerDrafts.update { $0.retainConversations(conversationIDs) }
         if conversationIDs.contains(Self.fixtureOpenPromptConversationID) == false {
             fixtureSendItems.removeAll(keepingCapacity: false)
 #if DEBUG
@@ -1373,6 +2032,39 @@ private struct PairedConnectionBanner: View {
     }
 }
 
+#if DEBUG
+/// How many times a transcript's body has run, as the accessibility value
+/// of a UIKit view. UIKit reads it when a UI test asks, so the count shows
+/// without updating any SwiftUI view.
+private struct ToasttyTranscriptBodyCountElement: UIViewRepresentable {
+    func makeUIView(context: Context) -> CountView {
+        CountView()
+    }
+
+    func updateUIView(_ view: CountView, context: Context) {}
+
+    final class CountView: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            isAccessibilityElement = true
+            accessibilityLabel = "Transcript body count"
+            accessibilityIdentifier = "toastty-mobile-fixture-transcript-body-count"
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            nil
+        }
+
+        override var accessibilityValue: String? {
+            get { String(ToasttyTranscriptBodyCount.value) }
+            set {}
+        }
+    }
+}
+#endif
+
 #Preview("Fixture home") {
     ToasttyMobileRootView(configuration: ToasttyMobileAppConfiguration(
         environment: ["TOASTTY_MOBILE_USE_FIXTURE": "1"],
@@ -1389,3 +2081,25 @@ private struct PairedConnectionBanner: View {
         infoDictionary: [:]
     ))
 }
+
+#if DEBUG
+/// With `TOASTTY_MOBILE_FIXTURE_COORDINATOR_REOPENS=1`, the fixture
+/// coordinator chat loads for a moment each time it opens, as the live
+/// app's new conversation controller does.
+private struct FixtureCoordinatorReopenLoad: ViewModifier {
+    let isEnabled: Bool
+    let selectedConversationID: UUID?
+    @Binding var isLoaded: Bool
+
+    func body(content: Content) -> some View {
+        content.task(id: selectedConversationID) {
+            guard isEnabled else { return }
+            isLoaded = false
+            guard selectedConversationID == ToasttyMobileFixture.coordinatorConversationID else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard Task.isCancelled == false else { return }
+            isLoaded = true
+        }
+    }
+}
+#endif

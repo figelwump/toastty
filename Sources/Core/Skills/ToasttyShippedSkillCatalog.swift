@@ -17,6 +17,10 @@ public enum ToasttyShippedSkillCatalog {
             summary: "Control Toastty workspaces, panels, terminals, and managed agents."
         ),
         ToasttyShippedSkillDescriptor(
+            name: "toastty-coordinator",
+            summary: "The coordinator's job: follow your tasks, unblock them, check their proof, merge what your rules allow, and start releases."
+        ),
+        ToasttyShippedSkillDescriptor(
             name: "toastty-open-markdown",
             summary: "Open plans and Markdown files for review inside Toastty."
         ),
@@ -31,6 +35,14 @@ public enum ToasttyShippedSkillCatalog {
         ToasttyShippedSkillDescriptor(
             name: "toastty-send-diagnostics",
             summary: "Collect, review, and send redacted Toastty diagnostics."
+        ),
+        ToasttyShippedSkillDescriptor(
+            name: "toastty-task-merge",
+            summary: "Check a task's pull request, then merge it with toastty task merge, or report what blocks it."
+        ),
+        ToasttyShippedSkillDescriptor(
+            name: "toastty-task-start",
+            summary: "Take a task from request to review: clarify, work in its own worktree, verify, and hand off."
         ),
     ]
 }

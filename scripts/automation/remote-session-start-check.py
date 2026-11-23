@@ -174,7 +174,9 @@ def main():
     log = open(artifacts / 'remote-session-start-app.log', 'w')
     # The argument domain turns Remote Access on without writing preferences.
     app = subprocess.Popen(
-        [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port)],
+        [str(binary), '-toastty.remoteAccess.enabled', 'YES', '-toastty.remoteAccess.port', str(port),
+         # This run is not about the question at a first launch.
+         '-toastty.coordinator.startOfferAnswered', 'YES'],
         env=environment, stdout=log, stderr=subprocess.STDOUT)
     try:
         run(app, Gateway(port), AppSocket(socket_path), runtime_home, fake_bin, allowed, evidence)

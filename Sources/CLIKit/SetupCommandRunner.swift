@@ -29,23 +29,14 @@ enum SetupCommand: Equatable {
 }
 
 struct SetupResourceStore {
-    /// Placeholder in guide text for the bundled example skills directory,
-    /// replaced with its absolute path when a guide is printed.
-    static let workflowExamplesPlaceholder = "{{WORKFLOW_EXAMPLES_DIR}}"
-
     let setupDirectoryURL: URL
-    let workflowExamplesDirectoryURL: URL
 
     static func live(environment: [String: String]) -> Self {
-        SetupResourceStore(
-            setupDirectoryURL: SetupResourceResolver.setupDirectoryURL(environment: environment),
-            workflowExamplesDirectoryURL: SetupResourceResolver.workflowExamplesDirectoryURL(environment: environment)
-        )
+        SetupResourceStore(setupDirectoryURL: SetupResourceResolver.setupDirectoryURL(environment: environment))
     }
 
     func guideMarkdown(topic: SetupGuideTopic) throws -> String {
         try readUTF8(setupDirectoryURL.appendingPathComponent(topic.resourceFileName, isDirectory: false))
-            .replacingOccurrences(of: Self.workflowExamplesPlaceholder, with: workflowExamplesDirectoryURL.path)
     }
 
     func guide(topic: SetupGuideTopic, format: SetupGuideFormat) throws -> String {

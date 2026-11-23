@@ -12,6 +12,7 @@ DerivedData
 /artifacts/
 /WORKTREE_HANDOFF.md
 /node_modules/
+__pycache__/
 /WebPanels/MarkdownApp/node_modules/
 /Dependencies/GhosttyKit*.xcframework/
 /Dependencies/GhosttyKit*.metadata.env

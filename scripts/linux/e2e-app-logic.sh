@@ -92,9 +92,8 @@ check "managed agent + session ingest-agent-event sets its session to working" "
 # The Claude launch staged the shipped Toastty skills from this build's
 # bundle (the checkout's plugins/toastty, or an install's copy of it).
 STAGED=$(find $WORK -path '*/claude/*/toastty/skills/toastty-read-terminal/SKILL.md' 2>/dev/null | head -1)
-check "Claude launch stages the five shipped Toastty skills" "[ -n \"$STAGED\" ] && [ \$(ls \"\$(dirname \"\$(dirname \"$STAGED\")\")\" | grep -c '^toastty-') -eq 5 ] && grep -q 'Alt+Shift+3 on Linux' \"$STAGED\""
-EXAMPLES=$(grep -m1 -o '/[^ `]*WorkflowExamples/skills\|/[^ `]*examples/skills' $WORK/workflows.md 2>/dev/null)
-check "setup guide --topic workflows points agents at the workflow example skills" "[ -n \"$EXAMPLES\" ] && [ -f \"$EXAMPLES/worktree-create/SKILL.md\" ]"
+SHIPPED=$(ls "$REPO/plugins/toastty/skills" | grep -c '^toastty-')
+check "Claude launch stages the $SHIPPED shipped Toastty skills" "[ -n \"$STAGED\" ] && [ \$(ls \"\$(dirname \"\$(dirname \"$STAGED\")\")\" | grep -c '^toastty-') -eq $SHIPPED ] && grep -q 'Alt+Shift+3 on Linux' \"$STAGED\""
 python3 "$(dirname "$0")/socket-request.py" $SOCK automation.capture_screenshot '{"step": "e2e"}' > $WORK/shot.json
 SHOT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"]["path"])' $WORK/shot.json 2>/dev/null)
 check "automation.capture_screenshot writes a PNG of the window" "[ -s \"$SHOT\" ] && head -c 8 \"$SHOT\" | grep -q PNG"

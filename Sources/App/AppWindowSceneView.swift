@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import SwiftUI
 
@@ -11,6 +12,7 @@ struct AppWindowSceneView: View {
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let annotationStyleStore: AnnotationStyleStore
+    var taskCoordinator: TaskCoordinator? = nil
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
@@ -21,6 +23,9 @@ struct AppWindowSceneView: View {
     let onWindowCloseInitiated: @MainActor () -> Void
     let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
+    /// Shows what Toastty found at launch, such as an error in
+    /// `tasks.toml`, over the first window that gets the keyboard.
+    var presentLaunchMessages: (@MainActor (UUID) -> Void)? = nil
 
     @State private var fontHUDValue: FontHUDValue?
     @State private var hideFontHUDTask: Task<Void, Never>?
@@ -48,7 +53,11 @@ struct AppWindowSceneView: View {
 
     private var focusedScaleHUDMeasurement: FocusedScaleHUDMeasurement? {
         guard windowState != nil,
-              let target = store.focusedScaleCommandTarget(preferredWindowID: windowID) else {
+              let target = store.focusedScaleCommandTarget(
+                  preferredWindowID: windowID,
+                  coordinatorChatCovers: coordinatorChatCovers,
+                  coordinatorDockHasKeyboard: coordinatorDockHasKeyboard
+              ) else {
             return nil
         }
 
@@ -72,7 +81,29 @@ struct AppWindowSceneView: View {
         case .scratchpad:
             // Shown from `scratchpadMagnificationDidChange` instead.
             return nil
+
+        case .coordinatorChat:
+            // The chat's scale is not app state. See `coordinatorChatTextScaleChanges`.
+            return nil
         }
+    }
+
+    private var coordinatorChatCovers: (UUID) -> Bool {
+        let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController
+        return { controller?.coversTerminal(panelID: $0) == true }
+    }
+
+    private var coordinatorDockHasKeyboard: (UUID) -> Bool {
+        let controller = sessionRuntimeStore.taskCoordinator?.coordinatorController
+        return { controller?.dockHasKeyboard(in: $0) == true }
+    }
+
+    /// Each new text scale of the coordinator's chat, after a change.
+    private var coordinatorChatTextScaleChanges: AnyPublisher<Double, Never> {
+        guard let chat = sessionRuntimeStore.taskCoordinator?.coordinatorController?.chat else {
+            return Empty().eraseToAnyPublisher()
+        }
+        return chat.$textScale.removeDuplicates().dropFirst().eraseToAnyPublisher()
     }
 
     private var showsEmptyState: Bool {
@@ -101,6 +132,7 @@ struct AppWindowSceneView: View {
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
                     annotationStyleStore: annotationStyleStore,
+                    taskCoordinator: taskCoordinator,
                     profileShortcutRegistry: profileShortcutRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,
@@ -140,6 +172,16 @@ struct AppWindowSceneView: View {
         .onDisappear {
             hideFontHUDTask?.cancel()
             hideFontHUDTask = nil
+        }
+        .onReceive(coordinatorChatTextScaleChanges) { scale in
+            // Only the window whose focused panel or dock is the chat
+            // shows it.
+            guard case .coordinatorChat = store.focusedScaleCommandTarget(
+                preferredWindowID: windowID,
+                coordinatorChatCovers: coordinatorChatCovers,
+                coordinatorDockHasKeyboard: coordinatorDockHasKeyboard
+            ) else { return }
+            showFontHUD(.coordinatorChat(scale: scale))
         }
         .onChange(of: focusedScaleHUDMeasurement) { previousMeasurement, nextMeasurement in
             guard let previousMeasurement, let nextMeasurement else { return }
@@ -192,6 +234,26 @@ struct AppWindowSceneView: View {
         _ = store.send(.selectWindow(windowID: windowID))
         scheduleWindowFocusRestore()
         openGettingStartedPanelIfNeeded()
+        presentLaunchMessagesIfNeeded()
+        offerCoordinatorStartIfNeeded()
+    }
+
+    /// After this notification, as the coordinator's question, because the
+    /// message is a sheet, which takes the keyboard itself. While the
+    /// question still waits, the message waits too and shows when the
+    /// question ends; otherwise it shows here.
+    private func presentLaunchMessagesIfNeeded() {
+        guard let presentLaunchMessages else { return }
+        let windowID = windowID
+        Task { @MainActor in presentLaunchMessages(windowID) }
+    }
+
+    /// Asks once whether to start the coordinator. After this notification,
+    /// because the question is a sheet, which takes the keyboard itself.
+    private func offerCoordinatorStartIfNeeded() {
+        guard let offer = taskCoordinator?.coordinatorController?.startOffer, offer.shouldOffer else { return }
+        let windowID = windowID
+        Task { @MainActor in offer.offerIfNeeded(windowID: windowID) }
     }
 
     private func openGettingStartedPanelIfNeeded() {
@@ -264,6 +326,7 @@ private enum FontHUDValue: Equatable {
     case terminal(points: Double)
     case markdown(scale: Double)
     case browser(zoom: Double)
+    case coordinatorChat(scale: Double)
 }
 
 private struct FontHUD: View {
@@ -290,6 +353,8 @@ private struct FontHUD: View {
             return "Markdown Text \(Int((scale * 100).rounded()))%"
         case .browser(let zoom):
             return "Zoom \(Int((zoom * 100).rounded()))%"
+        case .coordinatorChat(let scale):
+            return "Chat Text \(Int((scale * 100).rounded()))%"
         }
     }
 }

@@ -1,5 +1,8 @@
 name: Toastty CI
 
+# Pull requests run only the Linux workflow tests and the CI gate, which branch
+# protection on main requires. The test jobs run only on manual dispatch:
+#   gh workflow run mobile-ios.yml --ref <branch>
 on:
   pull_request:
   workflow_dispatch:
@@ -11,15 +14,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  changes:
-    name: Select checks
+  workflow:
+    name: CI workflow tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read
-    outputs:
-      scripts: ${{ steps.filter.outputs.scripts }}
-      web: ${{ steps.filter.outputs.web }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -29,24 +29,19 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Test CI selection and gate
+      - name: Test CI workflow and gate
         run: |
           npm ci --prefix Tests/CI --no-audit --no-fund
           npm test --prefix Tests/CI
 
-      - name: Select affected checks
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
-        with:
-          filters: .github/ci-paths.yml
-
   ios:
     name: iOS tests (${{ matrix.configuration }})
-    needs: changes
+    needs: workflow
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
-    timeout-minutes: ${{ matrix.configuration == 'Debug' && 90 || 45 }}
+    timeout-minutes: ${{ matrix.configuration == 'Debug' && 150 || 45 }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +54,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -94,7 +91,7 @@ jobs:
 
   macos:
     name: macOS contract tests
-    needs: changes
+    needs: workflow
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     timeout-minutes: 45
@@ -164,8 +161,8 @@ jobs:
 
   scripts:
     name: Script tests
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.scripts == 'true'
+    needs: workflow
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -189,8 +186,8 @@ jobs:
 
   web:
     name: Web panel tests
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true'
+    needs: workflow
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -213,38 +210,25 @@ jobs:
     name: CI gate
     if: always()
     needs:
-      - changes
+      - workflow
       - ios
       - macos
       - scripts
       - web
     runs-on: ubuntu-latest
     steps:
-      - name: Require selected checks
+      - name: Require the workflow tests, and every job on a full run
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
+          WORKFLOW_RESULT: ${{ needs.workflow.result }}
           IOS_RESULT: ${{ needs.ios.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
-          WEB_RESULT: ${{ needs.web.result }}
           SCRIPTS_RESULT: ${{ needs.scripts.result }}
-          SCRIPTS_SELECTED: ${{ needs.changes.outputs.scripts }}
-          WEB_SELECTED: ${{ needs.changes.outputs.web }}
+          WEB_RESULT: ${{ needs.web.result }}
           FULL_RUN: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          test "$CHANGES_RESULT" = success
-          if [[ "$FULL_RUN" != true ]]; then
-            for selected in "$SCRIPTS_SELECTED" "$WEB_SELECTED"; do
-              case "$selected" in true|false) ;; *) exit 1 ;; esac
-            done
-          fi
-          require_result() {
-            if [[ "$FULL_RUN" == true || "$1" == true ]]; then
-              test "$2" = success
-            else
-              case "$2" in success|skipped) ;; *) return 1 ;; esac
-            fi
-          }
-          require_result false "$IOS_RESULT"
-          require_result false "$MACOS_RESULT"
-          require_result "$SCRIPTS_SELECTED" "$SCRIPTS_RESULT"
-          require_result "$WEB_SELECTED" "$WEB_RESULT"
+          test "$WORKFLOW_RESULT" = success
+          expected=skipped
+          if [[ "$FULL_RUN" == true ]]; then expected=success; fi
+          for result in "$IOS_RESULT" "$MACOS_RESULT" "$SCRIPTS_RESULT" "$WEB_RESULT"; do
+            test "$result" = "$expected"
+          done

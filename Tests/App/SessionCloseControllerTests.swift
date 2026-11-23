@@ -146,10 +146,10 @@ final class SessionCloseControllerTests: XCTestCase {
 
     func testInteractiveCloseAsksAndHonorsCancel() throws {
         var confirmations: [String?] = []
-        var answer = false
+        let answer = MainActorValue(false)
         let fixture = try makeFixture(confirmStopAndClose: { _, detail in
             confirmations.append(detail)
-            return answer
+            return answer.value
         })
         fixture.startAgent()
         fixture.setStatus(.working)
@@ -158,7 +158,7 @@ final class SessionCloseControllerTests: XCTestCase {
         XCTAssertEqual(confirmations, ["Claude Code"])
         XCTAssertNotNil(fixture.store.state.workspaceSelection(containingPanelID: fixture.agentPanelID))
 
-        answer = true
+        answer.value = true
         fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
         XCTAssertEqual(confirmations.count, 2)
         XCTAssertNil(fixture.store.state.workspaceSelection(containingPanelID: fixture.agentPanelID))
@@ -166,10 +166,10 @@ final class SessionCloseControllerTests: XCTestCase {
 
     func testInteractiveWorkspaceCloseAsksOnceForAWorkingAgentAndHonorsCancel() throws {
         var prompts: [SessionCloseController.WorkspaceClose] = []
-        var answer = false
+        let answer = MainActorValue(false)
         let fixture = try makeFixture(addsSecondTab: false, confirmWorkspaceClose: { _, close in
             prompts.append(close)
-            return answer
+            return answer.value
         })
         fixture.startAgent()
         fixture.setStatus(.working)
@@ -180,10 +180,60 @@ final class SessionCloseControllerTests: XCTestCase {
 
         // The fixture fails on a separate stop confirmation, so one prompt
         // covers stopping the agent too.
-        answer = true
+        answer.value = true
         fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
         XCTAssertEqual(prompts.count, 2)
         XCTAssertNil(fixture.store.state.workspacesByID[fixture.workspaceID])
+    }
+
+    func testClosingATaskSpaceAsksTheTaskQuestionInPlaceOfTheWorkspaceConfirmation() throws {
+        var questions: [TaskSpaceCloseQuestion] = []
+        var applied: [TaskSpaceCloseChoice] = []
+        var answer: TaskSpaceCloseChoice?
+        var workspaceID: UUID?
+        // The fixture fails on the workspace confirmation, so the question
+        // is the only dialog.
+        let fixture = try makeFixture(addsSecondTab: false, taskSpaceCloseAsker: TaskSpaceCloseAsker(
+            question: { id in
+                id == workspaceID ? TaskSpaceCloseQuestion(taskID: UUID(), taskTitle: "Fix login", taskSpaceWorkspaceID: id) : nil
+            },
+            present: { question in
+                questions.append(question)
+                return answer
+            },
+            apply: { choice, _ in applied.append(choice) }
+        ))
+        workspaceID = fixture.workspaceID
+        fixture.startAgent()
+        fixture.setStatus(.working)
+
+        fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
+        XCTAssertEqual(questions.count, 1)
+        XCTAssertTrue(questions[0].warning?.contains("Claude Code is still running") == true)
+        XCTAssertNotNil(fixture.store.state.workspacesByID[fixture.workspaceID], "Cancel closes nothing")
+        XCTAssertEqual(applied, [])
+
+        answer = .archive
+        fixture.controller.closeSessionInteractively(panelID: fixture.agentPanelID, sessionTitle: "Fix login")
+        XCTAssertEqual(questions.count, 2)
+        XCTAssertNil(fixture.store.state.workspacesByID[fixture.workspaceID])
+        XCTAssertEqual(applied, [.archive])
+    }
+
+    func testAnAgentExitThatClosesATaskSpacePaneDoesNotAsk() throws {
+        let fixture = try makeFixture(taskSpaceCloseAsker: TaskSpaceCloseAsker(
+            question: { TaskSpaceCloseQuestion(taskID: UUID(), taskTitle: "Fix login", taskSpaceWorkspaceID: $0) },
+            present: { _ in
+                XCTFail("Unexpected task question")
+                return nil
+            },
+            apply: { _, _ in XCTFail("Unexpected task choice") }
+        ))
+        fixture.startAgent()
+        fixture.setStatus(.working)
+        fixture.setStatus(.ready)
+
+        XCTAssertEqual(fixture.controller.closeExitedSessionPane(panelID: fixture.agentPanelID), .closed)
     }
 
     func testWorkspaceCloseMessageWarnsAboutTheWorktree() {
@@ -321,7 +371,8 @@ final class SessionCloseControllerTests: XCTestCase {
         rightPanelDocumentState: LocalDocumentCloseConfirmationState? = nil,
         confirmStopAndClose: (@MainActor (String, String?) -> Bool)? = nil,
         confirmWorkspaceClose: (@MainActor (String, SessionCloseController.WorkspaceClose) -> Bool)? = nil,
-        presentRefusal: (@MainActor (String, String) -> Void)? = nil
+        presentRefusal: (@MainActor (String, String) -> Void)? = nil,
+        taskSpaceCloseAsker: TaskSpaceCloseAsker = .never
     ) throws -> Fixture {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let workspace = try XCTUnwrap(store.selectedWorkspace)
@@ -369,7 +420,8 @@ final class SessionCloseControllerTests: XCTestCase {
                 XCTFail("Unexpected workspace confirmation")
                 return false
             },
-            presentRefusal: presentRefusal ?? { _, _ in }
+            presentRefusal: presentRefusal ?? { _, _ in },
+            taskSpaceCloseAsker: taskSpaceCloseAsker
         )
         return Fixture(
             store: store,

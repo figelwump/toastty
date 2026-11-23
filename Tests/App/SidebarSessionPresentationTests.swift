@@ -1300,7 +1300,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
         let subspaces = statuses.enumerated().map { index, status in
             SidebarSubspacePresentation.Row(
                 id: UUID(), title: "Task", status: status, annotations: [:], summary: nil,
-                spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: index
+                spawningSessionID: nil, spawnerName: nil, sessions: []
             )
         }
         let state = SidebarSessionPresentation.hiddenSessionPillState(
@@ -1333,7 +1333,7 @@ final class SidebarSessionPresentationTests: XCTestCase {
         let sessions = makeSidebarSessionRowIDs(count: 1)
         let subspace = SidebarSubspacePresentation.Row(
             id: UUID(), title: "Task", status: .ready, annotations: [:], summary: nil,
-            spawningSessionID: nil, spawnerName: nil, sessions: [], creationIndex: 0
+            spawningSessionID: nil, spawnerName: nil, sessions: []
         )
         let state = SidebarSessionPresentation.hiddenSessionPillState(
             orderedSessionRowIDs: sessions,

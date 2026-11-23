@@ -133,23 +133,17 @@ final class ToasttyCommandMenusTests: XCTestCase {
             selectedWindowID: windowID
         )
 
-        let selection = WindowCommandSelection(
-            windowID: windowID,
-            window: try XCTUnwrap(state.window(id: windowID)),
-            workspace: try XCTUnwrap(state.workspacesByID[workspace.id])
-        )
-
         XCTAssertTrue(
             ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
-                state: state,
-                commandSelection: selection,
-                activePanelIDs: []
+                store: AppStore(state: state, persistTerminalFontPreference: false),
+                preferredWindowID: windowID,
+                sessionRuntimeStore: nil
             )
         )
     }
 
     @MainActor
-    func testCanFocusNextUnreadOrActivePanelFallsBackToActivePanelIDs() throws {
+    func testCanFocusNextUnreadOrActivePanelFallsBackToWorkingSessions() throws {
         let currentTab = makeUnreadMenuTab(
             focusedPanelIndex: 0,
             unreadPanelIndices: []
@@ -177,17 +171,21 @@ final class ToasttyCommandMenusTests: XCTestCase {
             selectedWindowID: windowID
         )
 
-        let selection = WindowCommandSelection(
-            windowID: windowID,
-            window: try XCTUnwrap(state.window(id: windowID)),
-            workspace: try XCTUnwrap(state.workspacesByID[workspace.id])
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let sessions = SessionRuntimeStore()
+        sessions.bind(store: store)
+        sessions.startSession(
+            sessionID: "working", agent: .codex, panelID: activeTab.panelIDs[1],
+            windowID: windowID, workspaceID: workspace.id,
+            codexStatusTrackingSource: .externallyReported, cwd: "/repo", repoRoot: "/repo", at: Date()
         )
+        sessions.updateStatus(sessionID: "working", status: SessionStatus(kind: .working, summary: "Working"), at: Date())
 
         XCTAssertTrue(
             ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
-                state: state,
-                commandSelection: selection,
-                activePanelIDs: [activeTab.panelIDs[1]]
+                store: store,
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessions
             )
         )
     }

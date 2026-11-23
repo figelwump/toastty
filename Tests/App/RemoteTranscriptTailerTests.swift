@@ -12,7 +12,7 @@ struct RemoteTranscriptTailerTests {
         var observationBatches: [[ProviderTranscriptObservation]] = []
         var linkedFileReferences: [String] = []
         var fileReplacedCount = 0
-        /// The number of batches delivered before each `caughtUp`.
+        /// The number of batches delivered before each `initialReadComplete`.
         var caughtUpAfterBatchCounts: [Int] = []
 
         var allObservations: [ProviderTranscriptObservation] {
@@ -38,6 +38,79 @@ struct RemoteTranscriptTailerTests {
         }
     }
 
+    @Test(arguments: [0, 1_400])
+    func initialReadCompletesAfterEveryBatchAndOnlyOnce(messageCount: Int) async throws {
+        let fileURL = try Self.makeTemporaryFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        func line(_ index: Int) -> String {
+            let text = "Message \(index) " + String(repeating: "text ", count: 80)
+            return #"{"timestamp":"2026-08-07T10:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"\#(text)"}}"#
+        }
+        // More than one read chunk and observation batch, ending without a
+        // newline. An empty file must report completion too.
+        try (0 ..< messageCount).map(line).joined(separator: "\n")
+            .write(to: fileURL, atomically: false, encoding: .utf8)
+        var received = 0
+        var countsAtCompletion: [Int] = []
+        let tailer = RemoteTranscriptTailer(
+            conversationID: Self.conversationID, fileURL: fileURL, provider: .codex,
+            makeParser: { CodexRolloutTranscriptParser() }, pollIntervalNanoseconds: 50_000_000
+        ) { _, event in
+            switch event {
+            case .observations(let observations, _): received += observations.count
+            case .initialReadComplete: countsAtCompletion.append(received)
+            case .initialReadStarted: break
+            case .initialReadUnavailable: Issue.record("The file is readable")
+            case .fileReplaced: Issue.record("The file was not replaced")
+            }
+        }
+        #expect(tailer.isReadingInitialContent)
+        tailer.start()
+        defer { tailer.stop() }
+        await Self.waitUntil { countsAtCompletion.isEmpty == false }
+        #expect(countsAtCompletion == [messageCount])
+        #expect(tailer.isReadingInitialContent == false)
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(("\n" + line(messageCount) + "\n").utf8))
+        try handle.close()
+        await Self.waitUntil { received == messageCount + 1 }
+        #expect(received == messageCount + 1)
+        #expect(countsAtCompletion == [messageCount])
+    }
+
+    @Test func missingFileBecomesReadableUnderANewReadID() async throws {
+        let fileURL = try Self.makeTemporaryFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        var unavailable = false
+        var completed = false
+        var received = 0
+        let tailer = RemoteTranscriptTailer(
+            conversationID: Self.conversationID, fileURL: fileURL, provider: .codex,
+            makeParser: { CodexRolloutTranscriptParser() }, pollIntervalNanoseconds: 50_000_000
+        ) { _, event in
+            switch event {
+            case .initialReadUnavailable: unavailable = true
+            case .initialReadComplete: completed = true
+            case .observations(let observations, _): received += observations.count
+            case .initialReadStarted: break
+            case .fileReplaced: Issue.record("No file had been read yet")
+            }
+        }
+        tailer.start()
+        defer { tailer.stop() }
+        await Self.waitUntil { unavailable }
+        #expect(unavailable)
+        #expect(tailer.isReadingInitialContent == false)
+        let unavailableID = tailer.id
+        try CodexRolloutFixtures.basicSession.write(to: fileURL, atomically: true, encoding: .utf8)
+        await Self.waitUntil { completed }
+        #expect(completed)
+        #expect(received > 0)
+        #expect(tailer.id != unavailableID)
+        #expect(tailer.isReadingInitialContent == false)
+    }
+
     @Test func tailsInitialContentAndAppends() async throws {
         let fileURL = try Self.makeTemporaryFile()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
@@ -54,8 +127,10 @@ struct RemoteTranscriptTailerTests {
             switch event {
             case .observations(let observations, _):
                 collector.observationBatches.append(observations)
-            case .caughtUp:
+            case .initialReadComplete:
                 collector.caughtUpAfterBatchCounts.append(collector.observationBatches.count)
+            case .initialReadStarted, .initialReadUnavailable:
+                break
             case .fileReplaced:
                 collector.fileReplacedCount += 1
             }
@@ -74,7 +149,7 @@ struct RemoteTranscriptTailerTests {
         // The replay reports catching up once, after every initial batch.
         await Self.waitUntil { collector.caughtUpAfterBatchCounts.isEmpty == false }
         #expect(collector.caughtUpAfterBatchCounts == [collector.observationBatches.count])
-        #expect(tailer.hasCaughtUp)
+        #expect(tailer.isReadingInitialContent == false)
 
         // Append the resumed continuation; the tailer picks up only the new
         // records with fingerprints consistent with a continuous parse.
@@ -172,8 +247,10 @@ struct RemoteTranscriptTailerTests {
             switch event {
             case .observations(let observations, _):
                 collector.observationBatches.append(observations)
-            case .caughtUp:
+            case .initialReadComplete:
                 collector.caughtUpAfterBatchCounts.append(collector.observationBatches.count)
+            case .initialReadStarted, .initialReadUnavailable:
+                break
             case .fileReplaced:
                 collector.fileReplacedCount += 1
             }

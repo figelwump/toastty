@@ -362,6 +362,10 @@ struct ToasttySkillsManagementSheet: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
 
+                if userSkillsModel.oldExampleSkills.isEmpty == false {
+                    oldExampleSkillsWarning
+                }
+
                 if let catalogState = userSkillsModel.catalogState, catalogState.packages.isEmpty == false {
                     ForEach(catalogState.packages, id: \.name) { package in
                         rowDivider
@@ -370,17 +374,19 @@ struct ToasttySkillsManagementSheet: View {
                                 .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                                 .frame(width: 210, alignment: .leading)
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                                Image(systemName: package.isAccepted
+                                let isOldExample = package.isAccepted && OldExampleSkills.replacements[package.name] != nil
+                                let isFine = package.isAccepted && isOldExample == false
+                                Image(systemName: isFine
                                     ? "checkmark.circle.fill"
                                     : "exclamationmark.triangle.fill")
                                     .font(.system(size: 10))
-                                    .foregroundStyle(package.isAccepted
+                                    .foregroundStyle(isFine
                                         ? ToastyTheme.sessionReadyText
                                         : ToastyTheme.sessionNeedsApprovalText)
                                 Text(UserSkillsManagementModel.statusDescription(for: package))
                                     .font(.system(size: 12))
                                     .foregroundStyle(
-                                        package.isAccepted
+                                        isFine
                                             ? ToastyTheme.inactiveText
                                             : ToastyTheme.sessionNeedsApprovalText
                                     )
@@ -427,6 +433,37 @@ struct ToasttySkillsManagementSheet: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sheet.toastty-skills.user")
+    }
+
+    /// Old example skills still go to every managed launch next to the
+    /// built-in task skills. Toastty does not delete the user's files.
+    private var oldExampleSkillsWarning: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            (Text("⚠ " + UserSkillsManagementModel.oldExampleSkillsWarning(count: userSkillsModel.oldExampleSkills.count))
+                .fontWeight(.semibold)
+                .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
+                + Text(" " + UserSkillsManagementModel.oldExampleSkillsDetail))
+                .font(.system(size: 11.5))
+                .foregroundStyle(ToastyTheme.primaryText.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Show in Finder") {
+                userSkillsModel.revealOldExampleSkills()
+            }
+            .controlSize(.small)
+            .accessibilityIdentifier("sheet.toastty-skills.user.old-examples.reveal")
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ToastyTheme.sessionNeedsApprovalBackground, in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(ToastyTheme.sessionNeedsApprovalText.opacity(0.35), lineWidth: 1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sheet.toastty-skills.user.old-examples")
     }
 
     @ViewBuilder
@@ -668,8 +705,8 @@ struct ManagedAgentSkillsProvisionedBanner: View {
     }
 }
 
-struct ManagedCodexSkillsUnavailableBanner: View {
-    let notice: ManagedCodexSkillsUnavailableNotice
+struct ManagedAgentSkillsUnavailableBanner: View {
+    let notice: ManagedAgentSkillsUnavailableNotice
     let manage: () -> Void
     let dismiss: () -> Void
 
@@ -682,7 +719,7 @@ struct ManagedCodexSkillsUnavailableBanner: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Codex launched without Toastty skills")
+                Text("\(notice.agent.displayName) launched without Toastty skills")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ToastyTheme.primaryText)
                 Text(notice.detail)
@@ -718,6 +755,6 @@ struct ManagedCodexSkillsUnavailableBanner: View {
         }
         .shadow(color: .black.opacity(0.48), radius: 18, y: 8)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("banner.managed-codex-skills-unavailable")
+        .accessibilityIdentifier("banner.managed-agent-skills-unavailable")
     }
 }

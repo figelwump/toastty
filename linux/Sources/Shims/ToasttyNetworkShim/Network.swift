@@ -60,10 +60,26 @@ public struct IPv6Address: Hashable, Sendable {
 public enum NWEndpoint: Hashable, Sendable {
     case hostPort(host: Host, port: Port)
 
-    public enum Host: Hashable, Sendable {
+    public enum Host: Hashable, Sendable, ExpressibleByStringLiteral {
         case name(String, String?)
         case ipv4(IPv4Address)
         case ipv6(IPv6Address)
+
+        /// As Network's: an address literal becomes that address, anything
+        /// else a name.
+        public init(_ string: String) {
+            if let address = IPv4Address(string) {
+                self = .ipv4(address)
+            } else if let address = IPv6Address(string) {
+                self = .ipv6(address)
+            } else {
+                self = .name(string, nil)
+            }
+        }
+
+        public init(stringLiteral value: String) {
+            self.init(value)
+        }
     }
 
     public struct Port: Hashable, Sendable, RawRepresentable {

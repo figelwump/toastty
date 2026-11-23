@@ -1,12 +1,14 @@
+import ConversationUI
 import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 import UIKit
 
-/// Which Subspaces groups the user collapsed, kept across launches so a long
-/// list of finished tasks stays folded away.
+/// Which Subspaces groups, or with the task system which project cards, the
+/// user collapsed, kept across launches so a long list stays folded away.
 struct ToasttyCollapsedSubspaceGroups: Equatable {
     static let preferenceKey = "toastty-mobile-collapsed-subspace-groups"
+    static let projectCardsPreferenceKey = "toastty-mobile-collapsed-project-cards"
 
     private(set) var parentIDs: Set<UUID>
 
@@ -56,10 +58,14 @@ enum ToasttySubspaceGroupPresentation {
     static func statusLabel(_ status: MobileSubspaceStatus) -> String {
         switch status {
         case .ready: "ready"
+        case .question: "asks a question"
         case .needsApproval: "needs approval"
         case .error: "error"
+        case .review: "ready for review"
         case .working: "working"
         case .idle: "idle"
+        case .waiting: "waiting outside Toastty"
+        case .toShip: "to ship"
         case .done: "done"
         }
     }
@@ -104,8 +110,10 @@ struct ToasttySubspaceGroup: View {
                 .toasttyListRow()
             if isExpanded {
                 if listed.isFiltered, let activeFilter {
-                    filterBar(activeFilter)
-                        .toasttyListRow()
+                    ToasttySpawnerFilterBar(filter: activeFilter, controller: controller) {
+                        spawnerFilter = nil
+                    }
+                    .toasttyListRow()
                 }
                 ForEach(listed.rows) { row in
                     ToasttySubspaceRow(
@@ -115,20 +123,7 @@ struct ToasttySubspaceGroup: View {
                         openWorkspace: openWorkspace
                     )
                     .toasttyListRow()
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        if row.status.showsDoneToggle, controller.canMarkSubspacesDone {
-                            Button {
-                                controller.setSubspaceDone(row.id, isDone: !row.workspace.isDone)
-                            } label: {
-                                Label(
-                                    row.workspace.isDone ? "Not Done" : "Done",
-                                    systemImage: row.workspace.isDone ? "square" : "checkmark.square"
-                                )
-                            }
-                            .tint(ToasttyDesignTokens.green)
-                            .accessibilityIdentifier("toastty-subspace-swipe-done-\(row.id.uuidString)")
-                        }
-                    }
+                    .toasttySubspaceDoneSwipe(row, controller: controller)
                 }
             }
         }
@@ -177,7 +172,7 @@ struct ToasttySubspaceGroup: View {
     }
 
     private var tallyCounts: [(status: MobileSubspaceStatus, count: Int)] {
-        [MobileSubspaceStatus.ready, .needsApproval, .error].compactMap { status in
+        [MobileSubspaceStatus.ready, .question, .needsApproval, .error, .review].compactMap { status in
             let count = rows.filter { $0.status == status }.count
             return count == 0 ? nil : (status, count)
         }
@@ -201,13 +196,19 @@ struct ToasttySubspaceGroup: View {
             + tallyCounts.map { "\($0.count) \(ToasttySubspaceGroupPresentation.statusLabel($0.status))" })
             .joined(separator: ", ")
     }
+}
 
-    private func filterBar(_ filter: ToasttySpawnerChip) -> some View {
+/// "Only task spaces from <session> ✕": the ⑂ filter that limits a group to
+/// one session's task spaces. Tapping it shows them all again.
+struct ToasttySpawnerFilterBar: View {
+    let filter: ToasttySpawnerChip
+    let controller: HomeScreenController
+    let clear: () -> Void
+
+    var body: some View {
         let name = controller.conversation(id: filter.conversationID)
             .map(ToasttySessionRowPresentation.title(for:)) ?? "this session"
-        return Button {
-            spawnerFilter = nil
-        } label: {
+        return Button(action: clear) {
             HStack(spacing: 6) {
                 Text("Only task spaces from \(name)")
                     .lineLimit(1)
@@ -235,19 +236,24 @@ enum ToasttySubspaceStatusStyle {
         guard freshness == .live else { return ToasttyDesignTokens.mutedText }
         return switch status {
         case .ready, .done: ToasttyDesignTokens.color(for: .ready)
+        case .question: ToasttyDesignTokens.taskQuestion
         case .needsApproval: ToasttyDesignTokens.color(for: .needsApproval)
         case .error: ToasttyDesignTokens.color(for: .error)
+        case .review: ToasttyDesignTokens.taskReview
         case .working: ToasttyDesignTokens.color(for: .working)
-        case .idle: ToasttyDesignTokens.mutedText
+        case .idle, .waiting: ToasttyDesignTokens.mutedText
+        case .toShip: ToasttyDesignTokens.taskToShip
         }
     }
 
     static func rowTint(_ status: MobileSubspaceStatus) -> Color {
         switch status {
         case .ready: ToasttyDesignTokens.color(for: .ready).opacity(0.16)
+        case .question: ToasttyDesignTokens.taskQuestion.opacity(0.13)
         case .needsApproval: ToasttyDesignTokens.color(for: .needsApproval).opacity(0.13)
         case .error: ToasttyDesignTokens.color(for: .error).opacity(0.13)
-        case .working, .idle, .done: .clear
+        case .review: ToasttyDesignTokens.taskReview.opacity(0.13)
+        case .working, .idle, .waiting, .toShip, .done: .clear
         }
     }
 }
@@ -281,8 +287,34 @@ struct ToasttySubspaceRailMark: View {
         case .idle:
             box.strokeBorder(ToasttyDesignTokens.mutedText, lineWidth: 1.4)
                 .frame(width: Self.boxSize, height: Self.boxSize)
+        case .waiting:
+            // A still clock: the task waits on something outside Toastty,
+            // possibly for months, so it does not move like work does.
+            Image(systemName: "clock")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .frame(width: Self.boxSize, height: Self.boxSize)
         case .ready:
             square(color)
+        case .question:
+            tintedBox(color) {
+                Image(systemName: "questionmark")
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(color)
+            }
+        case .review:
+            // The pull request waits for the user's review.
+            tintedBox(color) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+            }
+        case .toShip:
+            tintedBox(color) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(color)
+            }
         case .done:
             box.fill(color.opacity(0.22))
                 .overlay { box.strokeBorder(color.opacity(0.55), lineWidth: 1.2) }
@@ -297,6 +329,13 @@ struct ToasttySubspaceRailMark: View {
 
     private var box: RoundedRectangle {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
+    }
+
+    /// The task marks: a tinted box with a glyph, as on the Mac.
+    private func tintedBox(_ color: Color, @ViewBuilder glyph: () -> some View) -> some View {
+        box.fill(color.opacity(0.22))
+            .overlay { glyph() }
+            .frame(width: Self.boxSize, height: Self.boxSize)
     }
 
     private func square(_ color: Color) -> some View {
@@ -315,6 +354,10 @@ struct ToasttySubspaceRow: View {
     let parentTitle: String
     let controller: HomeScreenController
     let openWorkspace: (UUID) -> Void
+    /// The project, where rows from several projects share a list.
+    var projectTag: String? = nil
+    /// Drawn on one line, as the Needs you segment lists rows.
+    var compact: ToasttyCompactRow? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private static let railWidth: CGFloat = 16
@@ -340,7 +383,7 @@ struct ToasttySubspaceRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(ToasttySubspaceGroupPresentation.doneActionTitle(isDone: row.workspace.isDone))
-                .accessibilityValue(row.workspace.title)
+                .accessibilityValue(row.title)
                 .accessibilityIdentifier("toastty-subspace-done-\(row.id.uuidString)")
             }
         }
@@ -354,6 +397,9 @@ struct ToasttySubspaceRow: View {
                     systemImage: row.workspace.isDone ? "square" : "checkmark.square",
                     action: toggleDone
                 )
+            }
+            if let task = row.task {
+                ToasttyTaskActionMenuItems(task: task, controller: controller)
             }
         } preview: {
             ToasttySubspaceDetailCard(
@@ -370,7 +416,7 @@ struct ToasttySubspaceRow: View {
     /// The box is a checkbox only while the row is quiet and the Mac will
     /// take the change; otherwise it is just the row's status mark.
     private var showsDoneToggle: Bool {
-        row.status.showsDoneToggle && controller.canMarkSubspacesDone
+        row.showsDoneToggle && controller.canMarkSubspacesDone
     }
 
     private func toggleDone() {
@@ -401,15 +447,37 @@ struct ToasttySubspaceRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 titleLine
-                if let summary = row.summary {
-                    Text(summary)
-                        .font(row.status == .working ? .caption.monospaced().italic() : .caption.monospaced())
-                        .foregroundStyle(row.status == .done
-                            ? ToasttyDesignTokens.mutedText
-                            : ToasttyDesignTokens.secondaryText)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
+                if let compact {
+                    if let detail = compact.detail {
+                        summaryText(detail)
+                    }
+                } else if row.summary != nil || projectTag != nil || childProgress != nil {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        // Large text wraps the summary, so the tags take
+                        // their own line.
+                        if let summary = row.summary {
+                            summaryText(summary)
+                        }
+                        ToasttyLargeTextTags(progress: childProgress, project: projectTag)
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            // As on the Mac, the child progress sits on
+                            // the summary line, so the title keeps its
+                            // room. The summary shortens before the tags.
+                            if let summary = row.summary {
+                                summaryText(summary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                Spacer(minLength: 0)
+                            }
+                            if let childProgress {
+                                ToasttyChildProgressChip(progress: childProgress)
+                            }
+                            if let projectTag {
+                                ToasttyProjectTag(title: projectTag)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -419,26 +487,83 @@ struct ToasttySubspaceRow: View {
         .contentShape(ToasttySessionRow.shape)
     }
 
+    private var childProgress: RemoteTaskChildProgress? {
+        row.task?.shownChildProgress
+    }
+
+
+    private func summaryText(_ summary: String) -> some View {
+        Text(summary)
+            .font(row.status == .working ? .caption.monospaced().italic() : .caption.monospaced())
+            .foregroundStyle(row.status == .done
+                ? ToasttyDesignTokens.mutedText
+                : ToasttyDesignTokens.secondaryText)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     @ViewBuilder
     private var titleLine: some View {
         if dynamicTypeSize.isAccessibilitySize {
+            // Large text wraps the title. The pill and the chip share the
+            // next line when both fit; else the chip takes a line of its
+            // own, where it shortens only past the row's width.
             VStack(alignment: .leading, spacing: 3) {
                 titleText
-                HStack(spacing: 6) { trailingFacts }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        badgeView
+                        trailingChip(showsChip: true, width: .natural)
+                        openMark
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            badgeView
+                            openMark
+                        }
+                        trailingChip(showsChip: true, width: .ownLine)
+                    }
+                }
+            }
+        } else if compact != nil {
+            // The one tag keeps its room. The status pill gives way before
+            // the title shortens, since the mark already shows the state.
+            ViewThatFits(in: .horizontal) {
+                titleLine(showsBadge: true, showsChip: true)
+                titleLine(showsBadge: false, showsChip: true)
             }
         } else {
-            // The title is laid out first and the chip takes what is left,
-            // so a long chip shortens before the subspace's name does.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                titleText
-                    .layoutPriority(1)
-                trailingFacts
+            // As on the Mac, the title keeps some room: the chip gives way
+            // first, and the status pill stays.
+            ViewThatFits(in: .horizontal) {
+                titleLine(showsBadge: true, showsChip: true, reservedTitleWidth: ToasttyTaskRow.titleReservedWidth)
+                titleLine(showsBadge: true, showsChip: false, reservedTitleWidth: ToasttyTaskRow.titleReservedWidth)
             }
         }
     }
 
+    /// The title with its pill right after it, then the chip or tag and the
+    /// open mark at the trailing edge. The title takes the room the others
+    /// leave and shortens last. `reservedTitleWidth` is what a fit check
+    /// counts for the title in place of its full width.
+    private func titleLine(showsBadge: Bool, showsChip: Bool, reservedTitleWidth: CGFloat? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                titleText
+                    .frame(idealWidth: reservedTitleWidth, alignment: .leading)
+                if showsBadge {
+                    badgeView
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailingChip(showsChip: showsChip)
+            openMark
+        }
+    }
+
     private var titleText: some View {
-        Text(row.workspace.title)
+        Text(row.title)
             .font(titleFont)
             .foregroundStyle(row.status == .done
                 ? ToasttyDesignTokens.mutedText
@@ -449,7 +574,7 @@ struct ToasttySubspaceRow: View {
     }
 
     @ViewBuilder
-    private var trailingFacts: some View {
+    private var badgeView: some View {
         if let badge = badge {
             let color = ToasttySubspaceStatusStyle.color(row.status, freshness: controller.freshness)
             Text(badge)
@@ -460,36 +585,44 @@ struct ToasttySubspaceRow: View {
                 .background(color.opacity(0.2), in: RoundedRectangle(cornerRadius: 4))
                 .fixedSize()
         }
-        if dynamicTypeSize.isAccessibilitySize == false {
-            Spacer(minLength: 0)
-        }
-        if let chip = row.chip {
+    }
+
+    /// A one-line row's tag, else the row's chip. Each takes the width of
+    /// its text up to a cap, so a short chip leaves its room to the title.
+    @ViewBuilder
+    private func trailingChip(showsChip: Bool, width: ToasttyRowTagWidth = .capped) -> some View {
+        if let compact {
+            if let tag = compact.tag {
+                ToasttyCompactRowTag(tag: tag, width: width)
+            }
+        } else if showsChip, let chip = row.chip {
             ToasttyAnnotationChip(
                 annotation: RemoteWorkspaceAnnotation(key: chip.key, text: chip.text, color: chip.color),
                 size: .compact
             )
-            .frame(minWidth: 44, maxWidth: 110, alignment: .trailing)
+            .toasttyRowTagWidth(width, cap: ToasttyCompactRowTag.chipMaximumWidth)
             .opacity(row.status == .done ? 0.7 : 1)
         }
+    }
+
+    private var openMark: some View {
         Image(systemName: "arrow.right")
             .font(.caption2.weight(.semibold))
             .foregroundStyle(ToasttyDesignTokens.mutedText)
             .accessibilityHidden(true)
     }
 
+    /// A one-line row's second line already says what the agent asks.
     private var badge: String? {
-        switch row.status {
-        case .needsApproval: "approval"
-        case .error: "error"
-        case .ready, .working, .idle, .done: nil
-        }
+        if row.status == .question, compact?.detail != nil { return nil }
+        return row.status.pillLabel
     }
 
     private var titleFont: Font {
         let weight: Font.Weight = switch row.status {
-        case .ready, .needsApproval, .error: .bold
-        case .working, .idle: .medium
-        case .done: .regular
+        case .ready, .question, .needsApproval, .error, .review: .bold
+        case .working, .idle, .waiting: .medium
+        case .toShip, .done: .regular
         }
         let font = Font.subheadline.weight(weight)
         return row.status == .working ? font.italic() : font
@@ -499,8 +632,18 @@ struct ToasttySubspaceRow: View {
         let status = controller.freshness == .live
             ? ToasttySubspaceGroupPresentation.statusLabel(row.status)
             : "last seen \(ToasttySubspaceGroupPresentation.statusLabel(row.status))"
-        return ([row.workspace.title, "task space", status, row.summary]
-            + [row.chip.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))])
+        if let compact {
+            return [
+                row.title, "task space", status, compact.detail ?? row.summary, compact.tagAccessibilityLabel,
+                compact.parentAccessibilityLabel,
+            ]
+                .compactMap { $0 }
+                .filter { $0.isEmpty == false }
+                .joined(separator: ", ")
+        }
+        return ([row.title, "task space", status, row.summary, projectTag]
+            + [row.chip.map(ToasttyWorkspaceAnnotationAccessibility.label(for:))]
+            + [row.task?.shownChildProgress.map(ToasttyChildProgressChip.label)])
             .compactMap { $0 }
             .filter { $0.isEmpty == false }
             .joined(separator: ", ")
@@ -524,7 +667,7 @@ struct ToasttySubspaceDetailCard: View {
                     .font(.headline)
                     .frame(width: 16)
                     .overlay { ToasttySubspaceRailMark(status: row.status, freshness: freshness) }
-                Text(row.workspace.title)
+                Text(row.title)
                     .font(.headline)
                     .foregroundStyle(ToasttyDesignTokens.primaryText)
                     .lineLimit(2)
@@ -640,32 +783,51 @@ struct ToasttySubspaceDetailCard: View {
 struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
     let controller: HomeScreenController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The notice this screen shows. A notice that is out of date when the
+    /// screen comes on is never shown.
+    @State private var shownNoticeID: UUID?
 
     private static let visibleDuration: Duration = .seconds(5)
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottom) {
-                if let notice = controller.subspaceDoneNotice {
+                if let notice = controller.subspaceDoneNotice, notice.id == shownNoticeID {
                     noticeView(notice)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 18)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .task(id: notice.id) {
-                            try? await Task.sleep(for: Self.visibleDuration)
-                            guard Task.isCancelled == false else { return }
-                            controller.dismissSubspaceDoneNotice(notice)
-                        }
                 }
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controller.subspaceDoneNotice)
+            // Runs when the notice changes and when this screen comes back
+            // on. The notice shows for what is left of its few seconds,
+            // counted from when it was made, on whichever screen is up.
+            .task(id: controller.subspaceDoneNotice?.id) {
+                guard let notice = controller.subspaceDoneNotice else { return }
+                let remaining = Self.visibleDuration - .seconds(Date().timeIntervalSince(notice.createdAt))
+                guard remaining > .zero else {
+                    controller.dismissSubspaceDoneNotice(notice)
+                    return
+                }
+                shownNoticeID = notice.id
+                try? await Task.sleep(for: remaining)
+                guard Task.isCancelled == false else { return }
+                controller.dismissSubspaceDoneNotice(notice)
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: shownNotice)
             .sensoryFeedback(trigger: controller.subspaceDoneNotice) { _, notice in
                 switch notice?.kind {
-                case .changed?, .flagChanged?, .sessionStarted?, .sessionClosed?: .success
+                case .changed?, .flagChanged?, .sessionStarted?, .taskCreated?, .coordinatorMessage?, .sessionClosed?,
+                     .taskAction?: .success
                 case .failed?: .error
                 case nil: nil
                 }
             }
+    }
+
+    /// The notice on screen, for its animation.
+    private var shownNotice: SubspaceDoneNotice? {
+        controller.subspaceDoneNotice.flatMap { $0.id == shownNoticeID ? $0 : nil }
     }
 
     private func noticeView(_ notice: SubspaceDoneNotice) -> some View {
@@ -694,6 +856,25 @@ struct ToasttySubspaceDoneNoticeModifier: ViewModifier {
 extension View {
     func toasttySubspaceDoneNotice(_ controller: HomeScreenController) -> some View {
         modifier(ToasttySubspaceDoneNoticeModifier(controller: controller))
+    }
+
+    /// A subspace row's leading swipe: Done, or Not Done, while the row is
+    /// quiet and the Mac takes the change.
+    func toasttySubspaceDoneSwipe(_ row: MobileSubspaceRow, controller: HomeScreenController) -> some View {
+        swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if row.showsDoneToggle, controller.canMarkSubspacesDone {
+                Button {
+                    controller.setSubspaceDone(row.id, isDone: !row.workspace.isDone)
+                } label: {
+                    Label(
+                        row.workspace.isDone ? "Not Done" : "Done",
+                        systemImage: row.workspace.isDone ? "square" : "checkmark.square"
+                    )
+                }
+                .tint(ToasttyDesignTokens.green)
+                .accessibilityIdentifier("toastty-subspace-swipe-done-\(row.id.uuidString)")
+            }
+        }
     }
 
     /// A row of the phone's session lists: no separator or system

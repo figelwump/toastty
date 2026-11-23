@@ -54,11 +54,10 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.bind(store: store)
 
         var submittedCommand: String?
-        registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
-            XCTAssertTrue(submit)
+        registry.setRestoredManagedLaunchSubmitterForTesting { command, submittedPanelID in
             XCTAssertEqual(submittedPanelID, panelID)
             submittedCommand = command
-            return true
+            return .delivered
         }
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
@@ -78,7 +77,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.markInitialSurfaceLaunchCompleted(for: panelID)
         await Task.yield()
         await Task.yield()
-        let command = try XCTUnwrap(submittedCommand)
+        let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommand)
         XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="))
         XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
         XCTAssertTrue(command.contains("codex -c "))
@@ -187,11 +186,10 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.bind(store: store)
 
         var submittedCommand: String?
-        registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
-            XCTAssertTrue(submit)
+        registry.setRestoredManagedLaunchSubmitterForTesting { command, submittedPanelID in
             XCTAssertEqual(submittedPanelID, panelID)
             submittedCommand = command
-            return true
+            return .delivered
         }
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
@@ -209,7 +207,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.markInitialSurfaceLaunchCompleted(for: panelID)
         await Task.yield()
         await Task.yield()
-        let command = try XCTUnwrap(submittedCommand)
+        let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommand)
         XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="))
         XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
         XCTAssertTrue(command.contains("claude --settings "))
@@ -336,11 +334,10 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
             registry.bind(store: store)
 
             var submittedCommand: String?
-            registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
-                XCTAssertTrue(submit, scenario.commandName)
+            registry.setRestoredManagedLaunchSubmitterForTesting { command, submittedPanelID in
                 XCTAssertEqual(submittedPanelID, panelID, scenario.commandName)
                 submittedCommand = command
-                return true
+                return .delivered
             }
 
             let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
@@ -366,7 +363,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
             registry.markInitialSurfaceLaunchCompleted(for: panelID)
             await Task.yield()
             await Task.yield()
-            let command = try XCTUnwrap(submittedCommand, scenario.commandName)
+            let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommand)
             XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="), scenario.commandName)
             XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"), scenario.commandName)
             XCTAssertTrue(
@@ -604,6 +601,121 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertEqual(resumeRecord(), record, "The notice finishing must not clear the kept record")
         finishCommand()
         XCTAssertNil(resumeRecord(), "A later command in the pane clears the record as before")
+    }
+
+    /// After a relaunch the coordinator's agent resumes in its restored
+    /// terminal through a typed command. That command sets the
+    /// coordinator's git ceiling, so the shell's startup files cannot
+    /// replace it. A Codex coordinator's command also raises
+    /// `project_doc_max_bytes`, as its first start does, so it reads all of
+    /// its instructions. Another restored agent's command gets neither.
+    func testRestoredCoordinatorResumeCommandSetsTheCoordinatorEnvironmentOnly() async throws {
+        let docLimit = "--config project_doc_max_bytes=\(CoordinatorFolder.codexProjectDocMaxBytes)"
+        for agent in [AgentKind.claude, .codex] {
+            for isCoordinator in [true, false] {
+                let label = "agent: \(agent.rawValue), isCoordinator: \(isCoordinator)"
+                let fixture = try makeRuntimeResumeFixture()
+                defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+                let panelID = UUID()
+                let workspaceID = UUID()
+                let nativeSessionID = agent == .codex
+                    ? "019e2823-f520-7690-91b6-cd84eb52dd8a"
+                    : "db4f311b-12d0-4f61-ba81-0ae44ed10492"
+                let record = ManagedAgentResumeRecord(
+                    agent: agent,
+                    nativeSessionID: nativeSessionID,
+                    sessionFilePath: fixture.sessionFileURL.path,
+                    cwd: fixture.cwdURL.path,
+                    capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+                )
+                var state = makeRuntimeResumeState(
+                    windowID: UUID(),
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    resumeRecord: record,
+                    profileBinding: nil
+                )
+                if isCoordinator {
+                    state.workspacesByID[workspaceID]?.isCoordinator = true
+                    state.workspacesByID[workspaceID]?.coordinatorPanelID = panelID
+                }
+                let store = AppStore(state: state, persistTerminalFontPreference: false)
+                let registry = TerminalRuntimeRegistry()
+                let sessionRuntimeStore = SessionRuntimeStore()
+                sessionRuntimeStore.bind(store: store)
+                // The registry holds both weakly.
+                let profileProvider = makeRuntimeResumeProfileProvider()
+                let restoredManagedLaunchPlanner = makeRestoredManagedLaunchPlanner(
+                    store: store,
+                    sessionRuntimeStore: sessionRuntimeStore
+                )
+                registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+                registry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+                registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
+                registry.setCoordinatorLaunchEnvironment(["GIT_CEILING_DIRECTORIES": "/Users/someone/.toastty"])
+                registry.bind(store: store)
+                var promptState = TerminalPromptState.busy
+                let checkedPrompt = expectation(description: "Checked the starting shell: \(label)")
+                var didCheckPrompt = false
+                registry.setAutomationPromptStateHandlerForTesting { _ in
+                    if !didCheckPrompt {
+                        didCheckPrompt = true
+                        checkedPrompt.fulfill()
+                    }
+                    return promptState
+                }
+                let submitted = expectation(description: "Submitted the resume command: \(label)")
+                var submittedCommands: [String] = []
+                registry.setRestoredManagedLaunchSubmitterForTesting { command, _ in
+                    submittedCommands.append(command)
+                    submitted.fulfill()
+                    return .delivered
+                }
+
+                let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
+                registry.markInitialSurfaceLaunchCompleted(for: panelID)
+                await fulfillment(of: [checkedPrompt], timeout: 2)
+                if isCoordinator {
+                    XCTAssertTrue(submittedCommands.isEmpty, label)
+                    promptState = .idleAtPrompt
+                }
+                // A task may use a shell that never reports a prompt.
+                await fulfillment(of: [submitted], timeout: 2)
+
+                XCTAssertEqual(submittedCommands.count, 1, label)
+                let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommands.first)
+                withExtendedLifetime((profileProvider, restoredManagedLaunchPlanner)) {}
+                XCTAssertTrue(
+                    command.contains(agent == .codex ? "resume \(nativeSessionID)" : "--resume \(nativeSessionID)"),
+                    command
+                )
+                XCTAssertEqual(
+                    command.contains("GIT_CEILING_DIRECTORIES=/Users/someone/.toastty"),
+                    isCoordinator,
+                    "\(label): \(command)"
+                )
+                XCTAssertEqual(
+                    command.contains(docLimit),
+                    agent == .codex && isCoordinator,
+                    "\(label): \(command)"
+                )
+            }
+        }
+    }
+
+    private func restoredCommand(
+        from configuration: TerminalSurfaceLaunchConfiguration,
+        submittedInput: String?
+    ) throws -> String {
+        let input = try XCTUnwrap(submittedInput)
+        // Leave room for Return in the PTY's 1,024-byte startup buffer.
+        // Length must not grow with the agent's paths or arguments.
+        XCTAssertLessThan(input.utf8.count + 1, 128)
+        let key = TerminalRuntimeRegistry.restoredAgentCommandEnvironmentKey
+        XCTAssertTrue(input.contains("$\(key)"))
+        let command = try XCTUnwrap(configuration.environmentVariables[key])
+        XCTAssertTrue(command.contains("\(key)=''"), "The resumed agent must not inherit the command payload")
+        return command
     }
 
     func testRestoreNoticeRunsBeforeTheProfileStartupCommand() {

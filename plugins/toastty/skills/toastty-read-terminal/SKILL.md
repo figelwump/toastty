@@ -23,6 +23,10 @@ if [[ -z "${TOASTTY_CLI_PATH:-}" || ! -x "$TOASTTY_CLI_PATH" || -z "${TOASTTY_PA
 fi
 ```
 
+Run the Toastty commands below as `toastty …`, with `--json` after the command
+words, as written. If `toastty` is not found, run `"$TOASTTY_CLI_PATH"` in its
+place.
+
 Check `.ok == true` on every JSON response before reading `.result`.
 
 Sandboxed runtimes such as Codex may deny the CLI's connection to the Toastty
@@ -56,11 +60,11 @@ Resolve the current workspace, then take the selected-tab snapshot:
 
 ```bash
 workspace_id="$(
-  "$TOASTTY_CLI_PATH" --json query run terminal.state --panel "$TOASTTY_PANEL_ID" \
+  toastty query run terminal.state --json --panel "$TOASTTY_PANEL_ID" \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["workspaceID"])'
 )"
 
-"$TOASTTY_CLI_PATH" --json query run workspace.snapshot --workspace "$workspace_id"
+toastty query run workspace.snapshot --json --workspace "$workspace_id"
 ```
 
 Each `result.slotMappings` entry carries `slotID`, `panelID`, and
@@ -72,7 +76,7 @@ the pane, and `readable`.
 ## Reading
 
 ```bash
-"$TOASTTY_CLI_PATH" --json query run terminal.visible-text --panel "<panel-id>" tail=80
+toastty query run terminal.visible-text --json --panel "<panel-id>" tail=80
 ```
 
 - `tail=<n>` returns the last `n` lines. Start small; widen only if needed.

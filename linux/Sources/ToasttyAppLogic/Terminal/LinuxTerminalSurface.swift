@@ -164,6 +164,23 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         surface?.grabFocus() ?? false
     }
 
+    /// macOS checks that the view is visible in the key window first; the
+    /// GTK surface only takes focus when it is mapped.
+    func focusVisibleHostViewIfNeeded() -> Bool {
+        focusHostViewIfNeeded()
+    }
+
+    /// The coordinator's key-press record asks which view had the keyboard.
+    /// GTK focus is not an `NSResponder`, so no view matches.
+    func isKeyboardFocusTarget(_ responder: NSResponder) -> Bool { false }
+
+    var hostWindow: NSWindow? { nil }
+
+    /// The screen without its scrollback (Ghostty's active area).
+    func readActiveScreenText() -> String? {
+        surface?.readText(includeScrollback: false)
+    }
+
     func automationSendText(
         _ text: String,
         submit: Bool,
@@ -279,3 +296,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
 /// needs the type to exist (`TerminalFocusCoordinator`).
 @MainActor
 final class BrowserAnnotationCommentInputView: NSTextView {}
+/// The coordinator chat's composer (`CoordinatorComposerView.swift`, macOS
+/// only); `TerminalFocusCoordinator` checks for it by type.
+final class CoordinatorComposerTextView: NSTextView {}

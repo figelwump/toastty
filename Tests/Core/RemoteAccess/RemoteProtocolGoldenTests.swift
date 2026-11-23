@@ -34,7 +34,7 @@ struct RemoteProtocolGoldenTests {
             at: Self.fixtureDirectory,
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent))
-        let pushFixtureNames: Set<String> = ["push-registration.json", "push-session.json", "push-verification.json"]
+        let pushFixtureNames: Set<String> = ["push-registration.json", "push-session.json", "push-task.json", "push-verification.json"]
         #expect(expectedNames == Set(fixtures.map(\.name)).union(pushFixtureNames), "Fixture files must exactly match the registered v1 contract")
 
         for fixture in fixtures {
@@ -49,7 +49,9 @@ struct RemoteProtocolGoldenTests {
         #expect(registration.protocolVersion == RemoteGatewayProtocol.version)
         #expect(registration.registration?.relayID == RemotePushPolicy.developmentRelayID)
         #expect(registration.registration.map { RemotePushPolicy.isValidCapabilityToken($0.sendToken) } == true)
-        for (filename, kind) in [("push-session.json", RemotePushPayloadKind.session), ("push-verification.json", .verification)] {
+        for (filename, kind) in [
+            ("push-session.json", RemotePushPayloadKind.session), ("push-task.json", .task), ("push-verification.json", .verification),
+        ] {
             let data = try Data(contentsOf: Self.fixtureDirectory.appending(path: filename))
             let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
             let payloadData = try JSONSerialization.data(withJSONObject: #require(object["toastty"]))
@@ -59,7 +61,7 @@ struct RemoteProtocolGoldenTests {
             var reencoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
             // Foundation emits uppercase UUIDs; the relay emits lowercase.
             // UUID identity and the remaining wire fields must agree.
-            for key in ["registrationID", "pairingID", "conversationID", "eventID"] {
+            for key in ["registrationID", "pairingID", "conversationID", "eventID", "taskID"] {
                 if let value = reencoded[key] as? String { reencoded[key] = value.lowercased() }
             }
             #expect(NSDictionary(dictionary: reencoded) == object["toastty"] as? NSDictionary)
@@ -68,6 +70,47 @@ struct RemoteProtocolGoldenTests {
         #expect(clean.utf8.count <= 512 && !clean.contains("\n"))
         #expect(clean.allSatisfy { $0 == "👩🏽‍💻" })
         #expect(!RemotePushPolicy.isValidCapabilityToken(String(repeating: "_", count: 43)))
+    }
+
+    /// The relay accepts exactly these keys for a task alert, `null` when
+    /// empty, and checks the same limits; see `workers/push`.
+    @Test func taskAlertRequestKeepsEveryKeyAndOnlyTheTextItsReasonCarries() throws {
+        let taskID = UUID()
+        let question = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: nil, reason: .question,
+            taskTitle: "Composer\nblank line", detail: "Keep the\nblank line?\u{2028}Or trim it?", pullRequestNumber: 12
+        )
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(question)) as? [String: Any])
+        #expect(Set(object.keys) == ["kind", "eventID", "taskID", "conversationID", "reason", "taskTitle", "detail", "pullRequestNumber"])
+        #expect(object["kind"] as? String == "task")
+        #expect(object["reason"] as? String == "question")
+        #expect(object["conversationID"] is NSNull)
+        #expect(object["pullRequestNumber"] is NSNull)
+        #expect(object["taskTitle"] as? String == "Composerblank line")
+        #expect(object["detail"] as? String == "Keep the blank line? Or trim it?")
+
+        // A failure reason carries no free text: it can hold paths or output.
+        let failed = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: RemoteConversationID(), reason: .setupFailed,
+            taskTitle: "Task", detail: "create_hook exited 1 in /Users/me/repo", pullRequestNumber: 4
+        )
+        #expect(failed.detail == nil && failed.pullRequestNumber == nil)
+        let review = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: nil, reason: .review, taskTitle: "\n", pullRequestNumber: 263
+        )
+        #expect(review.pullRequestNumber == 263 && review.taskTitle == "Toastty task")
+        #expect(RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: nil, reason: .mergeStopped, taskTitle: "T", pullRequestNumber: 0
+        ).pullRequestNumber == nil)
+
+        let long = try #require(RemotePushPolicy.notificationDetail(String(repeating: "👩🏽‍💻", count: 60)))
+        #expect(long.utf8.count <= RemotePushPolicy.maximumDetailBytes && long.hasSuffix("…"))
+        #expect(RemotePushPolicy.notificationDetail(" \n\t ") == nil)
+        let largest = RemotePushTaskNotification(
+            eventID: UUID(), taskID: taskID, conversationID: RemoteConversationID(), reason: .question,
+            taskTitle: String(repeating: "\"\\/", count: 200), detail: String(repeating: "\"\\/", count: 200)
+        )
+        #expect(try JSONEncoder().encode(largest).count <= RemotePushPolicy.maximumBodyBytes)
     }
 
     @Test func optionalPresentationFieldsAreAdditiveToBaselineGoldenSnapshot() throws {
@@ -250,6 +293,70 @@ private extension RemoteProtocolGoldenTests {
                 RemoteInputAvailability.unavailable(reason: .sessionWritesDisabled)
             ),
             try fixture("session-list-response.json", RemoteGatewaySessionListResponse(snapshot: sessionSnapshot)),
+            try fixture(
+                "session-list-with-tasks.json",
+                RemoteGatewaySessionListResponse(snapshot: makeTaskSessionSnapshot())
+            ),
+            try fixture("coordinator-quiet-digests-response.json", quietDigests),
+            try fixture("finished-tasks-response.json", finishedTasks),
+            try fixture(
+                "coordinator-attachment-image-request.json",
+                RemoteCoordinatorAttachmentImageRequest(
+                    conversationID: RemoteConversationID(rawValue: numberedUUID(220)),
+                    eventID: "claude:msg_attach",
+                    attachmentIndex: 1,
+                    size: .thumbnail
+                )
+            ),
+            try fixture(
+                "coordinator-attachment-image-response.json",
+                RemoteCoordinatorAttachmentImageResponse(
+                    mimeType: "image/png", data: Data([0x89, 0x50, 0x4E, 0x47]), pixelWidth: 600, pixelHeight: 338)
+            ),
+            try fixture("coordinator-attachment-image-refusal.json", RemoteCoordinatorAttachmentImageResponse(error: .denied)),
+            try fixture(
+                "task-action-request.json",
+                RemoteTaskActionRequest(
+                    taskID: numberedUUID(302),
+                    action: .archive,
+                    clientRequestID: "ios-task-0001",
+                    expectedPullRequestNumber: 263,
+                    closePullRequest: true
+                )
+            ),
+            try fixture(
+                "task-action-response-rejected.json",
+                RemoteTaskActionResponse(result: .rejected(reason: .notOffered, message: "Merging…"))
+            ),
+            try fixture(
+                "task-archive-check-response.json",
+                RemoteTaskArchiveCheckResponse(result: .ready(RemoteTaskArchiveCheck(
+                    closesTaskSpace: true,
+                    agentSessions: 1,
+                    removesWorktree: true,
+                    uncommittedFiles: 0,
+                    branch: "fix/website-hero",
+                    unpushedCommits: 2,
+                    orphanedCommits: 0,
+                    unsavedDocuments: 0,
+                    pullRequest: RemoteTaskPullRequest(number: 258, url: URL(string: "https://github.com/example/site/pull/258")!),
+                    blockedReason: nil
+                )))
+            ),
+            // The v0.9.2 iPhone app sends the first request and decodes
+            // only the results it shipped with, `work_in_progress` among them.
+            try fixture(
+                "workspace-done-request.json",
+                RemoteWorkspaceDoneRequest(workspaceID: numberedUUID(310), done: true)
+            ),
+            try fixture(
+                "workspace-done-request-knows-open-pull-request.json",
+                RemoteWorkspaceDoneRequest(workspaceID: numberedUUID(310), done: true, knowsOpenPullRequestResult: true)
+            ),
+            try fixture(
+                "workspace-done-response-work_in_progress.json",
+                RemoteWorkspaceDoneResponse(result: .workInProgress)
+            ),
             try fixture(
                 "events-request.json",
                 RemoteGatewayEventsRequest(
@@ -481,6 +588,159 @@ private extension RemoteProtocolGoldenTests {
         )
     }
 
+    /// The baseline snapshot with a task board: a task space whose agent
+    /// asks a question, one in review with a pull request, a watched task
+    /// space, a task whose setup failed before it had a task space, a task
+    /// that started another, and a To ship lane.
+    static func makeTaskSessionSnapshot() -> RemoteSessionListSnapshot {
+        var snapshot = makeSessionSnapshot()
+        let projectID = numberedUUID(200)
+        let questionSpaceID = numberedUUID(201)
+        let reviewSpaceID = numberedUUID(202)
+        let watchedSpaceID = numberedUUID(203)
+        let question = numberedUUID(301), review = numberedUUID(302), failed = numberedUUID(304)
+        let unplaced = numberedUUID(307)
+        let child = numberedUUID(305), shipped = numberedUUID(306)
+        snapshot.tasks = RemoteTaskBoard(
+            tasks: [
+                RemoteTaskSummary(
+                    id: question, title: "iOS task support", group: .needsYou, mark: .question,
+                    statusLine: "Asks: Badge counts tasks or sessions?",
+                    rowSummary: "Asks: Badge counts tasks or sessions?",
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectWorkspaceID: projectID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: questionSpaceID, activityAt: timestamp,
+                    mergeControl: RemoteTaskMergeControl(
+                        kind: .archive, title: "Archive Task…",
+                        action: RemoteTaskActionItem(action: .archive, title: "Archive Task…")
+                    ),
+                    actions: [
+                        RemoteTaskActionItem(action: .markDone, title: "Mark Done"),
+                        RemoteTaskActionItem(action: .archive, title: "Archive…"),
+                    ],
+                    childProgress: RemoteTaskChildProgress(merged: 1, total: 2)
+                ),
+                RemoteTaskSummary(
+                    id: child, title: "Split the parser", group: .running, mark: .starting,
+                    statusLine: "Moving to worktree · fetching base", rowSummary: "Moving to worktree · fetching base",
+                    stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
+                    projectWorkspaceID: projectID, projectTitle: "toastty", activityAt: timestamp,
+                    parentTaskID: question, parentTaskTitle: "iOS task support"
+                ),
+                RemoteTaskSummary(
+                    id: review, title: "Jump-to-next-active fix", group: .needsYou, mark: .review,
+                    statusLine: "Ready for your review", stageTitle: "Review", stageReason: "PR open, agent idle",
+                    projectWorkspaceID: projectID, projectTitle: "toastty", taskSpaceWorkspaceID: reviewSpaceID,
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 263, url: URL(string: "https://github.com/example/toastty/pull/263")!, state: .open
+                    ),
+                    activityAt: timestamp.addingTimeInterval(-60),
+                    mergeControl: RemoteTaskMergeControl(
+                        kind: .merge, title: "Merge PR #263",
+                        action: RemoteTaskActionItem(action: .merge, title: "Merge PR #263"),
+                        menu: [RemoteTaskActionItem(action: .archive, title: "Archive Task…")]
+                    ),
+                    actions: [
+                        RemoteTaskActionItem(action: .merge, title: "Merge"),
+                        RemoteTaskActionItem(action: .archive, title: "Archive…"),
+                    ]
+                ),
+                RemoteTaskSummary(
+                    id: watchedSpaceID, hasRecord: false, title: "Website hero refresh", group: .idle,
+                    statusLine: "Codex · idle", stageTitle: "Idle", stageReason: "Codex · idle",
+                    projectWorkspaceID: projectID, projectTitle: "toastty", taskSpaceWorkspaceID: watchedSpaceID,
+                    activityAt: timestamp.addingTimeInterval(-120)
+                ),
+                RemoteTaskSummary(
+                    id: failed, title: "Composer blank line", group: .needsYou,
+                    statusLine: "⚠ setup failed", rowSummary: "⚠ setup failed",
+                    stageTitle: "Needs you", stageReason: "create_hook exited 1",
+                    projectWorkspaceID: projectID, projectTitle: "toastty",
+                    activityAt: timestamp.addingTimeInterval(-180),
+                    actions: [
+                        RemoteTaskActionItem(action: .retry, title: "Retry Setup"),
+                        RemoteTaskActionItem(action: .delete, title: "Delete Task"),
+                    ]
+                ),
+                // No action picks a workspace: the Mac says where to do it.
+                RemoteTaskSummary(
+                    id: unplaced, title: "Fix the settings typo", group: .needsYou,
+                    statusLine: "⚠ pick a workspace", rowSummary: "⚠ pick a workspace",
+                    stageTitle: "Needs you", stageReason: "No workspace was named. Pick a workspace for this task.",
+                    activityAt: timestamp.addingTimeInterval(-200),
+                    actions: [RemoteTaskActionItem(action: .delete, title: "Delete Task")],
+                    macStep: "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace."
+                ),
+                RemoteTaskSummary(
+                    id: shipped, title: "Parent task rollup", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: projectID, projectTitle: "toastty",
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 259, url: URL(string: "https://github.com/example/toastty/pull/259")!, state: .merged
+                    ),
+                    activityAt: timestamp.addingTimeInterval(-240),
+                    // A Done parent is not on the board; its title names it.
+                    parentTaskID: numberedUUID(399), parentTaskTitle: "Mobile release prep"
+                ),
+            ],
+            needsYou: [
+                RemoteTaskBoardEntry(taskID: question),
+                RemoteTaskBoardEntry(taskID: child, isLinkedChild: true, isContext: true),
+                RemoteTaskBoardEntry(taskID: review),
+                RemoteTaskBoardEntry(taskID: failed),
+                RemoteTaskBoardEntry(taskID: unplaced),
+            ],
+            idle: [RemoteTaskBoardEntry(taskID: watchedSpaceID)],
+            toShip: [
+                RemoteTaskShipLane(id: "/Users/example/toastty", projectTitle: "toastty", count: 3, recentTaskIDs: [shipped]),
+            ],
+            doneCount: 12,
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 3, doneCount: 12)],
+            // The finished tasks travel apart; the board names their revision.
+            finishedTasksRevision: finishedTasks.revision
+        )
+        // The coordinator's workspace: only it carries the mark, the read
+        // point of the coordinator's chat, and the revision of its quiet
+        // wake turns.
+        snapshot.workspaces.append(
+            RemoteWorkspaceSummary(
+                id: numberedUUID(210), title: "Coordinator", panels: [], isCoordinator: true,
+                coordinatorChatRead: RemoteCoordinatorChatReadPoint(eventID: "codex:msg_read", timestamp: timestamp),
+                coordinatorQuietDigestsRevision: quietDigests.revision
+            )
+        )
+        return snapshot
+    }
+
+    /// One quiet wake turn's digest, by its key.
+    static let quietDigests = RemoteCoordinatorQuietDigests(keys: [CoordinatorWakeState.digestKey("""
+        [Toastty] Wake: this message is from Toastty, not from the user.
+        - [Fix the login redirect](toastty://task/00000000-0000-0000-0000-000000000302): needsYou (agentFinished) at 2026-08-08T14:39:00Z
+        Read `toastty task list` for details.
+        """)])
+
+    /// A Done task whose task space closed, and an archived one: the chips
+    /// of links to them, and the mention list's tasks, with when each
+    /// finished.
+    static let finishedTasks = RemoteFinishedTasks(tasks: [
+        RemoteFinishedTask(
+            id: numberedUUID(399), title: "Mobile release prep", group: .done, stageTitle: "Done",
+            stageReason: "shipped in v0.9.2", statusLine: "Shipped", projectTitle: "toastty",
+            pullRequest: RemoteTaskPullRequest(
+                number: 251, url: URL(string: "https://github.com/example/toastty/pull/251")!, state: .merged
+            ),
+            doneAt: timestamp
+        ),
+        RemoteFinishedTask(
+            id: numberedUUID(398), title: "Old export spike", group: .archived, stageTitle: "Archived",
+            stageReason: "closed without finishing", statusLine: "Archived",
+            doneAt: timestamp.addingTimeInterval(-3_600)
+        ),
+    ])
+
+    static let remoteAttachmentPath = "/Users/example/Library/Application Support/Toastty/remote-access/attachments/A1/photo.jpg"
+
     static func makeEventPage() -> ConversationEventPage {
         var events: [ConversationEvent] = []
 
@@ -494,7 +754,9 @@ private extension RemoteProtocolGoldenTests {
                 payload: .userMessage(ConversationUserMessagePayload(
                     text: "User message from \(origin.rawValue)",
                     origin: origin,
-                    clientRequestID: requestID
+                    clientRequestID: requestID,
+                    // A device's send with a file keeps the stored path apart.
+                    attachmentPaths: origin == .remote ? [Self.remoteAttachmentPath] : nil
                 ))
             )
         }

@@ -4,6 +4,62 @@ import XCTest
 
 @MainActor
 final class AppWindowViewTests: XCTestCase {
+    func testColumnResizeTracksLocalPreviewAndCommitsOnlyMouseUpWidth() {
+        let resize = LiveColumnResize()
+        resize.begin(.sidebar, width: 260, holdingWorkspaceAt: 800)
+        resize.update(.sidebar, translation: 10, availableWidth: 1061)
+        resize.update(.sidebar, translation: 20, availableWidth: 1061)
+        XCTAssertEqual(resize.width(for: .sidebar), 280)
+        XCTAssertNil(resize.width(for: .dock))
+        XCTAssertEqual(resize.heldWorkspaceWidth, 800)
+        XCTAssertEqual(resize.finish(.sidebar, translation: 25, availableWidth: 1061), 285)
+        XCTAssertNil(resize.width(for: .sidebar))
+        XCTAssertNil(resize.heldWorkspaceWidth)
+        XCTAssertNil(resize.finish(.sidebar, translation: 30, availableWidth: 1061))
+    }
+
+    func testRightPanelPreviewIsTabScopedAndCancellationPreservesDefault() {
+        let resize = LiveColumnResize()
+        let workspaceID = UUID()
+        let column = ResizingColumn.rightPanel(workspaceID: workspaceID, tabID: UUID())
+        resize.begin(column, width: 400)
+        resize.update(column, translation: -60, availableWidth: 1000)
+        XCTAssertEqual(resize.width(for: column), 460)
+        XCTAssertNil(resize.width(for: .rightPanel(workspaceID: workspaceID, tabID: UUID())))
+        XCTAssertNil(resize.heldWorkspaceWidth)
+        resize.cancel(column)
+        XCTAssertNil(resize.finish(column, translation: -60, availableWidth: 1000))
+        resize.begin(column, width: 400)
+        XCTAssertNil(resize.finish(column, translation: 0, availableWidth: 1000))
+    }
+
+    func testWindowColumnWidthsCommitAtTheirVisibleLimits() {
+        let available: CGFloat = 1000
+        let cases: [(ResizingColumn, CGFloat, CGFloat, CGFloat)] = [
+            (.sidebar, 240, -1000, WindowState.minSidebarWidth),
+            (.dock, 300, 1000, WindowState.maxCoordinatorDockWidth(windowWidth: available)),
+        ]
+        for (column, start, delta, expected) in cases {
+            let resize = LiveColumnResize()
+            resize.begin(column, width: start)
+            resize.update(column, translation: delta, availableWidth: available)
+            XCTAssertEqual(resize.width(for: column), expected)
+            XCTAssertEqual(resize.finish(column, translation: delta, availableWidth: available), expected)
+        }
+    }
+
+    func testRightPanelPreviewFitsViewportAndItsSavedWidthSurvivesWidening() throws {
+        let resize = LiveColumnResize()
+        let column = ResizingColumn.rightPanel(workspaceID: UUID(), tabID: UUID())
+        resize.begin(column, width: 400)
+        resize.update(column, translation: -600, availableWidth: 900)
+        XCTAssertEqual(resize.width(for: column), 720)
+        let saved = try XCTUnwrap(resize.finish(column, translation: -600, availableWidth: 900))
+        let panel = RightAuxPanelState(width: saved, hasCustomWidth: true)
+        XCTAssertEqual(panel.effectiveWidth(for: 900), 720)
+        XCTAssertEqual(panel.effectiveWidth(for: 1600), 1000)
+    }
+
     func testNavigationControlsFitMinimumSidebarAndReserveHiddenSidebarHeaderSpace() {
         let controlsTrailingEdge = ToastyTheme.titlebarSidebarToggleLeadingPadding +
             (3 * ToastyTheme.titlebarSidebarToggleButtonSize) + (2 * ToastyTheme.titlebarControlSpacing)
@@ -51,50 +107,21 @@ final class AppWindowViewTests: XCTestCase {
         )
     }
 
-    func testEffectiveSidebarWidthUsesCompactDefaultBeforeAgentLaunch() {
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: false),
-            180
-        )
-    }
-
-    func testEffectiveSidebarWidthUsesExpandedDefaultAfterAgentLaunch() {
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: true),
-            280
-        )
+    func testEffectiveSidebarWidthUsesFullDefaultWithoutOverride() {
+        XCTAssertEqual(AppWindowView.effectiveSidebarWidth(sidebarWidthPointsOverride: nil), 280)
     }
 
     func testEffectiveSidebarWidthUsesPersistedOverride() {
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(
-                hasEverLaunchedAgent: false,
-                sidebarWidthPointsOverride: 320
-            ),
-            320
-        )
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(
-                hasEverLaunchedAgent: true,
-                sidebarWidthPointsOverride: 320
-            ),
-            320
-        )
+        XCTAssertEqual(AppWindowView.effectiveSidebarWidth(sidebarWidthPointsOverride: 320), 320)
     }
 
     func testEffectiveSidebarWidthClampsPersistedOverride() {
         XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(
-                hasEverLaunchedAgent: true,
-                sidebarWidthPointsOverride: 10
-            ),
+            AppWindowView.effectiveSidebarWidth(sidebarWidthPointsOverride: 10),
             CGFloat(WindowState.minSidebarWidth)
         )
         XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(
-                hasEverLaunchedAgent: true,
-                sidebarWidthPointsOverride: 900
-            ),
+            AppWindowView.effectiveSidebarWidth(sidebarWidthPointsOverride: 900),
             CGFloat(WindowState.maxSidebarWidth)
         )
     }
@@ -106,95 +133,6 @@ final class AppWindowViewTests: XCTestCase {
         XCTAssertEqual(frame.origin.y, 0)
         XCTAssertEqual(frame.size.width, AppWindowView.sidebarResizeHandleHitWidth)
         XCTAssertEqual(frame.size.height, 600)
-    }
-
-    func testEffectiveSidebarWidthTransitionsAfterSuccessfulAgentLaunch() {
-        let store = AppStore(persistTerminalFontPreference: false)
-
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent),
-            180
-        )
-
-        store.recordSuccessfulAgentLaunch()
-
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent),
-            280
-        )
-    }
-
-    func testFirstProgramStatusExpandsCompactSidebarAndRecordsEligibility() throws {
-        let store = AppStore(persistTerminalFontPreference: false)
-        let windowID = try XCTUnwrap(store.state.windows.first?.id)
-        var hasHandledAppearance = false
-
-        AppWindowView.expandSidebarForProgramStatusIfNeeded(
-            store: store,
-            windowID: windowID,
-            hasHandledAppearance: &hasHandledAppearance
-        )
-
-        XCTAssertTrue(hasHandledAppearance)
-        XCTAssertTrue(store.hasEverLaunchedAgent)
-        XCTAssertNil(store.window(id: windowID)?.sidebarWidthPointsOverride)
-        XCTAssertEqual(
-            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent),
-            280
-        )
-    }
-
-    func testFirstProgramStatusExpandsNarrowOverrideToExpandedDefault() throws {
-        let store = AppStore(persistTerminalFontPreference: false)
-        let windowID = try XCTUnwrap(store.state.windows.first?.id)
-        XCTAssertTrue(store.send(.setSidebarWidth(windowID: windowID, width: 220, defaultWidth: 180)))
-        var hasHandledAppearance = false
-
-        AppWindowView.expandSidebarForProgramStatusIfNeeded(
-            store: store,
-            windowID: windowID,
-            hasHandledAppearance: &hasHandledAppearance
-        )
-
-        XCTAssertTrue(store.hasEverLaunchedAgent)
-        XCTAssertNil(store.window(id: windowID)?.sidebarWidthPointsOverride)
-    }
-
-    func testFirstProgramStatusPreservesWiderOverride() throws {
-        let store = AppStore(persistTerminalFontPreference: false)
-        let windowID = try XCTUnwrap(store.state.windows.first?.id)
-        XCTAssertTrue(store.send(.setSidebarWidth(windowID: windowID, width: 360, defaultWidth: 180)))
-        var hasHandledAppearance = false
-
-        AppWindowView.expandSidebarForProgramStatusIfNeeded(
-            store: store,
-            windowID: windowID,
-            hasHandledAppearance: &hasHandledAppearance
-        )
-
-        XCTAssertTrue(hasHandledAppearance)
-        XCTAssertTrue(store.hasEverLaunchedAgent)
-        XCTAssertEqual(store.window(id: windowID)?.sidebarWidthPointsOverride, 360)
-    }
-
-    func testLaterProgramStatusAppearancePreservesManualNarrowing() throws {
-        let store = AppStore(persistTerminalFontPreference: false)
-        let windowID = try XCTUnwrap(store.state.windows.first?.id)
-        var hasHandledAppearance = false
-        AppWindowView.expandSidebarForProgramStatusIfNeeded(
-            store: store,
-            windowID: windowID,
-            hasHandledAppearance: &hasHandledAppearance
-        )
-        XCTAssertTrue(store.send(.setSidebarWidth(windowID: windowID, width: 200, defaultWidth: 280)))
-
-        AppWindowView.expandSidebarForProgramStatusIfNeeded(
-            store: store,
-            windowID: windowID,
-            hasHandledAppearance: &hasHandledAppearance
-        )
-
-        XCTAssertEqual(store.window(id: windowID)?.sidebarWidthPointsOverride, 200)
     }
 
     func testFirstRunAutoOpenGatingAllowsOneFreshPersistentLaunchPresentation() {

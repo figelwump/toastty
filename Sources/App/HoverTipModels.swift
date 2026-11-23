@@ -35,6 +35,7 @@ struct SessionChildHoverTipModel: Hashable {
     var metaItems: [String]
 }
 
+/// Row metadata the sidebar row itself stopped showing.
 struct SessionRowHoverTipModel: Hashable {
     struct MetaItem: Hashable {
         let label: String
@@ -77,6 +78,10 @@ struct SessionRowHoverTipModel: Hashable {
     }
 }
 
+/// A subspace row's hover card: every annotation under the name, as the
+/// sidebar shows them under a workspace title, then its agent sessions as
+/// compact rows shaped like the sidebar's session rows, then where the
+/// subspace lives.
 struct SubspaceHoverTipModel: Hashable {
     struct Session: Hashable {
         let title: String
@@ -97,7 +102,28 @@ struct SubspaceHoverTipModel: Hashable {
         let colorToken: AnnotationColorToken
     }
 
+    /// Where the task stands, in place of the "task space" tag: the task's
+    /// own sidebar group, as the group counts count it. A row that lists
+    /// with its family can sit under a more urgent heading.
+    enum Stage: Hashable {
+        case bucket(TaskBucket)
+        case toShip
+        case done
+        case archived
+
+        var title: String {
+            switch self {
+            case .bucket(let bucket): bucket.title
+            case .toShip: "To ship"
+            case .done: "Done"
+            case .archived: "Archived"
+            }
+        }
+    }
+
     var name: String
+    /// `nil` for a subspace that is not a task.
+    var stage: Stage? = nil
     var sessions: [Session]
     var hiddenSessionCount: Int
     var annotations: [Annotation]
@@ -106,4 +132,40 @@ struct SubspaceHoverTipModel: Hashable {
     /// What the copy button copies.
     var absolutePath: String?
     var spawnerName: String?
+    /// The row's summary, such as the question it asks, for a one-line row
+    /// that does not show it.
+    var rowSummary: String? = nil
+    /// The task that started this one, which the card's Parent button
+    /// opens.
+    var parentTaskTitle: String? = nil
+
+    /// A task that this one started, as the card lists it.
+    struct ChildTask: Hashable {
+        let taskID: UUID
+        /// The task, for its status mark.
+        let item: TaskBoardItem
+        /// Its sidebar group, or To ship or Done once its work finished.
+        let stage: Stage
+        /// The child's project, when it is not this task's project.
+        let projectTitle: String?
+
+        var title: String { item.title }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.taskID == rhs.taskID && lhs.item == rhs.item && lhs.stage == rhs.stage
+                && lhs.projectTitle == rhs.projectTitle
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(taskID)
+            hasher.combine(stage)
+            hasher.combine(projectTitle)
+        }
+    }
+
+    /// Open child tasks, most urgent first.
+    var openChildTasks: [ChildTask] = []
+    /// To ship and Done children, newest first.
+    var finishedChildTasks: [ChildTask] = []
+    var childProgress: TaskBoard.ChildProgress?
 }

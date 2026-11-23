@@ -15,6 +15,11 @@ struct ToasttyAttachmentPicker: View {
     let allowsInput: Bool
     @Binding var isLoading: Bool
     let addAttachments: ([RemoteMessageAttachment]) -> String?
+    /// The coordinator's chat: Mention a Task types `@` in the field and
+    /// opens the list of tasks. `nil` elsewhere.
+    var mentionTask: (@MainActor @Sendable () -> Void)? = nil
+    /// The field takes text, so a mention can go in.
+    var allowsMention = false
 
     @State private var showsChooser = false
     @State private var showsPhotos = false
@@ -32,6 +37,10 @@ struct ToasttyAttachmentPicker: View {
         allowsInput && supportsAttachments && !isLoading && attachments.count < RemoteAttachmentPolicy.maximumCount
     }
 
+    private var canMention: Bool {
+        mentionTask != nil && allowsMention
+    }
+
     var body: some View {
         Button { showsChooser = true } label: {
             Image(systemName: "paperclip")
@@ -40,17 +49,30 @@ struct ToasttyAttachmentPicker: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(canPick ? ToasttyDesignTokens.secondaryText : ToasttyDesignTokens.mutedText)
-        .disabled(!canPick)
-        .accessibilityLabel("Attach")
+        .foregroundStyle(canPick || canMention ? ToasttyDesignTokens.secondaryText : ToasttyDesignTokens.mutedText)
+        .disabled(!canPick && !canMention)
+        .accessibilityLabel(mentionTask == nil ? "Attach" : "Attach or mention")
         .accessibilityIdentifier("toastty-mobile-attachment-add")
         .confirmationDialog("Attach to message", isPresented: $showsChooser, titleVisibility: .visible) {
-            Button("Photo Library", systemImage: "photo") { showsPhotos = true }
-            Button("Take Photo", systemImage: "camera") { requestCamera() }
-            Button("Choose File", systemImage: "folder") { showsFiles = true }
+            // With as many files as a message takes, only the mention is on.
+            if canPick {
+                Button("Photo Library", systemImage: "photo") { showsPhotos = true }
+                Button("Take Photo", systemImage: "camera") { requestCamera() }
+                Button("Choose File", systemImage: "folder") { showsFiles = true }
+            }
+            if canMention, let mentionTask {
+                Button("Mention a Task", systemImage: "at") {
+                    // After the dialog closes, so the field can take the
+                    // keyboard.
+                    DispatchQueue.main.async { mentionTask() }
+                }
+                .accessibilityIdentifier("toastty-mobile-attachment-mention")
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Images, PDFs, and text files. Up to 4 files, 4 MB each, 8 MB total.")
+            if canPick {
+                Text("Images, PDFs, and text files. Up to 4 files, 4 MB each, 8 MB total.")
+            }
         }
         .photosPicker(isPresented: $showsPhotos, selection: $selectedPhotos,
                       maxSelectionCount: max(1, RemoteAttachmentPolicy.maximumCount - attachments.count), matching: .images)

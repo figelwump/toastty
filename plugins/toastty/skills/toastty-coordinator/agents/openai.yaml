@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Coordinator"
+  short_description: "Follow the user's tasks as the Toastty coordinator."
+  default_prompt: "Use $toastty-coordinator to follow my tasks."

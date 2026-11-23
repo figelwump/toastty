@@ -237,6 +237,58 @@ struct ConversationProjectorTests {
         #expect(projector.inputAvailability.allowsRemoteSend)
     }
 
+    @Test func claudeTurnThatEndsBeforeItsTranscriptIsReadStillOpensThePrompt() throws {
+        var projector = Self.makeClaudeProjector()
+        // The Stop hook reports the end of a short turn at once. The host
+        // reads the transcript on a timer, so the turn's own records come
+        // afterwards, with the earlier times at which Claude wrote them.
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(2),
+            fingerprint: "claude:turn-end-fast",
+            payload: .turnEnded(turnID: "turn-1", reason: .completed)
+        ))
+        let token = try #require(projector.pendingPromptStabilizationToken)
+
+        let lateUserMessage = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1.3),
+            turnID: "turn-1",
+            fingerprint: "claude:user-late",
+            payload: .transcript(.userMessage(.init(text: "Reply with one word")))
+        ))
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1.9),
+            turnID: "turn-1",
+            fingerprint: "claude:assistant-late",
+            payload: .transcript(.assistantMessage(.init(text: "Done")))
+        ))
+        // The message is in the conversation, and the turn stays ended.
+        #expect(lateUserMessage.contains { $0.kind == .userMessage })
+        #expect(projector.state == .awaitingInput)
+        #expect(projector.pendingPromptStabilizationToken == token)
+        projector.completePromptStabilization(token: token, at: Self.epochDate.addingTimeInterval(2.5))
+        #expect(projector.inputAvailability.allowsRemoteSend)
+
+        // A record of the finished turn that is read after the prompt opened
+        // does not close it either.
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(1.5),
+            turnID: "turn-1",
+            fingerprint: "claude:user-later-still",
+            payload: .transcript(.userMessage(.init(text: "A second record of that turn")))
+        ))
+        #expect(projector.inputAvailability.allowsRemoteSend)
+
+        // A message written after the turn ended starts the next turn.
+        _ = projector.ingest(ProviderTranscriptObservation(
+            timestamp: Self.epochDate.addingTimeInterval(3),
+            turnID: "turn-2",
+            fingerprint: "claude:user-next",
+            payload: .transcript(.userMessage(.init(text: "Next")))
+        ))
+        #expect(projector.state == .working)
+        #expect(projector.inputAvailability == .unavailable(reason: .working))
+    }
+
     @Test func claudePromptStabilizationSurvivesLatePassiveObservations() throws {
         var projector = Self.makeClaudeProjector()
         _ = projector.ingest(ProviderTranscriptObservation(
@@ -901,6 +953,45 @@ extension ConversationProjectorTests {
         let reopened = projector.completePromptStabilization(token: token, at: Self.epochDate.addingTimeInterval(4))
         #expect(reopened.isEmpty)
         #expect(projector.inputAvailability == .unavailable(reason: .interrupted))
+    }
+
+    @Test func lostSendReopensOnlyThePromptItConsumed() throws {
+        var projector = Self.makeProjector()
+        _ = projector.ingest(Self.observation("end-0", at: 1, .turnEnded(turnID: "turn-0", reason: .completed)))
+        guard case .openPrompt(let consumed) = projector.inputAvailability else {
+            Issue.record("Expected an open prompt")
+            return
+        }
+
+        // The provider showed nothing since the send: a new epoch opens.
+        var quiet = projector
+        let emitted = quiet.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12))
+        #expect(emitted.map(\.kind) == [.statusChanged])
+        #expect(quiet.inputAvailability == .openPrompt(epoch: consumed.next()))
+        #expect(quiet.state == .awaitingInput)
+        // The consumed epoch reopens once.
+        #expect(quiet.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(13)).isEmpty)
+        #expect(quiet.inputAvailability == .openPrompt(epoch: consumed.next()))
+
+        // The turn started: its end opens the next prompt, not the deadline.
+        var working = projector
+        _ = working.ingest(Self.observation("start-1", at: 2, .turnStarted(turnID: "turn-1")))
+        #expect(working.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12)).isEmpty)
+        #expect(working.inputAvailability == .unavailable(reason: .working))
+        #expect(working.turnEpoch == consumed)
+
+        // The turn ran and ended: the prompt it opened is not replaced.
+        var finished = working
+        _ = finished.ingest(Self.observation("end-1", at: 3, .turnEnded(turnID: "turn-1", reason: .completed)))
+        let afterTurn = finished.inputAvailability
+        #expect(finished.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12)).isEmpty)
+        #expect(finished.inputAvailability == afterTurn)
+
+        // No runtime, no prompt.
+        var ended = projector
+        _ = ended.noteBinding(reason: .runtimeEnded, bindingID: Self.bindingID, at: Self.epochDate.addingTimeInterval(2))
+        #expect(ended.reopenPromptAfterLostSend(expectedEpoch: consumed, at: Self.epochDate.addingTimeInterval(12)).isEmpty)
+        #expect(ended.inputAvailability == .unavailable(reason: .offline))
     }
 
     @Test func claudeCompletionRetiresTheTurnEpochBeforeStabilization() throws {

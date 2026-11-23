@@ -1,0 +1,276 @@
+import AppKit
+import ConversationUI
+import CoreState
+import SwiftUI
+
+extension CoordinatorDockPresentation {
+    /// Toasty on the toolbar button: steam while the agent works, and a
+    /// badge for unread output, an approval or an error while the chat is
+    /// out of sight. Jump to Next Active leaves the coordinator out, so the
+    /// badge is how the user sees that it needs them.
+    static func toggleIconStatus(mark: SidebarCoordinatorPresentation.Mark, chatOnScreen: Bool) -> ToastyIcon.Status {
+        switch mark {
+        case .working:
+            return .working
+        case .unread, .needsApproval, .error:
+            return chatOnScreen ? .none : SidebarCoordinatorPresentation.iconStatus(mark)
+        case .quiet, .starting, .notRunning:
+            return .none
+        }
+    }
+}
+
+/// The coordinator's dock as a stop of Select Next Split and Select
+/// Previous Split, beside the panels of the workspace it shows with.
+@MainActor
+protocol CoordinatorDockFocusStop: AnyObject {
+    /// Whether the dock shows in `windowID` now.
+    func dockShows(in windowID: UUID) -> Bool
+    /// Whether the dock's field has the keyboard in `windowID`.
+    func dockHasKeyboard(in windowID: UUID) -> Bool
+    /// Gives the dock's field the keyboard. Returns whether the dock shows.
+    func focusDockComposer(in windowID: UUID) -> Bool
+}
+
+extension CoordinatorController: CoordinatorDockFocusStop {}
+
+/// The coordinator's dock: a header with Toasty, the coordinator's status
+/// and two buttons, then the chat. The terminal stays in the coordinator's
+/// workspace: Open Full View shows it there.
+@available(macOS 15.0, *)
+struct CoordinatorDockView: View {
+    @ObservedObject var controller: CoordinatorController
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    @ObservedObject var store: AppStore
+    let chat: CoordinatorChatModel
+    let board: TaskBoardStore
+    let location: CoordinatorLocation
+    let settledWidth: CGFloat
+    /// Room on the header's left for the titlebar's buttons, when the dock
+    /// is at the window's left edge.
+    let headerLeadingInset: CGFloat
+    let appIsActive: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Toasty hops once when the dock opens, as toast pops from a toaster.
+    @State private var toastyHop: CGFloat = 0
+
+    static let headerButtonSize: CGFloat = 22
+
+    private var workspace: WorkspaceState? {
+        store.state.workspacesByID[location.workspaceID]
+    }
+
+    private var mark: SidebarCoordinatorPresentation.Mark {
+        guard let workspace else { return .notRunning }
+        return SidebarCoordinatorPresentation.currentMark(
+            controller: controller,
+            sessionRuntimeStore: sessionRuntimeStore,
+            workspace: workspace,
+            readPanelID: location.panelID
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if let panelID = location.panelID {
+                CoordinatorChatView(
+                    model: chat,
+                    controller: controller,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    board: board,
+                    store: store,
+                    panelID: panelID,
+                    windowID: location.windowID,
+                    isOnScreen: true,
+                    hasPanelFocus: false,
+                    host: .dock,
+                    settledDockWidth: settledWidth
+                )
+            } else {
+                missingTerminal
+            }
+        }
+        .background(ConversationDesignTokens.background)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("coordinator.dock")
+        // The chat the user sees is read, as a focused panel's output is.
+        .task(id: UnreadClear(isUnread: coordinatorPanelIsUnread, appIsActive: appIsActive)) {
+            await clearUnreadWhenSeen()
+        }
+        .onAppear(perform: hop)
+    }
+
+    private var header: some View {
+        let mark = mark
+        return HStack(spacing: 8) {
+            ToastyIcon(
+                style: .golden,
+                size: 16,
+                status: mark == .working ? .working : .none,
+                badgeRingColor: ToastyTheme.chromeBackground
+            )
+            .offset(y: toastyHop)
+            Text(AppState.coordinatorWorkspaceTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ToastyTheme.primaryText)
+                .lineLimit(1)
+                .layoutPriority(1)
+            CoordinatorStatusLabel(mark: mark)
+            Spacer(minLength: 0)
+            headerButton(
+                symbol: "arrow.up.left.and.arrow.down.right",
+                label: "Open Full View",
+                help: "Open the coordinator's workspace, with its chat and terminal",
+                identifier: "coordinator.dock.open-full-view"
+            ) {
+                controller.openFullView()
+            }
+            headerButton(
+                symbol: "arrow.left.to.line",
+                label: "Hide Dock",
+                help: ToasttyKeyboardShortcuts.toggleCoordinatorDock.helpText("Hide Dock"),
+                identifier: "coordinator.dock.hide"
+            ) {
+                controller.hideDock()
+            }
+        }
+        // Centered on the titlebar's buttons, as the workspace title is.
+        .frame(height: Self.headerButtonSize)
+        .padding(.top, ToastyTheme.titlebarSidebarToggleTopPadding)
+        .padding(.leading, headerLeadingInset)
+        .padding(.trailing, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(height: ToastyTheme.topBarHeight)
+        .background(ToastyTheme.chromeBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(height: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("coordinator.dock.header")
+    }
+
+    private func headerButton(
+        symbol: String,
+        label: String,
+        help: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
+    }
+
+    /// A coordinator's workspace without its terminal: only a restart
+    /// brings the chat back.
+    private var missingTerminal: some View {
+        VStack(spacing: 10) {
+            Text("The coordinator has no terminal.")
+                .font(.system(size: 12))
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
+            Button("Restart Coordinator") { controller.perform(.restart) }
+                .accessibilityIdentifier("coordinator.dock.restart")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func hop() {
+        guard reduceMotion == false else { return }
+        withAnimation(.easeOut(duration: 0.12)) { toastyHop = -3 }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.5).delay(0.12)) { toastyHop = 0 }
+    }
+
+    // MARK: - Unread
+
+    private struct UnreadClear: Equatable {
+        var isUnread: Bool
+        var appIsActive: Bool
+    }
+
+    private var coordinatorPanelIsUnread: Bool {
+        guard let panelID = location.panelID,
+              let workspace,
+              let tabID = workspace.tabID(containingPanelID: panelID) else { return false }
+        return workspace.tab(id: tabID)?.unreadPanelIDs.contains(panelID) == true
+    }
+
+    /// After the delay a focused panel waits, so that a dock the user only
+    /// passes through keeps its output unread.
+    private func clearUnreadWhenSeen() async {
+        guard coordinatorPanelIsUnread, appIsActive, let panelID = location.panelID else { return }
+        try? await Task.sleep(nanoseconds: WorkspaceView.seenUnreadClearDelayNanoseconds)
+        guard Task.isCancelled == false, store.isAppActive, controller.dockShows(in: location.windowID) else { return }
+        _ = store.send(.markPanelNotificationsRead(workspaceID: location.workspaceID, panelID: panelID))
+    }
+}
+
+/// The dock's button in the window's toolbar, after the sidebar's. Toasty
+/// is golden while the chat is on screen and a gray outline while it is
+/// not; then a badge shows unread output, an approval or an error.
+struct CoordinatorDockToggleButton: View {
+    @ObservedObject var controller: CoordinatorController
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    @ObservedObject var store: AppStore
+    let windowID: UUID
+
+    var body: some View {
+        let location = controller.location
+        let window = store.window(id: windowID)
+        let chatOnScreen = window.map {
+            CoordinatorDockPresentation.chatOnScreen(window: $0, coordinator: location, chatAvailable: controller.chatIsAvailable)
+        } ?? false
+        let dockShows = controller.dockShows(in: windowID)
+        let status = CoordinatorDockPresentation.toggleIconStatus(mark: mark(location: location), chatOnScreen: chatOnScreen)
+        let title = CoordinatorDockPresentation.toggleTitle(dockShows: dockShows)
+        Button {
+            controller.toggleDock()
+        } label: {
+            ToastyIcon(
+                style: chatOnScreen ? .golden : .outline,
+                size: 14,
+                status: status,
+                badgeRingColor: ToastyTheme.chromeBackground
+            )
+            .frame(width: ToastyTheme.titlebarSidebarToggleButtonSize, height: ToastyTheme.titlebarSidebarToggleButtonSize)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(ToasttyKeyboardShortcuts.toggleCoordinatorDock.helpText(title))
+        .accessibilityLabel(title)
+        .accessibilityValue(SidebarCoordinatorPresentation.statusText(badgeMark(status)) ?? "")
+        .accessibilityIdentifier("titlebar.toggle.coordinator-dock")
+    }
+
+    private func mark(location: CoordinatorLocation?) -> SidebarCoordinatorPresentation.Mark {
+        guard let location, let workspace = store.state.workspacesByID[location.workspaceID] else { return .notRunning }
+        let selected = store.selectedWorkspaceID(in: windowID) == location.workspaceID
+        return SidebarCoordinatorPresentation.currentMark(
+            controller: controller,
+            sessionRuntimeStore: sessionRuntimeStore,
+            workspace: workspace,
+            readPanelID: selected ? workspace.focusedPanelID : (controller.dockShows(in: windowID) ? location.panelID : nil)
+        )
+    }
+
+    private func badgeMark(_ status: ToastyIcon.Status) -> SidebarCoordinatorPresentation.Mark {
+        switch status {
+        case .none: .quiet
+        case .working: .working
+        case .unread: .unread
+        case .needsApproval: .needsApproval
+        case .error: .error
+        }
+    }
+}

@@ -22,7 +22,7 @@ struct ToasttySharedDraft: Codable, Equatable, Sendable {
     var skippedItemsNotice: String? {
         guard skippedItemCount > 0 else { return nil }
         let items = skippedItemCount == 1 ? "1 shared item" : "\(skippedItemCount) shared items"
-        return "Toastty left out \(items). A session can start with up to 4 images, PDFs, or text files, 8 MB in total."
+        return "Toastty left out \(items). You can attach up to 4 images, PDFs, or text files, 8 MB in total."
     }
 }
 

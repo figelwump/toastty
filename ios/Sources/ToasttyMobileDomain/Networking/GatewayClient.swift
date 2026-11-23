@@ -108,6 +108,30 @@ public protocol GatewayClientProtocol: Sendable {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue
+    func finishedTasks() async throws -> RemoteFinishedTasks
+    func coordinatorAttachmentImage(
+        _ request: RemoteCoordinatorAttachmentImageRequest
+    ) async throws -> RemoteCoordinatorAttachmentImageResponse
 }
 
 public extension GatewayClientProtocol {
@@ -179,6 +203,60 @@ public extension GatewayClientProtocol {
     func startSession(
         _ request: RemoteSessionStartRequest
     ) async throws -> RemoteSessionStartResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func coordinatorQueue() async throws -> RemoteCoordinatorQueue {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func finishedTasks() async throws -> RemoteFinishedTasks {
+        throw GatewayFailure.invalidResponse
+    }
+
+    func coordinatorAttachmentImage(
+        _ request: RemoteCoordinatorAttachmentImageRequest
+    ) async throws -> RemoteCoordinatorAttachmentImageResponse {
         throw GatewayFailure.invalidResponse
     }
 }
@@ -528,6 +606,136 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         return try decodeVersioned(RemoteSessionStartResponse.self, from: response.body) {
             $0.protocolVersion
         }
+    }
+
+    public func taskAction(
+        _ request: RemoteTaskActionRequest
+    ) async throws -> RemoteTaskActionResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskActionPolicy.actionPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskActionResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+    public func taskCreateOptions(
+        _ request: RemoteTaskCreateOptionsRequest
+    ) async throws -> RemoteTaskCreateOptionsResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskCreatePolicy.optionsPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskCreateOptionsResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func taskArchiveCheck(
+        _ request: RemoteTaskArchiveCheckRequest
+    ) async throws -> RemoteTaskArchiveCheckResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteTaskActionPolicy.archiveCheckPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteTaskArchiveCheckResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    /// Uses the upload route when files are attached, as a session start
+    /// does, so the Mac authorizes the headers before it reads the body.
+    public func createTask(
+        _ request: RemoteTaskCreateRequest
+    ) async throws -> RemoteTaskCreateResponse {
+        var urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: request.attachments.isEmpty ? RemoteTaskCreatePolicy.createPath : RemoteTaskCreatePolicy.createWithAttachmentsPath,
+            body: try request.encodedForTransport(),
+            sendsOrigin: true
+        )
+        if !request.attachments.isEmpty { urlRequest.timeoutInterval = 150 }
+        let response = try await sendTransportRequest(urlRequest)
+        guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
+        return try decodeVersioned(RemoteTaskCreateResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    /// Uses the upload route when files are attached, as a task create
+    /// does, so the Mac authorizes the headers before it reads the body.
+    public func sendToCoordinator(
+        _ request: RemoteCoordinatorSendRequest
+    ) async throws -> RemoteCoordinatorSendResponse {
+        var urlRequest = try await makeNativeBearerRequest(
+            method: "POST",
+            path: request.attachments.isEmpty
+                ? RemoteCoordinatorSendPolicy.sendPath
+                : RemoteCoordinatorSendPolicy.sendWithAttachmentsPath,
+            body: try request.encodedForTransport(),
+            sendsOrigin: true
+        )
+        if !request.attachments.isEmpty { urlRequest.timeoutInterval = 150 }
+        let response = try await sendTransportRequest(urlRequest)
+        guard (200..<300).contains(response.statusCode) else { throw try classifyHTTPError(response) }
+        return try decodeVersioned(RemoteCoordinatorSendResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func readCoordinatorChat(
+        _ request: RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse {
+        let response = try await perform(
+            method: "POST",
+            path: RemoteCoordinatorChatReadPolicy.readPath,
+            body: try encode(request)
+        )
+        return try decodeVersioned(RemoteCoordinatorChatReadResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func coordinatorQuietDigests() async throws -> RemoteCoordinatorQuietDigests {
+        let response = try await perform(method: "GET", path: RemoteCoordinatorQuietDigestsPolicy.path)
+        return try decodeVersioned(RemoteCoordinatorQuietDigests.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    public func coordinatorQueue() async throws -> RemoteCoordinatorQueue {
+        let response = try await perform(method: "GET", path: RemoteCoordinatorQueuePolicy.path)
+        return try decodeVersioned(RemoteCoordinatorQueue.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    /// The Mac's recent Done and archived tasks, for the chips of links to
+    /// them. The caller reads them only when the task board names a
+    /// revision.
+    public func finishedTasks() async throws -> RemoteFinishedTasks {
+        let response = try await perform(method: "GET", path: RemoteFinishedTasksPolicy.path)
+        return try decodeVersioned(RemoteFinishedTasks.self, from: response.body) {
+            $0.protocolVersion
+        }
+    }
+
+    /// One image attached to a message in the coordinator's chat. Throws
+    /// the Mac's refusal as a `RemotePreviewError`. The caller checks the
+    /// Mac's `coordinatorAttachmentImages` capability first.
+    public func coordinatorAttachmentImage(
+        _ request: RemoteCoordinatorAttachmentImageRequest
+    ) async throws -> RemoteCoordinatorAttachmentImageResponse {
+        let response = try await perform(
+            method: "POST", path: RemoteCoordinatorAttachmentImagePolicy.path, body: try encode(request))
+        let decoded = try decodeVersioned(RemoteCoordinatorAttachmentImageResponse.self, from: response.body) {
+            $0.protocolVersion
+        }
+        if let error = decoded.error { throw error }
+        return decoded
     }
 
     public func preview(_ target: RemotePreviewTarget) async throws -> RemotePreviewContent {

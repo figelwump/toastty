@@ -12,8 +12,11 @@ struct ManagedAgentSkillsProvisionedNotice: Equatable, Sendable {
     let deliveredUserSkillCount: Int
 }
 
-struct ManagedCodexSkillsUnavailableNotice: Equatable, Sendable {
+/// A managed launch that did not give the agent Toastty's skills, for the
+/// banner over the window. Codex and Claude post it.
+struct ManagedAgentSkillsUnavailableNotice: Equatable, Sendable {
     let windowID: UUID
+    let agent: AgentKind
     let reasonCode: String
     let detail: String
 }
@@ -126,6 +129,7 @@ final class UserSkillsManagementModel: ObservableObject {
     private let existingSnapshotProvider: @Sendable () -> UserSkillPluginSnapshot?
     private let refreshProvider: @Sendable () throws -> UserSkillPluginSnapshot?
     private let revealFolder: @MainActor (URL) -> Void
+    private let revealFiles: @MainActor ([URL]) -> Void
     private let fileManager: FileManager
     private var task: Task<Void, Never>?
 
@@ -148,6 +152,7 @@ final class UserSkillsManagementModel: ObservableObject {
         existingSnapshotProvider: @escaping @Sendable () -> UserSkillPluginSnapshot?,
         refreshProvider: @escaping @Sendable () throws -> UserSkillPluginSnapshot?,
         revealFolder: (@MainActor (URL) -> Void)? = nil,
+        revealFiles: (@MainActor ([URL]) -> Void)? = nil,
         fileManager: FileManager = .default
     ) {
         userSkillsDirectoryPath = userSkillsDirectoryURL.path
@@ -156,6 +161,9 @@ final class UserSkillsManagementModel: ObservableObject {
         self.refreshProvider = refreshProvider
         self.revealFolder = revealFolder ?? { url in
             NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        self.revealFiles = revealFiles ?? { urls in
+            NSWorkspace.shared.activateFileViewerSelecting(urls)
         }
         self.fileManager = fileManager
     }
@@ -182,10 +190,33 @@ final class UserSkillsManagementModel: ObservableObject {
     static func statusDescription(for package: UserSkillPackage) -> String {
         switch package.status {
         case .accepted:
+            if let replacement = OldExampleSkills.replacements[package.name] {
+                return "Included · old example, replaced by \(replacement)"
+            }
             return "Included"
         case .excluded(let diagnostic):
             return diagnostic.displayMessage
         }
+    }
+
+    /// Included user skills that are old examples, which compete with the
+    /// built-in task skills.
+    var oldExampleSkills: [UserSkillPackage] {
+        OldExampleSkills.included(in: catalogState)
+    }
+
+    static func oldExampleSkillsWarning(count: Int) -> String {
+        let subject = count == 1 ? "1 old example skill competes" : "\(count) old example skills compete"
+        return "\(subject) with the built-in task skills."
+    }
+
+    static let oldExampleSkillsDetail = "Agents can pick them instead of toastty-task-start, and worktree-done merges with gh pr merge --auto, which tasks do not allow. Delete them from the skills folder."
+
+    /// Shows the old examples' folders in Finder, for the user to delete.
+    func revealOldExampleSkills() {
+        let urls = oldExampleSkills.map(\.sourceURL)
+        guard urls.isEmpty == false else { return }
+        revealFiles(urls)
     }
 
     /// Read-only pass: scan plus a verified read of the newest snapshot.

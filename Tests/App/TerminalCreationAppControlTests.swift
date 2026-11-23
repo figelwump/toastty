@@ -268,7 +268,6 @@ final class TerminalCreationAppControlTests: XCTestCase {
 
         XCTAssertTrue(router.sendAttemptsByPanelID.isEmpty)
         XCTAssertTrue(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty)
-        XCTAssertFalse(fixture.store.hasEverLaunchedAgent)
     }
 
     func testAsyncLaunchRejectsBusyStableAndExitedUnreadyTerminals() async throws {

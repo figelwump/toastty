@@ -193,6 +193,6 @@ struct TerminalPanelHeaderSearchBar: View {
 
     private func closeSearch() {
         _ = terminalRuntimeRegistry.endSearch(panelID: panelID)
-        terminalRuntimeRegistry.restoreTerminalFocusAfterSearch(panelID: panelID)
+        terminalRuntimeRegistry.takeKeyboardFocus(panelID: panelID)
     }
 }

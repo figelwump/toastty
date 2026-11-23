@@ -341,13 +341,17 @@ public struct RemoteSessionListSnapshot: Codable, Equatable, Sendable {
     public var conversations: [RemoteConversationSummary]
     public var generatedAt: Date
     public var workspaces: [RemoteWorkspaceSummary]
+    /// The Mac's task board while its task system is on; see
+    /// `RemoteGatewayCapability.tasks`.
+    public var tasks: RemoteTaskBoard?
 
     public init(projectionRunID: RemoteProjectionRunID, conversations: [RemoteConversationSummary],
-                generatedAt: Date, workspaces: [RemoteWorkspaceSummary] = []) {
+                generatedAt: Date, workspaces: [RemoteWorkspaceSummary] = [], tasks: RemoteTaskBoard? = nil) {
         self.projectionRunID = projectionRunID
         self.conversations = conversations
         self.generatedAt = generatedAt
         self.workspaces = workspaces
+        self.tasks = tasks
     }
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -355,14 +359,16 @@ public struct RemoteSessionListSnapshot: Codable, Equatable, Sendable {
         try container.encode(conversations, forKey: .conversations)
         try container.encode(generatedAt, forKey: .generatedAt)
         if !workspaces.isEmpty { try container.encode(workspaces, forKey: .workspaces) }
+        try container.encodeIfPresent(tasks, forKey: .tasks)
     }
-    private enum CodingKeys: String, CodingKey { case projectionRunID, conversations, generatedAt, workspaces }
+    private enum CodingKeys: String, CodingKey { case projectionRunID, conversations, generatedAt, workspaces, tasks }
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         projectionRunID = try container.decode(RemoteProjectionRunID.self, forKey: .projectionRunID)
         conversations = try container.decode([RemoteConversationSummary].self, forKey: .conversations)
         generatedAt = try container.decode(Date.self, forKey: .generatedAt)
         workspaces = try container.decodeIfPresent([RemoteWorkspaceSummary].self, forKey: .workspaces) ?? []
+        tasks = try container.decodeIfPresent(RemoteTaskBoard.self, forKey: .tasks)
     }
 }
 

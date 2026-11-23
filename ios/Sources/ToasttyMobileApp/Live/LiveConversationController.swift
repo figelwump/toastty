@@ -1,3 +1,4 @@
+import ConversationUI
 import Foundation
 import Observation
 import RemoteProtocol
@@ -56,6 +57,10 @@ final class LiveConversationController {
     private(set) var isLoadingOlder = false
     private(set) var prependAnchorID: ToasttyTranscriptRowID?
     private(set) var transcriptPresentation: ToasttyConversationPresentationState = .loading
+    /// The conversation is the coordinator's own, which the Mac names: its
+    /// chat shows the messages that Toastty typed as the Mac's coordinator
+    /// chat does.
+    private(set) var isCoordinatorChat = false
     private(set) var composerAuthority = ConversationComposerAuthority()
     private(set) var sendReconciliation = SendReconciliationState()
     private(set) var lastSendGateFailure: ConversationSendGateFailure?
@@ -72,6 +77,36 @@ final class LiveConversationController {
     /// Why the last Release from this phone left the Mac draft lock in place.
     /// Cleared when the lock ends or the user taps Release again.
     private(set) var localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal?
+    /// The coordinator chat's New line: where the messages that the user
+    /// has not read, on the Mac or here, start. `nil` in other chats and
+    /// with a Mac that does not share the chat's read point.
+    private(set) var coordinatorNewMessages: ToasttyNewMessagesMarker?
+    private(set) var chatReading = ToasttyCoordinatorChatReading()
+    /// The Mac shares the coordinator chat's read point with this phone.
+    private var supportsCoordinatorChatRead = false
+    /// The keys of the digests whose wake turn the coordinator marked
+    /// quiet, from the Mac. `nil` with a Mac that does not share them: then
+    /// no turn folds.
+    private(set) var quietDigestKeys: Set<String>?
+    /// The Mac serves the images attached to the coordinator chat's
+    /// messages: the chat shows them as thumbnails rather than names.
+    private(set) var showsCoordinatorAttachedImages = false
+    /// The coordinator's own queue, from a Mac that shares it, for this
+    /// conversation. `nil` in other chats and with an older Mac: the chat
+    /// then lists only the conversation's own queue, as before.
+    private(set) var coordinatorQueue: RemoteCoordinatorQueue?
+    /// This phone may let the coordinator's waiting messages go or remove
+    /// them: it has send access.
+    private var mayChangeCoordinatorQueue = false
+    /// The entries of the coordinator's own queue whose last Remove the
+    /// Mac answered `failed`: their rows say that they still wait.
+    private(set) var coordinatorRemoveFailures: Set<String> = []
+    /// The app is active. The chat is on screen while this controller
+    /// exists: it closes when another screen covers it.
+    private var isSceneActive = true
+    private var chatReadReportTask: Task<Void, Never>?
+    /// Reads of messages that arrive together go to the Mac together.
+    static let chatReadReportDelay: Duration = .seconds(1)
 
     private let runtime: any LiveConversationRuntime
     private let loadOlderAction: @Sendable () async -> Void
@@ -93,6 +128,9 @@ final class LiveConversationController {
     private let releaseLocalDraftAction: @Sendable (
         RemoteConversationLocalDraftReleaseRequest
     ) async throws -> RemoteConversationLocalDraftReleaseResponse?
+    private let readCoordinatorChatAction: @Sendable (
+        RemoteCoordinatorChatReadRequest
+    ) async throws -> RemoteCoordinatorChatReadResponse?
     private var stateTask: Task<Void, Never>?
     private var sendReconciliationTask: Task<Void, Never>?
     private var readAcknowledgementTask: Task<Void, Never>?
@@ -133,7 +171,10 @@ final class LiveConversationController {
         ) async throws -> RemoteConversationInterruptResponse? = { _ in nil },
         releaseLocalDraft: @escaping @Sendable (
             RemoteConversationLocalDraftReleaseRequest
-        ) async throws -> RemoteConversationLocalDraftReleaseResponse? = { _ in nil }
+        ) async throws -> RemoteConversationLocalDraftReleaseResponse? = { _ in nil },
+        readCoordinatorChat: @escaping @Sendable (
+            RemoteCoordinatorChatReadRequest
+        ) async throws -> RemoteCoordinatorChatReadResponse? = { _ in nil }
     ) {
         self.conversationID = conversationID
         self.runtime = runtime
@@ -146,6 +187,7 @@ final class LiveConversationController {
         updateQueueAction = updateQueue
         interruptAction = interrupt
         releaseLocalDraftAction = releaseLocalDraft
+        readCoordinatorChatAction = readCoordinatorChat
     }
 
     func start() async {
@@ -168,6 +210,8 @@ final class LiveConversationController {
     }
 
     func stop() {
+        // The chat closes: what the user read goes to the Mac now.
+        flushChatReadReport()
         stateTask?.cancel()
         stateTask = nil
         sendReconciliationTask?.cancel()
@@ -210,6 +254,12 @@ final class LiveConversationController {
         } else {
             outcome = .notEnqueued(.attachmentsUnsupported)
         }
+        if case .enqueued = outcome, readsCoordinatorChat {
+            // The user answered: what is above the composer is read.
+            chatReading.userSent(rows: transcriptPresentation.rows)
+            coordinatorNewMessages = nil
+            scheduleChatReadReport()
+        }
         guard runtimeRevision == submittedAtRuntimeRevision else { return outcome }
         switch outcome {
         case .enqueued:
@@ -224,24 +274,63 @@ final class LiveConversationController {
         return outcome
     }
 
-    /// Asks the Mac to drop one queued message. True only when the Mac
-    /// confirmed it was still queued; a message already typed or gone
-    /// returns false so the caller does not act on stale text.
+    /// Asks the Mac to drop one queued message, from whichever of the
+    /// coordinator's queues holds it. True only when the Mac confirmed it
+    /// was still queued; a message already typed or gone returns false so
+    /// the caller does not act on stale text. When the Mac could not remove
+    /// a message of the coordinator's own queue, its row stays and says so.
     func removeQueuedMessage(_ clientRequestID: String) async -> Bool {
+        let inCoordinatorQueue = coordinatorQueue?.entries.contains { $0.id == clientRequestID } == true
         let request = RemoteConversationQueueUpdateRequest(
             conversationID: RemoteConversationID(rawValue: conversationID),
-            action: .remove,
+            action: inCoordinatorQueue ? .coordinatorRemove : .remove,
             clientRequestID: clientRequestID
         )
-        guard let response = try? await updateQueueAction(request) else { return false }
-        return response.result == .updated
+        let result = try? await updateQueueAction(request)?.result
+        if inCoordinatorQueue {
+            noteCoordinatorRemove(clientRequestID, failed: result == .failed)
+        }
+        return result == .updated
     }
 
+    private func noteCoordinatorRemove(_ clientRequestID: String, failed: Bool) {
+        var failures = coordinatorRemoveFailures
+        if failed {
+            // Only a row that still shows can say so.
+            guard coordinatorQueue?.entries.contains(where: { $0.id == clientRequestID }) == true else { return }
+            failures.insert(clientRequestID)
+        } else {
+            failures.remove(clientRequestID)
+        }
+        guard failures != coordinatorRemoveFailures else { return }
+        coordinatorRemoveFailures = failures
+        guard isCoordinatorChat else { return }
+        change = .metadataOnly
+        refreshTranscriptPresentation()
+    }
+
+    /// A message that waits in the Mac's queue, as this phone sent it. Its
+    /// bubble can show other text, such as a reply without its quote.
+    func queuedMessageText(_ clientRequestID: String) -> String? {
+        inputControl?.queuedMessages.first { $0.clientRequestID == clientRequestID }?.text
+    }
+
+    /// Lets the held messages go. With a Mac that shares the coordinator's
+    /// own queue, one Resume lets go everything that the Stop holds, in both
+    /// of the coordinator's queues, by the Stop's token; before this phone
+    /// has the token, nothing is sent, so the Resume never lets go only the
+    /// conversation's queue.
     func resumeQueue() async {
-        let request = RemoteConversationQueueUpdateRequest(
-            conversationID: RemoteConversationID(rawValue: conversationID),
-            action: .resume
-        )
+        let conversation = RemoteConversationID(rawValue: conversationID)
+        let request: RemoteConversationQueueUpdateRequest
+        if let coordinatorQueue {
+            guard let token = coordinatorQueue.heldSetToken else { return }
+            request = RemoteConversationQueueUpdateRequest(
+                conversationID: conversation, action: .coordinatorResume, heldSetToken: token
+            )
+        } else {
+            request = RemoteConversationQueueUpdateRequest(conversationID: conversation, action: .resume)
+        }
         _ = try? await updateQueueAction(request)
     }
 
@@ -297,6 +386,70 @@ final class LiveConversationController {
             localDraftReleaseRefusal = .failed
         }
         return result
+    }
+
+    func consumeIsCoordinatorChat(_ isCoordinatorChat: Bool) {
+        guard self.isCoordinatorChat != isCoordinatorChat else { return }
+        self.isCoordinatorChat = isCoordinatorChat
+        change = .rebuild
+        refreshTranscriptPresentation(contentChanged: true)
+    }
+
+    /// Whether the Mac shares the coordinator chat's read point, and the
+    /// read point it sent last.
+    func consumeCoordinatorChatRead(isSupported: Bool, readPoint: RemoteCoordinatorChatReadPoint?) {
+        guard supportsCoordinatorChatRead != isSupported || chatReading.macReadPoint != readPoint else { return }
+        supportsCoordinatorChatRead = isSupported
+        chatReading.consumeMacReadPoint(readPoint)
+        updateChatReading()
+    }
+
+    /// The quiet wake turns that the Mac shares. A mark that comes or goes
+    /// folds or opens its turn in place, as a new row would change it,
+    /// without moving the reader.
+    func consumeCoordinatorQuietDigests(_ keys: Set<String>?) {
+        guard quietDigestKeys != keys else { return }
+        quietDigestKeys = keys
+        guard isCoordinatorChat else { return }
+        change = .append
+        refreshTranscriptPresentation(contentChanged: true)
+    }
+
+    /// The coordinator's own queue, as the Mac last answered, and whether
+    /// this phone may change it. A queue for another conversation, from an
+    /// earlier agent of the coordinator, is not this chat's.
+    func consumeCoordinatorQueue(_ queue: RemoteCoordinatorQueue?, mayChange: Bool) {
+        let queue = queue.flatMap { $0.conversationID?.rawValue == conversationID ? $0 : nil }
+        guard coordinatorQueue != queue || mayChangeCoordinatorQueue != mayChange else { return }
+        coordinatorQueue = queue
+        mayChangeCoordinatorQueue = mayChange
+        // A failed Remove is said on its row while the row shows.
+        let shown = Set(queue?.entries.map(\.id) ?? [])
+        coordinatorRemoveFailures.formIntersection(shown)
+        guard isCoordinatorChat else { return }
+        change = .metadataOnly
+        refreshTranscriptPresentation()
+    }
+
+    /// Whether the Mac serves the images attached to the coordinator
+    /// chat's messages. The bubbles that have files change in place.
+    func consumeCoordinatorAttachedImages(isSupported: Bool) {
+        guard showsCoordinatorAttachedImages != isSupported else { return }
+        showsCoordinatorAttachedImages = isSupported
+        guard isCoordinatorChat else { return }
+        change = .append
+        refreshTranscriptPresentation(contentChanged: true)
+    }
+
+    /// The app became active, or stopped being active. Coming back places
+    /// the coordinator chat's New line again, as on the Mac.
+    func consumeSceneActivity(isActive: Bool) {
+        guard isSceneActive != isActive else { return }
+        isSceneActive = isActive
+        if isActive { chatReading.userCameBack() }
+        updateChatReading()
+        // iOS suspends the app soon after it leaves the foreground.
+        if isActive == false { flushChatReadReport() }
     }
 
     func consumeInputControl(_ control: RemoteConversationInputControl?) {
@@ -600,13 +753,31 @@ final class LiveConversationController {
         }
     }
 
+    /// The messages this phone sent that have no row yet, then the
+    /// messages that wait on the Mac, in the order they are typed. In the
+    /// coordinator's chat that is both of the coordinator's queues; an
+    /// entry whose echo is a row already is left out.
+    private var sendItemsForPresentation: [ToasttySendPresentationItem] {
+        var shownQueue = isCoordinatorChat ? self.coordinatorQueue : nil
+        shownQueue?.entries.removeAll { canonicalRequestIDs.contains($0.id) }
+        return ToasttySendPresentationAdapter.makeItems(
+            from: sendReconciliationForPresentation,
+            inputControl: inputControl,
+            readsCoordinatorMessages: isCoordinatorChat,
+            coordinatorQueue: shownQueue.map {
+                .init(
+                    queue: $0,
+                    mayChange: mayChangeCoordinatorQueue && inputControl?.canQueue == true,
+                    removeFailures: coordinatorRemoveFailures
+                )
+            }
+        )
+    }
+
     private func refreshTranscriptPresentation(contentChanged: Bool = false) {
         guard contentChanged else {
             transcriptPresentation = transcriptPresentation.updatingMetadata(
-                sendItems: ToasttySendPresentationAdapter.makeItems(
-                    from: sendReconciliationForPresentation,
-                    inputControl: inputControl
-                ),
+                sendItems: sendItemsForPresentation,
                 phase: transcriptPhase,
                 revision: transcriptRevision,
                 historyTruncated: historyTruncated,
@@ -614,6 +785,7 @@ final class LiveConversationController {
                 isLoadingOlder: isLoadingOlder,
                 prependAnchorID: prependAnchorID
             )
+            updateChatReading()
             return
         }
         transcriptPresentation = ToasttyConversationPresentationAdapter.makeState(
@@ -623,13 +795,96 @@ final class LiveConversationController {
             phase: transcriptPhase,
             revision: transcriptRevision,
             historyTruncated: historyTruncated,
-            sendItems: ToasttySendPresentationAdapter.makeItems(
-                from: sendReconciliationForPresentation,
-                inputControl: inputControl
-            ),
+            sendItems: sendItemsForPresentation,
             hasOlder: hasOlder,
             isLoadingOlder: isLoadingOlder,
-            prependAnchorID: prependAnchorID
+            prependAnchorID: prependAnchorID,
+            coordinatorMessages: isCoordinatorChat
+                ? ToasttyConversationPresentationAdapter.coordinatorMessages(
+                    quietDigestKeys: quietDigestKeys, showsAttachedImages: showsCoordinatorAttachedImages)
+                : nil
+        )
+        updateChatReading()
+    }
+
+    // MARK: - The coordinator chat's read point
+
+    /// The coordinator's chat, with a Mac that shares its read point.
+    var readsCoordinatorChat: Bool {
+        isCoordinatorChat && supportsCoordinatorChatRead
+    }
+
+    /// Places or keeps the New line, and notes what the user read. Only
+    /// live rows count, as on the Mac, where rows that are still being read
+    /// from the transcript do not.
+    private func updateChatReading() {
+        guard readsCoordinatorChat else {
+            if coordinatorNewMessages != nil { coordinatorNewMessages = nil }
+            return
+        }
+        guard phase == .live else { return }
+        let step = chatReading.update(
+            rows: transcriptPresentation.rows,
+            hasOlder: hasOlder,
+            isLoadingOlder: isLoadingOlder,
+            isReading: isSceneActive
+        )
+        if coordinatorNewMessages != chatReading.newMessages {
+            coordinatorNewMessages = chatReading.newMessages
+        }
+        if step == .loadOlder {
+            Task { @MainActor [weak self] in await self?.loadOlder() }
+        }
+        scheduleChatReadReport()
+    }
+
+    /// Sends this phone's newest read to the Mac after a short wait, so
+    /// that the messages that arrive together take one request.
+    private func scheduleChatReadReport() {
+        guard chatReadReportTask == nil,
+              readsCoordinatorChat,
+              chatReading.report(in: transcriptPresentation.rows) != nil else { return }
+        chatReadReportTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.chatReadReportDelay)
+            guard let self, Task.isCancelled == false else { return }
+            let answered = await sendChatReadReport()
+            guard Task.isCancelled == false else { return }
+            chatReadReportTask = nil
+            // A read that came meanwhile. A failed send waits for the next
+            // read, so a lost connection does not send in a loop.
+            if answered { scheduleChatReadReport() }
+        }
+    }
+
+    private func sendChatReadReport() async -> Bool {
+        guard let report = chatReading.report(in: transcriptPresentation.rows) else { return true }
+        do {
+            guard try await readCoordinatorChatAction(chatReadRequest(report)) != nil else { return false }
+            // The Mac moved its read point, had it, or cannot take it.
+            chatReading.didReport(report)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Sends the newest read now: the chat closes, or the app leaves the
+    /// foreground.
+    private func flushChatReadReport() {
+        chatReadReportTask?.cancel()
+        chatReadReportTask = nil
+        guard readsCoordinatorChat, let report = chatReading.report(in: transcriptPresentation.rows) else { return }
+        let request = chatReadRequest(report)
+        let action = readCoordinatorChatAction
+        Task { _ = try? await action(request) }
+    }
+
+    private func chatReadRequest(_ report: ToasttyCoordinatorChatReading.Report) -> RemoteCoordinatorChatReadRequest {
+        RemoteCoordinatorChatReadRequest(
+            conversationID: RemoteConversationID(rawValue: conversationID),
+            eventID: report.eventID,
+            projectionRunID: RemoteProjectionRunID(rawValue: report.rowID.projectionRunID),
+            projectionGeneration: report.rowID.projectionGeneration
         )
     }
 
@@ -740,7 +995,8 @@ final class LiveConversationController {
                 clientRequestID: record.clientRequestID,
                 text: record.text,
                 projectionRunID: record.projectionRunID,
-                deliveryState: .pending(.accepted)
+                deliveryState: .pending(.accepted),
+                deliveryMode: record.deliveryMode
             )
         })
     }

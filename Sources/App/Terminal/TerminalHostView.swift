@@ -19,12 +19,35 @@ private extension NSView {
     }
 }
 
+/// What a terminal's view did with one key press. It names the key only by
+/// its code and flags; a record made from it must not name typed characters.
+struct TerminalKeyPress {
+    let keyCode: UInt16
+    let modifierFlags: NSEvent.ModifierFlags
+    let isRepeat: Bool
+    /// How the press counts for the protection of a draft in an agent's prompt.
+    let localInputKind: TerminalLocalInputKind
+    /// The view held unfinished composed text when the key came.
+    let hadComposedText: Bool
+    /// The press went to Ghostty as a part of composing. Ghostty then sends
+    /// no arrow key, Return or Escape to the program.
+    var composing = false
+    /// The modifiers that went to Ghostty with the key, as `ghostty_input_mods_e`.
+    /// `nil` when the view had no surface, so the key went nowhere.
+    var ghosttyModifiers: UInt32?
+    /// The press went to Ghostty with text, not only as a key code.
+    var sentText = false
+    var ghosttyHandled: Bool?
+}
+
 final class TerminalHostView: NSView {
     var activatePanelIfNeeded: (() -> Bool)?
     var openCommandClickLink: ((URL, Bool) -> Bool)?
     var resolveFileDrop: (([URL]) -> PreparedFileDrop?)?
     var performFileDrop: ((PreparedFileDrop) -> Bool)?
     var openSearchSelectionURL: ((URL) -> Bool)?
+    /// Opens the quick entry panel with the selected text attached.
+    var newTaskFromSelection: ((String) -> Void)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
     /// when the host view finishes attaching or becomes visible again.
     var requestFirstResponderIfNeeded: (() -> Void)?
@@ -33,6 +56,9 @@ final class TerminalHostView: NSView {
     /// invalidate an open remote-send epoch. Must stay O(1): the owning
     /// controller forwards a bare panel identity, no per-keystroke work here.
     var handleLocalInput: ((TerminalLocalInputKind) -> Void)?
+    /// Says what this view did with a key press, for an owner that keeps a
+    /// record of one terminal's keys. Must stay cheap: it runs for each key.
+    var reportKeyPress: ((TerminalKeyPress) -> Void)?
     private var pendingFileDrop: PreparedFileDrop?
     private var pendingVisibilitySyncGeneration = 0
     private var mouseTrackingArea: NSTrackingArea?
@@ -56,6 +82,7 @@ final class TerminalHostView: NSView {
         .urlReadingFileURLsOnly: true,
     ]
     private static let searchWithGoogleMenuItemTitle = "Search with Google"
+    static let newTaskFromSelectionMenuItemTitle = "New Task from Selection…"
     private static let commandClickDragCancellationDistance: CGFloat = 4
 
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -169,6 +196,7 @@ final class TerminalHostView: NSView {
         let result = super.resignFirstResponder()
         #if TOASTTY_HAS_GHOSTTY_KIT
         if result {
+            discardUnfinishedComposition()
             syncSurfaceFocus(
                 false,
                 reason: "resign_first_responder"
@@ -177,6 +205,21 @@ final class TerminalHostView: NSView {
         #endif
         return result
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    /// Ends a composed character that the person did not finish, such as a
+    /// dead key or an input method's candidate. AppKit does not end it when
+    /// the keyboard goes to another view. While it stays, Ghostty takes
+    /// every arrow key, Return and Escape for a part of the composing and
+    /// sends none of them to the program: the terminal looks dead when the
+    /// keyboard comes back.
+    private func discardUnfinishedComposition() {
+        guard markedText.length > 0 else { return }
+        inputContext?.discardMarkedText()
+        unmarkText()
+        ToasttyLog.info("Ended unfinished composed text in a terminal that lost the keyboard", category: .input)
+    }
+    #endif
 
     // AppKit sends these callbacks for ancestor visibility changes as well.
     override func viewDidHide() {
@@ -1028,6 +1071,13 @@ final class TerminalHostView: NSView {
         _ = invokeGhosttyBindingAction("paste_from_clipboard", on: ghosttySurface)
     }
 
+    @objc func createTaskFromSelection(_ sender: Any?) {
+        // The menu item carries the selection read when the menu opened;
+        // a later click must not depend on the selection still being there.
+        guard let selectionText = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        newTaskFromSelection?(selectionText)
+    }
+
     @objc func searchWithGoogle(_ sender: Any?) {
         guard let ghosttySurface,
               let selectedText = selectedText(from: ghosttySurface) else {
@@ -1075,15 +1125,32 @@ final class TerminalHostView: NSView {
                 charactersIgnoringModifiers: event.charactersIgnoringModifiers
             ) == .controlC
             && isUnboundKey(event, action: action)
+        let kind: TerminalLocalInputKind
         if isPlainControlC {
             // Inspect the existing prompt before the interrupt can synthesize idle.
+            kind = .controlC
             handleLocalInput?(.controlC)
             notifyLocalInterruptIfNeeded(event, action: action)
         } else {
             notifyLocalInterruptIfNeeded(event, action: action)
-            handleLocalInput?(.key)
+            let unmodified = markedText.length == 0
+                && event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+            switch (unmodified, event.keyCode) {
+            case (true, 36), (true, 53), (true, 76): kind = .dialogAnswer
+            case (true, 123...126): kind = .dialogNavigation
+            default: kind = .key
+            }
+            handleLocalInput?(kind)
         }
+        var keyPress = TerminalKeyPress(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
+            isRepeat: event.isARepeat,
+            localInputKind: kind,
+            hadComposedText: markedText.length > 0
+        )
         guard let ghosttySurface else {
+            reportKeyPress?(keyPress)
             super.keyDown(with: event)
             return
         }
@@ -1098,29 +1165,38 @@ final class TerminalHostView: NSView {
         interpretKeyEvents([translationEvent])
         syncPreedit(clearIfNeeded: markedTextBefore)
 
+        keyPress.ghosttyModifiers = Self.ghosttyModifierFlags(for: event.modifierFlags).rawValue
         if let keyTextAccumulator, keyTextAccumulator.isEmpty == false {
+            var handled = true
             for text in keyTextAccumulator {
-                _ = forwardGhosttyKeyEvent(
+                handled = forwardGhosttyKeyEvent(
                     keyCode: event.keyCode,
                     modifierFlags: event.modifierFlags,
                     action: action,
                     text: text,
                     unshiftedCodepoint: Self.ghosttyUnshiftedCodepoint(for: event),
                     translationModifierFlags: translationEvent.modifierFlags
-                )
+                ) && handled
             }
+            keyPress.sentText = true
+            keyPress.ghosttyHandled = handled
+            reportKeyPress?(keyPress)
             return
         }
 
-        _ = forwardGhosttyKeyEvent(
+        let text = Self.ghosttyText(for: translationEvent)
+        keyPress.sentText = text?.isEmpty == false
+        keyPress.composing = markedText.length > 0 || markedTextBefore
+        keyPress.ghosttyHandled = forwardGhosttyKeyEvent(
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
             action: action,
-            text: Self.ghosttyText(for: translationEvent),
+            text: text,
             unshiftedCodepoint: Self.ghosttyUnshiftedCodepoint(for: event),
             translationModifierFlags: translationEvent.modifierFlags,
-            composing: markedText.length > 0 || markedTextBefore
+            composing: keyPress.composing
         )
+        reportKeyPress?(keyPress)
     }
 
     override func keyUp(with event: NSEvent) {
@@ -1468,6 +1544,20 @@ final class TerminalHostView: NSView {
             )
             searchItem.target = self
             menu.addItem(searchItem)
+        }
+
+        if newTaskFromSelection != nil,
+           let selectionText,
+           Self.hasCopyableSelectionText(selectionText) {
+            menu.addItem(.separator())
+            let taskItem = NSMenuItem(
+                title: Self.newTaskFromSelectionMenuItemTitle,
+                action: #selector(createTaskFromSelection(_:)),
+                keyEquivalent: ""
+            )
+            taskItem.target = self
+            taskItem.representedObject = selectionText
+            menu.addItem(taskItem)
         }
 
         return menu

@@ -429,6 +429,8 @@ public final class LinuxWindowController {
         for binding in LinuxCommandTable.all {
             let id = binding.id
             switch id {
+            case "task.new", "window.toggle-tasks-view":
+                enable(id, false)
             case "workspace.close", "workspace.rename", "workspace.tab.create", "workspace.tab.rename", "workspace.tab.close",
                  "layout.split.horizontal", "layout.split.vertical", "layout.split.left", "layout.split.up",
                  "panel.close", "panel.focus-mode.toggle", "window.toggle-right-panel":

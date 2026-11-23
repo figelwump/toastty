@@ -1,3 +1,4 @@
+@testable import ConversationUI
 import Foundation
 import RemoteProtocol
 import XCTest
@@ -326,6 +327,17 @@ final class ToasttyComposerPresentationTests: XCTestCase {
                 .optimistic(response: .duplicate),
             ]
         )
+        // The sending bubble carries the caption its transcript row will
+        // show, so the bubble keeps its height when the row replaces it.
+        XCTAssertEqual(items.map(\.sentCaption), ["sent remotely", "sent remotely", "sent remotely"])
+        let other = ToasttySendPresentationAdapter.makeItems(from: .init(records: [
+            record("queued", text: "later", .pending(.queued(position: 1))),
+            SendReconciliationRecord(
+                clientRequestID: "steered", text: "OK", projectionRunID: nil,
+                deliveryState: .pending(.accepted), deliveryMode: .steer
+            ),
+        ]))
+        XCTAssertEqual(other.map(\.sentCaption), ["from queue", "steered"])
     }
 
     func testExactConfirmationRemovesOptimisticPresentationSoCanonicalEchoStandsAlone() {
@@ -605,6 +617,162 @@ extension ToasttyComposerPresentationTests {
         // Attachments cannot be typed into a running turn, so the row offers no Steer.
         XCTAssertEqual(items[3].content, .queued(.init(position: 2, attachmentCount: 2, isPaused: true, canSteer: false)))
         XCTAssertEqual(items[3].text, "second")
+    }
+
+    /// The coordinator's chat lists both of its queues in the order the
+    /// messages go once nothing is held: the conversation's, then the
+    /// coordinator's held messages, then its waiting ones. The one Resume
+    /// sits on the first held row, here the coordinator's, and counts every
+    /// held message. A coordinator row offers Remove, never Edit or Steer.
+    /// A queued message's own pending record does not show twice.
+    func testTheCoordinatorsTwoQueuesListAsOneWithOneResume() {
+        let state = SendReconciliationState(records: [
+            record("chat-1", text: "first", .pending(.queued(position: 1))),
+        ])
+        let control = RemoteConversationInputControl(
+            turnEpoch: turnEpoch, canQueue: true, canSteer: true, canInterrupt: true,
+            queuedMessages: [RemoteQueuedMessage(clientRequestID: "chat-1", text: "first", enqueuedAt: Date())]
+        )
+        let queue = RemoteCoordinatorQueue(
+            revision: "r", conversationID: RemoteConversationID(rawValue: UUID()), heldSetToken: "stop",
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "held-1", text: "Held one", fileNames: ["a.txt", "b.png"], isHeld: true),
+                RemoteCoordinatorQueueEntry(id: "held-2", text: "Yes.", quote: "Merge it?", quoteTime: "9:41", isHeld: true),
+                RemoteCoordinatorQueueEntry(id: "waiting-1", text: "Later"),
+            ]
+        )
+
+        let items = ToasttySendPresentationAdapter.makeItems(
+            from: state, inputControl: control, readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: true)
+        )
+
+        XCTAssertEqual(items.map(\.id), ["chat-1", "held-1", "held-2", "waiting-1"])
+        let queued = items.compactMap { item -> ToasttyQueuedSendPresentation? in
+            guard case .queued(let queued) = item.content else { return nil }
+            return queued
+        }
+        XCTAssertEqual(queued.map(\.position), [1, 2, 3, 4])
+        XCTAssertEqual(queued.map(\.isPaused), [false, true, true, false])
+        XCTAssertEqual(queued.map(\.resumeTitle), [nil, "Resume all 2", nil, nil])
+        XCTAssertEqual(queued.map(\.canEdit), [true, false, false, false])
+        XCTAssertEqual(queued.map(\.canSteer), [true, false, false, false])
+        XCTAssertEqual(queued.map(\.canChange), [true, true, true, true])
+        XCTAssertEqual(queued[1].attachmentCount, 2)
+        XCTAssertEqual(items[2].quote, ToasttyMessageQuote(text: "Merge it?", timeText: "9:41"))
+
+        // A Stop reaches the session list before the phone reads its token:
+        // no row offers Resume until then.
+        var beforeTheRead = queue
+        beforeTheRead.heldSetToken = nil
+        var heldControl = control
+        heldControl.isQueuePaused = true
+        let early = ToasttySendPresentationAdapter.makeItems(
+            from: state, inputControl: heldControl, readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: beforeTheRead, mayChange: true)
+        )
+        XCTAssertTrue(early.allSatisfy { item in
+            guard case .queued(let queued) = item.content else { return true }
+            return queued.resumeTitle == nil
+        })
+
+        // Without the coordinator's queue, each paused row keeps Send next.
+        var paused = control
+        paused.isQueuePaused = true
+        let single = ToasttySendPresentationAdapter.makeItems(from: state, inputControl: paused)
+        guard case .queued(let alone) = single.first?.content else { return XCTFail("The message waits") }
+        XCTAssertEqual(alone.resumeTitle, "Send next")
+        XCTAssertTrue(alone.canEdit)
+    }
+
+    /// A row of the coordinator's own queue warns when Toastty on the Mac
+    /// quit while it typed the message, and says when the Mac could not
+    /// remove it. An entry from a Mac that sets no mark has neither.
+    func testACoordinatorRowWarnsAboutInterruptedTypingAndAFailedRemove() {
+        let queue = RemoteCoordinatorQueue(
+            revision: "r", conversationID: RemoteConversationID(rawValue: UUID()), heldSetToken: "relaunch",
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "interrupted", text: "Create the task", isHeld: true, typingWasInterrupted: true),
+                RemoteCoordinatorQueueEntry(id: "held", text: "Held", isHeld: true),
+                RemoteCoordinatorQueueEntry(id: "kept", text: "Later"),
+            ]
+        )
+
+        let items = ToasttySendPresentationAdapter.makeItems(
+            from: SendReconciliationState(), readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: true, removeFailures: ["kept", "gone"])
+        )
+
+        let queued = items.compactMap { item -> ToasttyQueuedSendPresentation? in
+            guard case .queued(let queued) = item.content else { return nil }
+            return queued
+        }
+        XCTAssertEqual(items.map(\.id), ["interrupted", "held", "kept"])
+        XCTAssertEqual(queued.map(\.warning), [ToasttySendPresentationAdapter.typingInterruptedWarning, nil, nil])
+        XCTAssertEqual(queued.map(\.actionFailure), [nil, nil, ToasttySendPresentationAdapter.removeFailedNotice])
+        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarning.contains("If the message is there, choose Remove"))
+        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarning.contains("If it is not, choose Resume to send it"))
+        // The interrupted row keeps the one Resume and its Remove.
+        XCTAssertEqual(queued.map(\.resumeTitle), ["Resume all 2", nil, nil])
+        XCTAssertTrue(queued.allSatisfy(\.canChange))
+
+        // A phone that cannot change the queue has neither: the warning
+        // points to the Mac's chat.
+        let readOnly = ToasttySendPresentationAdapter.makeItems(
+            from: SendReconciliationState(), readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: false)
+        ).compactMap { item -> ToasttyQueuedSendPresentation? in
+            guard case .queued(let queued) = item.content else { return nil }
+            return queued
+        }
+        XCTAssertEqual(readOnly.first?.warning, ToasttySendPresentationAdapter.typingInterruptedWarningForTheMac)
+        XCTAssertTrue(ToasttySendPresentationAdapter.typingInterruptedWarningForTheMac.contains(
+            "in the Mac's chat, choose Remove if the message is there, or Send next if it is not"
+        ))
+        XCTAssertTrue(readOnly.allSatisfy { $0.canChange == false && $0.resumeTitle == nil })
+    }
+
+    /// A digest or a message from `coordinator send` that waits in the
+    /// coordinator's queue shows as its row will: the digest's line and the
+    /// sender's card, not Toastty's raw text. A digest that the Mac
+    /// shortened lost lines, so its line gives no count. The user's own
+    /// message stays a bubble.
+    func testAWaitingDigestOrSendersMessageShowsAsItsRowWill() throws {
+        let digest = [
+            "\(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.",
+            "- [Fix the unread dot](toastty://task/1): needsYou (review) at 2026-11-19T22:01:04Z",
+            "- [Ship the release](toastty://task/2): running at 2026-11-19T22:01:09Z",
+        ].joined(separator: "\n")
+        let queue = RemoteCoordinatorQueue(
+            revision: "r", conversationID: RemoteConversationID(rawValue: UUID()), heldSetToken: nil,
+            entries: [
+                RemoteCoordinatorQueueEntry(id: "digest", text: digest),
+                RemoteCoordinatorQueueEntry(id: "shortened", text: digest, isTextShortened: true),
+                RemoteCoordinatorQueueEntry(id: "sender", text: "Checks passed.", sender: "task Fix the unread dot"),
+                RemoteCoordinatorQueueEntry(id: "own", text: "Later"),
+            ]
+        )
+
+        let items = ToasttySendPresentationAdapter.makeItems(
+            from: SendReconciliationState(), readsCoordinatorMessages: true,
+            coordinatorQueue: .init(queue: queue, mayChange: true)
+        )
+
+        XCTAssertEqual(items.map(\.id), ["digest", "shortened", "sender", "own"])
+        let line = try XCTUnwrap(items[0].hostMessage)
+        XCTAssertTrue(line.isLine)
+        XCTAssertEqual(line.summary, "Toastty · 2 updates · waiting")
+        XCTAssertEqual(line.title, "Toastty · 2 updates")
+        XCTAssertEqual(items[1].hostMessage?.summary, "Toastty · waiting")
+        let card = try XCTUnwrap(items[2].hostMessage)
+        XCTAssertEqual(card.style, .sender(name: "task Fix the unread dot", timeText: "waiting"))
+        XCTAssertEqual(card.text, "Checks passed.")
+        XCTAssertNil(items[3].hostMessage)
+        // Remove still acts on the queue's entry.
+        XCTAssertTrue(items.allSatisfy { item in
+            guard case .queued(let queued) = item.content else { return false }
+            return queued.canChange && queued.canEdit == false
+        })
     }
 
     func testQueueRejectionReceiptsExplainTheQueue() {

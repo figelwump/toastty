@@ -125,6 +125,15 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(hooks["SessionStart"])
         XCTAssertNotNil(hooks["UserPromptSubmit"])
         XCTAssertNotNil(hooks["Stop"])
+        // A turn that an API error ends fires StopFailure in place of Stop.
+        // No matcher: every error type ends the turn.
+        let stopFailureEntries = try XCTUnwrap(hooks["StopFailure"] as? [[String: Any]])
+        XCTAssertEqual(stopFailureEntries.count, 1)
+        XCTAssertNil(stopFailureEntries[0]["matcher"])
+        XCTAssertEqual(
+            (stopFailureEntries[0]["hooks"] as? [[String: Any]])?.first?["command"] as? String,
+            ((hooks["Stop"] as? [[String: Any]])?.last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
+        )
         XCTAssertNotNil(hooks["SubagentStart"])
         XCTAssertNotNil(hooks["SubagentStop"])
         XCTAssertNotNil(hooks["TeammateIdle"])

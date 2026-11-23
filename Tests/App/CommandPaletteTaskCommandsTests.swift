@@ -1,0 +1,209 @@
+import CoreState
+import Foundation
+import Testing
+@testable import ToasttyApp
+
+/// The command palette's task commands through the real palette handler,
+/// store, reducer, task coordinator and board, with the start-work
+/// fixture's git repository and fake agents.
+@MainActor
+struct CommandPaletteTaskCommandsTests {
+    typealias Fixture = TaskStartWorkTests.Fixture
+
+    /// `gh` that never answers, so stages come from links and the record.
+    private struct OfflineGitHub: WorkspaceMergeCommandRunning {
+        func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
+            WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
+        }
+    }
+
+    @MainActor
+    final class Harness {
+        let fixture: Fixture
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let board: TaskBoardStore
+        private(set) var actions: CommandPaletteActionHandler!
+        var failures: [String] = []
+        var openedURLs: [URL] = []
+        /// The answer to the Complete dialog.
+        var confirmsComplete = true
+        private(set) var completeQuestions: [TaskCoordinator.CompleteCheck] = []
+
+        init() throws {
+            fixture = try Fixture()
+            board = TaskBoardStore(
+                coordinator: fixture.coordinator,
+                store: fixture.store,
+                sessionRuntimeStore: sessionRuntimeStore,
+                pullRequests: PullRequestStateCache(runner: OfflineGitHub()),
+                refreshInterval: nil,
+                releaseCheckInterval: nil
+            )
+            fixture.coordinator.board = board
+            sessionRuntimeStore.taskCoordinator = fixture.coordinator
+
+            let store = fixture.store
+            let runtimeRegistry = TerminalRuntimeRegistry()
+            runtimeRegistry.bind(store: store)
+            let profiles = TerminalProfileStore(
+                fileManager: .default,
+                homeDirectoryPath: fixture.repository.root.path,
+                environment: [:]
+            )
+            let taskActions = CommandPaletteTaskActions(
+                store: store,
+                sessionRuntimeStore: sessionRuntimeStore,
+                openURL: { [unowned self] in openedURLs.append($0) },
+                presentFailure: { [unowned self] title, message in failures.append("\(title): \(message)") },
+                confirmComplete: { [unowned self] _, check in
+                    completeQuestions.append(check)
+                    return confirmsComplete
+                },
+                // Runs at once instead of after the palette closes.
+                afterPaletteCloses: { $0() }
+            )
+            actions = CommandPaletteActionHandler(
+                store: store,
+                splitLayoutCommandController: SplitLayoutCommandController(store: store),
+                focusedPanelCommandController: FocusedPanelCommandController(
+                    store: store,
+                    runtimeRegistry: runtimeRegistry,
+                    slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+                ),
+                terminalRuntimeRegistry: runtimeRegistry,
+                sessionRuntimeStore: sessionRuntimeStore,
+                agentLaunchService: AgentLaunchService(
+                    store: store,
+                    terminalCommandRouter: runtimeRegistry,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    agentCatalogProvider: AgentCatalogStore(fileManager: .default, homeDirectoryPath: fixture.repository.root.path)
+                ),
+                terminalProfilesMenuController: TerminalProfilesMenuController(
+                    store: store,
+                    terminalRuntimeRegistry: runtimeRegistry,
+                    terminalProfileProvider: profiles,
+                    installShellIntegrationAction: {},
+                    openProfilesConfigurationAction: {}
+                ),
+                supportsConfigurationReload: { true },
+                reloadConfigurationAction: {},
+                openLocalDocumentAction: { _, _ in false },
+                taskActions: taskActions
+            )
+        }
+
+        var windowID: UUID { fixture.store.state.windows[0].id }
+        var window: WindowState { fixture.store.state.windows[0] }
+
+        func commands() -> [PaletteCommandDescriptor] {
+            CommandPaletteCatalog.commands(
+                originWindowID: windowID,
+                actions: actions,
+                agentCatalog: .empty,
+                terminalProfileCatalog: .empty,
+                profileShortcutRegistry: makeProfileShortcutRegistry()
+            )
+        }
+
+        /// The task commands' rows, as title and subtitle.
+        func taskRows() -> [String] {
+            commands()
+                .filter { if case .task = $0.invocation { true } else { false } }
+                .map { [$0.title, $0.subtitle].compactMap { $0 }.joined(separator: " — ") }
+        }
+
+        func run(_ title: String) throws -> Bool {
+            let command = try #require(commands().first { $0.title == title })
+            return actions.execute(command.invocation, originWindowID: windowID)
+        }
+
+        func select(_ workspaceID: UUID) {
+            _ = fixture.store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
+        }
+
+        /// A task that started in its own worktree.
+        func startedTask(_ text: String) async throws -> TaskRecord {
+            let created = try await fixture.coordinator.create(TaskCreateRequest(
+                text: text,
+                workspaceID: fixture.workspaceID,
+                agent: "claude",
+                startWork: true
+            ))
+            await fixture.waitUntil("setup ends") { fixture.record(created.id)?.setup != .settingUp }
+            let task = try #require(fixture.record(created.id))
+            #expect(task.setup == .started)
+            return task
+        }
+    }
+
+    @Test func taskCommandsFollowTheSelectedTaskSpaceThenTheTasksViewRow() async throws {
+        let harness = try Harness()
+        let first = try await harness.startedTask("Fix the composer")
+        let second = try await harness.startedTask("Keep the sidebar order")
+        let firstSpace = try #require(first.taskSpaceWorkspaceID)
+
+        // A project workspace has no current task.
+        harness.select(harness.fixture.workspaceID)
+        #expect(harness.taskRows().isEmpty)
+
+        harness.select(firstSpace)
+        #expect(harness.taskRows() == [
+            "Task: Mark Done — Fix the composer · Idle",
+            "Task: Archive… — Fix the composer · Idle",
+        ])
+
+        // Show Tasks covers the task space without selecting anything else.
+        let show = try #require(harness.commands().first { $0.id == ToasttyBuiltInCommand.toggleTasksView.id })
+        #expect(show.title == "Show Tasks")
+        #expect(show.shortcut?.symbolLabel == "⇧⌘T")
+        #expect(try harness.run("Show Tasks"))
+        #expect(harness.window.showsTasksView)
+        #expect(harness.window.selectedWorkspaceID == firstSpace)
+
+        // Now the commands act on the Tasks view's selected row.
+        harness.board.selectionByWindowID[harness.windowID] = .task(second.id)
+        #expect(harness.taskRows() == [
+            "Task: Mark Done — Keep the sidebar order · Idle",
+            "Task: Archive… — Keep the sidebar order · Idle",
+            "Task: Open Task Space — Keep the sidebar order · Idle",
+        ])
+
+        // Pressed again, it returns to the task space that was showing.
+        #expect(try harness.run("Hide Tasks"))
+        #expect(harness.window.showsTasksView == false)
+        #expect(harness.window.selectedWorkspaceID == firstSpace)
+
+        // Open Task Space selects the row's task space and leaves the view.
+        #expect(try harness.run("Show Tasks"))
+        #expect(try harness.run("Task: Open Task Space"))
+        #expect(harness.window.showsTasksView == false)
+        #expect(harness.window.selectedWorkspaceID == second.taskSpaceWorkspaceID)
+        #expect(harness.failures.isEmpty)
+    }
+
+    @Test func markDoneFromThePaletteFinishesTheTaskAsTheDetailPaneDoes() async throws {
+        let harness = try Harness()
+        let task = try await harness.startedTask("Fix the composer")
+        let taskSpace = try #require(task.taskSpaceWorkspaceID)
+        harness.select(taskSpace)
+        let markDone = try #require(harness.commands().first { $0.title == "Task: Mark Done" })
+
+        // Cancel in the Complete dialog changes nothing.
+        harness.confirmsComplete = false
+        #expect(harness.actions.execute(markDone.invocation, originWindowID: harness.windowID))
+        #expect(harness.completeQuestions.map(\.hasTaskSpace) == [true])
+        #expect(harness.fixture.record(task.id)?.doneAt == nil)
+        #expect(harness.fixture.store.state.workspacesByID[taskSpace] != nil)
+
+        // Confirmed, the task is done and its task space closes.
+        harness.confirmsComplete = true
+        #expect(harness.actions.execute(markDone.invocation, originWindowID: harness.windowID))
+
+        #expect(harness.fixture.record(task.id)?.doneAt != nil)
+        #expect(harness.fixture.store.state.workspacesByID[taskSpace] == nil)
+        #expect(harness.failures.isEmpty)
+        // A done task has no actions left, and the stale row does nothing.
+        #expect(harness.taskRows().isEmpty)
+        #expect(harness.actions.execute(markDone.invocation, originWindowID: harness.windowID) == false)
+    }
+}

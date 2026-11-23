@@ -126,6 +126,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    @ObservedObject var quickEntryController: QuickEntryController
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let processWatchCommandController: ProcessWatchCommandController
@@ -226,19 +227,18 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private var focusedScaleCommandTarget: FocusedScaleCommandTarget? {
-        store.focusedScaleCommandTarget(preferredWindowID: preferredCommandWindowID)
+        store.focusedScaleCommandTarget(
+            preferredWindowID: preferredCommandWindowID,
+            coordinatorChatCovers: { coordinatorController?.coversTerminal(panelID: $0) == true },
+            coordinatorDockHasKeyboard: { coordinatorController?.dockHasKeyboard(in: $0) == true }
+        )
     }
 
     private var canFocusNextUnreadOrActivePanel: Bool {
-        let livePanelIDs = sessionRuntimeStore.activePanelIDs(
-            matching: AppStore.nextUnreadOrActionRequiredFallbackStatusKinds
-                .union(AppStore.nextUnreadOrWorkingFallbackStatusKinds)
-        )
         return Self.canFocusNextUnreadOrActivePanel(
-            state: store.state,
-            commandSelection: commandSelection,
-            activePanelIDs: livePanelIDs.union(sessionRuntimeStore.activeLaterPanelIDs()),
-            unreadPriorityPanelIDs: livePanelIDs
+            store: store,
+            preferredWindowID: preferredCommandWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
         )
     }
 
@@ -363,6 +363,13 @@ struct ToasttyCommandMenus: Commands {
                 ToasttyBuiltInCommand.newWindow.requiredShortcut.key,
                 modifiers: ToasttyBuiltInCommand.newWindow.requiredShortcut.modifiers
             )
+
+            Divider()
+
+            Button(ToasttyBuiltInCommand.newTask.title) {
+                quickEntryController.present(prefill: .empty)
+            }
+            .keyboardShortcut(quickEntryController.shortcut?.keyboardShortcut)
         }
 
         CommandGroup(replacing: .saveItem) {
@@ -546,6 +553,27 @@ struct ToasttyCommandMenus: Commands {
                 modifiers: ToasttyBuiltInCommand.toggleRightPanel.requiredShortcut.modifiers
             )
             .disabled(!canToggleCommandRightPanel)
+
+            Button(ToasttyBuiltInCommand.toggleTasksViewTitle(tasksViewShown: commandWindow?.showsTasksView == true)) {
+                toggleTasksViewFromCommandSelection()
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.toggleTasksView.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.toggleTasksView.requiredShortcut.modifiers
+            )
+            .disabled(commandSelection == nil || sessionRuntimeStore.taskCoordinator?.board?.isEnabled != true)
+
+            // The native menu can keep an older title until something
+            // rebuilds it. Cmd+Shift+K itself goes through
+            // DisplayShortcutInterceptor, which decides when the key is pressed.
+            Button(CoordinatorDockPresentation.shortcutTitle(coordinatorController?.dockShortcutAction ?? .showDock)) {
+                coordinatorController?.performDockShortcut()
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.toggleCoordinatorDock.key,
+                modifiers: ToasttyKeyboardShortcuts.toggleCoordinatorDock.modifiers
+            )
+            .disabled(canToggleCoordinatorDock == false)
         }
 
         CommandMenu("Workspace") {
@@ -812,8 +840,50 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            // The coordinator is an agent session in its own workspace. The
+            // command palette offers the same two commands.
+            Button(Self.openCoordinatorTitle) {
+                performCoordinatorCommand(.open)
+            }
+            .disabled(coordinatorController == nil)
+
+            Button(Self.restartCoordinatorTitle) {
+                performCoordinatorCommand(.restart)
+            }
+            .disabled(Self.canRestartCoordinator(coordinatorController) == false)
+
+            Divider()
+
             Button("Manage Agents…", action: openAgentProfilesConfiguration)
         }
+    }
+
+    static let openCoordinatorTitle = "Open Coordinator"
+    static let restartCoordinatorTitle = "Restart Coordinator"
+
+    /// `nil` when this Toastty has no task system.
+    private var coordinatorController: CoordinatorController? {
+        sessionRuntimeStore.taskCoordinator?.coordinatorController
+    }
+
+    /// The dock opens and hides from the window that holds the
+    /// coordinator's workspace, where it shows.
+    private var canToggleCoordinatorDock: Bool {
+        guard let coordinatorController, let windowID = commandSelection?.windowID else { return false }
+        return CoordinatorDockPresentation.showsToggle(
+            windowID: windowID,
+            coordinator: coordinatorController.location,
+            chatAvailable: coordinatorController.chatIsAvailable
+        )
+    }
+
+    /// Restart is for a coordinator that is open, as in the command palette.
+    static func canRestartCoordinator(_ controller: CoordinatorController?) -> Bool {
+        controller?.location != nil
+    }
+
+    private func performCoordinatorCommand(_ command: CoordinatorController.UserCommand) {
+        coordinatorController?.perform(command, windowID: commandSelection?.windowID)
     }
 
     private func selectWorkspaceFromCommandSelection(workspaceID: UUID) {
@@ -933,7 +1003,7 @@ struct ToasttyCommandMenus: Commands {
             _ = webPanelRuntimeRegistry.restoreLocalDocumentFocusAfterSearch(panelID: panelID)
         case .terminal(let panelID):
             _ = terminalRuntimeRegistry.endSearch(panelID: panelID)
-            terminalRuntimeRegistry.restoreTerminalFocusAfterSearch(panelID: panelID)
+            terminalRuntimeRegistry.takeKeyboardFocus(panelID: panelID)
         case nil:
             return
         }
@@ -1065,6 +1135,13 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.window.sidebarVisible ?? true
     }
 
+    /// The Tasks view covers the selected workspace without changing it, so
+    /// hiding it returns to that workspace.
+    private func toggleTasksViewFromCommandSelection() {
+        guard let selection = commandSelection else { return }
+        store.send(.setTasksViewShown(windowID: selection.windowID, shown: selection.window.showsTasksView == false))
+    }
+
     private func toggleSidebarFromCommandSelection() {
         guard let windowID = commandSelection?.windowID else { return }
         store.send(.toggleSidebar(windowID: windowID))
@@ -1079,40 +1156,14 @@ struct ToasttyCommandMenus: Commands {
     }
 
     static func canFocusNextUnreadOrActivePanel(
-        state: AppState,
-        commandSelection: WindowCommandSelection?,
-        activePanelIDs: Set<UUID>,
-        unreadPriorityPanelIDs: Set<UUID> = []
+        store: AppStore,
+        preferredWindowID: UUID?,
+        sessionRuntimeStore: SessionRuntimeStore?
     ) -> Bool {
-        guard let selection = commandSelection,
-              let selectedTabID = selection.workspace.resolvedSelectedTabID else {
-            return false
-        }
-
-        if state.nextUnreadPanel(
-            fromWindowID: selection.windowID,
-            workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID,
-            isEligible: { workspace, panelID in
-                workspace.doneAt == nil || unreadPriorityPanelIDs.contains(panelID)
-            }
-        ) != nil {
-            return true
-        }
-
-        guard activePanelIDs.isEmpty == false else {
-            return false
-        }
-
-        return state.nextMatchingPanel(
-            fromWindowID: selection.windowID,
-            workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID
-        ) { _, panelID in
-            activePanelIDs.contains(panelID)
-        } != nil
+        store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     nonisolated static func textInputOwnsFindCommands(
@@ -1205,6 +1256,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
         case .scratchpad(_, let panelID):
             webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: .increase)
+        case .coordinatorChat:
+            coordinatorController?.chat?.changeTextScale(.increase)
         }
     }
 
@@ -1218,6 +1271,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
         case .scratchpad(_, let panelID):
             webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: .decrease)
+        case .coordinatorChat:
+            coordinatorController?.chat?.changeTextScale(.decrease)
         }
     }
 
@@ -1231,6 +1286,8 @@ struct ToasttyCommandMenus: Commands {
             store.send(.resetBrowserPanelPageZoom(panelID: panelID))
         case .scratchpad(_, let panelID):
             webPanelRuntimeRegistry.adjustScratchpadMagnification(panelID: panelID, adjustment: .reset)
+        case .coordinatorChat:
+            coordinatorController?.chat?.changeTextScale(.reset)
         }
     }
 }

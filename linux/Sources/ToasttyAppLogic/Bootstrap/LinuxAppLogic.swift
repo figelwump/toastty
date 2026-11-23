@@ -212,10 +212,11 @@ public final class LinuxAppLogic {
         let store = AppStore(
             state: bootstrap.state,
             persistTerminalFontPreference: usesPersistentPreferences,
-            initialHasEverLaunchedAgent: initialSettings.hasEverLaunchedAgent,
             initialAskBeforeQuitting: initialSettings.askBeforeQuitting,
             initialWorkspaceMergeMode: initialSettings.workspaceMergeMode,
             isWorkspaceMergeEnabled: initialSettings.isWorkspaceMergeEnabled,
+            initialLocalDocumentMarkdownViewMode: initialSettings.localDocumentMarkdownViewMode,
+            initialLocalDocumentAppearance: initialSettings.localDocumentAppearance,
             recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()
@@ -455,7 +456,7 @@ public final class LinuxAppLogic {
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 runtimePaths: runtimePaths,
                 sessionLauncher: agentLaunchService,
-                port: options.remoteAccessPort ?? RemoteAccessPreferences.loadPort(),
+                port: options.remoteAccessPort ?? RemoteAccessPreferences.loadPort(runtimePaths: runtimePaths),
                 pushConfiguration: LinuxAppConfiguration.pushConfiguration(environment: environment),
                 tailnetServeSetup: options.remoteAccessTailnetServeSetup ?? { port, configuredOrigin, configureIfNeeded in
                     try await TailscaleServeSetup().run(

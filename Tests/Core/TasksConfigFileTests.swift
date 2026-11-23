@@ -1,0 +1,318 @@
+import CoreState
+import Foundation
+import Testing
+
+struct TasksConfigFileTests {
+    private let home = "/Users/tester"
+
+    private func parse(_ contents: String) throws -> TasksConfig {
+        try TasksConfigFile.parse(contents: contents, homeDirectoryPath: home)
+    }
+
+    private func parseError(_ contents: String) -> TasksConfigParseError? {
+        do {
+            _ = try parse(contents)
+            return nil
+        } catch let error as TasksConfigParseError {
+            return error
+        } catch {
+            Issue.record("unexpected error \(error)")
+            return nil
+        }
+    }
+
+    @Test
+    func parsesEveryTable() throws {
+        let config = try parse(#"""
+        # comment
+        [triage]
+        command = "claude -p --model claude-sonnet-5-5 --effort medium"
+        guidelines = """
+        Bugs with a repro: codex. # not a comment
+        Design questions: claude.
+        """
+        timeout_seconds = 90
+
+        [defaults]
+        agent = "claude"
+        model = "claude-opus-5-5"
+        effort = "high"
+        merge = "agent"
+        merge_prompt = "Use toastty-task-merge."
+        start_prompt = "Ask for a review before a PR."
+        start_skill = "task-start"
+        merge_skill = "toastty-task-merge"
+        release_skill = "toastty-release"
+
+        [quick_entry]
+        shortcut = "opt+shift+t"
+
+        [workspace."~/GiantThings/repos/toastty"]
+        guidelines = "iOS tasks: read ios/AGENTS.md first."
+        create_hook = "scripts/dev/bootstrap-worktree.sh"
+        branch_prefix = "fix"
+        release_tags = "v*"  # trailing comment
+        release_prompt = "Use toastty-release, then toastty-publish."
+
+        [workspace."/srv/website"]
+        merge = "direct"
+        start_prompt = "Deploy previews only."
+        start_skill = "website-start"
+        merge_skill = "website-merge"
+        release_skill = "website-release"
+        """#)
+
+        #expect(config.triage == TasksConfig.Triage(
+            command: "claude -p --model claude-sonnet-5-5 --effort medium",
+            guidelines: "Bugs with a repro: codex. # not a comment\nDesign questions: claude.",
+            timeoutSeconds: 90
+        ))
+        #expect(config.defaults == TasksConfig.Defaults(
+            agent: "claude",
+            model: "claude-opus-5-5",
+            effort: "high",
+            merge: .agent,
+            mergePrompt: "Use toastty-task-merge.",
+            startPrompt: "Ask for a review before a PR.",
+            startSkill: "task-start",
+            mergeSkill: "toastty-task-merge",
+            releaseSkill: "toastty-release"
+        ))
+        #expect(config.quickEntry.shortcut == .default)
+        #expect(config.workspaces == [
+            TasksConfig.Workspace(
+                path: "~/GiantThings/repos/toastty",
+                guidelines: "iOS tasks: read ios/AGENTS.md first.",
+                createHook: "scripts/dev/bootstrap-worktree.sh",
+                branchPrefix: "fix",
+                releaseTags: "v*",
+                releasePrompt: "Use toastty-release, then toastty-publish."
+            ),
+            TasksConfig.Workspace(
+                path: "/srv/website",
+                merge: .direct,
+                startPrompt: "Deploy previews only.",
+                startSkill: "website-start",
+                mergeSkill: "website-merge",
+                releaseSkill: "website-release"
+            ),
+        ])
+    }
+
+    @Test
+    func emptyFileAndMissingFileAreEmpty() throws {
+        #expect(try parse("") == .empty)
+        #expect(try parse("# only comments\n\n") == .empty)
+        let missingHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-tasks-config-\(UUID().uuidString)").path
+        #expect(try TasksConfigFile.load(homeDirectoryPath: missingHome) == .empty)
+    }
+
+    @Test
+    func quickEntryShortcutDefaultsAndCanBeTurnedOff() throws {
+        #expect(try parse("").quickEntry.shortcut == .default)
+        #expect(try parse("[quick_entry]\nshortcut = \"None\"").quickEntry.shortcut == nil)
+        #expect(try parse("[quick_entry]\nshortcut = \"ctrl+opt+space\"").quickEntry.shortcut
+            == QuickEntryShortcut(modifiers: [.control, .option], key: .space))
+        // Only a written shortcut wins over the answer in the What's new
+        // sheet, "none" included.
+        #expect(try parse("").quickEntry.isShortcutSet == false)
+        #expect(try parse("[quick_entry]\n").quickEntry.isShortcutSet == false)
+        #expect(try parse("[quick_entry]\nshortcut = \"none\"").quickEntry.isShortcutSet)
+        #expect(try parse("[quick_entry]\nshortcut = \"opt+shift+t\"").quickEntry.isShortcutSet)
+    }
+
+    /// "Change the key…" in the What's new sheet writes this file when there
+    /// is none; it must change nothing until the user edits it.
+    @Test
+    func theTemplateSetsNothingAndIsNotWrittenOverAFile() throws {
+        #expect(try parse(TasksConfigFile.templateContents) == .empty)
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-tasks-template-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try TasksConfigFile.ensureTemplateExists(homeDirectoryPath: home.path)
+        let url = TasksConfigFile.fileURL(homeDirectoryPath: home.path)
+        #expect(try String(contentsOf: url, encoding: .utf8) == TasksConfigFile.templateContents)
+        try "[quick_entry]\nshortcut = \"none\"\n".write(to: url, atomically: true, encoding: .utf8)
+        try TasksConfigFile.ensureTemplateExists(homeDirectoryPath: home.path)
+        #expect(try TasksConfigFile.load(homeDirectoryPath: home.path).quickEntry.shortcut == nil)
+    }
+
+    @Test
+    func coordinatorDefaultsToTheClaudeProfileAndTakesItsOwnAgentModelAndEffort() throws {
+        #expect(try parse("").coordinator == TasksConfig.Coordinator(agent: "claude", model: nil, effort: nil))
+        // The task defaults do not reach the coordinator.
+        #expect(try parse("[defaults]\nagent = \"codex\"\nmodel = \"gpt\"").coordinator == TasksConfig.Coordinator())
+        #expect(try parse("[coordinator]\nmodel = \"claude-opus-5-5\"").coordinator
+            == TasksConfig.Coordinator(agent: "claude", model: "claude-opus-5-5", effort: nil))
+        #expect(try parse("[coordinator]\nagent = \"claude-work\"\nmodel = \"claude-fable-5-2\"\neffort = \"xhigh\"").coordinator
+            == TasksConfig.Coordinator(agent: "claude-work", model: "claude-fable-5-2", effort: "xhigh"))
+    }
+
+    @Test
+    func triageTimeoutDefaults() throws {
+        #expect(try parse("[triage]\ncommand = \"x\"").triage?.timeoutSeconds == TasksConfig.Triage.defaultTimeoutSeconds)
+    }
+
+    @Test(arguments: [
+        ("[create]\nscript = \"x\"", 1, "create_hook"),
+        ("[start]\nskill = \"task-start\"", 1, "start_skill"),
+        ("[defaults]\nskill = \"task-start\"", 2, "start_skill"),
+        ("[triage]\nprofile = \"claude\"", 2, "command"),
+        ("[triage]\nguidance = \"x\"", 2, "renamed to guidelines"),
+        ("[triage]\ntimeout-seconds = 60", 2, "timeout_seconds"),
+    ])
+    func earlierDraftKeysNameTheirReplacement(contents: String, line: Int, mention: String) {
+        let error = parseError(contents)
+        #expect(error?.line == line)
+        #expect(error?.message.contains(mention) == true)
+    }
+
+    @Test(arguments: [
+        ("[tasks]", 1, "unknown table [tasks]"),
+        ("[[defaults]]", 1, "invalid table header"),
+        ("agent = \"claude\"", 1, "before keys"),
+        ("[defaults]\nagent claude", 2, "expected key = value"),
+        ("[defaults]\nagent = claude", 2, "quoted string or a whole number"),
+        ("[defaults]\nagent = \"\"", 2, "is empty"),
+        ("[defaults]\ncolor = \"red\"", 2, "unknown key 'color'"),
+        ("[defaults]\nagent = \"a\"\nagent = \"b\"", 3, "duplicate agent"),
+        ("[defaults]\n[defaults]", 2, "duplicate table"),
+        ("[defaults]\nmodel = \"gpt 6\"", 2, "one word"),
+        ("[defaults]\neffort = \"-x\"", 2, "one word"),
+        ("[defaults]\nmerge = \"auto\"", 2, "\"agent\" or \"direct\""),
+        ("[defaults]\nagent = 3", 2, "must be a quoted string"),
+        ("[triage]\ntimeout_seconds = 4", 2, "from 5 to 600"),
+        ("[triage]\nguidelines = \"a\"\nguidelines_file = \"b\"", 3, "keep one"),
+        ("[triage]\nguidelines = \"\"\"\nnever closed", 2, "unterminated"),
+        ("[triage]\ncommand = \"\"\"a\"\"\" extra", 2, "after closing"),
+        ("[workspace.toastty]", 1, "in quotes"),
+        ("[workspace.\"repos/toastty\"]", 1, "absolute"),
+        ("[workspace.\"/r\"]\nbranch_prefix = \"Fix\"", 2, "branch_prefix"),
+        ("[workspace.\"/r\"]\nrelease_tag = \"v*\"", 2, "unknown key 'release_tag'"),
+        ("[workspace.\"/r\"]\nrelease_tracking = \"guess\"", 2, "release_tracking must be \"tags\" or \"reported\""),
+        ("[defaults]\nstart_skill = \"task start\"", 2, "[defaults] start_skill must be a skill name with no spaces"),
+        ("[defaults]\nmerge_skill = \"  \"", 2, "merge_skill is empty"),
+        ("[defaults]\nrelease_skill = 3", 2, "release_skill must be a quoted string"),
+        ("[workspace.\"/r\"]\nrelease_skill = \"a\\tb\"", 2, "release_skill must be a skill name with no spaces"),
+        ("[workspace.\"/r\"]\nstart_skill = \"\"\"\none\ntwo\n\"\"\"", 2, "start_skill must be one line"),
+        ("[quick_entry]\nshortcut = \"shift+t\"", 2, "[quick_entry] the shortcut \"shift+t\" needs Command"),
+        ("[quick_entry]\nshortcut = \"opt+shift+tt\"", 2, "unknown key \"tt\""),
+        ("[coordinator]\nprompt = \"x\"", 2, "[coordinator] contains unknown key 'prompt'"),
+        ("[coordinator]\nmodel = \"--dangerous\"", 2, "[coordinator] model must be one word"),
+        ("[coordinator]\nagent = \"claude code\"", 2, "[coordinator] agent must be one word"),
+        ("[coordinator]\nagent = \"a\"\n[coordinator]", 3, "duplicate table"),
+    ])
+    func reportsErrorsWithLines(contents: String, line: Int, mention: String) {
+        let error = parseError(contents)
+        #expect(error?.line == line, "\(contents)")
+        #expect(error?.message.contains(mention) == true, "\(error?.message ?? "no error")")
+    }
+
+    @Test
+    func rejectsTwoTablesForTheSameDirectory() {
+        let error = parseError("""
+        [workspace."~/repos/toastty"]
+        [workspace."/Users/tester/repos/toastty/"]
+        """)
+        #expect(error?.line == 2)
+        #expect(error?.message.contains("line 1") == true)
+    }
+
+    @Test
+    func findsWorkspaceByProjectRoot() throws {
+        let config = try parse("""
+        [workspace."~/repos/toastty"]
+        release_tags = "v*"
+        """)
+        #expect(config.workspace(forProjectRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home)?.releaseTags == "v*")
+        #expect(config.workspace(forProjectRoot: "/Users/tester/repos/toastty/", homeDirectoryPath: home) != nil)
+        #expect(config.workspace(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == nil)
+    }
+
+    @Test
+    func worktreesShareOnlyReleaseSettingsAndKeepExplicitOverrides() throws {
+        let config = try parse("""
+        [workspace."~/repos/toastty"]
+        release_tags = "v*"
+        release_tracking = "reported"
+        release_skill = "release-app"
+        release_prompt = "Publish it."
+        start_prompt = "Main checkout only."
+        [workspace."~/repos/coordinator"]
+        start_prompt = "Coordinator only."
+        release_tags = "preview-*"
+        release_tracking = "tags"
+        """)
+        let inherited = try #require(config.releaseWorkspace(
+            forProjectRoot: "/Users/tester/repos/other-worktree", repositoryRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home
+        ))
+        #expect(inherited.releaseTags == "v*")
+        #expect(inherited.releaseTracking == .reported)
+        #expect(inherited.releaseSkill == "release-app")
+        #expect(inherited.releasePrompt == "Publish it.")
+        #expect(inherited.startPrompt == nil)
+        let explicit = try #require(config.releaseWorkspace(
+            forProjectRoot: "/Users/tester/repos/coordinator", repositoryRoot: "/Users/tester/repos/toastty", homeDirectoryPath: home
+        ))
+        #expect(explicit.releaseTags == "preview-*")
+        #expect(explicit.releaseTracking == .tags)
+        #expect(explicit.releaseSkill == "release-app")
+        #expect(explicit.startPrompt == "Coordinator only.")
+        #expect(config.workspace(forProjectRoot: "/Users/tester/repos/other-worktree", homeDirectoryPath: home) == nil)
+    }
+
+    @Test
+    func startSkillDefaultsToTheShippedSkillAndNoneTurnsItOff() throws {
+        let config = try parse("""
+        [defaults]
+        start_prompt = "Ask for a review before a PR."
+
+        [workspace."~/repos/plain"]
+        start_skill = "None"
+
+        [workspace."~/repos/site"]
+        start_prompt = "Deploy previews only."
+        """)
+        #expect(TasksConfig.empty.startSkill(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == TaskPrompt.defaultStartSkill)
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == TaskPrompt.defaultStartSkill)
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/plain", homeDirectoryPath: home) == nil)
+        // A project's own start_prompt replaces the default one.
+        #expect(config.startPrompt(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == "Deploy previews only.")
+        #expect(config.startPrompt(forProjectRoot: "/Users/tester/repos/plain", homeDirectoryPath: home) == "Ask for a review before a PR.")
+        #expect(TasksConfig.empty.startPrompt(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == nil)
+    }
+
+    @Test
+    func aProjectsSkillOverridesTheDefault() throws {
+        let config = try parse("""
+        [defaults]
+        start_skill = "task-start"
+
+        [workspace."~/repos/toastty"]
+        start_skill = "toastty-start"
+        release_skill = "toastty-release"
+
+        [workspace."~/repos/notes"]
+        release_prompt = "Tag it."
+
+        [workspace."~/repos/site"]
+        branch_prefix = "fix"
+        """)
+        let toastty = "/Users/tester/repos/toastty"
+        #expect(config.startSkill(forProjectRoot: toastty, homeDirectoryPath: home) == "toastty-start")
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == "task-start")
+        #expect(config.startSkill(forProjectRoot: "/Users/tester/repos/other", homeDirectoryPath: home) == "task-start")
+        #expect(config.releaseSkill(forProjectRoot: toastty, homeDirectoryPath: home) == "toastty-release")
+
+        // A release skill or a release prompt makes a project releasable.
+        #expect(config.canRelease(projectRoot: toastty, homeDirectoryPath: home))
+        #expect(config.canRelease(projectRoot: "/Users/tester/repos/notes", homeDirectoryPath: home))
+        #expect(config.canRelease(projectRoot: "/Users/tester/repos/site", homeDirectoryPath: home) == false)
+        // A release skill in [defaults] applies to every project.
+        var everywhere = config
+        everywhere.defaults.releaseSkill = "release"
+        #expect(everywhere.canRelease(projectRoot: "/Users/tester/repos/site", homeDirectoryPath: home))
+        #expect(everywhere.releaseSkill(forProjectRoot: toastty, homeDirectoryPath: home) == "toastty-release")
+    }
+}

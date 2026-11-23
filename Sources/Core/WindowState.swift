@@ -1,11 +1,46 @@
 import Foundation
 
+/// What a window's sidebar lists: every project card, with its sessions and
+/// tasks in Needs you, Running and Idle, or only the rows that need the user.
+public enum SidebarSegment: String, Codable, CaseIterable, Sendable {
+    case all
+    case needsYou
+
+    /// A segment by its name. The names saved before the segments were
+    /// renamed still work: `projects` is All and `status` is Needs you.
+    public init?(name: String) {
+        switch name {
+        case Self.all.rawValue, "projects": self = .all
+        case Self.needsYou.rawValue, "status": self = .needsYou
+        default: return nil
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let name = try decoder.singleValueContainer().decode(String.self)
+        guard let segment = Self(name: name) else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Unknown sidebar segment \(name)"
+            ))
+        }
+        self = segment
+    }
+}
+
 public struct WindowState: Codable, Equatable, Identifiable, Sendable {
-    public static let defaultSidebarWidthBeforeAgentLaunch: Double = 180
-    public static let defaultSidebarWidthAfterAgentLaunch: Double = 280
+    public static let defaultSidebarWidth: Double = 280
     public static let minSidebarWidth: Double = 160
     public static let maxSidebarWidth: Double = 480
     public static let sidebarWidthComparisonEpsilon: Double = 0.0001
+    /// The coordinator's dock: a column between the sidebar and the
+    /// workspace that shows the coordinator's chat.
+    public static let defaultCoordinatorDockWidth: Double = 360
+    public static let minCoordinatorDockWidth: Double = 300
+    /// The widest saved width. A window shows the dock at most
+    /// `maxCoordinatorDockWindowFraction` of its width.
+    public static let maxCoordinatorDockWidth: Double = 2_400
+    public static let maxCoordinatorDockWindowFraction: Double = 0.4
 
     public let id: UUID
     public var frame: CGRectCodable
@@ -15,6 +50,20 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public var sidebarWidthPointsOverride: Double?
     public var terminalFontSizePointsOverride: Double?
     public var markdownTextScaleOverride: Double?
+    public var sidebarSegment: SidebarSegment
+    /// The project cards collapsed to their name line in the All segment.
+    /// Saved with the window; a workspace that leaves the window drops out
+    /// when the window is saved.
+    public var collapsedSidebarWorkspaceIDs: Set<UUID>
+    /// The user opened the coordinator's dock in this window. It shows only
+    /// in the window that holds the coordinator's workspace, and only while
+    /// that workspace is not the selected one.
+    public var coordinatorDockVisible: Bool
+    /// The dock's width after a resize, or `nil` for the default width.
+    public var coordinatorDockWidthPointsOverride: Double?
+    /// Whether the Tasks view covers the workspace content. Not saved: a
+    /// relaunch opens the workspace the window had selected.
+    public var showsTasksView: Bool
 
     public init(
         id: UUID,
@@ -24,7 +73,12 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         sidebarVisible: Bool = true,
         sidebarWidthPointsOverride: Double? = nil,
         terminalFontSizePointsOverride: Double? = nil,
-        markdownTextScaleOverride: Double? = nil
+        markdownTextScaleOverride: Double? = nil,
+        sidebarSegment: SidebarSegment = .all,
+        collapsedSidebarWorkspaceIDs: Set<UUID> = [],
+        showsTasksView: Bool = false,
+        coordinatorDockVisible: Bool = false,
+        coordinatorDockWidthPointsOverride: Double? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -34,6 +88,38 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         self.sidebarWidthPointsOverride = Self.normalizedSidebarWidthOverride(sidebarWidthPointsOverride)
         self.terminalFontSizePointsOverride = terminalFontSizePointsOverride.map(AppState.clampedTerminalFontPoints)
         self.markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(markdownTextScaleOverride)
+        self.sidebarSegment = sidebarSegment
+        self.collapsedSidebarWorkspaceIDs = collapsedSidebarWorkspaceIDs
+        self.showsTasksView = showsTasksView
+        self.coordinatorDockVisible = coordinatorDockVisible
+        self.coordinatorDockWidthPointsOverride = Self.normalizedCoordinatorDockWidthOverride(coordinatorDockWidthPointsOverride)
+    }
+
+    /// The dock's width within its limits, or `nil` for a width that is not
+    /// a number or is the default.
+    public static func normalizedCoordinatorDockWidthOverride(_ width: Double?) -> Double? {
+        guard let width, width.isFinite else { return nil }
+        let clamped = min(max(width, minCoordinatorDockWidth), maxCoordinatorDockWidth)
+        guard abs(clamped - defaultCoordinatorDockWidth) >= sidebarWidthComparisonEpsilon else { return nil }
+        return clamped
+    }
+
+    public var coordinatorDockWidth: Double {
+        coordinatorDockWidthPointsOverride ?? Self.defaultCoordinatorDockWidth
+    }
+
+    /// The widest the dock can be in a window this wide: a part of the
+    /// window's width, never less than the dock's minimum.
+    public static func maxCoordinatorDockWidth(windowWidth: Double) -> Double {
+        guard windowWidth.isFinite, windowWidth > 0 else { return maxCoordinatorDockWidth }
+        let limit = (windowWidth * maxCoordinatorDockWindowFraction).rounded(.down)
+        return min(max(limit, minCoordinatorDockWidth), maxCoordinatorDockWidth)
+    }
+
+    /// The dock's width in a window this wide. A narrower window shows the
+    /// dock narrower and keeps the saved width for a wider window.
+    public func coordinatorDockWidth(windowWidth: Double) -> Double {
+        min(coordinatorDockWidth, Self.maxCoordinatorDockWidth(windowWidth: windowWidth))
     }
 
     public static func clampedSidebarWidth(_ width: Double) -> Double {
@@ -69,6 +155,10 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         case sidebarWidthPointsOverride
         case terminalFontSizePointsOverride
         case markdownTextScaleOverride
+        case sidebarSegment
+        case collapsedSidebarWorkspaceIDs
+        case coordinatorDockVisible
+        case coordinatorDockWidthPointsOverride
     }
 
     public init(from decoder: Decoder) throws {
@@ -94,6 +184,16 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
                 forKey: .markdownTextScaleOverride
             )
         )
+        // An unknown segment from a newer version falls back to All.
+        sidebarSegment = (try? container.decodeIfPresent(SidebarSegment.self, forKey: .sidebarSegment)) ?? .all
+        collapsedSidebarWorkspaceIDs = Set(
+            ((try? container.decodeIfPresent([UUID].self, forKey: .collapsedSidebarWorkspaceIDs)) ?? nil) ?? []
+        )
+        showsTasksView = false
+        coordinatorDockVisible = try container.decodeIfPresent(Bool.self, forKey: .coordinatorDockVisible) ?? false
+        coordinatorDockWidthPointsOverride = Self.normalizedCoordinatorDockWidthOverride(
+            try container.decodeIfPresent(Double.self, forKey: .coordinatorDockWidthPointsOverride)
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -106,5 +206,12 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(sidebarWidthPointsOverride, forKey: .sidebarWidthPointsOverride)
         try container.encodeIfPresent(terminalFontSizePointsOverride, forKey: .terminalFontSizePointsOverride)
         try container.encodeIfPresent(markdownTextScaleOverride, forKey: .markdownTextScaleOverride)
+        try container.encode(sidebarSegment, forKey: .sidebarSegment)
+        let collapsed = workspaceIDs.filter(collapsedSidebarWorkspaceIDs.contains)
+        if collapsed.isEmpty == false {
+            try container.encode(collapsed, forKey: .collapsedSidebarWorkspaceIDs)
+        }
+        try container.encode(coordinatorDockVisible, forKey: .coordinatorDockVisible)
+        try container.encodeIfPresent(coordinatorDockWidthPointsOverride, forKey: .coordinatorDockWidthPointsOverride)
     }
 }

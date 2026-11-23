@@ -1573,6 +1573,9 @@ final class TerminalMetadataService {
             exitCode: exitCode,
             at: now
         )
+        if exitCode != nil {
+            registry?.clearUncertainManagedRestoreInput(panelID: panelID)
+        }
         // Ghostty's command-finished signal is emitted when the shell's
         // foreground command returns. For managed launches, that foreground
         // command is the agent process itself, not the agent's internal tools.

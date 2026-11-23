@@ -189,6 +189,400 @@ public enum ToasttyMobileFixture {
         )
     }()
 
+    public static let coordinatorWorkspaceID = UUID(uuidString: "A1000000-0000-0000-0000-000000000090")!
+    public static let coordinatorConversationID = UUID(uuidString: "B1000000-0000-0000-0000-000000000090")!
+    public static let coordinatorScratchpadPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000090")!
+    /// The Mac's Open Policy shows the policy as a panel in the coordinator's
+    /// workspace. The tab's … menu lists Policy once, not this panel too.
+    public static let coordinatorPolicyPanelID = UUID(uuidString: "C1000000-0000-0000-0000-000000000091")!
+
+    /// `snapshot` with the Mac's coordinator workspace. Its session has
+    /// `status`; without one the workspace lists no session, as while the
+    /// coordinator does not run or is starting. The coordinator's session
+    /// asks for approval and waits in Needs you, so a test can check that
+    /// Home leaves it out.
+    public static func withCoordinator(
+        _ snapshot: MobileHomeSnapshot,
+        status: RemoteSessionPresentationStatus?,
+        chatRead: RemoteCoordinatorChatReadPoint? = nil
+    ) -> MobileHomeSnapshot {
+        let conversations = status.map { status in
+            [MobileConversation(
+                id: coordinatorConversationID,
+                workspaceID: coordinatorWorkspaceID,
+                workspaceTitle: "Coordinator",
+                cwd: "~/.toastty/coordinator",
+                agent: .claude,
+                title: "Toasty",
+                state: .known(status),
+                inputAvailability: status == .working ? .unavailable(reason: "Claude is working") : .openPrompt,
+                age: "1m",
+                activityAge: MobileActivityAge(secondsAtReceipt: 60, receivedAtMonotonicTime: fixtureReceiptTime),
+                lastActivity: "Two tasks moved."
+            )]
+        } ?? []
+        let coordinator = MobileWorkspace(
+            id: coordinatorWorkspaceID,
+            title: "Coordinator",
+            conversations: conversations,
+            panels: [
+                previewPanel(90, panelID: coordinatorScratchpadPanelID, kind: "scratchpad", title: "Release plan",
+                             tabNumber: 90, tabTitle: "Coordinator", revision: 1),
+                previewPanel(91, panelID: coordinatorPolicyPanelID, kind: "localDocument", title: "policy.md",
+                             tabNumber: 90, tabTitle: "Coordinator",
+                             filePath: "/fixtures/home/.toastty/coordinator/policy.md"),
+            ],
+            isCoordinator: true,
+            coordinatorConversationID: status == nil ? nil : coordinatorConversationID,
+            coordinatorChatRead: chatRead
+        )
+        return MobileHomeSnapshot(
+            hostName: snapshot.hostName,
+            workspaces: [coordinator] + snapshot.workspaces,
+            taskBoard: snapshot.taskBoard
+        )
+    }
+
+    public static let questionTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000001")!
+    public static let reviewTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000002")!
+    public static let setupFailedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000003")!
+    public static let startingTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000004")!
+    public static let shippedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000005")!
+    public static let otherProjectTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000012")!
+    public static let shareSheetTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000016")!
+    public static let steerChipTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000017")!
+    public static let finishedDoneTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000030")!
+    public static let finishedArchivedTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000031")!
+
+    public static let finishedOlderDoneTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000032")!
+
+    /// The fixture Mac's recent finished tasks, which leave its task board:
+    /// a Done task whose task space closed two days ago, with its merged
+    /// pull request; an archived one, which finished yesterday; and a Done
+    /// task that finished a month ago. The fixture chats link the first two.
+    /// The mention list shows only the first before a search.
+    public static let finishedTasks: RemoteFinishedTasks = {
+        let day: TimeInterval = 24 * 60 * 60
+        let now = Date()
+        return RemoteFinishedTasks(
+            revision: "f1n15hed0000c0de",
+            tasks: [
+                RemoteFinishedTask(
+                    id: finishedArchivedTaskID, title: "csv-export-spike", group: .archived, stageTitle: "Archived",
+                    stageReason: "closed without finishing", statusLine: "Archived", projectTitle: "toastty",
+                    doneAt: now.addingTimeInterval(-day)
+                ),
+                RemoteFinishedTask(
+                    id: finishedDoneTaskID, title: "signup-feedback-form", group: .done, stageTitle: "Done",
+                    stageReason: "merged", statusLine: "Done", projectTitle: "toastty",
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 212, url: URL(string: "https://github.com/example/toastty/pull/212")!, state: .merged
+                    ),
+                    doneAt: now.addingTimeInterval(-2 * day)
+                ),
+                RemoteFinishedTask(
+                    id: finishedOlderDoneTaskID, title: "onboarding-copy-pass", group: .done, stageTitle: "Done",
+                    stageReason: "merged", statusLine: "Done", projectTitle: "toastty",
+                    pullRequest: RemoteTaskPullRequest(
+                        number: 158, url: URL(string: "https://github.com/example/toastty/pull/158")!, state: .merged
+                    ),
+                    doneAt: now.addingTimeInterval(-30 * day)
+                ),
+            ]
+        )
+    }()
+
+    /// `home` from a Mac with the task system on. Its task spaces are
+    /// tasks: compact-session-rows waits for approval, early-session-titles
+    /// asks a question, ios-subspaces is working, and sidebar-done-subspaces
+    /// is done. A review task holds PR #36; one task's setup failed; the
+    /// question task started two tasks: one starts, and one merged and waits
+    /// for a release. One task's project is not open.
+    /// The emptyos project holds one task space for each other Merge
+    /// control state; see `taskActionTasks`.
+    public static let taskHome: MobileHomeSnapshot = {
+        let toasttyID = previewWorkspaceID
+        let now = Date()
+        func pullRequest(_ number: Int, _ state: RemoteTaskPullRequestState) -> RemoteTaskPullRequest {
+            RemoteTaskPullRequest(
+                number: number, url: URL(string: "https://github.com/example/toastty/pull/\(number)")!, state: state
+            )
+        }
+        let board = RemoteTaskBoard(
+            tasks: [
+                RemoteTaskSummary(
+                    id: questionTaskID, title: "early-session-titles", group: .needsYou, mark: .question,
+                    statusLine: "Asks: Should the badge count tasks or sessions?",
+                    rowSummary: "Asks: Should the badge count tasks or sessions?",
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: readySubspaceID, pullRequest: pullRequest(45, .open), activityAt: now,
+                    // GitHub reports a blocker, so the control opens the PR.
+                    mergeControl: RemoteTaskMergeControl(
+                        kind: .openPullRequest, title: "Open PR #45", detail: "Checks failing",
+                        menu: [RemoteTaskActionItem(action: .merge, title: "Merge PR #45"), archiveTaskItem]
+                    ),
+                    actions: [mergeItem, archiveItem],
+                    childProgress: RemoteTaskChildProgress(merged: 1, total: 2)
+                ),
+                RemoteTaskSummary(
+                    id: startingTaskID, title: "Split the parser", group: .running, mark: .starting,
+                    statusLine: "Moving to worktree · fetching base", rowSummary: "Moving to worktree · fetching base",
+                    stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now,
+                    actions: [deleteItem],
+                    parentTaskID: questionTaskID, parentTaskTitle: "early-session-titles"
+                ),
+                RemoteTaskSummary(
+                    id: reviewTaskID, title: "compact-session-rows", group: .needsYou,
+                    statusLine: "Claude is waiting for your input",
+                    stageTitle: "Needs you", stageReason: "the agent asked for input",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: needsApprovalSubspaceID, pullRequest: pullRequest(36, .open),
+                    activityAt: now,
+                    mergeControl: mergeControl(pullRequest: 36),
+                    actions: [mergeItem, archiveItem]
+                ),
+                RemoteTaskSummary(
+                    id: setupFailedTaskID, title: "Composer blank line", group: .needsYou,
+                    statusLine: "⚠ setup failed", rowSummary: "⚠ setup failed",
+                    stageTitle: "Needs you", stageReason: "create_hook exited 1: tuist install failed",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now,
+                    actions: [RemoteTaskActionItem(action: .retry, title: "Retry Setup"), deleteItem]
+                ),
+                RemoteTaskSummary(
+                    id: workingSubspaceID, hasRecord: false, title: "ios-subspaces", group: .running,
+                    statusLine: "Claude · working", stageTitle: "Running", stageReason: "Claude · working",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: workingSubspaceID, activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: doneSubspaceID, hasRecord: false, title: "sidebar-done-subspaces", group: .done, mark: .done,
+                    statusLine: "Done", stageTitle: "Done", stageReason: "marked done",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    taskSpaceWorkspaceID: doneSubspaceID, activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: shippedTaskID, title: "Parent task rollup", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    pullRequest: pullRequest(259, .merged), activityAt: now,
+                    parentTaskID: questionTaskID, parentTaskTitle: "early-session-titles"
+                ),
+                // Two more merged tasks wait for the same release.
+                RemoteTaskSummary(
+                    id: shareSheetTaskID, title: "Share sheet links", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    pullRequest: pullRequest(330, .merged), activityAt: now.addingTimeInterval(-2 * 3600)
+                ),
+                RemoteTaskSummary(
+                    id: steerChipTaskID, title: "Steer chip fix", group: .toShip, mark: .toShip,
+                    statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: toasttyID, projectTitle: "toastty",
+                    pullRequest: pullRequest(327, .merged), activityAt: now.addingTimeInterval(-26 * 3600)
+                ),
+                // Its project is not open on the Mac, so Home lists it in
+                // the Other tasks card.
+                RemoteTaskSummary(
+                    id: otherProjectTaskID, title: "Linux port spike", group: .idle,
+                    statusLine: "Codex · idle", rowSummary: "Codex · idle",
+                    stageTitle: "Idle", stageReason: "Codex · idle",
+                    projectTitle: "linux-port", activityAt: now,
+                    actions: [markDoneItem, archiveItem]
+                ),
+            ] + taskActionTasks(now: now),
+            needsYou: [
+                RemoteTaskBoardEntry(taskID: questionTaskID),
+                RemoteTaskBoardEntry(taskID: startingTaskID, isLinkedChild: true, isContext: true),
+                RemoteTaskBoardEntry(taskID: reviewTaskID),
+                RemoteTaskBoardEntry(taskID: setupFailedTaskID),
+                RemoteTaskBoardEntry(taskID: completeTaskID),
+                RemoteTaskBoardEntry(taskID: cleanupStoppedTaskID),
+            ],
+            running: [RemoteTaskBoardEntry(taskID: workingSubspaceID), RemoteTaskBoardEntry(taskID: mergingTaskID)],
+            idle: [RemoteTaskBoardEntry(taskID: archiveTaskID), RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
+            toShip: [RemoteTaskShipLane(
+                id: "toastty", projectTitle: "toastty", count: 3,
+                recentTaskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID],
+                taskIDs: [shippedTaskID, shareSheetTaskID, steerChipTaskID]
+            )],
+            doneCount: 14,
+            finishedByProject: [
+                RemoteTaskProjectTally(projectWorkspaceID: toasttyID, toShipCount: 3, doneCount: 12),
+                RemoteTaskProjectTally(projectWorkspaceID: emptyosWorkspaceID, toShipCount: 0, doneCount: 2),
+            ]
+        )
+        return MobileHomeSnapshot(
+            hostName: home.hostName,
+            workspaces: home.workspaces + taskActionWorkspaces(),
+            taskBoard: MobileTaskBoard(board)
+        )
+    }()
+
+    /// A Mac with the task system on where nothing needs the user: one
+    /// session works, one task runs and one is idle. Home's Needs you
+    /// segment shows its empty state.
+    public static let quietTaskHome = makeQuietTaskHome(needsYou: [])
+
+    public static let pickWorkspaceTaskID = UUID(uuidString: "D1000000-0000-0000-0000-000000000020")!
+
+    /// `quietTaskHome` with a task that waits for the user to pick its
+    /// workspace, as the Mac sends one when no workspace was named and
+    /// triage is off: only Delete, and the step to take on the Mac.
+    public static let pickWorkspaceTaskHome = makeQuietTaskHome(needsYou: [
+        RemoteTaskSummary(
+            id: pickWorkspaceTaskID, title: "Fix the settings typo", group: .needsYou,
+            statusLine: "⚠ pick a workspace", rowSummary: "⚠ pick a workspace",
+            stageTitle: "Needs you", stageReason: "No workspace was named. Pick a workspace for this task.",
+            activityAt: Date(),
+            actions: [RemoteTaskActionItem(action: .delete, title: "Delete Task")],
+            macStep: "Pick the workspace on your Mac: open Tasks with ⌘⇧T, select this task, and choose a workspace."
+        ),
+    ])
+
+    private static func makeQuietTaskHome(needsYou: [RemoteTaskSummary]) -> MobileHomeSnapshot {
+        let toasttyID = previewWorkspaceID
+        let now = Date()
+        let toastty = MobileWorkspace(
+            id: toasttyID,
+            title: "toastty",
+            conversations: [
+                conversation(
+                    2, workspaceID: toasttyID, workspaceTitle: "toastty",
+                    cwd: "~/GiantThings/repos/toastty", agent: .codex,
+                    title: "Sparkle update check", status: .working,
+                    availability: .unavailable(reason: "working"), age: "now", last: "Running the test suite"
+                ),
+            ]
+        )
+        func task(_ id: UUID, _ title: String, _ group: RemoteTaskGroup, _ status: String) -> RemoteTaskSummary {
+            RemoteTaskSummary(
+                id: id, title: title, group: group, statusLine: status,
+                stageTitle: group == .running ? "Running" : "Idle", stageReason: status,
+                projectWorkspaceID: toasttyID, projectTitle: "toastty", activityAt: now
+            )
+        }
+        let board = RemoteTaskBoard(
+            tasks: needsYou + [
+                task(startingTaskID, "Split the parser", .running, "Claude · working"),
+                task(otherProjectTaskID, "Linux port spike", .idle, "Codex · idle"),
+            ],
+            needsYou: needsYou.map { RemoteTaskBoardEntry(taskID: $0.id) },
+            running: [RemoteTaskBoardEntry(taskID: startingTaskID)],
+            idle: [RemoteTaskBoardEntry(taskID: otherProjectTaskID)],
+            doneCount: 3
+        )
+        return MobileHomeSnapshot(hostName: home.hostName, workspaces: [toastty], taskBoard: MobileTaskBoard(board))
+    }
+
+    public static let longNamesWorkspaceID = UUID(uuidString: "A3000000-0000-0000-0000-000000000001")!
+    public static let longNamesQuestionSubspaceID = UUID(uuidString: "A3000000-0000-0000-0000-000000000011")!
+    public static let longNamesQuestionTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000001")!
+    public static let longNamesStartingTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000002")!
+    public static let longNamesShippedTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000003")!
+    public static let longNamesOtherProjectTaskID = UUID(uuidString: "D3000000-0000-0000-0000-000000000004")!
+
+    /// A Mac with the task system on whose project, tasks and sessions have
+    /// long names, for rows that must keep their text on the screen: a
+    /// question task space with a pull request and child progress, a
+    /// starting task with child progress, a merged task that waits for a
+    /// release, and a question in a project that is not open.
+    public static let longNamesTaskHome: MobileHomeSnapshot = {
+        let projectID = longNamesWorkspaceID
+        let project = "toastty-ios-coordinator-parity-integration"
+        let closedProject = "linux-port-with-a-long-name"
+        let now = Date()
+        func pullRequest(_ number: Int, _ state: RemoteTaskPullRequestState) -> RemoteTaskPullRequest {
+            RemoteTaskPullRequest(
+                number: number, url: URL(string: "https://github.com/example/toastty/pull/\(number)")!, state: state
+            )
+        }
+        let question = "Asks: Should the app badge count sessions, tasks, or both, and should reviews count?"
+        let workspaces = [
+            MobileWorkspace(
+                id: projectID,
+                title: project,
+                conversations: [
+                    conversation(
+                        31, workspaceID: projectID, workspaceTitle: project, cwd: "~/GiantThings/repos/toastty",
+                        agent: .claude, title: "Investigate why the gateway drops the websocket after sleep",
+                        status: .needsApproval, availability: .pendingInteraction(preview: "Review the command on the Mac"),
+                        age: "2m", last: "Allow Toastty to run scripts/remote/test.sh --platform ios?"
+                    ),
+                ]
+            ),
+            MobileWorkspace(
+                id: longNamesQuestionSubspaceID,
+                title: "decide-the-badge-rule-for-reviews",
+                conversations: [
+                    conversation(
+                        32, workspaceID: longNamesQuestionSubspaceID, workspaceTitle: "decide-the-badge-rule-for-reviews",
+                        cwd: "~/GiantThings/repos/toastty-decide-the-badge-rule", agent: .claude, title: "",
+                        status: .ready, availability: .unavailable(reason: "prompt not open"),
+                        age: "12m", last: "Which badge rule do you want?"
+                    ),
+                ],
+                annotations: [
+                    RemoteWorkspaceAnnotation(
+                        key: "github-pr", text: "PR #1188",
+                        url: URL(string: "https://github.com/example/toastty/pull/1188"), color: "#5BA08A"
+                    ),
+                ],
+                parentWorkspaceID: projectID
+            ),
+        ]
+        let board = RemoteTaskBoard(
+            tasks: [
+                RemoteTaskSummary(
+                    id: longNamesQuestionTaskID, title: "decide-the-badge-rule-for-reviews", group: .needsYou,
+                    mark: .question, statusLine: question, rowSummary: question,
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectWorkspaceID: projectID, projectTitle: project,
+                    taskSpaceWorkspaceID: longNamesQuestionSubspaceID, pullRequest: pullRequest(1188, .open),
+                    activityAt: now, childProgress: RemoteTaskChildProgress(merged: 2, total: 5)
+                ),
+                RemoteTaskSummary(
+                    id: longNamesStartingTaskID, title: "Parent without merged children yet", group: .running,
+                    mark: .starting, statusLine: "Moving to worktree · fetching base",
+                    rowSummary: "Moving to worktree · fetching base",
+                    stageTitle: "Starting", stageReason: "Moving to worktree · fetching base",
+                    projectWorkspaceID: projectID, projectTitle: project, activityAt: now,
+                    childProgress: RemoteTaskChildProgress(merged: 0, total: 3)
+                ),
+                RemoteTaskSummary(
+                    id: longNamesShippedTaskID, title: "Shipped change with a longer title than most", group: .toShip,
+                    mark: .toShip, statusLine: "Merged · waiting for a release", stageTitle: "To ship",
+                    stageReason: "merged, waiting for a release tag",
+                    projectWorkspaceID: projectID, projectTitle: project,
+                    pullRequest: pullRequest(1204, .merged), activityAt: now
+                ),
+                RemoteTaskSummary(
+                    id: longNamesOtherProjectTaskID, title: "Question in a closed project", group: .needsYou,
+                    mark: .question, statusLine: "Asks: Which base branch should the port start from?",
+                    rowSummary: "Asks: Which base branch should the port start from?",
+                    stageTitle: "Needs you", stageReason: "the agent asked a question",
+                    projectTitle: closedProject, activityAt: now
+                ),
+            ],
+            needsYou: [
+                RemoteTaskBoardEntry(taskID: longNamesQuestionTaskID),
+                RemoteTaskBoardEntry(taskID: longNamesOtherProjectTaskID),
+            ],
+            running: [RemoteTaskBoardEntry(taskID: longNamesStartingTaskID)],
+            toShip: [RemoteTaskShipLane(
+                id: "long-names", projectTitle: project, count: 1,
+                recentTaskIDs: [longNamesShippedTaskID], taskIDs: [longNamesShippedTaskID]
+            )],
+            doneCount: 104,
+            finishedByProject: [RemoteTaskProjectTally(projectWorkspaceID: projectID, toShipCount: 1, doneCount: 104)]
+        )
+        return MobileHomeSnapshot(hostName: home.hostName, workspaces: workspaces, taskBoard: MobileTaskBoard(board))
+    }()
+
     /// Task worktrees spawned from the toastty workspace, one in each state
     /// a subspace row shows. Three come from the first session and one from
     /// the second, so the ⑂ filter has something to leave out.
@@ -320,7 +714,7 @@ public enum ToasttyMobileFixture {
         )
     }
 
-    private static func conversation(
+    static func conversation(
         _ number: Int,
         workspaceID: UUID,
         workspaceTitle: String,
@@ -426,6 +820,41 @@ public extension ToasttyMobileFixture {
                     supportsModel: true
                 ),
             ],
+            supportsAttachments: true
+        )
+    }
+
+    /// What a Mac would offer for a new task: its top-level workspaces,
+    /// two agents, and a Frequent list as quick entry would rank it.
+    static func taskCreateOptions(workspaces: [MobileWorkspace]) -> RemoteTaskCreateOptionsResponse {
+        RemoteTaskCreateOptionsResponse(
+            permission: .allowed,
+            workspaces: workspaces.map { RemoteTaskCreateWorkspace(id: $0.id, title: $0.title) },
+            defaultWorkspaceID: workspaces.first?.id,
+            agents: [
+                RemoteSessionStartAgent(
+                    profileID: "claude",
+                    displayName: "Claude",
+                    availability: .available,
+                    supportsModel: true,
+                    recentModels: ["claude-opus-5-5", "claude-sonnet-5-5"],
+                    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"]
+                ),
+                RemoteSessionStartAgent(
+                    profileID: "codex",
+                    displayName: "Codex",
+                    availability: .available,
+                    supportsModel: true,
+                    recentModels: ["gpt-6.1-sol"],
+                    reasoningEfforts: ["low", "medium", "high", "xhigh"]
+                ),
+            ],
+            frequentPresets: [
+                RemoteTaskPreset(profileID: "claude", model: "claude-opus-5-5", effort: "xhigh"),
+                RemoteTaskPreset(profileID: "codex", model: "gpt-6.1-sol", effort: "high"),
+                RemoteTaskPreset(profileID: "claude", model: "claude-sonnet-5-5"),
+            ],
+            defaultPreset: RemoteTaskPreset(profileID: "codex", model: "gpt-6.1-sol", effort: "high"),
             supportsAttachments: true
         )
     }

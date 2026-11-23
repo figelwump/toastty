@@ -698,6 +698,31 @@ final class GatewayClientTests: XCTestCase {
         )
     }
 
+    /// A Mac refuses a task with an open pull request with a result an older
+    /// phone does not know. That phone must report a failure, not success:
+    /// an unknown result fails to decode, which the caller reports as a
+    /// failed update.
+    func testWorkspaceDoneDecodesTheOpenPullRequestRefusalAndFailsOnAnUnknownResult() async throws {
+        let transport = RecordingHTTPTransport(responses: [
+            .json(Data(#"{"protocolVersion":"1.0","result":"has_open_pull_request"}"#.utf8)),
+            .json(Data(#"{"protocolVersion":"1.0","result":"some_future_refusal"}"#.utf8)),
+        ])
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: transport,
+            credentialProvider: StaticGatewayCredentialProvider(.bearer(token: "secret"))
+        )
+        let request = RemoteWorkspaceDoneRequest(workspaceID: UUID(), done: true)
+
+        let refused = try await client.setWorkspaceDone(request)
+        XCTAssertEqual(refused.result, .hasOpenPullRequest)
+        do {
+            _ = try await client.setWorkspaceDone(request)
+            XCTFail("An unknown result must not decode")
+        } catch GatewayFailure.invalidResponse {
+        }
+    }
+
     func testConversationReadAcknowledgementUsesAuthenticatedPOSTContract() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Data(#"{"protocolVersion":"1.0","result":"acknowledged"}"#.utf8)),

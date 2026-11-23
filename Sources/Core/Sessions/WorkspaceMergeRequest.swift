@@ -51,12 +51,19 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         case merging(thenCleanUp: Bool)
         /// The workspace is done, and Toastty is waiting for checks or a
         /// required review before it merges `acceptedHead`, the pull request
-        /// head when the user clicked. New commits on the pull request end
-        /// the wait without merging.
+        /// head when the user clicked. New commits on the pull request or in
+        /// its worktree end the wait without merging. New agent work in the
+        /// workspace does not: it keeps the done mark during this phase.
         case awaitingChecks(acceptedHead: String, thenCleanUp: Bool)
         /// The workspace is done; the pull request has merged or is about to,
         /// and the cleanup waits for it.
         case awaitingMerge
+        /// The pull request merged and the cleanup waits until `until`. A
+        /// task space waits after its merge, so the user can still look at
+        /// it; other workspaces clean up at once. Any workspace waits here
+        /// before a cleanup runs again after a failure that can pass, such
+        /// as no network.
+        case holdingCleanup(until: Date)
         case cleaningUp
         /// Cleanup did not finish. The workspace stays, and the user can retry
         /// or dismiss the request.
@@ -71,27 +78,51 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// the repository's main checkout from it.
     public let repoPath: String
     public var phase: Phase
-
-    public init(pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase) {
+    /// The target branch reported when a merge started waiting for checks.
+    /// Older saved waits have no target and must be accepted again.
+    public var acceptedBase: String?
+    /// An adopted task with no saved checkout may close only its empty
+    /// task space. A checkout found by branch name must stay untouched.
+    public var requiresAbsentWorktree: Bool?
+    /// The cleanup already waited in `.holdingCleanup`, so a retry or a
+    /// relaunch after it cleans up without waiting again.
+    public var cleanupHoldEnded: Bool?
+    /// How many times the cleanup was scheduled to run again after a
+    /// failure that can pass, since the user last asked for it.
+    public var cleanupRetries: Int?
+    public init(
+        pullRequest: WorkspacePullRequestLink, repoPath: String, phase: Phase,
+        requiresAbsentWorktree: Bool? = nil
+    ) {
         self.pullRequest = pullRequest
         self.repoPath = repoPath
         self.phase = phase
+        self.requiresAbsentWorktree = requiresAbsentWorktree
     }
 
-    /// The request after a change to its workspace, or `nil` when it no longer
-    /// applies. `pullRequest` is what the workspace's `github-pr` annotation
-    /// links to now. A running script keeps its request until it reports
-    /// back, because the script itself can close the workspace.
-    public func reconciled(workspaceExists: Bool, isDone: Bool, pullRequest: WorkspacePullRequestLink?) -> Self? {
+    /// Why a request no longer applies after a change to its workspace.
+    public enum DropReason: Equatable, Sendable {
+        case workspaceClosed
+        /// The workspace's `github-pr` annotation links elsewhere, or nowhere.
+        case pullRequestChanged
+        /// The workspace's done mark was cleared. Someone cleared it by hand,
+        /// which cancels a waiting merge; or, after a merge, new work in the
+        /// workspace cleared it, which ends the cleanup.
+        case doneMarkCleared
+    }
+
+    /// Why the request no longer applies after a change to its workspace, or
+    /// `nil` while it still does. `pullRequest` is what the workspace's
+    /// `github-pr` annotation links to now. A running script keeps its
+    /// request until it reports back, because the script itself can close
+    /// the workspace.
+    public func dropReason(workspaceExists: Bool, isDone: Bool, pullRequest: WorkspacePullRequestLink?) -> DropReason? {
         if isRunning {
-            return self
-        }
-        guard workspaceExists, pullRequest == self.pullRequest else {
             return nil
         }
-        // New work in the workspace clears its done mark, and with it the
-        // user's acceptance of the version that was to merge.
-        return isDone ? self : nil
+        guard workspaceExists else { return .workspaceClosed }
+        guard pullRequest == self.pullRequest else { return .pullRequestChanged }
+        return isDone ? nil : .doneMarkCleared
     }
 
     /// Whether the pull request script is running for this request.
@@ -99,7 +130,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         switch phase {
         case .merging, .cleaningUp, .closing:
             return true
-        case .awaitingChecks, .awaitingMerge, .failed:
+        case .awaitingChecks, .awaitingMerge, .holdingCleanup, .failed:
             return false
         }
     }
@@ -116,7 +147,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
             return next
         case .merging, .closing:
             return nil
-        case .awaitingChecks, .awaitingMerge, .failed:
+        case .awaitingChecks, .awaitingMerge, .holdingCleanup, .failed:
             return self
         }
     }

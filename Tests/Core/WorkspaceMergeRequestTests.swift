@@ -17,20 +17,22 @@ struct WorkspaceMergeRequestTests {
         for phase in [
             WorkspaceMergeRequest.Phase.awaitingMerge,
             .awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: false),
+            .holdingCleanup(until: Date(timeIntervalSince1970: 1_800_000_000)),
             .failed(reason: "skipped"),
         ] {
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: link) == with(phase))
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: false, pullRequest: link) == nil)
-            #expect(with(phase).reconciled(workspaceExists: false, isDone: true, pullRequest: link) == nil)
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: other) == nil)
-            #expect(with(phase).reconciled(workspaceExists: true, isDone: true, pullRequest: nil) == nil)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: true, pullRequest: link) == nil)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: false, pullRequest: link) == .doneMarkCleared)
+            #expect(with(phase).dropReason(workspaceExists: false, isDone: true, pullRequest: link) == .workspaceClosed)
+            #expect(with(phase).dropReason(workspaceExists: false, isDone: false, pullRequest: nil) == .workspaceClosed)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: true, pullRequest: other) == .pullRequestChanged)
+            #expect(with(phase).dropReason(workspaceExists: true, isDone: false, pullRequest: nil) == .pullRequestChanged)
         }
     }
 
     @Test
-    func aRunningScriptKeepsItsRequestUntilItReportsBack() {
+    func aRunningScriptKeepsItsRequestUntilItReportsBack() throws {
         for running in [with(.merging(thenCleanUp: true)), with(.cleaningUp), with(.closing)] {
-            #expect(running.reconciled(workspaceExists: false, isDone: false, pullRequest: nil) == running)
+            #expect(running.dropReason(workspaceExists: false, isDone: false, pullRequest: nil) == nil)
         }
         // A relaunch starts an interrupted cleanup over, but not a merge or a close.
         #expect(with(.cleaningUp).persisted == with(.awaitingMerge))
@@ -39,6 +41,23 @@ struct WorkspaceMergeRequestTests {
         #expect(with(.failed(reason: "x")).persisted == with(.failed(reason: "x")))
         let waiting = with(.awaitingChecks(acceptedHead: "a1b2c3d4", thenCleanUp: true))
         #expect(waiting.persisted == waiting)
+        // A held cleanup keeps its time across a relaunch.
+        let held = with(.holdingCleanup(until: Date(timeIntervalSince1970: 1_800_000_000)))
+        let savedHold = try JSONEncoder().encode(#require(held.persisted))
+        #expect(try JSONDecoder().decode(WorkspaceMergeRequest.self, from: savedHold) == held)
+        // A cleanup that a quit interrupted after its hold does not wait again.
+        var released = with(.cleaningUp)
+        released.cleanupHoldEnded = true
+        let savedRelease = try JSONEncoder().encode(#require(released.persisted))
+        #expect(try JSONDecoder().decode(WorkspaceMergeRequest.self, from: savedRelease).cleanupHoldEnded == true)
+        // Restarting an adopted task's interrupted cleanup must not permit
+        // deletion of a checkout discovered only by its branch name.
+        var restricted = with(.cleaningUp)
+        restricted.requiresAbsentWorktree = true
+        let saved = try JSONEncoder().encode(#require(restricted.persisted))
+        let restored = try JSONDecoder().decode(WorkspaceMergeRequest.self, from: saved)
+        #expect(restored.phase == .awaitingMerge)
+        #expect(restored.requiresAbsentWorktree == true)
     }
 
     @Test

@@ -50,6 +50,36 @@ struct AgentLaunchServiceTests {
         }
     }
 
+    /// A Codex coordinator starts with a larger `project_doc_max_bytes`, so
+    /// it reads all of its instructions. The setting is on the command
+    /// only. A Claude coordinator and a task agent's launch do not get it.
+    @Test
+    func onlyACodexCoordinatorStartsWithTheLargerProjectDocLimit() async throws {
+        let docLimit = "--config project_doc_max_bytes=\(CoordinatorFolder.codexProjectDocMaxBytes)"
+        for agent in [AgentKind.codex, .claude] {
+            for isCoordinator in [true, false] {
+                let fixture = try makeLaunchUITestFixture()
+                let root = try makeProjectRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let result = if isCoordinator {
+                    try await fixture.service.launchCoordinator(
+                        profileID: agent.rawValue, workspaceID: fixture.workspaceID, panelID: fixture.panelID,
+                        cwd: root.path, environment: [:], model: nil, reasoningEffort: nil
+                    )
+                } else {
+                    try await fixture.service.launchAsync(
+                        profileID: agent.rawValue, workspaceID: fixture.workspaceID, panelID: fixture.panelID,
+                        cwd: root.path
+                    )
+                }
+                #expect(
+                    result.commandLine.contains(docLimit) == (agent == .codex && isCoordinator),
+                    "agent: \(agent.rawValue), isCoordinator: \(isCoordinator): \(result.commandLine)"
+                )
+            }
+        }
+    }
+
     @Test
     func forksFailClosedForUnconfirmedStaleMissingAndMismatchedSources() throws {
         for failure in ["inactive", "unconfirmed", "stale", "missing-file", "provider", "same-panel", "missing-cwd", "initial-commands"] {
@@ -429,7 +459,6 @@ struct AgentLaunchServiceTests {
         #expect(activeSession.repoRoot == projectRoot.path)
         #expect(activeSession.usesSessionStatusNotifications)
         #expect(activeSession.status == SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
-        #expect(store.hasEverLaunchedAgent)
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
         #expect(terminalRouter.focusPolicyByPanelID[panelID] == .focusTarget)
@@ -521,7 +550,6 @@ struct AgentLaunchServiceTests {
         #expect(throws: AgentLaunchError.panelBusy(runningCommand: nil)) {
             try service.launch(profileID: "claude")
         }
-        #expect(store.hasEverLaunchedAgent == false)
     }
 
     @Test
@@ -672,7 +700,6 @@ struct AgentLaunchServiceTests {
         #expect(sessionRuntimeStore.sessionRegistry.activeSessionIDByPanelID[panelID] == nil)
         #expect(sessionRuntimeStore.sessionRegistry.sessionsByID[startedSessionID]?.stoppedAt != nil)
         #expect(terminalRouter.sendAttemptsByPanelID[panelID] == 1)
-        #expect(store.hasEverLaunchedAgent == false)
     }
 
     @Test
@@ -824,6 +851,95 @@ struct AgentLaunchServiceTests {
         #expect(result.agent == .codex)
         #expect(result.displayName == "Codex")
         #expect(command.contains("codex '/work-on POP-1234'"))
+    }
+
+    @Test
+    func launchWithFirstPromptShowsWorkingUntilTheAgentReportsItsTurn() throws {
+        let fixture = makePromptStatusFixture()
+        let (service, sessionRuntimeStore) = (fixture.service, fixture.sessionRuntimeStore)
+        func status(_ sessionID: String) -> SessionStatus? {
+            sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        }
+
+        let launched = try service.launch(profileID: "claude", initialPrompt: "Fix the flaky test")
+        #expect(status(launched.sessionID)?.kind == .working)
+        #expect(status(launched.sessionID)?.detail == "Starting")
+
+        // pi and Grok report idle when they start, before they read the prompt.
+        sessionRuntimeStore.updateStatus(
+            sessionID: launched.sessionID,
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Grok is ready"),
+            at: Date()
+        )
+        #expect(status(launched.sessionID)?.kind == .working)
+
+        sessionRuntimeStore.updateStatus(
+            sessionID: launched.sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Using Skill"),
+            at: Date()
+        )
+        #expect(status(launched.sessionID)?.detail == "Using Skill")
+
+        // Once the agent reported its turn, idle means idle again.
+        sessionRuntimeStore.updateStatus(
+            sessionID: launched.sessionID,
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            at: Date()
+        )
+        #expect(status(launched.sessionID)?.kind == .idle)
+
+        // An interrupt ends the turn before the agent reports it.
+        let interruptedFixture = makePromptStatusFixture()
+        let interrupted = try interruptedFixture.service.launch(profileID: "claude", initialPrompt: "Fix the flaky test")
+        #expect(interruptedFixture.sessionRuntimeStore.handleLocalInterruptForPanelIfActive(
+            panelID: interrupted.panelID, kind: .controlC, at: Date()
+        ))
+        #expect(interruptedFixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: interrupted.sessionID)?.status?.kind == .idle)
+
+        let plainFixture = makePromptStatusFixture()
+        let plain = try plainFixture.service.launch(profileID: "claude")
+        #expect(plainFixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plain.sessionID)?.status?.kind == .idle)
+    }
+
+    @Test
+    func launchWithFirstPromptFallsBackToIdleWhenTheAgentNeverReports() async throws {
+        let fixture = makePromptStatusFixture(initialPromptTurnTimeoutNanoseconds: 50_000_000)
+        let (service, sessionRuntimeStore) = (fixture.service, fixture.sessionRuntimeStore)
+        let launched = try service.launch(profileID: "claude", initialPrompt: "Fix the flaky test")
+        #expect(sessionRuntimeStore.sessionRegistry.activeSession(sessionID: launched.sessionID)?.status?.kind == .working)
+
+        let deadline = Date().addingTimeInterval(5)
+        while sessionRuntimeStore.sessionRegistry.activeSession(sessionID: launched.sessionID)?.status?.kind == .working,
+              Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let status = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: launched.sessionID)?.status
+        #expect(status?.kind == .idle)
+        #expect(status?.detail == "Ready for prompt")
+    }
+
+    /// The service holds the stores and the router weakly, so the fixture
+    /// keeps them alive.
+    private func makePromptStatusFixture(
+        initialPromptTurnTimeoutNanoseconds: UInt64 = 60_000_000_000
+    ) -> (service: AgentLaunchService, sessionRuntimeStore: SessionRuntimeStore, store: AppStore, router: TestTerminalCommandRouter) {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { _, _, _, _, _ in },
+            initialPromptTurnTimeoutNanoseconds: initialPromptTurnTimeoutNanoseconds
+        )
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+        return (service, sessionRuntimeStore, store, terminalRouter)
     }
 
     @Test

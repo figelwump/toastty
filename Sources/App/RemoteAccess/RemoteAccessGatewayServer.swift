@@ -374,8 +374,7 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                 return
             case .request(let head, _):
                 connection.checkedHeaders = true
-                if head.path == RemoteAttachmentPolicy.sendPath
-                    || head.path == RemoteSessionStartPolicy.startWithAttachmentsPath {
+                if RemoteGatewayHTTPRequest.isAttachmentUploadPath(head.path) {
                     switch handler.authorizeAttachmentUpload(head, at: Date()) {
                     case .attachmentUploadAuthorized(let deviceID):
                         guard activeAttachmentConnectionID == nil else {
@@ -460,6 +459,29 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
                     self.sendPreviewResponse(response, connectionID: connectionID)
                 }
+            case .deferredTaskAction(let deviceID, let actionRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // An archive waits on git before it answers.
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveTaskAction(deviceID: deviceID, request: actionRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredTaskArchiveCheck(let deviceID, let checkRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveTaskArchiveCheck(deviceID: deviceID, request: checkRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
             case .deferredSessionStartAttachments(let deviceID, let body):
                 guard connection.admittedAttachmentUpload else { drop(connectionID); return }
                 connection.previewTask = Task { @MainActor [weak self] in
@@ -468,6 +490,62 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                         if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
                     }
                     let response = await self.handler.resolveSessionStartAttachments(deviceID: deviceID, body: body) {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                        connection.requestTimeoutTask?.cancel()
+                        connection.requestTimeoutTask = nil
+                    }
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredTaskCreate(let deviceID, let createRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // Saving copies the task's files, which can outlast the
+                // timeout meant for reading a request.
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveTaskCreate(deviceID: deviceID, request: createRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredTaskCreateAttachments(let deviceID, let body):
+                guard connection.admittedAttachmentUpload else { drop(connectionID); return }
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                    }
+                    let response = await self.handler.resolveTaskCreateAttachments(deviceID: deviceID, body: body) {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                        connection.requestTimeoutTask?.cancel()
+                        connection.requestTimeoutTask = nil
+                    }
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredCoordinatorSend(let deviceID, let sendRequest):
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // Sending copies the message's files, which can outlast the
+                // timeout meant for reading a request.
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let response = await self.handler.resolveCoordinatorSend(deviceID: deviceID, request: sendRequest)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredCoordinatorSendAttachments(let deviceID, let body):
+                guard connection.admittedAttachmentUpload else { drop(connectionID); return }
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer {
+                        if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
+                    }
+                    let response = await self.handler.resolveCoordinatorSendAttachments(deviceID: deviceID, body: body) {
                         if self.activeAttachmentConnectionID == connectionID { self.activeAttachmentConnectionID = nil }
                         connection.requestTimeoutTask?.cancel()
                         connection.requestTimeoutTask = nil
@@ -490,6 +568,34 @@ final class RemoteAccessGatewayServer: RemoteAccessGatewayServing {
                     guard let self else { return }
                     defer { self.activePreviewCount -= 1 }
                     let response = await self.handler.resolvePreview(operation)
+                    guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
+                    self.sendPreviewResponse(response, connectionID: connectionID)
+                }
+            case .deferredCoordinatorAttachmentImage(let deviceID, let imageRequest):
+                // Images share the previews' limit: both read files off the
+                // main thread.
+                guard activePreviewCount < 8 else {
+                    let body = (try? JSONEncoder().encode(RemoteCoordinatorAttachmentImageResponse(error: .busy))) ?? Data()
+                    sendPreviewResponse(.json(body: body), connectionID: connectionID)
+                    return
+                }
+                connection.deviceID = deviceID
+                connection.authKind = .native
+                // A full-size image can take a phone on a slow link longer to
+                // download than the deadline for reading a request: it gets
+                // the time an attachment upload gets.
+                connection.requestTimeoutTask?.cancel()
+                let timeout = attachmentUploadTimeoutNanoseconds
+                connection.requestTimeoutTask = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: timeout) } catch { return }
+                    self?.drop(connectionID)
+                }
+                activePreviewCount += 1
+                connection.previewTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { self.activePreviewCount -= 1 }
+                    let response = await self.handler.resolveCoordinatorAttachmentImage(
+                        deviceID: deviceID, request: imageRequest)
                     guard !Task.isCancelled, self.connections[connectionID] != nil else { return }
                     self.sendPreviewResponse(response, connectionID: connectionID)
                 }

@@ -22,6 +22,18 @@ public struct RemoteMessageSendRequest: Codable, Equatable, Sendable {
         ([text].filter { !$0.isEmpty } + attachments.map { "[Attachment: \(RemoteAttachmentPolicy.displayFilename($0.filename))]" }).joined(separator: "\n")
     }
 
+    /// The text that `displayText` started from: `displayText` without its
+    /// line for each of the `fileCount` attached files. `displayText` as it
+    /// is when it does not end with that many such lines.
+    public static func typedText(ofDisplayText displayText: String, fileCount: Int) -> String {
+        var lines = displayText.components(separatedBy: "\n")
+        guard fileCount > 0, lines.count >= fileCount,
+              lines.suffix(fileCount).allSatisfy({ $0.hasPrefix("[Attachment: ") && $0.hasSuffix("]") })
+        else { return displayText }
+        lines.removeLast(fileCount)
+        return lines.joined(separator: "\n")
+    }
+
     public init(
         conversationID: RemoteConversationID,
         clientRequestID: String,

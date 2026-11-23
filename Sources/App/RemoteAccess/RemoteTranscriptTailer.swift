@@ -16,22 +16,28 @@ final class RemoteTranscriptTailer {
         /// `linkedFileReferences` are extracted here, off the main actor,
         /// because deriving them parses every assistant message as Markdown.
         case observations([ProviderTranscriptObservation], linkedFileReferences: [String])
-        /// The first read reached the end of the file. Sent once per tailer,
-        /// after the observations replayed from the start.
-        case caughtUp
+        /// A previously unavailable file can now be read. Its history must
+        /// not be mistaken for live output after an empty initial page.
+        case initialReadStarted
+        /// The file is not readable yet. Keep polling without leaving the
+        /// chat loading or withholding its live session controls.
+        case initialReadUnavailable
+        /// All complete records present at the first successful poll have
+        /// reached the owner. Later appends do not delay this boundary.
+        case initialReadComplete
         case fileReplaced
     }
 
+    private(set) var id = UUID()
     let conversationID: RemoteConversationID
     let fileURL: URL
     let provider: AgentKind
-    /// False while the tailer replays the file from the start.
-    private(set) var hasCaughtUp = false
 
     private let pollIntervalNanoseconds: UInt64
     private let makeParser: @Sendable () -> any ProviderTranscriptLineParser
     private let onEvent: @MainActor (RemoteConversationID, Event) -> Void
     private var task: Task<Void, Never>?
+    private(set) var isReadingInitialContent = true
 
     init(
         conversationID: RemoteConversationID,
@@ -51,6 +57,7 @@ final class RemoteTranscriptTailer {
 
     func start() {
         guard task == nil else { return }
+        isReadingInitialContent = true
         let conversationID = conversationID
         let fileURL = fileURL
         let pollInterval = pollIntervalNanoseconds
@@ -59,7 +66,15 @@ final class RemoteTranscriptTailer {
         // restore events, and file-link grants, from the abandoned transcript.
         let onEvent: @MainActor (RemoteConversationID, Event) -> Void = { [weak self, onEvent] id, event in
             guard let self, self.task != nil else { return }
-            if case .caughtUp = event { self.hasCaughtUp = true }
+            switch event {
+            case .initialReadStarted:
+                self.id = UUID()
+                self.isReadingInitialContent = true
+            case .initialReadComplete, .initialReadUnavailable:
+                self.isReadingInitialContent = false
+            case .observations, .fileReplaced:
+                break
+            }
             onEvent(id, event)
         }
         let makeParser = makeParser
@@ -76,13 +91,20 @@ final class RemoteTranscriptTailer {
             var offset: UInt64 = 0
             var identity: FileIdentity?
             var remainder = Data()
-            var reportedCaughtUp = false
+            var initialReadCompleted = false
+            var initialReadStarted = false
+            var initialReadUnavailable = false
             let readChunkSize = 256 * 1024
             let maximumBufferedLineBytes = 8 * 1024 * 1024
             let observationBatchSize = 200
 
             while Task.isCancelled == false {
                 guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path) else {
+                    if initialReadCompleted == false, initialReadUnavailable == false {
+                        initialReadUnavailable = true
+                        initialReadStarted = false
+                        await onEvent(conversationID, .initialReadUnavailable)
+                    }
                     try? await Task.sleep(nanoseconds: pollInterval)
                     continue
                 }
@@ -104,6 +126,11 @@ final class RemoteTranscriptTailer {
                 if size > offset,
                    let handle = try? FileHandle(forReadingFrom: fileURL) {
                     defer { try? handle.close() }
+                    if initialReadCompleted == false, initialReadStarted == false {
+                        initialReadStarted = true
+                        initialReadUnavailable = false
+                        await onEvent(conversationID, .initialReadStarted)
+                    }
                     try? handle.seek(toOffset: offset)
                     while offset < size, Task.isCancelled == false {
                         let data: Data
@@ -115,6 +142,11 @@ final class RemoteTranscriptTailer {
                                 category: .automation,
                                 metadata: Self.readFailureLogMetadata(provider: provider)
                             )
+                            if initialReadCompleted == false {
+                                initialReadUnavailable = true
+                                initialReadStarted = false
+                                await onEvent(conversationID, .initialReadUnavailable)
+                            }
                             break
                         }
                         guard data.isEmpty == false else { break }
@@ -166,22 +198,26 @@ final class RemoteTranscriptTailer {
                             await onEvent(conversationID, Self.observationsEvent(observations))
                         }
                     }
+                } else if size > offset, initialReadCompleted == false, initialReadUnavailable == false {
+                    initialReadUnavailable = true
+                    initialReadStarted = false
+                    await onEvent(conversationID, .initialReadUnavailable)
                 }
 
-                if reportedCaughtUp == false, offset >= size, Task.isCancelled == false {
-                    reportedCaughtUp = true
+                if initialReadCompleted == false, offset >= size, Task.isCancelled == false {
+                    initialReadCompleted = true
                     var metadata = Self.lifecycleLogMetadata(
                         conversationID: conversationID, provider: provider, byteCount: offset)
                     metadata["elapsed_ms"] = String(Int(Date().timeIntervalSince(startedAt) * 1000))
                     ToasttyLog.info("Remote transcript tailer caught up", category: .automation, metadata: metadata)
-                    await onEvent(conversationID, .caughtUp)
+                    await onEvent(conversationID, .initialReadComplete)
                 }
 
                 try? await Task.sleep(nanoseconds: pollInterval)
             }
             var metadata = Self.lifecycleLogMetadata(
                 conversationID: conversationID, provider: provider, byteCount: offset)
-            metadata["caught_up"] = String(reportedCaughtUp)
+            metadata["caught_up"] = String(initialReadCompleted)
             ToasttyLog.info("Remote transcript tailer stopped", category: .automation, metadata: metadata)
         }
     }
@@ -199,7 +235,7 @@ final class RemoteTranscriptTailer {
         guard let task else { return }
         var metadata = Self.lifecycleLogMetadata(conversationID: conversationID, provider: provider)
         metadata["reason"] = reason
-        metadata["caught_up"] = String(hasCaughtUp)
+        metadata["caught_up"] = String(isReadingInitialContent == false)
         ToasttyLog.info("Stopping remote transcript tailer", category: .automation, metadata: metadata)
         task.cancel()
         self.task = nil

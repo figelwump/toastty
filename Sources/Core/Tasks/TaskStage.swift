@@ -1,0 +1,506 @@
+import Foundation
+
+/// Where a task stands: worked out from its record and from what Toastty
+/// sees now, never stored, so it cannot go stale. The rules are checked in
+/// order and the first match wins: a stopped cleanup, Archived, Done, To
+/// ship, Needs you, Starting, Running, Idle. Needs you comes before
+/// Starting, so a task whose setup failed counts toward the Needs you badge.
+/// A task that coordinates child tasks then finishes through them instead
+/// of resting at Idle; see `derivation(_:live:releaseTagsConfigured:)`.
+public enum TaskStage: Equatable, Sendable {
+    /// Setup, triage, or a move into a worktree is under way. Lists show it
+    /// with Running.
+    case starting
+    case needsYou(Attention)
+    case running
+    /// Nothing is under way and nothing waits for the user: the agent is at
+    /// the prompt with its last turn read, or no agent runs.
+    case idle
+    case toShip
+    case done
+    case archived
+
+    /// Why a task needs the user.
+    public enum Attention: Equatable, Sendable {
+        /// Triage could not place the task; the user picks a workspace.
+        case pickWorkspace(reason: String)
+        case setupFailed(reason: String)
+        /// The move into a worktree failed.
+        case moveFailed(reason: String)
+        /// The task space closed before the task finished.
+        case taskSpaceClosed
+        /// The agent asked a question or wants an approval.
+        case agentNeedsInput
+        /// The agent was started with the task's first prompt and never
+        /// reported that it began it. It most likely waits for an answer
+        /// that only its terminal can take, such as a login or a
+        /// folder-trust question, which comes before its first report.
+        case startWaitsInTerminal
+        /// The agent ended its turn with a question and marked the task as
+        /// waiting for the user's reply (`task.needs-reply`).
+        case awaitingReply
+        case agentError
+        /// The pull request is open and the agent is idle.
+        case review
+        /// The agent marked work without a pull request ready.
+        case readyForReview
+        /// The agent finished a turn the user has not read yet and waits
+        /// for the next prompt.
+        case agentFinished
+        /// Closing the task space or removing the worktree stopped, after a
+        /// merge, an archive or a release: "Merged · clean up?".
+        case cleanupStopped(reason: String)
+
+        /// The case's name, as `task get` and webhook events report it.
+        public var name: String {
+            switch self {
+            case .pickWorkspace: "pickWorkspace"
+            case .setupFailed: "setupFailed"
+            case .moveFailed: "moveFailed"
+            case .taskSpaceClosed: "taskSpaceClosed"
+            case .agentNeedsInput: "agentNeedsInput"
+            case .startWaitsInTerminal: "startWaitsInTerminal"
+            case .awaitingReply: "awaitingReply"
+            case .agentError: "agentError"
+            case .review: "review"
+            case .readyForReview: "readyForReview"
+            case .agentFinished: "agentFinished"
+            case .cleanupStopped: "cleanupStopped"
+            }
+        }
+
+        /// Whether the task has not reached its task space yet: setup or
+        /// the move into a worktree failed.
+        public var isBeforeStart: Bool {
+            switch self {
+            case .pickWorkspace, .setupFailed, .moveFailed: true
+            case .taskSpaceClosed, .agentNeedsInput, .startWaitsInTerminal, .awaitingReply, .agentError, .review,
+                 .readyForReview, .agentFinished, .cleanupStopped: false
+            }
+        }
+    }
+
+    /// The groups lists show, in their order.
+    public enum Group: Int, CaseIterable, Comparable, Sendable {
+        case needsYou
+        case running
+        case idle
+        case toShip
+        case done
+        case archived
+
+        public static func < (lhs: Group, rhs: Group) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+    }
+
+    /// The group a list shows the task in. A task that is starting lists
+    /// with Running, and one whose start failed with Needs you.
+    public var group: Group {
+        switch self {
+        case .needsYou: .needsYou
+        case .starting, .running: .running
+        case .idle: .idle
+        case .toShip: .toShip
+        case .done: .done
+        case .archived: .archived
+        }
+    }
+
+    /// Whether the task counts toward the Needs you badge.
+    public var needsUser: Bool {
+        if case .needsYou = self { return true }
+        return false
+    }
+
+    /// Whether the task's work is over: it shipped, finished, or was
+    /// archived. A merged task waiting for a release is not finished yet,
+    /// so the board still asks GitHub about its pull request once: a task
+    /// space still open after the merge then gets the merge's cleanup.
+    public var isFinished: Bool {
+        switch self {
+        case .done, .archived: true
+        case .starting, .needsYou, .running, .idle, .toShip: false
+        }
+    }
+
+    /// Whether the task has not reached its task space yet, or is still
+    /// moving into its worktree: setup, triage or the move is under way, or
+    /// one of them failed.
+    public var isBeforeStart: Bool {
+        switch self {
+        case .starting: true
+        case .needsYou(let attention): attention.isBeforeStart
+        case .running, .idle, .toShip, .done, .archived: false
+        }
+    }
+
+    public static func derive(_ facts: TaskStageFacts, live: TaskLiveFacts, releaseTagsConfigured: Bool) -> TaskStage {
+        derivation(facts, live: live, releaseTagsConfigured: releaseTagsConfigured).stage
+    }
+
+    /// The stage, and whether the task reached it through its child tasks.
+    /// A task that splits its work into child tasks and has no pull request
+    /// or worktree of its own finishes when they do: To ship while a child
+    /// waits for a release, Done once every child that is not archived is
+    /// Done. Only a task that would otherwise be Idle moves this way, so a
+    /// task whose agent works, waits for the user, or marked it ready for
+    /// review stays where it is. So does a task whose agent marked that it
+    /// waits on something outside Toastty: it still owns work. A ready mark
+    /// from before the newest child task was created is about earlier work,
+    /// so it does not hold a finished parent back. `children` is asked only
+    /// for such a task.
+    public static func derivation(
+        _ facts: TaskStageFacts,
+        live: TaskLiveFacts,
+        releaseTagsConfigured: Bool,
+        children: () -> TaskChildrenOutcome? = { nil }
+    ) -> (stage: TaskStage, finishedThroughChildren: Bool) {
+        let own = ownStage(facts, live: live, releaseTagsConfigured: releaseTagsConfigured)
+        guard facts.hasWorktree == false, live.hasPullRequestLink == false, live.pullRequest == nil,
+              facts.waitsOutside == false else {
+            return (own, false)
+        }
+        switch own {
+        case .idle, .needsYou(.taskSpaceClosed), .needsYou(.readyForReview):
+            break
+        case .starting, .needsYou, .running, .toShip, .done, .archived:
+            return (own, false)
+        }
+        // Closing the task space is how the user puts a conversation away,
+        // so it does not hold a finished task back. A ready mark the agent
+        // set before it started its newest child is about earlier work, so
+        // it does not either. What the task still waits for, such as a
+        // reply or a ready mark set after its children, does.
+        var open = live
+        open.taskSpaceOpen = true
+        var current = facts
+        if let mark = facts.readyForReviewAt, let newestChild = facts.newestChildCreatedAt, mark < newestChild {
+            current.readyForReviewAt = nil
+        }
+        guard ownStage(current, live: open, releaseTagsConfigured: releaseTagsConfigured) == .idle else {
+            return (own, false)
+        }
+        guard let outcome = children() else { return (own, false) }
+        return (outcome.stage, true)
+    }
+
+    private static func ownStage(_ facts: TaskStageFacts, live: TaskLiveFacts, releaseTagsConfigured: Bool) -> TaskStage {
+        // A cleanup that stopped leaves a task space or a worktree behind,
+        // whatever the task's stage would be without it.
+        if let problem = live.cleanupProblem ?? facts.cleanupProblem {
+            return .needsYou(.cleanupStopped(reason: problem))
+        }
+        if facts.archivedAt != nil {
+            return .archived
+        }
+        if facts.doneAt != nil || facts.shippedAt != nil {
+            return .done
+        }
+        if facts.isRelease == false, facts.mergedAt != nil || live.pullRequest?.state == .merged {
+            let target = live.pullRequest?.mergeTarget ?? facts.mergeTarget
+            // Keep the previous release wait until an older record's destination
+            // is known. Never infer it from the branch the work started from.
+            return releaseTagsConfigured && target?.waitsForRelease != false ? .toShip : .done
+        }
+        switch facts.setup {
+        case .needsWorkspace(let reason):
+            return .needsYou(.pickWorkspace(reason: reason))
+        case .setupFailed(let reason):
+            return .needsYou(.setupFailed(reason: reason))
+        case .routing, .settingUp:
+            return .starting
+        case .started:
+            break
+        }
+        switch facts.startWork {
+        case .failed(let reason)?:
+            return .needsYou(.moveFailed(reason: reason))
+        case .running?:
+            return .starting
+        case .finished?, nil:
+            break
+        }
+        if facts.hasTaskSpace, live.taskSpaceOpen == false {
+            return .needsYou(.taskSpaceClosed)
+        }
+        switch live.agent {
+        case .needsInput:
+            return .needsYou(.agentNeedsInput)
+        case .error:
+            return .needsYou(.agentError)
+        case .working:
+            return .running
+        case .finished, .idle, .none:
+            break
+        }
+        // An agent that never began its first prompt has done nothing yet,
+        // so nothing below can apply to it.
+        if live.startWaitsInTerminal {
+            return .needsYou(.startWaitsInTerminal)
+        }
+        // An accepted merge that is still under way is not waiting for a
+        // review. A merge skill that stopped on a blocker ended its turn, so
+        // its activity is gone and the task falls to Review below.
+        if live.merge != nil {
+            return .running
+        }
+        // The agent's own mark that it waits for an answer outranks a pull
+        // request: the user's reply comes before a review.
+        if facts.replyRequestedAt != nil {
+            return .needsYou(.awaitingReply)
+        }
+        if let pullRequest = live.pullRequest {
+            if pullRequest.state == .open, pullRequest.isDraft == false {
+                return .needsYou(.review)
+            }
+        } else if live.hasPullRequestLink {
+            // Without an answer from GitHub, a linked pull request and an
+            // idle agent are the best sign that the work waits for review.
+            return .needsYou(.review)
+        }
+        if facts.readyForReviewAt != nil {
+            return .needsYou(.readyForReview)
+        }
+        // An agent that ended its turn to wait for another task is still
+        // running. Otherwise a finished turn that is unread makes the next
+        // step the user's, and once the user reads it the task is idle.
+        if live.waitsOnTask {
+            return .running
+        }
+        if live.agent == .finished {
+            return .needsYou(.agentFinished)
+        }
+        return .idle
+    }
+}
+
+/// The parts of a task the stage depends on: its record, or for a task
+/// space without one, the little Toastty knows about it.
+public struct TaskStageFacts: Equatable, Sendable {
+    public var setup: TaskSetupState
+    public var startWork: TaskStartWorkState?
+    /// Whether setup made a task space, which may have closed since.
+    public var hasTaskSpace: Bool
+    /// Whether the task has, or is making, a worktree of its own.
+    public var hasWorktree: Bool
+    public var isRelease: Bool
+    public var readyForReviewAt: Date?
+    /// When the agent marked that it waits for the user's reply.
+    public var replyRequestedAt: Date?
+    /// Whether the agent marked that the task waits on something outside
+    /// Toastty (`task.waiting`). It does not change the stage: the task
+    /// rests in Idle. It keeps a task with child tasks from finishing
+    /// through them.
+    public var waitsOutside: Bool
+    public var mergedAt: Date?
+    public var mergeTarget: TaskMergeTarget?
+    public var shippedAt: Date?
+    public var archivedAt: Date?
+    public var doneAt: Date?
+    /// Why the record's cleanup stopped, if it did.
+    public var cleanupProblem: String?
+    /// When the newest of the task's child tasks was created. The board
+    /// fills it only for a task marked ready for review.
+    public var newestChildCreatedAt: Date?
+
+    public init(
+        setup: TaskSetupState,
+        startWork: TaskStartWorkState? = nil,
+        hasTaskSpace: Bool,
+        hasWorktree: Bool = false,
+        isRelease: Bool = false,
+        readyForReviewAt: Date? = nil,
+        replyRequestedAt: Date? = nil,
+        waitsOutside: Bool = false,
+        mergedAt: Date? = nil,
+        mergeTarget: TaskMergeTarget? = nil,
+        shippedAt: Date? = nil,
+        archivedAt: Date? = nil,
+        doneAt: Date? = nil,
+        cleanupProblem: String? = nil,
+        newestChildCreatedAt: Date? = nil
+    ) {
+        self.setup = setup
+        self.startWork = startWork
+        self.hasTaskSpace = hasTaskSpace
+        self.hasWorktree = hasWorktree
+        self.isRelease = isRelease
+        self.readyForReviewAt = readyForReviewAt
+        self.replyRequestedAt = replyRequestedAt
+        self.waitsOutside = waitsOutside
+        self.mergedAt = mergedAt
+        self.mergeTarget = mergeTarget
+        self.shippedAt = shippedAt
+        self.archivedAt = archivedAt
+        self.doneAt = doneAt
+        self.cleanupProblem = cleanupProblem
+        self.newestChildCreatedAt = newestChildCreatedAt
+    }
+
+    public init(record: TaskRecord) {
+        self.init(
+            setup: record.setup,
+            startWork: record.startWork?.state,
+            hasTaskSpace: record.operation.taskSpace != nil,
+            hasWorktree: record.operation.worktree != nil,
+            isRelease: record.release != nil,
+            readyForReviewAt: record.readyForReviewAt,
+            replyRequestedAt: record.replyRequest?.askedAt,
+            waitsOutside: record.waiting != nil,
+            mergedAt: record.mergedAt,
+            mergeTarget: record.mergeTarget,
+            shippedAt: record.shippedAt,
+            archivedAt: record.archivedAt,
+            doneAt: record.doneAt,
+            cleanupProblem: record.cleanup?.problem
+        )
+    }
+
+    /// A task space with no record. Toastty only watches it: its done mark
+    /// counts as done, and the mark clears when its work starts again.
+    public static func observed(doneAt: Date?) -> TaskStageFacts {
+        TaskStageFacts(setup: .started, hasTaskSpace: true, doneAt: doneAt)
+    }
+}
+
+/// What the agents in a task space are doing, the most urgent first.
+public enum TaskAgentActivity: Equatable, Sendable {
+    /// No agent session in the task space.
+    case none
+    /// At the prompt with no unread turn: just started or restored, or the
+    /// user has read the turn it finished.
+    case idle
+    /// Finished a turn the user has not read yet, and waits for a prompt.
+    case finished
+    case working
+    case needsInput
+    case error
+}
+
+/// An accepted merge that has not finished.
+public enum TaskMergeActivity: Equatable, Sendable {
+    /// The agent is checking the pull request with the merge skill.
+    case checking
+    /// Toastty is merging it.
+    case merging
+    /// Toastty waits for GitHub's checks or a required review, then merges.
+    case waitingForChecks
+    /// The pull request merged; Toastty closes the task space and removes
+    /// the worktree.
+    case cleaningUp
+}
+
+/// GitHub's last answer about a pull request.
+public struct TaskPullRequestState: Equatable, Sendable {
+    public enum State: String, Equatable, Sendable {
+        case open
+        case closed
+        case merged
+    }
+
+    public var state: State
+    public var isDraft: Bool
+    public var headSHA: String?
+    public var mergeCommit: String?
+    public var mergeTarget: TaskMergeTarget?
+    /// Whether GitHub would merge it now, and why not. `nil` when the
+    /// answer did not say.
+    public var mergeability: PullRequestMergeability?
+
+    public init(
+        state: State,
+        isDraft: Bool = false,
+        headSHA: String? = nil,
+        mergeCommit: String? = nil,
+        mergeTarget: TaskMergeTarget? = nil,
+        mergeability: PullRequestMergeability? = nil
+    ) {
+        self.state = state
+        self.isDraft = isDraft
+        self.headSHA = headSHA
+        self.mergeCommit = mergeCommit
+        self.mergeTarget = mergeTarget
+        self.mergeability = mergeability
+    }
+}
+
+/// What Toastty sees now, from caches only, so working out a stage never
+/// waits on `gh` or `git`.
+public struct TaskLiveFacts: Equatable, Sendable {
+    public var taskSpaceOpen: Bool
+    public var agent: TaskAgentActivity
+    /// `nil` until GitHub answered, or when `gh` is unavailable.
+    public var pullRequest: TaskPullRequestState?
+    /// Whether the task has a pull request link at all.
+    public var hasPullRequestLink: Bool
+    public var merge: TaskMergeActivity?
+    /// Why the merge's cleanup stopped, while Toastty still holds it.
+    public var cleanupProblem: String?
+    /// Whether the task holds a pending watch on another task: its agent
+    /// ended its turn to wait, so the task is still running.
+    public var waitsOnTask: Bool
+    /// Whether an agent in the task space was started with its first
+    /// prompt and never reported that it began it, in the time Toastty
+    /// waits for that report.
+    public var startWaitsInTerminal: Bool
+
+    public init(
+        taskSpaceOpen: Bool,
+        agent: TaskAgentActivity = .none,
+        pullRequest: TaskPullRequestState? = nil,
+        hasPullRequestLink: Bool = false,
+        merge: TaskMergeActivity? = nil,
+        cleanupProblem: String? = nil,
+        waitsOnTask: Bool = false,
+        startWaitsInTerminal: Bool = false
+    ) {
+        self.taskSpaceOpen = taskSpaceOpen
+        self.agent = agent
+        self.pullRequest = pullRequest
+        self.hasPullRequestLink = hasPullRequestLink
+        self.merge = merge
+        self.cleanupProblem = cleanupProblem
+        self.waitsOnTask = waitsOnTask
+        self.startWaitsInTerminal = startWaitsInTerminal
+    }
+}
+
+/// Where a task's child tasks stand once every one of them is To ship,
+/// Done or Archived and at least one merged. Archived children were closed
+/// without finishing, and a child marked Done without a merge may not have
+/// changed anything, so neither alone finishes the parent.
+public enum TaskChildrenOutcome: Equatable, Sendable {
+    /// A child waits for a release.
+    case toShip
+    /// Every child that is not archived is Done.
+    case done
+
+    /// `merged` is whether the child's work merged: through its own pull
+    /// request, or through its own child tasks. `nil` while a child is
+    /// still open, or when none merged.
+    public init?(children: [(stage: TaskStage, merged: Bool)]) {
+        var anyMerged = false
+        var waitsToShip = false
+        for child in children {
+            switch child.stage {
+            case .toShip:
+                waitsToShip = true
+            case .done, .archived:
+                break
+            case .starting, .needsYou, .running, .idle:
+                return nil
+            }
+            if child.merged, child.stage != .archived { anyMerged = true }
+        }
+        guard anyMerged else { return nil }
+        self = waitsToShip ? .toShip : .done
+    }
+
+    public var stage: TaskStage {
+        switch self {
+        case .toShip: .toShip
+        case .done: .done
+        }
+    }
+}

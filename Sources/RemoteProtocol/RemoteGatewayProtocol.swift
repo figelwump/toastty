@@ -58,6 +58,51 @@ public enum RemoteGatewayCapability: String, Codable, Equatable, Hashable, Senda
     case localDraftRelease = "local_draft_release"
     /// A configured host accepts a native device's verified notification grant.
     case pushNotifications = "push_notifications"
+    /// The session snapshot carries the Mac's task board while the task
+    /// system is on.
+    case tasks
+    /// A native device may run a task's actions: merge, mark done, archive,
+    /// and the others each task's summary offers. The device also needs
+    /// send access and its Task actions switch on the Mac; without them the
+    /// Mac refuses each request.
+    case taskActions = "task_actions"
+    /// A native client may create a task, as the Mac's quick entry does.
+    /// It uses the device's session start permission, which the create
+    /// options report.
+    case taskCreate = "task_create"
+    /// A native client may send a quick entry message to the coordinator,
+    /// as the Mac's quick entry panel does while a coordinator exists. The
+    /// coordinator then creates the task. It uses the device's session
+    /// start permission, as task creation does. The task-create options
+    /// carry the coordinator's state while the Mac has a coordinator.
+    case coordinatorSend = "coordinator_send"
+    /// The coordinator's chat has one read point on the Mac, shared with
+    /// paired devices: the coordinator's workspace carries it in
+    /// `coordinatorChatRead`, and a native client sends what it read with
+    /// `RemoteCoordinatorChatReadRequest`. Only a Mac with the coordinator
+    /// advertises it.
+    case coordinatorChatRead = "coordinator_chat_read"
+    /// The Mac shares which wake turns the coordinator marked quiet, so a
+    /// device's chat folds them as the Mac's does. The coordinator's
+    /// workspace carries `coordinatorQuietDigestsRevision`, and a native
+    /// client reads the digests' keys from
+    /// `RemoteCoordinatorQuietDigestsPolicy.path` when it changes. Only a Mac
+    /// with the coordinator advertises it.
+    case coordinatorQuietDigests = "coordinator_quiet_digests"
+    /// The Mac serves the images attached to the user messages of the
+    /// coordinator's chat, at `RemoteCoordinatorAttachmentImagePolicy.path`,
+    /// so a device's chat shows them as the Mac's chat does. Without it, a
+    /// device shows the files by name. Only a Mac with the coordinator
+    /// advertises it.
+    case coordinatorAttachmentImages = "coordinator_attachment_images"
+    /// The Mac shares the coordinator's own queue: the messages for the
+    /// coordinator that wait outside its conversation's send queue. The
+    /// coordinator's workspace carries `coordinatorQueueRevision`, a native
+    /// client reads the queue from `RemoteCoordinatorQueuePolicy.path` when
+    /// it changes, and `RemoteConversationQueueAction.coordinatorResume` and
+    /// `coordinatorRemove` change it. Only a Mac with the coordinator
+    /// advertises it.
+    case coordinatorQueue = "coordinator_queue"
 }
 
 /// Public compatibility probe used before a client has credentials.
@@ -85,6 +130,8 @@ public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
             .sessionStart,
             .conversationInputControl,
             .localDraftRelease,
+            .tasks,
+            .taskActions,
         ]
     ) {
         self.protocolVersion = protocolVersion
@@ -366,15 +413,45 @@ public struct RemoteWorkspaceDoneRequest: Codable, Equatable, Sendable {
     public var protocolVersion: String
     public var workspaceID: UUID
     public var done: Bool
+    /// The client can decode `RemoteWorkspaceDoneResult.hasOpenPullRequest`.
+    /// A request without the key comes from a client that cannot, so the
+    /// Mac answers it with `workInProgress`, which every client decodes.
+    public var knowsOpenPullRequestResult: Bool
 
     public init(
         protocolVersion: String = RemoteGatewayProtocol.version,
         workspaceID: UUID,
-        done: Bool
+        done: Bool,
+        knowsOpenPullRequestResult: Bool = false
     ) {
         self.protocolVersion = protocolVersion
         self.workspaceID = workspaceID
         self.done = done
+        self.knowsOpenPullRequestResult = knowsOpenPullRequestResult
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try container.decode(String.self, forKey: .protocolVersion)
+        workspaceID = try container.decode(UUID.self, forKey: .workspaceID)
+        done = try container.decode(Bool.self, forKey: .done)
+        knowsOpenPullRequestResult = try container.decodeIfPresent(
+            Bool.self, forKey: .knowsOpenPullRequestResult
+        ) ?? false
+    }
+
+    /// Leaves the key out when false, so the request is the same JSON an
+    /// older client sends.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(protocolVersion, forKey: .protocolVersion)
+        try container.encode(workspaceID, forKey: .workspaceID)
+        try container.encode(done, forKey: .done)
+        if knowsOpenPullRequestResult { try container.encode(true, forKey: .knowsOpenPullRequestResult) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, workspaceID, done, knowsOpenPullRequestResult
     }
 }
 
@@ -387,6 +464,11 @@ public enum RemoteWorkspaceDoneResult: String, Codable, Equatable, Sendable {
     /// A session in the subspace is working, waiting on approval, or failed,
     /// so the task is not one to wave off as done.
     case workInProgress = "work_in_progress"
+    /// The subspace's task has an open pull request or a merge under way,
+    /// so it finishes through Merge, not a done mark. Older clients cannot
+    /// decode this result, so the Mac sends it only to a client whose
+    /// request sets `knowsOpenPullRequestResult`.
+    case hasOpenPullRequest = "has_open_pull_request"
     case workspaceNotFound = "workspace_not_found"
 }
 

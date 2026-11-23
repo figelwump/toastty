@@ -1,11 +1,13 @@
 import RemoteProtocol
 @testable import ToasttyApp
 import AppKit
+import Carbon.HIToolbox
 import CoreState
 import SwiftUI
 import XCTest
 
-private final class SidebarLayoutWidthRecorder {
+// SwiftUI runs layout on the main thread.
+private final class SidebarLayoutWidthRecorder: @unchecked Sendable {
     var width: CGFloat = 0
     var height: CGFloat = 0
 }
@@ -94,6 +96,16 @@ final class SidebarViewTests: XCTestCase {
         let sessionRuntimeStore: SessionRuntimeStore
         let hostingView: NSView
         let window: NSWindow
+        var taskCoordinator: TaskCoordinator? = nil
+        var taskBoard: TaskBoardStore? = nil
+        var coordinatorController: CoordinatorController? = nil
+    }
+
+    /// `gh` that never answers, so stages come from links and the record.
+    private struct OfflineGitHub: WorkspaceMergeCommandRunning {
+        func run(arguments: [String], directory: String, timeout: TimeInterval) async -> WorkspaceMergeCommandResult {
+            WorkspaceMergeCommandResult(exitCode: 1, stdout: "", stderr: "offline", failure: nil)
+        }
     }
 
     private struct MultiSessionSidebarHarness {
@@ -325,7 +337,7 @@ final class SidebarViewTests: XCTestCase {
     /// The card panel never becomes key, so the first click on a card row or
     /// its copy button must reach the button directly and leave keyboard
     /// focus where it was.
-    func testSubspaceHoverCardRowJumpsAndPathCopiesOnFirstClickWithoutTakingFocus() throws {
+    func testSubspaceHoverCardRowJumpsParentOpensAndPathCopiesOnFirstClickWithoutTakingFocus() throws {
         let presenter = HoverTipPresenter.shared
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 300, height: 200),
@@ -345,6 +357,7 @@ final class SidebarViewTests: XCTestCase {
         let path = NSHomeDirectory() + "/worktrees/hover-card-copy"
         let model = SubspaceHoverTipModel(
             name: "qa-mobile-navigation",
+            stage: .bucket(.readyToReview),
             sessions: [
                 .init(
                     title: "Fix nav drawer focus", panelID: targetPanelID, agentLabel: "claude",
@@ -356,15 +369,21 @@ final class SidebarViewTests: XCTestCase {
             annotations: [],
             path: "~/worktrees/hover-card-copy",
             absolutePath: path,
-            spawnerName: "Test EmptyOS beta experience"
+            spawnerName: "Test EmptyOS beta experience",
+            parentTaskTitle: "iOS parity with the Mac coordinator UI"
         )
         var selectedPanelIDs: [UUID] = []
+        var parentOpenCount = 0
         let screen = try XCTUnwrap(NSScreen.main?.visibleFrame)
         let anchor = CGRect(x: screen.minX + 40, y: screen.midY, width: 240, height: 22)
         func showCard() throws -> NSView {
             presenter.show(
                 id: "subspace-card",
-                content: SubspaceHoverTipCard(model: model) { selectedPanelIDs.append($0) },
+                content: SubspaceHoverTipCard(
+                    model: model,
+                    onSelectSession: { selectedPanelIDs.append($0) },
+                    onSelectParentTask: { parentOpenCount += 1 }
+                ),
                 anchorScreenRect: anchor,
                 placement: .trailing(gap: 6)
             )
@@ -375,6 +394,19 @@ final class SidebarViewTests: XCTestCase {
         }
 
         var cardView = try showCard()
+        // The stage replaces the "task space" tag.
+        XCTAssertNotNil(semanticTextField(in: cardView, prefix: "Stage: Ready to review"))
+        try writeSidebarEvidence(cardView, name: "task-space-card-parent-button")
+        try attachSidebarRender(cardView, name: "task-space-card-parent-button")
+
+        try clickSemanticText(prefix: "Go to parent task iOS parity with the Mac coordinator UI", in: cardView)
+        pumpMainRunLoop(duration: 0.1)
+        XCTAssertEqual(parentOpenCount, 1, "The first click on the Parent button should reach it")
+        XCTAssertTrue(selectedPanelIDs.isEmpty, "Opening the parent must not also jump to a session")
+        XCTAssertFalse(presenter.isVisible(id: "subspace-card"), "Opening the parent closes the card")
+        XCTAssertEqual(window.isKeyWindow, windowWasKey, "Clicking the card must not move keyboard focus")
+
+        cardView = try showCard()
         try clickSemanticText(prefix: "Go to Fix nav drawer focus", in: cardView)
         pumpMainRunLoop(duration: 0.1)
         XCTAssertEqual(selectedPanelIDs, [targetPanelID], "The first click on a card row should reach it")
@@ -392,6 +424,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(presenter.isVisible(id: "subspace-card"))
         XCTAssertEqual(window.isKeyWindow, windowWasKey)
         XCTAssertEqual(selectedPanelIDs, [targetPanelID], "Copying must not also jump")
+        XCTAssertEqual(parentOpenCount, 1)
 
         // The next card starts without the last one's copy check.
         cardView = try showCard()
@@ -405,6 +438,35 @@ final class SidebarViewTests: XCTestCase {
         NSApp.windows
             .first { $0.isVisible && $0.contentView is HoverTipContainerView }?
             .contentView
+    }
+
+    /// Hovers a task space row in a hosted sidebar and returns its open
+    /// card. SwiftUI hover: one entered event through the hosting view's own
+    /// tracking areas, then moves straight to the row.
+    private func hoverTaskSpaceRow(_ title: String, in root: NSView, hasEntered: inout Bool) throws -> NSView {
+        HoverTipPresenter.shared.hideAll()
+        let rowFrame = try semanticTextFrame(in: root, prefix: "\(title), task space")
+        let windowPoint = root.convert(CGPoint(x: rowFrame.midX, y: rowFrame.midY), to: nil)
+        let window = try XCTUnwrap(root.window)
+        if hasEntered == false {
+            hasEntered = true
+            for area in root.trackingAreas where area.owner === root {
+                root.mouseEntered(with: try XCTUnwrap(NSEvent.enterExitEvent(
+                    with: .mouseEntered, location: windowPoint, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, trackingNumber: unsafeBitCast(area, to: Int.self), userData: nil
+                )))
+            }
+        }
+        root.mouseMoved(with: try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved, location: windowPoint, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        )))
+        pumpMainRunLoop(duration: 0.8)
+        let card = try XCTUnwrap(renderedHoverCardView(), "Hovering \(title) should open its card")
+        card.layoutSubtreeIfNeeded()
+        return card
     }
 
     func testSessionHoverRecoversAfterTrackingUpdateWithoutMouseExit() throws {
@@ -2008,7 +2070,9 @@ final class SidebarViewTests: XCTestCase {
     /// the spawner tags, and that subspaces do not render as cards.
     private func makeSubspacesHarness(
         sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
-        additionalSubspaceCount: Int = 0
+        additionalSubspaceCount: Int = 0,
+        taskRecords: [TaskRecord]? = nil,
+        withTaskBoard: Bool = false
     ) throws -> (SidebarHarness, SubspacesHarnessIDs) {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let parentLeftPanelID = UUID()
@@ -2080,7 +2144,13 @@ final class SidebarViewTests: XCTestCase {
             workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
             selectedWindowID: windowID
         )
-        let harness = try makeSidebarHarness(state: state, windowID: windowID, sidebarWidth: sidebarWidth)
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            sidebarWidth: sidebarWidth,
+            taskRecords: taskRecords,
+            withTaskBoard: withTaskBoard
+        )
 
         func start(_ sessionID: String, title: String, in workspace: WorkspaceState, status: SessionStatus) {
             harness.sessionRuntimeStore.startSession(
@@ -2128,7 +2198,1904 @@ final class SidebarViewTests: XCTestCase {
         ))
     }
 
-    func testSubspacesRenderInsideParentCardSortedByStatusNotAsCards() throws {
+    func testStartingTasksListWithRunningAndSetupFailuresWithNeedsYou() throws {
+        let now = Date()
+        func record(_ title: String, setup: TaskSetupState, workspaceID: UUID? = nil) -> TaskRecord {
+            TaskRecord(
+                createdAt: now,
+                text: title,
+                title: title,
+                slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli,
+                resolved: TaskFields(agent: "codex"),
+                workspaceID: workspaceID,
+                setup: setup
+            )
+        }
+        let (harness, _) = try makeSubspacesHarness(taskRecords: [
+            record("Billing page shows the old plan", setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")),
+            record("Fix the unread dot", setup: .setupFailed(reason: "The agent did not start: profile missing")),
+            record("Flaky scratchpad unread test", setup: .settingUp),
+            record("Composer keeps a blank line", setup: .routing),
+        ], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        // Tasks with no project open in the window list in the last card,
+        // Other tasks: one that is starting with Running, and one whose setup
+        // failed with Needs you. There is no Inbox above the cards.
+        var textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Inbox") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains(SidebarView.otherTasksCardTitle), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the unread dot, ⚠ setup failed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Flaky scratchpad unread test, Setting up"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Composer keeps a blank line, Setting up · choosing a workspace"), "\(textValues)")
+        let otherBuckets = try semanticTextFrame(in: harness.hostingView, prefix: SidebarView.otherTasksCardTitle)
+        let billing = try semanticTextFrame(in: harness.hostingView, prefix: "Billing page shows the old plan")
+        let settingUp = try semanticTextFrame(in: harness.hostingView, prefix: "Flaky scratchpad unread test")
+        let downward: (CGRect, CGRect) -> Bool = { upper, lower in
+            harness.hostingView.isFlipped ? upper.midY < lower.midY : upper.midY > lower.midY
+        }
+        XCTAssertTrue(downward(otherBuckets, billing) && downward(billing, settingUp), "Needs you lists above Running in the card")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-other-tasks-all")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-other-tasks-all")
+
+        // Needs you lists the two that need the user, and not the starting ones.
+        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Inbox") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the unread dot, ⚠ setup failed"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Flaky scratchpad unread test") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Composer keeps a blank line") }, "\(textValues)")
+        let board = try XCTUnwrap(harness.taskBoard)
+        let sections = SidebarStatusSections.make(board.items(windowID: harness.windowID))
+        let needsYou = Set(sections.needsYou.map(\.item.title))
+        let running = Set(sections.running.map(\.item.title))
+        XCTAssertTrue(needsYou.isSuperset(of: ["Billing page shows the old plan", "Fix the unread dot"]), "\(needsYou)")
+        XCTAssertTrue(running.isSuperset(of: ["Flaky scratchpad unread test", "Composer keeps a blank line"]), "\(running)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-needs-you-starting")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-needs-you-starting")
+    }
+
+    /// The report behind these rules: a clicked unread task jumped to Idle
+    /// from under the pointer, a parent showed apart from its child, and a
+    /// question looked idle once read. A pull request waits for review apart
+    /// from what blocks an agent. The Needs you segment then lists only the
+    /// rows that need the user, in those two sections.
+    func testBucketsKeepQuestionsFamiliesAndTheClickedRowInPlace() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        func task(_ title: String, parent: UUID? = nil, pullRequest: Int? = nil, question: String? = nil, unread: Bool = false) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, setup: .started,
+                parentTaskID: parent, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID, unreadPanelIDs: unread ? [panelID] : [],
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: project.id
+            )
+            workspace.taskID = taskID
+            workspaces.append(workspace)
+            records.append(record)
+            panelByTitle[title] = (workspaceID, panelID)
+            return taskID
+        }
+        let parentID = task("Public URL warning")
+        _ = task("Private pages stay private", parent: parentID, pullRequest: 322)
+        _ = task("Thumbnail filenames", unread: true)
+        _ = task("Hostname options", question: "Pick a hostname option")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        // The newest report comes last, but each bucket keeps the order the
+        // task spaces opened in.
+        let reports: [(String, SessionStatusKind, TimeInterval)] = [
+            ("Public URL warning", .idle, 1), ("Private pages stay private", .idle, 2),
+            ("Hostname options", .idle, 3), ("Thumbnail filenames", .ready, 4),
+        ]
+        for (title, kind, seconds) in reports {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID, windowID: windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .ready ? "Ready" : "Waiting"),
+                at: now.addingTimeInterval(seconds)
+            )
+        }
+        let root = harness.hostingView
+
+        /// Group headers and rows, top to bottom, once rows that changed
+        /// bucket have finished moving.
+        func layout() throws -> [String] {
+            pumpMainRunLoop(duration: 0.6)
+            root.layoutSubtreeIfNeeded()
+            pumpMainRunLoop(duration: 0.4)
+            root.layoutSubtreeIfNeeded()
+            let top = try semanticTextFrame(in: root, text: "Tasks", shape: "the Tasks row")
+            // Not every group shows, so look up without recording a failure.
+            func frame(_ prefix: String) -> CGRect? {
+                semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
+            }
+            var frames: [(String, CGRect)] = []
+            for header in ["Needs you", "Ready to review", "Running", "Idle"] {
+                if let found = frame("\(header), ") { frames.append((header.uppercased(), found)) }
+            }
+            for title in panelByTitle.keys {
+                if let found = frame("\(title), task space") { frames.append((title, found)) }
+            }
+            let below = frames.first.map { $0.1.minY > top.minY } ?? true
+            return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
+        }
+
+        // A question waits in Needs you with its text; a family lists in
+        // Ready to review with its child whose pull request waits there.
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options",
+            "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+        ])
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Needs you, 2"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Ready to review, 1"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("2 need you, 1 ready for review, 1 idle"), "\(textValues)")
+        XCTAssertTrue(textValues.contains {
+            $0.hasPrefix("Hostname options, task space, waiting for your reply") && $0.contains("Asks: Pick a hostname option")
+        }, "\(textValues)")
+        // Only the question row shows the question pill, on its title line.
+        XCTAssertEqual(textValues.filter { $0 == "question" }.count, 1, "\(textValues)")
+        // Row labels are zero-size and centered in their rows.
+        let questionRow = try semanticTextFrame(in: root, prefix: "Hostname options, task space")
+        let neighborRow = try semanticTextFrame(in: root, prefix: "Thumbnail filenames, task space")
+        let questionPill = try semanticTextFrame(in: root, text: "question", shape: "the question row")
+        XCTAssertLessThan(
+            abs(questionPill.midY - questionRow.midY), abs(questionPill.midY - neighborRow.midY),
+            "The pill should sit in the question row: \(questionPill), rows \(questionRow) \(neighborRow)"
+        )
+        try writeSidebarEvidence(root, name: "buckets-1-before-click")
+        try attachSidebarRender(root, name: "buckets-1-before-click")
+
+        // Selecting the unread task reads it; it holds its place and no
+        // longer counts.
+        let clicked = try XCTUnwrap(panelByTitle["Thumbnail filenames"])
+        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: clicked.workspaceID)))
+        XCTAssertTrue(harness.store.send(.focusPanel(workspaceID: clicked.workspaceID, panelID: clicked.panelID)))
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Thumbnail filenames", "Hostname options",
+            "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+        ])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Needs you, 1"), "\(textValues)")
+        try writeSidebarEvidence(root, name: "buckets-2-clicked-row-holds")
+        try attachSidebarRender(root, name: "buckets-2-clicked-row-holds")
+
+        // Resuming work moves the selected row to Running.
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "Thumbnail filenames", status: SessionStatus(kind: .working, summary: "Working"),
+            at: now.addingTimeInterval(5)
+        )
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Hostname options", "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+            "RUNNING", "Thumbnail filenames",
+        ])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Running, 1"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Needs you, 1"), "\(textValues)")
+        try writeSidebarEvidence(root, name: "buckets-3-selected-row-resumes")
+        try attachSidebarRender(root, name: "buckets-3-selected-row-resumes")
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "Thumbnail filenames", status: SessionStatus(kind: .idle, summary: "Waiting"),
+            at: now.addingTimeInterval(6)
+        )
+
+        // Once the selection moves, the read task lists in Idle.
+        XCTAssertTrue(harness.store.send(.selectWorkspace(windowID: windowID, workspaceID: project.id)))
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "Hostname options", "READY TO REVIEW", "Public URL warning", "Private pages stay private",
+            "IDLE", "Thumbnail filenames",
+        ])
+        try writeSidebarEvidence(root, name: "buckets-4-after-selection-moves")
+        try attachSidebarRender(root, name: "buckets-4-after-selection-moves")
+
+        // Needs you lists only what needs the user, in two sections: the
+        // idle parent stays out, and its child that waits for review names
+        // it instead.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        XCTAssertEqual(try layout(), ["NEEDS YOU", "Hostname options", "READY TO REVIEW", "Private pages stay private"])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Only what needs you, 1, 1 ready for review"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("emptyos, 1 needs you, 1 ready for review"), "\(textValues)")
+        // Rows take one line: the question moves to the row's hover card,
+        // and the child's tag is its pull request, not its parent. A
+        // two-line row would put the next header about 33 points below the
+        // row's center; a one-line row puts it about 25 below.
+        let questionRowInSegment = try semanticTextFrame(in: root, prefix: "Hostname options, task space")
+        let reviewHeader = try semanticTextFrame(in: root, text: "Ready to review, 1", shape: "the Ready to review header")
+        XCTAssertLessThan(abs(reviewHeader.midY - questionRowInSegment.midY), 29, "\(questionRowInSegment) \(reviewHeader)")
+        XCTAssertTrue(textValues.contains("github-pr: PR #322"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Public URL warning, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Thumbnail filenames, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Hostname options, task space, waiting for your reply") }, "\(textValues)")
+        let child = try XCTUnwrap(textValues.first { $0.hasPrefix("Private pages stay private, task space") }, "\(textValues)")
+        XCTAssertTrue(child.hasSuffix("started by Public URL warning"), child)
+        try writeSidebarEvidence(root, name: "buckets-5-needs-you-segment")
+        try attachSidebarRender(root, name: "buckets-5-needs-you-segment")
+    }
+
+    /// A task space card offers the task that started it. In Needs you the
+    /// parent usually has no row, and the sidebar stays on Needs you: the
+    /// parent's task space opens without a row of its own. A parent whose
+    /// task space closed opens in the Tasks view, and one in another window
+    /// opens there.
+    func testTaskSpaceCardParentButtonOpensTheParentAndKeepsNeedsYou() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        var otherWindowWorkspaces: [WorkspaceState] = []
+        func task(
+            _ title: String, parent: UUID? = nil, pullRequest: Int? = nil, unread: Bool = false,
+            closedAndDone: Bool = false, inOtherWindow: Bool = false
+        ) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, setup: .started,
+                parentTaskID: parent, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            if closedAndDone {
+                // Its task space is gone, so the task has no row to open.
+                record.doneAt = now
+                records.append(record)
+                return taskID
+            }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID, unreadPanelIDs: unread ? [panelID] : [],
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: inOtherWindow ? nil : project.id
+            )
+            workspace.taskID = taskID
+            if inOtherWindow {
+                otherWindowWorkspaces.append(workspace)
+            } else {
+                workspaces.append(workspace)
+            }
+            records.append(record)
+            panelByTitle[title] = (workspaceID, panelID)
+            return taskID
+        }
+        let parentID = task("Public URL warning")
+        _ = task("Private pages stay private", parent: parentID, pullRequest: 322)
+        let closedParentID = task("Hostname options", closedAndDone: true)
+        _ = task("Thumbnail filenames", parent: closedParentID, unread: true)
+        let otherWindowParentID = task("Billing rework", inOtherWindow: true)
+        _ = task("Invoice totals", parent: otherWindowParentID, unread: true)
+        let windowID = UUID(), otherWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+                ),
+                WindowState(
+                    id: otherWindowID, frame: CGRectCodable(x: 400, y: 0, width: 800, height: 600),
+                    workspaceIDs: otherWindowWorkspaces.map(\.id), selectedWorkspaceID: nil
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: (workspaces + otherWindowWorkspaces).map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            harness.window.orderOut(nil)
+        }
+        // Off screen, so the user's real pointer cannot hover a row.
+        harness.window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        for (title, kind) in [
+            ("Public URL warning", SessionStatusKind.idle), ("Private pages stay private", .idle), ("Thumbnail filenames", .ready),
+            ("Billing rework", .idle), ("Invoice totals", .ready),
+        ] {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID,
+                windowID: title == "Billing rework" ? otherWindowID : windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .ready ? "Ready" : "Waiting"),
+                at: now.addingTimeInterval(1)
+            )
+        }
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        let root = harness.hostingView
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        var textValues = renderedTextValues(in: root)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Public URL warning, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Private pages stay private, task space") }, "\(textValues)")
+
+        var hasEntered = false
+        func hoverRow(_ title: String) throws -> NSView {
+            try hoverTaskSpaceRow(title, in: root, hasEntered: &hasEntered)
+        }
+
+        var card = try hoverRow("Private pages stay private")
+        XCTAssertNotNil(semanticTextField(in: card, prefix: "Stage: Ready to review"))
+        try writeSidebarEvidence(card, name: "parent-button-1-card-in-needs-you")
+        try attachSidebarRender(card, name: "parent-button-1-card-in-needs-you")
+        try clickSemanticText(prefix: "Go to parent task Public URL warning", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        let parentSpace = try XCTUnwrap(panelByTitle["Public URL warning"])
+        XCTAssertEqual(harness.store.window(id: windowID)?.selectedWorkspaceID, parentSpace.workspaceID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou, "The jump keeps the segment")
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, false)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Private pages stay private, task space") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "parent-button-2-sidebar-after-jump")
+        try attachSidebarRender(root, name: "parent-button-2-sidebar-after-jump")
+
+        // The other parent's task space closed: the Tasks view shows it.
+        card = try hoverRow("Thumbnail filenames")
+        try clickSemanticText(prefix: "Go to parent task Hostname options", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.taskBoard?.tasksViewSelection(windowID: windowID)?.taskID, closedParentID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
+
+        // A parent in another window opens there, and that window becomes
+        // the selected one: focusing its panel is what raises the window.
+        _ = harness.store.send(.setTasksViewShown(windowID: windowID, shown: false))
+        pumpMainRunLoop(duration: 0.4)
+        root.layoutSubtreeIfNeeded()
+        card = try hoverRow("Invoice totals")
+        try clickSemanticText(prefix: "Go to parent task Billing rework", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        let otherSpace = try XCTUnwrap(panelByTitle["Billing rework"])
+        XCTAssertEqual(harness.store.state.selectedWindowID, otherWindowID)
+        XCTAssertEqual(harness.store.window(id: otherWindowID)?.selectedWorkspaceID, otherSpace.workspaceID)
+        XCTAssertEqual(harness.store.state.workspacesByID[otherSpace.workspaceID]?.focusedPanelID, otherSpace.panelID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
+    }
+
+    /// A task space card lists the tasks this one started, so a parent
+    /// reads as one in Needs you, where most of its children have no row.
+    /// Open children list most urgent first, five at most until the user
+    /// shows the rest; merged ones fold into one line; archived ones stay
+    /// out. A click on a child opens it and keeps the segment, as the
+    /// Parent button does; a child whose task space closed opens in the
+    /// Tasks view. The card grows downward when it shows more rows.
+    func testTaskSpaceCardListsChildTasksAndOpensThem() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "toastty")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        var sessionKinds: [(title: String, kind: SessionStatusKind)] = []
+        func task(
+            _ title: String, parent: UUID? = nil, pullRequest: Int? = nil, question: String? = nil,
+            session: SessionStatusKind = .idle, closedAndDone: Bool = false, mergedMinutesAgo: Double = 0,
+            archived: Bool = false
+        ) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, setup: .started,
+                parentTaskID: parent, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            if closedAndDone || archived {
+                // Its task space is gone, so the task has no row to open.
+                if closedAndDone {
+                    record.mergedAt = now.addingTimeInterval(-mergedMinutesAgo * 60)
+                    record.doneAt = now
+                } else {
+                    record.archivedAt = now
+                }
+                records.append(record)
+                return taskID
+            }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID,
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: project.id
+            )
+            workspace.taskID = taskID
+            workspaces.append(workspace)
+            records.append(record)
+            panelByTitle[title] = (workspaceID, panelID)
+            sessionKinds.append((title, session))
+            return taskID
+        }
+        // The card's task is both a child and a parent.
+        let grandparentID = task("Remote access v2")
+        let parentID = task("Rework remote pairing", parent: grandparentID, pullRequest: 448)
+        let expiryID = task("QR code expiry", parent: parentID, question: "Keep the 10-minute expiry?")
+        var investigation = TaskRecord(
+            createdAt: now, text: "Check the expiry", title: "Check the expiry", slug: "check-expiry",
+            source: .cli, workspaceID: project.id, setup: .started, parentTaskID: expiryID
+        )
+        investigation.doneAt = now
+        records.append(investigation)
+        _ = task("Relay retry", parent: parentID, pullRequest: 451)
+        _ = task("Onboarding copy", parent: parentID, session: .working)
+        // Thirteen open children: five show, "8 more open" shows seven more,
+        // and the last opens in the Tasks view.
+        for index in 1...10 {
+            _ = task("Idle child \(index)", parent: parentID)
+        }
+        // Thirteen merged children in all, newest first: the card lists
+        // twelve and sends the oldest to the Tasks view, so it stays on
+        // screen.
+        let closedChildID = task("Log redaction", parent: parentID, closedAndDone: true)
+        _ = task("Token store", parent: parentID, closedAndDone: true, mergedMinutesAgo: 1)
+        for index in 1...11 {
+            _ = task("Done child \(index)", parent: parentID, closedAndDone: true, mergedMinutesAgo: Double(index + 1))
+        }
+        _ = task("Bluetooth spike", parent: parentID, archived: true)
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer {
+            HoverTipPresenter.shared.hideAll()
+            harness.window.orderOut(nil)
+        }
+        // Off screen, so the user's real pointer cannot hover a row.
+        harness.window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        for (title, kind) in sessionKinds {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID, windowID: windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .working ? "Writing" : "Waiting"),
+                at: now.addingTimeInterval(1)
+            )
+        }
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        let root = harness.hostingView
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        let textValues = renderedTextValues(in: root)
+        // Needs you has no row for the running and idle children.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Rework remote pairing, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Onboarding copy, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Idle child 1, task space") }, "\(textValues)")
+
+        var hasEntered = false
+        let expiryCard = try hoverTaskSpaceRow("QR code expiry", in: root, hasEntered: &hasEntered)
+        let expiryText = renderedTextValues(in: expiryCard)
+        XCTAssertTrue(expiryText.contains("Child tasks: 1/1 finished"), "\(expiryText)")
+        XCTAssertTrue(expiryText.contains("Show 1 finished child task"), "\(expiryText)")
+        try writeSidebarEvidence(expiryCard, name: "child-done-without-pr")
+        try attachSidebarRender(expiryCard, name: "child-done-without-pr")
+        var card = try hoverTaskSpaceRow("Rework remote pairing", in: root, hasEntered: &hasEntered)
+        var cardText = renderedTextValues(in: card)
+        XCTAssertTrue(cardText.contains("Stage: Ready to review"), "\(cardText)")
+        XCTAssertTrue(cardText.contains("Go to parent task Remote access v2"), "\(cardText)")
+        XCTAssertTrue(cardText.contains("Child tasks: 13/26 merged"), "\(cardText)")
+        let shownChildren = [
+            "QR code expiry, Needs you", "Relay retry, Ready to review", "Onboarding copy, Running",
+            "Idle child 1, Idle", "Idle child 2, Idle",
+        ]
+        let rowCenters = try shownChildren.map { try semanticTextFrame(in: card, prefix: "Go to child task \($0)").midY }
+        XCTAssertEqual(rowCenters, rowCenters.sorted(), "Most urgent first: \(rowCenters)")
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Idle child 3") }, "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.contains("Bluetooth spike") }, "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Log redaction") }, "\(cardText)")
+        try writeSidebarEvidence(card, name: "child-tasks-1-card")
+        try attachSidebarRender(card, name: "child-tasks-1-card")
+
+        // Show the rest: the card grows downward and keeps its top edge.
+        // The sidebar is off screen, so first put the card where a real one
+        // opens, near the top of the screen; otherwise the screen's bottom
+        // edge would move it up.
+        let cardWindow = try XCTUnwrap(card.window)
+        let screenFrame = try XCTUnwrap(NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame)
+        cardWindow.setFrameTopLeftPoint(NSPoint(x: screenFrame.minX + 40, y: screenFrame.maxY - 40))
+        let collapsedFrame = cardWindow.frame
+        try clickSemanticText(prefix: "Show 8 open child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        let openExpandedFrame = cardWindow.frame
+        XCTAssertGreaterThan(openExpandedFrame.height, collapsedFrame.height + 60, "\(collapsedFrame) -> \(openExpandedFrame)")
+        XCTAssertEqual(openExpandedFrame.maxY, collapsedFrame.maxY, accuracy: 1)
+        cardText = renderedTextValues(in: card)
+        for child in ["Idle child 3, Idle", "Idle child 9, Idle"] {
+            let frame = try semanticTextFrame(in: card, prefix: "Go to child task \(child)")
+            XCTAssertLessThanOrEqual(frame.maxY, card.bounds.maxY, "\(child) fits in the card: \(frame) \(card.bounds)")
+        }
+        // Twelve open rows at most.
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Idle child 10") }, "\(cardText)")
+        XCTAssertTrue(cardText.contains("Show 1 more open child task in the Tasks view"), "\(cardText)")
+        try writeSidebarEvidence(card, name: "child-tasks-2-more-open")
+        try attachSidebarRender(card, name: "child-tasks-2-more-open")
+
+        // Hiding them shrinks the card back.
+        try clickSemanticText(prefix: "Hide 8 open child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        XCTAssertEqual(cardWindow.frame.height, collapsedFrame.height, accuracy: 1)
+        XCTAssertEqual(cardWindow.frame.maxY, collapsedFrame.maxY, accuracy: 1)
+
+        try clickSemanticText(prefix: "Show 13 merged child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(cardWindow.frame.height, collapsedFrame.height + 60, "\(collapsedFrame) -> \(cardWindow.frame)")
+        XCTAssertEqual(cardWindow.frame.maxY, collapsedFrame.maxY, accuracy: 1)
+        cardText = renderedTextValues(in: card)
+        for child in ["Log redaction, Done", "Token store, Done", "Done child 10, Done"] {
+            let frame = try semanticTextFrame(in: card, prefix: "Go to child task \(child)")
+            XCTAssertLessThanOrEqual(frame.maxY, card.bounds.maxY, "\(child) fits in the card: \(frame) \(card.bounds)")
+        }
+        XCTAssertTrue(cardText.contains("Hide 13 merged child tasks"), "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.hasPrefix("Go to child task Done child 11") }, "\(cardText)")
+        XCTAssertTrue(cardText.contains("Show 1 more merged child task in the Tasks view"), "\(cardText)")
+        XCTAssertFalse(cardText.contains { $0.contains("Bluetooth spike") }, "\(cardText)")
+        try writeSidebarEvidence(card, name: "child-tasks-3-merged")
+        try attachSidebarRender(card, name: "child-tasks-3-merged")
+
+        // A child opens like the Parent button: its task space, and the
+        // sidebar stays on Needs you.
+        try clickSemanticText(prefix: "Go to child task Onboarding copy", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertNil(renderedHoverCardView(), "The card closes after the jump")
+        XCTAssertEqual(harness.store.window(id: windowID)?.selectedWorkspaceID, panelByTitle["Onboarding copy"]?.workspaceID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou, "The jump keeps the segment")
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, false)
+        root.layoutSubtreeIfNeeded()
+        try writeSidebarEvidence(root, name: "child-tasks-4-sidebar-after-jump")
+        try attachSidebarRender(root, name: "child-tasks-4-sidebar-after-jump")
+
+        // A reopened card starts folded. A merged child whose task space
+        // closed opens in the Tasks view. The test's clicks reach the card
+        // without the pointer leaving the row, so leave it through another
+        // row first, as a real pointer does.
+        func hoverParentRowAgain() throws -> NSView {
+            _ = try hoverTaskSpaceRow("QR code expiry", in: root, hasEntered: &hasEntered)
+            return try hoverTaskSpaceRow("Rework remote pairing", in: root, hasEntered: &hasEntered)
+        }
+        card = try hoverParentRowAgain()
+        XCTAssertNil(semanticTextField(in: card, prefix: "Go to child task Log redaction"))
+        try clickSemanticText(prefix: "Show 13 merged child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "Go to child task Log redaction", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.taskBoard?.tasksViewSelection(windowID: windowID)?.taskID, closedChildID)
+        XCTAssertEqual(harness.store.window(id: windowID)?.sidebarSegment, .needsYou)
+
+        // Past twelve, the rest open in the Tasks view with this task
+        // selected.
+        _ = harness.store.send(.setTasksViewShown(windowID: windowID, shown: false))
+        pumpMainRunLoop(duration: 0.4)
+        root.layoutSubtreeIfNeeded()
+        card = try hoverParentRowAgain()
+        try clickSemanticText(prefix: "Show 13 merged child tasks", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        card.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "Show 1 more merged child task in the Tasks view", in: card)
+        pumpMainRunLoop(duration: 0.4)
+        XCTAssertNil(renderedHoverCardView(), "The card closes")
+        XCTAssertEqual(harness.store.window(id: windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.taskBoard?.tasksViewSelection(windowID: windowID)?.taskID, parentID)
+    }
+
+    /// The report behind this: merged child tasks whose task spaces
+    /// Toastty keeps open for a day listed as full rows under their parent,
+    /// in the parent's bucket, so done work filled Needs you and Running.
+    /// They now fold into one "N/M merged" line after the parent's open
+    /// children, and do not count as Idle. A second report: merged tasks
+    /// without a parent listed in Idle until their task spaces closed.
+    /// A family with nothing open now leaves the buckets: its Done tasks
+    /// list under the card's Done line and its To ship tasks under To ship.
+    func testMergedChildTasksFoldUnderTheirParent() throws {
+        let now = Date()
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "toastty")
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        var mergeRequests: [UUID: WorkspaceMergeRequest] = [:]
+        var panelByTitle: [String: (workspaceID: UUID, panelID: UUID)] = [:]
+        func task(
+            _ title: String, parent: UUID? = nil, pullRequest: Int? = nil, question: String? = nil,
+            merged: Bool = false, mergedMinutesAgo: Double = 10, shipping: Bool = false, taskSpaceOpen: Bool = true
+        ) -> UUID {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: project.id, projectRoot: "/repo",
+                setup: .started, parentTaskID: parent,
+                operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            let link = pullRequest.map { "https://github.com/example/repo/pull/\($0)" }
+            if merged {
+                record.mergedAt = now.addingTimeInterval(-mergedMinutesAgo * 60)
+                record.pullRequestURL = link
+                // The project releases with tags, so a merge waits To ship
+                // unless the task is Done, as a feature-branch merge is.
+                if shipping == false {
+                    record.doneAt = record.mergedAt
+                }
+            }
+            records.append(record)
+            guard taskSpaceOpen else { return taskID }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID,
+                annotations: pullRequest.map {
+                    ["github-pr": WorkspaceAnnotation(text: "PR #\($0)", url: "https://github.com/example/repo/pull/\($0)")]
+                } ?? [:],
+                parentWorkspaceID: project.id
+            )
+            workspace.taskID = taskID
+            if merged {
+                // The merge marks the task space done; Toastty holds it
+                // open for a day.
+                workspace.doneAt = now.addingTimeInterval(-600)
+                mergeRequests[workspaceID] = WorkspaceMergeRequest(
+                    pullRequest: WorkspacePullRequestLink(annotationURL: link)!, repoPath: "/repo",
+                    phase: .holdingCleanup(until: now.addingTimeInterval(20 * 3_600))
+                )
+            }
+            workspaces.append(workspace)
+            panelByTitle[title] = (workspaceID, panelID)
+            return taskID
+        }
+        let parentID = task("iOS parity", question: "Test build ready?")
+        _ = task("iPhone fixes", parent: parentID, pullRequest: 379, merged: true)
+        _ = task("iPhone fold", parent: parentID, pullRequest: 407)
+        _ = task("iPhone tab groups", parent: parentID, pullRequest: 385, merged: true)
+        _ = task("iPhone keyboard", parent: parentID, pullRequest: 390, merged: true)
+        _ = task("Older iPhone fix", parent: parentID, pullRequest: 360, merged: true, taskSpaceOpen: false)
+        _ = task("Docs gaps", pullRequest: 398, merged: true, mergedMinutesAgo: 5)
+        let websiteID = task("Website", pullRequest: 401, merged: true, mergedMinutesAgo: 40)
+        _ = task("Website copy", parent: websiteID, pullRequest: 402, merged: true, mergedMinutesAgo: 20)
+        _ = task("Sidebar polish", pullRequest: 403, merged: true)
+        _ = task("Release notes", pullRequest: 404, merged: true, shipping: true)
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state, windowID: windowID, taskRecords: records, withTaskBoard: true,
+            tasksConfig: TasksConfig(workspaces: [
+                TasksConfig.Workspace(path: "/repo", releaseTags: "v*", releasePrompt: "Release the merged tasks."),
+            ])
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.setWorkspaceMergeRequests(mergeRequests)
+        let reports: [(String, SessionStatusKind)] = [
+            ("iOS parity", .idle), ("iPhone fixes", .idle), ("iPhone fold", .working),
+            ("iPhone tab groups", .idle), ("iPhone keyboard", .working), ("Docs gaps", .idle),
+            ("Website", .idle), ("Website copy", .idle), ("Sidebar polish", .working), ("Release notes", .idle),
+        ]
+        for (index, (title, kind)) in reports.enumerated() {
+            let target = try XCTUnwrap(panelByTitle[title])
+            harness.sessionRuntimeStore.startSession(
+                sessionID: title, agent: .codex, panelID: target.panelID, windowID: windowID, workspaceID: target.workspaceID,
+                codexStatusTrackingSource: .externallyReported, displayTitleOverride: title, cwd: "/repo", repoRoot: "/repo",
+                at: now.addingTimeInterval(-60)
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: title, status: SessionStatus(kind: kind, summary: kind == .working ? "Working" : "Waiting"),
+                at: now.addingTimeInterval(Double(index) - 50)
+            )
+        }
+        let root = harness.hostingView
+
+        /// Group headers, rows and the fold line, top to bottom.
+        func layout() throws -> [String] {
+            pumpMainRunLoop(duration: 0.6)
+            root.layoutSubtreeIfNeeded()
+            pumpMainRunLoop(duration: 0.4)
+            root.layoutSubtreeIfNeeded()
+            func frame(_ prefix: String) -> CGRect? {
+                semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
+            }
+            var frames: [(String, CGRect)] = []
+            for header in ["Needs you", "Ready to review", "Running", "Idle"] {
+                if let found = frame("\(header), ") { frames.append((header.uppercased(), found)) }
+            }
+            for title in panelByTitle.keys {
+                if let found = frame("\(title), task space") { frames.append((title, found)) }
+            }
+            if let found = frame("4/5 merged, ") { frames.append(("[4/5 merged]", found)) }
+            let top = try semanticTextFrame(in: root, text: "Tasks", shape: "the Tasks row")
+            let below = frames.first.map { $0.1.minY > top.minY } ?? true
+            return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
+        }
+
+        // Collapsed: the parent, its open children, then one line for the
+        // two quiet merged children whose task spaces are still open. A
+        // merged task whose agent still works stays a row. Quiet merged
+        // tasks without an open relative leave the buckets, so no Idle.
+        let collapsed = try layout()
+        try writeSidebarEvidence(root, name: "merged-children-1-collapsed")
+        try attachSidebarRender(root, name: "merged-children-1-collapsed")
+        XCTAssertEqual(collapsed, [
+            "NEEDS YOU", "iOS parity", "iPhone fold", "iPhone keyboard", "[4/5 merged]", "RUNNING", "Sidebar polish",
+        ])
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("4/5 merged, 2 finished tasks, collapsed"), "\(textValues)")
+        // Folded children and the footer's tasks do not count in a bucket.
+        XCTAssertTrue(textValues.contains("1 needs you, 3 running"), "\(textValues)")
+        // The footer: the merged To ship task, and Done with the three
+        // Done task spaces still open. Done counts every Done task.
+        XCTAssertTrue(textValues.contains("To ship, 1 task, collapsed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Done, 8 tasks, 3 task spaces open, collapsed"), "\(textValues)")
+
+        // Done expanded: its open task spaces, newest merge first, then a
+        // link to the Done tasks whose task spaces closed or that list
+        // elsewhere on the card.
+        try clickSemanticText(prefix: "Done, 8 tasks, 3 task spaces open, collapsed", in: root)
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU", "iOS parity", "iPhone fold", "iPhone keyboard", "[4/5 merged]", "RUNNING", "Sidebar polish",
+            "Docs gaps", "Website copy", "Website",
+        ])
+        try writeSidebarEvidence(root, name: "merged-children-3-done-expanded")
+        try attachSidebarRender(root, name: "merged-children-3-done-expanded")
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Done, 8 tasks, 3 task spaces open, expanded"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Show 5 more done tasks in the Tasks view"), "\(textValues)")
+        try clickSemanticText(prefix: "Done, 8 tasks, 3 task spaces open, expanded", in: root)
+
+        // To ship expanded: the merged To ship task, whose task space row
+        // no longer lists in a bucket.
+        try clickSemanticText(prefix: "To ship, 1 task, collapsed", in: root)
+        _ = try layout()
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Release notes, ") }, "\(textValues)")
+        try clickSemanticText(prefix: "To ship, 1 task, expanded", in: root)
+
+        // Expanded: the merged children list under the line, then a link
+        // to the one merged child whose task space already closed.
+        try clickSemanticText(prefix: "4/5 merged, 2 finished tasks, collapsed", in: root)
+        let expanded = try layout()
+        try writeSidebarEvidence(root, name: "merged-children-2-expanded")
+        try attachSidebarRender(root, name: "merged-children-2-expanded")
+        XCTAssertEqual(expanded, [
+            "NEEDS YOU", "iOS parity", "iPhone fold", "iPhone keyboard", "[4/5 merged]", "iPhone fixes", "iPhone tab groups",
+            "RUNNING", "Sidebar polish",
+        ])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("4/5 merged, 2 finished tasks, expanded"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Show 1 more merged task in the Tasks view"), "\(textValues)")
+
+        // The Needs you segment lists only the parent, as before.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        XCTAssertEqual(try layout(), ["NEEDS YOU", "iOS parity"])
+    }
+
+    /// Plain sessions list in the same buckets as task spaces. A card
+    /// collapses to its name line and keeps its counts, and the Needs you
+    /// segment still lists what waits in it.
+    func testAllCardsBucketSessionsWithTaskSpacesAndCollapseToTheNameLine() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let assessPanel = UUID(), plaidPanel = UUID(), domainPanel = UUID()
+        let emptyos = WorkspaceState(
+            id: UUID(),
+            title: "emptyos",
+            layoutTree: .split(
+                nodeID: UUID(), orientation: .horizontal, ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: assessPanel),
+                second: .split(
+                    nodeID: UUID(), orientation: .vertical, ratio: 0.5,
+                    first: .slot(slotID: UUID(), panelID: plaidPanel),
+                    second: .slot(slotID: UUID(), panelID: domainPanel)
+                )
+            ),
+            panels: [
+                assessPanel: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo")),
+                plaidPanel: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo")),
+                domainPanel: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/repo")),
+            ],
+            focusedPanelID: assessPanel,
+            unreadPanelIDs: [plaidPanel]
+        )
+        let toastty = makeSinglePanelWorkspace(id: UUID(), title: "toastty")
+        var workspaces = [emptyos]
+        var records: [TaskRecord] = []
+        var sessions: [(title: String, panelID: UUID, workspaceID: UUID, kind: SessionStatusKind)] = [
+            ("Assess Plaid integration options", assessPanel, emptyos.id, .ready),
+            ("Plaid integration layer", plaidPanel, emptyos.id, .ready),
+            ("Evaluate public user domain", domainPanel, emptyos.id, .working),
+        ]
+        func task(_ title: String, kind: SessionStatusKind, question: String? = nil) {
+            let taskID = UUID(), workspaceID = UUID(), panelID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: TaskRecord.sanitizedSlug(title) ?? "task",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: emptyos.id, setup: .started,
+                operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            var workspace = WorkspaceState(
+                id: workspaceID, title: record.slug, layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))],
+                focusedPanelID: panelID, parentWorkspaceID: emptyos.id
+            )
+            workspace.taskID = taskID
+            workspaces.append(workspace)
+            records.append(record)
+            sessions.append((title, panelID, workspaceID, kind))
+        }
+        task("Hostname options", kind: .idle, question: "Pick a hostname option")
+        task("Move computer addresses", kind: .working)
+        workspaces.append(toastty)
+        let toasttyPanel = try XCTUnwrap(toastty.focusedPanelID)
+        sessions.append(("Fix the sidebar", toasttyPanel, toastty.id, .needsApproval))
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: toastty.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(state: state, windowID: windowID, taskRecords: records, withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        for (index, session) in sessions.enumerated() {
+            harness.sessionRuntimeStore.startSession(
+                sessionID: session.title, agent: .codex, panelID: session.panelID, windowID: windowID,
+                workspaceID: session.workspaceID, codexStatusTrackingSource: .externallyReported,
+                displayTitleOverride: session.title, cwd: "/repo", repoRoot: "/repo", at: now
+            )
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: session.title, status: SessionStatus(kind: session.kind, summary: "Status"),
+                at: now.addingTimeInterval(TimeInterval(index + 1))
+            )
+        }
+        // The Assess turn was read; the Plaid turn was not.
+        _ = harness.store.send(.markPanelNotificationsRead(workspaceID: emptyos.id, panelID: assessPanel))
+        let root = harness.hostingView
+
+        /// The emptyos card's bucket headers and rows, top to bottom, once
+        /// rows that changed bucket have finished moving.
+        func layout() throws -> [String] {
+            pumpMainRunLoop(duration: 0.6)
+            root.layoutSubtreeIfNeeded()
+            pumpMainRunLoop(duration: 0.4)
+            root.layoutSubtreeIfNeeded()
+            let top = try semanticTextFrame(in: root, text: "Tasks", shape: "the Tasks row")
+            func frame(_ prefix: String) -> CGRect? {
+                semanticTextField(in: root, prefix: prefix).map { $0.convert($0.bounds, to: root) }
+            }
+            var frames: [(String, CGRect)] = []
+            for header in ["Needs you, 2", "Running, 2", "Idle, 1"] {
+                if let found = frame(header) { frames.append((header.uppercased(), found)) }
+            }
+            for title in sessions.map(\.title) where title != "Fix the sidebar" {
+                if let found = frame("\(title), ") { frames.append((title, found)) }
+            }
+            let below = frames.first.map { $0.1.minY > top.minY } ?? true
+            return frames.sorted { below ? $0.1.minY < $1.1.minY : $0.1.minY > $1.1.minY }.map(\.0)
+        }
+
+        // Sessions and task spaces share the buckets. Inside a bucket the
+        // project's own sessions come first, then its task spaces.
+        XCTAssertEqual(try layout(), [
+            "NEEDS YOU, 2", "Plaid integration layer", "Hostname options",
+            "RUNNING, 2", "Evaluate public user domain", "Move computer addresses",
+            "IDLE, 1", "Assess Plaid integration options",
+        ])
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("2 need you, 2 running, 1 idle"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("1 needs you"), "\(textValues)")
+        // The segment counts sessions and tasks that need the user.
+        XCTAssertTrue(textValues.contains("Only what needs you, 3"), "\(textValues)")
+        try writeSidebarEvidence(root, name: "all-1-buckets")
+        try attachSidebarRender(root, name: "all-1-buckets")
+
+        // Collapsed, the card keeps its name line and its counts; the choice
+        // is saved with the window.
+        try clickSemanticText(prefix: "Collapse emptyos", in: root)
+        XCTAssertEqual(try layout(), [])
+        XCTAssertEqual(harness.store.window(id: windowID)?.collapsedSidebarWorkspaceIDs, [emptyos.id])
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("Expand emptyos"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("2 need you, 2 running, 1 idle"), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Fix the sidebar, ") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "all-2-collapsed")
+        try attachSidebarRender(root, name: "all-2-collapsed")
+
+        // Needs you lists the waiting session and question from the collapsed
+        // card, and the other project's approval, and nothing else.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("emptyos, 2 need you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("toastty, 1 needs you"), "\(textValues)")
+        for title in ["Plaid integration layer", "Hostname options", "Fix the sidebar"] {
+            XCTAssertTrue(textValues.contains { $0.hasPrefix("\(title), ") }, "\(title): \(textValues)")
+        }
+        for title in ["Evaluate public user domain", "Move computer addresses", "Assess Plaid integration options"] {
+            XCTAssertFalse(textValues.contains { $0.hasPrefix("\(title), ") }, "\(title): \(textValues)")
+        }
+        try writeSidebarEvidence(root, name: "all-3-needs-you-segment")
+        try attachSidebarRender(root, name: "all-3-needs-you-segment")
+
+        // Back in All, the chevron expands the card again.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .all))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "Expand emptyos", in: root)
+        XCTAssertEqual(try layout().first, "NEEDS YOU, 2")
+        XCTAssertEqual(harness.store.window(id: windowID)?.collapsedSidebarWorkspaceIDs, [])
+    }
+
+    /// Tasks without a task space under a card list by their own rows: in
+    /// their project's order, not by their latest activity; a child names its
+    /// parent when it lists alone; and a task space left at top level, such
+    /// as when its project closed, still shows its task's stage.
+    func testTaskRowsKeepTheirOrderAndNameTheirParent() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "emptyos")
+        var workspaces = [project]
+        func record(
+            _ title: String, minutesAgo: Double, project projectID: UUID?, parent: UUID? = nil,
+            taskSpace: (workspaceID: UUID, panelID: UUID)? = nil, question: String? = nil
+        ) -> TaskRecord {
+            var record = TaskRecord(
+                id: UUID(), createdAt: now.addingTimeInterval(-minutesAgo * 60), text: title, title: title,
+                slug: TaskRecord.sanitizedSlug(title) ?? "task", source: .cli, resolved: TaskFields(agent: "codex"),
+                workspaceID: projectID, setup: .started, parentTaskID: parent,
+                // A task space that is not open: the task space closed.
+                operation: TaskOperation(taskSpace: .init(
+                    workspaceID: taskSpace?.workspaceID ?? UUID(), panelID: taskSpace?.panelID ?? UUID()
+                ))
+            )
+            record.replyRequest = question.map { TaskReplyRequest(askedAt: now, question: $0) }
+            return record
+        }
+        let older = record("Older closed task", minutesAgo: 30, project: project.id)
+        var newer = record("Newer closed task", minutesAgo: 20, project: project.id)
+        // The newer task changed last, which used to list it first.
+        newer.readyForReviewAt = now
+        let parentSpace = UUID(), parentPanel = UUID()
+        let parent = record("Parent runs", minutesAgo: 10, project: project.id, taskSpace: (parentSpace, parentPanel))
+        let child = record("Child asks", minutesAgo: 5, project: project.id, parent: parent.id)
+        let promotedSpace = UUID(), promotedPanel = UUID()
+        // Its project is not open, and its task space is a top-level workspace.
+        let promoted = record(
+            "Promoted question", minutesAgo: 1, project: UUID(), taskSpace: (promotedSpace, promotedPanel), question: "Keep it?"
+        )
+        var parentWorkspace = WorkspaceState(
+            id: parentSpace, title: "parent-runs", layoutTree: .slot(slotID: UUID(), panelID: parentPanel),
+            panels: [parentPanel: .terminal(TerminalPanelState(title: "Parent runs", shell: "zsh", cwd: "/repo"))],
+            focusedPanelID: parentPanel, parentWorkspaceID: project.id
+        )
+        parentWorkspace.taskID = parent.id
+        var promotedWorkspace = WorkspaceState(
+            id: promotedSpace, title: "promoted-question", layoutTree: .slot(slotID: UUID(), panelID: promotedPanel),
+            panels: [promotedPanel: .terminal(TerminalPanelState(title: "Promoted", shell: "zsh", cwd: "/repo"))],
+            focusedPanelID: promotedPanel
+        )
+        promotedWorkspace.taskID = promoted.id
+        workspaces += [parentWorkspace, promotedWorkspace]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state, windowID: windowID, taskRecords: [older, newer, parent, child, promoted], withTaskBoard: true
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "parent-agent", agent: .codex, panelID: parentPanel, windowID: windowID, workspaceID: parentSpace,
+            codexStatusTrackingSource: .externallyReported, displayTitleOverride: "Parent runs", cwd: "/repo", repoRoot: "/repo", at: now
+        )
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "parent-agent", status: SessionStatus(kind: .working, summary: "Working"), at: now
+        )
+        let root = harness.hostingView
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+
+        // All: the closed tasks list in the order they were created.
+        let first = try semanticTextFrame(in: root, prefix: "Older closed task, ")
+        let second = try semanticTextFrame(in: root, prefix: "Newer closed task, ")
+        XCTAssertTrue(root.isFlipped ? first.midY < second.midY : first.midY > second.midY, "creation order: \(first) \(second)")
+        var textValues = renderedTextValues(in: root)
+        // The promoted task space lists with Other tasks, with its question.
+        XCTAssertTrue(textValues.contains(SidebarView.otherTasksCardTitle), "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Promoted question, task space, waiting for your reply") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "task-rows-all")
+        try attachSidebarRender(root, name: "task-rows-all")
+
+        // Needs you: the child lists without its running parent and names it.
+        _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        root.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: root)
+        let childRow = try XCTUnwrap(textValues.first { $0.hasPrefix("Child asks, ") }, "\(textValues)")
+        XCTAssertTrue(childRow.hasSuffix("started by Parent runs"), childRow)
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Parent runs, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Promoted question, task space, waiting for your reply") }, "\(textValues)")
+        try writeSidebarEvidence(root, name: "task-rows-needs-you")
+        try attachSidebarRender(root, name: "task-rows-needs-you")
+    }
+
+    /// A closed project's name is repeated on Other tasks rows, including
+    /// rows below the viewport. None may widen the shared scroll view.
+    func testOtherTasksProjectTagsFitAcrossSidebarWidthsAndSegments() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let projectName = "toastty-task-system-coordinator-with-a-long-project-name"
+        let project = makeSinglePanelWorkspace(id: UUID(), title: "Open project")
+        let closedProjectID = UUID()
+        var workspaces = [project]
+        var records: [TaskRecord] = []
+        for index in 0..<24 {
+            let spaceID = UUID(), panelID = UUID(), taskID = UUID()
+            var record = TaskRecord(
+                id: taskID, createdAt: now, text: "Task \(index)", title: "Task \(index)", slug: "task-\(index)",
+                source: .cli, resolved: TaskFields(agent: "codex"), workspaceID: closedProjectID,
+                projectRoot: "/repo/\(index < 12 ? projectName : "short")", setup: .started,
+                operation: TaskOperation(taskSpace: .init(workspaceID: spaceID, panelID: panelID))
+            )
+            if index.isMultiple(of: 2) {
+                record.replyRequest = TaskReplyRequest(askedAt: now, question: "Choose the next step")
+            } else {
+                record.readyForReviewAt = now
+            }
+            records.append(record)
+            // Review tasks retain their spaces; the closed spaces and the
+            // first promoted space supply the attention count.
+            if index == 0 || index.isMultiple(of: 2) == false {
+                var space = WorkspaceState(
+                    id: spaceID, title: "promoted-\(index)",
+                    layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                    panels: [panelID: .terminal(TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/repo"))],
+                    focusedPanelID: panelID
+                )
+                space.taskID = taskID
+                workspaces.append(space)
+            }
+        }
+        let windowID = UUID()
+        let state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: 360, height: 900),
+                workspaceIDs: workspaces.map(\.id), selectedWorkspaceID: project.id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        func scrollView(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+        }
+        for width in [CGFloat(WindowState.minSidebarWidth), 220, 280, 360] {
+            let harness = try makeSidebarHarness(
+                state: state, windowID: windowID, sidebarWidth: width,
+                taskRecords: records, withTaskBoard: true
+            )
+            defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+            harness.sessionRuntimeStore.bind(store: harness.store)
+            let scroll = try XCTUnwrap(scrollView(in: harness.hostingView))
+            for segment in SidebarSegment.allCases {
+                _ = harness.store.send(.setSidebarSegment(windowID: windowID, segment: segment))
+                pumpMainRunLoop(duration: 0.3)
+                harness.hostingView.layoutSubtreeIfNeeded()
+                let frame = scroll.convert(scroll.bounds, to: harness.hostingView)
+                XCTAssertGreaterThanOrEqual(frame.minX, -0.5, "\(segment), \(width): \(frame)")
+                XCTAssertLessThanOrEqual(frame.maxX, width + 0.5, "\(segment), \(width): \(frame)")
+                XCTAssertLessThanOrEqual(scroll.documentView?.frame.width ?? 0, width + 0.5)
+                let text = renderedTextValues(in: harness.hostingView)
+                XCTAssertTrue(text.contains { $0.hasPrefix("Only what needs you, 12, 12 ready for review") }, "\(text)")
+                // Both row kinds retain the full project name for assistive
+                // users even when its visible tag truncates.
+                XCTAssertTrue(text.contains { $0.hasPrefix("Task 0, task space") && $0.contains(projectName) }, "\(text)")
+                XCTAssertTrue(text.contains { $0.hasPrefix("Task 2, ") && $0.contains(projectName) }, "\(text)")
+                print("SIDEBAR_TAGS width=\(width) segment=\(segment.rawValue) viewport=\(frame) documentWidth=\(scroll.documentView?.frame.width ?? 0)")
+                if let document = scroll.documentView {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.frame.height - scroll.contentView.bounds.height)))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    pumpMainRunLoop(duration: 0.2)
+                }
+                try attachSidebarRender(harness.hostingView, name: "orphaned-project-\(Int(width))-\(segment.rawValue)")
+
+            }
+            if width == 360 {
+                let tasks = hostTasksView(harness, board: try XCTUnwrap(harness.taskBoard), height: 640)
+                defer { tasks.window.orderOut(nil) }
+                try attachSidebarRender(tasks.hostingView, name: "project-tags-wide-tasks-view")
+            }
+        }
+    }
+
+    func testTaskBoardGroupsTheSidebarByStageAndHidesFinishedTaskSpaces() throws {
+        let pickWorkspace = TaskRecord(
+            createdAt: Date(),
+            text: "Billing page shows the old plan",
+            title: "Billing page shows the old plan",
+            slug: "billing-old-plan",
+            source: .cli,
+            setup: .needsWorkspace(reason: "None of the open workspaces has a billing page.")
+        )
+        // The extra task space's agent sits idle at its prompt.
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [pickWorkspace], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        var textValues = renderedTextValues(in: harness.hostingView)
+
+        // Needs you: the agent asking for approval, the linked pull request
+        // with no agent working on it, and the task triage could not place.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Only what needs you, ") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
+        // The finished task space leaves its card; the footer counts it.
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Checklist, task space") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Finished tasks: 1 done. Opens the Tasks view."), "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-projects")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-projects")
+
+        // The task triage could not place lists in Other tasks.
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
+        // An idle agent lists apart from the working one.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Running, ") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Idle, ") }, "\(textValues)")
+        let sections = SidebarStatusSections.make(try XCTUnwrap(harness.taskBoard).items(windowID: harness.windowID))
+        XCTAssertEqual(sections.running.map(\.item.agent), [.working])
+        XCTAssertEqual(sections.idle.map(\.item.agent), [.idle])
+
+        _ = harness.store.send(.setSidebarSegment(windowID: harness.windowID, segment: .needsYou))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        // Needs you: the agent asking for approval, the linked pull request
+        // with no agent working on it, and the task triage could not place.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready for review") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Fix nav drawer focus, task space, needs approval") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Billing page shows the old plan, ⚠ pick a workspace"), "\(textValues)")
+        // Running and idle rows, and the Done count, stay in All.
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Review task 1, task space") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Running, ") || $0.hasPrefix("Idle, ") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Finished tasks:") }, "\(textValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-tasks-needs-you")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-tasks-needs-you")
+    }
+
+    func testProjectCardToShipStartsCollapsedWithTheDoneCountAndExpandsInPlace() throws {
+        let now = Date()
+        let emptyosID = UUID()
+        let toasttyID = UUID()
+        func record(_ title: String, project: UUID, root: String, hoursAgo: Double, done: Bool = false) -> TaskRecord {
+            var record = TaskRecord(
+                createdAt: now.addingTimeInterval(-3 * 86_400),
+                text: title,
+                title: title,
+                slug: title,
+                source: .cli,
+                workspaceID: project,
+                projectRoot: root,
+                setup: .started
+            )
+            record.mergedAt = now.addingTimeInterval(-hoursAgo * 3_600 - 60)
+            if done {
+                record.doneAt = record.mergedAt
+            }
+            return record
+        }
+        let workspaces = [
+            makeSinglePanelWorkspace(id: emptyosID, title: "emptyos"),
+            makeSinglePanelWorkspace(id: toasttyID, title: "toastty"),
+        ]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: emptyosID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            taskRecords: [
+                record("Home setup wizard", project: emptyosID, root: "/repo/emptyos", hoursAgo: 1),
+                record("Signup pages onboarding copy", project: emptyosID, root: "/repo/emptyos", hoursAgo: 2),
+                record("Docs onboarding fixes", project: emptyosID, root: "/repo/emptyos", hoursAgo: 3),
+                record("Pricing page draft", project: emptyosID, root: "/repo/emptyos", hoursAgo: 4),
+                record("Old billing fix", project: emptyosID, root: "/repo/emptyos", hoursAgo: 30, done: true),
+                record("Question state pill badge", project: toasttyID, root: "/repo/toastty", hoursAgo: 5),
+            ],
+            withTaskBoard: true,
+            tasksConfig: TasksConfig(workspaces: ["/repo/emptyos", "/repo/toastty"].map {
+                TasksConfig.Workspace(path: $0, releaseTags: "v*", releasePrompt: "Release the merged tasks.")
+            })
+        )
+        defer { harness.window.orderOut(nil) }
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        // Collapsed by default: one line per card, with the Done count on it.
+        var textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 4 tasks, collapsed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("To ship, 1 task, collapsed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Finished tasks: 1 done. Opens the Tasks view."), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Home setup wizard") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Show 1 more") }, "\(textValues)")
+        let toggle = try semanticTextFrame(in: harness.hostingView, prefix: "To ship, 4 tasks, collapsed")
+        let doneCount = try semanticTextFrame(in: harness.hostingView, prefix: "Finished tasks: 1 done.")
+        XCTAssertLessThan(abs(toggle.midY - doneCount.midY), 6, "Done should share the To ship line: \(toggle) \(doneCount)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-projects-to-ship-collapsed")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-projects-to-ship-collapsed")
+
+        // Expanded: the three newest merges, then "Show 1 more". The other
+        // card stays collapsed.
+        try clickSemanticText(prefix: "To ship, 4 tasks, collapsed", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 4 tasks, expanded"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("To ship, 1 task, collapsed"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Show 1 more task to ship in the Tasks view"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Pricing page draft") }, "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Question state pill badge") }, "\(textValues)")
+        let rows = try ["Home setup wizard, ", "Signup pages onboarding copy, ", "Docs onboarding fixes, "].map {
+            try semanticTextFrame(in: harness.hostingView, prefix: $0)
+        }
+        let showMore = try semanticTextFrame(in: harness.hostingView, prefix: "Show 1 more")
+        // Top to bottom, measured from the Tasks row at the sidebar's top,
+        // whichever way the view's y axis runs.
+        let top = try semanticTextFrame(in: harness.hostingView, text: "Tasks", shape: "the Tasks row")
+        let lines = ([toggle] + rows + [showMore]).map { abs($0.midY - top.midY) }
+        XCTAssertEqual(lines, lines.sorted(), "Expected the To ship line, rows newest first, then Show 1 more: \(lines)")
+        XCTAssertEqual(Set(lines).count, lines.count, "Each line should have its own row: \(lines)")
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-projects-to-ship-expanded")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-projects-to-ship-expanded")
+
+        try clickSemanticText(prefix: "To ship, 4 tasks, expanded", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        textValues = renderedTextValues(in: harness.hostingView)
+        XCTAssertTrue(textValues.contains("To ship, 4 tasks, collapsed"), "\(textValues)")
+        XCTAssertFalse(textValues.contains { $0.hasPrefix("Home setup wizard") }, "\(textValues)")
+    }
+
+    /// The rows of a task the user asked to release right after its merge
+    /// carry a small mark, before the merge and while the task waits in To
+    /// ship: in the project card and the Tasks view.
+    func testReleaseAfterMergeMarkShowsOnOpenAndToShipRows() throws {
+        let now = Date()
+        let toasttyID = UUID()
+        let request = TaskReleaseAfterMerge(requestedAt: now.addingTimeInterval(-2 * 86_400))
+        func taskSpace(_ title: String, taskID: UUID) -> WorkspaceState {
+            let panelID = UUID()
+            var workspace = WorkspaceState(
+                id: UUID(),
+                title: title,
+                layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo/toastty"))],
+                focusedPanelID: panelID,
+                parentWorkspaceID: toasttyID
+            )
+            workspace.taskID = taskID
+            return workspace
+        }
+        func record(
+            _ title: String,
+            id: UUID = UUID(),
+            taskSpace: WorkspaceState? = nil,
+            mergedHoursAgo: Double? = nil,
+            releaseAfterMerge: TaskReleaseAfterMerge? = nil
+        ) -> TaskRecord {
+            var record = TaskRecord(
+                id: id,
+                createdAt: now.addingTimeInterval(-3 * 86_400),
+                text: title,
+                title: title,
+                slug: title,
+                source: .cli,
+                workspaceID: toasttyID,
+                projectRoot: "/repo/toastty",
+                setup: .started
+            )
+            record.mergedAt = mergedHoursAgo.map { now.addingTimeInterval(-$0 * 3_600) }
+            record.releaseAfterMerge = releaseAfterMerge
+            if let taskSpace, let panelID = taskSpace.focusedPanelID {
+                record.operation.taskSpace = .init(workspaceID: taskSpace.id, panelID: panelID)
+            }
+            return record
+        }
+        let hotfixID = UUID()
+        let renameID = UUID()
+        let shippingID = UUID()
+        let hotfixSpace = taskSpace("hotfix-unread-dot", taskID: hotfixID)
+        let renameSpace = taskSpace("rename-sidebar-group", taskID: renameID)
+        let workspaces = [makeSinglePanelWorkspace(id: toasttyID, title: "toastty"), hotfixSpace, renameSpace]
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: toasttyID
+                ),
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let harness = try makeSidebarHarness(
+            state: state,
+            windowID: windowID,
+            taskRecords: [
+                record("Hotfix the unread dot", id: hotfixID, taskSpace: hotfixSpace, releaseAfterMerge: request),
+                record("Rename the sidebar group", id: renameID, taskSpace: renameSpace),
+                record("Fix the crash on wake", id: shippingID, mergedHoursAgo: 2, releaseAfterMerge: request),
+                record("Update the docs", mergedHoursAgo: 5),
+            ],
+            withTaskBoard: true,
+            tasksConfig: TasksConfig(workspaces: [
+                TasksConfig.Workspace(path: "/repo/toastty", releaseTags: "v*", releasePrompt: "Release the merged tasks."),
+            ])
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.window.appearance = NSAppearance(named: .darkAqua)
+        let marked = "release right after merge"
+
+        // The project card: the open task space rows, then To ship.
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        try clickSemanticText(prefix: "To ship, 2 tasks, collapsed", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        func assertRows(_ textValues: [String], _ place: String) throws {
+            let hotfix = try XCTUnwrap(textValues.first { $0.hasPrefix("Hotfix the unread dot, task space") }, "\(place): \(textValues)")
+            XCTAssertTrue(hotfix.contains(marked), "\(place): \(hotfix)")
+            let rename = try XCTUnwrap(textValues.first { $0.hasPrefix("Rename the sidebar group, task space") }, "\(place): \(textValues)")
+            XCTAssertFalse(rename.contains(marked), "\(place): \(rename)")
+            XCTAssertTrue(
+                textValues.contains("Fix the crash on wake, Merged · waiting for a release, \(marked)"), "\(place): \(textValues)"
+            )
+            XCTAssertTrue(textValues.contains("Update the docs, Merged · waiting for a release"), "\(place): \(textValues)")
+        }
+        let cardTextValues = renderedTextValues(in: harness.hostingView)
+        try assertRows(cardTextValues, "project card")
+        // The project can release from Toastty, but its To ship line offers
+        // no Release: the user asks the coordinator for releases.
+        XCTAssertFalse(cardTextValues.contains { $0.hasPrefix("Release") }, "\(cardTextValues)")
+        try writeSidebarEvidence(harness.hostingView, name: "release-mark-sidebar-projects")
+        try attachSidebarRender(harness.hostingView, name: "release-mark-sidebar-projects")
+
+        // The Tasks view, with the To ship task in the detail pane.
+        let board = try XCTUnwrap(harness.taskBoard)
+        board.selectionByWindowID[windowID] = .task(shippingID)
+        let tasks = hostTasksView(harness, board: board, height: 520)
+        defer { tasks.window.orderOut(nil) }
+        let textValues = renderedTextValues(in: tasks.hostingView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Hotfix the unread dot, ") && $0.hasSuffix(", \(marked)") }, "\(textValues)")
+        XCTAssertTrue(textValues.contains("Fix the crash on wake, Merged · waiting for a release, \(marked)"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Update the docs, Merged · waiting for a release"), "\(textValues)")
+        XCTAssertFalse(
+            textValues.contains { $0.hasPrefix("Rename the sidebar group, ") && $0.contains(marked) }, "\(textValues)"
+        )
+        XCTAssertTrue(textValues.contains("Task detail, Fix the crash on wake, To ship"), "\(textValues)")
+        try writeSidebarEvidence(tasks.hostingView, name: "release-mark-tasks-view")
+        try attachSidebarRender(tasks.hostingView, name: "release-mark-tasks-view")
+    }
+
+    func testTasksViewListsTheBoardWithTheChosenTaskInItsDetailPane() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        board.selectionByWindowID[harness.windowID] = .taskSpace(ids.annotatedIdleID)
+        let tasksView = TasksView(
+            windowID: harness.windowID,
+            store: harness.store,
+            board: board,
+            sessionRuntimeStore: harness.sessionRuntimeStore,
+            newTask: {}
+        )
+        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 640))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop(duration: 0.6)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains("Task detail, qa-private-app-verification, Review"), "\(textValues)")
+        // The idle agent lists under Idle, apart from the working one.
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Review task 1") }, "\(textValues)")
+        // The unread finished turn the sidebar marks ready waits for the
+        // user here too.
+        let readyUnread = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
+        XCTAssertEqual(readyUnread.stage, .needsYou(.agentFinished))
+        XCTAssertTrue(readyUnread.hasUnreadTurn)
+        try attachSidebarRender(hostingView, name: "tasks-view")
+        try writeSidebarEvidence(hostingView, name: "tasks-view")
+    }
+
+    func testSidebarDoneCountsOpenTheTasksViewWithDoneExpanded() throws {
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        // Already open and short enough that Done starts below the fold.
+        var tasks = hostTasksView(harness, board: board, height: 300)
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-before-done-click")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-before-done-click")
+
+        // The project card's Done count expands Done and scrolls to it.
+        harness.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Finished tasks: 1 done.", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.6)
+        tasks.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID], "The view should clear the request it applied.")
+        let doneFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "Done, 1, expanded")
+        XCTAssertTrue(
+            tasks.hostingView.bounds.contains(CGPoint(x: doneFrame.midX, y: doneFrame.midY)),
+            "Done should be scrolled into view: \(doneFrame) in \(tasks.hostingView.bounds)"
+        )
+        try writeSidebarEvidence(harness.hostingView, name: "sidebar-done-count")
+        try attachSidebarRender(harness.hostingView, name: "sidebar-done-count")
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-after-done-click")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-after-done-click")
+
+        // The Tasks row opens the view without touching Done.
+        tasks.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Done, 1, expanded", in: tasks.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
+        harness.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Tasks", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.6)
+        tasks.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, collapsed"), "\(renderedTextValues(in: tasks.hostingView))")
+        // Closed views stop observing the board, as in the app.
+        tasks.window.orderOut(nil)
+        tasks.window.contentView = nil
+
+        // With the Tasks view closed, the card's Done count expands Done in
+        // the view that opens after the click, as the app opens it.
+        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: false))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        harness.window.makeKeyAndOrderFront(nil)
+        try clickSemanticText(prefix: "Finished tasks: 1 done.", in: harness.hostingView)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .done)
+        tasks = hostTasksView(harness, board: board, height: 300)
+        defer { tasks.window.orderOut(nil) }
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Done, 1, expanded"), "\(renderedTextValues(in: tasks.hostingView))")
+    }
+
+    /// A coordinator link to a task whose space is closed opens the Tasks
+    /// view on that task. A done or archived task's group expands and the
+    /// task stays selected, also when the view last showed the task in
+    /// another group.
+    func testTasksViewShowsARequestedArchivedTaskSelectedInItsExpandedGroup() throws {
+        let task = TaskRecord(
+            createdAt: Date(), text: "Fix the worktree build", title: "Fix the worktree build", slug: "fix-worktree-build",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        var done = TaskRecord(
+            createdAt: Date(), text: "Rename the CLI flag", title: "Rename the CLI flag", slug: "rename-cli-flag",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        done.doneAt = Date()
+        let (harness, _) = try makeSubspacesHarness(taskRecords: [task, done], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        let coordinator = try XCTUnwrap(board.coordinator)
+        let subject = TaskBoardItem.Subject.task(task.id)
+
+        // A done task opens Done.
+        XCTAssertEqual(board.items().first { $0.id == .task(done.id) }?.stage.group, .done)
+        board.showTasksView(windowID: harness.windowID, selecting: .task(done.id), store: harness.store, source: .ui("test"))
+        XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .done)
+        board.revealGroupByWindowID[harness.windowID] = nil
+
+        // A task in Needs you shows without a group to open. The view then
+        // last showed it there.
+        board.showTasksView(windowID: harness.windowID, selecting: subject, store: harness.store, source: .ui("test"))
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID])
+        var tasks = hostTasksView(harness, board: board, height: 300)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], subject)
+        XCTAssertTrue(board.tasksViewListByWindowID[harness.windowID]?.contains(subject) == true)
+        tasks.window.orderOut(nil)
+        tasks.window.contentView = nil
+        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: false))
+
+        // Archived while the view was closed, then shown from a link.
+        _ = coordinator.records.update(id: task.id) { $0.archivedAt = Date() }
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.items().first { $0.id == subject }?.stage.group, .archived)
+        // As the coordinator chat's link does: the task only.
+        board.showTasksView(windowID: harness.windowID, selecting: subject, store: harness.store, source: .ui("test"))
+        XCTAssertEqual(board.revealGroupByWindowID[harness.windowID], .archived)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        tasks = hostTasksView(harness, board: board, height: 300)
+        defer { tasks.window.orderOut(nil) }
+        tasks.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(board.revealGroupByWindowID[harness.windowID], "The view should clear the request it applied.")
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], subject)
+        let textValues = renderedTextValues(in: tasks.hostingView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Task detail, Fix the worktree build,") }, "\(textValues)")
+        XCTAssertNotNil(semanticTextField(in: tasks.hostingView, prefix: "Archived, 1, expanded"), "\(textValues)")
+        let rowFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "Fix the worktree build, ")
+        XCTAssertTrue(
+            tasks.hostingView.bounds.contains(CGPoint(x: rowFrame.midX, y: rowFrame.midY)),
+            "The archived row should scroll into view: \(rowFrame) in \(tasks.hostingView.bounds)"
+        )
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-archived-task-link")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-archived-task-link")
+    }
+
+    func testTasksViewArrowKeysMoveTheSelectionThroughTheRowsItShows() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 8, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        // One task in the collapsed Done group, which the arrows skip.
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        let tasks = hostTasksView(harness, board: board, height: 300)
+        defer { tasks.window.orderOut(nil) }
+        let visible = TasksViewSections.make(board.items()).visible(isDoneExpanded: false, isArchivedExpanded: false)
+        XCTAssertGreaterThan(visible.count, 6, "The list should run past the fold")
+        XCTAssertFalse(visible.contains { $0.id == .taskSpace(ids.readyUnreadID) })
+        let responder = try XCTUnwrap(tasks.window.firstResponder as? NSView, "The Tasks view should hold keyboard focus")
+
+        func press(_ keyCode: Int, modifiers: NSEvent.ModifierFlags = []) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers.union([.numericPad, .function]),
+                timestamp: 0, windowNumber: tasks.window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: UInt16(keyCode)
+            ))
+            responder.keyDown(with: event)
+            pumpMainRunLoop(duration: 0.3)
+            tasks.hostingView.layoutSubtreeIfNeeded()
+        }
+
+        // Down walks the list from the first row, which shows by default.
+        for entry in visible.dropFirst() {
+            try press(kVK_DownArrow)
+            XCTAssertEqual(board.selectionByWindowID[harness.windowID], entry.id)
+        }
+        let last = try XCTUnwrap(visible.last)
+        try press(kVK_DownArrow)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], last.id, "Down should stop at the last row")
+        // The detail pane follows, and the row scrolled into view.
+        XCTAssertTrue(renderedTextValues(in: tasks.hostingView).contains { $0.hasPrefix("Task detail, \(last.item.title),") })
+        let rowFrame = try semanticTextFrame(in: tasks.hostingView, prefix: "\(last.item.title), ")
+        XCTAssertTrue(
+            tasks.hostingView.bounds.contains(CGPoint(x: rowFrame.midX, y: rowFrame.midY)),
+            "The selected row should scroll into view: \(rowFrame) in \(tasks.hostingView.bounds)"
+        )
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-arrow-last-row")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-arrow-last-row")
+
+        try press(kVK_UpArrow)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
+        // Arrows with a modifier are not the list's.
+        try press(kVK_UpArrow, modifiers: .shift)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], visible[visible.count - 2].id)
+    }
+
+    /// A single click in this test window cannot be checked: the test host
+    /// is not the active app, so AppKit drops a lone click into its window.
+    /// The second click of a double click still arrives.
+    func testTasksViewDoubleClickOpensTheRowsTaskSpace() throws {
+        let failed = TaskRecord(
+            createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [failed], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        _ = harness.store.send(.setTasksViewShown(windowID: harness.windowID, shown: true))
+        let tasks = hostTasksView(harness, board: board, height: 640)
+        defer { tasks.window.orderOut(nil) }
+        let startWorkspaceID = harness.store.selectedWorkspaceID(in: harness.windowID)
+        let target = try XCTUnwrap(board.items().first { $0.id == .taskSpace(ids.readyUnreadID) })
+        XCTAssertNotEqual(startWorkspaceID, ids.readyUnreadID)
+
+        // A task with no task space only selects on a double click.
+        try clickSemanticText(prefix: "Fix the unread dot, ", in: tasks.hostingView, clickCount: 2)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], .task(failed.id))
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, true)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), startWorkspaceID)
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-before-double-click")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-before-double-click")
+
+        // A double click opens the row's task space and closes the view.
+        try clickSemanticText(prefix: "\(target.title), ", in: tasks.hostingView, clickCount: 2)
+        pumpMainRunLoop(duration: 0.3)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], target.id)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
+        XCTAssertEqual(harness.store.window(id: harness.windowID)?.showsTasksView, false)
+    }
+
+    func testTasksViewSelectsTheNextTaskWhenTheSelectedOneLeavesTheList() throws {
+        let failed = TaskRecord(
+            createdAt: Date(), text: "Fix the unread dot", title: "Fix the unread dot", slug: "fix-unread-dot",
+            source: .cli, setup: .setupFailed(reason: "The agent did not start")
+        )
+        let (harness, ids) = try makeSubspacesHarness(taskRecords: [failed], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        let coordinator = try XCTUnwrap(board.coordinator)
+        let tasks = hostTasksView(harness, board: board, height: 640)
+        defer { tasks.window.orderOut(nil) }
+        func visible() -> [TaskBoardItem.Subject] {
+            TasksViewSections.make(board.items()).visible(isDoneExpanded: false, isArchivedExpanded: false).map(\.id)
+        }
+
+        // Marked done into the collapsed Done group: the next row takes the
+        // selection, or the previous one when it was the last.
+        let leaving = TaskBoardItem.Subject.taskSpace(ids.readyUnreadID)
+        var before = visible()
+        let index = try XCTUnwrap(before.firstIndex(of: leaving))
+        let expected = index + 1 < before.count ? before[index + 1] : before[index - 1]
+        board.selectionByWindowID[harness.windowID] = leaving
+        pumpMainRunLoop(duration: 0.3)
+        _ = harness.store.send(.setWorkspaceDone(workspaceID: ids.readyUnreadID, doneAt: Date()))
+        pumpMainRunLoop(duration: 0.6)
+        tasks.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertFalse(visible().contains(leaving))
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], expected)
+        let expectedTitle = try XCTUnwrap(board.items().first { $0.id == expected }?.title)
+        XCTAssertTrue(renderedTextValues(in: tasks.hostingView).contains { $0.hasPrefix("Task detail, \(expectedTitle),") })
+
+        // A deleted task whose setup failed hands the selection to the row
+        // below it.
+        before = visible()
+        let failedIndex = try XCTUnwrap(before.firstIndex(of: .task(failed.id)))
+        board.selectionByWindowID[harness.windowID] = .task(failed.id)
+        pumpMainRunLoop(duration: 0.3)
+        try coordinator.delete(taskID: failed.id)
+        pumpMainRunLoop(duration: 0.6)
+        XCTAssertEqual(board.selectionByWindowID[harness.windowID], before[failedIndex + 1])
+        try writeSidebarEvidence(tasks.hostingView, name: "tasks-view-selection-after-delete")
+        try attachSidebarRender(tasks.hostingView, name: "tasks-view-selection-after-delete")
+    }
+
+    private func hostTasksView(
+        _ harness: SidebarHarness,
+        board: TaskBoardStore,
+        height: CGFloat
+    ) -> (window: NSWindow, hostingView: NSView) {
+        let tasksView = TasksView(
+            windowID: harness.windowID,
+            store: harness.store,
+            board: board,
+            sessionRuntimeStore: harness.sessionRuntimeStore,
+            newTask: {}
+        )
+        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: height))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: height), styleMask: [.titled], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop(duration: 0.6)
+        hostingView.layoutSubtreeIfNeeded()
+        return (window, hostingView)
+    }
+
+    func testTasksViewDetailShowsAStartingTaskOnceWithThePicker() throws {
+        var waiting = TaskRecord(
+            createdAt: Date().addingTimeInterval(-120),
+            text: "this path is in the artifacts/ directory but doesn't show up in file search with \"@\" in command pallette, why?",
+            title: "Why artifacts/ files are missing from @ file search",
+            slug: "artifacts-missing-from-file-search",
+            source: .quickEntry,
+            setup: .needsWorkspace(reason: "It's about Toastty's command palette file search. Toastty's workspace is not open.")
+        )
+        waiting.suggestedWorkspace = TaskWorkspaceSuggestion(title: "toastty", rootDirectory: NSTemporaryDirectory())
+        let (harness, _) = try makeSubspacesHarness(taskRecords: [waiting], withTaskBoard: true)
+        defer { harness.window.orderOut(nil) }
+        let board = try XCTUnwrap(harness.taskBoard)
+        board.selectionByWindowID[harness.windowID] = .task(waiting.id)
+        let tasksView = TasksView(
+            windowID: harness.windowID,
+            store: harness.store,
+            board: board,
+            sessionRuntimeStore: harness.sessionRuntimeStore,
+            newTask: {}
+        )
+        let hostingView = NSHostingView(rootView: tasksView.frame(width: 1000, height: 560))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop(duration: 0.6)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Task detail, Why artifacts/ files are missing from @ file search") }, "\(textValues)")
+        try writeSidebarEvidence(hostingView, name: "tasks-view-setup-picker")
+        try attachSidebarRender(hostingView, name: "tasks-view-setup-picker")
+    }
+
+    func testSetupCardShowsTriagesSuggestionAndTheWorkspacePicker() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("toastty-picker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let toastty = root.appendingPathComponent("toastty", isDirectory: true)
+        try FileManager.default.createDirectory(at: toastty, withIntermediateDirectories: true)
+        let recents = RecentWorkspacesStore.inMemory()
+        recents.record(RecentWorkspace(
+            id: UUID(),
+            title: "control-plane",
+            rootDirectory: root.appendingPathComponent("control-plane").path,
+            closedAt: Date().addingTimeInterval(-3 * 86_400)
+        ))
+        // A real image, so the chip shows its thumbnail.
+        let screenshot = root.appendingPathComponent("CleanShot 2026-10-21 at 9.57.01 AM@2x.png")
+        let image = NSImage(size: NSSize(width: 120, height: 80), flipped: false) { rect in
+            NSGradient(starting: NSColor(calibratedRed: 0.23, green: 0.27, blue: 0.32, alpha: 1),
+                       ending: NSColor(calibratedRed: 0.12, green: 0.15, blue: 0.18, alpha: 1))?.draw(in: rect, angle: -45)
+            NSColor(calibratedRed: 0.91, green: 0.58, blue: 0.05, alpha: 1).setFill()
+            NSRect(x: 12, y: 20, width: 70, height: 8).fill()
+            return true
+        }
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])).write(to: screenshot)
+
+        let recordStore = TaskRecordStore.inMemory()
+        var suggested = TaskRecord(
+            createdAt: Date().addingTimeInterval(-120),
+            text: "this path is in the artifacts/ directory but doesn't show up in file search with \"@\" in command pallette, why?",
+            attachments: [TaskAttachment(path: screenshot.path, displayName: screenshot.lastPathComponent)],
+            title: "Why artifacts/ files are missing from @ file search",
+            slug: "artifacts-missing-from-file-search",
+            source: .quickEntry,
+            setup: .needsWorkspace(reason: "It's about Toastty's command palette file search. Toastty's workspace is not open.")
+        )
+        suggested.suggestedWorkspace = TaskWorkspaceSuggestion(title: "toastty", rootDirectory: toastty.path)
+        let unplaced = TaskRecord(
+            createdAt: Date().addingTimeInterval(-240),
+            text: "After upgrading, the billing page still shows the Starter plan until a reload.",
+            title: "Billing page shows the old plan after upgrade",
+            slug: "billing-old-plan",
+            source: .cli,
+            setup: .needsWorkspace(reason: "None of the open workspaces has the billing page.")
+        )
+        let failed = TaskRecord(
+            createdAt: Date().addingTimeInterval(-600),
+            text: "Fix the unread dot",
+            title: "Fix the unread dot",
+            slug: "unread-dot",
+            source: .cli,
+            resolved: TaskFields(agent: "codex"),
+            setup: .setupFailed(reason: "The agent did not start: the codex profile is missing from agents.toml.")
+        )
+        for record in [suggested, unplaced, failed] {
+            try recordStore.insert(record)
+        }
+        let coordinator = TaskCoordinator(
+            records: recordStore,
+            store: store,
+            launcher: nil,
+            configLoader: { .empty },
+            attachmentsDirectoryURL: root,
+            hasActiveSession: { _ in false },
+            grantScope: { _, _ in },
+            recentWorkspaces: recents
+        )
+
+        // The picker chooses the suggestion: a project that is not open.
+        let choices = coordinator.workspaceChoices(taskID: suggested.id)
+        XCTAssertEqual(choices.suggested?.choice, .directory(toastty.path))
+        XCTAssertEqual(TaskSetupCard.startTitle(for: choices.suggested?.choice, choices: choices), "Open toastty & Start")
+        XCTAssertNil(coordinator.workspaceChoices(taskID: unplaced.id).suggested)
+        XCTAssertEqual(coordinator.workspaceChoices().recent.map(\.title), ["control-plane"])
+
+        func render(_ record: TaskRecord, name: String) throws {
+            let card = TaskSetupCard(taskID: record.id, records: recordStore, coordinator: coordinator)
+                .frame(width: 520, alignment: .leading)
+                .padding(16)
+            let hostingView = NSHostingView(
+                rootView: ZStack(alignment: .topLeading) {
+                    ToastyTheme.surfaceBackground
+                    card
+                        .background(TaskSetupCard.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(hex: 0x343434), lineWidth: 1))
+                        .padding(24)
+                }
+                .environment(\.colorScheme, .dark)
+                .fixedSize()
+            )
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: hostingView.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = hostingView
+            window.orderFront(nil)
+            defer { window.orderOut(nil) }
+            pumpMainRunLoop(duration: 0.3)
+            hostingView.setFrameSize(hostingView.fittingSize)
+            hostingView.layoutSubtreeIfNeeded()
+            try writeSidebarEvidence(hostingView, name: name)
+            try attachSidebarRender(hostingView, name: name)
+        }
+        try render(suggested, name: "setup-card-suggested")
+        try render(unplaced, name: "setup-card-no-suggestion")
+        try render(failed, name: "setup-card-setup-failed")
+    }
+
+    func testSubspacesRenderInsideParentCardInWorkspaceOrderNotAsCards() throws {
         let (harness, ids) = try makeSubspacesHarness()
         let rootView = harness.hostingView
         let textValues = renderedTextValues(in: rootView)
@@ -2151,11 +4118,10 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains("ios-tab-footer"), "Sibling card should still render: \(textValues)")
         XCTAssertFalse(textValues.contains { $0.hasPrefix("qa-private-app-verification, task space, ready") })
 
-        // The legacy Ready annotation does not lift an idle row above the
-        // unread ready session, approval, or working rows.
+        // Rows keep the window's workspace order, whatever their status.
         XCTAssertEqual(
             try subspaceRowOrder(in: rootView),
-            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
+            ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
         )
         // The PR chip and spawner tags render; the ↗ child row for a
         // subspace agent does not (the chip replaces it).
@@ -2167,7 +4133,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains { $0.contains("spawned by Assess beta launch readiness") })
         XCTAssertFalse(textValues.contains { $0.contains("sub-agent") }, "Subspace agents should not be ↗ rows: \(textValues)")
 
-        try writeSidebarEvidence(rootView, name: "sidebar-subspaces-sorted")
+        try writeSidebarEvidence(rootView, name: "sidebar-subspaces-order")
     }
 
     func testOffscreenSubspacesDriveScrollPillsAndClearWhenVisibleOrDone() throws {
@@ -2359,7 +4325,7 @@ final class SidebarViewTests: XCTestCase {
 
         for (width, annotation, showsPill, showsAnnotation) in [
             (ToastyTheme.sidebarWidth, "PR #58", true, true),
-            (ToastyTheme.sidebarWidth, "ENG-1234-fix", true, false),
+            (ToastyTheme.sidebarWidth, "ENG-1234-fix-auth", true, false),
             (CGFloat(220), "PR #58", true, false),
             (CGFloat(WindowState.minSidebarWidth), "PR #58", false, false),
         ] {
@@ -2432,114 +4398,224 @@ final class SidebarViewTests: XCTestCase {
         }
     }
 
-    func testWorkingTaskSpacesKeepTheirVisibleOrderAcrossProgressReports() throws {
-        let (harness, _) = try makeSubspacesHarness()
+    func testTaskSpacesKeepWorkspaceOrderAcrossStatusChangesReadsAndJumps() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 2)
         defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
-        let now = Date()
-        for (index, sessionID) in ["approval-agent", "working-agent", "approval-agent", "working-agent"].enumerated() {
-            harness.sessionRuntimeStore.updateStatus(
-                sessionID: sessionID,
-                status: SessionStatus(kind: .working, summary: "Progress \(index)"),
-                at: now.addingTimeInterval(Double(index))
-            )
-            pumpMainRunLoop(duration: 0.4)
-            harness.hostingView.layoutSubtreeIfNeeded()
-            XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView), [
-                "launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification",
-            ])
+        let rootView = harness.hostingView
+        let extraIDs = try (1...2).map { number in
+            try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space \(number)" }?.id)
         }
-    }
+        let workspaceOrder = [
+            "qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist",
+            "Task space 1", "Task space 2",
+        ]
+        func assertWorkspaceOrder(_ message: String) throws {
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(
+                try subspaceRowOrder(in: rootView, additionalTitles: ["Task space 1", "Task space 2"]),
+                workspaceOrder,
+                message
+            )
+        }
+        try assertWorkspaceOrder("Initial order")
 
-    func testDoneTaskSpacesFollowDoneMarksIncludingASpaceWithoutSessions() throws {
-        let (harness, ids) = try makeSubspacesHarness()
-        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        // Progress, finished turns and a done mark change each row's status
+        // but not its place. The newest finished turn does not lift its row.
         let now = Date()
         harness.sessionRuntimeStore.updateStatus(
-            sessionID: "working-agent", status: SessionStatus(kind: .idle, summary: "Finished"), at: now
+            sessionID: "working-agent", status: SessionStatus(kind: .working, summary: "Progress"), at: now
         )
-        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.workingID, doneAt: now.addingTimeInterval(1))))
-        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.annotatedIdleID, doneAt: now.addingTimeInterval(2))))
-        pumpMainRunLoop(duration: 0.4)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView), [
-            "launch-checklist", "qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture",
-        ])
+        try assertWorkspaceOrder("Progress report")
+        let unreadIDs = [ids.readyUnreadID] + extraIDs
+        for (index, sessionID) in ["ready-agent", "extra-0", "extra-1"].enumerated() {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Ready"),
+                at: now.addingTimeInterval(Double(index + 1))
+            )
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[unreadIDs[index]]?.focusedPanelID)
+            XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: unreadIDs[index], panelID: panelID)))
+        }
+        try assertWorkspaceOrder("Finished turns")
+        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.annotatedIdleID, doneAt: now)))
+        try assertWorkspaceOrder("Done mark")
+        try attachSidebarRender(rootView, name: "projects-fixed-order-before-jumps")
 
-        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.workingID, doneAt: nil)))
-        XCTAssertTrue(harness.store.send(.setWorkspaceDone(workspaceID: ids.workingID, doneAt: now.addingTimeInterval(3))))
-        pumpMainRunLoop(duration: 0.4)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView), [
-            "launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification",
-        ])
-    }
-
-    func testNextUnreadJumpLeavesTheSubspaceInItsSlotUntilSelectionMoves() throws {
-        let (harness, ids) = try makeSubspacesHarness()
-        let rootView = harness.hostingView
-
-        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
-            preferredWindowID: harness.windowID,
-            sessionRuntimeStore: harness.sessionRuntimeStore
-        ))
-        pumpMainRunLoop(duration: 0.6)
-        rootView.layoutSubtreeIfNeeded()
-
-        // The jump read launch-checklist, which now belongs at the top of
-        // the idle group; it stays where the jump found it while selected.
-        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.readyUnreadID)
-        XCTAssertFalse(renderedTextValues(in: rootView).contains { $0.hasPrefix("launch-checklist, task space, ready") })
-        XCTAssertEqual(
-            try subspaceRowOrder(in: rootView),
-            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
-        )
+        // Each jump reads the next unread task down the list, then moves on
+        // to the approval request. Reading and leaving a row moves nothing.
+        for (index, workspaceID) in (unreadIDs + [ids.approvalID]).enumerated() {
+            XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: harness.windowID,
+                sessionRuntimeStore: harness.sessionRuntimeStore
+            ))
+            XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), workspaceID, "Jump \(index + 1)")
+            try assertWorkspaceOrder("Jump \(index + 1)")
+            try attachSidebarRender(rootView, name: "projects-fixed-order-jump-\(index + 1)")
+        }
+        for workspaceID in unreadIDs {
+            XCTAssertTrue(try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]).unreadPanelIDs.isEmpty)
+        }
 
         harness.store.selectWorkspace(
-            windowID: harness.windowID,
-            workspaceID: ids.parentID,
+            windowID: harness.windowID, workspaceID: ids.parentID,
             preferringUnreadSessionPanelIn: harness.sessionRuntimeStore
+        )
+        try assertWorkspaceOrder("Selection left the group")
+    }
+
+    func testNextUnreadVisitsAChildTaskRightAfterItsParent() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let coordinator = try XCTUnwrap(harness.taskCoordinator)
+        // Navigation reads the parent links from the task records.
+        harness.sessionRuntimeStore.taskCoordinator = coordinator
+        let parentTaskID = UUID()
+        let now = Date()
+        for (workspaceID, taskID, parentID, title) in [
+            (ids.readyUnreadID, parentTaskID, nil as UUID?, "launch-checklist"),
+            (ids.approvalID, UUID(), parentTaskID, "qa-mobile-navigation"),
+        ] {
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+            try coordinator.records.insert(TaskRecord(
+                id: taskID, createdAt: now, text: title, title: title, slug: title, source: .cli,
+                resolved: TaskFields(agent: "codex"), workspaceID: ids.parentID, setup: .started,
+                parentTaskID: parentID, operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            ))
+            XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: taskID)))
+        }
+        let otherID = try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space 1" }?.id)
+        let targets = [ids.readyUnreadID, ids.approvalID, otherID]
+        for (index, sessionID) in ["ready-agent", "approval-agent", "extra-0"].enumerated() {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID, status: SessionStatus(kind: .ready, summary: "Ready"),
+                at: now.addingTimeInterval(Double(3 - index))
+            )
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[targets[index]]?.focusedPanelID)
+            XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: targets[index], panelID: panelID)))
+        }
+        pumpMainRunLoop(duration: 0.6)
+        // Task-board rows use the agent's display title unless the user named
+        // them. The child draws under its parent, although its task space
+        // opened first, and the jumps follow the same order.
+        let titles = ["Checklist", "Fix nav drawer focus", "Review task 1"]
+        for (index, workspaceID) in targets.prefix(2).enumerated() {
+            XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+            ))
+            pumpMainRunLoop(duration: 0.6)
+            harness.hostingView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), workspaceID)
+            XCTAssertEqual(Array(try subspaceRowOrder(in: harness.hostingView, titles: titles).prefix(3)), [
+                "Checklist", "Fix nav drawer focus", "Review task 1",
+            ])
+            try attachSidebarRender(harness.hostingView, name: "projects-unread-family-\(index + 1)")
+        }
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        pumpMainRunLoop(duration: 0.6)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), otherID)
+        // The family's turns are read and the selection left it, so it moved
+        // to Idle; the selected task holds its place in Needs you.
+        XCTAssertEqual(try subspaceRowOrder(in: harness.hostingView, titles: titles), [
+            "Review task 1", "Checklist", "Fix nav drawer focus",
+        ])
+    }
+
+    func testNextActiveReviewCyclesKeepTaskSpacesInWorkspaceOrder() throws {
+        let (harness, ids) = try makeSubspacesHarness(additionalSubspaceCount: 2, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let coordinator = try XCTUnwrap(harness.taskCoordinator)
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.taskCoordinator = coordinator
+        coordinator.board = try XCTUnwrap(harness.taskBoard)
+        let rootView = harness.hostingView
+        let now = Date().addingTimeInterval(-100)
+        let titles = ["Review A", "Review B"]
+        let targets = try (1...2).map { number in
+            try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space \(number)" }?.id)
+        }
+        for sessionID in ["spawner", "working-agent", "approval-agent", "ready-agent"] {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: sessionID, status: SessionStatus(kind: .idle, summary: "Waiting"), at: now
+            )
+        }
+        let readyPanelID = try XCTUnwrap(harness.store.state.workspacesByID[ids.readyUnreadID]?.focusedPanelID)
+        XCTAssertTrue(harness.store.send(.markPanelNotificationsRead(workspaceID: ids.readyUnreadID, panelID: readyPanelID)))
+        for (index, workspaceID) in targets.enumerated() {
+            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+            var record = TaskRecord(
+                createdAt: now, text: titles[index], title: titles[index], slug: "review-\(index)",
+                titleSetByUser: true, source: .cli, resolved: TaskFields(agent: "codex"),
+                workspaceID: ids.parentID, setup: .started,
+                operation: TaskOperation(taskSpace: .init(workspaceID: workspaceID, panelID: panelID))
+            )
+            record.readyForReviewAt = now
+            try coordinator.records.insert(record)
+            XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: workspaceID, taskID: record.id)))
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "extra-\(index)",
+                status: SessionStatus(kind: index == 0 ? .idle : .ready, summary: "Review complete"),
+                at: now.addingTimeInterval(Double(20 - index * 10))
+            )
+            if index == 1 {
+                XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID)))
+            }
+        }
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles)
+
+        // Reading B changes ready to idle while its task stays ready for review.
+        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+        ))
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), targets[1])
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        for workspaceID in targets {
+            let workspace = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID])
+            XCTAssertTrue(workspace.unreadPanelIDs.isEmpty)
+            XCTAssertEqual(try XCTUnwrap(harness.sessionRuntimeStore.workspaceStatuses(for: workspaceID).first).status.kind, .idle)
+            XCTAssertEqual(harness.taskCoordinator?.board?.items().first { $0.taskSpaceWorkspaceID == workspaceID }?.stage,
+                           .needsYou(.readyForReview))
+        }
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles)
+        try attachSidebarRender(rootView, name: "projects-review-before-cycle")
+        var visited = Set<UUID>()
+        for index in 0..<6 {
+            XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: harness.windowID, sessionRuntimeStore: harness.sessionRuntimeStore
+            ))
+            pumpMainRunLoop(duration: 0.6)
+            rootView.layoutSubtreeIfNeeded()
+            visited.insert(try XCTUnwrap(harness.store.selectedWorkspaceID(in: harness.windowID)))
+            XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles, "Review cycle jump \(index + 1)")
+            if index == 0 {
+                try attachSidebarRender(rootView, name: "projects-review-after-jump")
+            }
+        }
+        XCTAssertTrue(Set(targets).isSubset(of: visited), "The cycle must visit both already-read review tasks")
+
+        harness.store.selectWorkspace(
+            windowID: harness.windowID, workspaceID: ids.parentID, preferringUnreadSessionPanelIn: nil
+        )
+        pumpMainRunLoop(duration: 0.6)
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "extra-1", status: SessionStatus(kind: .idle, summary: "Review updated"), at: Date()
         )
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
-        // Releasing the pin puts the most recently idle subspace first in
-        // its group, ahead of the idle workspace created before it.
-        XCTAssertEqual(
-            try subspaceRowOrder(in: rootView),
-            ["qa-mobile-navigation", "qa-update-visitor-fixture", "launch-checklist", "qa-private-app-verification"]
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles,
+                       "A new agent report does not move a row")
+        harness.sessionRuntimeStore.updateStatus(
+            sessionID: "extra-0", status: SessionStatus(kind: .needsApproval, summary: "Needs approval"), at: Date()
         )
-    }
-
-    func testNextActiveUsesPinnedSubspaceOrderDisplayedBySidebar() throws {
-        let (harness, ids) = try makeSubspacesHarness()
-        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
-        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
-            preferredWindowID: harness.windowID,
-            sessionRuntimeStore: harness.sessionRuntimeStore
-        ))
         pumpMainRunLoop(duration: 0.6)
-        for sessionID in ["ready-agent", "approval-agent"] {
-            harness.sessionRuntimeStore.updateStatus(
-                sessionID: sessionID,
-                status: SessionStatus(kind: .working, summary: "Working", detail: "Resumed"),
-                at: Date()
-            )
-        }
-        for workspaceID in [ids.approvalID, ids.readyUnreadID] {
-            let panelID = try XCTUnwrap(harness.store.state.workspacesByID[workspaceID]?.focusedPanelID)
-            harness.store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: panelID))
-        }
-        pumpMainRunLoop(duration: 0.6)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        XCTAssertEqual(
-            try subspaceRowOrder(in: harness.hostingView),
-            ["launch-checklist", "qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification"]
-        )
-
-        XCTAssertTrue(harness.store.focusNextUnreadOrActivePanelFromCommand(
-            preferredWindowID: harness.windowID,
-            sessionRuntimeStore: harness.sessionRuntimeStore
-        ))
-        XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.approvalID)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try subspaceRowOrder(in: rootView, titles: titles), titles,
+                       "An approval request does not move a row")
     }
 
     func testSelectingASubspaceHighlightsItsParentCard() throws {
@@ -2590,13 +4666,13 @@ final class SidebarViewTests: XCTestCase {
         return Array(UnsafeBufferPointer(start: data + rowStart, count: Int(20 * scale) * bytesPerPixel))
     }
 
-    func testDoneCheckboxSinksASubspaceUntilItsAgentStartsNewWork() throws {
+    func testDoneCheckboxMarksASubspaceInPlaceUntilItsAgentStartsNewWork() throws {
         let (harness, ids) = try makeSubspacesHarness()
         let rootView = harness.hostingView
         // The runtime clears the mark through the store, as it does in the app.
         harness.sessionRuntimeStore.bind(store: harness.store)
 
-        // The unread ready row sorts first; its rail box marks it done.
+        // The unread ready row's rail box marks it done.
         try clickDoneToggle(forRowTitled: "launch-checklist", in: rootView)
         pumpMainRunLoop(duration: 0.6)
         rootView.layoutSubtreeIfNeeded()
@@ -2615,7 +4691,7 @@ final class SidebarViewTests: XCTestCase {
         )
         XCTAssertEqual(
             try subspaceRowOrder(in: rootView),
-            ["qa-mobile-navigation", "qa-update-visitor-fixture", "qa-private-app-verification", "launch-checklist"]
+            ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
         )
         try writeSidebarEvidence(rootView, name: "sidebar-subspace-done")
 
@@ -2632,6 +4708,62 @@ final class SidebarViewTests: XCTestCase {
         textValues = renderedTextValues(in: rootView)
         XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, task space, working") }, "\(textValues)")
         try writeSidebarEvidence(rootView, name: "sidebar-subspace-reopened")
+    }
+
+    /// A task in Ready for review with an open pull request finishes through
+    /// Merge: its rail mark shows the status but is no done checkbox.
+    func testATaskWithAnOpenPullRequestHasNoDoneCheckbox() throws {
+        let (harness, _) = try makeSubspacesHarness(additionalSubspaceCount: 1, taskRecords: [], withTaskBoard: true)
+        defer { harness.window.orderOut(nil); harness.sessionRuntimeStore.reset() }
+        let coordinator = try XCTUnwrap(harness.taskCoordinator)
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        harness.sessionRuntimeStore.taskCoordinator = coordinator
+        coordinator.board = try XCTUnwrap(harness.taskBoard)
+        let rootView = harness.hostingView
+        let now = Date().addingTimeInterval(-100)
+        let taskSpace = try XCTUnwrap(harness.store.state.workspacesByID.values.first { $0.title == "Task space 1" }?.id)
+        let panelID = try XCTUnwrap(harness.store.state.workspacesByID[taskSpace]?.focusedPanelID)
+        var record = TaskRecord(
+            createdAt: now, text: "Review PR", title: "Review PR", slug: "review-pr",
+            titleSetByUser: true, source: .cli, resolved: TaskFields(agent: "codex"),
+            workspaceID: harness.store.state.workspacesByID[taskSpace]?.parentWorkspaceID, setup: .started,
+            operation: TaskOperation(taskSpace: .init(workspaceID: taskSpace, panelID: panelID))
+        )
+        record.readyForReviewAt = now
+        try coordinator.records.insert(record)
+        XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: taskSpace, taskID: record.id)))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        // Without a pull request, Mark Done is how the task finishes.
+        XCTAssertNotNil(try doneToggleFrame(forRowTitled: "Review PR", in: rootView))
+        try writeSidebarEvidence(rootView, name: "sidebar-no-pr-has-checkbox")
+
+        XCTAssertTrue(harness.store.send(.setWorkspaceAnnotation(
+            workspaceID: taskSpace,
+            key: "github-pr",
+            annotation: WorkspaceAnnotation(text: "PR #7", url: "https://github.com/example/toastty/pull/7")
+        )))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+
+        let textValues = renderedTextValues(in: rootView)
+        XCTAssertTrue(textValues.contains { $0.hasPrefix("Review PR, task space, ready for review") }, "\(textValues)")
+        XCTAssertNil(try doneToggleFrame(forRowTitled: "Review PR", in: rootView), "The rail mark is no checkbox")
+        // A quiet subspace without a task keeps its box.
+        XCTAssertNotNil(try doneToggleFrame(forRowTitled: "Checklist", in: rootView))
+        try attachSidebarRender(rootView, name: "sidebar-open-pr-no-checkbox")
+        try writeSidebarEvidence(rootView, name: "sidebar-open-pr-no-checkbox")
+    }
+
+    /// The rail box nearest the row titled `title`, or nil when that row
+    /// draws none.
+    private func doneToggleFrame(forRowTitled title: String, in rootView: NSView) throws -> CGRect? {
+        let rowFrame = try semanticTextFrame(in: rootView, prefix: "\(title), task space")
+        return toolTipViews(in: rootView, toolTip: SidebarSubspacePresentation.doneToggleActionTitle(isDone: false))
+            .map { $0.convert($0.bounds, to: rootView) }
+            .filter { abs($0.midY - rowFrame.midY) < 20 }
+            .min { abs($0.midY - rowFrame.midY) < abs($1.midY - rowFrame.midY) }
     }
 
     /// Clicks the rail box of the subspace row titled `title`. The box
@@ -2669,9 +4801,12 @@ final class SidebarViewTests: XCTestCase {
     }
 
     /// The harness's subspace row titles in on-screen order, top first.
-    private func subspaceRowOrder(in rootView: NSView) throws -> [String] {
-        let titles = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
-        let rowFrames = try titles.map { title in
+    private func subspaceRowOrder(
+        in rootView: NSView,
+        additionalTitles: [String] = [],
+        titles: [String] = ["qa-mobile-navigation", "qa-private-app-verification", "qa-update-visitor-fixture", "launch-checklist"]
+    ) throws -> [String] {
+        let rowFrames = try (titles + additionalTitles).map { title in
             (title, try semanticTextFrame(in: rootView, prefix: "\(title), task space"))
         }
         let siblingFrame = try semanticTextFrame(in: rootView, prefix: "ios-tab-footer")
@@ -2707,26 +4842,303 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(textValues.contains { $0.hasPrefix("launch-checklist, task space") })
     }
 
+    // MARK: - Coordinator row
+
+    /// Two projects and the coordinator's workspace, read back from a saved
+    /// layout as a relaunch reads it.
+    private func makeCoordinatorSidebarState() throws -> (state: AppState, windowID: UUID, coordinator: CoordinatorLocation, projectIDs: [UUID]) {
+        let projects = [
+            makeSinglePanelWorkspace(id: UUID(), title: "toastty"),
+            makeSinglePanelWorkspace(id: UUID(), title: "emptyos"),
+        ]
+        let windowID = UUID()
+        var state = AppState(
+            windows: [WindowState(
+                id: windowID, frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 900),
+                workspaceIDs: projects.map(\.id), selectedWorkspaceID: projects[0].id
+            )],
+            workspacesByID: Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        XCTAssertTrue(AppReducer.reduce(
+            action: .createCoordinatorWorkspace(
+                windowID: windowID, workspaceID: UUID(), panelID: UUID(), terminalCWD: "/Users/tester/.toastty/coordinator"
+            ),
+            state: &state
+        ))
+        let saved = try JSONEncoder().encode(WorkspaceLayoutSnapshot(state: state))
+        let restored = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: saved).makeAppState()
+        return (restored, windowID, try XCTUnwrap(restored.coordinator), projects.map(\.id))
+    }
+
+    func testCoordinatorRowIsPinnedAboveTheTasksRowInBothSegmentsAfterARestore() throws {
+        let fixture = try makeCoordinatorSidebarState()
+        let harness = try makeSidebarHarness(
+            state: fixture.state, windowID: fixture.windowID, taskRecords: [], withTaskBoard: true, withCoordinator: true
+        )
+        defer { harness.window.orderOut(nil) }
+        let root = harness.hostingView
+
+        func checkPinned(_ segment: String) throws {
+            pumpMainRunLoop(duration: 0.3)
+            root.layoutSubtreeIfNeeded()
+            let textValues = renderedTextValues(in: root)
+            // One row, restored without an agent.
+            XCTAssertEqual(textValues.filter { $0.hasPrefix("Coordinator") }, ["Coordinator, not running"], "\(segment): \(textValues)")
+            let coordinator = try semanticTextFrame(in: root, prefix: "Coordinator")
+            let tasks = try semanticTextFrame(in: root, prefix: "Tasks")
+            // The same side of the Tasks row as the top of the view.
+            let towardTop = root.isFlipped ? coordinator.midY < tasks.midY : coordinator.midY > tasks.midY
+            XCTAssertTrue(towardTop, "\(segment): the coordinator's row is not above the Tasks row")
+        }
+
+        // All: above the Tasks row, and not one of the cards.
+        try checkPinned("all")
+        var textValues = renderedTextValues(in: root)
+        XCTAssertTrue(textValues.contains("toastty"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("emptyos"), "\(textValues)")
+        let coordinator = try semanticTextFrame(in: root, prefix: "Coordinator")
+        let tasks = try semanticTextFrame(in: root, prefix: "Tasks")
+        let firstCard = try semanticTextFrame(in: root, prefix: "toastty")
+        XCTAssertEqual((coordinator.midY - tasks.midY).sign, (tasks.midY - firstCard.midY).sign, "the Tasks row is between the coordinator and the cards")
+        try attachSidebarRender(root, name: "coordinator-row-projects-not-running")
+        try writeSidebarEvidence(root, name: "coordinator-row-projects-not-running")
+
+        // Needs you: the cards go, the coordinator's row stays.
+        _ = harness.store.send(.setSidebarSegment(windowID: fixture.windowID, segment: .needsYou))
+        try checkPinned("needs you")
+        textValues = renderedTextValues(in: root)
+        XCTAssertFalse(textValues.contains("toastty"), "\(textValues)")
+        // Nothing waits for the user, and the segment says so.
+        XCTAssertTrue(textValues.contains("Nothing needs you"), "\(textValues)")
+        XCTAssertTrue(textValues.contains("Only what needs you"), "\(textValues)")
+        try attachSidebarRender(root, name: "coordinator-row-needs-you-not-running")
+        try writeSidebarEvidence(root, name: "coordinator-row-needs-you-not-running")
+    }
+
+    func testCoordinatorRowShowsTheAgentsStateAndSelectsItsWorkspace() throws {
+        let fixture = try makeCoordinatorSidebarState()
+        var coordinatorRestoreState = TerminalManagedAgentRestoreState.inactive
+        let harness = try makeSidebarHarness(
+            state: fixture.state, windowID: fixture.windowID, taskRecords: [], withTaskBoard: true, withCoordinator: true,
+            coordinatorRestoreState: { _ in coordinatorRestoreState }
+        )
+        defer { harness.window.orderOut(nil) }
+        harness.sessionRuntimeStore.bind(store: harness.store)
+        let root = harness.hostingView
+        let panelID = try XCTUnwrap(fixture.coordinator.panelID)
+        func coordinatorLabels() -> [String] {
+            pumpMainRunLoop(duration: 0.3)
+            root.layoutSubtreeIfNeeded()
+            return renderedTextValues(in: root).filter { $0.hasPrefix("Coordinator") }
+        }
+        func report(_ kind: SessionStatusKind) {
+            harness.sessionRuntimeStore.updateStatus(
+                sessionID: "coordinator-session", status: SessionStatus(kind: kind, summary: kind.rawValue), at: Date()
+            )
+        }
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, not running"])
+        try attachSidebarRender(root, name: "coordinator-row-not-running")
+        try writeSidebarEvidence(root, name: "coordinator-row-not-running")
+
+        // A restored agent that has not come back yet is starting.
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .claude, nativeSessionID: UUID().uuidString, sessionFilePath: "/Users/tester/.claude/session.jsonl",
+            cwd: "/Users/tester/.toastty/coordinator", capturedAt: Date()
+        )
+        XCTAssertTrue(harness.store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord)))
+        coordinatorRestoreState = .pending
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, starting"])
+        try attachSidebarRender(root, name: "coordinator-row-starting")
+        try writeSidebarEvidence(root, name: "coordinator-row-starting")
+        coordinatorRestoreState = .inactive
+
+        // The agent starts: a quiet row while it is at rest.
+        harness.sessionRuntimeStore.startSession(
+            sessionID: "coordinator-session", agent: .claude, panelID: panelID, windowID: fixture.windowID,
+            workspaceID: fixture.coordinator.workspaceID, codexStatusTrackingSource: .externallyReported,
+            cwd: "/Users/tester/.toastty/coordinator", repoRoot: nil, at: Date()
+        )
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+        try attachSidebarRender(root, name: "coordinator-row-quiet")
+        try writeSidebarEvidence(root, name: "coordinator-row-quiet")
+        report(.working)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, working"])
+        try attachSidebarRender(root, name: "coordinator-row-working")
+        try writeSidebarEvidence(root, name: "coordinator-row-working")
+        report(.needsApproval)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, needs approval"])
+        try attachSidebarRender(root, name: "coordinator-row-needs-approval")
+        try writeSidebarEvidence(root, name: "coordinator-row-needs-approval")
+        report(.error)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, error"])
+        try attachSidebarRender(root, name: "coordinator-row-error")
+        try writeSidebarEvidence(root, name: "coordinator-row-error")
+        // The turn ended while another workspace was selected: its output
+        // is unread, as on any agent's row.
+        report(.idle)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, unread"])
+        try attachSidebarRender(root, name: "coordinator-row-unread")
+        try writeSidebarEvidence(root, name: "coordinator-row-unread")
+
+        // The agent's session is not a card's session row, in either segment.
+        XCTAssertEqual(harness.store.state.topLevelWorkspaceIDs(in: fixture.windowID), fixture.projectIDs)
+
+        // A click selects the coordinator's workspace.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertEqual(harness.store.selectedWorkspaceID(in: fixture.windowID), fixture.coordinator.workspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+        // A notification for the workspace itself stays unread while it is
+        // selected: the dot's ring takes the selected row's fill.
+        XCTAssertTrue(harness.store.send(.recordDesktopNotification(workspaceID: fixture.coordinator.workspaceID, panelID: nil)))
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, unread, selected"])
+        try attachSidebarRender(root, name: "coordinator-row-selected-unread")
+        try writeSidebarEvidence(root, name: "coordinator-row-selected-unread")
+
+        // The agent exits: the row says so.
+        XCTAssertTrue(harness.sessionRuntimeStore.handleCommandFinished(panelID: panelID, exitCode: 0, at: Date()))
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, not running, selected"])
+
+        // Closing the workspace removes the row.
+        XCTAssertTrue(harness.store.send(.closeWorkspace(workspaceID: fixture.coordinator.workspaceID)))
+        XCTAssertEqual(coordinatorLabels(), [])
+    }
+
+    /// Where the chat can show, the row shows and hides the dock as the
+    /// toolbar's Toasty button does, and says when the dock shows.
+    func testCoordinatorRowShowsAndHidesTheDockAsTheToolbarButtonDoes() throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        let store = fixture.store
+        let controller = fixture.controller
+        let location = try XCTUnwrap(store.state.coordinator)
+        let windowID = location.windowID
+        let otherWorkspaceID = try XCTUnwrap(store.state.topLevelWorkspaceIDs(in: windowID).first)
+        XCTAssertTrue(store.selectWorkspace(windowID: windowID, workspaceID: otherWorkspaceID, preferringUnreadSessionPanelIn: nil))
+        XCTAssertTrue(controller.chatIsAvailable)
+
+        let taskCoordinator = TaskCoordinator(
+            records: TaskRecordStore.inMemory(),
+            store: store,
+            launcher: nil,
+            configLoader: { .empty },
+            attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
+            hasActiveSession: { _ in false },
+            grantScope: { _, _ in }
+        )
+        taskCoordinator.coordinatorController = controller
+        let registry = fixture.conversations.terminalRuntimeRegistry
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: fixture.conversations.sessionRuntimeStore,
+            annotationStyleStore: makeTestAnnotationStyleStore(),
+            taskCoordinator: taskCoordinator,
+            taskBoard: .disabled,
+            newTask: nil,
+            terminalRuntimeContext: TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        )
+        let root = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        hostWindow.contentView = root
+        hostWindow.makeKeyAndOrderFront(nil)
+        defer { hostWindow.orderOut(nil) }
+        func coordinatorLabels() -> [String] {
+            pumpMainRunLoop(duration: 0.3)
+            root.layoutSubtreeIfNeeded()
+            return renderedTextValues(in: root).filter { $0.hasPrefix("Coordinator") }
+        }
+        func dockShows() -> Bool { controller.dockShows(in: windowID) }
+
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+        try attachSidebarRender(root, name: "coordinator-row-dock-hidden")
+        try writeSidebarEvidence(root, name: "coordinator-row-dock-hidden")
+
+        // A click shows the dock beside the workspace, and the row says so.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertTrue(dockShows())
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), otherWorkspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, dock open"])
+        try attachSidebarRender(root, name: "coordinator-row-dock-open")
+        try writeSidebarEvidence(root, name: "coordinator-row-dock-open")
+
+        // A second click hides it again.
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), otherWorkspaceID)
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator"])
+
+        // The toolbar button and Cmd+Shift+K show the dock: the row follows.
+        controller.toggleDock()
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, dock open"])
+
+        // In the full view, a click keeps the full view.
+        controller.openFullView()
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+        try clickSemanticText(prefix: "Coordinator", in: root)
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), location.workspaceID)
+        XCTAssertFalse(dockShows())
+        XCTAssertEqual(coordinatorLabels(), ["Coordinator, selected"])
+    }
+
+    func testCoordinatorRowUnreadMarkFollowsTheSessionRowRule() throws {
+        let fixture = try makeCoordinatorSidebarState()
+        var workspace = try XCTUnwrap(fixture.state.workspacesByID[fixture.coordinator.workspaceID])
+        let panelID = try XCTUnwrap(fixture.coordinator.panelID)
+        func mark(unread: Bool, selected: Bool) -> SidebarCoordinatorPresentation.Mark {
+            SidebarCoordinatorPresentation.mark(
+                agentState: .running,
+                statusKind: .ready,
+                hasUnread: unread && SidebarCoordinatorPresentation.hasUnread(
+                    in: workspace,
+                    selectedWorkspaceID: selected ? workspace.id : nil,
+                    selectedPanelID: selected ? panelID : nil
+                )
+            )
+        }
+        XCTAssertEqual(mark(unread: true, selected: false), .quiet)
+        let tabID = try XCTUnwrap(workspace.tabID(containingPanelID: panelID))
+        XCTAssertTrue(workspace.updateTab(id: tabID) { $0.unreadPanelIDs = [panelID] })
+        XCTAssertEqual(mark(unread: true, selected: false), .unread)
+        // The panel the user looks at is read.
+        XCTAssertEqual(mark(unread: true, selected: true), .quiet)
+        XCTAssertEqual(SidebarCoordinatorPresentation.accessibilityLabel(.unread, isSelected: false), "Coordinator, unread")
+        // A working or waiting agent shows that first.
+        XCTAssertEqual(SidebarCoordinatorPresentation.mark(agentState: .running, statusKind: .working, hasUnread: true), .working)
+        XCTAssertEqual(SidebarCoordinatorPresentation.mark(agentState: .starting, statusKind: nil, hasUnread: true), .starting)
+        XCTAssertEqual(SidebarCoordinatorPresentation.accessibilityLabel(.starting, isSelected: true), "Coordinator, starting, selected")
+    }
+
     /// Clicks the hosted view at the semantic text bridge whose text starts
     /// with `prefix`; the bridge is a zero-size field centered on its view.
-    private func clickSemanticText(prefix: String, in rootView: NSView) throws {
+    /// `clickCount` 2 sends both clicks of a double click.
+    private func clickSemanticText(prefix: String, in rootView: NSView, clickCount: Int = 1) throws {
         let frame = try semanticTextFrame(in: rootView, prefix: prefix)
         let window = try XCTUnwrap(rootView.window)
         let windowPoint = rootView.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
-        for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
-            let event = try XCTUnwrap(NSEvent.mouseEvent(
-                with: type,
-                location: windowPoint,
-                modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber,
-                context: nil,
-                eventNumber: eventNumber,
-                clickCount: 1,
-                pressure: pressure
-            ))
-            window.sendEvent(event)
-            pumpMainRunLoop(duration: 0.05)
+        for click in 1...clickCount {
+            for (type, pressure, eventNumber) in [(NSEvent.EventType.leftMouseDown, Float(1), 0), (.leftMouseUp, 0, 1)] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type,
+                    location: windowPoint,
+                    modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber,
+                    context: nil,
+                    eventNumber: eventNumber + 2 * (click - 1),
+                    clickCount: click,
+                    pressure: pressure
+                ))
+                window.sendEvent(event)
+                pumpMainRunLoop(duration: 0.05)
+            }
         }
     }
 
@@ -2821,6 +5233,20 @@ final class SidebarViewTests: XCTestCase {
 
         XCTAssertEqual(harness.store.selectedWorkspaceID(in: harness.windowID), ids.siblingID)
         XCTAssertEqual(harness.store.state.workspacesByID[ids.siblingID]?.focusedPanelID, orchestratorPanelID)
+        try writeSidebarEvidence(rootView, name: "spawner-tag-1-plain-subspace")
+
+        // A task's space drops the tag: every task the coordinator makes
+        // would name the same session.
+        XCTAssertTrue(harness.store.send(.setWorkspaceTaskID(workspaceID: ids.workingID, taskID: UUID())))
+        pumpMainRunLoop(duration: 0.6)
+        rootView.layoutSubtreeIfNeeded()
+        XCTAssertNil(semanticTextField(in: rootView, prefix: "Go to Merge ready PRs"))
+        let taskTitle = try XCTUnwrap(harness.store.state.workspacesByID[ids.workingID]?.title)
+        XCTAssertTrue(
+            renderedTextValues(in: rootView).contains { $0.contains(taskTitle) },
+            "The task's row should still render"
+        )
+        try writeSidebarEvidence(rootView, name: "spawner-tag-2-task-space")
     }
 
     /// The orchestrator's row gets the ⑂ chip rather than a ↗ sub-agent row,
@@ -3006,6 +5432,18 @@ final class SidebarViewTests: XCTestCase {
     /// Writes a PNG of the hosted sidebar when the runner sets
     /// `TOASTTY_SIDEBAR_EVIDENCE_DIR` (pass it as `TEST_RUNNER_…` to
     /// xcodebuild), so a review can see the rendered rows.
+    /// Keeps a render in the test result, for comparing with the mockups.
+    private func attachSidebarRender(_ view: NSView, name: String) throws {
+        let bitmap = try renderedBitmap(for: view)
+        let attachment = XCTAttachment(
+            data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func writeSidebarEvidence(_ view: NSView, name: String) throws {
         guard let directory = ProcessInfo.processInfo.environment["TOASTTY_SIDEBAR_EVIDENCE_DIR"],
               directory.isEmpty == false else {
@@ -3156,12 +5594,56 @@ final class SidebarViewTests: XCTestCase {
     private func makeSidebarHarness(
         state: AppState,
         windowID: UUID,
-        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth
+        sidebarWidth: CGFloat = ToastyTheme.sidebarWidth,
+        taskRecords: [TaskRecord]? = nil,
+        withTaskBoard: Bool = false,
+        tasksConfig: TasksConfig = .empty,
+        withCoordinator: Bool = false,
+        coordinatorRestoreState: @escaping (UUID) -> TerminalManagedAgentRestoreState = { _ in .inactive }
     ) throws -> SidebarHarness {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let taskCoordinator = taskRecords.map { records in
+            let recordStore = TaskRecordStore.inMemory()
+            for record in records { try? recordStore.insert(record) }
+            return TaskCoordinator(
+                records: recordStore,
+                store: store,
+                launcher: nil,
+                configLoader: { tasksConfig },
+                attachmentsDirectoryURL: FileManager.default.temporaryDirectory,
+                hasActiveSession: { _ in false },
+                grantScope: { _, _ in }
+            )
+        }
+        let taskBoard = withTaskBoard ? taskCoordinator.map { coordinator in
+            TaskBoardStore(
+                coordinator: coordinator,
+                store: store,
+                sessionRuntimeStore: sessionRuntimeStore,
+                pullRequests: PullRequestStateCache(runner: OfflineGitHub()),
+                refreshInterval: nil,
+                releaseCheckInterval: nil
+            )
+        } : nil
+        // No launcher and no terminal: these tests show the row, and set
+        // the agent's state through the session store.
+        let coordinatorController = withCoordinator ? CoordinatorController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            launcher: nil,
+            // Its own folder: the controller writes the coordinator's files
+            // there when the layout already holds a coordinator.
+            directoryURL: FileManager.default.temporaryDirectory
+                .appending(path: "toastty-sidebar-coordinator-\(UUID().uuidString)", directoryHint: .isDirectory),
+            configLoader: { tasksConfig },
+            deliverText: { _, _ in .unavailable },
+            promptState: { _ in .idleAtPrompt },
+            managedAgentRestoreState: coordinatorRestoreState
+        ) : nil
+        taskCoordinator?.coordinatorController = coordinatorController
 
         let sidebarView = SidebarView(
             windowID: windowID,
@@ -3169,6 +5651,9 @@ final class SidebarViewTests: XCTestCase {
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
             annotationStyleStore: makeTestAnnotationStyleStore(),
+            taskCoordinator: taskCoordinator,
+            taskBoard: taskBoard ?? .disabled,
+            newTask: withTaskBoard ? { @MainActor in } : nil,
             terminalRuntimeContext: runtimeContext
         )
         let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
@@ -3195,7 +5680,10 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
             hostingView: hostingView,
-            window: hostWindow
+            window: hostWindow,
+            taskCoordinator: taskCoordinator,
+            taskBoard: taskBoard,
+            coordinatorController: coordinatorController
         )
     }
 
@@ -4019,7 +6507,7 @@ final class SidebarViewTests: XCTestCase {
             }
         }
 
-        let unignoredChildren = NSAccessibility.unignoredChildren(from: children).compactMap { $0 as? AnyObject }
+        let unignoredChildren = NSAccessibility.unignoredChildren(from: children).map { $0 as AnyObject }
         for child in unignoredChildren {
             values.append(
                 contentsOf: recursiveAccessibilityTextValues(

@@ -42,6 +42,9 @@
     },
     "CoreStateTests": {
       "source": "Tests/Core",
+      "exclude": [
+        "RemoteAccess/RemoteCoordinatorAttachmentImageGatewayTests.swift"
+      ],
       "implicitImports": [
         "ToasttyFoundationShim"
       ]
@@ -65,6 +68,35 @@
     "ToasttyAppLogic": {
       "source": "Sources/App",
       "exclude": [
+        "Attachments/AttachmentChip.swift",
+        "Attachments/AttachmentTextView.swift",
+        "Attachments/DraftAttachments.swift",
+        "Coordinator/CoordinatorChatModel.swift",
+        "Coordinator/CoordinatorTerminalKeyLog.swift",
+        "Coordinator/CoordinatorChatView.swift",
+        "Coordinator/CoordinatorComposerView.swift",
+        "Coordinator/CoordinatorDock.swift",
+        "Coordinator/CoordinatorMentions.swift",
+        "Coordinator/CoordinatorPanelChrome.swift",
+        "Coordinator/WhatsNewSheet.swift",
+        "LiveColumnResize.swift",
+        "SidebarCoordinatorRow.swift",
+        "SidebarStatusSegment.swift",
+        "SidebarTasksHeader.swift",
+        "Tasks/QuickEntry/QuickEntryController.swift",
+        "Tasks/QuickEntry/QuickEntryHotKey.swift",
+        "Tasks/QuickEntry/QuickEntryModel.swift",
+        "Tasks/QuickEntry/QuickEntryPanel.swift",
+        "Tasks/QuickEntry/QuickEntryPickerPanel.swift",
+        "Tasks/QuickEntry/QuickEntryPickerView.swift",
+        "Tasks/QuickEntry/QuickEntryTextEditor.swift",
+        "Tasks/QuickEntry/QuickEntryView.swift",
+        "Tasks/TaskContextMenuItems.swift",
+        "Tasks/TaskMarks.swift",
+        "Tasks/TaskSetupCard.swift",
+        "Tasks/TaskWebhookApprovalViews.swift",
+        "Tasks/TasksView.swift",
+        "ToastyIcon+Mac.swift",
         "Agents/ToasttySkillsManagementSheet.swift",
         "AppWindowSceneHostView.swift",
         "AppWindowSceneObserver.swift",
@@ -155,7 +187,9 @@
       "importRewrites": {
         "SwiftUI": [
           "ToasttyAppKitShim"
-        ]
+        ],
+        "ConversationUI": [],
+        "Security": []
       },
       "darwinQualifier": "ToasttyAppKitShim",
       "textRewrites": [
@@ -170,6 +204,10 @@
         [
           ".st_atimespec",
           ".st_atim"
+        ],
+        [
+          ".st_birthtimespec",
+          ".st_ctim"
         ],
         [
           ".receive(on: RunLoop.main)",
@@ -350,7 +388,37 @@
         "WorkspaceMergeTests.swift",
         "WorkspaceSubspaceAppControlTests.swift",
         "WorkspaceTabCloseConfirmationTests.swift",
-        "WorktreeCreateSkillScriptTests.swift"
+        "AutomationSocketServerEventBatchTests.swift",
+        "ClaudeFolderTrustTests.swift",
+        "CodexModelCatalogTests.swift",
+        "CoordinatorAppControlTests.swift",
+        "CoordinatorControllerTests.swift",
+        "CoordinatorFolderTests.swift",
+        "CoordinatorRepliesAppControlTests.swift",
+        "CoordinatorWakeTests.swift",
+        "LocalConversationAccessTests.swift",
+        "QuickEntryPresetUsageTests.swift",
+        "RemoteTaskActionTests.swift",
+        "RemoteTaskAlertTests.swift",
+        "RemoteTaskBoardTests.swift",
+        "SidebarBucketsTests.swift",
+        "TaskCoordinationTests.swift",
+        "TaskAppControlTests.swift",
+        "TaskBoardTests.swift",
+        "TaskCoordinatorTests.swift",
+        "TaskStateTimesTests.swift",
+        "TaskGitTestRepository.swift",
+        "TaskLifecyclePresentationTests.swift",
+        "TaskLifecycleTests.swift",
+        "TaskRecordStoreTests.swift",
+        "TaskRoutingTests.swift",
+        "TaskReleaseRequestTests.swift",
+        "TaskSpaceCloseQuestionTests.swift",
+        "TaskStartWorkTests.swift",
+        "TaskSteerSenderTests.swift",
+        "TaskWebhookServiceTests.swift",
+        "TaskWorktreeCreatorTests.swift",
+        "Support/MainActorValue.swift"
       ],
       "extraSources": [
         "linux/Tests/ToasttyAppLogicTests",
@@ -371,7 +439,8 @@
         ],
         "SwiftUI": [
           "ToasttyAppKitShim"
-        ]
+        ],
+        "Security": []
       },
       "darwinQualifier": "ToasttyAppKitShim",
       "textRewrites": [

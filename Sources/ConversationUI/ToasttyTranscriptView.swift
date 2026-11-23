@@ -1,0 +1,2847 @@
+import RemoteProtocol
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
+/// The conversation transcript: messages, tool activity, interaction cards,
+/// and the tail of outgoing messages. The host supplies presentation values
+/// and receives the reader's actions through the closures.
+@available(macOS 15.0, *)
+public struct ToasttyTranscriptView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
+
+    let state: ToasttyConversationPresentationState
+    let isSubmitting: Bool
+    let loadOlder: () -> Void
+    let dismissSendReceipt: (String) -> Void
+    let queuedMessageAction: (ToasttyQueuedMessageAction) -> Void
+    let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
+    let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
+    let interactionAnswerFeedback: ToasttyInteractionAnswerFeedback
+    let readAcknowledgementEpoch: ToasttyTranscriptSessionStatus?
+    let workingIndicator: ToasttyTranscriptWorkingIndicator?
+    let canAcknowledgeRead: Bool
+    let onVisibleLiveEdge: () -> Void
+    let options: ToasttyTranscriptOptions
+    /// Reply on an agent's message. `nil` offers no Reply.
+    let replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)?
+    /// Where the messages that the reader has not seen start, or `nil` to
+    /// draw no line.
+    let newMessages: ToasttyNewMessagesMarker?
+    @Binding private var jumpToLiveEdgeRequest: UInt64
+
+    @State private var toolBatchDisclosure = ToasttyToolBatchDisclosureState()
+    @State private var turnFold = ToasttyTurnFoldState()
+    @State private var quietCheckFold = ToasttyQuietCheckFoldState()
+    @State private var expandedSubagentIDs: Set<ToasttyTranscriptRowID> = []
+    @State private var isAtLiveEdge = true
+    @State private var hasReachedPhysicalLiveEdge = true
+    @State private var hasMeasuredScrollGeometry = false
+    @State private var measuredBoundaryID: ToasttyTranscriptRowID?
+    @State private var isVisible = false
+    @State private var followsLiveEdge = true
+    @State private var visibleBlockIDs: [ToasttyTranscriptBlockID] = []
+    @State private var entryScrollPosition: TranscriptEntryScrollPosition
+    @State private var scrollCoordinator = TranscriptScrollCoordinator()
+    @State private var messageHover = ToasttyMessageHoverState()
+    @State private var measuredEntryTargets: Set<ToasttyConversationScrollTarget> = []
+    /// Counts the reader's own scrolls, so that a scroll to the new
+    /// messages' line gives way to one.
+    @State private var scrollInteractionCount = 0
+    /// The scroll view's phase; a programmatic move ends at rest in `.idle`.
+    @State private var scrollPhase: ScrollPhase = .idle
+    /// Until when the transcript's own move to a row's top may still be
+    /// landing; see `repairRowTopOvershoot`.
+    @State private var rowTopMoveDeadline: ContinuousClock.Instant?
+    #if DEBUG && os(iOS)
+    @State private var fixtureScrollTrace = TranscriptFixtureScrollTrace()
+    #endif
+
+    public init(
+        state: ToasttyConversationPresentationState,
+        isSubmitting: Bool,
+        loadOlder: @escaping () -> Void = {},
+        dismissSendReceipt: @escaping (String) -> Void = { _ in },
+        queuedMessageAction: @escaping (ToasttyQueuedMessageAction) -> Void = { _ in },
+        interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState] = [:],
+        editInteractionAnswer: @escaping (
+            RemotePendingInteraction.ID,
+            ToasttyInteractionAnswerEdit
+        ) -> Void = { _, _ in },
+        submitInteractionAnswer: @escaping (RemotePendingInteraction.ID) -> Void = { _ in },
+        interactionAnswerFeedback: @escaping ToasttyInteractionAnswerFeedback = { _, _ in nil },
+        readAcknowledgementEpoch: ToasttyTranscriptSessionStatus? = nil,
+        workingIndicator: ToasttyTranscriptWorkingIndicator? = nil,
+        jumpToLiveEdgeRequest: Binding<UInt64>,
+        canAcknowledgeRead: Bool,
+        onVisibleLiveEdge: @escaping () -> Void = {},
+        options: ToasttyTranscriptOptions = ToasttyTranscriptOptions(),
+        replyToMessage: (@MainActor (ToasttyMessageReplyRequest) -> Void)? = nil,
+        newMessages: ToasttyNewMessagesMarker? = nil
+    ) {
+        self.state = state
+        self.isSubmitting = isSubmitting
+        self.loadOlder = loadOlder
+        self.dismissSendReceipt = dismissSendReceipt
+        self.queuedMessageAction = queuedMessageAction
+        self.interactionAnswerStates = interactionAnswerStates
+        self.editInteractionAnswer = editInteractionAnswer
+        self.submitInteractionAnswer = submitInteractionAnswer
+        self.interactionAnswerFeedback = interactionAnswerFeedback
+        self.readAcknowledgementEpoch = readAcknowledgementEpoch
+        self.workingIndicator = workingIndicator
+        self.canAcknowledgeRead = canAcknowledgeRead
+        self.onVisibleLiveEdge = onVisibleLiveEdge
+        self.options = options
+        self.replyToMessage = replyToMessage
+        self.newMessages = newMessages
+        _entryScrollPosition = State(initialValue: TranscriptEntryScrollPosition(status: readAcknowledgementEpoch))
+        _followsLiveEdge = State(initialValue:
+            readAcknowledgementEpoch?.activity != .ready || state.phase == .loading || state.phase == .resyncing
+        )
+        _jumpToLiveEdgeRequest = jumpToLiveEdgeRequest
+    }
+
+    public var body: some View {
+        #if DEBUG && os(iOS)
+        let _ = ToasttyTranscriptBodyCount.record()
+        #endif
+        let scrollTaskKey = self.scrollTaskKey
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                if showsStatusContent {
+                    VStack(spacing: 8) {
+                        statusContent
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
+                    .background(ConversationDesignTokens.background)
+                }
+
+                ScrollView {
+                    // Modest transcripts lay out eagerly: measured heights mean
+                    // no lazy-estimation churn, which both snapped the reader
+                    // to a long message's start and could live-lock layout when
+                    // a few large cells dominated the list. The lazy container
+                    // stays for huge lists, where chunked messages keep cell
+                    // sizes in the regime its estimation handles well.
+                    Group {
+                        if state.blocks.count <= Self.eagerLayoutBlockLimit {
+                            VStack(alignment: .leading, spacing: Self.transcriptStackSpacing) {
+                                transcriptStackContent
+                            }
+                        } else {
+                            LazyVStack(alignment: .leading, spacing: Self.transcriptStackSpacing) {
+                                transcriptStackContent
+                            }
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .modifier(TranscriptContentWidth(maximum: options.maximumContentWidth))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                }
+                .background(ConversationDesignTokens.background)
+                .accessibilityIdentifier("toastty-mobile-transcript")
+                .scrollDismissesKeyboard(.interactively)
+                // Keep the content's bottom fixed in the same layout pass as
+                // keyboard dismissal, composer collapse, and appended rows.
+                // A pending submit applies before its command task executes.
+                .defaultScrollAnchor(
+                    followsLiveEdge || scrollCoordinator.ownsLiveEdge || jumpToLiveEdgeRequest > 0
+                        ? .bottom : nil,
+                    for: .sizeChanges
+                )
+                .overlay(alignment: .topLeading) {
+                    #if DEBUG && os(iOS)
+                    if TranscriptFixtureScrollTrace.isEnabled {
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .background(TranscriptFixtureScrollTraceAnchor(trace: fixtureScrollTrace))
+                            .accessibilityElement()
+                            .accessibilityLabel("Transcript scroll trace")
+                            .accessibilityValue(fixtureScrollTrace.encodedSamples)
+                            .accessibilityIdentifier("toastty-mobile-transcript-scroll-trace")
+                        TranscriptFixtureScrollMetricsElement(trace: fixtureScrollTrace)
+                    }
+                    #endif
+                }
+                .overlay(alignment: .topLeading) {
+                    if state.rows.count == 5_000 {
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .accessibilityElement()
+                            .accessibilityLabel("5,000 transcript rows ready")
+                            .accessibilityIdentifier("toastty-mobile-transcript-ready-5000")
+                    }
+                }
+                .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
+                    TranscriptScrollMetrics(geometry: geometry)
+                } action: { old, new in
+                    #if DEBUG && os(iOS)
+                    fixtureScrollTrace.record(new, hasSendItems: !state.sendItems.isEmpty)
+                    #endif
+                    let hadMeasuredScrollGeometry = hasMeasuredScrollGeometry
+                    let atLiveEdge = new.isNearLiveEdge
+                    let reachedPhysicalLiveEdge = new.hasReachedPhysicalLiveEdge
+                    hasMeasuredScrollGeometry = true
+                    measuredBoundaryID = state.rows.last?.id
+                    isAtLiveEdge = atLiveEdge
+                    hasReachedPhysicalLiveEdge = reachedPhysicalLiveEdge
+                    if hadMeasuredScrollGeometry,
+                       new.hasLiveEdgeLayoutChange(comparedTo: old),
+                       scrollCoordinator.hasPendingHistoryMove {
+                        scrollCoordinator.recordPendingHistoryLayoutChange()
+                    }
+                    if hadMeasuredScrollGeometry,
+                       new.hasLiveEdgeLayoutChange(comparedTo: old),
+                       lastScrollTarget != nil,
+                       followsLiveEdge || scrollCoordinator.ownsLiveEdge {
+                        // Layout changes reinforce the current owner through
+                        // the same serialized command path as transcript
+                        // changes; they never race a separate scroll writer.
+                        scrollCoordinator.reinforceLiveEdge()
+                    }
+                    if hadMeasuredScrollGeometry,
+                       new.hasViewportChange(comparedTo: old),
+                       reachedPhysicalLiveEdge == false,
+                       lastScrollTarget != nil,
+                       followsLiveEdge || scrollCoordinator.ownsLiveEdge,
+                       scrollCoordinator.allowsSynchronousLiveEdgeRepair {
+                        // The size-change anchor compensates container and
+                        // content growth, but not every inset change: when the
+                        // keyboard leaves while the composer grows, iOS 27
+                        // applies the inset decrease and then the increase in
+                        // one pass and leaves the live edge under the composer.
+                        // Repairing here keeps that state off screen: the
+                        // committed-frame traces show only the repaired
+                        // position. The reinforced command above still owns
+                        // any later settling.
+                        scrollWithoutAnimation(
+                            to: ToasttyConversationScrollTarget.liveEdge,
+                            anchor: .bottom,
+                            using: proxy
+                        )
+                    }
+                    if scrollPhase == .idle {
+                        repairRowTopOvershoot(new, using: proxy)
+                    }
+                    if reachedPhysicalLiveEdge {
+                        if case .send(let request)? = scrollCoordinator.liveEdgeOwner,
+                           jumpToLiveEdgeRequest == request,
+                           scrollCoordinator.finishSend(atLiveEdge: true) {
+                            jumpToLiveEdgeRequest = 0
+                            followsLiveEdge = true
+                        }
+                        if scrollCoordinator.finishJump(atLiveEdge: true) {
+                            followsLiveEdge = true
+                        }
+                    }
+                }
+                .onScrollPhaseChange { oldPhase, newPhase, context in
+                    scrollPhase = newPhase
+                    if newPhase == .idle {
+                        // An animated move to a quote's row ends here.
+                        repairRowTopOvershoot(TranscriptScrollMetrics(geometry: context.geometry), using: proxy)
+                    }
+                    if newPhase == .tracking || newPhase == .interacting {
+                        rowTopMoveDeadline = nil
+                        // Finger-down or a direct drag owns the reader's
+                        // position until it settles, including any momentum
+                        // after finger lift.
+                        jumpToLiveEdgeRequest = 0
+                        followsLiveEdge = false
+                        scrollInteractionCount &+= 1
+                        entryScrollPosition.cancelForInteraction()
+                        scrollCoordinator.cancelForInteraction()
+                        #if DEBUG && os(iOS)
+                        fixtureScrollTrace.stop()
+                        #endif
+                        return
+                    }
+
+                    guard TranscriptScrollCoordinator.shouldResolveFollowing(
+                        oldPhase: oldPhase,
+                        newPhase: newPhase
+                    )
+                    else { return }
+                    // Resolve only at rest so a short flick is classified after
+                    // its momentum ends.
+                    followsLiveEdge = TranscriptScrollMetrics(
+                        geometry: context.geometry
+                    ).isNearLiveEdge
+                }
+                .onScrollTargetVisibilityChange(
+                    idType: ToasttyConversationScrollTarget.self,
+                    threshold: 0.12
+                ) { ids in
+                    visibleBlockIDs = ids.compactMap { id in
+                        guard case .transcript(let blockID) = id else { return nil }
+                        return blockID
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if isAtLiveEdge == false,
+                       followsLiveEdge == false,
+                       lastScrollTarget != nil {
+                        Button {
+                            // The affordance stays visible until the live edge
+                            // is actually reached; each tap (re)starts a jump.
+                            entryScrollPosition.cancelForInteraction()
+                            scrollCoordinator.requestJump()
+                        } label: {
+                            Label(jumpToLatestTitle, systemImage: "arrow.down")
+                                .conversationFont(.caption, weight: .semibold)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(ConversationDesignTokens.amber, in: Capsule())
+                                .foregroundStyle(ConversationDesignTokens.inkOnAmber)
+                                .shadow(color: .black.opacity(0.45), radius: 7, y: 3)
+                        }
+                        .conversationPlainButtonOnMac()
+                        .accessibilityIdentifier("toastty-mobile-transcript-jump-latest")
+                        .padding(14)
+                    }
+                }
+                .onChange(of: jumpToLiveEdgeRequest) { _, request in
+                    guard request > 0 else { return }
+                    entryScrollPosition.cancelForInteraction()
+                    guard lastScrollTarget != nil else { return }
+                    #if DEBUG && os(iOS)
+                    fixtureScrollTrace.begin()
+                    #endif
+                    scrollCoordinator.requestSend(request)
+                }
+                .onChange(of: scrollChangeKey, initial: true) { old, new in
+                    reconcileScrollChange(contentChanged: old.content != new.content)
+                }
+                .task(id: scrollTaskKey) {
+                    guard let command = scrollTaskKey.command else { return }
+                    guard scrollCoordinator.executionCandidate(for: command) != nil else { return }
+                    if command.motion == .stable {
+                        // Stable moves wait for one quiet layout interval. New
+                        // layout generations coalesce into this pending command
+                        // instead of repeatedly restarting its task. Sustained
+                        // growth is bounded so it cannot starve the first move;
+                        // any later generation schedules a follow-up command.
+                        var completedSettleChecks = 0
+                        while true {
+                            guard let candidate = scrollCoordinator.executionCandidate(
+                                for: command
+                            ) else { return }
+                            try? await Task.sleep(
+                                for: TranscriptScrollCoordinator.stableSettleInterval
+                            )
+                            guard Task.isCancelled == false else { return }
+                            guard let settled = scrollCoordinator.executionCandidate(
+                                for: command
+                            ) else { return }
+                            completedSettleChecks += 1
+                            let isQuiet = candidate.layoutGeneration
+                                == settled.layoutGeneration
+                            guard TranscriptScrollCoordinator.shouldExecuteStableCandidate(
+                                isQuiet: isQuiet,
+                                completedSettleChecks: completedSettleChecks
+                            ) else {
+                                continue
+                            }
+                            if let target = scrollTaskKey.materializationTarget {
+                                markRowTopMove()
+                                scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                // The first move can stop at the lazy stack's
+                                // estimated bottom without realizing this target.
+                                // Retry as that pending layout grows, using the
+                                // same command and a bounded measurement window.
+                                let clock = ContinuousClock()
+                                let deadline = clock.now.advanced(by: .seconds(1))
+                                var retry = TranscriptEntryMaterializationRetry(
+                                    layoutGeneration: settled.layoutGeneration
+                                )
+                                // Each retry gets a layout interval before expiry.
+                                while true {
+                                    do {
+                                        try await Task.sleep(
+                                            for: TranscriptScrollCoordinator.stableSettleInterval
+                                        )
+                                    } catch {
+                                        return
+                                    }
+                                    guard !Task.isCancelled,
+                                          self.scrollTaskKey == scrollTaskKey,
+                                          let candidate = scrollCoordinator.executionCandidate(
+                                              for: command
+                                          ) else { return }
+                                    switch retry.nextAction(
+                                        layoutGeneration: candidate.layoutGeneration,
+                                        isExpired: clock.now >= deadline
+                                    ) {
+                                    case .wait:
+                                        continue
+                                    case .retry:
+                                        markRowTopMove()
+                                        scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+                                    case .expire:
+                                        scrollCoordinator.abandonHistoryMove(command)
+                                        return
+                                    }
+                                }
+                            }
+                            guard scrollCoordinator.markExecuted(settled) else { continue }
+                            break
+                        }
+                    } else {
+                        // Submit acquires the bottom without animation or a
+                        // settling delay; Jump to Latest keeps its animation.
+                        // Native size-change anchoring covers subsequent layout.
+                        await Task.yield()
+                        guard Task.isCancelled == false,
+                              let candidate = scrollCoordinator.executionCandidate(for: command),
+                              scrollCoordinator.markExecuted(candidate)
+                        else { return }
+                    }
+                    guard scrollCoordinator.command == command else { return }
+                    execute(command, responseContext: scrollTaskKey.responseContext, using: proxy)
+
+                    guard command.target == .liveEdge else {
+                        if command.target == entryScrollPosition.selectedTarget {
+                            try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+                            guard Task.isCancelled == false,
+                                  scrollCoordinator.command == command,
+                                  hasMeasuredScrollGeometry
+                            else { return }
+                            // A short response can show its start and the live
+                            // edge together. Keep following in that case only.
+                            followsLiveEdge = hasReachedPhysicalLiveEdge
+                        }
+                        return
+                    }
+                    let initialDelay: Duration = command.motion == .animated
+                        ? .milliseconds(250)
+                        : .milliseconds(100)
+                    try? await Task.sleep(for: initialDelay)
+                    let retryCount = switch command.liveEdgeOwner {
+                    case .send?, .jump?: 8
+                    case .automatic?, nil: 2
+                    }
+                    for _ in 0 ..< retryCount {
+                        guard Task.isCancelled == false,
+                              scrollCoordinator.command == command
+                        else { return }
+                        if hasReachedPhysicalLiveEdge == false {
+                            scrollWithoutAnimation(
+                                to: ToasttyConversationScrollTarget.liveEdge,
+                                anchor: .bottom,
+                                using: proxy
+                            )
+                        }
+                        try? await Task.sleep(for: .milliseconds(150))
+                    }
+
+                    guard Task.isCancelled == false,
+                          scrollCoordinator.command == command
+                    else { return }
+                    if case .send(let request)? = command.liveEdgeOwner,
+                       jumpToLiveEdgeRequest == request {
+                        jumpToLiveEdgeRequest = 0
+                        followsLiveEdge = hasReachedPhysicalLiveEdge
+                        _ = scrollCoordinator.finishSend(
+                            atLiveEdge: hasReachedPhysicalLiveEdge
+                        )
+                    } else if case .jump? = command.liveEdgeOwner {
+                        followsLiveEdge = hasReachedPhysicalLiveEdge
+                        _ = scrollCoordinator.finishJump(
+                            atLiveEdge: hasReachedPhysicalLiveEdge
+                        )
+                    }
+                }
+                .task(id: newMessages?.firstRowID) {
+                    await revealNewMessages(using: proxy)
+                }
+                .onChange(of: liveEdgeVisibilityKey, initial: true) { _, key in
+                    guard key.isEligible else { return }
+                    onVisibleLiveEdge()
+                }
+            }
+            .background(ConversationDesignTokens.background)
+            .environment(\.toasttyTranscriptOptions, options)
+            .environment(messageHover)
+            .environment(\.toasttyMessageReply, replyToMessage.map(ToasttyMessageReplyAction.init))
+            .environment(\.toasttyRevealRow, ToasttyRevealRowAction { rowID in
+                revealRow(rowID, using: proxy)
+            })
+            .onAppear { isVisible = true }
+            .onDisappear { isVisible = false }
+            .onChange(of: toolBatchActivity, initial: true) { _, activity in
+                toolBatchDisclosure.reconcile(activity: activity, revision: state.revision)
+            }
+            .onChange(of: turnFoldKey, initial: true) { old, new in
+                let apply = {
+                    turnFold.reconcile(
+                        turns: new.turns,
+                        settledIDs: new.settledIDs,
+                        revision: new.revision,
+                        previousBoundarySequence: old.firstSequence,
+                        opensRunningTurns: options.foldsRunningWork == false
+                    )
+                    quietCheckFold.reconcile(
+                        runs: quietCheckRuns, revision: new.revision, expandedTurnIDs: turnFold.expandedIDs
+                    )
+                }
+                // Animate only live transitions; initial, rebuilt, and
+                // prepended reconciles must land instantly so opening or
+                // re-anchoring never races an in-flight fold animation.
+                if old != new, new.revision == .appended || new.revision == .metadataOnly {
+                    withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.25), apply)
+                } else {
+                    apply()
+                }
+            }
+        }
+    }
+
+    /// Above this block count the transcript falls back to lazy layout.
+    private static let eagerLayoutBlockLimit = 150
+    private static let transcriptStackSpacing: CGFloat = 12
+    private static let responseEntryContextHeight: CGFloat = 32
+
+    @ViewBuilder
+    private var transcriptStackContent: some View {
+        olderHistoryControl
+
+        let workingLine = self.workingLine
+        let items = displayItems(workingLine: workingLine)
+        let entryContext = scrollTaskKey.responseContext
+        let newMessagesItemID = newMessages?.itemID(in: items)
+        ForEach(items) { item in
+            VStack(alignment: .leading, spacing: 0) {
+                if item.id == newMessagesItemID {
+                    ToasttyNewMessagesDivider()
+                        .padding(.bottom, Self.transcriptStackSpacing)
+                }
+                displayItemView(item, workingLine: workingLine)
+            }
+            .background(alignment: .bottom) {
+                if let entryContext, entryContext.markerHostID == item.id {
+                    // This target includes 20 points of the preceding row
+                    // plus the 12-point stack gap, without changing layout.
+                    Color.clear
+                        .frame(height: Self.responseEntryContextHeight - Self.transcriptStackSpacing)
+                        .id(entryContext.target)
+                        .background {
+                            entryMeasurement(for: entryContext.target)
+                        }
+                        .accessibilityHidden(true)
+                }
+            }
+            .background {
+                if let entryContext,
+                   item.id == entryContext.target || item.id == scrollTaskKey.response {
+                    entryMeasurement(for: item.id)
+                }
+            }
+            .id(item.id)
+        }
+
+        // The working row sits between what reached the agent and what waits
+        // for the next prompt, so queued messages read as coming after it.
+        sendTailItems(state.sendItems.filter { $0.isQueued == false }, workingLine: workingLine)
+
+        let showsWorkingRow = workingLine == .row
+        if let workingIndicator, showsWorkingRow {
+            ToasttyTranscriptWorkingRow(indicator: workingIndicator, looksLikeStrip: options.foldsRunningWork)
+        }
+
+        sendTailItems(state.sendItems.filter(\.isQueued), workingLine: workingLine)
+
+        // A session started from the phone has no rows yet; its working row
+        // already says what is happening.
+        if state.rows.isEmpty, state.sendItems.isEmpty, state.phase != .loading, workingLine == .none {
+            ContentUnavailableView(
+                "No transcript yet",
+                systemImage: "text.bubble",
+                description: Text("New conversation activity will appear here.")
+            )
+            .foregroundStyle(ConversationDesignTokens.secondaryText)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 44)
+        }
+
+        // The preceding 12-point stack spacing plus this target's height
+        // preserve the original 14-point bottom inset while making that inset
+        // part of the live-edge scroll target.
+        Color.clear
+            .frame(height: 2)
+            .id(ToasttyConversationScrollTarget.liveEdge)
+    }
+
+    @ViewBuilder
+    private func entryMeasurement(for target: ToasttyConversationScrollTarget) -> some View {
+        if state.blocks.count > Self.eagerLayoutBlockLimit {
+            Color.clear
+                .onGeometryChange(for: Bool.self) { geometry in
+                    geometry.size.width > 0
+                } action: { isMeasured in
+                    if isMeasured, !measuredEntryTargets.contains(target) {
+                        measuredEntryTargets.insert(target)
+                    }
+                }
+        }
+    }
+
+    private var scrollTaskKey: TranscriptScrollTaskKey {
+        let command = scrollCoordinator.command
+        guard case .responseStart(let blockID) = command?.target else {
+            // A late entry measurement must not cancel a send or jump task.
+            return TranscriptScrollTaskKey(command: command)
+        }
+        let response = ToasttyConversationScrollTarget.transcript(blockID)
+        let context = responseEntryContext(for: blockID, items: displayItems)
+        let needsMeasurement = state.blocks.count > Self.eagerLayoutBlockLimit
+        return TranscriptScrollTaskKey(
+            command: command,
+            response: response,
+            responseContext: context,
+            responseMeasured: !needsMeasurement || measuredEntryTargets.contains(response),
+            contextMeasured: !needsMeasurement || measuredEntryTargets.contains(context.target)
+        )
+    }
+
+    private func sendTailItems(
+        _ items: [ToasttySendPresentationItem],
+        workingLine: ToasttyTranscriptWorkingLine
+    ) -> some View {
+        ForEach(items) { item in
+            ToasttySendTailItemView(
+                item: item,
+                dismiss: { dismissSendReceipt(item.clientRequestID) },
+                queuedMessageAction: queuedMessageAction,
+                lineWorkingIndicator: workingLine == .send(item.clientRequestID) ? workingIndicator : nil
+            )
+            .id(ToasttyConversationScrollTarget.send(item.clientRequestID))
+        }
+    }
+
+    private var workingLine: ToasttyTranscriptWorkingLine {
+        let liveTurnID = self.liveTurnID
+        return .place(
+            isWorking: workingIndicator != nil && state.phase == .live,
+            foldsRunningWork: options.foldsRunningWork,
+            sendItems: state.sendItems,
+            liveTurn: liveTurnID == nil ? nil : state.turns.last,
+            isLiveTurnExpanded: liveTurnID.map(turnFold.isExpanded) ?? false
+        )
+    }
+
+    /// Blocks interleaved with per-turn work strips; a folded turn's work
+    /// blocks are omitted and its strip stands in for them.
+    private var displayItems: [ToasttyTranscriptDisplayItem] {
+        displayItems(workingLine: workingLine)
+    }
+
+    private func displayItems(workingLine: ToasttyTranscriptWorkingLine) -> [ToasttyTranscriptDisplayItem] {
+        guard state.turns.isEmpty == false else {
+            return state.blocks.map { .block($0, isWork: false) }
+        }
+        var turnAtFirstWorkBlock: [ToasttyTranscriptBlockID: ToasttyTranscriptTurn] = [:]
+        var turnForWorkBlock: [ToasttyTranscriptBlockID: ToasttyTranscriptRowID] = [:]
+        for turn in state.turns {
+            if let first = turn.workBlockIDs.first {
+                turnAtFirstWorkBlock[first] = turn
+            }
+            for blockID in turn.workBlockIDs {
+                turnForWorkBlock[blockID] = turn.id
+            }
+        }
+        // A row of quiet checks shows its line before its first turn's
+        // line. Closed, it hides its turns' lines and work.
+        var quietRunAtFirstLine: [ToasttyTranscriptBlockID: ToasttyQuietCheckRun] = [:]
+        var closedQuietTurnIDs: Set<ToasttyTranscriptRowID> = []
+        for run in quietCheckRuns {
+            quietRunAtFirstLine[ToasttyTranscriptBlockID(rowID: run.id)] = run
+            if quietCheckFold.isOpen(run) == false {
+                closedQuietTurnIDs.formUnion(run.turnIDs)
+            }
+        }
+        // The running turn's strip shows that the agent works from the
+        // turn's start, under its message, before any work comes.
+        var stripAfterAnchor: ToasttyTranscriptTurn?
+        if case .turn(let turnID) = workingLine,
+           let turn = state.turns.last, turn.id == turnID, turn.workBlockIDs.isEmpty,
+           turn.opensFromAnchorLine(foldsRunningWork: options.foldsRunningWork) == false {
+            stripAfterAnchor = turn
+        }
+
+        var items: [ToasttyTranscriptDisplayItem] = []
+        items.reserveCapacity(state.blocks.count + state.turns.count)
+        for block in state.blocks {
+            if let run = quietRunAtFirstLine[block.id] {
+                items.append(.quietChecks(run))
+            }
+            if closedQuietTurnIDs.isEmpty == false,
+               closedQuietTurnIDs.contains(turnForWorkBlock[block.id] ?? block.id.rowID) {
+                continue
+            }
+            // A turn whose host message's line opens it has no strip.
+            if let turn = turnAtFirstWorkBlock[block.id],
+               turn.opensFromAnchorLine(foldsRunningWork: options.foldsRunningWork) == false {
+                items.append(.workStrip(turn))
+            }
+            if let turnID = turnForWorkBlock[block.id] {
+                if turnFold.isExpanded(turnID) {
+                    items.append(.block(block, isWork: true))
+                }
+            } else {
+                items.append(.block(block, isWork: false))
+            }
+            if let turn = stripAfterAnchor, block.id.rowID == turn.id {
+                items.append(.workStrip(turn))
+            }
+        }
+        return items
+    }
+
+    @ViewBuilder
+    private func displayItemView(
+        _ item: ToasttyTranscriptDisplayItem,
+        workingLine: ToasttyTranscriptWorkingLine
+    ) -> some View {
+        switch item {
+        case .quietChecks(let run):
+            ToasttyQuietChecksLine(
+                run: run,
+                isExpanded: quietCheckFold.isOpen(run),
+                toggle: {
+                    withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
+                        quietCheckFold.toggle(run)
+                    }
+                }
+            )
+        case .workStrip(let turn):
+            ToasttyTurnWorkStrip(
+                turn: turn,
+                isExpanded: turnFold.isExpanded(turn.id),
+                isLive: turn.id == liveTurnID,
+                workingIndicator: workingLine == .turn(turn.id) ? workingIndicator : nil,
+                toggle: {
+                    withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
+                        turnFold.toggle(turn.id)
+                    }
+                }
+            )
+        case .block(let block, let isWork):
+            if isWork {
+                blockView(block, demoted: true, workingLine: workingLine)
+                    .padding(.leading, 14)
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(ConversationDesignTokens.border)
+                            .frame(width: 2)
+                    }
+            } else {
+                blockView(block, workingLine: workingLine)
+            }
+        }
+    }
+
+    private var isSessionWorking: Bool {
+        readAcknowledgementEpoch?.activity == .working
+    }
+
+    private var settledTurnIDs: Set<ToasttyTranscriptRowID> {
+        state.settledTurnIDs(isSessionWorking: isSessionWorking, isSubmitting: isSubmitting)
+    }
+
+    private var liveTurnID: ToasttyTranscriptRowID? {
+        guard let last = state.turns.last else { return nil }
+        return settledTurnIDs.contains(last.id) ? nil : last.id
+    }
+
+    /// The rows of quiet checks. The turn that runs and has no answer yet
+    /// keeps its own line, which shows that the agent works. Once its answer
+    /// comes it joins, also while the agent still works: then the agent may
+    /// already work on the next message, such as a digest that another
+    /// device sees typed before its row comes.
+    private var quietCheckRuns: [ToasttyQuietCheckRun] {
+        let runningTurnID = state.turns.last.flatMap { turn in
+            turn.id == liveTurnID && turn.hasResponse == false ? turn.id : nil
+        }
+        return state.quietCheckRuns(runningTurnID: runningTurnID)
+    }
+
+    /// The closed row of quiet checks that hides this block: its turn's
+    /// line or work.
+    private func closedQuietCheckRun(hiding blockID: ToasttyTranscriptBlockID) -> ToasttyQuietCheckRun? {
+        let turnID = state.turns.first { $0.workBlockIDs.contains(blockID) }?.id ?? blockID.rowID
+        return quietCheckRuns.first { $0.contains(turnID: turnID) && quietCheckFold.isOpen($0) == false }
+    }
+
+    private var turnFoldKey: TurnFoldKey {
+        TurnFoldKey(
+            turns: state.turns,
+            settledIDs: settledTurnIDs,
+            revision: state.revision,
+            firstSequence: state.blocks.first?.id.rowID.sequence
+        )
+    }
+
+    @ViewBuilder
+    private var statusContent: some View {
+        switch state.phase {
+        case .loading:
+            HStack(spacing: 9) {
+                ProgressView()
+                    .tint(ConversationDesignTokens.amber)
+                Text("Loading transcript…")
+            }
+            .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
+        case .resyncing:
+            HStack(spacing: 9) {
+                ProgressView()
+                    .tint(ConversationDesignTokens.amber)
+                Text("Resyncing transcript…")
+            }
+            .transcriptBannerStyle(color: ConversationDesignTokens.amberText)
+            .accessibilityIdentifier("toastty-mobile-transcript-resyncing")
+        case .stale:
+            Label("Connection paused — transcript may be stale", systemImage: "wifi.slash")
+                .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
+                .accessibilityIdentifier("toastty-mobile-transcript-stale")
+        case .failure(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .transcriptBannerStyle(color: ConversationDesignTokens.red)
+        case .live:
+            EmptyView()
+        }
+
+        if state.historyTruncated {
+            Label(
+                "Earlier activity is no longer retained by Toastty",
+                systemImage: "clock.badge.exclamationmark"
+            )
+            .transcriptBannerStyle(color: ConversationDesignTokens.mutedText)
+            .accessibilityIdentifier("toastty-mobile-transcript-history-truncated")
+        }
+    }
+
+    private var showsStatusContent: Bool {
+        state.phase != .live || state.historyTruncated
+    }
+
+    @ViewBuilder
+    private var olderHistoryControl: some View {
+        if state.isLoadingOlder {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .tint(ConversationDesignTokens.amber)
+                Text("Loading earlier activity…")
+            }
+            .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
+            .accessibilityIdentifier("toastty-mobile-transcript-loading-older")
+        } else if state.hasOlder {
+            Button {
+                entryScrollPosition.cancelForInteraction()
+                loadOlder()
+            } label: {
+                Label("Load earlier activity", systemImage: "arrow.up")
+                    .conversationFont(.caption, weight: .semibold)
+                    .foregroundStyle(ConversationDesignTokens.amberText)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 44)
+                    .background(ConversationDesignTokens.raisedSurface)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: ConversationDesignTokens.controlCornerRadius,
+                        style: .continuous
+                    ))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("toastty-mobile-transcript-load-older")
+        }
+    }
+
+    /// The row is a host message whose line opens its turn: a line that
+    /// folds the whole turn, or any host's line where the running work
+    /// folds. Its disclosure is the turn's fold, so one line opens the
+    /// message and the work, and the answer of a turn that folds whole.
+    private func opensTurn(_ row: ToasttyTranscriptRow) -> Bool {
+        guard case .hostMessage(let message) = row.content else { return false }
+        return message.foldsTurn || (options.foldsRunningWork && message.isLine)
+    }
+
+    @ViewBuilder
+    private func blockView(
+        _ block: ToasttyTranscriptBlock,
+        demoted: Bool = false,
+        workingLine: ToasttyTranscriptWorkingLine
+    ) -> some View {
+        switch block.content {
+        case .row(let row):
+            ToasttyTranscriptRowView(
+                row: row,
+                isDemoted: demoted,
+                subagentIsExpanded: opensTurn(row)
+                    ? turnFold.isExpanded(row.id)
+                    : expandedSubagentIDs.contains(row.id),
+                toggleSubagentExpansion: {
+                    if opensTurn(row) {
+                        withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.22)) {
+                            turnFold.toggle(row.id)
+                        }
+                    } else {
+                        toggle(row.id, in: &expandedSubagentIDs)
+                    }
+                },
+                lineWorkingIndicator: workingLine == .turn(row.id) ? workingIndicator : nil,
+                interactionAnswerStates: interactionAnswerStates,
+                editInteractionAnswer: editInteractionAnswer,
+                submitInteractionAnswer: submitInteractionAnswer,
+                interactionAnswerFeedback: interactionAnswerFeedback
+            )
+        case .messageChunk(let chunk):
+            ToasttyTranscriptRowView(
+                row: chunk.row,
+                chunk: chunk,
+                isDemoted: demoted,
+                subagentIsExpanded: false,
+                toggleSubagentExpansion: {},
+                interactionAnswerStates: interactionAnswerStates,
+                editInteractionAnswer: editInteractionAnswer,
+                submitInteractionAnswer: submitInteractionAnswer,
+                interactionAnswerFeedback: interactionAnswerFeedback
+            )
+        case .toolBatch(let rows):
+            if options.foldsRunningWork {
+                ToasttyToolCallList(
+                    blockID: block.id,
+                    calls: state.preparedTranscript.toolCallsByBlock[block.id] ?? ToasttyToolCall.calls(in: rows)
+                )
+            } else {
+                ToasttyToolBatchCard(
+                    blockID: block.id,
+                    rows: rows,
+                    isExpanded: toolBatchDisclosure.isExpanded(block.id),
+                    toggleDetails: {
+                        toolBatchDisclosure.toggle(block.id)
+                    }
+                )
+            }
+        }
+    }
+
+    private var scrollChangeKey: ScrollChangeKey {
+        ScrollChangeKey(
+            content: ScrollContentKey(
+                revision: state.revision,
+                blockCount: state.blocks.count,
+                sendItems: state.sendItems.map(ToasttySendScrollItem.init),
+                firstID: state.blocks.first?.id,
+                lastTarget: lastScrollTarget
+            ),
+            phase: state.phase,
+            isSubmitting: isSubmitting
+        )
+    }
+
+    private func responseEntryContext(
+        for blockID: ToasttyTranscriptBlockID,
+        items: [ToasttyTranscriptDisplayItem]
+    ) -> TranscriptResponseEntryContext {
+        TranscriptResponseEntryContext(
+            responseID: blockID, items: items, expandedToolBatchIDs: toolBatchDisclosure.expandedIDs,
+            toolBatchesAreCards: options.foldsRunningWork == false
+        )
+    }
+
+    private func reconcileScrollChange(contentChanged: Bool) {
+        let wasPendingEntry = entryScrollPosition.isPending
+        if let target = entryScrollPosition.target(
+            for: state,
+            isSubmitting: isSubmitting
+        ) {
+            switch target {
+            case .liveEdge:
+                followsLiveEdge = true
+                if scrollCoordinator.hasExplicitLiveEdgeOwner {
+                    scrollCoordinator.reinforceLiveEdge()
+                } else {
+                    scrollCoordinator.requestInitialLiveEdge()
+                }
+            case .transcript(let blockID):
+                followsLiveEdge = !scrollCoordinator.requestHistoryAnchor(blockID)
+            case .responseStart(let blockID):
+                followsLiveEdge = !scrollCoordinator.requestHistoryAnchor(
+                    blockID, includesResponseContext: true
+                )
+            }
+            return
+        }
+
+        // Catch-up pages and their completion belong to entry positioning,
+        // even when a reader cancelled it. A rebuild on that same update
+        // must not replace the chosen response or override the reader.
+        if wasPendingEntry {
+            if lastScrollTarget != nil, followsLiveEdge || scrollCoordinator.ownsLiveEdge {
+                scrollCoordinator.reinforceLiveEdge()
+            }
+            return
+        }
+        // Phase-only updates can resolve entry, but must not replay a stale
+        // prepend or rebuild revision after entry has finished.
+        guard contentChanged else { return }
+
+        switch state.revision {
+        case .initial:
+            // Entry positioning already owns the first snapshot. Repeated
+            // fixture metadata must not move the reader through that response.
+            break
+        case .rebuilt:
+            guard lastScrollTarget != nil else { return }
+            followsLiveEdge = true
+            scrollCoordinator.requestInitialLiveEdge()
+        case .appended, .metadataOnly:
+            guard lastScrollTarget != nil,
+                  followsLiveEdge || scrollCoordinator.ownsLiveEdge
+            else { return }
+            scrollCoordinator.reinforceLiveEdge()
+        case .prepended:
+            let anchor = state.prependAnchorID
+                .map { ToasttyTranscriptBlockID(rowID: $0) }
+                ?? visibleBlockIDs.first
+            if let anchor {
+                if scrollCoordinator.requestHistoryAnchor(anchor) {
+                    followsLiveEdge = false
+                }
+            }
+        }
+    }
+
+    private func execute(
+        _ command: TranscriptScrollCoordinator.Command,
+        responseContext: TranscriptResponseEntryContext?,
+        using proxy: ScrollViewProxy
+    ) {
+        let target: ToasttyConversationScrollTarget
+        let anchor: UnitPoint
+        switch command.target {
+        case .liveEdge:
+            target = .liveEdge
+            anchor = .bottom
+        case .transcript(let blockID):
+            // A row that a closed row of quiet checks hides, such as the
+            // first row before older history loaded, is at that row's line.
+            target = closedQuietCheckRun(hiding: blockID).map { .quietChecks($0.id) } ?? .transcript(blockID)
+            anchor = .top
+        case .responseStart(let blockID):
+            target = responseContext?.target ?? .transcript(blockID)
+            anchor = .top
+        }
+        if anchor == .top { markRowTopMove() }
+
+        if command.motion == .animated, !reducesMotion {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: anchor)
+            }
+        } else {
+            scrollWithoutAnimation(to: target, anchor: anchor, using: proxy)
+        }
+    }
+
+    /// Scrolls to the start of a row, for a click on a quote of it. A row in
+    /// a folded turn opens its turn first. The reader then owns the
+    /// position, as after a scroll by hand: the transcript stops following
+    /// the newest message, and Jump to latest shows.
+    private var jumpToLatestTitle: String {
+        guard let count = newMessages?.count, count > 0 else { return "Jump to latest" }
+        return "\(count) new"
+    }
+
+    /// Opens the transcript at the new messages' line, in place of the
+    /// latest response or the live edge, when one shows: while the reader
+    /// follows the live edge or has not scrolled this transcript yet. A
+    /// reader who scrolled into the history stays there.
+    private func revealNewMessages(using proxy: ScrollViewProxy) async {
+        guard newMessages != nil,
+              followsLiveEdge || scrollInteractionCount == 0
+        else { return }
+        let interactions = scrollInteractionCount
+        // The line takes the place of the opening position and of the
+        // automatic move to the live edge for the rows that brought it.
+        followsLiveEdge = false
+        entryScrollPosition.cancelForInteraction()
+        scrollCoordinator.cancelForInteraction()
+        // Twice: the first move can stop at a lazy stack's estimate.
+        for _ in 0 ..< 2 {
+            try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+            guard Task.isCancelled == false,
+                  scrollInteractionCount == interactions,
+                  let target = newMessages?.itemID(in: displayItems)
+            else { return }
+            markRowTopMove()
+            scrollWithoutAnimation(to: target, anchor: .top, using: proxy)
+        }
+        try? await Task.sleep(for: TranscriptScrollCoordinator.stableSettleInterval)
+        guard Task.isCancelled == false,
+              scrollInteractionCount == interactions,
+              hasMeasuredScrollGeometry
+        else { return }
+        // New messages that fit on screen show the live edge too: keep
+        // following it then, as a short opening response does.
+        followsLiveEdge = hasReachedPhysicalLiveEdge
+    }
+
+    private func revealRow(_ rowID: ToasttyTranscriptRowID, using proxy: ScrollViewProxy) {
+        let blockID = ToasttyTranscriptBlockID(rowID: rowID)
+        guard state.blocks.contains(where: { $0.id == blockID }) else { return }
+        followsLiveEdge = false
+        entryScrollPosition.cancelForInteraction()
+        scrollCoordinator.cancelForInteraction()
+        let target = ToasttyConversationScrollTarget.transcript(blockID)
+        let closedRun = closedQuietCheckRun(hiding: blockID)
+        if let closedRun {
+            quietCheckFold.open(closedRun)
+        }
+        let foldedTurn = state.turns.first(where: { $0.workBlockIDs.contains(blockID) })
+            .flatMap { turnFold.isExpanded($0.id) ? nil : $0 }
+        if let foldedTurn {
+            turnFold.toggle(foldedTurn.id)
+        }
+        if closedRun != nil || foldedTurn != nil {
+            // The row is laid out on the next pass.
+            DispatchQueue.main.async {
+                markRowTopMove()
+                withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
+                    proxy.scrollTo(target, anchor: .top)
+                }
+            }
+            return
+        }
+        markRowTopMove()
+        withAnimation(reducesMotion ? nil : .easeOut(duration: 0.2)) {
+            proxy.scrollTo(target, anchor: .top)
+        }
+    }
+
+    /// How long the transcript's own move to a row's top may take to land,
+    /// with the lazy stack's corrections and an animation.
+    private static let rowTopMoveLandingTime: Duration = .milliseconds(500)
+
+    /// Marks the start of the transcript's own move to a row's top.
+    private func markRowTopMove() {
+        rowTopMoveDeadline = .now + Self.rowTopMoveLandingTime
+    }
+
+    /// In a lazy transcript, a move to a row's top near the end, such as the
+    /// new messages' line, can leave iOS's scroll view resting past the
+    /// content's end by the bottom inset: the screen stays blank under the
+    /// last row until a gesture bounces it back. While such a move lands,
+    /// the transcript shows its end instead, which still shows the row.
+    /// Only the move's own landing counts: while content changes, such as a
+    /// card that opens, iOS 26 can report the end passed for a moment.
+    private func repairRowTopOvershoot(_ metrics: TranscriptScrollMetrics, using proxy: ScrollViewProxy) {
+        guard let rowTopMoveDeadline, ContinuousClock.now < rowTopMoveDeadline,
+              metrics.isPastContentEnd, lastScrollTarget != nil
+        else { return }
+        self.rowTopMoveDeadline = nil
+        scrollWithoutAnimation(to: ToasttyConversationScrollTarget.liveEdge, anchor: .bottom, using: proxy)
+    }
+
+    private func scrollWithoutAnimation(
+        to target: ToasttyConversationScrollTarget,
+        anchor: UnitPoint,
+        using proxy: ScrollViewProxy
+    ) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(target, anchor: anchor)
+        }
+    }
+
+    private var toolBatchActivity: [ToasttyToolBatchActivity] {
+        ToasttyToolBatchActivity.make(from: state.blocks)
+    }
+
+    private var lastScrollTarget: ToasttyConversationScrollTarget? {
+        guard state.blocks.isEmpty == false || state.sendItems.isEmpty == false else {
+            return nil
+        }
+        return .liveEdge
+    }
+
+    private var liveEdgeVisibilityKey: TranscriptLiveEdgeVisibilityKey {
+        TranscriptLiveEdgeVisibilityKey(
+            phase: state.phase,
+            scenePhase: scenePhase,
+            isVisible: isVisible,
+            isAtLiveEdge: isAtLiveEdge,
+            hasMeasuredScrollGeometry: hasMeasuredScrollGeometry,
+            measuredBoundaryID: measuredBoundaryID,
+            latestBoundaryID: state.rows.last?.id,
+            readAcknowledgementEpoch: readAcknowledgementEpoch,
+            canAcknowledgeRead: canAcknowledgeRead
+        )
+    }
+
+    private func toggle(
+        _ id: ToasttyTranscriptRowID,
+        in values: inout Set<ToasttyTranscriptRowID>
+    ) {
+        withAnimation(reducesMotion ? nil : .easeInOut(duration: 0.2)) {
+            if values.contains(id) {
+                values.remove(id)
+            } else {
+                values.insert(id)
+            }
+        }
+    }
+}
+
+#if DEBUG && os(iOS)
+/// How many times a transcript's body has run, for the iPhone app's UI
+/// tests. A keystroke in the composer must not run it: with a long chat,
+/// each run cost the main thread enough to make typing slow.
+@MainActor
+public enum ToasttyTranscriptBodyCount {
+    public private(set) static var value = 0
+
+    static func record() {
+        value += 1
+    }
+}
+#endif
+
+/// Choose from the completed opening catch-up, not its first nonempty page.
+/// Offline content can supply a provisional position until that first live
+/// snapshot. Reader actions cancel entry, and later turns never reopen it.
+struct TranscriptEntryScrollPosition {
+    private let opensLatestResponse: Bool
+    private var isCancelled = false
+    private(set) var isPending = true
+    private(set) var selectedTarget: TranscriptScrollCoordinator.Target?
+
+    init(status: ToasttyTranscriptSessionStatus?) {
+        opensLatestResponse = status?.activity == .ready
+    }
+
+    mutating func cancelForInteraction() {
+        isCancelled = true
+    }
+
+    mutating func target(
+        for state: ToasttyConversationPresentationState,
+        isSubmitting: Bool
+    ) -> TranscriptScrollCoordinator.Target? {
+        guard isPending else { return nil }
+        if isSubmitting || !state.sendItems.isEmpty {
+            isPending = false
+            guard !isCancelled else { return nil }
+            selectedTarget = .liveEdge
+            return .liveEdge
+        }
+
+        switch state.phase {
+        case .loading, .resyncing:
+            return nil
+        case .stale, .failure:
+            // Keep cached history usable while disconnected, but allow one
+            // correction when the opening catch-up completes.
+            guard !isCancelled, selectedTarget == nil, !state.blocks.isEmpty else { return nil }
+        case .live:
+            isPending = false
+            guard !isCancelled else { return nil }
+        }
+
+        let target = preferredTarget(for: state)
+        guard target != selectedTarget else { return nil }
+        selectedTarget = target
+        return target
+    }
+
+    private func preferredTarget(
+        for state: ToasttyConversationPresentationState
+    ) -> TranscriptScrollCoordinator.Target {
+        guard opensLatestResponse,
+              let response = state.rows.reversed().prefix(while: { row in
+                  row.startsTurn == false
+              }).first(where: { row in
+                  guard case .assistantMessage(_, let phase) = row.content else { return false }
+                  // Unknown phases are responses too, as in turn folding.
+                  return phase != .commentary
+              })
+        else { return .liveEdge }
+
+        return .responseStart(
+            ToasttyTranscriptBlockID(rowID: response.id)
+        )
+    }
+}
+
+struct TranscriptScrollMetrics: Equatable {
+    static let nearLiveEdgeThreshold: CGFloat = 72
+    static let physicalLiveEdgeEpsilon: CGFloat = 1
+    static let viewportResizeThreshold: CGFloat = 0.5
+
+    let contentHeight: CGFloat
+    let visibleMaxY: CGFloat
+    let visibleHeight: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let containerHeight: CGFloat
+
+    @available(macOS 15.0, *)
+    init(geometry: ScrollGeometry) {
+        contentHeight = geometry.contentSize.height
+        // visibleRect includes the safe-area regions behind the composer and
+        // keyboard. Only the inset-excluded viewport can establish that the
+        // transcript's bottom is actually visible.
+        visibleMaxY = geometry.visibleRect.maxY - geometry.contentInsets.bottom
+        visibleHeight = max(
+            0,
+            geometry.visibleRect.height - geometry.contentInsets.top - geometry.contentInsets.bottom
+        )
+        topInset = geometry.contentInsets.top
+        bottomInset = geometry.contentInsets.bottom
+        containerHeight = geometry.containerSize.height
+    }
+
+    init(
+        contentHeight: CGFloat,
+        visibleMaxY: CGFloat,
+        visibleHeight: CGFloat
+    ) {
+        self.contentHeight = contentHeight
+        self.visibleMaxY = visibleMaxY
+        self.visibleHeight = visibleHeight
+        topInset = 0
+        bottomInset = 0
+        containerHeight = visibleHeight
+    }
+
+    func hasViewportHeightChange(comparedTo other: Self) -> Bool {
+        abs(visibleHeight - other.visibleHeight) >= Self.viewportResizeThreshold
+    }
+
+    func hasLiveEdgeLayoutChange(comparedTo other: Self) -> Bool {
+        hasViewportHeightChange(comparedTo: other)
+            || abs(contentHeight - other.contentHeight) >= Self.viewportResizeThreshold
+    }
+
+    /// The usable viewport moved or resized through the keyboard or composer.
+    /// An inset change can arrive before the container catches up, so the
+    /// height alone can look unchanged while the bottom is no longer visible.
+    func hasViewportChange(comparedTo other: Self) -> Bool {
+        hasViewportHeightChange(comparedTo: other)
+            || abs(bottomInset - other.bottomInset) >= Self.viewportResizeThreshold
+    }
+
+    var distanceFromBottom: CGFloat {
+        contentHeight - visibleMaxY
+    }
+
+    var isNearLiveEdge: Bool {
+        distanceFromBottom < Self.nearLiveEdgeThreshold
+    }
+
+    /// Completion is intentionally tighter than the user-facing near-tail
+    /// threshold. A negative distance is valid during bottom overscroll or
+    /// when the content is shorter than the viewport.
+    var hasReachedPhysicalLiveEdge: Bool {
+        distanceFromBottom <= Self.physicalLiveEdgeEpsilon
+    }
+
+    var isAtLiveEdge: Bool {
+        isNearLiveEdge
+    }
+
+    /// The viewport ends past the content's end although the content could
+    /// fill it: the scroll view rests beyond its largest offset. iOS lets a
+    /// programmatic move get there; a reader's own overscroll bounces back.
+    var isPastContentEnd: Bool {
+        let visibleTop = visibleMaxY - visibleHeight
+        return visibleTop > Self.physicalLiveEdgeEpsilon
+            && visibleMaxY - max(contentHeight, visibleHeight) > Self.physicalLiveEdgeEpsilon
+    }
+}
+
+#if DEBUG && os(iOS)
+/// UI tests collect one coherent geometry sample per committed UI update.
+/// `onScrollGeometryChange` can run several times inside a single update while
+/// the keyboard inset, the container size, and the composer inset settle one
+/// after another; those intermediate states never reach the screen. Callbacks
+/// are folded until `UIUpdateLink` reports `afterCATransactionCommit`, so each
+/// sample is a state that Core Animation actually committed for display.
+/// Reading separate accessibility frames would likewise straddle the keyboard
+/// animation and report movement that never appeared.
+@MainActor @Observable
+private final class TranscriptFixtureScrollTrace {
+    static let isEnabled = ProcessInfo.processInfo.environment[
+        "TOASTTY_MOBILE_FIXTURE_SCROLL_TRACE"
+    ] == "1"
+
+    struct Sample: Encodable {
+        let elapsed: Double
+        let contentHeight: CGFloat
+        let visibleMaxY: CGFloat
+        let visibleHeight: CGFloat
+        let topInset: CGFloat
+        let bottomInset: CGFloat
+        let containerHeight: CGFloat
+        let hasSendItems: Bool
+        /// Geometry callbacks folded into this committed sample.
+        let layoutPasses: Int
+        /// `distanceFromBottom` of every folded callback, for failure triage.
+        let intermediateDistances: [CGFloat]
+    }
+
+    private struct Pending {
+        var metrics: TranscriptScrollMetrics
+        var hasSendItems: Bool
+        var elapsed: Double
+        var intermediateDistances: [CGFloat]
+    }
+
+    private var latest: TranscriptScrollMetrics?
+    private var startedAt: TimeInterval?
+    private var pending: Pending?
+    private var samples: [Sample] = []
+    @ObservationIgnored private var updateLink: UIUpdateLink?
+
+    var encodedSamples: String {
+        guard let data = try? JSONEncoder().encode(samples) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// The latest geometry, whether or not a trace runs.
+    var encodedLatest: String {
+        guard let latest else { return "{}" }
+        let sample = Sample(
+            elapsed: 0, contentHeight: latest.contentHeight, visibleMaxY: latest.visibleMaxY,
+            visibleHeight: latest.visibleHeight, topInset: latest.topInset, bottomInset: latest.bottomInset,
+            containerHeight: latest.containerHeight, hasSendItems: false, layoutPasses: 1, intermediateDistances: []
+        )
+        guard let data = try? JSONEncoder().encode(sample) else { return "{}" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func begin() {
+        guard Self.isEnabled else { return }
+        samples = []
+        pending = nil
+        startedAt = ProcessInfo.processInfo.systemUptime
+        // The geometry before the send is already on screen; keep it as the
+        // baseline without waiting for a commit.
+        if let latest {
+            append(metrics: latest, hasSendItems: false, elapsed: 0, intermediateDistances: [])
+        }
+    }
+
+    func stop() {
+        startedAt = nil
+        pending = nil
+    }
+
+    /// Flushes folded callbacks once per committed UI update of `view`'s
+    /// window. The link only fires for updates (continuous updates stay off),
+    /// so an idle screen adds no samples.
+    func attach(to view: UIView) {
+        guard Self.isEnabled, updateLink == nil, view.window != nil else { return }
+        let link = UIUpdateLink(view: view)
+        link.addAction(to: .afterCATransactionCommit) { [weak self] _, _ in
+            self?.commitPending()
+        }
+        link.isEnabled = true
+        updateLink = link
+    }
+
+    func record(_ metrics: TranscriptScrollMetrics, hasSendItems: Bool) {
+        guard Self.isEnabled else { return }
+        latest = metrics
+        guard let startedAt else { return }
+        let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+        if var pending {
+            pending.metrics = metrics
+            pending.hasSendItems = hasSendItems
+            pending.elapsed = elapsed
+            pending.intermediateDistances.append(metrics.distanceFromBottom)
+            self.pending = pending
+            return
+        }
+        pending = Pending(
+            metrics: metrics,
+            hasSendItems: hasSendItems,
+            elapsed: elapsed,
+            intermediateDistances: [metrics.distanceFromBottom]
+        )
+    }
+
+    private func commitPending() {
+        guard let pending else { return }
+        self.pending = nil
+        guard startedAt != nil else { return }
+        append(
+            metrics: pending.metrics,
+            hasSendItems: pending.hasSendItems,
+            elapsed: pending.elapsed,
+            intermediateDistances: pending.intermediateDistances
+        )
+    }
+
+    private func append(
+        metrics: TranscriptScrollMetrics,
+        hasSendItems: Bool,
+        elapsed: Double,
+        intermediateDistances: [CGFloat]
+    ) {
+        guard samples.count < 512 else { return }
+        samples.append(Sample(
+            elapsed: elapsed,
+            contentHeight: metrics.contentHeight,
+            visibleMaxY: metrics.visibleMaxY,
+            visibleHeight: metrics.visibleHeight,
+            topInset: metrics.topInset,
+            bottomInset: metrics.bottomInset,
+            containerHeight: metrics.containerHeight,
+            hasSendItems: hasSendItems,
+            layoutPasses: max(1, intermediateDistances.count),
+            intermediateDistances: intermediateDistances
+        ))
+    }
+}
+
+/// The latest scroll geometry for UI tests, in its own view so that only it
+/// updates with each geometry change.
+private struct TranscriptFixtureScrollMetricsElement: View {
+    let trace: TranscriptFixtureScrollTrace
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .accessibilityElement()
+            .accessibilityLabel("Transcript scroll metrics")
+            .accessibilityValue(trace.encodedLatest)
+            .accessibilityIdentifier("toastty-mobile-transcript-scroll-metrics")
+    }
+}
+
+/// Hosts the `UIUpdateLink` that flushes the fixture trace after each commit.
+/// The link needs a view inside a window, so it attaches from `didMoveToWindow`.
+private struct TranscriptFixtureScrollTraceAnchor: UIViewRepresentable {
+    let trace: TranscriptFixtureScrollTrace
+
+    final class AnchorView: UIView {
+        var onMoveToWindow: (() -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onMoveToWindow?()
+        }
+    }
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.isUserInteractionEnabled = false
+        view.onMoveToWindow = { [trace] in trace.attach(to: view) }
+        return view
+    }
+
+    func updateUIView(_ uiView: AnchorView, context: Context) {}
+}
+#endif
+
+struct TranscriptScrollCoordinator: Equatable {
+    static let stableSettleInterval: Duration = .milliseconds(50)
+    static let maximumStableSettleChecks = 4
+
+    enum LiveEdgeOwner: Equatable {
+        case automatic
+        case send(UInt64)
+        case jump(UInt64)
+    }
+
+    enum Motion: Equatable {
+        case immediate
+        case stable
+        case animated
+    }
+
+    enum Target: Equatable {
+        case liveEdge
+        case transcript(ToasttyTranscriptBlockID)
+        case responseStart(ToasttyTranscriptBlockID)
+    }
+
+    struct Command: Equatable {
+        let sequence: UInt64
+        let target: Target
+        let motion: Motion
+        let liveEdgeOwner: LiveEdgeOwner?
+    }
+
+    struct ExecutionCandidate: Equatable {
+        let command: Command
+        let layoutGeneration: UInt64
+    }
+
+    private(set) var liveEdgeOwner: LiveEdgeOwner?
+    private(set) var command: Command?
+    private var nextSequence: UInt64 = 0
+    private var nextJumpRequest: UInt64 = 0
+    private var layoutGeneration: UInt64 = 0
+    private var executedCommandSequence: UInt64?
+
+    var ownsLiveEdge: Bool {
+        liveEdgeOwner != nil
+    }
+
+    var hasExplicitLiveEdgeOwner: Bool {
+        switch liveEdgeOwner {
+        case .send?, .jump?: true
+        case .automatic?, nil: false
+        }
+    }
+
+    /// A viewport change may snap the live edge back in the same layout pass
+    /// unless an animated jump is still travelling toward it.
+    var allowsSynchronousLiveEdgeRepair: Bool {
+        if case .jump? = liveEdgeOwner { return false }
+        return true
+    }
+
+    @available(macOS 15.0, *)
+    static func shouldResolveFollowing(
+        oldPhase: ScrollPhase,
+        newPhase: ScrollPhase
+    ) -> Bool {
+        guard newPhase == .idle else { return false }
+        return oldPhase == .tracking
+            || oldPhase == .interacting
+            || oldPhase == .decelerating
+    }
+
+    static func shouldExecuteStableCandidate(
+        isQuiet: Bool,
+        completedSettleChecks: Int
+    ) -> Bool {
+        isQuiet || completedSettleChecks >= maximumStableSettleChecks
+    }
+
+    mutating func requestInitialLiveEdge() {
+        issueLiveEdge(owner: .automatic, motion: .stable)
+    }
+
+    mutating func recordPendingHistoryLayoutChange() {
+        guard hasPendingHistoryMove else { return }
+        advanceLayoutGeneration()
+    }
+
+    var hasPendingHistoryMove: Bool {
+        guard let command else { return false }
+        return command.target != .liveEdge && executedCommandSequence != command.sequence
+    }
+
+    mutating func abandonHistoryMove(_ pending: Command) {
+        guard command == pending, hasPendingHistoryMove else { return }
+        command = nil
+        executedCommandSequence = nil
+    }
+
+    mutating func requestSend(_ request: UInt64) {
+        issueLiveEdge(owner: .send(request), motion: .immediate)
+    }
+
+    mutating func requestJump() {
+        nextJumpRequest &+= 1
+        issueLiveEdge(owner: .jump(nextJumpRequest), motion: .animated)
+    }
+
+    mutating func reinforceLiveEdge() {
+        let owner = liveEdgeOwner ?? .automatic
+        liveEdgeOwner = owner
+        advanceLayoutGeneration()
+
+        if let command,
+           command.target == .liveEdge,
+           command.liveEdgeOwner == owner,
+           executedCommandSequence != command.sequence {
+            // Equivalent work that arrives before execution belongs to the
+            // same pending operation. Immediate sends use the latest generation;
+            // stable commands wait for that generation's layout to settle.
+            return
+        }
+
+        // Once the pending operation has executed, a later generation needs a
+        // fresh command so SwiftUI starts a follow-up task rather than losing
+        // late content growth.
+        issue(target: .liveEdge, motion: .stable, liveEdgeOwner: owner)
+    }
+
+    /// Returns false when an explicit send or jump still owns the live edge;
+    /// a late pagination result must not steal that user-requested movement.
+    @discardableResult
+    mutating func requestHistoryAnchor(
+        _ blockID: ToasttyTranscriptBlockID,
+        includesResponseContext: Bool = false
+    ) -> Bool {
+        guard hasExplicitLiveEdgeOwner == false else {
+            reinforceLiveEdge()
+            return false
+        }
+        liveEdgeOwner = nil
+        issue(
+            target: includesResponseContext ? .responseStart(blockID) : .transcript(blockID),
+            motion: .stable,
+            liveEdgeOwner: nil
+        )
+        return true
+    }
+
+    mutating func cancelForInteraction() {
+        liveEdgeOwner = nil
+        command = nil
+        executedCommandSequence = nil
+    }
+
+    /// Returns true when an active jump completed at the live edge.
+    @discardableResult
+    mutating func finishJump(atLiveEdge: Bool) -> Bool {
+        guard case .jump? = liveEdgeOwner,
+              currentCommandHasExecuted
+        else { return false }
+        liveEdgeOwner = atLiveEdge ? .automatic : nil
+        command = nil
+        executedCommandSequence = nil
+        return atLiveEdge
+    }
+
+    /// Returns true when an active send completed at the live edge. A failed
+    /// acquisition releases ownership so the recovery affordance can appear.
+    @discardableResult
+    mutating func finishSend(atLiveEdge: Bool) -> Bool {
+        guard case .send? = liveEdgeOwner,
+              currentCommandHasExecuted
+        else { return false }
+        liveEdgeOwner = atLiveEdge ? .automatic : nil
+        command = nil
+        executedCommandSequence = nil
+        return atLiveEdge
+    }
+
+    func executionCandidate(for command: Command) -> ExecutionCandidate? {
+        guard self.command == command,
+              executedCommandSequence != command.sequence
+        else { return nil }
+        return ExecutionCandidate(
+            command: command,
+            layoutGeneration: layoutGeneration
+        )
+    }
+
+    /// Marks exactly the observed generation. A newer generation must be
+    /// observed by the task instead of being silently consumed.
+    mutating func markExecuted(_ candidate: ExecutionCandidate) -> Bool {
+        guard command == candidate.command,
+              layoutGeneration == candidate.layoutGeneration,
+              executedCommandSequence != candidate.command.sequence
+        else { return false }
+        executedCommandSequence = candidate.command.sequence
+        return true
+    }
+
+    private var currentCommandHasExecuted: Bool {
+        guard let command else { return false }
+        return executedCommandSequence == command.sequence
+    }
+
+    private mutating func issueLiveEdge(owner: LiveEdgeOwner, motion: Motion) {
+        liveEdgeOwner = owner
+        advanceLayoutGeneration()
+        issue(target: .liveEdge, motion: motion, liveEdgeOwner: owner)
+    }
+
+    private mutating func advanceLayoutGeneration() {
+        layoutGeneration &+= 1
+    }
+
+    private mutating func issue(
+        target: Target,
+        motion: Motion,
+        liveEdgeOwner: LiveEdgeOwner?
+    ) {
+        nextSequence &+= 1
+        executedCommandSequence = nil
+        command = Command(
+            sequence: nextSequence,
+            target: target,
+            motion: motion,
+            liveEdgeOwner: liveEdgeOwner
+        )
+    }
+}
+
+/// A delayed continuation may consume one newer layout at expiry. Its next
+/// interval permits measurement, then retires entry instead of extending again.
+struct TranscriptEntryMaterializationRetry {
+    enum Action: Equatable {
+        case wait
+        case retry
+        case expire
+    }
+
+    private var attemptedGeneration: UInt64
+    private var usedFinalAttempt = false
+
+    init(layoutGeneration: UInt64) {
+        attemptedGeneration = layoutGeneration
+    }
+
+    mutating func nextAction(layoutGeneration: UInt64, isExpired: Bool) -> Action {
+        guard !usedFinalAttempt else { return .expire }
+        guard layoutGeneration != attemptedGeneration else {
+            return isExpired ? .expire : .wait
+        }
+        attemptedGeneration = layoutGeneration
+        usedFinalAttempt = isExpired
+        return .retry
+    }
+}
+
+struct TranscriptScrollTaskKey: Equatable {
+    let command: TranscriptScrollCoordinator.Command?
+    var response: ToasttyConversationScrollTarget?
+    var responseContext: TranscriptResponseEntryContext?
+    var responseMeasured = true
+    var contextMeasured = true
+
+    var materializationTarget: ToasttyConversationScrollTarget? {
+        guard case .responseStart = command?.target,
+              let response, let responseContext else { return nil }
+        if !responseMeasured { return response }
+        if !contextMeasured { return responseContext.markerHostID ?? responseContext.target }
+        return nil
+    }
+}
+
+struct TranscriptLiveEdgeVisibilityKey: Equatable {
+    let phase: ToasttyConversationPresentationPhase
+    let scenePhase: ScenePhase
+    let isVisible: Bool
+    let isAtLiveEdge: Bool
+    let hasMeasuredScrollGeometry: Bool
+    let measuredBoundaryID: ToasttyTranscriptRowID?
+    let latestBoundaryID: ToasttyTranscriptRowID?
+    let readAcknowledgementEpoch: ToasttyTranscriptSessionStatus?
+    let canAcknowledgeRead: Bool
+
+    var isEligible: Bool {
+        canAcknowledgeRead
+            && phase == .live
+            && scenePhase == .active
+            && isVisible
+            && isAtLiveEdge
+            && hasMeasuredScrollGeometry
+            && (latestBoundaryID == nil || measuredBoundaryID == latestBoundaryID)
+    }
+}
+
+enum ToasttyConversationScrollTarget: Hashable {
+    case transcript(ToasttyTranscriptBlockID)
+    case responseContext(ToasttyTranscriptBlockID)
+    case turnWork(ToasttyTranscriptRowID)
+    /// A row of quiet checks' line, by the row's ID.
+    case quietChecks(ToasttyTranscriptRowID)
+    case send(String)
+    case liveEdge
+}
+
+enum ToasttyTranscriptDisplayItem: Identifiable {
+    case block(ToasttyTranscriptBlock, isWork: Bool)
+    case workStrip(ToasttyTranscriptTurn)
+    case quietChecks(ToasttyQuietCheckRun)
+
+    var id: ToasttyConversationScrollTarget {
+        switch self {
+        case .block(let block, _): .transcript(block.id)
+        case .workStrip(let turn): .turnWork(turn.id)
+        case .quietChecks(let run): .quietChecks(run.id)
+        }
+    }
+
+    /// The first row that the item shows.
+    var firstRowID: ToasttyTranscriptRowID? {
+        switch self {
+        case .block(let block, _): block.id.rowID
+        case .workStrip(let turn): turn.workBlockIDs.first?.rowID
+        case .quietChecks(let run): run.id
+        }
+    }
+}
+
+/// Entry anchors use the rendered timeline, so folded work never supplies a
+/// hidden tool target and an earlier turn's work cannot replace the response.
+struct TranscriptResponseEntryContext: Equatable {
+    let target: ToasttyConversationScrollTarget
+    let markerHostID: ToasttyConversationScrollTarget?
+
+    /// - Parameter toolBatchesAreCards: a tool batch is a card that shows
+    ///   its calls only when it is open. Where running work folds, a batch
+    ///   is its list of calls, as tall as an open card.
+    init(
+        responseID: ToasttyTranscriptBlockID,
+        items: [ToasttyTranscriptDisplayItem],
+        expandedToolBatchIDs: Set<ToasttyTranscriptBlockID> = [],
+        toolBatchesAreCards: Bool = true
+    ) {
+        guard let index = items.firstIndex(where: { $0.id == .transcript(responseID) }),
+              index > items.startIndex
+        else {
+            target = .transcript(responseID)
+            markerHostID = nil
+            return
+        }
+        let preceding = items[index - 1]
+        let isCard: Bool
+        switch preceding {
+        case .workStrip:
+            isCard = true
+        case .quietChecks:
+            isCard = false
+        case .block(let block, _):
+            if case .toolBatch = block.content {
+                // Expanded tool output can fill the viewport. Keep the answer
+                // visible instead of opening at the top of those details.
+                isCard = toolBatchesAreCards && !expandedToolBatchIDs.contains(block.id)
+            } else {
+                isCard = false
+            }
+        }
+        if isCard {
+            target = preceding.id
+            markerHostID = nil
+        } else {
+            target = .responseContext(responseID)
+            markerHostID = preceding.id
+        }
+    }
+}
+
+private struct TurnFoldKey: Equatable {
+    let turns: [ToasttyTranscriptTurn]
+    let settledIDs: Set<ToasttyTranscriptRowID>
+    let revision: ToasttyTranscriptRevision
+    let firstSequence: UInt64?
+}
+
+private struct ScrollChangeKey: Equatable {
+    let content: ScrollContentKey
+    let phase: ToasttyConversationPresentationPhase
+    let isSubmitting: Bool
+}
+
+private struct ScrollContentKey: Equatable {
+    let revision: ToasttyTranscriptRevision
+    let blockCount: Int
+    let sendItems: [ToasttySendScrollItem]
+    let firstID: ToasttyTranscriptBlockID?
+    let lastTarget: ToasttyConversationScrollTarget?
+}
+
+private struct ToasttySendScrollItem: Equatable {
+    enum ContentKind: Equatable {
+        case optimistic
+        case receipt
+        case queued
+    }
+
+    let clientRequestID: String
+    let contentKind: ContentKind
+
+    init(_ item: ToasttySendPresentationItem) {
+        clientRequestID = item.clientRequestID
+        contentKind = switch item.content {
+        case .optimistic: .optimistic
+        case .receipt: .receipt
+        case .queued: .queued
+        }
+    }
+}
+
+/// The size of a message's copy button. A message that is still sending
+/// keeps the same space, so its bubble does not move when it is sent.
+private enum ToasttyMessageCopyButtonMetrics {
+    #if os(macOS)
+    static let size = CGSize(width: 24, height: 20)
+    #else
+    /// A phone shows the buttons all the time and a finger taps them, so
+    /// they take more room than the pointer's.
+    static let size = CGSize(width: 36, height: 30)
+    #endif
+    static let spacing: CGFloat = 2
+}
+
+/// The user's message bubble. A message that is still sending uses the same
+/// view, so the bubble keeps its size when its transcript row replaces it.
+/// The sending state changes no layout: the bubble is faded, and after a
+/// short wait a spinner shows in the empty space to its left.
+private struct ToasttyUserMessageBubble<Footer: View>: View {
+    /// A quick send ends before this, so it shows only the fade.
+    static var sendingIndicatorDelay: Duration { .milliseconds(400) }
+
+    let text: String
+    let caption: String?
+    /// The agent's message that this message answers.
+    var quote: ToasttyMessageQuote?
+    /// The files sent with the message, by their paths on the host.
+    var attachments: [URL] = []
+    /// The message, by which a device asks the host for its images. `nil`
+    /// while it sends.
+    var attachmentMessage: ToasttyAttachedMessage?
+    var isSending = false
+    /// Under the bubble, outside it: the message's copy button, or the
+    /// same space while the message sends.
+    @ViewBuilder let footer: () -> Footer
+    @State private var showsSendingIndicator = false
+    /// The text is drawn as typed, except a link that the host draws as a
+    /// chip, such as a task the user mentioned.
+    @Environment(\.conversationLinkPresenter) private var linkPresenter
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: ToasttyMessageCopyButtonMetrics.spacing) {
+            bubble
+            footer()
+        }
+        .padding(.leading, 48)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var bubble: some View {
+        // With files, the bubble is often wider than its text: the text
+        // starts at its leading edge, as the files do.
+        VStack(alignment: attachments.isEmpty ? .trailing : .leading, spacing: 5) {
+            if let quote {
+                ToasttyMessageQuoteStrip(quote: quote)
+            }
+            // A message of files alone has no text.
+            if text.isEmpty == false || attachments.isEmpty {
+                ToasttySelectableText(ConversationLinkDecoration.applyChips(toPlainText: text, presenter: linkPresenter),
+                                      textColor: ConversationDesignTokens.userBubbleText, lineSpacing: 0)
+            }
+            if attachments.isEmpty == false {
+                ToasttyMessageAttachments(urls: attachments, message: attachmentMessage)
+            }
+            if let caption {
+                Text(caption)
+                    .conversationFont(.caption2, monospaced: true)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
+            }
+        }
+        .padding(12)
+        .background(ConversationDesignTokens.userBubbleSurface)
+        .overlay {
+            ConversationDesignTokens.userBubbleShape
+                .stroke(ConversationDesignTokens.userBubbleBorder)
+        }
+        .clipShape(ConversationDesignTokens.userBubbleShape)
+        .opacity(isSending ? 0.6 : 1)
+        .overlay(alignment: .bottomLeading) {
+            if isSending, showsSendingIndicator {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(ConversationDesignTokens.amberText)
+                    .frame(width: 16, height: 16)
+                    // Outside the bubble, level with its last line. An
+                    // offset takes no layout space.
+                    .offset(x: -24, y: -12)
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
+            }
+        }
+        .task(id: isSending) {
+            guard isSending else { return }
+            try? await Task.sleep(for: Self.sendingIndicatorDelay)
+            guard Task.isCancelled == false else { return }
+            withAnimation(.easeIn(duration: 0.15)) { showsSendingIndicator = true }
+        }
+    }
+}
+
+private struct ToasttySendTailItemView: View {
+    let item: ToasttySendPresentationItem
+    let dismiss: () -> Void
+    var queuedMessageAction: (ToasttyQueuedMessageAction) -> Void = { _ in }
+    /// Set when the line of this host's message shows that the agent works:
+    /// the message was typed and its row has not come yet.
+    var lineWorkingIndicator: ToasttyTranscriptWorkingIndicator?
+    @Environment(\.toasttyTranscriptOptions) private var options
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var hostMessageIsExpanded = false
+
+    /// A waiting message's actions stand in a row. At an accessibility
+    /// text size a row breaks their titles in the middle of a word, so
+    /// they stand one above the other.
+    private var queuedActionsLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: 16))
+    }
+
+    @ViewBuilder
+    var body: some View {
+        switch item.content {
+        case .optimistic:
+            if let hostMessage = item.hostMessage {
+                hostMessageView(hostMessage, workingIndicator: lineWorkingIndicator)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
+            } else {
+                optimisticBubble
+            }
+        case .receipt(let receipt):
+            receiptCard(receipt)
+        case .queued(let queued):
+            if let hostMessage = item.hostMessage {
+                queuedHostMessage(queued, hostMessage)
+            } else {
+                queuedBubble(queued)
+            }
+        }
+    }
+
+    /// A message waiting on the Mac. Dashed, because nothing has reached the
+    /// agent yet; the actions change the queue, not the transcript.
+    private func queuedBubble(_ queued: ToasttyQueuedSendPresentation) -> some View {
+        VStack(alignment: .trailing, spacing: 7) {
+            queuedCaption(queued)
+            if let quote = item.quote {
+                ToasttyMessageQuoteStrip(quote: quote)
+            }
+            Text(item.text)
+                .conversationFont(.body)
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if queued.attachmentCount > 0 {
+                Text(queued.attachmentCount == 1 ? "+1 file" : "+\(queued.attachmentCount) files")
+                    .conversationFont(.caption2, monospaced: true)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
+            }
+            queuedNotesAndActions(queued)
+        }
+        .padding(12)
+        .overlay {
+            ConversationDesignTokens.userBubbleShape
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                .foregroundStyle(ConversationDesignTokens.userBubbleBorder)
+        }
+        .clipShape(ConversationDesignTokens.userBubbleShape)
+        .padding(.leading, 48)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(item.text), \(queuedAccessibilityState(queued))")
+        .accessibilityIdentifier("toastty-mobile-send-queued-\(item.clientRequestID)")
+    }
+
+    /// A host's message waiting on the Mac, such as a digest or a message
+    /// that `coordinator send` brought: the line or card that its row will
+    /// show, under the queue's caption and over the queue's actions.
+    private func queuedHostMessage(
+        _ queued: ToasttyQueuedSendPresentation,
+        _ message: ToasttyHostMessagePresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            queuedCaption(queued)
+            hostMessageView(message, workingIndicator: nil)
+            queuedNotesAndActions(queued)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(hostMessageAccessibilityText(message)), \(queuedAccessibilityState(queued))")
+        .accessibilityIdentifier("toastty-mobile-send-queued-\(item.clientRequestID)")
+    }
+
+    @ViewBuilder
+    private func hostMessageView(
+        _ message: ToasttyHostMessagePresentation,
+        workingIndicator: ToasttyTranscriptWorkingIndicator?
+    ) -> some View {
+        switch message.style {
+        case .disclosure:
+            ToasttyHostMessageLine(
+                message: message,
+                isExpanded: hostMessageIsExpanded,
+                workingIndicator: workingIndicator,
+                toggle: { hostMessageIsExpanded.toggle() },
+                accessibilitySuffix: "send-\(item.clientRequestID)"
+            )
+        case .sender(let sender, let timeText):
+            ToasttySenderMessageCard(
+                sender: sender, timeText: timeText, text: message.text,
+                isExpanded: hostMessageIsExpanded, toggleExpansion: { hostMessageIsExpanded.toggle() },
+                accessibilitySuffix: "send-\(item.clientRequestID)"
+            )
+        }
+    }
+
+    private func hostMessageAccessibilityText(_ message: ToasttyHostMessagePresentation) -> String {
+        switch message.style {
+        case .disclosure: message.summary
+        case .sender(let sender, _): "From \(sender): \(message.text)"
+        }
+    }
+
+    private func queuedAccessibilityState(_ queued: ToasttyQueuedSendPresentation) -> String {
+        queued.isPaused ? "Paused in queue" : "Queued, sends after this turn"
+    }
+
+    private func queuedCaption(_ queued: ToasttyQueuedSendPresentation) -> some View {
+        Text(queued.isPaused
+            ? "Paused · queued \(queued.position)"
+            : queued.waitingCaption ?? "Queued \(queued.position) · sends after this turn")
+            .conversationFont(.caption2, weight: .semibold, monospaced: true)
+            .foregroundStyle(ConversationDesignTokens.amberText)
+            .textCase(.uppercase)
+    }
+
+    @ViewBuilder
+    private func queuedNotesAndActions(_ queued: ToasttyQueuedSendPresentation) -> some View {
+        if let warning = queued.warning {
+            queuedNote(warning, systemImage: "exclamationmark.triangle", key: "warning")
+        }
+        if let failure = queued.actionFailure {
+            queuedNote(failure, systemImage: "exclamationmark.circle", key: "failure")
+        }
+        if queued.canChange || queued.canSteer || queued.resumeTitle != nil {
+            queuedActionsLayout {
+                if let resumeTitle = queued.resumeTitle {
+                    queuedAction(resumeTitle, "resume") { queuedMessageAction(.resume) }
+                }
+                if queued.canEdit {
+                    queuedAction("Edit", "edit") {
+                        queuedMessageAction(.edit(clientRequestID: item.clientRequestID, text: item.text))
+                    }
+                }
+                if queued.canSteer {
+                    queuedAction("Steer now", "steer") {
+                        queuedMessageAction(.steer(clientRequestID: item.clientRequestID, text: item.text))
+                    }
+                }
+                if queued.canChange {
+                    queuedAction("Remove", "remove") {
+                        queuedMessageAction(.remove(clientRequestID: item.clientRequestID))
+                    }
+                }
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    /// A line above a waiting message's actions that the user should read
+    /// before choosing one.
+    private func queuedNote(_ text: String, systemImage: String, key: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .conversationFont(.caption)
+            .foregroundStyle(ConversationDesignTokens.amberText)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
+            .accessibilityIdentifier("toastty-mobile-queued-\(key)-\(item.clientRequestID)")
+    }
+
+    private func queuedAction(_ title: String, _ key: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .conversationPlainButtonOnMac()
+            .conversationFont(.caption, weight: .semibold)
+            .foregroundStyle(ConversationDesignTokens.mutedText)
+            .frame(minHeight: 32)
+            .accessibilityIdentifier("toastty-mobile-queued-\(key)-\(item.clientRequestID)")
+    }
+
+    private var optimisticBubble: some View {
+        ToasttyUserMessageBubble(
+            text: item.text, caption: item.sentCaption, quote: item.quote, attachments: item.attachments, isSending: true
+        ) {
+            if options.showsMessageCopyButton {
+                Color.clear
+                    .frame(
+                        width: ToasttyMessageCopyButtonMetrics.size.width,
+                        height: ToasttyMessageCopyButtonMetrics.size.height
+                    )
+                    .accessibilityHidden(true)
+            }
+        }
+            .accessibilityLabel("\(item.text), Sending")
+            .accessibilityIdentifier("toastty-mobile-send-optimistic-\(item.clientRequestID)")
+    }
+
+    private func receiptCard(
+        _ receipt: ToasttySendReceiptPresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(ConversationDesignTokens.red)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(receipt.title)
+                        .conversationFont(.subheadline, weight: .semibold)
+                        .foregroundStyle(ConversationDesignTokens.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(receipt.detail)
+                        .conversationFont(.caption)
+                        .foregroundStyle(ConversationDesignTokens.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .conversationFont(.caption, weight: .bold)
+                        .frame(width: 44, height: 44)
+                }
+                .conversationPlainButtonOnMac()
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
+                .accessibilityLabel("Dismiss delivery receipt")
+                .accessibilityIdentifier(
+                    "toastty-mobile-send-receipt-dismiss-\(item.clientRequestID)"
+                )
+            }
+
+            Button {
+                ConversationPasteboard.copy(item.text)
+            } label: {
+                Label("Copy attempted message", systemImage: "doc.on.doc")
+                    .conversationFont(.caption, weight: .semibold)
+                    .frame(minHeight: 44)
+            }
+            .conversationPlainButtonOnMac()
+            .foregroundStyle(ConversationDesignTokens.amberText)
+            .padding(.leading, 28)
+            .accessibilityIdentifier("toastty-mobile-send-receipt-copy-\(item.clientRequestID)")
+
+            Text(item.text)
+                .conversationFont(.caption, monospaced: true)
+                .foregroundStyle(ConversationDesignTokens.mutedText)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 28)
+        }
+        .padding(12)
+        .background(ConversationDesignTokens.raisedSurface)
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: ConversationDesignTokens.cardCornerRadius,
+                style: .continuous
+            )
+            .stroke(ConversationDesignTokens.red.opacity(0.5))
+        }
+        .clipShape(RoundedRectangle(
+            cornerRadius: ConversationDesignTokens.cardCornerRadius,
+            style: .continuous
+        ))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("toastty-mobile-send-receipt-\(item.clientRequestID)")
+    }
+}
+
+/// One line of the agent's message that a user's message answers, at the
+/// top of the user's bubble. A click scrolls to that message when the host
+/// found its row.
+private struct ToasttyMessageQuoteStrip: View {
+    let quote: ToasttyMessageQuote
+    @Environment(\.toasttyRevealRow) private var revealRow
+
+    var body: some View {
+        if let rowID = quote.sourceRowID, let revealRow {
+            Button { revealRow.reveal(rowID) } label: { content }
+                .conversationPlainButtonOnMac()
+                .help("Show the message this replies to")
+                .accessibilityHint("Shows the message this replies to")
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.caption2)
+            Text(quote.timeText.map { "\($0) · \(quote.excerpt)" } ?? quote.excerpt)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .foregroundStyle(ConversationDesignTokens.secondaryText)
+        .padding(.leading, 8)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(ConversationDesignTokens.amber)
+                .frame(width: 2)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Reply to: \(quote.excerpt)")
+        .accessibilityIdentifier("toastty-transcript-reply-quote")
+    }
+}
+
+/// The one muted, centered line of a host's message, such as a digest, that
+/// opens to the text the host typed. While the turn that the message
+/// started runs with its work folded, the line shows that the agent works,
+/// with the turn's running time: "Toastty · 1 update · working 16s".
+private struct ToasttyHostMessageLine: View {
+    let message: ToasttyHostMessagePresentation
+    let isExpanded: Bool
+    var workingIndicator: ToasttyTranscriptWorkingIndicator?
+    let toggle: () -> Void
+    let accessibilitySuffix: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: toggle) {
+                if let workingIndicator {
+                    ToasttyWorkingTime(indicator: workingIndicator) { elapsed in
+                        line(text: workingText(elapsed: elapsed))
+                    }
+                } else {
+                    line(text: message.summary)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(workingIndicator == nil ? message.summary : workingText(elapsed: nil))
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("toastty-mobile-transcript-host-message-\(accessibilitySuffix)")
+
+            if isExpanded {
+                ToasttySelectableText(AttributedString(message.text), monospaced: true,
+                                      textColor: ConversationDesignTokens.secondaryText, lineSpacing: 3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ConversationDesignTokens.raisedSurface)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: ConversationDesignTokens.controlCornerRadius,
+                        style: .continuous
+                    ))
+            }
+        }
+    }
+
+    private func line(text: String) -> some View {
+        ToasttyDisclosureLineLabel(text: text, isExpanded: isExpanded, showsSpinner: workingIndicator != nil)
+    }
+
+    private func workingText(elapsed: String?) -> String {
+        ["\(message.title ?? message.summary) · working", elapsed].compactMap { $0 }.joined(separator: " ")
+    }
+}
+
+/// The message row under the pointer. A long message is drawn as several
+/// rows, and its copy button, under the last row, shows while the pointer is
+/// over any of them.
+@MainActor @Observable
+private final class ToasttyMessageHoverState {
+    var blockID: ToasttyTranscriptBlockID?
+}
+
+private struct ToasttyTranscriptRowView: View {
+    let row: ToasttyTranscriptRow
+    var chunk: ToasttyTranscriptMessageChunk?
+    var isDemoted = false
+    let subagentIsExpanded: Bool
+    let toggleSubagentExpansion: () -> Void
+    /// Set when the line of this host's message shows that the agent works
+    /// on the turn the message started.
+    var lineWorkingIndicator: ToasttyTranscriptWorkingIndicator?
+    let interactionAnswerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let editInteractionAnswer: (RemotePendingInteraction.ID, ToasttyInteractionAnswerEdit) -> Void
+    let submitInteractionAnswer: (RemotePendingInteraction.ID) -> Void
+    let interactionAnswerFeedback: ToasttyInteractionAnswerFeedback
+    @Environment(\.toasttyTranscriptOptions) private var options
+    @Environment(ToasttyMessageHoverState.self) private var messageHover: ToasttyMessageHoverState?
+    @Environment(\.toasttyMessageReply) private var messageReply
+    /// Counts copies, so a second copy restarts the copied mark's timer.
+    @State private var messageCopyCount = 0
+
+    @ViewBuilder
+    var body: some View {
+        switch row.content {
+        case .interaction(let presentation):
+            let interaction = presentation.interaction
+            ToasttyInteractionCard(
+                presentation: presentation,
+                answerState: interactionAnswerStates[interaction.id],
+                answerFeedback: interactionAnswerFeedback,
+                onEdit: { editInteractionAnswer(interaction.id, $0) },
+                onSubmit: { submitInteractionAnswer(interaction.id) }
+            )
+                .accessibilityIdentifier(rowAccessibilityIdentifier)
+                .overlay {
+                    if interaction.state == .pending,
+                       interactionAnswerStates[interaction.id] == nil {
+                        Color.clear
+                            .accessibilityElement()
+                            .accessibilityLabel(
+                                "Read-only interaction, \(interaction.prompt), \(options.readOnlyInteractionMessage)"
+                            )
+                            .accessibilityIdentifier("toastty-mobile-readonly-interaction")
+                    }
+                }
+        default:
+            rowContent
+                .accessibilityIdentifier(rowAccessibilityIdentifier)
+        }
+    }
+
+    @ViewBuilder
+    private var rowContent: some View {
+        switch row.content {
+        case .userMessage(let text, let origin, let deliveryMode, let quote, let attachments):
+            message(
+                text: text,
+                isUser: true,
+                metadata: ToasttyUserMessageCaption.text(origin: origin, deliveryMode: deliveryMode),
+                quote: quote,
+                attachments: attachments,
+                attachmentMessage: row.eventID.map {
+                    ToasttyAttachedMessage(conversationID: row.id.conversationID, eventID: $0)
+                }
+            )
+        case .assistantMessage(let text, let phase):
+            // A chunked message renders this row's slice; the metadata caption
+            // belongs to the final slice only.
+            message(
+                text: text,
+                isUser: false,
+                metadata: phase == .commentary && (chunk?.isLast ?? true) ? "commentary" : nil
+            )
+        case .hostMessage(let message):
+            switch message.style {
+            case .disclosure:
+                ToasttyHostMessageLine(
+                    message: message,
+                    isExpanded: subagentIsExpanded,
+                    workingIndicator: lineWorkingIndicator,
+                    toggle: toggleSubagentExpansion,
+                    accessibilitySuffix: row.id.accessibilitySuffix
+                )
+            case .sender(let sender, let timeText):
+                ToasttySenderMessageCard(
+                    sender: sender, timeText: timeText, text: message.text,
+                    isExpanded: subagentIsExpanded, toggleExpansion: toggleSubagentExpansion,
+                    accessibilitySuffix: row.id.accessibilitySuffix
+                )
+            }
+        case .interaction:
+            EmptyView()
+        case .interactionResolved(_, let resolution):
+            marker(icon: resolutionIcon(resolution), text: "interaction \(resolution.rawValue)")
+        case .subagentSummary(let name, let phase, let detail):
+            disclosureRow(
+                icon: "person.2",
+                title: "\(name) · \(subagentPhaseLabel(phase))",
+                detail: detail,
+                isExpanded: subagentIsExpanded,
+                action: toggleSubagentExpansion
+            )
+        case .sessionBindingChanged(let reason):
+            marker(icon: "link", text: bindingLabel(reason))
+        case .toolStarted, .toolFinished:
+            EmptyView()
+        }
+    }
+
+    private var rowAccessibilityIdentifier: String {
+        // Only the first chunk keeps the bare row identifier so accessibility
+        // queries for a row stay unambiguous.
+        if let chunk, chunk.isFirst == false {
+            return "toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)-c\(chunk.index)"
+        }
+        return "toastty-mobile-transcript-row-\(row.id.accessibilitySuffix)"
+    }
+
+    @ViewBuilder
+    private func message(
+        text: String,
+        isUser: Bool,
+        metadata: String?,
+        quote: ToasttyMessageQuote? = nil,
+        attachments: [URL] = [],
+        attachmentMessage: ToasttyAttachedMessage? = nil
+    ) -> some View {
+        // A long message draws as several rows. Only its last row has the
+        // buttons, and they act on the whole message.
+        let copiesMessage = options.showsMessageCopyButton && (chunk?.isLast ?? true)
+        let repliesToMessage = isUser == false && messageReply != nil && (chunk?.isLast ?? true)
+        let accessibilityLabel = text + (metadata.map { ", " + $0 } ?? "")
+
+        if isUser {
+            // Copy takes the names of the files after the text, as a
+            // message of files alone has no text.
+            let names = attachments.map(\.lastPathComponent).joined(separator: ", ")
+            let copiedText = [text, names].filter { $0.isEmpty == false }.joined(separator: "\n\n")
+            ToasttyUserMessageBubble(
+                text: text, caption: metadata, quote: quote, attachments: attachments, attachmentMessage: attachmentMessage
+            ) {
+                if copiesMessage {
+                    messageCopyButton(copiedText, alignment: .trailing)
+                }
+            }
+            .accessibilityLabel(accessibilityLabel)
+            .messageCopyAccessibilityAction(copiesMessage) { copyMessage(copiedText) }
+            .onHover(perform: messageHoverChanged)
+        } else {
+            VStack(alignment: .leading, spacing: ToasttyMessageCopyButtonMetrics.spacing) {
+                VStack(alignment: .leading, spacing: 5) {
+                    ToasttyMarkdownText(
+                        text: text,
+                        preparedBlocks: chunk?.blocks,
+                        textColor: isDemoted
+                            ? ConversationDesignTokens.secondaryText
+                            : ConversationDesignTokens.primaryText
+                    )
+
+                    if let metadata {
+                        Text(metadata)
+                            .conversationFont(.caption2, monospaced: true)
+                            .foregroundStyle(ConversationDesignTokens.mutedText)
+                    }
+                }
+                if copiesMessage || repliesToMessage {
+                    HStack(spacing: 2) {
+                        if copiesMessage {
+                            messageCopyButton(text, alignment: .leading)
+                        }
+                        if repliesToMessage {
+                            messageReplyButton(text)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Keep native text selection and links accessible within each
+            // message, including descendants of horizontal table views.
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(accessibilityLabel)
+            .messageCopyAccessibilityAction(copiesMessage) { copyMessage(text) }
+            .messageReplyAccessibilityAction(repliesToMessage) { replyToMessage(text) }
+            .onHover(perform: messageHoverChanged)
+        }
+    }
+
+    private func messageHoverChanged(_ isHovering: Bool) {
+        guard options.showsMessageCopyButton || messageReply != nil, let messageHover else { return }
+        let blockID = ToasttyTranscriptBlockID(rowID: row.id, chunkIndex: chunk?.index ?? 0)
+        if isHovering {
+            messageHover.blockID = blockID
+        } else if messageHover.blockID == blockID {
+            // The pointer may already be over the next row, which set its own ID.
+            messageHover.blockID = nil
+        }
+    }
+
+    private func copyMessage(_ text: String) {
+        ConversationPasteboard.copy(text)
+        messageCopyCount += 1
+    }
+
+    /// `text` is the whole message: a long message's rows each hold it.
+    private func replyToMessage(_ text: String) {
+        messageReply?.reply(ToasttyMessageReplyRequest(rowID: row.id, text: text, timestamp: row.timestamp))
+    }
+
+    /// Reply, next to Copy under an agent's message. It shows while the
+    /// pointer is over the message, as Copy does.
+    private func messageReplyButton(_ text: String) -> some View {
+        #if os(macOS)
+        let isVisible = messageHover?.blockID?.rowID == row.id
+        #else
+        let isVisible = true
+        #endif
+        return Button {
+            replyToMessage(text)
+        } label: {
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.caption)
+                .frame(
+                    width: ToasttyMessageCopyButtonMetrics.size.width,
+                    height: ToasttyMessageCopyButtonMetrics.size.height
+                )
+                .contentShape(Rectangle())
+        }
+        .conversationPlainButtonOnMac()
+        .foregroundStyle(ConversationDesignTokens.mutedText)
+        .help("Reply to this message")
+        .accessibilityLabel("Reply to message")
+        .accessibilityIdentifier("toastty-mobile-transcript-reply-\(row.id.accessibilitySuffix)")
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(isVisible)
+        .animation(.easeOut(duration: 0.12), value: isVisible)
+    }
+
+    /// A small button under the message. It shows while the pointer is over
+    /// the message, and for a moment after a copy. Its space is always kept,
+    /// so the transcript does not move when it appears.
+    /// `alignment` lines the icon up with the message's edge.
+    private func messageCopyButton(_ text: String, alignment: Alignment) -> some View {
+        let showsCopiedMark = messageCopyCount > 0
+        #if os(macOS)
+        let isVisible = messageHover?.blockID?.rowID == row.id || showsCopiedMark
+        #else
+        let isVisible = true
+        #endif
+        return Button {
+            copyMessage(text)
+        } label: {
+            Image(systemName: showsCopiedMark ? "checkmark" : "doc.on.doc")
+                .conversationFont(.caption)
+                .frame(
+                    width: ToasttyMessageCopyButtonMetrics.size.width,
+                    height: ToasttyMessageCopyButtonMetrics.size.height,
+                    alignment: alignment
+                )
+                .contentShape(Rectangle())
+        }
+        .conversationPlainButtonOnMac()
+        .foregroundStyle(ConversationDesignTokens.mutedText)
+        .help(showsCopiedMark ? "Copied" : "Copy message")
+        .accessibilityLabel(showsCopiedMark ? "Copied" : "Copy message")
+        .accessibilityIdentifier("toastty-mobile-transcript-copy-\(row.id.accessibilitySuffix)")
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(isVisible)
+        .animation(.easeOut(duration: 0.12), value: isVisible)
+        .task(id: messageCopyCount) {
+            guard messageCopyCount > 0 else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            messageCopyCount = 0
+        }
+    }
+
+    private func marker(icon: String, text: String) -> some View {
+        Label(text, systemImage: icon)
+            .conversationFont(.caption2, monospaced: true)
+            .foregroundStyle(ConversationDesignTokens.mutedText)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 3)
+            .accessibilityElement(children: .combine)
+    }
+
+    private func disclosureRow(
+        icon: String,
+        title: String,
+        detail: String?,
+        isExpanded: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: action) {
+                HStack(spacing: 7) {
+                    Image(systemName: icon)
+                    Text(title)
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                }
+                .conversationFont(.caption, monospaced: true)
+                .foregroundStyle(ConversationDesignTokens.secondaryText)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(minHeight: 44)
+            .accessibilityIdentifier("toastty-mobile-transcript-subagent-\(row.id.accessibilitySuffix)")
+
+            if isExpanded, let detail, detail.isEmpty == false {
+                Text(detail)
+                    .conversationFont(.caption)
+                    .foregroundStyle(ConversationDesignTokens.mutedText)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func subagentPhaseLabel(_ phase: ConversationSubagentPhase) -> String {
+        switch phase {
+        case .started: "started"
+        case .updated: "updated"
+        case .finished: "finished"
+        case .unknown: "activity"
+        }
+    }
+
+    private func bindingLabel(_ reason: ConversationBindingChangeReason) -> String {
+        switch reason {
+        case .runtimeBound: "session connected"
+        case .runtimeResumed: "session resumed"
+        case .runtimeEnded: "session disconnected"
+        case .projectionRebuilt: "transcript rebuilt"
+        }
+    }
+
+    private func resolutionIcon(_ resolution: RemotePendingInteraction.State) -> String {
+        switch resolution {
+        case .pending: "hourglass"
+        case .resolved: "checkmark.circle"
+        case .superseded: "arrow.trianglehead.2.clockwise.rotate.90"
+        }
+    }
+}
+
+/// Centers the column of messages under a host's width limit. With no
+/// limit the content is left as it is.
+private struct TranscriptContentWidth: ViewModifier {
+    let maximum: CGFloat?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let maximum {
+            content
+                .frame(maxWidth: maximum)
+                .frame(maxWidth: .infinity)
+        } else {
+            content
+        }
+    }
+}
+
+private extension View {
+    /// Lets VoiceOver reply to a message without finding the button that
+    /// shows only under the pointer.
+    @ViewBuilder
+    func messageReplyAccessibilityAction(_ isEnabled: Bool, reply: @escaping () -> Void) -> some View {
+        if isEnabled {
+            accessibilityAction(named: "Reply to message", reply)
+        } else {
+            self
+        }
+    }
+
+    /// Lets VoiceOver copy a message without finding the button that shows
+    /// only under the pointer.
+    @ViewBuilder
+    func messageCopyAccessibilityAction(_ isEnabled: Bool, copy: @escaping () -> Void) -> some View {
+        if isEnabled {
+            accessibilityAction(named: "Copy message", copy)
+        } else {
+            self
+        }
+    }
+
+    func transcriptBannerStyle(color: Color) -> some View {
+        self
+            .conversationFont(.caption, monospaced: true)
+            .foregroundStyle(color)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ConversationDesignTokens.raisedSurface)
+            .clipShape(RoundedRectangle(
+                cornerRadius: ConversationDesignTokens.controlCornerRadius,
+                style: .continuous
+            ))
+            .accessibilityElement(children: .combine)
+    }
+}

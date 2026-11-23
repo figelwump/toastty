@@ -17,7 +17,7 @@
 #   PREFIX/lib/toastty/lib/      libghostty.so, libtoastty-ghostty-gtk.so, Swift runtime
 #   PREFIX/lib/toastty/libexec/swift/linux/swift-backtrace   (Swift crash backtracer)
 #   PREFIX/lib/toastty/share/toastty/Resources/   (Sources/App/Resources: WebPanels, setup docs, …,
-#                                                  ToasttyAgentPluginBundle/, WorkflowExamples/skills/)
+#                                                  ToasttyAgentPluginBundle/)
 #   PREFIX/lib/toastty/share/{ghostty,terminfo}/  (Ghostty shell integration + terminfo)
 #   PREFIX/bin/{toastty-linux,toastty} -> ../lib/toastty/bin/…
 #   PREFIX/share/applications/com.GiantThings.toastty.desktop
@@ -145,14 +145,12 @@ for entry in "$resources"/*; do
   run cp -R "$entry" "$libdir/share/toastty/Resources/"
 done
 
-# Toastty agent skills (ToasttyAgentPluginBundle) and the workflow example
-# skills, laid out as Project.swift bundles them on macOS.
+# Toastty agent skills (ToasttyAgentPluginBundle), laid out as Project.swift
+# bundles them on macOS.
 plugin_bundle="$libdir/share/toastty/Resources/ToasttyAgentPluginBundle"
-run mkdir -p "$plugin_bundle/.agents/plugins" "$plugin_bundle/plugins" \
-  "$libdir/share/toastty/Resources/WorkflowExamples"
+run mkdir -p "$plugin_bundle/.agents/plugins" "$plugin_bundle/plugins"
 run cp "$repo_root/.agents/plugins/marketplace.json" "$plugin_bundle/.agents/plugins/"
 run cp -R "$repo_root/plugins/toastty" "$plugin_bundle/plugins/"
-run cp -R "$repo_root/examples/skills" "$libdir/share/toastty/Resources/WorkflowExamples/"
 
 # SetupResourceResolver (CLI `toastty setup …`) looks at <exe>/../Resources.
 run ln -sfn "share/toastty/Resources" "$libdir/Resources"

@@ -117,12 +117,16 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
     func testCodexLaunchWithoutSkillsPostsActionableUnavailableNotice() throws {
         let fixture = try makePlannerFixture()
         let recorder = CodexSkillsUnavailableNoticeRecorder()
+        let windowID = try XCTUnwrap(fixture.store.state.windows.first?.id)
         let observer = NotificationCenter.default.addObserver(
-            forName: .toasttyManagedCodexSkillsUnavailable,
+            forName: .toasttyManagedAgentSkillsUnavailable,
             object: nil,
             queue: nil
         ) { notification in
-            recorder.record(notification.object as? ManagedCodexSkillsUnavailableNotice)
+            // Launches in other tests post the same notification.
+            guard let notice = notification.object as? ManagedAgentSkillsUnavailableNotice,
+                  notice.windowID == windowID else { return }
+            recorder.record(notice)
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
@@ -138,10 +142,67 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 
         XCTAssertEqual(recorder.notices.count, 1)
         XCTAssertEqual(recorder.notices.first?.reasonCode, "configuration_unavailable")
-        XCTAssertEqual(
-            recorder.notices.first?.windowID,
-            fixture.store.state.windows.first?.id
+        XCTAssertEqual(recorder.notices.first?.agent, .codex)
+        XCTAssertTrue(plan.lacksShippedSkills)
+        XCTAssertTrue(fixture.planner.lacksShippedSkills(sessionID: plan.sessionID))
+    }
+
+    /// A Claude launch whose skills plugin could not be staged, or whose
+    /// command Toastty does not add it to, shows the banner Codex shows and
+    /// is known to lack the skills. One with the plugin is not.
+    func testClaudeLaunchWithoutSkillsPostsTheBannerAndIsRecorded() throws {
+        let recorder = CodexSkillsUnavailableNoticeRecorder()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .toasttyManagedAgentSkillsUnavailable,
+            object: nil,
+            queue: nil
+        ) { notification in
+            recorder.record(notification.object as? ManagedAgentSkillsUnavailableNotice)
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        func notices(in windowID: UUID) -> [ManagedAgentSkillsUnavailableNotice] {
+            recorder.notices.filter { $0.windowID == windowID }
+        }
+
+        // The plugin could not be staged.
+        let unstaged = try makePlannerFixture()
+        let unstagedWindowID = try XCTUnwrap(unstaged.store.state.windows.first?.id)
+        let unstagedPlan = try unstaged.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: unstaged.panelID, argv: ["claude"], cwd: "/tmp/repo")
         )
+        defer { unstaged.sessionRuntimeStore.stopSession(sessionID: unstagedPlan.sessionID, at: Date()) }
+        XCTAssertEqual(notices(in: unstagedWindowID).map(\.agent), [.claude])
+        XCTAssertEqual(notices(in: unstagedWindowID).map(\.reasonCode), ["plugin_unavailable"])
+        XCTAssertTrue(unstagedPlan.lacksShippedSkills)
+        XCTAssertTrue(unstaged.planner.lacksShippedSkills(sessionID: unstagedPlan.sessionID))
+        XCTAssertFalse(unstagedPlan.argv.contains("--plugin-dir"))
+
+        // A wrapper script: the plugin is staged, but not added.
+        let configuration = makeStagedSkillsConfigurationFixture()
+        let wrapped = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration)
+        )
+        let wrappedWindowID = try XCTUnwrap(wrapped.store.state.windows.first?.id)
+        let wrappedPlan = try wrapped.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: wrapped.panelID, argv: ["my-claude-wrapper"], cwd: "/tmp/repo")
+        )
+        defer { wrapped.sessionRuntimeStore.stopSession(sessionID: wrappedPlan.sessionID, at: Date()) }
+        XCTAssertEqual(notices(in: wrappedWindowID).map(\.reasonCode), ["command_not_supported"])
+        XCTAssertTrue(wrapped.planner.lacksShippedSkills(sessionID: wrappedPlan.sessionID))
+
+        // With the plugin, nothing to report.
+        let delivered = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration)
+        )
+        let deliveredWindowID = try XCTUnwrap(delivered.store.state.windows.first?.id)
+        let deliveredPlan = try delivered.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: delivered.panelID, argv: ["claude"], cwd: "/tmp/repo")
+        )
+        defer { delivered.sessionRuntimeStore.stopSession(sessionID: deliveredPlan.sessionID, at: Date()) }
+        XCTAssertTrue(notices(in: deliveredWindowID).isEmpty)
+        XCTAssertFalse(deliveredPlan.lacksShippedSkills)
+        XCTAssertFalse(delivered.planner.lacksShippedSkills(sessionID: deliveredPlan.sessionID))
+        XCTAssertTrue(deliveredPlan.argv.contains("--plugin-dir"))
     }
 
     func testRestoredCodexPreparationUsesBoundedRestoreProvisioning() throws {
@@ -636,6 +697,36 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 ]
             )
         }
+    }
+
+    /// A staged plugin that the launch left out, as for a wrapper command,
+    /// is not provisioned: the unavailable banner stays.
+    func testAsyncClaudeWrapperLaunchPostsOnlyTheUnavailableNotice() async throws {
+        let provisioned = SkillsProvisionedNoticeRecorder()
+        let unavailable = CodexSkillsUnavailableNoticeRecorder()
+        let observers = [
+            NotificationCenter.default.addObserver(forName: .toasttyManagedAgentSkillsProvisioned, object: nil, queue: nil) {
+                provisioned.record($0.object as? ManagedAgentSkillsProvisionedNotice)
+            },
+            NotificationCenter.default.addObserver(forName: .toasttyManagedAgentSkillsUnavailable, object: nil, queue: nil) {
+                unavailable.record($0.object as? ManagedAgentSkillsUnavailableNotice)
+            },
+        ]
+        defer {
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        }
+        let fixture = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: makeStagedSkillsConfigurationFixture())
+        )
+        let windowID = try XCTUnwrap(fixture.store.state.windows.first?.id)
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(agent: .claude, panelID: fixture.panelID, argv: ["my-claude-wrapper"], cwd: "/tmp/repo")
+        )
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+
+        XCTAssertTrue(plan.lacksShippedSkills)
+        XCTAssertEqual(unavailable.notices.filter { $0.windowID == windowID }.map(\.reasonCode), ["command_not_supported"])
+        XCTAssertTrue(provisioned.notices.filter { $0.windowID == windowID }.isEmpty)
     }
 
     func testAsyncManagedLaunchSkipsSkillsNoticeForAdditiveRuntimeWithoutStagedConfiguration() async throws {
@@ -1480,6 +1571,172 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let status = fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
         XCTAssertEqual(status?.kind, .error)
         XCTAssertEqual(status?.detail, "401 Unauthorized: Incorrect API key provided")
+    }
+
+    func testResumedHookTrackedCodexWaitsForAbortOfItsCurrentTurn() async throws {
+        let fixture = try makePlannerFixture(codexStatusTrackingSourceProvider: { .hooks })
+        let rolloutURL = temporaryJSONLURL()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex", "resume", "thread-root"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        let runtime = fixture.sessionRuntimeStore
+        defer {
+            runtime.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            removeRolloutFixture(rolloutURL)
+        }
+        func status() -> SessionStatusKind? {
+            runtime.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind
+        }
+        func sendHook(_ name: String, turnID: String, kind: SessionStatusKind) {
+            XCTAssertTrue(runtime.handleCodexHookEvent(
+                sessionID: plan.sessionID,
+                event: CodexHookEvent(
+                    hookEventName: name,
+                    threadID: "thread-root",
+                    turnID: turnID,
+                    promptFingerprint: nil,
+                    status: SessionStatus(kind: kind, summary: kind == .working ? "Working" : "Ready", detail: nil),
+                    nativeSessionID: nil,
+                    sessionFilePath: nil,
+                    cwd: nil
+                ),
+                at: Date()
+            ))
+        }
+
+        let replayedAbort = #"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-before-restart","reason":"interrupted"}}"#
+        try appendCodexSessionLogLine(replayedAbort, to: rolloutURL)
+        try appendCodexSessionLogLine(
+            #"{"type":"turn_context","payload":{"turn_id":"turn-continues","cwd":"/tmp/repo","approval_policy":"never"}}"#,
+            to: rolloutURL
+        )
+        sendHook("UserPromptSubmit", turnID: "turn-continues", kind: .working)
+        XCTAssertTrue(fixture.store.send(.updateTerminalPanelResumeRecord(
+            panelID: fixture.panelID,
+            resumeRecord: codexResumeRecord(nativeSessionID: "thread-root", sessionFilePath: rolloutURL.path)
+        )))
+        await waitUntil {
+            runtime.codexRootTurnSnapshotForTesting(sessionID: plan.sessionID)?.latestCanonicalTurnID == "turn-continues"
+        }
+        XCTAssertEqual(status(), .working)
+        XCTAssertFalse(runtime.handleLocalInterruptForPanelIfActive(
+            panelID: fixture.panelID, kind: .escape, at: Date()
+        ))
+        XCTAssertEqual(status(), .working)
+        sendHook("PreToolUse", turnID: "turn-continues", kind: .working)
+        XCTAssertNil(runtime.sessionRegistry.activeSession(sessionID: plan.sessionID)?.lastTurnEndedAt)
+        sendHook("Stop", turnID: "turn-continues", kind: .ready)
+        XCTAssertNotNil(runtime.sessionRegistry.activeSession(sessionID: plan.sessionID)?.lastTurnEndedAt)
+
+        for (key, turnID) in [(TerminalLocalInterruptKind.escape, "turn-esc"), (.controlC, "turn-ctrl-c")] {
+            sendHook("UserPromptSubmit", turnID: turnID, kind: .working)
+            if key == .controlC {
+                // An unbound steer leaves the current turn ID in place.
+                runtime.recordCodexRootTurnInput(sessionID: plan.sessionID, fingerprint: "steer-without-turn-id")
+            }
+            XCTAssertFalse(runtime.handleLocalInterruptForPanelIfActive(
+                panelID: fixture.panelID, kind: key, at: Date()
+            ))
+            XCTAssertEqual(status(), .working)
+            try appendCodexSessionLogLine(
+                #"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"\#(turnID)","reason":"interrupted"}}"#,
+                to: rolloutURL
+            )
+            await waitUntil { status() == .idle }
+            XCTAssertEqual(status(), .idle)
+        }
+    }
+
+    /// A Codex session resumed after a relaunch may never run `notify`, so
+    /// without hooks the rollout's `task_complete` must end its turn.
+    func testCodexRolloutTurnCompletionEndsAFallbackTurnThatNotifyNeverReported() async throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex", "resume", "thread-root"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+            removeRolloutFixture(rolloutURL)
+        }
+        func activeStatus() -> SessionStatus? {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func stamp(_ offset: TimeInterval) -> String { formatter.string(from: Date().addingTimeInterval(offset)) }
+        func attachRollout() {
+            XCTAssertTrue(fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(nativeSessionID: "thread-root", sessionFilePath: rolloutURL.path)
+                )
+            ))
+        }
+
+        // A new prompt starts a turn, and Codex never runs `notify` for it.
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: plan.sessionID,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Reply with DONE-A"),
+            at: Date()
+        )
+        // The resumed thread's earlier turn is in the rollout. The watcher reads
+        // it from the start once the session is known, while the new turn
+        // already works; that old completion must not end the new turn.
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(-60))","type":"turn_context","payload":{"turn_id":"turn-old","cwd":"/tmp/repo","approval_policy":"never"}}
+            {"timestamp":"\(stamp(-55))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-old","last_agent_message":"READY-A"}}
+            """,
+            to: rolloutURL
+        )
+        attachRollout()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(0))","type":"turn_context","payload":{"turn_id":"turn-new","cwd":"/tmp/repo","approval_policy":"never"}}
+            """,
+            to: rolloutURL
+        )
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(activeStatus()?.kind, .working)
+
+        // A watcher that reattaches to the same rollout does not read the
+        // turn's `turn_context` again, but still knows the turn.
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: nil)
+        ))
+        attachRollout()
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherTransitionCountForTesting == 0 &&
+                fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == rolloutURL.path
+        }
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"\(stamp(1))","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-new","last_agent_message":"DONE-A"}}
+            """,
+            to: rolloutURL
+        )
+
+        // Ready is stored as idle while the panel is focused in the active
+        // app, as it is on CI; either way the turn ended with the reply.
+        await waitUntil { activeStatus()?.detail == "DONE-A" }
+        XCTAssertTrue([.ready, .idle].contains(activeStatus()?.kind))
+        XCTAssertEqual(activeStatus()?.detail, "DONE-A")
     }
 
     func testCodexSessionLogApprovalDoesNotDriveStatusWhenHooksAreAvailable() async throws {
@@ -3179,7 +3436,7 @@ private func makePlannerFixture(
     }
 
     let store = AppStore(state: state, persistTerminalFontPreference: false)
-    let sessionRuntimeStore = SessionRuntimeStore()
+    let sessionRuntimeStore = SessionRuntimeStore(sendSessionStatusNotification: { _, _, _, _, _ in })
     sessionRuntimeStore.bind(store: store)
 
     let resolvedCodexSkillsResolver = codexSkillsResolver
@@ -3379,11 +3636,11 @@ private final class SkillsProvisionedNoticeRecorder: @unchecked Sendable {
 
 private final class CodexSkillsUnavailableNoticeRecorder: @unchecked Sendable {
     private let lock = NSLock()
-    private var storage: [ManagedCodexSkillsUnavailableNotice] = []
+    private var storage: [ManagedAgentSkillsUnavailableNotice] = []
 
-    var notices: [ManagedCodexSkillsUnavailableNotice] { lock.withLock { storage } }
+    var notices: [ManagedAgentSkillsUnavailableNotice] { lock.withLock { storage } }
 
-    func record(_ notice: ManagedCodexSkillsUnavailableNotice?) {
+    func record(_ notice: ManagedAgentSkillsUnavailableNotice?) {
         guard let notice else { return }
         lock.withLock { storage.append(notice) }
     }
