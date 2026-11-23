@@ -301,9 +301,12 @@ def run(check):
         click('toastty-offers-send')
         wait_for('the answers in Claude\'s conversation', lambda: user_message(ANSWERS_LINE), timeout=120)
         sent = user_message(ANSWERS_LINE)
+        # Claude Code records a long typed message inside its own
+        # `<pasted_content>` lines: the message starts at Toastty's line.
         lines = sent.splitlines()
-        first = lines[0] if lines else ''
-        require(first.startswith(ANSWERS_LINE) and first.endswith(', 3 answers') and lines[1:4] == [
+        lines = lines[next(index for index, line in enumerate(lines) if line.startswith(ANSWERS_LINE)):]
+        first = lines[0]
+        require(first.endswith(', 3 answers') and lines[1:4] == [
             '- yes: safari-check "Check the sign-up page in Safari"',
             '- skip: preamble-sooner "Show the first-run preamble sooner"',
             '- skip: model-list "A command that lists model IDs"',
