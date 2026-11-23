@@ -81,6 +81,8 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
     /// The target branch reported when a merge started waiting for checks.
     /// Older saved waits have no target and must be accepted again.
     public var acceptedBase: String?
+    /// A preparation merge does not use a workspace Done mark or run cleanup.
+    public var releasePreparation: Bool?
     /// An adopted task with no saved checkout may close only its empty
     /// task space. A checkout found by branch name must stay untouched.
     public var requiresAbsentWorktree: Bool?
@@ -122,7 +124,7 @@ public struct WorkspaceMergeRequest: Codable, Equatable, Sendable {
         }
         guard workspaceExists else { return .workspaceClosed }
         guard pullRequest == self.pullRequest else { return .pullRequestChanged }
-        return isDone ? nil : .doneMarkCleared
+        return isDone || releasePreparation == true ? nil : .doneMarkCleared
     }
 
     /// Whether the pull request script is running for this request.

@@ -1107,6 +1107,7 @@ struct ToasttyApp: App {
             triageRunner: TaskLiveTriageRunner(),
             recentWorkspaces: recentWorkspaces
         )
+        taskCoordinator.merges = sessionRuntimeStore.workspaceMergeCoordinator
         taskCoordinator.reconcileAfterLaunch()
         self.taskCoordinator = taskCoordinator
         // A quit must leave the marks of turns it cuts off; see
@@ -1137,7 +1138,6 @@ struct ToasttyApp: App {
         taskCoordinator.webhooks = taskWebhooks
         self.taskWebhooks = taskWebhooks
         taskWebhooks.start()
-        taskCoordinator.merges = sessionRuntimeStore.workspaceMergeCoordinator
         sessionRuntimeStore.workspaceMergeCoordinator?.cleanupObserver = { [weak taskCoordinator] workspaceID, event in
             taskCoordinator?.mergeCleanupEvent(workspaceID: workspaceID, event: event)
         }

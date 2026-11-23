@@ -4963,7 +4963,8 @@ struct SidebarView: View {
     /// Whether Option+Shift+M would merge the workspace: its Merge button is
     /// ready, as the shortcut's handler checks.
     private func isMergeButtonReady(_ workspace: WorkspaceState) -> Bool {
-        guard case .ready? = WorkspaceMergePresentation.make(
+        guard sessionRuntimeStore.workspaceAllowsPullRequestActions(workspace),
+              case .ready? = WorkspaceMergePresentation.make(
             workspace: workspace,
             request: sessionRuntimeStore.workspaceMergeRequests[workspace.id],
             mode: store.workspaceMergeMode,
@@ -5685,6 +5686,7 @@ struct SidebarView: View {
     ) -> WorkspaceMergePresentation? {
         guard store.isWorkspaceMergeEnabled || sessionRuntimeStore.isTaskSpaceWithRecord(workspaceID: row.id),
               let workspace = store.state.workspacesByID[row.id],
+              sessionRuntimeStore.workspaceAllowsPullRequestActions(workspace),
               let presentation = WorkspaceMergePresentation.make(
                 workspace: workspace,
                 request: sessionRuntimeStore.workspaceMergeRequests[row.id],

@@ -375,7 +375,12 @@ visual order.
 
 `workspace.set-annotation` sets or updates one structured `key -> (text, url?)`
 chip rendered under the workspace name in the sidebar, and
-`workspace.clear-annotation` removes one by key. The caller chooses the key;
+`workspace.clear-annotation` removes one by key. Set and clear require
+`--workspace` for the `github-pr` key. A managed session in a release task's
+own space can set this key to its preparation pull request. A link saved by
+an earlier version stays visible. To enable its merge controls, the release
+agent sets the annotation again with the verified URL.
+The caller chooses the key;
 Toastty never derives it from the displayed text. Use a stable semantic identity
 for the annotation kind rather than copying its current value into the key. For
 example:

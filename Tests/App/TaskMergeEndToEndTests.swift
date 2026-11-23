@@ -741,6 +741,64 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    @Test(arguments: [false, true])
+    func aReleasePreparationMergeKeepsTheReleaseOpen(checksPending: Bool) async throws {
+        try await withScenario(checksPending: checksPending) { scenario in
+            try scenario.tasks.records.save(id: scenario.taskID) {
+                $0.release = TaskRelease(childTaskIDs: [])
+                $0.release?.preparationPullRequestURL = scenario.pullRequest.url
+                $0.pullRequestURL = scenario.pullRequest.url
+                $0.operation.worktree?.branch = ""
+            }
+            scenario.reportAgent(.working)
+            let socketPath = temporarySocketPath()
+            let server = try makeTaskServer(scenario, socketPath: socketPath)
+            defer { withExtendedLifetime(server) {} }
+            try waitForSocket(at: socketPath)
+            scenario.socketPath = socketPath
+
+            let result = try await scenario.cli(
+                ["--json", "task", "merge", scenario.taskID.uuidString, "--head", scenario.head], sessionID: "agent"
+            )
+            #expect(result.status == 0, "\(result.output)")
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+            if checksPending {
+                #expect(scenario.isWaitingForChecks)
+                try scenario.tasks.cancelMerge(taskID: scenario.taskID)
+                #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+                #expect(!FileManager.default.fileExists(atPath: scenario.mergedMarker))
+                #expect(throws: TaskError.self) {
+                    try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+                }
+                scenario.reportAgent(.ready)
+                scenario.reportAgent(.working)
+                let cancelledAt = try #require(scenario.record?.mergeCancelledAt)
+                scenario.fakeSessions.sessions["agent"] = TaskSessionInfo(
+                    sessionID: "agent", agent: .claude, panelID: scenario.taskPanelID, workspaceID: scenario.taskSpaceID,
+                    cwd: scenario.worktree, isActive: true, isInTurn: true, turnStartedAt: cancelledAt.addingTimeInterval(1)
+                )
+                try scenario.tasks.merge(taskID: scenario.taskID, expectedHead: scenario.head, caller: scenario.agentCaller)
+                await scenario.waitUntil("the preparation merge waits again") { scenario.isWaitingForChecks }
+                scenario.passChecks()
+            }
+            await scenario.waitUntil("the preparation merge is recorded") { scenario.record?.mergeCommit == scenario.head }
+            #expect(scenario.boardItem?.stage == .running)
+            #expect(scenario.boardItem?.hasMerged == false)
+
+            scenario.reportAgent(.ready)
+            #expect(scenario.boardItem?.stage.group != .done)
+            #expect(scenario.boardItem?.stage.group != .toShip)
+            #expect(scenario.merges.request(workspaceID: scenario.taskSpaceID) == nil)
+            #expect(scenario.record?.cleanup == nil)
+            #expect(scenario.record?.release?.completion == nil)
+            #expect(scenario.record?.shippedAt == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID]?.doneAt == nil)
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] != nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree))
+            #expect(try !scenario.remoteBranch().isEmpty)
+        }
+    }
+
     /// Closing the project's workspace leaves its task spaces open as
     /// top-level workspaces. An accepted merge there still waits for the
     /// checks after the agent's turn ends, then merges and cleans up.

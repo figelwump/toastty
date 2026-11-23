@@ -2577,6 +2577,13 @@ when GitHub merged it: the cleanup waits for its turn to end, and a new turn
 or a link to another pull request keeps the task space open. The worktree
 must be clean at the merged commit. Otherwise the task shows **Merged · clean up?** in Needs you;
 **Clean Up** tries again and **Keep As Is** leaves everything where it is.
+
+A release task's own managed agent can link its preparation pull request
+with an explicit task-space workspace ID, then run `toastty task merge --head
+<commit>` from that space. The release checkout must be on the preparation
+branch at the checked commit. This merge leaves the release active and keeps
+its task space, checkout, and branches available for the rest of the release.
+Use **Cancel Merge** to end a wait for checks on a preparation merge.
 When the task's recorded worktree is on another branch than the pull request,
 Toastty can remove that clean checkout after the same wait. It keeps the
 pull request's local branch and both branches on GitHub. It removes the

@@ -214,7 +214,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Set or update a structured annotation chip under a workspace name.",
+                summary: "Set or update a structured annotation chip under a workspace name. The github-pr key requires workspaceID. A release task's own managed session can set its preparation PR.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [
                     .annotationKey(required: true),
@@ -228,7 +228,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Remove a workspace annotation chip by key.",
+                summary: "Remove a workspace annotation chip by key. The github-pr key requires workspaceID.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.annotationKey(required: true)]
             )

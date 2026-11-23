@@ -1152,6 +1152,7 @@ final class TaskCoordinator {
             }
         }
         relinkTaskSpaces()
+        reconcileReleaseMerges()
         for workspace in store.state.workspacesByID.values {
             guard let taskID = workspace.taskID, records.record(id: taskID) == nil else { continue }
             let parent = workspace.parentWorkspaceID.flatMap { store.state.workspacesByID[$0] }

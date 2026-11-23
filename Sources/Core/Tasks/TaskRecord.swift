@@ -373,6 +373,9 @@ public struct TaskRelease: Codable, Equatable, Sendable {
 
     /// The project's To ship tasks when the release started.
     public var childTaskIDs: [UUID]
+    /// The PR explicitly linked from a managed session in this release's task space.
+    /// Older saved annotations have no such confirmation.
+    public var preparationPullRequestURL: String?
     public var completion: Completion?
 
     public init(childTaskIDs: [UUID]) {
