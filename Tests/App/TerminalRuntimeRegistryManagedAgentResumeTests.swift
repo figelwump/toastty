@@ -77,7 +77,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.markInitialSurfaceLaunchCompleted(for: panelID)
         await Task.yield()
         await Task.yield()
-        let command = try XCTUnwrap(submittedCommand)
+        let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommand)
         XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="))
         XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
         XCTAssertTrue(command.contains("codex -c "))
@@ -207,7 +207,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.markInitialSurfaceLaunchCompleted(for: panelID)
         await Task.yield()
         await Task.yield()
-        let command = try XCTUnwrap(submittedCommand)
+        let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommand)
         XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="))
         XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
         XCTAssertTrue(command.contains("claude --settings "))
@@ -363,7 +363,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
             registry.markInitialSurfaceLaunchCompleted(for: panelID)
             await Task.yield()
             await Task.yield()
-            let command = try XCTUnwrap(submittedCommand, scenario.commandName)
+            let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommand)
             XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="), scenario.commandName)
             XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"), scenario.commandName)
             XCTAssertTrue(
@@ -672,19 +672,18 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
                     return .delivered
                 }
 
-                _ = registry.surfaceLaunchConfiguration(for: panelID)
+                let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
                 registry.markInitialSurfaceLaunchCompleted(for: panelID)
                 await fulfillment(of: [checkedPrompt], timeout: 2)
                 if isCoordinator {
-                    // During shell startup, the terminal can accept bytes but
-                    // the PTY can truncate a pasted command before zsh reads it.
                     XCTAssertTrue(submittedCommands.isEmpty, label)
+                    promptState = .idleAtPrompt
                 }
-                promptState = .idleAtPrompt
+                // A task may use a shell that never reports a prompt.
                 await fulfillment(of: [submitted], timeout: 2)
 
                 XCTAssertEqual(submittedCommands.count, 1, label)
-                let command = try XCTUnwrap(submittedCommands.first, label)
+                let command = try restoredCommand(from: launchConfiguration, submittedInput: submittedCommands.first)
                 withExtendedLifetime((profileProvider, restoredManagedLaunchPlanner)) {}
                 XCTAssertTrue(
                     command.contains(agent == .codex ? "resume \(nativeSessionID)" : "--resume \(nativeSessionID)"),
@@ -702,6 +701,21 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
                 )
             }
         }
+    }
+
+    private func restoredCommand(
+        from configuration: TerminalSurfaceLaunchConfiguration,
+        submittedInput: String?
+    ) throws -> String {
+        let input = try XCTUnwrap(submittedInput)
+        // Leave room for Return in the PTY's 1,024-byte startup buffer.
+        // Length must not grow with the agent's paths or arguments.
+        XCTAssertLessThan(input.utf8.count + 1, 128)
+        let key = TerminalRuntimeRegistry.restoredAgentCommandEnvironmentKey
+        XCTAssertTrue(input.contains("$\(key)"))
+        let command = try XCTUnwrap(configuration.environmentVariables[key])
+        XCTAssertTrue(command.contains("\(key)=''"), "The resumed agent must not inherit the command payload")
+        return command
     }
 
     func testRestoreNoticeRunsBeforeTheProfileStartupCommand() {

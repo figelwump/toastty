@@ -59,7 +59,6 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 private struct RestoredManagedLaunch {
     let sessionID: String
-    let commandLine: String
     let configuration: TerminalSurfaceLaunchConfiguration
     var surfaceLaunchCompleted: Bool
     var commandSubmittedAt: Date?
@@ -83,6 +82,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private static let restoredCoordinatorLaunchSubmitTimeout: TimeInterval = 30.0
     private static let restoredManagedLaunchSubmitRetryDelayNanoseconds: UInt64 = 100_000_000
     private static let restoredManagedLaunchPostSubmitGraceInterval: TimeInterval = 2.0
+    static let restoredAgentCommandEnvironmentKey = "TOASTTY_RESTORED_AGENT_COMMAND"
+    // Like a restore notice, the long payload goes in the surface's
+    // environment. Both this short line and Return fit in the PTY before
+    // the shell starts its line editor, even with no prompt marker.
+    private static let restoredAgentInput = " eval \"$\(restoredAgentCommandEnvironmentKey)\""
 
     private let focusCoordinator: TerminalFocusCoordinator
     private let activateApp: @MainActor () -> Void
@@ -2086,19 +2090,22 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
             commandEnvironment["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] = record.agent.rawValue
             commandEnvironment["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"] = record.nativeSessionID
+            // Clear the payload for the launched command. Clear it inside
+            // the evaluated line so shells such as fish can expand it first.
+            commandEnvironment[Self.restoredAgentCommandEnvironmentKey] = ""
 
-            let commandLine = ShellCommandRenderer.render(
+            var shellEnvironment = fallbackConfiguration.environmentVariables
+            shellEnvironment[Self.restoredAgentCommandEnvironmentKey] = ShellCommandRenderer.render(
                 argv: plan.argv,
                 environment: commandEnvironment
             )
 
             let configuration = TerminalSurfaceLaunchConfiguration(
-                environmentVariables: fallbackConfiguration.environmentVariables,
+                environmentVariables: shellEnvironment,
                 workingDirectoryOverride: fallbackConfiguration.workingDirectoryOverride
             )
             restoredManagedLaunchesByPanelID[panelID] = RestoredManagedLaunch(
                 sessionID: plan.sessionID,
-                commandLine: commandLine,
                 configuration: configuration,
                 surfaceLaunchCompleted: false,
                 commandSubmittedAt: nil
@@ -2262,11 +2269,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
             let currentPromptState = promptState(panelID: panelID)
             let shellWasAtPrompt = currentPromptState == .idleAtPrompt
-            // A ready surface can write to a PTY before the shell's line
-            // editor starts. The PTY can truncate a long Coordinator launch.
+            // The Coordinator waits for its first prompt. Ordinary panes
+            // also support shells that never report a prompt marker.
             let delivery = waitsForShellPrompt && !shellWasAtPrompt
                 ? .unavailable
-                : sendRestoredManagedLaunchCommand(launch.commandLine, panelID: panelID)
+                : sendRestoredManagedLaunchCommand(panelID: panelID)
             if delivery != .unavailable {
                 var submittedLaunch = launch
                 submittedLaunch.commandSubmittedAt = now
@@ -2283,6 +2290,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     "panel_id": panelID.uuidString,
                     "session_id": launch.sessionID,
                     "prompt_state": String(describing: currentPromptState),
+                    "input_bytes": String(Self.restoredAgentInput.utf8.count),
                 ]
                 if delivery == .uncertain {
                     // The pasted text may still be on the prompt. Stop
@@ -2317,12 +2325,12 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         }
     }
 
-    private func sendRestoredManagedLaunchCommand(_ commandLine: String, panelID: UUID) -> TerminalInputDeliveryResult {
+    private func sendRestoredManagedLaunchCommand(panelID: UUID) -> TerminalInputDeliveryResult {
         if let restoredManagedLaunchSubmitterForTesting {
-            return restoredManagedLaunchSubmitterForTesting(commandLine, panelID)
+            return restoredManagedLaunchSubmitterForTesting(Self.restoredAgentInput, panelID)
         }
         return sendManagedAgentCommandResult(
-            commandLine,
+            Self.restoredAgentInput,
             panelID: panelID,
             focusPolicy: .focusTarget
         )
