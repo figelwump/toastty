@@ -58,8 +58,10 @@ the worktree is gone; it adds a refusal if a checkout is found by branch name.
 changing nothing, when that workspace is not the one whose terminals are in the
 worktree (or whose github-pr chip names the PR), when it has unsaved documents,
 a terminal in another worktree, or another PR's chip, or when the worktree is
-locked. They reread the workspace just before closing it, recheck the worktree
-just before removing it, and delete each branch only at the commit checked for
+locked. With --worktree, a terminal in another worktree does not stop clean-up:
+the task record names the workspace, and the close ends that terminal too.
+They reread the workspace just before closing it, recheck the worktree just
+before removing it, and delete each branch only at the commit checked for
 removal. Closing a workspace ends its agent sessions and terminal commands.
 
 Needs `git` and an authenticated `gh`. clean-up and close also need
@@ -488,8 +490,6 @@ def workspace_problem(ctx: Context, require_done: bool) -> tuple[Workspace | Non
     if found.unsaved_documents:
         return None, f"{found.label} has unsaved document changes"
     other_worktrees = ctx.other_worktrees
-    if ctx.different_task_branch and ctx.worktree is not None:
-        other_worktrees = [w.path for w in list_worktrees(ctx.repo) if w.path != ctx.worktree.path]
     if ctx.worktree is None:
         if ctx.expected_worktree_path is None and (found.session_agents or found.busy_terminals):
             return None, f"{found.label} still has agent sessions or running commands"
@@ -501,7 +501,14 @@ def workspace_problem(ctx: Context, require_done: bool) -> tuple[Workspace | Non
         if ctx.expected_worktree_path is None and any(w.branch == ctx.pr["headRefName"] for w in worktrees):
             return None, "the PR's worktree reappeared; workspace kept"
         other_worktrees = [w.path for w in worktrees]
-    if any(inside(cwd, other) for cwd in found.cwds for other in other_worktrees):
+    # A task's recorded cleanup closes the task space that the task record
+    # names. A terminal there in another checkout, such as the session the
+    # task started in the project's main checkout, is part of the task: the
+    # close ends it like any other terminal in the space and changes no
+    # files. Without a recorded worktree, such a terminal can mean that the
+    # workspace holds other work, so it stays.
+    if ctx.expected_worktree_path is None and any(
+            inside(cwd, other) for cwd in found.cwds for other in other_worktrees):
         return None, f"{found.label} also has a terminal in another worktree"
     for chip in found.chips:
         match = PR_URL.search(chip.get("url") or "")
