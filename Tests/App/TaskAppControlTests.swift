@@ -853,6 +853,65 @@ struct TaskAppControlTests {
         }
         #expect(typed.entries.count == typedBefore)
     }
+
+    /// A queued send, as a coordinator outside Toastty makes it: nothing is
+    /// typed into the busy agent, the message goes when its turn ends, and
+    /// task.get tells the sender what happened to it.
+    @Test func aQueuedSendWaitsForTheTurnAndTaskGetReportsIt() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let typed = useLiveSessions(fixture)
+        let task = try await fixture.coordinator.create(TaskCreateRequest(text: "mine", workspaceID: fixture.workspaceID, agent: "claude"))
+        await fixture.waitForSetup(task.id)
+        let session = try #require(fixture.record(task.id)?.operation.agentLaunch?.sessionID)
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .working, summary: "Working"), at: Date())
+        let typedBefore = typed.entries.count
+        let args: [String: AutomationJSONValue] = [
+            "taskID": .string(task.id.uuidString), "text": .string("The logs show the crash"),
+            "queue": .bool(true), "from": .string("Grok Bot"),
+        ]
+
+        let sent = try executor.runAction(id: "task.send", args: args, context: context())
+        #expect(sent.result?["delivery"] == .string("queued"))
+        #expect(sent.result?["delivered"] == .bool(false))
+        #expect(sent.result?["queuePosition"] == .int(1))
+        guard case .string(let messageID)? = sent.result?["messageID"] else {
+            Issue.record("no messageID in \(String(describing: sent.result))")
+            return
+        }
+        #expect(typed.entries.count == typedBefore)
+
+        func queued() throws -> [String: AutomationJSONValue]? {
+            let got = try executor.runQuery(id: "task.get", args: ["taskID": .string(task.id.uuidString)])
+            guard case .array(let messages)? = got["queuedMessages"], case .object(let first)? = messages.first else { return nil }
+            return first
+        }
+        #expect(try queued()?["messageID"] == .string(messageID))
+        #expect(try queued()?["state"] == .string("queued"))
+        #expect(try queued()?["from"] == .string("Grok Bot (named by the caller)"))
+
+        // The turn ends.
+        fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: .idle, summary: "Idle"), at: Date())
+        fixture.coordinator.evaluateWatches()
+        fixture.coordinator.evaluateWatches()
+        #expect(typed.entries.count == typedBefore + 1)
+        #expect(typed.entries.last?.text == """
+            [Toastty] From "Grok Bot" (named by the caller): Toastty cannot tell who ran it.
+            The logs show the crash
+            """)
+        #expect(try queued()?["state"] == .string("sent"))
+        #expect(try queued()?["sessionID"] == .string(session))
+
+        // Steer and queue together are refused on both paths.
+        var both = args
+        both["steer"] = .bool(true)
+        await expectInvalidPayload("pass steer or queue, not both") {
+            _ = try executor.runAction(id: "task.send", args: both, context: context())
+        }
+        await expectInvalidPayload("pass steer or queue, not both") {
+            _ = try await executor.runActionAsync(id: "task.send", args: both, context: context())
+        }
+    }
 }
 
 extension TaskAppControlTests {

@@ -880,7 +880,7 @@ toastty task set-workspace <task-id> (--workspace <id> | --recent <id> | --root 
 toastty task set-release [<task-id>] (--after-merge | --clear)
 toastty task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
 toastty task workspace-choices [<task-id>] [--name <project>]
-toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer] [--from <name>]
+toastty task send <task-id> (<text> | --text <text> | --text-file <path>) [--steer | --queue] [--from <name>]
 toastty task watch <task-id> --until <condition> [--notify <task-id> | --wait [--timeout <seconds>]]
 toastty task unwatch <watch-id>
 toastty task watches [--task <task-id>] [--notify <task-id>]
@@ -970,6 +970,9 @@ that makes its approvals and decisions count as yours in the task; see
 whatever the agent does. With `--steer`, it checks the agent first: the message
 goes to the agent's open prompt or into its running turn, or Toastty holds it
 for the next open prompt, and nothing is typed into a permission prompt.
+With `--queue`, Toastty never types into a running turn: it saves the message
+on the task and types it at the agent's next open prompt, also after a
+relaunch. `task get` lists it under `queuedMessages` with its outcome.
 `task watch` tells the calling
 agent's own task, or the `--notify` task, once with a one-line message when the
 condition holds. With `--wait`, it blocks instead and exits 0 when the condition

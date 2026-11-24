@@ -734,6 +734,39 @@ worktree.
   learns of a permission prompt from the agent's hooks, a short time after the
   prompt comes on screen. A message that arrives in that time can still
   reach the prompt.
+- `toastty task send <task-id> "<message>" --queue` leaves a message that
+  Toastty types when the agent's turn ends. It never types into a running
+  turn. The coordinator uses it for its own facts for a busy task, which it
+  may not type into the turn. Toastty saves the message on the task and
+  types it at the agent's next open prompt, by the rules that the watch
+  messages below follow:
+
+  | `delivery` | What Toastty did |
+  | --- | --- |
+  | `sent` | The agent was at its open prompt and no earlier message waited. Toastty typed the message there. |
+  | `sentUnconfirmed` | Toastty typed the message at the open prompt, but the terminal did not confirm the Return key. Toastty does not type it again; check that terminal. |
+  | `queued` | The message waits. `queuePosition` counts from 1. |
+
+  A queued message waits while the agent works, waits at a permission prompt
+  or a question, stopped with an error, or has text that someone typed at
+  its prompt. It also waits while the task's question waits for you
+  (`task needs-reply`), since a new turn clears that question, and while a
+  quit cut off the agent's turn, until that turn goes on. Toastty types one
+  message for each open prompt, oldest first, after its own watch, wake and
+  merge messages and after any message that `--steer` holds. The message
+  survives a restart of the agent and of Toastty, and goes to the agent that
+  works on the task then.
+
+  The sender learns what happened from `toastty task get <task-id>`: each
+  message under `queuedMessages` has its `messageID`, `from`, `queuedAt`, and
+  `state`: `queued`, `sent`, `sentUnconfirmed` or `dropped`, with the time in
+  `at`. Toastty drops the waiting messages, with the reason, when the task
+  merges, ships, is marked Done or is archived first, and lists a message
+  for 24 hours after it leaves the queue. To read the agent's answer, watch
+  the task `--until idle` after the send: that watch fires only once no
+  queued message waits, after the turn that read yours. Up to 10 messages
+  wait for one task. A queued send fails when the task has finished or has
+  no running agent.
 - `toastty task watch <task-id> --until <condition>` tells the calling agent's
   own task once, by a one-line message, when the other task reaches the
   condition. A waiting agent can then end its turn instead of polling in a
@@ -743,7 +776,7 @@ Watch conditions:
 
 | Condition | Holds when |
 | --- | --- |
-| `idle` | The agent finished a turn after the watch was made. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
+| `idle` | The agent finished a turn after the watch was made, and no message from `task send --queue` waits for it. A turn that ended before does not count, so you can send a request and then watch for its answer. An agent that Toastty restored after a relaunch counts once it finishes a turn. |
 | `waiting` | The agent waits for an approval or an answer. |
 | `ready-for-review` | The task's pull request waits for review, or its agent marked work without a pull request ready. |
 | `merged` | Its pull request merged. |
@@ -772,7 +805,8 @@ merging, until a new merge starts; see [Merge a task](#merge-a-task). A fired
 notification stays queued, including after a relaunch, until the receiving agent
 reports idle or ready at its prompt. Toastty waits while it detects a permission
 prompt, a question, or typing that may still be in the prompt. Watches, scheduled
-wakes, and merge messages share one automatic submission per prompt.
+wakes, merge messages and queued messages share one automatic submission per
+prompt, and leave it to a message that `--steer` holds.
 `toastty task watches` lists watches, with `--task` or
 `--notify` to filter them, and `toastty task unwatch <watch-id>` cancels one.
 Delivered watches stay listed for up to a day.
@@ -1490,6 +1524,9 @@ How it works with your tasks:
   (`lastUserInputAt`).
 - It sends a task one message for each condition. If the condition comes
   back, it tells you.
+- It never types into a busy agent's turn. It passes your own words to a
+  busy task with `task send --steer`, and leaves its own facts for a busy
+  task with `task send --queue`, which Toastty types when the turn ends.
 - It names a task by its title as a link, `[title](toastty://task/<task-id>)`,
   in its answers, in its messages to tasks and in its ledger. It uses the ID
   alone only in commands.

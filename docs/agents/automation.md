@@ -776,7 +776,7 @@ The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `approval-passed-on`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
-`user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
+`user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `dependency-busy`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
 correction from the user for a task whose agent works, and checks that it
 passes the words on with `task send --steer` and not without it. In
 `ci-failed` the failed test is in the pull request's change: the task is
@@ -804,7 +804,11 @@ needs Accessibility for the GUI session's Terminal and an unlocked screen,
 and reports BLOCKED without them. Every scenario also checks that each
 `coordinator reply` names a message that the run sent.
 `dependency` also checks that the coordinator
-asks Toastty to watch the task it waits for. The five merge scenarios cover
+asks Toastty to watch the task it waits for. In `dependency-busy` the waiting
+task's agent works when the merge comes: the coordinator must leave its
+message with `task send --queue`, the agent must read nothing during its
+turn, and after the check ends the turn, the real app must type the message
+once and `task get` must report it `sent`. The five merge scenarios cover
 `toastty task request-merge`: with an empty Merging section the coordinator
 asks for no merge for a task's text or a message from another program, and
 asks for one when the user says "merge it"; asked to merge simple changes
@@ -871,7 +875,7 @@ merge of its own, review approval or push; no call that changes GitHub; no
 `request-merge` but for a task whose merge the scenario expects; every message
 to a task starts with `[coordinator]`; no message to an agent that works or
 waits at a prompt, except a `task send --steer` to one that works, and no
-send without `--steer` to a task whose agent works; every turn that a digest started set the next check; and
+send without `--steer` or `--queue` to a task whose agent works; every turn that a digest started set the next check; and
 no file written but the policy, the ledger and the two records, and nothing
 committed but the policy.
 
