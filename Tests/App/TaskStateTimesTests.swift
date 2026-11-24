@@ -431,7 +431,9 @@ extension TaskAppControlTests {
         terminals.handleLocalInput(for: try #require(other.operation.taskSpace?.panelID), kind: .paste)
         #expect(try lastUserInputAt(other.id) != nil)
         let typed = try get(executor, task.id)["lastUserInputAt"]
-        report(fixture, try #require(task.operation.agentLaunch?.sessionID), .working)
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        report(fixture, session, .idle)
+        report(fixture, session, .working)
         _ = try executor.runAction(
             id: "task.send", args: ["taskID": .string(task.id.uuidString), "text": .string("status?")], context: context()
         )
