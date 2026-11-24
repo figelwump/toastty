@@ -586,7 +586,7 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual(self.closed(), [])
 
     def test_missing_worktree_recovery_preserves_workspace_guards(self):
-        for number, problem in enumerate(("no chip", "wrong chip", "duplicate", "unsaved", "not done", "other worktree"), 1):
+        for number, problem in enumerate(("no chip", "wrong chip", "duplicate", "unsaved", "not done"), 1):
             with self.subTest(problem=problem):
                 branch, path = self.removed_task(number)
                 workspace = self.workspaces[-1]
@@ -598,10 +598,8 @@ class WorkspacePullRequestTests(unittest.TestCase):
                     self.workspaces.append(dict(workspace, workspaceID=workspace_id(99)))
                 elif problem == "unsaved":
                     workspace["unsavedDocumentCount"] = 1
-                elif problem == "not done":
-                    workspace["done"] = False
                 else:
-                    workspace["terminalCwds"].append(str(self.repo))
+                    workspace["done"] = False
                 result = self.run_script("clean-up", number, repo=self.repo, worktree=path)
                 self.assertEqual(result["status"], "skipped", result)
                 self.assertTrue(self.remote_has(branch))
@@ -653,16 +651,48 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertTrue(other.exists())
         self.assertTrue(self.remote_has(branch))
 
-    def test_missing_worktree_recovery_rechecks_other_terminal_checkouts(self):
-        branch, path = self.removed_task(1)
-        other = self.root / "later-checkout"
-        self.git("branch", "other-work")
-        self.workspaces[0]["terminalCwds"] = [str(other)]
-        self.extra_state["worktree_on_later_list"] = [str(self.repo), "other-work", str(other)]
+    def test_task_cleanup_ends_terminals_in_other_checkouts(self):
+        """The task record names the task space, so its terminals in the main
+        checkout or in another task's worktree close with it, as an idle agent
+        session does. Those checkouts and their uncommitted files stay."""
+        _, other_task = self.task(9)
+        (other_task / "draft.txt").write_text("uncommitted\n")
+        _, path = self.task(1)
+        _, removed = self.removed_task(2)
+        pr_branch, task_branch = self.task(3)[0], "task-3-checkout"
+        self.git("branch", "-m", task_branch, cwd=self.root / "task-3")
+        self.workspaces[-1]["annotations"] = [{"key": "github-pr", "url": self.prs[-1]["url"]}]
+        for workspace in self.workspaces[1:]:
+            workspace["terminalCwds"] += [str(self.repo), str(other_task / "src")]
+            workspace["activeSessions"] = [{"agent": "codex"}, {"agent": "codex"}]
+            workspace["busyTerminalCount"] = 2
+        for number, worktree, branch in ((1, path, None), (2, removed, None),
+                                         (3, self.root / "task-3", task_branch)):
+            with self.subTest(number=number):
+                result = self.run_script("clean-up", number, repo=self.repo, worktree=worktree,
+                                         worktree_branch=branch)
+                self.assertEqual(result["status"], "cleaned", result)
+                self.assertIn("ending 2 agent sessions", result["detail"])
+                self.assertFalse(worktree.exists())
+        self.assertEqual(len(self.closed()), 3)
+        self.assertTrue(self.remote_has(pr_branch))
+        self.assertEqual((other_task / "draft.txt").read_text(), "uncommitted\n")
+        self.assertIn(str(self.repo), self.git("worktree", "list", "--porcelain"))
+
+    def test_task_cleanup_keeps_a_worktree_nested_in_an_ignored_folder(self):
+        """Git status hides a checkout in an ignored folder of the task's
+        worktree; removing the task's worktree would delete it."""
+        branch, path = self.task(1)
+        with open(self.repo / ".git" / "info" / "exclude", "a") as exclude:
+            exclude.write("nested/\n")
+        nested = path / "nested" / "other"
+        self.git("worktree", "add", "-q", "-b", "other-work", str(nested), "main")
+        (nested / "draft.txt").write_text("uncommitted\n")
+        self.workspaces[-1]["terminalCwds"].append(str(nested))
         result = self.run_script("clean-up", 1, repo=self.repo, worktree=path)
-        self.assertEqual(result["status"], "stopped", result)
-        self.assertIn("terminal in another worktree", result["detail"])
-        self.assertTrue(other.exists())
+        self.assertEqual(result["status"], "skipped", result)
+        self.assertIn("another worktree is inside it", result["detail"])
+        self.assertEqual((nested / "draft.txt").read_text(), "uncommitted\n")
         self.assertTrue(self.remote_has(branch))
         self.assertEqual(self.closed(), [])
 

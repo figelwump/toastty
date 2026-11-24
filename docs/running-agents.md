@@ -637,7 +637,9 @@ with `toastty task merge` finish its reply.
   worktree has uncommitted changes or is not at the PR head, when the
   workspace has unsaved documents or a terminal in another worktree, or when
   the workspace is no longer marked done. Closing the workspace ends its agent
-  sessions and running commands.
+  sessions and running commands. A task's task space is the exception for a
+  terminal in another worktree: its cleanup ends that terminal too, as
+  [Tasks](tasks.md) describes.
 - A detached release worktree can also be cleaned up at the PR head or its
   merge commit. Its workspace must have one unambiguous `github-pr` URL for
   that PR. Toastty checks the URL and exact worktree commit again before

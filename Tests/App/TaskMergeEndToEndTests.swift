@@ -80,6 +80,44 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// A task space can keep a terminal in the project's main checkout, such
+    /// as the session the task started in. The task's cleanup closes it with
+    /// the space, without a question, and leaves the main checkout alone.
+    @Test
+    func aTaskSpaceWithATerminalInTheMainCheckoutStillCleansUp() async throws {
+        try await withScenario { scenario in
+            let store = scenario.store
+            let before = try #require(store.state.workspacesByID[scenario.taskSpaceID])
+            #expect(store.send(.splitFocusedSlot(workspaceID: scenario.taskSpaceID, orientation: .horizontal)))
+            let after = try #require(store.state.workspacesByID[scenario.taskSpaceID])
+            let mainCheckoutPanelID = try #require(
+                Set(after.allPanelsByID.keys).subtracting(before.allPanelsByID.keys).first
+            )
+            store.send(.updateTerminalPanelMetadata(panelID: mainCheckoutPanelID, title: nil, cwd: scenario.repo))
+            scenario.sessionRuntimeStore.startSession(
+                sessionID: "first-session", agent: .codex, panelID: mainCheckoutPanelID,
+                windowID: scenario.windowID, workspaceID: scenario.taskSpaceID,
+                codexStatusTrackingSource: .externallyReported, cwd: scenario.repo, repoRoot: scenario.repo, at: Date()
+            )
+            scenario.sessionRuntimeStore.updateStatus(
+                sessionID: "first-session", status: SessionStatus(kind: .ready, summary: "Waiting"), at: Date()
+            )
+            scenario.reportAgent(.ready)
+            let untracked = (scenario.repo as NSString).appendingPathComponent("notes.txt")
+            try "main checkout work\n".write(toFile: untracked, atomically: true, encoding: .utf8)
+
+            FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+            await scenario.pullRequests.refresh(scenario.pullRequest).value
+            await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(try scenario.remoteBranch().isEmpty)
+            #expect(scenario.boardItem?.stage == .done)
+            #expect(try String(contentsOfFile: untracked, encoding: .utf8) == "main checkout work\n")
+        }
+    }
+
     /// While the task space waits for its cleanup, the task's agent reads
     /// when it closes, and a caller reads what an archive would do instead,
     /// both through the CLI and without changing anything.

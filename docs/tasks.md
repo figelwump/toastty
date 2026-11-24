@@ -2614,8 +2614,12 @@ local task branch only if it can verify that its commits are on origin.
 If the recorded worktree was already removed, Clean Up uses the task's recorded
 repository to close the remaining task space and check its branches. The task
 space must have one exact PR link, remain marked done, and have no unsaved
-documents or terminals in another worktree. A recreated directory or a remaining
+documents. A recreated directory or a remaining
 Git worktree registration stops recovery; Toastty does not remove either one.
+A terminal in the task space whose folder is in another checkout, such as the
+session the task started in the project's main checkout, does not stop a
+cleanup that uses the task's recorded worktree. Closing the task space ends
+that terminal like the others, and the other checkout and its files stay.
 
 This includes older task spaces tracked with `task adopt`. Without a saved
 checkout path, cleanup requires the worktree to be gone; an existing checkout
