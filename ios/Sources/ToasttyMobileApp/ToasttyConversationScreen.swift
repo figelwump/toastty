@@ -58,6 +58,12 @@ struct ToasttyConversationScreen: View {
     /// become a reply; `replyNotice` then says why.
     let replyToMessage: (CoordinatorReplyTarget) -> Bool
     let cancelReply: () -> Void
+    /// The user's answers to the coordinator's offers, for the offer cards
+    /// of the coordinator's chat.
+    let offerAnswers: ToasttyOfferAnswers
+    /// Send answers on the offer cards: the answers go to the coordinator
+    /// as one message, apart from the draft. False when nothing was sent.
+    let sendOfferAnswers: ([CoordinatorOfferAnswer], _ offeredAt: Date) -> Bool
     /// The coordinator chat's New line, from the read point the Mac shares.
     let newMessages: ToasttyNewMessagesMarker?
 
@@ -91,6 +97,8 @@ struct ToasttyConversationScreen: View {
         isCoordinatorRoot: Bool = false,
         replyToMessage: @escaping (CoordinatorReplyTarget) -> Bool = { _ in false },
         cancelReply: @escaping () -> Void = {},
+        offerAnswers: ToasttyOfferAnswers = ToasttyOfferAnswers(),
+        sendOfferAnswers: @escaping ([CoordinatorOfferAnswer], _ offeredAt: Date) -> Bool = { _, _ in false },
         newMessages: ToasttyNewMessagesMarker? = nil
     ) {
         self.conversationID = conversationID
@@ -119,7 +127,26 @@ struct ToasttyConversationScreen: View {
         self.isCoordinatorRoot = isCoordinatorRoot
         self.replyToMessage = replyToMessage
         self.cancelReply = cancelReply
+        self.offerAnswers = offerAnswers
+        self.sendOfferAnswers = sendOfferAnswers
         self.newMessages = newMessages
+    }
+
+    /// The coordinator's offers as cards, as in the Mac's coordinator chat.
+    /// Send answers sends them apart from the draft, which stays with its
+    /// reply, and shows the chat's end, where the message waits. Ask makes
+    /// the draft a reply to the offer, as Reply does for a message.
+    private var offerCards: ToasttyOfferCards {
+        ToasttyOfferCards(answers: offerAnswers, actions: ToasttyOfferActions(
+            send: { answers, offeredAt in
+                guard sendOfferAnswers(answers, offeredAt) else { return false }
+                jumpToLiveEdgeRequest &+= 1
+                return true
+            },
+            ask: { offer, offeredAt in
+                if replyToMessage(CoordinatorReplyTarget(offer: offer, offeredAt: offeredAt)) { isComposerFocused = true }
+            }
+        ))
     }
 
     /// The coordinator's chat has Copy under each message, always shown on
@@ -167,6 +194,7 @@ struct ToasttyConversationScreen: View {
                         // The field takes the keyboard, as on the Mac.
                         if replyToMessage(CoordinatorReplyTarget(request)) { isComposerFocused = true }
                     } : nil,
+                    offers: isCoordinatorRoot ? offerCards : nil,
                     newMessages: newMessages
                 )
                 // The phone has a transcript only while the conversation is
@@ -995,9 +1023,7 @@ private struct ToasttyConversationComposerBar: View {
     /// The mode Send will use while the agent works: Steer unless the user
     /// picked Queue or the host does not allow steer right now.
     private func effectiveDeliveryMode(_ presentation: ToasttyComposerPresentation) -> RemoteMessageDeliveryMode {
-        guard let sendMode = presentation.gate.sendMode, sendMode != .prompt else { return .queue }
-        let selected = drafts.state.queuedTurnEpochs[conversationID]
-        return sendMode.deliveryMode(queueSelected: selected != nil && selected == presentation.runningTurnEpoch)
+        presentation.workingDeliveryMode(queuedTurnEpoch: drafts.state.queuedTurnEpochs[conversationID])
     }
 
     /// Steer is the default; the chip takes the accent only in Queue, so

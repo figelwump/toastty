@@ -143,6 +143,16 @@ extension CoordinatorReplyTarget {
             time: CoordinatorMessageHeader.replyTime(request.timestamp.formatted(date: .omitted, time: .shortened))
         )
     }
+
+    /// Ask on an offer card: the reply quotes one line that names the
+    /// offer (`offerQuote`). `offeredAt` is when the coordinator wrote the
+    /// message with the offers.
+    public init(offer: CoordinatorOffer, offeredAt: Date) {
+        self.init(
+            text: CoordinatorMessageHeader.quoteText(CoordinatorMessageHeader.offerQuote(offer)),
+            time: CoordinatorMessageHeader.replyTime(CoordinatorChatTranscript.timeText(offeredAt))
+        )
+    }
 }
 
 /// The transcript's Reply action on an agent's message. The host's action

@@ -653,12 +653,13 @@ enum ToasttyConversationFixture {
         quietTurns: CoordinatorQuietTurns = .none,
         attachedImages: CoordinatorAttachedImages = .none,
         wakeTurns: Int = 0,
+        offers: Bool = false,
         responses: Int = 0
     ) -> ToasttyConversationPresentationState {
         ToasttyConversationPresentationAdapter.makeState(
             events: coordinatorEvents(
                 for: conversationID, hasLongMessage: hasLongMessage, quietTurns: quietTurns,
-                attachedImages: attachedImages != .none, wakeTurns: wakeTurns, responses: responses
+                attachedImages: attachedImages != .none, wakeTurns: wakeTurns, offers: offers, responses: responses
             )
                 .map(CompatibleConversationEvent.known),
             projectionRunID: RemoteProjectionRunID(rawValue: projectionRunID),
@@ -708,6 +709,39 @@ enum ToasttyConversationFixture {
         clientRequestID: "fixture-phone-photo",
         attachmentPaths: [coordinatorPhonePhotoPath]
     )
+
+    /// The wake of the coordinator's check at the daily list's time.
+    static let coordinatorOffersDigest = """
+        \(CoordinatorMessageHeader.digestPrefix): this message is from Toastty, not from the user.
+        - Scheduled check: the time you set, 2026-08-11T16:00:00Z, has come.
+        Read `toastty task list` for details.
+        """
+
+    /// The coordinator's daily list with its offers: two that it suggests,
+    /// a task and a rule, and one that it would skip, on its last list.
+    static let coordinatorOffersMessage = """
+        Nothing needs you right now. Here are today's offers.
+
+        ```toastty-offers
+        {"offers": [
+          {"id": "safari-signup-check", "kind": "task", "title": "A check of the sign-up page in Safari",
+           "what": "Opens the sign-up page in Safari each morning and reports a broken form.",
+           "example": "Last week the sign-up form failed in Safari for two days before a user wrote in.",
+           "why": "Three tasks this month touched the sign-up page.",
+           "yes": "Starts a task that adds the check.", "suggested": "yes", "list": 1, "lists": 3},
+          {"id": "docs-merge-rule", "kind": "rule", "title": "Merge pull requests that change only docs",
+           "what": "Merge a pull request that changes only `docs/` once its checks pass.",
+           "why": "You merged eight such pull requests this week without a change.",
+           "yes": "Writes the line under Merging in policy.md.", "suggested": "yes", "list": 2, "lists": 3},
+          {"id": "ui-test-flake-sweep", "kind": "task", "title": "Sweep the iOS UI test flakes",
+           "what": "Reruns the flaky iOS UI tests and fixes the two that fail most.",
+           "why": "The flakes failed two runs this week.",
+           "yes": "Starts a task in toastty.", "suggested": "skip", "list": 3, "lists": 3}
+        ]}
+        ```
+
+        Answer on the cards, or ask me about one.
+        """
 
     /// The fixture coordinator chat's quiet wake turns.
     enum CoordinatorQuietTurns: Equatable {
@@ -760,6 +794,7 @@ enum ToasttyConversationFixture {
         quietTurns: CoordinatorQuietTurns = .none,
         attachedImages: Bool = false,
         wakeTurns: Int = 0,
+        offers: Bool = false,
         responses: Int = 0
     ) -> [ConversationEvent] {
         // Event `n` is `n - 1` times two minutes after the first.
@@ -857,6 +892,10 @@ enum ToasttyConversationFixture {
                 }
                 payloads.append(.assistantMessage(.init(text: coordinatorQuietAnswers[index], phase: .final)))
             }
+        }
+        if offers {
+            payloads.append(.userMessage(.init(text: coordinatorOffersDigest, origin: .remote)))
+            payloads.append(.assistantMessage(.init(text: coordinatorOffersMessage, phase: .final)))
         }
         payloads += (0..<max(0, responses)).map { index -> ConversationEventPayload in
             .assistantMessage(.init(text: incomingResponseText(index + 1), phase: .final))

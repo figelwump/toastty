@@ -607,9 +607,13 @@ private struct ToasttyOfferCard: View {
     @ViewBuilder
     private var answer: some View {
         if let sent {
-            Label(sent == .yes ? "You said yes" : "You skipped it", systemImage: sent == .yes ? "checkmark" : "minus")
+            let text = sent == .yes ? "You said yes" : "You skipped it"
+            Label(text, systemImage: sent == .yes ? "checkmark" : "minus")
                 .conversationFont(.caption, weight: .semibold)
                 .foregroundStyle(sent == .yes ? ConversationDesignTokens.green : ConversationDesignTokens.mutedText)
+                // One element: iOS reads the icons as "Selected" and "Remove".
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(text)
                 .accessibilityIdentifier("toastty-offer-\(offer.id)-answered")
         } else if takesAnswers {
             HStack(spacing: 6) {
