@@ -43,7 +43,9 @@ settings unless they set their own values.
   tell the user the release task as a link, with the agent, model and effort
   you passed, or "the default".
 - **Then follow the release task** like any other task. Its questions about
-  versions, approvals and production always go to the user. The release
-  agent confirms completion after all approved lanes and checks finish.
+  versions, approvals and production always go to the user. Pass the user's
+  answer on to the release task, as Send says; it needs no second yes in
+  the task. The release agent confirms completion after all approved lanes
+  and checks finish.
 - **A task whose `merged` line in the ledger says "by rule"** gets no
   release before the user's yes.

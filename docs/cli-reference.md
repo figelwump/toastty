@@ -963,7 +963,10 @@ and talk to other tasks by task ID; see
 `coordinator send` take the message in exactly one way: as one argument, with
 `--text`, or from a UTF-8 file with `--text-file`. Both put a first line
 before the message that names the sender; see `send` under
-[`coordinator`](#coordinator). `task send` types its message
+[`coordinator`](#coordinator). The coordinator's own `task send` gets a line
+that passes your approval on to the task; see
+[Approvals that the coordinator passes on](tasks.md#approvals-that-the-coordinator-passes-on).
+`task send` types its message
 whatever the agent does. With `--steer`, it checks the agent first: the message
 goes to the agent's open prompt or into its running turn, or Toastty holds it
 for the next open prompt, and nothing is typed into a permission prompt.

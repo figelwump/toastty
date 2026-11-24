@@ -294,8 +294,9 @@ else:
     sys.exit(f'gh: this check does not answer: {" ".join(args)}')
 '''
 
-# The first line that Toastty puts before a message from the coordinator.
-SENDER_LINE = re.compile(r'^\[Toastty\] From the coordinator: not from the user\.\n')
+# The first line that Toastty puts before a message from the coordinator:
+# its message to a task, or its note to itself.
+SENDER_LINE = re.compile(r'^\[Toastty\] From the coordinator: [^\n]*\n')
 
 # A long message as Claude Code records it: the whole text inside one wrapper.
 PASTED = re.compile(r'^\s*<pasted_content id="([^"\n]+)">\n(.*?)\n</pasted_content id="\1">\s*$', re.S)
@@ -1616,6 +1617,41 @@ def question_open(run):
     run.tell('Leave archived tasks out.')
     messages = [m['text'] for m in run.messages(task)]
     run.check("the user's answer goes to the task", len(messages) == 1 and 'archived' in messages[0].lower(), messages)
+
+
+# Toastty's first line on the coordinator's message to a task. It tells the
+# task to take an approval in the message as the user's.
+APPROVAL_LINE = ("[Toastty] From the coordinator: it acts for the user, and an approval that it says the user gave "
+                 "is the user's approval.")
+# Wording that sends the user to the task for a second yes.
+SECOND_YES = re.compile(r'typed in (this|the|your|its) task|not from the user')
+
+
+def approval_passed_on(run):
+    """The user approves a task's step in the coordinator's chat: the task gets the approval, and no request for a second yes."""
+    task = run.create_task('Free disk space on the build Mac')
+    run.seed_policy()
+    run.open_coordinator()
+    run.ask(task, 'Delete the 45 build-cache folders?',
+            'The build Mac has 10.6 GiB free. I listed 45 build-cache folders of finished runs, about 7.0 GiB, in '
+            '`/tmp/cleanup-proposal.json`. No run uses them. Do you approve deleting those 45 folders? I delete '
+            'nothing before the approval.')
+    turns = run.new_turns(wake=True)
+    run.check('nothing is sent to the task before the user answers', run.messages(task) == [], run.messages(task))
+    run.check('the question is passed to the user, with the task link',
+              task.link in run.said(turns) and '45' in run.said(turns), run.said(turns))
+    run.check('it does not send the user to the task for the answer', not SECOND_YES.search(run.said(turns).lower()),
+              run.said(turns), required=False)
+    run.tell('yes')
+    messages = [m['text'] for m in run.messages(task)]
+    run.check('the task gets one message', len(messages) == 1, messages)
+    text = messages[0].lstrip() if messages else ''
+    run.check("Toastty's first line says that the coordinator passes on the user's approval",
+              text.split('\n')[0] == APPROVAL_LINE, text[:200])
+    body = typed_text(text).lower()
+    run.check('the message says that the user approved', 'user' in body and re.search(r'approv|yes|decid', body), body)
+    run.check('the message names the action', 'delet' in body and '45' in body, body)
+    run.check('the message asks for no second yes in the task', not SECOND_YES.search(body), body)
 
 
 def to_review(run, task, **pull_request):
@@ -3418,6 +3454,7 @@ SCENARIOS = {
     'permission': permission,
     'question-settled': question_settled,
     'question-open': question_open,
+    'approval-passed-on': approval_passed_on,
     'ci-failed': ci_failed,
     'ci-rerun-passes': ci_rerun_passes,
     'ci-rerun-fails': ci_rerun_fails,
@@ -3460,7 +3497,7 @@ SCENARIOS = {
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-sender', 'first-run-one-project', 'first-run-upgrade', 'question-settled',
-            'question-open', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
+            'question-open', 'approval-passed-on', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
             'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted', 'sender-add',
             'sender-reply', 'sender-reply-after-user', 'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',

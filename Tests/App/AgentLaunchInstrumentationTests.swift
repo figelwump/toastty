@@ -92,6 +92,56 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         }
     }
 
+    /// Claude Code's auto mode reads `autoMode.environment` to decide whether
+    /// a command has the user's approval. Toastty adds the entry about the
+    /// coordinator's message to a task, and keeps the caller's own entries.
+    func testPrepareClaudeLaunchTellsAutoModeAboutTheCoordinatorsApproval() throws {
+        let callerRule = "Deploys go to staging.acme.example"
+        let cases: [(argv: [String], expectedBefore: [String])] = [
+            (["claude"], ["$defaults"]),
+            (["claude", "--settings", #"{"autoMode":{"allow":["x"]}}"#], ["$defaults"]),
+            (["claude", "--settings", #"{"autoMode":{"environment":["\#(callerRule)"],"allow":["x"]}}"#], [callerRule]),
+        ]
+        for testCase in cases {
+            let prepared = try AgentLaunchInstrumentation.prepare(
+                agent: .claude,
+                argv: testCase.argv,
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default
+            )
+            defer { cleanup([prepared]) }
+            let settingsIndex = try XCTUnwrap(prepared.argv.firstIndex(of: "--settings"))
+            let settingsPath = try XCTUnwrap(prepared.argv[safe: settingsIndex + 1])
+            let settings = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: settingsPath)))
+                    as? [String: Any]
+            )
+            let autoMode = try XCTUnwrap(settings["autoMode"] as? [String: Any], "\(testCase.argv)")
+            XCTAssertEqual(
+                autoMode["environment"] as? [String],
+                testCase.expectedBefore + [AgentLaunchInstrumentation.claudeAutoModeEnvironmentEntry],
+                "\(testCase.argv)"
+            )
+            if testCase.argv.count > 1 {
+                XCTAssertEqual(autoMode["allow"] as? [String], ["x"])
+            }
+        }
+        // The entry names the whole first line that only the coordinator's
+        // `task send` writes, and no shorter text that another sender's
+        // line could start with.
+        let entry = AgentLaunchInstrumentation.claudeAutoModeEnvironmentEntry
+        XCTAssertTrue(entry.contains("`\(CoordinatorMessageHeader.coordinatorToTaskLine)`"))
+        XCTAssertFalse(entry.contains("\n"))
+        // Settings that Toastty cannot read stay as the caller wrote them.
+        for unreadable in [#"{"autoMode":"off"}"#, #"{"autoMode":{"environment":"one rule"}}"#] {
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(unreadable.utf8)) as? [String: Any])
+            let merged = AgentLaunchInstrumentation.mergeClaudeAutoModeEnvironment(into: object)
+            XCTAssertEqual(merged as NSDictionary, object as NSDictionary)
+        }
+    }
+
     func testPrepareClaudeLaunchMergesInlineSettingsArgument() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"

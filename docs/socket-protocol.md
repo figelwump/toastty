@@ -430,8 +430,10 @@ Notable action-specific behavior:
   - Toastty types a first line that names the sender, from the caller and
     never from the text, as for `coordinator.send`: `[Toastty] From task
     [title](toastty://task/<id>): not from the user.` for a caller in a task's
-    space, and `[Toastty] From the coordinator: not from the user.` for the
-    coordinator's own agent session. Optional `args.from` names a caller in no
+    space. For the coordinator's own agent session the line is
+    `[Toastty] From the coordinator: it acts for the user, and an approval
+    that it says the user gave is the user's approval.`: only the
+    coordinator passes the user's approval on to a task. Optional `args.from` names a caller in no
     session, also as for `coordinator.send`. The text starts on the second
     line.
   - optional `args.steer=true` checks the agent before it types, and types
