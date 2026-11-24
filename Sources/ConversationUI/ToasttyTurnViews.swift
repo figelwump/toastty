@@ -110,22 +110,7 @@ struct ToasttyTurnWorkStrip: View {
     /// "2 tool calls · 1 note" while the turn runs with its work open, and
     /// "worked · 2 tool calls" after the turn.
     private func summary(elapsed: String?) -> String {
-        var counts: [String] = []
-        if turn.toolCallCount > 0 {
-            counts.append(turn.toolCallCount == 1 ? "1 tool call" : "\(turn.toolCallCount) tool calls")
-        }
-        if turn.noteCount > 0 {
-            counts.append(turn.noteCount == 1 ? "1 note" : "\(turn.noteCount) notes")
-        }
-        let lead: [String]
-        if workingIndicator != nil {
-            lead = ["working", elapsed].compactMap { $0 }
-        } else if isLive {
-            lead = counts.isEmpty ? ["working"] : []
-        } else {
-            lead = ["worked"]
-        }
-        return (lead + counts).joined(separator: " · ")
+        turn.workSummary(isLive: isLive, showsWorking: workingIndicator != nil, elapsed: elapsed)
     }
 }
 

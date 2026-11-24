@@ -50,6 +50,12 @@ public final class PanelFrame {
     private let subtitleLabel: WidgetPtr
     private let unreadDot: WidgetPtr
     private let zoomButton: WidgetPtr
+    /// Buttons a feature adds to the header, before zoom and close (the
+    /// coordinator's Dock, Terminal/Chat and … menu).
+    public let headerAccessories: WidgetPtr
+    /// Holds the content and, while one is set, a cover over it.
+    private let contentOverlay: WidgetPtr
+    public private(set) var cover: WidgetPtr?
     private var presentation: PanelFramePresentation?
 
     /// A press in the frame, or keyboard focus entering an unfocused frame.
@@ -75,14 +81,19 @@ public final class PanelFrame {
         gtk_label_set_ellipsize(cast(subtitleLabel), PANGO_ELLIPSIZE_START)
         zoomButton = Gtk.iconButton("view-fullscreen-symbolic", tooltip: "Focus Panel (\(ShortcutLabels.label(forCommand: "panel.focus-mode.toggle") ?? ""))")
         let closeButton = Gtk.iconButton("window-close-symbolic", tooltip: "Close Panel (\(ShortcutLabels.label(forCommand: "panel.close") ?? ""))")
-        for child in [unreadDot, titleLabel, subtitleLabel, zoomButton, closeButton] {
+        headerAccessories = Gtk.hbox(spacing: 4, classes: ["panel-header-accessories"])
+        gtk_widget_set_valign(headerAccessories, GTK_ALIGN_CENTER)
+        for child in [unreadDot, titleLabel, subtitleLabel, headerAccessories, zoomButton, closeButton] {
             Gtk.append(header, child)
         }
         Gtk.append(root, header)
 
         Gtk.detachFromParent(content)
         Gtk.expand(content)
-        Gtk.append(root, content)
+        contentOverlay = gtk_overlay_new()!
+        Gtk.expand(contentOverlay)
+        gtk_overlay_set_child(cast(contentOverlay), content)
+        Gtk.append(root, contentOverlay)
 
         Signal.connect(zoomButton, "clicked") { [weak self] in self?.onToggleZoom?() }
         Signal.connect(closeButton, "clicked") { [weak self] in self?.onClose?() }
@@ -128,6 +139,22 @@ public final class PanelFrame {
     }
 
     public var isFocused: Bool { presentation?.isFocused ?? false }
+
+    /// Covers the content with `widget` (the coordinator's chat over its
+    /// terminal), or uncovers it with nil. The content stays attached under
+    /// the cover, as on macOS.
+    public func setCover(_ widget: WidgetPtr?) {
+        guard widget != cover else { return }
+        if let cover {
+            gtk_overlay_remove_overlay(cast(contentOverlay), cover)
+        }
+        cover = widget
+        if let widget {
+            Gtk.detachFromParent(widget)
+            Gtk.expand(widget)
+            gtk_overlay_add_overlay(cast(contentOverlay), widget)
+        }
+    }
 
     /// What the header currently shows (automation and tests).
     public var currentPresentation: PanelFramePresentation? { presentation }

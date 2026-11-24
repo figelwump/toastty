@@ -86,12 +86,14 @@ final class TasksWindowFeature: LinuxWindowFeature {
     private let ui: TasksUI
     private weak var controller: LinuxWindowController?
     let tasksPage: TasksPage
+    let coordinatorUI: CoordinatorWindowUI
 
     init(ui: TasksUI, controller: LinuxWindowController) {
         self.ui = ui
         self.controller = controller
         windowID = controller.windowID
         tasksPage = TasksPage(ui: ui, windowID: controller.windowID)
+        coordinatorUI = CoordinatorWindowUI(ui: ui, controller: controller)
         ui.register(self)
     }
 
@@ -102,12 +104,13 @@ final class TasksWindowFeature: LinuxWindowFeature {
         return Self.tasksPageName
     }
 
-    var leadingColumn: WidgetPtr? { nil }
+    var leadingColumn: WidgetPtr? { coordinatorUI.dockRoot }
     var sidebarHeader: WidgetPtr? { nil }
 
     func render(_ state: AppState) {
         let shows = coveringPage(state) != nil
         tasksPage.render(state, isShown: shows)
+        coordinatorUI.render(state)
     }
 
     func perform(commandID: String) -> Bool {
@@ -119,6 +122,23 @@ final class TasksWindowFeature: LinuxWindowFeature {
         case "task.new":
             ui.board.newTask?()
             return true
+        case "coordinator.dock.toggle":
+            coordinatorUI.performDockShortcut()
+            return true
+        case "coordinator.open":
+            coordinatorUI.perform(.open)
+            return true
+        case "coordinator.restart":
+            coordinatorUI.perform(.restart)
+            return true
+        // While a chat's field has the keyboard, the text size keys size
+        // the chat, not the terminals.
+        case "text-size.increase":
+            return coordinatorUI.changeTextScale(.increase)
+        case "text-size.decrease":
+            return coordinatorUI.changeTextScale(.decrease)
+        case "text-size.reset":
+            return coordinatorUI.changeTextScale(.reset)
         default:
             return false
         }
@@ -128,12 +148,15 @@ final class TasksWindowFeature: LinuxWindowFeature {
         switch commandID {
         case "window.toggle-tasks-view": ui.board.isEnabled
         case "task.new": ui.board.newTask != nil
+        case "coordinator.dock.toggle", "coordinator.open": ui.tasks.coordinatorController != nil
+        case "coordinator.restart": ui.tasks.coordinatorController?.location != nil
         default: nil
         }
     }
 
     func teardown() {
         tasksPage.teardown()
+        coordinatorUI.teardown()
     }
 
     func toast(_ message: String) {
@@ -150,6 +173,7 @@ extension LinuxAppController {
         }
         tasksUI = ui
         installTasksAutomation(ui: ui)
+        installCoordinatorAutomation(ui: ui)
     }
 }
 

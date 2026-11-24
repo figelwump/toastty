@@ -123,6 +123,12 @@ public enum Gtk {
             gtk_box_remove(cast(parent), widget)
         } else if isInstance(parent, of: gtk_stack_get_type()) {
             gtk_stack_remove(cast(parent), widget)
+        } else if isInstance(parent, of: gtk_overlay_get_type()) {
+            if gtk_overlay_get_child(cast(parent)) == widget {
+                gtk_overlay_set_child(cast(parent), nil)
+            } else {
+                gtk_overlay_remove_overlay(cast(parent), widget)
+            }
         } else {
             gtk_widget_unparent(widget)
         }

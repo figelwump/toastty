@@ -643,65 +643,14 @@ public struct ToasttyTranscriptView: View {
     }
 
     private func displayItems(workingLine: ToasttyTranscriptWorkingLine) -> [ToasttyTranscriptDisplayItem] {
-        guard state.turns.isEmpty == false else {
-            return state.blocks.map { .block($0, isWork: false) }
-        }
-        var turnAtFirstWorkBlock: [ToasttyTranscriptBlockID: ToasttyTranscriptTurn] = [:]
-        var turnForWorkBlock: [ToasttyTranscriptBlockID: ToasttyTranscriptRowID] = [:]
-        for turn in state.turns {
-            if let first = turn.workBlockIDs.first {
-                turnAtFirstWorkBlock[first] = turn
-            }
-            for blockID in turn.workBlockIDs {
-                turnForWorkBlock[blockID] = turn.id
-            }
-        }
-        // A row of quiet checks shows its line before its first turn's
-        // line. Closed, it hides its turns' lines and work.
-        var quietRunAtFirstLine: [ToasttyTranscriptBlockID: ToasttyQuietCheckRun] = [:]
-        var closedQuietTurnIDs: Set<ToasttyTranscriptRowID> = []
-        for run in quietCheckRuns {
-            quietRunAtFirstLine[ToasttyTranscriptBlockID(rowID: run.id)] = run
-            if quietCheckFold.isOpen(run) == false {
-                closedQuietTurnIDs.formUnion(run.turnIDs)
-            }
-        }
-        // The running turn's strip shows that the agent works from the
-        // turn's start, under its message, before any work comes.
-        var stripAfterAnchor: ToasttyTranscriptTurn?
-        if case .turn(let turnID) = workingLine,
-           let turn = state.turns.last, turn.id == turnID, turn.workBlockIDs.isEmpty,
-           turn.opensFromAnchorLine(foldsRunningWork: options.foldsRunningWork) == false {
-            stripAfterAnchor = turn
-        }
-
-        var items: [ToasttyTranscriptDisplayItem] = []
-        items.reserveCapacity(state.blocks.count + state.turns.count)
-        for block in state.blocks {
-            if let run = quietRunAtFirstLine[block.id] {
-                items.append(.quietChecks(run))
-            }
-            if closedQuietTurnIDs.isEmpty == false,
-               closedQuietTurnIDs.contains(turnForWorkBlock[block.id] ?? block.id.rowID) {
-                continue
-            }
-            // A turn whose host message's line opens it has no strip.
-            if let turn = turnAtFirstWorkBlock[block.id],
-               turn.opensFromAnchorLine(foldsRunningWork: options.foldsRunningWork) == false {
-                items.append(.workStrip(turn))
-            }
-            if let turnID = turnForWorkBlock[block.id] {
-                if turnFold.isExpanded(turnID) {
-                    items.append(.block(block, isWork: true))
-                }
-            } else {
-                items.append(.block(block, isWork: false))
-            }
-            if let turn = stripAfterAnchor, block.id.rowID == turn.id {
-                items.append(.workStrip(turn))
-            }
-        }
-        return items
+        ToasttyTranscriptLayout.displayItems(
+            state,
+            workingLine: workingLine,
+            turnFold: turnFold,
+            quietCheckFold: quietCheckFold,
+            quietCheckRuns: quietCheckRuns,
+            foldsRunningWork: options.foldsRunningWork
+        )
     }
 
     @ViewBuilder
@@ -2163,9 +2112,7 @@ private struct ToasttySendTailItemView: View {
     }
 
     private func queuedCaption(_ queued: ToasttyQueuedSendPresentation) -> some View {
-        Text(queued.isPaused
-            ? "Paused · queued \(queued.position)"
-            : queued.waitingCaption ?? "Queued \(queued.position) · sends after this turn")
+        Text(ToasttyTranscriptLabels.queuedCaption(queued))
             .conversationFont(.caption2, weight: .semibold, monospaced: true)
             .foregroundStyle(ConversationDesignTokens.amberText)
             .textCase(.uppercase)
@@ -2505,7 +2452,7 @@ private struct ToasttyTranscriptRowView: View {
         case .interaction:
             EmptyView()
         case .interactionResolved(_, let resolution):
-            marker(icon: resolutionIcon(resolution), text: "interaction \(resolution.rawValue)")
+            marker(icon: resolutionIcon(resolution), text: ToasttyTranscriptLabels.resolution(resolution))
         case .subagentSummary(let name, let phase, let detail):
             disclosureRow(
                 icon: "person.2",
@@ -2731,21 +2678,11 @@ private struct ToasttyTranscriptRowView: View {
     }
 
     private func subagentPhaseLabel(_ phase: ConversationSubagentPhase) -> String {
-        switch phase {
-        case .started: "started"
-        case .updated: "updated"
-        case .finished: "finished"
-        case .unknown: "activity"
-        }
+        ToasttyTranscriptLabels.subagentPhase(phase)
     }
 
     private func bindingLabel(_ reason: ConversationBindingChangeReason) -> String {
-        switch reason {
-        case .runtimeBound: "session connected"
-        case .runtimeResumed: "session resumed"
-        case .runtimeEnded: "session disconnected"
-        case .projectionRebuilt: "transcript rebuilt"
-        }
+        ToasttyTranscriptLabels.binding(reason)
     }
 
     private func resolutionIcon(_ resolution: RemotePendingInteraction.State) -> String {

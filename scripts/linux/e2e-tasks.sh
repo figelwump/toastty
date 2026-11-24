@@ -34,6 +34,25 @@ out="$(dirname "$0")/../agent-$TOASTTY_SESSION_ID.log"
 { echo "args: $*"; echo "cwd=$PWD"; } > "$out"
 printf '{"hook_event_name":"UserPromptSubmit","prompt":"e2e","session_id":"native-%s"}' "$TOASTTY_SESSION_ID" \
   | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
+# As the coordinator: a Claude transcript with markdown, a tool call and an
+# answer, bound through the SessionStart hook, as Claude Code reports it.
+case "$PWD" in
+*/coordinator)
+  sid="11111111-2222-3333-4444-$(printf '%012d' $$)"
+  dir="$HOME/.claude/projects/coordinator"; mkdir -p "$dir"; t="$dir/$sid.jsonl"
+  ts() { date -u +%Y-%m-%dT%H:%M:%S.000Z; }
+  {
+    printf '{"type":"user","sessionId":"%s","uuid":"u-1","parentUuid":null,"isSidechain":false,"timestamp":"%s","message":{"role":"user","content":"What needs me?"}}\n' "$sid" "$(ts)"
+    printf '{"type":"assistant","sessionId":"%s","uuid":"a-1","parentUuid":"u-1","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"toastty task list --json"}}]}}\n' "$sid" "$(ts)"
+    printf '{"type":"user","sessionId":"%s","uuid":"u-2","parentUuid":"a-1","isSidechain":false,"timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"[]"}]}}\n' "$sid" "$(ts)"
+    printf '{"type":"assistant","sessionId":"%s","uuid":"a-2","parentUuid":"u-2","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"## Nothing needs you\\n\\n**All clear.** Next check:\\n\\n- the `build` task\\n- [docs](https://example.com)\\n\\n| Task | Stage |\\n|---|---|\\n| Build | Running |"}]}}\n' "$sid" "$(ts)"
+  } > "$t"
+  printf '{"hook_event_name":"SessionStart","session_id":"%s","transcript_path":"%s","cwd":"%s","source":"startup"}' "$sid" "$t" "$PWD" \
+    | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
+  printf '{"hook_event_name":"Stop","session_id":"%s","transcript_path":"%s"}' "$sid" "$t" \
+    | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
+  ;;
+esac
 echo "fake agent up"
 sleep 600
 AGENT
@@ -146,6 +165,45 @@ check "the Tasks view script passes (open, rows, select, arrows, Esc, toggle)" "
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
 [ -s $WORK/tasks-view.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/tasks-view.png $REPO/artifacts/manual/linux-tasks/tasks-view.png
+pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
+
+# Phase C: the coordinator's chat over its terminal and the dock.
+cat > $WORK/coordinator.script <<SCRIPT
+wait 500
+perform coordinator.open
+wait 3000
+expect coordinatorRunning=true coordinatorCover=chat
+screenshot $WORK/coordinator-full.png
+coordinator type Hello_Toasty
+wait 200
+expect coordinatorComposer=Hello_Toasty
+coordinator send
+wait 800
+expect coordinatorComposerEmpty=true
+click coordinator.panel.mode
+wait 300
+expect coordinatorCover=terminal
+click coordinator.panel.mode
+wait 300
+expect coordinatorCover=chat
+perform coordinator.dock.toggle
+wait 800
+expect coordinatorDock=shown
+screenshot $WORK/coordinator-dock.png
+perform coordinator.dock.toggle
+wait 500
+expect coordinatorDock=hidden
+state $WORK/coordinator-state.json
+quit
+SCRIPT
+(cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/coordinator.script $APP > $WORK/app-coordinator.log 2>&1) & APID=$!
+for i in $(seq 1 400); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+kill -9 $APID 2>/dev/null; wait $APID; CRC=$?
+check "the coordinator script passes (chat cover, send, Terminal/Chat, dock)" "[ $CRC = 0 ] && ! grep -q 'FAIL' $WORK/app-coordinator.log"
+grep 'FAIL' $WORK/app-coordinator.log | head -8
+for shot in coordinator-full coordinator-dock; do
+  [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
+done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 [ $fail = 0 ] && echo "e2e-tasks: all checks passed" || { echo "e2e-tasks: FAILED (work dir $WORK)"; trap - EXIT; cleanup; exit 1; }
 rm -rf $WORK

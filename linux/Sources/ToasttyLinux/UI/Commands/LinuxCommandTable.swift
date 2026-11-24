@@ -100,12 +100,20 @@ public enum LinuxCommandTable {
                   keywords: ["manage", "open", "terminal", "profiles", "config", "toml"]),
             .init("agent.profiles.manage", "Manage Agents", section: .application,
                   keywords: ["manage", "open", "agents", "agent", "profiles", "config", "toml"]),
-            // The macOS task board and quick entry panel. Linux has no task
-            // UI yet: the actions exist for parity and stay disabled.
-            .init("task.new", "New Task…", section: .application,
-                  keywords: ["task", "new", "create", "quick", "entry"], inPalette: false),
-            .init("window.toggle-tasks-view", "Show Tasks", section: .windowsAndWorkspaces, macOS: "Cmd+Shift+T",
-                  keywords: ["tasks", "task", "board", "view"], inPalette: false),
+            // Tasks and the coordinator (docs/tasks.md). Ctrl+Shift+T is New
+            // Tab here, so Show Tasks takes Ctrl+Shift+D. New Task's key works
+            // in Toastty; the desktop-wide quick entry key is registered
+            // through the GlobalShortcuts portal.
+            .init("task.new", "New Task…", ["<Alt><Shift>t"], section: .application, macOS: "Opt+Shift+T",
+                  keywords: ["task", "new", "create", "quick", "entry"]),
+            .init("window.toggle-tasks-view", "Show Tasks", ["<Control><Shift>d"], section: .windowsAndWorkspaces, macOS: "Cmd+Shift+T",
+                  keywords: ["tasks", "task", "board", "view"]),
+            .init("coordinator.dock.toggle", "Show Coordinator Dock", ["<Control><Shift>k"], section: .windowsAndWorkspaces,
+                  macOS: "Cmd+Shift+K", keywords: ["coordinator", "dock", "chat", "toasty", "focus"]),
+            .init("coordinator.open", "Open Coordinator", section: .application,
+                  keywords: ["coordinator", "open", "start", "toasty", "chat"]),
+            .init("coordinator.restart", "Restart Coordinator", section: .application,
+                  keywords: ["coordinator", "restart", "toasty"]),
             .init("agent.toastty-skills.manage", "Manage Toastty Skills", section: .application,
                   keywords: ["manage", "toastty", "codex", "claude", "skills", "plugin", "repair", "uninstall"]),
             .init("agent.status-hooks.setup", "Set Up Agent Status Hooks", section: .application,
@@ -301,9 +309,8 @@ public enum LinuxCommandTable {
 
     /// macOS `ToasttyBuiltInCommand` IDs whose macOS shortcut intentionally
     /// has no Ubuntu accelerator; the parity test fails if a built-in
-    /// shortcut is dropped without being listed here. The Tasks view has no
-    /// Linux UI yet.
-    public static let macOSShortcutsWithoutLinuxAccelerator: Set<String> = ["window.toggle-tasks-view"]
+    /// shortcut is dropped without being listed here.
+    public static let macOSShortcutsWithoutLinuxAccelerator: Set<String> = []
 
     /// Modifier+key combinations reserved for app shortcuts; agent and
     /// terminal profile `shortcutKey`s that would collide are reported

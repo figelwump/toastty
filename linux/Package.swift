@@ -83,7 +83,10 @@ let package = Package(
                 "RemoteProtocol",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
-            path: "\(generated)/ConversationUI"
+            path: "\(generated)/ConversationUI",
+            // The GTK coordinator chat draws the transcript's internal
+            // layout types (@testable import), as ToasttyAppLogic.
+            swiftSettings: [.unsafeFlags(["-enable-testing"])]
         ),
         .testTarget(
             name: "ConversationUITests",

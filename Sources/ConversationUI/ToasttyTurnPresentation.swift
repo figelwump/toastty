@@ -232,3 +232,27 @@ public struct ToasttyTranscriptWorkingIndicator: Equatable, Sendable {
         return String(format: "%dm %02ds", minutes, remaining)
     }
 }
+
+extension ToasttyTranscriptTurn {
+    /// The work strip's text: "working · 16s · 2 tool calls" while it shows
+    /// that the agent works, "2 tool calls · 1 note" while the turn runs with
+    /// its work open, and "worked · 2 tool calls" after the turn.
+    func workSummary(isLive: Bool, showsWorking: Bool, elapsed: String?) -> String {
+        var counts: [String] = []
+        if toolCallCount > 0 {
+            counts.append(toolCallCount == 1 ? "1 tool call" : "\(toolCallCount) tool calls")
+        }
+        if noteCount > 0 {
+            counts.append(noteCount == 1 ? "1 note" : "\(noteCount) notes")
+        }
+        let lead: [String]
+        if showsWorking {
+            lead = ["working", elapsed].compactMap { $0 }
+        } else if isLive {
+            lead = counts.isEmpty ? ["working"] : []
+        } else {
+            lead = ["worked"]
+        }
+        return (lead + counts).joined(separator: " · ")
+    }
+}

@@ -299,6 +299,90 @@ public enum LinuxTheme {
     .webhook-agent-warning { padding: 8px; border-radius: 6px; background-color: color-mix(in srgb, var(--toastty-approval) 15%, transparent); }
     .webhook-hint { padding: 6px 8px; border-radius: 4px; background-color: alpha(currentColor, 0.06); }
 
+    /* Coordinator chat (macOS CoordinatorChatView, ToasttyTranscriptView) */
+    .coordinator-chat { background-color: var(--view-bg-color); color: var(--view-fg-color); }
+    .transcript-list { padding: 14px 18px 18px 18px; }
+    .transcript-banner { padding: 6px 12px; font-size: 0.86em; opacity: 0.7; }
+    .transcript-older { font-size: 0.86em; }
+    .transcript-new-label { color: #e8643a; font-size: 0.78em; font-weight: 800; }
+    .transcript-new separator { background-color: color-mix(in srgb, #e8643a 60%, transparent); }
+    .transcript-disclosure { padding: 2px 6px; min-height: 0; }
+    .transcript-disclosure-text { font-size: 0.86em; opacity: 0.6; }
+    .transcript-strip {
+      padding: 7px 11px; border-radius: 8px; font-family: monospace; font-size: 0.8em;
+      background-color: alpha(currentColor, 0.04); border: 1px solid alpha(currentColor, 0.1); opacity: 0.8;
+    }
+    .transcript-strip-button { padding: 0; min-height: 0; border-radius: 8px; }
+    .transcript-strip spinner, .transcript-working spinner, .transcript-disclosure spinner { min-width: 10px; min-height: 10px; }
+    .transcript-work { padding-left: 14px; border-left: 2px solid alpha(currentColor, 0.12); }
+    .transcript-working { font-family: monospace; font-size: 0.8em; opacity: 0.65; padding: 4px 0; }
+    .transcript-user { margin-left: 48px; }
+    .transcript-bubble {
+      padding: 8px 12px; border-radius: 14px;
+      background-color: color-mix(in srgb, var(--accent-bg-color) 16%, transparent);
+    }
+    .transcript-queued .transcript-bubble, .transcript-user.pending .transcript-bubble { background-color: alpha(currentColor, 0.06); }
+    .transcript-quote { font-size: 0.82em; opacity: 0.65; padding: 0; min-height: 0; }
+    .transcript-caption { font-size: 0.78em; opacity: 0.55; }
+    .transcript-receipt { font-size: 0.82em; color: var(--toastty-approval); }
+    .transcript-hover-action { min-width: 22px; min-height: 22px; padding: 0; opacity: 0.45; }
+    .transcript-hover-action:hover { opacity: 1; }
+    .transcript-link-button { font-size: 0.82em; padding: 0 4px; min-height: 0; color: var(--accent-color); }
+    .transcript-assistant.commentary { opacity: 0.7; }
+    .transcript-host-text { font-size: 0.92em; opacity: 0.85; }
+    .transcript-sender { padding: 10px 12px; border-radius: 10px; border: 1px solid alpha(currentColor, 0.12); }
+    .transcript-sender-name { font-weight: 700; font-size: 0.9em; }
+    .transcript-muted { font-size: 0.82em; opacity: 0.5; }
+    .transcript-tools { padding: 2px 0; }
+    .transcript-tool { font-family: monospace; font-size: 0.8em; padding: 1px 0; }
+    .transcript-tool-button { padding: 0 4px; min-height: 0; }
+    .transcript-tool-mark.ok { color: var(--toastty-ready); }
+    .transcript-tool-mark.failed { color: var(--toastty-error); }
+    .transcript-tool-name { font-weight: 700; }
+    .transcript-tool-detail { opacity: 0.6; }
+    .transcript-tool-details { font-family: monospace; font-size: 0.78em; opacity: 0.75; padding: 6px 8px; border-radius: 6px; background-color: alpha(currentColor, 0.05); }
+    .transcript-jump { box-shadow: 0 2px 8px alpha(black, 0.2); }
+    .markdown .md-heading { font-weight: 800; }
+    .markdown .md-h1 { font-size: 1.3em; }
+    .markdown .md-h2 { font-size: 1.15em; }
+    .markdown .md-h3 { font-size: 1.05em; }
+    .markdown .md-quote { padding-left: 10px; border-left: 3px solid alpha(currentColor, 0.2); opacity: 0.85; }
+    .markdown .md-list-marker { opacity: 0.6; }
+    .markdown .md-code { padding: 8px 10px; border-radius: 8px; background-color: alpha(currentColor, 0.06); }
+    .markdown .md-code-text { font-family: monospace; font-size: 0.88em; }
+    .markdown .md-code-language { font-size: 0.72em; opacity: 0.5; }
+    .markdown .md-table-header { font-weight: 700; }
+    .interaction-card { padding: 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--toastty-approval) 45%, transparent);
+      background-color: color-mix(in srgb, var(--toastty-approval) 8%, transparent); }
+    .interaction-kind { font-size: 0.72em; font-weight: 800; color: var(--toastty-approval); }
+    .interaction-question-header { font-size: 0.78em; font-weight: 700; opacity: 0.6; }
+    .interaction-status { font-size: 0.84em; opacity: 0.7; }
+    .coordinator-intro { padding: 24px; }
+    .coordinator-notice { padding: 8px 14px; font-size: 0.88em;
+      background-color: color-mix(in srgb, var(--toastty-approval) 14%, transparent);
+      border-top: 1px solid color-mix(in srgb, var(--toastty-approval) 35%, transparent); }
+    .coordinator-notice-button { font-weight: 700; color: var(--toastty-approval); padding: 2px 6px; min-height: 0; }
+    .composer { padding: 8px 12px 12px 12px; border-top: 1px solid alpha(currentColor, 0.08); }
+    .composer-field { border-radius: 12px; border: 1px solid alpha(currentColor, 0.15); background-color: var(--view-bg-color); }
+    .composer-field:focus-within { border-color: var(--accent-bg-color); }
+    .composer-text, .composer-text text { background: transparent; }
+    .composer-placeholder { opacity: 0.45; }
+    .composer-reply { padding: 4px 8px; border-radius: 8px; background-color: alpha(currentColor, 0.05); font-size: 0.86em; }
+    .composer-delivery { font-size: 0.86em; font-weight: 700; }
+    .composer-delivery.queue { color: var(--accent-color); }
+    .mention-popover list, .mention-list { padding: 4px; }
+    .mention-section { font-size: 0.72em; font-weight: 800; opacity: 0.5; padding: 6px 8px 2px 8px; }
+    .mention-row { padding: 4px 8px; min-height: 0; }
+    .mention-row.selected { background-color: color-mix(in srgb, var(--accent-bg-color) 22%, transparent); }
+    .mention-detail { font-size: 0.82em; }
+
+    /* Coordinator dock and panel */
+    .coordinator-dock { background-color: var(--view-bg-color); border-right: 1px solid alpha(currentColor, 0.1); }
+    .coordinator-dock-header { padding: 8px 8px 8px 12px; border-bottom: 1px solid alpha(currentColor, 0.08); }
+    .coordinator-dock-title { font-weight: 700; }
+    .coordinator-dock-status { font-size: 0.8em; opacity: 0.6; }
+    .coordinator-panel-button { font-size: 0.8em; font-weight: 600; min-height: 20px; padding: 1px 8px; }
+
     /* Attachments */
     .attachment-chip { padding: 3px 6px; border-radius: 8px; background-color: alpha(currentColor, 0.07); }
     .attachment-thumbnail { border-radius: 4px; }

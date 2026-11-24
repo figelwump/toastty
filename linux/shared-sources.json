@@ -37,6 +37,8 @@
         "ToasttySendPresentation.swift",
         "ToasttyToolCall.swift",
         "ToasttyTranscriptDisplayItem.swift",
+        "ToasttyTranscriptLabels.swift",
+        "ToasttyTranscriptLayout.swift",
         "ToasttyTranscriptSessionStatus.swift",
         "ToasttyTurnPresentation.swift"
       ],
