@@ -426,7 +426,11 @@ Notable action-specific behavior:
     the session setup started, else the session restored in that session's
     pane after a relaunch, else the most recently active agent in the task
     space. It types the text and submits it, as `terminal.send-text` with
-    `submit=true` does; a busy agent queues it as typed input.
+    `submit=true` does; a busy agent gets it as typed input. It types nothing
+    and fails with `invalidPayload` and the reason while the agent waits for an
+    answer to a permission prompt, a question or a dialog, while text typed in
+    the terminal since the agent's latest turn started can still be in its
+    prompt, or while an earlier message without a confirmed Return can.
   - Toastty types a first line that names the sender, from the caller and
     never from the text, as for `coordinator.send`: `[Toastty] From task
     [title](toastty://task/<id>): not from the user.` for a caller in a task's

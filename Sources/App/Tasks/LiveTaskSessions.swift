@@ -14,17 +14,20 @@ final class LiveTaskSessions: TaskSessionProviding {
     /// Types a message and reports whether it was submitted, so a caller
     /// never types it twice after a Return that may not have gone through.
     private let deliverText: @MainActor (_ text: String, _ panelID: UUID) -> TerminalInputDeliveryResult
+    /// Whether Claude Code shows one of its own dialogs in the panel, such
+    /// as the compact offer. It reports no interaction for them, and Return
+    /// picks a choice there.
+    private let claudeHasNativeDialog: @MainActor (_ panelID: UUID) -> Bool
     private let replyReader = TaskAgentReplyReader()
     /// Types for `deliverSteering`, and holds the messages that wait.
     private(set) lazy var steerSender = TaskSteerSender { [weak self] panelID in
         guard let self, let session = self.activeSession(panelID: panelID) else { return nil }
-        let record = self.sessionRuntimeStore?.sessionRegistry.sessionsByID[session.sessionID]
         return TaskSteerAgentView(
             sessionID: session.sessionID,
             state: TaskAgentState(statusKind: session.status?.kind),
-            latestTurnStartedAt: record?.turnStartedAt
-                ?? record?.lastTurnEndedAt?.addingTimeInterval(-(record?.lastTurnDuration ?? 0)),
-            userTypedAt: self.sessionRuntimeStore?.lastUserInputAt(panelID: panelID)
+            latestTurnStartedAt: session.latestTurnStartedAt,
+            userTypedAt: self.sessionRuntimeStore?.lastPromptInputAt(panelID: panelID),
+            showsDialog: session.agent == .claude && self.claudeHasNativeDialog(panelID)
         )
     }
     /// Ends the follow of a panel whose agent ended, with the messages
@@ -41,13 +44,15 @@ final class LiveTaskSessions: TaskSessionProviding {
         closeController: SessionCloseController,
         exitController: SessionExitController?,
         sendText: @escaping @MainActor (String, UUID) -> Bool,
-        deliverText: (@MainActor (String, UUID) -> TerminalInputDeliveryResult)? = nil
+        deliverText: (@MainActor (String, UUID) -> TerminalInputDeliveryResult)? = nil,
+        claudeHasNativeDialog: @escaping @MainActor (UUID) -> Bool = { _ in false }
     ) {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.closeController = closeController
         self.exitController = exitController
         self.sendText = sendText
         self.deliverText = deliverText ?? { text, panelID in sendText(text, panelID) ? .delivered : .unavailable }
+        self.claudeHasNativeDialog = claudeHasNativeDialog
         endedAgentObservation = sessionRuntimeStore.$sessionRegistry
             .debounce(for: .seconds(1), scheduler: RunLoop.main)
             .sink { [weak self] _ in
@@ -81,7 +86,10 @@ final class LiveTaskSessions: TaskSessionProviding {
             stateChangedAt: record.stateChangedAt ?? record.startedAt,
             lastTurnEndedAt: record.lastTurnEndedAt,
             turnStartedAt: record.turnStartedAt,
-            transcriptPath: binding.flatMap { $0.sessionFilePath.isEmpty ? nil : $0.sessionFilePath }
+            transcriptPath: binding.flatMap { $0.sessionFilePath.isEmpty ? nil : $0.sessionFilePath },
+            latestTurnStartedAt: record.turnStartedAt
+                ?? record.lastTurnEndedAt?.addingTimeInterval(-(record.lastTurnDuration ?? 0))
+                ?? record.startedAt
         )
     }
 
@@ -141,21 +149,31 @@ final class LiveTaskSessions: TaskSessionProviding {
         ].compactMap { $0 }.max()
     }
 
-    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool {
+    func lastPromptInputAt(panelID: UUID) -> Date? {
+        let probe = exitController?.remoteInputProbe
+        return [
+            sessionRuntimeStore?.lastPromptInputAt(panelID: panelID),
+            probe?.lastRemoteUserInputAt(panelID: panelID),
+            probe?.lastUnconfirmedRemoteDeliveryAt(panelID: panelID),
+        ].compactMap { $0 }.max()
+    }
+
+    func promptView(in session: TaskSessionInfo) -> TaskPromptView {
+        var view = TaskPromptView()
+        if session.agent == .claude, claudeHasNativeDialog(session.panelID) {
+            view.showsInteraction = true
+        }
         switch conversationAccess?.inputAvailability(panelID: session.panelID, sessionID: session.sessionID) {
         case .pendingInteraction?:
-            return true
-        case .localDraft?:
-            // The conversation can carry a draft over from the running turn.
-            // Only user input counts here: programmatic delivery can also
-            // mark a draft, even when the terminal was unavailable.
-            guard let typedAt = sessionRuntimeStore?.lastUserInputAt(panelID: session.panelID),
-                  let record = sessionRuntimeStore?.sessionRegistry.sessionsByID[session.sessionID] else { return false }
-            let lastTurnStartedAt = record.lastTurnEndedAt?.addingTimeInterval(-(record.lastTurnDuration ?? 0))
-            return typedAt > (lastTurnStartedAt ?? .distantPast)
+            view.showsInteraction = true
+        case .openPrompt?:
+            view.openPromptFollowedSince = conversationAccess?.followedSince(panelID: session.panelID)
         default:
-            return false
+            // A local draft, which Toastty's own typing also marks, or no
+            // open prompt: the typing times decide.
+            break
         }
+        return view
     }
 
     /// The effective scope: an empty explicit scope still allows the

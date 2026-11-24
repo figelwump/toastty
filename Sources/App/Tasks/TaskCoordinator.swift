@@ -92,6 +92,37 @@ struct TaskSessionInfo: Equatable {
     var turnStartedAt: Date? = nil
     /// The provider transcript Toastty confirmed for the session.
     var transcriptPath: String? = nil
+    /// When the agent's latest turn started: the running turn, or the last
+    /// one that ended. When the session started, if it had no turn since
+    /// Toastty started. A turn starts when the prompt is submitted, so text
+    /// typed before this time is not in the prompt any more.
+    var latestTurnStartedAt: Date? = nil
+}
+
+/// What Toastty sees at a task agent's prompt, apart from the status that
+/// the agent's hooks report.
+struct TaskPromptView: Equatable {
+    /// A permission prompt, a question or a dialog of the agent waits for
+    /// an answer. Typed text and its Return could answer it.
+    var showsInteraction = false
+    /// Set when the conversation that Toastty follows shows the prompt open
+    /// with nothing typed at it: the time since when Toastty followed the
+    /// panel. For a turn that started after that time, the conversation saw
+    /// the typing, and it opens the prompt again only when the agent
+    /// recorded the typed text.
+    var openPromptFollowedSince: Date? = nil
+}
+
+/// What can be at a task agent's prompt that a message Toastty types, and
+/// its Return, would join or answer.
+enum TaskPromptOccupant: Equatable {
+    /// A permission prompt, a question or a dialog of the agent.
+    case interaction
+    /// Text that a person typed, or sent from Toastty Mobile, after the
+    /// agent's latest turn started.
+    case typedText
+    /// A message that Toastty typed without a confirmed Return.
+    case unconfirmedMessage
 }
 
 /// The session side of moving a task into its worktree. A protocol so tests
@@ -138,8 +169,14 @@ protocol TaskSessionProviding: AnyObject {
     /// or sent it a message from Toastty Mobile. Text that Toastty or the
     /// CLI typed, such as `task send`, does not count.
     func lastUserInputAt(panelID: UUID) -> Date?
-    /// Whether the tracked conversation reports an interaction or a user draft.
-    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool
+    /// When text last went into the agent's prompt in the panel from
+    /// outside the task system, and can still be there: a person's typing
+    /// while the agent did not wait for an approval or an answer, a phone
+    /// message, or a delivery without a confirmed Return.
+    func lastPromptInputAt(panelID: UUID) -> Date?
+    /// What the agent's dialogs and its followed conversation show at its
+    /// prompt now.
+    func promptView(in session: TaskSessionInfo) -> TaskPromptView
 }
 
 extension TaskSessionProviding {
@@ -154,7 +191,8 @@ extension TaskSessionProviding {
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }
     func lastUserInputAt(panelID: UUID) -> Date? { nil }
-    func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool { false }
+    func lastPromptInputAt(panelID: UUID) -> Date? { nil }
+    func promptView(in session: TaskSessionInfo) -> TaskPromptView { TaskPromptView() }
 }
 
 /// What a caller asked for in `task.create`. Every field except the text is
@@ -326,6 +364,9 @@ final class TaskCoordinator {
     /// By session ID, the completed turn whose prompt an automatic message
     /// or uncertain send used. Automatic messages wait for a new prompt.
     var automaticPromptDeliveryTurnEnds: [String: Date] = [:]
+    /// By session ID, when Toastty last typed a message without a confirmed
+    /// Return. Its text can be in the prompt until a turn starts after it.
+    var unconfirmedDeliveryTimes: [String: Date] = [:]
     /// Sends the wakes of `task waiting` marks when their time comes.
     var wakeMonitor: Task<Void, Never>?
     /// When to try a due wake again after its agent could not take it.

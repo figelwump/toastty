@@ -289,6 +289,38 @@ struct TaskSteerSenderTests {
         #expect(harness.typed.texts == ["Use 300 ms"])
     }
 
+    /// Claude Code's own dialogs, such as the compact offer, show no
+    /// interaction in the conversation and leave the hooks at rest. Return
+    /// picks a choice there, so the message waits until the dialog closes.
+    @MainActor
+    @Test func aDialogOfTheAgentsOwnHoldsTheMessage() async throws {
+        final class Dialog { var shows = true }
+        let harness = try Harness()
+        defer { harness.tearDown() }
+        try harness.startTurn()
+        try harness.endTurn()
+        let dialog = Dialog()
+        let sender = TaskSteerSender { panelID in
+            guard let session = harness.sessions.activeSession(panelID: panelID) else { return nil }
+            return TaskSteerAgentView(
+                sessionID: session.sessionID,
+                state: TaskAgentState(statusKind: session.status?.kind),
+                latestTurnStartedAt: session.latestTurnStartedAt,
+                showsDialog: dialog.shows
+            )
+        }
+        sender.access = harness.fixture.service
+        defer { sender.releasePanels { _ in true } }
+
+        #expect(await sender.send("Use 300 ms", panelID: harness.fixture.panelID) == .success(.queued(position: 1)))
+        try await Task.sleep(for: .milliseconds(1_200))
+        #expect(harness.typed.texts.isEmpty)
+
+        dialog.shows = false
+        try await Transcript.waitUntil("the held message after the dialog closed") { harness.typed.texts.isEmpty == false }
+        #expect(harness.typed.texts == ["Use 300 ms"])
+    }
+
     @MainActor
     @Test func heldMessagesAreTypedInOrderOneForEachOpenPrompt() async throws {
         let harness = try Harness()

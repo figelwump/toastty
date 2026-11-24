@@ -87,7 +87,9 @@ struct TaskStartWorkTests {
                 cwd: cwd,
                 isActive: true,
                 isInTurn: true,
-                nativeConversationID: forkFromSessionID == nil ? "conversation-\(sessionID)" : nil
+                nativeConversationID: forkFromSessionID == nil ? "conversation-\(sessionID)" : nil,
+                // The first prompt starts a turn.
+                latestTurnStartedAt: Date()
             )
             return AgentLaunchResult(
                 agent: agent,
@@ -173,22 +175,36 @@ struct TaskStartWorkTests {
         /// When a person last typed into each panel, or a phone message
         /// reached it.
         var userInputAt: [UUID: Date] = [:]
-        var sessionsWithPendingInput: Set<String> = []
-        private(set) var pendingInputChecks: [String: Int] = [:]
+        /// Sessions whose prompt shows a permission prompt, a question or a
+        /// dialog.
+        var sessionsShowingInteraction: Set<String> = []
+        /// For sessions whose followed conversation shows an open prompt:
+        /// since when Toastty followed it.
+        var openPromptFollowedSince: [String: Date] = [:]
+        private(set) var promptChecks: [String: Int] = [:]
 
         func lastOutputAt(sessionID: String) -> Date? { outputAt[sessionID] }
 
         func lastUserInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
 
-        func hasPendingInteractionOrUserDraft(in session: TaskSessionInfo) -> Bool {
-            pendingInputChecks[session.sessionID, default: 0] += 1
-            return sessionsWithPendingInput.contains(session.sessionID)
+        /// A person's typing in these tests goes into the agent's prompt.
+        func lastPromptInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
+
+        func promptView(in session: TaskSessionInfo) -> TaskPromptView {
+            promptChecks[session.sessionID, default: 0] += 1
+            return TaskPromptView(
+                showsInteraction: sessionsShowingInteraction.contains(session.sessionID),
+                openPromptFollowedSince: openPromptFollowedSince[session.sessionID]
+            )
         }
 
-        /// Reports a status, as the agent's hooks do.
-        /// A turn that was running ends at `.idle`, `.ready` or `.error`.
+        /// Reports a status, as the agent's hooks do. `.working` starts a
+        /// turn; a turn that was running ends at `.idle`, `.ready` or `.error`.
         func report(_ sessionID: String, _ kind: SessionStatusKind, at date: Date = Date()) {
             let wasInTurn = sessions[sessionID]?.isInTurn == true
+            if kind == .working, wasInTurn == false {
+                sessions[sessionID]?.latestTurnStartedAt = date
+            }
             sessions[sessionID]?.status = SessionStatus(kind: kind, summary: kind.rawValue)
             sessions[sessionID]?.statusUpdatedAt = date
             sessions[sessionID]?.isInTurn = [.working, .needsApproval].contains(kind)
@@ -524,6 +540,22 @@ struct TaskStartWorkTests {
         #expect(moved.startWork?.state == .finished)
         #expect(moved.operation.sourceOutcome == .kept(reason: "Someone typed into this session after the move began."))
         #expect(fixture.sessions.closedPanels.isEmpty)
+
+        // Text that a person typed during the turn that asked for the move,
+        // and did not send, can still be in the prompt: the close's exit
+        // would submit it.
+        let draft = try Fixture()
+        let draftTask = try await draft.startedTask()
+        let draftSource = try #require(draftTask.operation.agentLaunch?.sessionID)
+        draft.sessions.userInputAt[try #require(draftTask.operation.taskSpace?.panelID)] = Date()
+        _ = try draft.coordinator.startWork(TaskStartWorkRequest(), caller: draft.caller(of: draftTask))
+        draft.sessions.endTurn(draftSource)
+        await draft.waitUntil("the fork launches") { draft.launcher.calls.count == 2 }
+        draft.sessions.confirm("launched-2")
+        await draft.waitForMove(draftTask.id)
+        #expect(draft.record(draftTask.id)?.operation.sourceOutcome
+            == .kept(reason: "This session's prompt can still hold text that was typed during its last turn."))
+        #expect(draft.sessions.closedPanels.isEmpty)
     }
 
     @Test func agentThatCannotBeForkedStartsFreshWithTheTaskAndTheSourceStays() async throws {
