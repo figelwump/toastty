@@ -25,6 +25,14 @@ protocol SessionRemoteInputProbe: AnyObject {
     /// steered it or stopped it. Toastty's later delivery of a queued
     /// message does not count.
     func lastRemoteUserInputAt(panelID: UUID) -> Date?
+    /// When Toastty last typed a message from a phone or an in-app sender
+    /// into the panel without a confirmed Return. Its text can still be in
+    /// the agent's prompt.
+    func lastUnconfirmedRemoteDeliveryAt(panelID: UUID) -> Date?
+}
+
+extension SessionRemoteInputProbe {
+    func lastUnconfirmedRemoteDeliveryAt(panelID: UUID) -> Date? { nil }
 }
 
 /// Two exits that clean up after an agent:

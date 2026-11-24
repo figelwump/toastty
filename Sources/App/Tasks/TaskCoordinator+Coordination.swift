@@ -127,8 +127,9 @@ extension TaskCoordinator {
     /// Text is in the prompt from the first key until a submit sends it,
     /// and that submit starts a turn. So text typed after the latest turn
     /// started can still be there. The conversation that Toastty follows
-    /// can tell, when it followed the panel from before the typing: an
-    /// agent at rest records sent text in its transcript.
+    /// can tell, when it followed the panel from before that turn started:
+    /// an agent at rest records sent text in its transcript. Within the
+    /// turn in which following began, it can miss the typing.
     func promptOccupant(of session: TaskSessionInfo) -> TaskPromptOccupant? {
         guard let sessions else { return nil }
         let view = sessions.promptView(in: session)
@@ -139,11 +140,11 @@ extension TaskCoordinator {
         if let typedAt = unconfirmedDeliveryTimes[session.sessionID], typedAt > latestTurnStartedAt {
             return .unconfirmedMessage
         }
-        guard let typedAt = sessions.lastUserInputAt(panelID: session.panelID), typedAt > latestTurnStartedAt else {
+        guard let typedAt = sessions.lastPromptInputAt(panelID: session.panelID), typedAt > latestTurnStartedAt else {
             return nil
         }
         let isAtRest = session.status?.kind == .idle || session.status?.kind == .ready
-        if isAtRest, let followedSince = view.openPromptFollowedSince, followedSince < typedAt {
+        if isAtRest, let followedSince = view.openPromptFollowedSince, followedSince < latestTurnStartedAt {
             return nil
         }
         return .typedText

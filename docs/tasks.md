@@ -709,12 +709,13 @@ worktree.
     as the compact offer.
   - Text that someone typed in the task's terminal, or sent from Toastty
     Mobile, since the agent's latest turn started. A submitted prompt starts a
-    turn, so older text is not in the prompt any more. While Toastty follows
-    the agent's conversation (Remote Access is on, or a `--steer` send went to
-    the task) from before the typing, it also knows when an agent at its
+    turn, so older text is not in the prompt any more. Keys that answer a
+    permission prompt or a question do not count. When Toastty followed the
+    agent's conversation (Remote Access is on, or a `--steer` send went to the
+    task) from before that turn started, it also knows when an agent at its
     prompt recorded that text. Otherwise the message waits for the next turn.
-  - An earlier message that Toastty typed there but whose Return the terminal
-    did not confirm, until a turn starts after it.
+  - An earlier message that Toastty typed there, for any sender, but whose
+    Return the terminal did not confirm, until a turn starts after it.
 
   Toastty learns of a permission prompt from the agent's hooks, a short time
   after the prompt comes on screen. A message that arrives in that time can
@@ -723,14 +724,14 @@ worktree.
   submitted; check that terminal before you send it again.
 - `toastty task send <task-id> "<message>" --steer` checks the agent first, so
   that the message can go to a busy agent. Toastty types nothing into a
-  permission prompt or a question. The result's `delivery` says what it did,
+  permission prompt, a question or a dialog of Claude Code's own. The result's `delivery` says what it did,
   and `message` says it in a sentence:
 
   | `delivery` | What Toastty did |
   | --- | --- |
   | `sent` | The agent was at its open prompt. Toastty typed the message there. |
   | `steered` | A Claude Code or Codex agent was in a turn. Toastty typed the message into that turn. Claude Code reads it after its active tool calls finish, or when the turn ends. |
-  | `queued` | Toastty holds the message and types it at the agent's next open prompt. This is the result for an agent that cannot read during a turn, for a turn that someone typed in, and while a permission prompt or a question is on screen. `queuePosition` counts from 1. |
+  | `queued` | Toastty holds the message and types it at the agent's next open prompt. This is the result for an agent that cannot read during a turn, for a turn that someone typed in, and while a permission prompt, a question or a dialog of Claude Code's own is on screen. `queuePosition` counts from 1. |
 
   Toastty holds at most 5 messages for an agent. It loses them when Toastty
   quits or the agent restarts, and reports neither. The command fails, with

@@ -26,7 +26,8 @@ final class LiveTaskSessions: TaskSessionProviding {
             sessionID: session.sessionID,
             state: TaskAgentState(statusKind: session.status?.kind),
             latestTurnStartedAt: session.latestTurnStartedAt,
-            userTypedAt: self.sessionRuntimeStore?.lastUserInputAt(panelID: panelID)
+            userTypedAt: self.sessionRuntimeStore?.lastPromptInputAt(panelID: panelID),
+            showsDialog: session.agent == .claude && self.claudeHasNativeDialog(panelID)
         )
     }
     /// Ends the follow of a panel whose agent ended, with the messages
@@ -137,6 +138,15 @@ final class LiveTaskSessions: TaskSessionProviding {
         [
             sessionRuntimeStore?.lastUserInputAt(panelID: panelID),
             exitController?.remoteInputProbe?.lastRemoteUserInputAt(panelID: panelID),
+        ].compactMap { $0 }.max()
+    }
+
+    func lastPromptInputAt(panelID: UUID) -> Date? {
+        let probe = exitController?.remoteInputProbe
+        return [
+            sessionRuntimeStore?.lastPromptInputAt(panelID: panelID),
+            probe?.lastRemoteUserInputAt(panelID: panelID),
+            probe?.lastUnconfirmedRemoteDeliveryAt(panelID: panelID),
         ].compactMap { $0 }.max()
     }
 

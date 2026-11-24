@@ -177,6 +177,9 @@ struct TaskStartWorkTests {
 
         func lastUserInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
 
+        /// A person's typing in these tests goes into the agent's prompt.
+        func lastPromptInputAt(panelID: UUID) -> Date? { userInputAt[panelID] }
+
         func promptView(in session: TaskSessionInfo) -> TaskPromptView {
             promptChecks[session.sessionID, default: 0] += 1
             return TaskPromptView(

@@ -175,13 +175,14 @@ struct TaskCoordinationTests {
         fixture.sessions.sessionsShowingInteraction.remove(session)
 
         // A person typed during the turn and did not submit it. Only a
-        // conversation that Toastty followed from before the typing can
-        // tell that the agent recorded that text.
+        // conversation that Toastty followed from before that turn started
+        // can tell that the agent recorded that text: following that began
+        // during the turn can miss the typing.
         fixture.sessions.userInputAt[panel] = start.addingTimeInterval(5)
         #expect(throws: typedTextError(task)) { try send("status?") }
-        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(6)
+        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(1)
         #expect(throws: typedTextError(task)) { try send("status?") }
-        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(4)
+        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(-60)
         try send("first")
         fixture.sessions.openPromptFollowedSince[session] = nil
 
@@ -192,7 +193,7 @@ struct TaskCoordinationTests {
         fixture.sessions.report(session, .working, at: start.addingTimeInterval(14))
         try send("second")
         fixture.sessions.userInputAt[panel] = start.addingTimeInterval(15)
-        fixture.sessions.openPromptFollowedSince[session] = start
+        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(-60)
         #expect(throws: typedTextError(task)) { try send("status?") }
         #expect(try messages(fixture, to: task) == ["first", "second"])
     }

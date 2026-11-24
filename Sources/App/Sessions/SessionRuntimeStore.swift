@@ -186,6 +186,10 @@ final class SessionRuntimeStore: ObservableObject {
     /// Unlike `lastLocalInputAtByPanelID`, text that Toastty or the CLI
     /// typed does not count.
     private var lastUserInputAtByPanelID: [UUID: Date] = [:]
+    /// The same, without the keys a person pressed while the panel's agent
+    /// waited for an approval or an answer: they answer that prompt and
+    /// leave nothing in the agent's own prompt.
+    private var lastPromptInputAtByPanelID: [UUID: Date] = [:]
     /// When each panel's input last asked the task system to save its time.
     private var userInputSaveRequestedAtByPanelID: [UUID: Date] = [:]
     private struct ManagedProviderConversationFeedState {
@@ -558,6 +562,9 @@ final class SessionRuntimeStore: ObservableObject {
     func noteUserInput(panelID: UUID) {
         let now = Date()
         lastUserInputAtByPanelID[panelID] = now
+        if sessionRegistry.activeSession(for: panelID)?.status?.kind != .needsApproval {
+            lastPromptInputAtByPanelID[panelID] = now
+        }
         // Typing changes nothing else that the task system follows, so ask
         // it to save the time: once per save interval for each panel, and
         // outside the key event.
@@ -573,6 +580,13 @@ final class SessionRuntimeStore: ObservableObject {
     /// When a person last typed, pasted or dropped a file into `panelID`.
     func lastUserInputAt(panelID: UUID) -> Date? {
         lastUserInputAtByPanelID[panelID]
+    }
+
+    /// When a person last typed, pasted or dropped a file into the prompt of
+    /// `panelID`'s agent: their input while the agent waited for an approval
+    /// or an answer does not count.
+    func lastPromptInputAt(panelID: UUID) -> Date? {
+        lastPromptInputAtByPanelID[panelID]
     }
 
     /// A remote user released the Mac draft lock: they say the composer holds
@@ -3635,6 +3649,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
         if lastUserInputAtByPanelID.keys.contains(where: { livePanelIDs.contains($0) == false }) {
             lastUserInputAtByPanelID = lastUserInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
+            lastPromptInputAtByPanelID = lastPromptInputAtByPanelID.filter { livePanelIDs.contains($0.key) }
             userInputSaveRequestedAtByPanelID = userInputSaveRequestedAtByPanelID.filter { livePanelIDs.contains($0.key) }
         }
         scheduleProgramStatusPublication(ifRecordsChangedFrom: previousProgramRecords)

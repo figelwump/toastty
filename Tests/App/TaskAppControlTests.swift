@@ -674,22 +674,30 @@ struct TaskAppControlTests {
         report(.working)
         report(.idle)
 
+        // A permission prompt. The person answers it with keys: those leave
+        // nothing in the prompt, so the send goes after the turn.
+        report(.working)
         report(.needsApproval)
         await expectInvalidPayload(interaction) { try send() }
+        fixture.sessionRuntimeStore.noteUserInput(panelID: panel)
+        report(.working)
         report(.idle)
         typed.dialogPanels.insert(panel)
         await expectInvalidPayload(interaction) { try send() }
         typed.dialogPanels.remove(panel)
+        #expect(typed.entries.isEmpty)
+        try send()
+        #expect(typed.entries.map(\.panelID) == [panel])
 
         // A draft that a person typed at the agent's prompt.
         fixture.sessionRuntimeStore.noteUserInput(panelID: panel)
         await expectInvalidPayload(typedText) { try send() }
-        #expect(typed.entries.isEmpty)
+        #expect(typed.entries.count == 1)
 
         // The person submits it: the turn it starts takes the message.
         report(.working)
         try send()
-        #expect(typed.entries.map(\.panelID) == [panel])
+        #expect(typed.entries.map(\.panelID) == [panel, panel])
         #expect(typed.entries.last?.text.hasSuffix("\nstatus?") == true)
     }
 

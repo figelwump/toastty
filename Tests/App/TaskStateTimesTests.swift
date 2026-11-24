@@ -427,9 +427,11 @@ extension TaskAppControlTests {
         #expect(try get(executor, other.id)["lastUserInputAt"] == .null)
 
         // A paste counts as well, and a later `task send` does not move it.
+        // It types once the person's text went out: a turn started.
         terminals.handleLocalInput(for: try #require(other.operation.taskSpace?.panelID), kind: .paste)
         #expect(try lastUserInputAt(other.id) != nil)
         let typed = try get(executor, task.id)["lastUserInputAt"]
+        report(fixture, try #require(task.operation.agentLaunch?.sessionID), .working)
         _ = try executor.runAction(
             id: "task.send", args: ["taskID": .string(task.id.uuidString), "text": .string("status?")], context: context()
         )

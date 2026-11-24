@@ -107,8 +107,9 @@ struct TaskPromptView: Equatable {
     var showsInteraction = false
     /// Set when the conversation that Toastty follows shows the prompt open
     /// with nothing typed at it: the time since when Toastty followed the
-    /// panel. The conversation saw all typing after that time, and it shows
-    /// the prompt open again only when the agent recorded the typed text.
+    /// panel. For a turn that started after that time, the conversation saw
+    /// the typing, and it opens the prompt again only when the agent
+    /// recorded the typed text.
     var openPromptFollowedSince: Date? = nil
 }
 
@@ -161,6 +162,11 @@ protocol TaskSessionProviding: AnyObject {
     /// or sent it a message from Toastty Mobile. Text that Toastty or the
     /// CLI typed, such as `task send`, does not count.
     func lastUserInputAt(panelID: UUID) -> Date?
+    /// When text last went into the agent's prompt in the panel from
+    /// outside the task system, and can still be there: a person's typing
+    /// while the agent did not wait for an approval or an answer, a phone
+    /// message, or a delivery without a confirmed Return.
+    func lastPromptInputAt(panelID: UUID) -> Date?
     /// What the agent's dialogs and its followed conversation show at its
     /// prompt now.
     func promptView(in session: TaskSessionInfo) -> TaskPromptView
@@ -176,6 +182,7 @@ extension TaskSessionProviding {
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }
     func lastUserInputAt(panelID: UUID) -> Date? { nil }
+    func lastPromptInputAt(panelID: UUID) -> Date? { nil }
     func promptView(in session: TaskSessionInfo) -> TaskPromptView { TaskPromptView() }
 }
 
