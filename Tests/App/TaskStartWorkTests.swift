@@ -729,6 +729,86 @@ struct TaskStartWorkTests {
         }
     }
 
+    // MARK: - New projects
+
+    /// A new project gets a repository with a first commit, so a task can
+    /// start work there at once.
+    @Test func newProjectMakesARepositoryThatATaskStartsWorkIn() async throws {
+        let fixture = try Fixture()
+        let folder = fixture.repository.root.appendingPathComponent("minecraft-mods").path
+        let created = try await fixture.coordinator.create(TaskCreateRequest(
+            text: "Build the mods site", rootDirectory: folder, newProject: true, agent: "codex", startWork: true
+        ))
+        await fixture.waitUntil("setup ends") { fixture.record(created.id)?.setup != .settingUp }
+        let record = try #require(fixture.record(created.id))
+        #expect(record.setup == .started)
+        #expect(record.projectRoot == TasksConfigFile.normalizedPath(folder))
+        #expect(try TaskGitTestRepository.git(["log", "--format=%s"], in: folder) == "Initial commit")
+        let worktree = try #require(record.worktree)
+        #expect(try TaskGitTestRepository.git(["rev-parse", "HEAD"], in: worktree.path)
+            == TaskGitTestRepository.git(["rev-parse", "HEAD"], in: folder))
+        let launch = try #require(fixture.launcher.calls.first { $0.workspaceID == record.taskSpaceWorkspaceID })
+        #expect(launch.cwd == worktree.path)
+
+        // The folder is a repository now, so a second new project there is
+        // refused.
+        await #expect(throws: TaskError.self) {
+            try await fixture.coordinator.create(TaskCreateRequest(text: "x", rootDirectory: folder, newProject: true, agent: "codex"))
+        }
+    }
+
+    /// Toastty never writes into a folder with files, and a create that
+    /// fails after the folder was made leaves the disk as it was.
+    @Test func newProjectNeverWritesIntoAFolderWithFilesAndUndoesAFailedCreate() async throws {
+        let fixture = try Fixture()
+        let root = fixture.repository.root
+        let files = FileManager.default
+        func newProject(_ path: String, base: String? = nil) async throws -> TaskRecord {
+            try await fixture.coordinator.create(TaskCreateRequest(
+                text: "x", rootDirectory: path, newProject: true, agent: "codex", base: base
+            ))
+        }
+
+        let notes = root.appendingPathComponent("notes")
+        try files.createDirectory(at: notes, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: notes.appendingPathComponent("todo.txt"))
+        // Only Finder's .DS_Store file counts as empty, not a folder of that name.
+        let hidden = root.appendingPathComponent("hidden")
+        try files.createDirectory(at: hidden.appendingPathComponent(".DS_Store"), withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: hidden.appendingPathComponent(".DS_Store/notes.txt"))
+        let refused = [
+            hidden.path,
+            notes.path,
+            notes.appendingPathComponent("todo.txt").path,
+            fixture.repository.project,
+            root.appendingPathComponent("missing/site").path,
+        ]
+        for path in refused {
+            await #expect(throws: TaskError.self) { _ = try await newProject(path) }
+        }
+        #expect(try files.contentsOfDirectory(atPath: notes.path) == ["todo.txt"])
+        #expect(files.fileExists(atPath: hidden.appendingPathComponent(".git").path) == false)
+        #expect(files.fileExists(atPath: root.appendingPathComponent("missing").path) == false)
+
+        // --base without --start-work fails after the folder was made.
+        let site = root.appendingPathComponent("site").path
+        await #expect(throws: TaskError.self) { _ = try await newProject(site, base: "main") }
+        #expect(files.fileExists(atPath: site) == false)
+
+        // An empty folder, as Finder leaves it, keeps only what it had.
+        let empty = root.appendingPathComponent("empty")
+        try files.createDirectory(at: empty, withIntermediateDirectories: false)
+        try Data().write(to: empty.appendingPathComponent(".DS_Store"))
+        await #expect(throws: TaskError.self) { _ = try await newProject(empty.path, base: "main") }
+        #expect(try files.contentsOfDirectory(atPath: empty.path) == [".DS_Store"])
+
+        let created = try await newProject(empty.path)
+        #expect(created.projectRoot == TasksConfigFile.normalizedPath(empty.path))
+        #expect(try TaskGitTestRepository.git(["log", "--format=%s"], in: empty.path) == "Initial commit")
+        await fixture.waitUntil("setup ends") { fixture.record(created.id)?.setup != .settingUp }
+        #expect(fixture.record(created.id)?.setup == .started)
+    }
+
     // MARK: - Forked tasks
 
     @Test func forkedTasksWaitForTheCallersTurnAndForkItsConversationIntoTheirTaskSpaces() async throws {

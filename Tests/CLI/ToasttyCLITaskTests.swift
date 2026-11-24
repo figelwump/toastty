@@ -84,6 +84,14 @@ struct ToasttyCLITaskTests {
 
         #expect(throws: ToasttyCLIError.self) { try arguments(["--root", "/srv/site", "--workspace", UUID().uuidString]) }
         #expect(throws: ToasttyCLIError.self) { try arguments(["--external-url", "https://example.com"]) }
+
+        // A new project is a root directory that Toastty makes first.
+        let newProject = try arguments(["--new-project", "minecraft-mods"])
+        #expect(newProject["rootDirectory"] == .string("/Users/me/work/minecraft-mods"))
+        #expect(newProject["newProject"] == .bool(true))
+        #expect(args["newProject"] == nil)
+        #expect(throws: ToasttyCLIError.self) { try arguments(["--new-project", "/srv/a", "--root", "/srv/b"]) }
+        #expect(throws: ToasttyCLIError.self) { try arguments(["--new-project", "/srv/a", "--workspace", UUID().uuidString]) }
     }
 
     @Test

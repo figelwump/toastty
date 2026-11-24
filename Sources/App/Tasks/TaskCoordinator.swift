@@ -213,6 +213,9 @@ struct TaskCreateRequest: Equatable {
     /// workspace on it, or a new one that Toastty opens once every other
     /// check passed.
     var rootDirectory: String?
+    /// `rootDirectory` names a folder that is missing or empty, which
+    /// Toastty makes into a new git repository before it creates the task.
+    var newProject = false
     /// The issue or report the task came from. Its URL needs its ID.
     var externalRefID: String?
     var externalRefURL: String?
@@ -328,6 +331,8 @@ final class TaskCoordinator {
     /// The same for moves into a worktree.
     var startWorkAttempts: [UUID: UUID] = [:]
     var startWorkTasks: [UUID: Task<Void, Never>] = [:]
+    /// The folders that creates are making into new projects now.
+    var newProjectsInProgress: Set<String> = []
 
     /// Saves the workspace layout at once. Setup calls it after it makes or
     /// unlinks a task space, so the layout on disk never lags a record that
@@ -431,11 +436,22 @@ final class TaskCoordinator {
         caller: TaskCaller = .unmanaged,
         beforeSave: (@MainActor () throws -> Void)? = nil
     ) async throws -> TaskRecord {
-        try await finishCreate(try prepareCreate(request, caller: caller), beforeSave: beforeSave)
+        let (request, made) = try await makeNewProjectIfRequested(request, caller: caller)
+        let preparation: TaskCreatePreparation
+        do {
+            preparation = try prepareCreate(request, caller: caller)
+        } catch {
+            removeNewProject(made)
+            throw error
+        }
+        return try await finishCreate(preparation, beforeSave: beforeSave)
     }
 
     /// Every check that needs app state, done before any file is copied.
     func prepareCreate(_ request: TaskCreateRequest, caller: TaskCaller = .unmanaged) throws -> TaskCreatePreparation {
+        guard request.newProject == false else {
+            throw TaskError("Make the new project with makeNewProjectIfRequested before the other checks.")
+        }
         let source = caller.source
         let clientRequestID = try validatedClientRequestID(request.clientRequestID)
         // Request IDs belong to their caller, so one caller cannot read

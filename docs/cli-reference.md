@@ -872,7 +872,7 @@ Create and manage tasks. See [Tasks](tasks.md) for what setup does and for
 `~/.toastty/tasks.toml`.
 
 ```
-toastty task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
+toastty task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir> | --new-project <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
 toastty task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
 toastty task get [<task-id>]
 toastty task retry|delete <task-id>
@@ -912,6 +912,13 @@ cannot be used with it. See
 `--root <dir>` names the project by its directory instead of `--workspace`:
 Toastty uses the open workspace on it, or opens the project once every other
 check passed. A relative path resolves against the current directory.
+`--new-project <dir>` is `--root` for a project that does not exist yet:
+Toastty makes the folder, in a parent folder that exists, with an empty git
+repository and a first empty commit, so that `--start-work` can make a
+worktree. The folder must be missing or empty. Toastty never writes into a
+folder with files, and refuses a folder that is already a git repository;
+pass such a folder with `--root`. If the create then fails, Toastty removes
+what it made.
 `--external-ref` names the issue or report the task came from, such as
 `github:owner/repo#123` (printable ASCII, no spaces, at most 128
 characters), and `--external-url` gives its page; `task get` and `task list`

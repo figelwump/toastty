@@ -1164,7 +1164,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--tab <id>] [--panel <id>] [key=value ...]
-      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
+      toastty [--json] [--socket-path <path>] task create [<text>] [--file <path> ...] [--workspace <id> | --root <dir> | --new-project <dir>] [--external-ref <id> [--external-url <url>]] [--agent <id>] [--model <id>] [--effort <level>] [--prompt <text> | --prompt-file <path>] [--title <text>] [--slug <slug>] [--request-id <id>] [--start-work [--base <ref>] [--branch-prefix <prefix>]] [--fork] [--wait [--timeout <seconds>]]
       toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
@@ -2325,7 +2325,7 @@ public enum ToasttyCLI {
                 valueOptions: [
                     "--text", "--file", "--workspace", "--agent", "--model", "--effort",
                     "--prompt", "--prompt-file", "--title", "--slug", "--request-id", "--timeout",
-                    "--base", "--branch-prefix", "--root", "--external-ref", "--external-url",
+                    "--base", "--branch-prefix", "--root", "--new-project", "--external-ref", "--external-url",
                 ],
                 flagOptions: ["--wait", "--start-work", "--fork"]
             )
@@ -2367,6 +2367,13 @@ public enum ToasttyCLI {
                     throw ToasttyCLIError.usage("pass --workspace or --root, not both\n\n\(usage)")
                 }
                 args["rootDirectory"] = .string(absolutePath(root))
+            }
+            if let folder = parsed.singleValue("--new-project") {
+                guard parsed.singleValue("--workspace") == nil, parsed.singleValue("--root") == nil else {
+                    throw ToasttyCLIError.usage("pass one of --workspace, --root or --new-project\n\n\(usage)")
+                }
+                args["rootDirectory"] = .string(absolutePath(folder))
+                args["newProject"] = .bool(true)
             }
             if parsed.singleValue("--external-url") != nil, parsed.singleValue("--external-ref") == nil {
                 throw ToasttyCLIError.usage("--external-url needs --external-ref\n\n\(usage)")

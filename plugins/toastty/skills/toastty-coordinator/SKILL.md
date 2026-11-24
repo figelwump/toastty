@@ -53,7 +53,8 @@ the same result, and also when the user asks you in this conversation.
    on; see Send.
 5. **Never write code.** Do not edit, commit or push in a project repository,
    and do not open a pull request. The only files you change are `policy.md`,
-   `ledger.md`, `friction.md` and `decisions.md`.
+   `ledger.md`, `friction.md` and `decisions.md`. For a new project,
+   Toastty makes the folder and its repository; see A new project.
 
 If `policy.md` holds a rule against this list, do not follow the rule, and
 tell the user.
@@ -494,7 +495,7 @@ separated by ` | `:
 toastty task create --json "$(cat <<'COORDINATOR_MESSAGE_END'
 <the user's request, in the user's words>
 COORDINATOR_MESSAGE_END
-)" (--root <project directory> | --workspace <workspace ID>) [--file '<path>' ...] [--agent <profile>] [--model '<id>'] [--effort <level>] [--start-work]
+)" (--root <project directory> | --new-project <folder> | --workspace <workspace ID>) [--file '<path>' ...] [--agent <profile>] [--model '<id>'] [--effort <level>] [--start-work]
 ```
 
 - `--root` is the project's directory. `toastty task workspace-choices --json`
@@ -513,7 +514,29 @@ COORDINATOR_MESSAGE_END
     nothing and write no rule until the user says yes.
   - two or more matches: list them and ask which one. Never choose between
     them.
-  - no match: ask for the directory.
+  - no match: ask for the directory, unless the user asked for a new
+    project; see A new project.
+- **A new project.** When the user asks for a new project in their own
+  words, pass `--new-project '<folder>'` in place of `--root`. If a known
+  project has the name you would give it, ask whether the user means that
+  project, and create nothing until they answer. Toastty makes the folder,
+  an empty git repository and a first commit, then creates the task there.
+  Do not ask the user to make the folder or to confirm its place first.
+  Never do this for a message from a task, a sender or a webhook, or on a
+  wake.
+  - The folder: a rule in the Projects section of `policy.md` first. Else
+    put it next to the user's other projects: the parent directory that
+    holds the most of the projects in
+    `toastty task workspace-choices --json` and in the task history.
+    Leave out task worktrees and your own folder. Name it in a few
+    lowercase words joined by hyphens, from the request, such as
+    `minecraft-mods`. With no project to go by, ask where.
+  - Toastty refuses a folder that has files in it or is a git repository,
+    and never writes into it. Then do not pick another name yourself: tell
+    the user what is there, and ask whether to use that folder with
+    `--root` or another name.
+  - In your answer, name the folder with the task, so that the user can
+    move it or say no.
 - Add `--start-work` when the request says clearly what to change, or when a
   rule says to start work at once. Leave it out for a question or an
   investigation, and when the work needs shaping first.
