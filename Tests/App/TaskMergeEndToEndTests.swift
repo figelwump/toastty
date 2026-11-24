@@ -1222,6 +1222,49 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
         }
     }
 
+    /// The task merged its first pull request from its recorded branch, then
+    /// moved its worktree onto another branch and merged a second pull
+    /// request from it. Cleanup finishes without a question: on its own
+    /// after the merge, and with Clean Up for a stop saved before this case
+    /// was handled.
+    @Test(arguments: [false, true])
+    func cleanupFinishesWhenTheWorktreeMovedOntoALaterPullRequestsBranch(stoppedBefore: Bool) async throws {
+        let oldStop = "the worktree is no longer on the recorded branch"
+        try await withScenario(
+            pullRequestBranch: "feat/shared", restoredCleanup: stoppedBefore ? .failed(reason: oldStop) : nil
+        ) { scenario in
+            // The first pull request merged the recorded branch's commit
+            // into main; the worktree now holds the second pull request's branch.
+            try scenario.git(["checkout", "-q", "-b", "feat/shared"], in: scenario.worktree)
+            try scenario.git(["branch", "-f", "fix/task-7", "HEAD~1"], in: scenario.worktree)
+            try scenario.git(["push", "-q", "origin", "HEAD~1:refs/heads/main"], in: scenario.worktree)
+
+            if stoppedBefore {
+                #expect(scenario.boardItem?.stage == .needsYou(.cleanupStopped(reason: oldStop)))
+                let socketPath = temporarySocketPath()
+                let taskServer = try makeTaskServer(scenario, socketPath: socketPath)
+                defer { withExtendedLifetime(taskServer) {} }
+                try waitForSocket(at: socketPath)
+                scenario.socketPath = socketPath
+                let result = try await scenario.cli(["--json", "task", "clean-up", scenario.taskID.uuidString])
+                #expect(result.status == 0, "\(result.output)")
+                await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            } else {
+                scenario.reportAgent(.ready)
+                FileManager.default.createFile(atPath: scenario.mergedMarker, contents: nil)
+                await scenario.pullRequests.refresh(scenario.pullRequest).value
+                await scenario.waitUntil("the cleanup finishes") { scenario.record?.cleanup?.finishedAt != nil }
+            }
+            #expect(scenario.record?.cleanup?.problem == nil)
+            #expect(scenario.record?.mergeFailure == nil, "\(scenario.notifications)")
+            #expect(scenario.store.state.workspacesByID[scenario.taskSpaceID] == nil)
+            #expect(FileManager.default.fileExists(atPath: scenario.worktree) == false)
+            #expect(try scenario.git(["branch", "--list", "fix/task-7", "feat/shared"], in: scenario.repo).isEmpty)
+            #expect(try scenario.git(["ls-remote", "--heads", "origin", "feat/shared"], in: scenario.repo).isEmpty)
+            #expect(scenario.boardItem?.stage == .done)
+        }
+    }
+
     /// A merge on GitHub while the agent works is the user's acceptance too.
     /// Its cleanup waits for the agent's turn, as after a merge Toastty
     /// ran, and does not ask the user. Work the agent starts afterwards, or
