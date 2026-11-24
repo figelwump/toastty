@@ -10,7 +10,7 @@ public enum LinuxMenus {
     /// Menu layout as (section, [submenu title?, items]) for tests and docs.
     public static let layout: [[(submenu: String?, items: [String])]] = [
         [
-            (nil, ["window.create", "workspace.create", "workspace.tab.create"]),
+            (nil, ["window.create", "workspace.create", "workspace.tab.create", "task.new"]),
         ],
         [
             ("Workspace", ["workspace.rename", "workspace.close", "workspace.select-previous", "workspace.select-next",
@@ -24,10 +24,10 @@ public enum LinuxMenus {
                        "panel.focus-next-unread-or-active", "session.later-flag.toggle", "terminal.agent-reads.toggle"]),
             ("Right Panel", ["window.toggle-right-panel", "browser.create", "scratchpad.create",
                              "scratchpad.show-current-session", "local-document.open"]),
-            ("View", ["window.toggle-sidebar", "text-size.increase", "text-size.decrease", "text-size.reset",
-                      "find.show", "window.fullscreen"]),
-            ("Agents", ["agent.profiles.manage", "agent.status-hooks.setup", "agent.toastty-skills.manage",
-                        "terminal.profiles.manage"]),
+            ("View", ["window.toggle-sidebar", "window.toggle-tasks-view", "coordinator.dock.toggle", "text-size.increase",
+                      "text-size.decrease", "text-size.reset", "find.show", "window.fullscreen"]),
+            ("Agents", ["coordinator.open", "coordinator.restart", "agent.profiles.manage", "agent.status-hooks.setup",
+                        "agent.toastty-skills.manage", "terminal.profiles.manage"]),
         ],
         [
             (nil, ["command-palette.toggle", "app.preferences", "app.shortcuts", "app.remote-access.open"]),

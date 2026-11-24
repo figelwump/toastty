@@ -17,6 +17,9 @@ import GhosttyKit
 /// or the desktop's handler, close requests → Toastty's close path.
 @MainActor
 public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActionHandling {
+    /// Opens quick entry with a terminal's selection (set by the tasks UI).
+    public static var newTaskFromSelection: (@MainActor (String, UUID) -> Void)?
+
     final class Entry {
         let panelID: UUID
         let container: GObjectRef
@@ -625,6 +628,15 @@ public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActi
             g_action_map_add_action(cast(group), cast(action))
             g_object_unref(UnsafeMutableRawPointer(action))
         }
+        // macOS "New Task from Selection…": quick entry with the selection
+        // attached as selection.txt and this terminal's workspace chosen.
+        let newTask = g_simple_action_new("new-task-from-selection", nil)!
+        Signal.connectPointer(newTask, "activate") { [weak self] _ in
+            guard let self, let text = self.entries[panelID]?.surface.readSelection(), text.isEmpty == false else { return }
+            Self.newTaskFromSelection?(text, panelID)
+        }
+        g_action_map_add_action(cast(group), cast(newTask))
+        g_object_unref(UnsafeMutableRawPointer(newTask))
         gtk_widget_insert_action_group(entry.container.widgetPointer, "term", cast(group))
         g_object_unref(UnsafeMutableRawPointer(group))
     }
@@ -642,6 +654,12 @@ public final class GhosttyTerminalHost: TerminalPanelHosting, GhosttyRuntimeActi
             g_menu_append(layout, "Split Right", "win.layout.split.horizontal")
             g_menu_append(layout, "Split Down", "win.layout.split.vertical")
             g_menu_append_section(menu, nil, cast(layout))
+            if Self.newTaskFromSelection != nil {
+                let tasks = g_menu_new()!
+                g_menu_append(tasks, "New Task from Selection…", "term.new-task-from-selection")
+                g_menu_append_section(menu, nil, cast(tasks))
+                g_object_unref(UnsafeMutableRawPointer(tasks))
+            }
             let terminal = g_menu_new()!
             g_menu_append(terminal, "Find…", "term.find")
             g_menu_append(terminal, "Clear", "term.clear")

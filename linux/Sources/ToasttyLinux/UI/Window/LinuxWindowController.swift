@@ -649,6 +649,7 @@ public final class LinuxWindowController {
                 return
             }
             let palette = CommandPaletteDialog(catalog: PaletteModel.catalog(state: store.state, windowID: windowID)
+                + features.flatMap { $0.paletteItems(store.state) }
                 + TerminalProfileShortcuts.shared.paletteItems
                 + TerminalProfileShortcuts.shared.agentPaletteItems(windowID: windowID)) { [weak self] id in
                 self?.palette = nil

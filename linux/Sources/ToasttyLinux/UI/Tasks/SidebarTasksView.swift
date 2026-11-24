@@ -32,6 +32,7 @@ final class SidebarTasksView {
     private let reviewCount: WidgetPtr
     private let cards: WidgetPtr
     private let menu: WidgetPtr
+    private var menuRef: GObjectRef?
     private var model: SidebarTasksModel?
     private var memory = SidebarTasksModel.Memory()
     private var expandedToShip: Set<UUID> = []
@@ -104,6 +105,7 @@ final class SidebarTasksView {
         menu = gtk_popover_menu_new_from_model(nil)
         gtk_popover_set_has_arrow(cast(menu), 0)
         gtk_widget_set_halign(menu, GTK_ALIGN_START)
+        menuRef = GObjectRef(sinking: menu)
         gtk_widget_set_parent(menu, cards)
 
         click(coordinatorRow) { [weak self] in self?.coordinatorClicked() }
@@ -117,7 +119,7 @@ final class SidebarTasksView {
     }
 
     func teardown() {
-        gtk_widget_unparent(menu)
+        Gtk.unparentIfAttached(menu)
     }
 
     // MARK: - Render

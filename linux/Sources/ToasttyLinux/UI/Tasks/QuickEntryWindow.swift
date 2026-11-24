@@ -459,6 +459,7 @@ final class QuickEntryWindowFrontend: QuickEntryFrontend {
 @MainActor
 final class QuickEntryPickerPopover {
     private let popover: WidgetPtr
+    private var popoverRef: GObjectRef?
     private let picker: QuickEntryPicker
     private weak var controller: QuickEntryController?
     private let search: WidgetPtr
@@ -491,6 +492,7 @@ final class QuickEntryPickerPopover {
         status = Gtk.hbox(spacing: 6, classes: ["quick-entry-picker-status"])
         Gtk.append(column, status)
         gtk_popover_set_child(cast(popover), column)
+        popoverRef = GObjectRef(sinking: popover)
         gtk_widget_set_parent(popover, anchor)
 
         Signal.connect(search, "search-changed") { [weak self] in
@@ -517,7 +519,7 @@ final class QuickEntryPickerPopover {
         isClosing = true
         subscription = nil
         gtk_popover_popdown(cast(popover))
-        gtk_widget_unparent(popover)
+        Gtk.unparentIfAttached(popover)
     }
 
     private func installKeys() {

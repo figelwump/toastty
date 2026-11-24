@@ -82,6 +82,17 @@ public final class GhosttyTerminalSurface {
         return sendKey(keyval: keyval)
     }
 
+    /// The selected text, or nil without a selection.
+    public func readSelection() -> String? {
+        guard let surface, ghostty_surface_has_selection(surface) else { return nil }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &text) else { return nil }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard let pointer = text.text else { return nil }
+        let buffer = UnsafeRawBufferPointer(start: UnsafeRawPointer(pointer), count: Int(text.text_len))
+        return String(decoding: buffer, as: UTF8.self)
+    }
+
     /// Viewport text, or the whole screen including scrollback. Like macOS,
     /// the scrollback read ends at the screen bottom.
     public func readText(includeScrollback: Bool) -> String? {

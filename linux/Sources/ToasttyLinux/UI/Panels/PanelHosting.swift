@@ -99,6 +99,12 @@ public protocol LinuxWindowFeature: AnyObject {
     func isEnabled(commandID: String, state: AppState) -> Bool?
     /// The window is closing.
     func teardown()
+    /// Commands the palette lists for this window now.
+    func paletteItems(_ state: AppState) -> [PaletteItem]
+}
+
+extension LinuxWindowFeature {
+    public func paletteItems(_ state: AppState) -> [PaletteItem] { [] }
 }
 
 /// Makes a window's feature once its controller exists.

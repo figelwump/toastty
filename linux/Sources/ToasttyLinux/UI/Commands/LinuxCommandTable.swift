@@ -109,11 +109,13 @@ public enum LinuxCommandTable {
             .init("window.toggle-tasks-view", "Show Tasks", ["<Control><Shift>d"], section: .windowsAndWorkspaces, macOS: "Cmd+Shift+T",
                   keywords: ["tasks", "task", "board", "view"]),
             .init("coordinator.dock.toggle", "Show Coordinator Dock", ["<Control><Shift>k"], section: .windowsAndWorkspaces,
-                  macOS: "Cmd+Shift+K", keywords: ["coordinator", "dock", "chat", "toasty", "focus"]),
+                  macOS: "Cmd+Shift+K", keywords: ["coordinator", "dock", "chat", "toasty", "focus"], inPalette: false),
             .init("coordinator.open", "Open Coordinator", section: .application,
                   keywords: ["coordinator", "open", "start", "toasty", "chat"]),
+            // The tasks feature lists Restart and the dock's toggle in the
+            // palette while they apply, with the dock's current title.
             .init("coordinator.restart", "Restart Coordinator", section: .application,
-                  keywords: ["coordinator", "restart", "toasty"]),
+                  keywords: ["coordinator", "restart", "toasty"], inPalette: false),
             .init("agent.toastty-skills.manage", "Manage Toastty Skills", section: .application,
                   keywords: ["manage", "toastty", "codex", "claude", "skills", "plugin", "repair", "uninstall"]),
             .init("agent.status-hooks.setup", "Set Up Agent Status Hooks", section: .application,

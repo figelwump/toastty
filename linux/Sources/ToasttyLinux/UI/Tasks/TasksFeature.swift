@@ -28,6 +28,8 @@ final class TasksUI {
     /// Quick entry's GTK window (`QuickEntryPresentation.frontend` holds it
     /// weakly).
     var quickEntryFrontend: QuickEntryWindowFrontend?
+    /// Where the What's new answer is kept (nil in an automation run).
+    var startOfferDefaults: UserDefaults?
 
     private struct WeakFeature {
         weak var feature: TasksWindowFeature?
@@ -101,6 +103,20 @@ final class TasksWindowFeature: LinuxWindowFeature {
         sidebarView = SidebarTasksView(ui: ui, controller: controller)
         controller.sidebar.setAlternateContent(sidebarView.content)
         ui.register(self)
+        // The What's new question shows over the window that gets the
+        // keyboard, as on macOS.
+        let windowID = controller.windowID
+        let window = controller.window
+        Signal.notify(window, "is-active") { [weak ui] in
+            guard gtk_window_is_active(cast(window)).bool else { return }
+            ui?.offerStartIfNeeded(windowID: windowID)
+        }
+        // And once the window is on screen, as macOS asks when its window
+        // scene appears.
+        MainLoop.timeout(milliseconds: 400) { [weak ui] in
+            if gtk_widget_get_mapped(window).bool { ui?.offerStartIfNeeded(windowID: windowID) }
+            return false
+        }
     }
 
     var pages: [String: WidgetPtr] { [Self.tasksPageName: tasksPage.root] }
@@ -134,6 +150,8 @@ final class TasksWindowFeature: LinuxWindowFeature {
         case "task.new":
             ui.board.newTask?()
             return true
+        case let id where id.hasPrefix("task.palette."):
+            return performPaletteTaskCommand(id)
         case "coordinator.dock.toggle":
             coordinatorUI.performDockShortcut()
             return true
@@ -166,6 +184,84 @@ final class TasksWindowFeature: LinuxWindowFeature {
         }
     }
 
+    // MARK: - Palette
+
+    /// macOS `CommandPaletteTaskCatalog`: "Task: <action>" for the current
+    /// task (the Tasks view's row while it shows, else the selected task
+    /// space's task), its pull request and task space, Restart Coordinator
+    /// once it is open, and the dock's toggle in the coordinator's window.
+    func paletteItems(_ state: AppState) -> [PaletteItem] {
+        var items: [PaletteItem] = []
+        if let current = currentTask() {
+            let item = current.item
+            let subtitle = "\(item.title) · \(TaskBoardPresentation.stageDescription(item).stage)"
+            let keywords = ["task", "done", "merge", "archive", "ship"]
+            for action in TaskBoardPresentation.detailActions(item) {
+                items.append(PaletteItem(
+                    id: "task.palette.action.\(action)", title: "Task: \(action.title)", subtitle: subtitle,
+                    keywords: keywords + ["\(action)"],
+                    accelerator: action == .merge && current.source == .selectedTaskSpace && current.hasMergeButton ? "<Alt><Shift>m" : nil
+                ))
+            }
+            if let link = item.pullRequest, URL(string: link.url) != nil {
+                items.append(PaletteItem(id: "task.palette.pull-request", title: "Task: Open PR #\(link.number)", subtitle: subtitle,
+                                         keywords: keywords + ["open", "pr", "pull", "request", "github"]))
+            }
+            if current.source == .tasksView, item.taskSpaceWorkspaceID != nil {
+                items.append(PaletteItem(id: "task.palette.task-space", title: "Task: Open Task Space", subtitle: subtitle,
+                                         keywords: keywords + ["open", "space", "workspace"]))
+            }
+        }
+        if let controller = ui.tasks.coordinatorController {
+            if controller.location != nil {
+                items.append(PaletteItem(id: "coordinator.restart", title: "Restart Coordinator",
+                                         subtitle: "Starts a fresh agent session in the coordinator's workspace",
+                                         keywords: ["coordinator", "agent", "restart", "start", "new", "session"]))
+            }
+            if CoordinatorDockPresentation.showsToggle(windowID: windowID, coordinator: controller.location, chatAvailable: controller.chatIsAvailable) {
+                let shows = controller.dockShows(in: windowID)
+                items.append(PaletteItem(id: "coordinator.dock.toggle", title: CoordinatorDockPresentation.toggleTitle(dockShows: shows),
+                                         subtitle: shows ? nil : "The coordinator's chat beside your workspace",
+                                         keywords: ["coordinator", "dock", "chat", "show", "hide", "toggle"],
+                                         accelerator: "<Control><Shift>k"))
+            }
+        }
+        return items
+    }
+
+    private func currentTask() -> TaskBoardCurrentTask? {
+        guard let selection = ui.store.commandSelection(preferredWindowID: windowID) else { return nil }
+        return ui.board.currentTask(in: selection) { [weak ui] in ui?.sessionRuntimeStore.workspaceStatuses(for: $0) ?? [] }
+    }
+
+    /// Runs a palette row for the current task. The task may have moved on
+    /// since the palette listed it.
+    private func performPaletteTaskCommand(_ commandID: String) -> Bool {
+        guard let item = currentTask()?.item else {
+            controller?.toast("No current task")
+            return true
+        }
+        if commandID == "task.palette.pull-request" {
+            if let url = item.pullRequest.flatMap({ URL(string: $0.url) }) {
+                _ = DesktopLauncher.open(url, parent: controller?.window)
+            }
+            return true
+        }
+        if commandID == "task.palette.task-space" {
+            if let workspaceID = item.taskSpaceWorkspaceID { ui.openTaskSpace(workspaceID, windowID: windowID) }
+            return true
+        }
+        let name = String(commandID.dropFirst("task.palette.action.".count))
+        guard let record = item.record,
+              let action = TaskBoardPresentation.detailActions(item).first(where: { "\($0)" == name }) else { return true }
+        do {
+            try TaskActions.run(action, taskID: record.id, coordinator: ui.coordinator)
+        } catch {
+            TaskActions.presentFailure("\(action.failureTitle) \(record.title)", error.localizedDescription)
+        }
+        return true
+    }
+
     func teardown() {
         tasksPage.teardown()
         coordinatorUI.teardown()
@@ -192,7 +288,12 @@ extension LinuxAppController {
         }
         ui.quickEntryFrontend = quickEntry
         QuickEntryPresentation.frontend = quickEntry
+        // The key waits for the What's new question (a first launch).
+        ui.installStartOffer(app: self)
         ui.tasks.quickEntry.loadShortcutAtLaunch()
+        GhosttyTerminalHost.newTaskFromSelection = { [weak ui] text, panelID in
+            ui?.tasks.quickEntry.presentFromSelection(text, panelID: panelID)
+        }
         installTasksAutomation(ui: ui)
         installCoordinatorAutomation(ui: ui)
     }

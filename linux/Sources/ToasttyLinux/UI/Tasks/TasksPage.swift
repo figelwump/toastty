@@ -24,6 +24,7 @@ final class TasksPage {
     private let newTaskButton: WidgetPtr
     private let newTaskShortcut: WidgetPtr
     private let contextMenu: WidgetPtr
+    private var contextMenuRef: GObjectRef?
     private var isShown = false
     private var isDoneExpanded = false
     private var isArchivedExpanded = false
@@ -96,6 +97,7 @@ final class TasksPage {
         contextMenu = gtk_popover_menu_new_from_model(nil)
         gtk_popover_set_has_arrow(cast(contextMenu), 0)
         gtk_widget_set_halign(contextMenu, GTK_ALIGN_START)
+        contextMenuRef = GObjectRef(sinking: contextMenu)
         gtk_widget_set_parent(contextMenu, root)
 
         Signal.connect(newTaskButton, "clicked") { [weak self] in self?.ui.board.newTask?() }
@@ -111,7 +113,7 @@ final class TasksPage {
         isTornDown = true
         MainLoop.cancel(ageTimer)
         ageTimer = 0
-        gtk_widget_unparent(contextMenu)
+        Gtk.unparentIfAttached(contextMenu)
     }
 
     isolated deinit {

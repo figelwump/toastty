@@ -859,9 +859,9 @@ final class TranscriptView {
     private func updateJumpButton() {
         let shows = isAtLiveEdge == false && entries.isEmpty == false
         if let count = newMessages?.count, count > 0 {
-            Gtk.setLabel(jumpButton, count == 1 ? "1 new" : "\(count) new")
+            gtk_button_set_label(cast(jumpButton), count == 1 ? "1 new" : "\(count) new")
         } else {
-            Gtk.setLabel(jumpButton, "Jump to latest")
+            gtk_button_set_label(cast(jumpButton), "Jump to latest")
         }
         Gtk.setVisible(jumpButton, shows)
     }

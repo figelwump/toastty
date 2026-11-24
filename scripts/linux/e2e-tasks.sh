@@ -246,5 +246,23 @@ for shot in quick-entry quick-entry-picker; do
   [ -s $WORK/$shot.png ] && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
+
+# Phase E: a first launch asks What's new; Start Coordinator starts it.
+FRESH=$WORK/fresh-home; mkdir -p $FRESH/.toastty; cp $HOMEDIR/.toastty/agents.toml $FRESH/.toastty/
+cat > $WORK/whats-new.script <<SCRIPT
+wait 1500
+screenshot $WORK/whats-new.png
+click whats-new.start
+wait 3000
+expect coordinatorRunning=true
+quit
+SCRIPT
+(cd $PROJECT && "${envs[@]}" HOME=$FRESH CFFIXED_USER_HOME=$FRESH XDG_CONFIG_HOME=$FRESH/.config TOASTTY_LINUX_TEST_START_OFFER=1 TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/whats-new.script $APP > $WORK/app-whats-new.log 2>&1) & APID=$!
+for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+kill -9 $APID 2>/dev/null; wait $APID; WRC=$?
+check "a first launch asks What's new, and Start Coordinator starts it" "[ $WRC = 0 ] && ! grep -q 'FAIL' $WORK/app-whats-new.log"
+grep 'FAIL' $WORK/app-whats-new.log | head -5
+[ -s $WORK/whats-new.png ] && cp $WORK/whats-new.png $REPO/artifacts/manual/linux-tasks/whats-new.png
+pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 [ $fail = 0 ] && echo "e2e-tasks: all checks passed" || { echo "e2e-tasks: FAILED (work dir $WORK)"; trap - EXIT; cleanup; exit 1; }
 rm -rf $WORK

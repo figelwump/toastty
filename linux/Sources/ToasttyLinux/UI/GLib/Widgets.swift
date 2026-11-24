@@ -153,6 +153,12 @@ public enum Gtk {
         return nil
     }
 
+    /// Unparents a popover or other child widget while it still has a
+    /// parent; a parent that was destroyed already took it away.
+    public static func unparentIfAttached(_ widget: WidgetPtr) {
+        if gtk_widget_get_parent(widget) != nil { gtk_widget_unparent(widget) }
+    }
+
     public static func setName(_ widget: WidgetPtr, _ name: String) {
         gtk_widget_set_name(widget, name)
     }

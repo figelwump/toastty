@@ -87,6 +87,7 @@ enum TaskChipColors {
 @MainActor
 final class CoordinatorMentionPopover {
     private let popover: WidgetPtr
+    private var popoverRef: GObjectRef?
     private let list: WidgetPtr
     private let candidates: () -> [CoordinatorMentionCandidate]
     private var results: [CoordinatorMentionCandidate] = []
@@ -112,11 +113,12 @@ final class CoordinatorMentionPopover {
         gtk_scrolled_window_set_child(cast(scroller), list)
         gtk_popover_set_child(cast(popover), scroller)
         Gtk.setName(popover, "coordinator.chat.mentions")
+        popoverRef = GObjectRef(sinking: popover)
         gtk_widget_set_parent(popover, anchor)
     }
 
     func teardown() {
-        gtk_widget_unparent(popover)
+        Gtk.unparentIfAttached(popover)
     }
 
     var isOpen: Bool { queryRange != nil }
