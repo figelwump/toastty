@@ -718,14 +718,20 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
             ok, output = succeeds(["git", "update-ref", "-d", f"refs/heads/{branch}", head], cwd=ctx.repo)
             complete = ok
             done.append("deleted local branch" if ok else f"local branch kept: {output}")
-    if ctx.recorded_task_branch:
-        ok, task_head = succeeds(["git", "rev-parse", "--verify", "--quiet",
-                                  f"refs/heads/{ctx.recorded_task_branch}"], cwd=ctx.repo)
-        done.append(clean_up_local_task_branch(ctx, ctx.recorded_task_branch, task_head) if ok
-                    else f"local branch {ctx.recorded_task_branch} already absent")
+
+    def finish() -> tuple[str, str]:
+        # Last: the PR's remote branch may have been the only origin branch
+        # with the recorded branch's commits.
+        if ctx.recorded_task_branch:
+            ok, task_head = succeeds(["git", "rev-parse", "--verify", "--quiet",
+                                      f"refs/heads/{ctx.recorded_task_branch}"], cwd=ctx.repo)
+            done.append(clean_up_local_task_branch(ctx, ctx.recorded_task_branch, task_head) if ok
+                        else f"local branch {ctx.recorded_task_branch} already absent")
+        return ("cleaned" if complete else "partial"), "; ".join(done)
+
     if close_pr or keep_branches:
         done.append("kept the branch on GitHub")
-        return ("cleaned" if complete else "partial"), "; ".join(done)
+        return finish()
     ok, output = succeeds(["git", "ls-remote", "--heads", "origin", branch], cwd=ctx.repo)
     remote = output.split() if ok else []
     if not ok:
@@ -739,7 +745,7 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
     elif remote:
         complete = False
         done.append(f"remote branch kept: it now points at {remote[0][:8]}")
-    return ("cleaned" if complete else "partial"), "; ".join(done)
+    return finish()
 
 
 # MARK: - Main

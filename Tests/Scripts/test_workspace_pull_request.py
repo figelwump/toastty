@@ -728,12 +728,17 @@ class WorkspacePullRequestTests(unittest.TestCase):
     def test_cleanup_worktree_moved_onto_a_later_pr_branch(self):
         """The task merged its first PR from the recorded branch, then a second PR
         from another branch that its worktree now has checked out."""
-        for number, first_on_origin, dirty in ((1, True, False), (2, False, False), (3, True, True)):
-            with self.subTest(first_on_origin=first_on_origin, dirty=dirty):
+        # Number 4: the first branch's commit is only on the PR's own branch,
+        # as after a squash merge, so deleting that remote branch loses it.
+        for number, first_on_origin, dirty in ((1, True, False), (2, False, False), (3, True, True),
+                                               (4, False, False)):
+            with self.subTest(number=number, first_on_origin=first_on_origin, dirty=dirty):
                 pr_branch, path = self.task(number)
                 first = f"first-{number}"
                 if first_on_origin:
                     self.git("branch", first, "origin/main")
+                elif number == 4:
+                    self.git("branch", first, pr_branch)
                 else:
                     self.git("branch", first, self.commit(self.repo, f"unpushed {number}"))
                     self.git("reset", "-q", "--hard", "origin/main")
