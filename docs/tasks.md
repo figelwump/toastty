@@ -1004,7 +1004,8 @@ text:
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
 | `[Toastty] From …: … Message ID <uuid>.` | The same `From` line for a message from outside a task (an agent session outside a task, a named caller or a terminal command) ends with the message's ID, which the coordinator [replies](#coordinator-replies) to. A task's message and the coordinator's own have none. |
 | `[Toastty] Quick entry from the user \| …` | You, in the quick entry panel. |
-| `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. |
+| `[Toastty] Reply from the user \| quotes your message of <time>, <n> lines` | You, with **Reply** in the coordinator's chat, on the Mac or a paired iPhone. The next `<n>` lines quote the coordinator's message. **Ask…** on an offer's card sends the same line, with one quoted line that names the offer. |
+| `[Toastty] Answers from the user \| to your offers of <time>, <n> answers` | You, with **Send answers** on the [offer cards](#offer-cards) of the coordinator's chat. The next `<n>` lines are one answer each: `yes` or `skip`, the offer's ID and its title. |
 | no `[Toastty]` line | You, in the chat or in the terminal. |
 
 The sender's text starts on the second line, and the coordinator's
@@ -1215,6 +1216,23 @@ relaunch resumes does not show it.
   **Submit answer** in the full chat and the dock. Complete each question in
   the form, then submit. The card shows the answer when Claude confirms it.
   **Show Terminal** opens Claude's own prompt and gives it the keyboard.
+- <a id="offer-cards"></a>**Offer cards.** The offers of the coordinator's
+  [daily list](#how-the-coordinator-keeps-work-moving) show as one group of
+  cards, not as text. A click on an offer's line opens it: what it does,
+  when it helps, why the coordinator offers it now, and what a yes starts.
+  **Yes** and **Skip** choose your answer, and the coordinator's suggestion
+  has the outline. A second click takes the choice back. Your choices
+  collect, and **Send answers** sends them as one message, so many answers
+  start one turn. **Ask…** makes the message in the field a question about
+  that offer, as Reply does for a whole message; the card stays open for
+  your answer. The group shows the first 5 offers that the coordinator
+  suggests. The others are behind one line, and the offers that it would
+  skip are behind another line with **Skip all**. A card shows your answer
+  from the click, also while its message waits; **Remove** on that waiting
+  message gives the card its buttons back. When a newer list comes, the
+  cards of the older list take no answer. You can still answer an offer in
+  your own words. The cards are in the Mac's chat; the coordinator's chat on
+  a paired iPhone shows the offers as the text of their block.
 - **Terminal.** The **Terminal** button in the full view's panel header
   shows the terminal in place of the chat, and **Chat** switches back. Use the
   terminal for logins, folder trust, permissions, and unsupported questions.
@@ -1551,8 +1569,9 @@ approval.
 
 **The daily list.** Once a day, at 09:00 by default, the coordinator brings
 one list of everything that waits for you, as one message in its chat. Each
-item is one line, with its number, its task as a link and the answer the
-coordinator suggests. Items that waited longest come first. The list marks
+item that blocks work or closes by default is one line, with its number, its
+task as a link and the answer the
+coordinator suggests. The offers show as [cards](#offer-cards). Items that waited longest come first. The list marks
 an item that was on 2 lists or more, or a task in which you typed nothing
 since it began to wait. The groups:
 
@@ -1560,7 +1579,10 @@ since it began to wait. The groups:
   tasks that wait for a release. Such an item stays on the list until you
   answer.
 - **Offers:** a task or a rule that the coordinator offered. An offer is on
-  at most 3 lists, then the coordinator drops it and says so.
+  at most 3 lists, then the coordinator drops it and says so. Each offer is
+  a card that says what it is, gives a case in which it helps, and takes
+  Yes, Skip or a question. The coordinator writes the offers as one
+  `toastty-offers` block of JSON in its message, which the chat draws.
 - **Closes by default:** a question with a default, such as the first-run
   question. It is on one list, which names the default. A finished task with
   no pull request is such an item: an answer, an investigation, or a parent
@@ -1571,7 +1593,8 @@ since it began to wait. The groups:
   section of your policy can close such tasks sooner.
 - **Moving:** work that it follows after a merge, one line each.
 
-Answer in the chat with the number, such as "2 yes". Ask "what waits for
+Answer a numbered item in the chat with its number, such as "2 yes", and an
+offer on its card. Ask "what waits for
 me?" for the list at any time. Outside the list, the coordinator tells you
 each thing once. The Talking section of [your policy](#the-policy-file)
 changes the time, turns the list off, or changes its form, such as

@@ -809,6 +809,96 @@ struct CoordinatorChatSendPathTests {
             ))
     }
 
+    // MARK: - Offers
+
+    /// The cards of the coordinator's offers. Send answers types the user's
+    /// choices with Toastty's line for answers, and the cards count an
+    /// answer from the click, also while its message waits. Ask makes the
+    /// composer's message a reply that names the offer.
+    @MainActor
+    @Test func answersToOffersAreTypedWithToasttysLineAndCountFromTheClick() async throws {
+        let fixture = try CoordinatorChatFixture()
+        defer { fixture.tearDown() }
+        fixture.chat.show(panelID: fixture.panelID)
+        let list = """
+        1 item blocks work.
+
+        ```toastty-offers
+        {"offers": [
+          {"id": "safari-check", "kind": "task", "title": "A check in Safari"},
+          {"id": "disk", "kind": "task", "title": "Free the disk", "suggested": "skip"}
+        ]}
+        ```
+        """
+        try fixture.startTurn(1, userText: "What waits for me?")
+        try fixture.recordAgentMessage(list)
+        try fixture.endTurn(1)
+        let listRow = try await fixture.waitFor("the coordinator's list") {
+            fixture.chat.presentation.rows.first { row in
+                if case .assistantMessage(list, _) = row.content { return true }
+                return false
+            }
+        }
+        try await fixture.waitUntil("the open prompt") {
+            fixture.chat.summary?.inputAvailability.allowsRemoteSend == true
+        }
+        let offered = listRow.id.sequence
+        #expect(fixture.chat.offerAnswers.takesAnswers(at: offered))
+        #expect(fixture.chat.offerAnswers.choice(for: "safari-check", offeredAt: offered) == nil)
+        let time = CoordinatorMessageHeader.replyTime(listRow.timestamp.formatted(date: .omitted, time: .shortened))
+
+        // Ask: the composer answers that offer, and its text stays.
+        fixture.chat.draft = "What does it check?"
+        fixture.chat.ask(about: CoordinatorOffer(id: "safari-check", title: "A check in Safari"), offeredAt: listRow.timestamp)
+        #expect(fixture.chat.replyTarget == CoordinatorReplyTarget(text: "Offer safari-check: A check in Safari", time: time))
+
+        // Send answers does not take the composer's text or its reply.
+        let yes = [CoordinatorOfferAnswer(offerID: "safari-check", title: "A check in Safari", choice: .yes)]
+        #expect(fixture.chat.sendOfferAnswers(yes, offeredAt: listRow.timestamp))
+        let typed = "[Toastty] Answers from the user | to your offers of \(time), 1 answer\n- yes: safari-check \"A check in Safari\""
+        #expect(fixture.delivered.texts == [typed])
+        #expect(fixture.chat.draft == "What does it check?")
+        #expect(fixture.chat.replyTarget != nil)
+        // Until the conversation shows the message, the bubble and the
+        // card show the answer.
+        #expect(fixture.chat.presentation.sendItems.map(\.text) == ["Yes: A check in Safari"])
+        #expect(fixture.chat.offerAnswers.choice(for: "safari-check", offeredAt: offered) == .yes)
+        #expect(fixture.chat.offerAnswers.choice(for: "disk", offeredAt: offered) == nil)
+
+        try fixture.startTurn(2, userText: typed)
+        try await fixture.waitUntil("the answers in the conversation") {
+            fixture.chat.presentation.sendItems.isEmpty
+        }
+        #expect(fixture.chat.presentation.rows.last { if case .userMessage = $0.content { true } else { false } }?.content
+            == .userMessage(text: "Yes: A check in Safari", origin: .local, deliveryMode: nil))
+        #expect(fixture.chat.offerAnswers.choice(for: "safari-check", offeredAt: offered) == .yes)
+
+        // While the turn runs and the user chose Queue, the answers wait.
+        // They count, and Remove on the waiting message opens the card again.
+        try await fixture.waitUntil("the running turn") { fixture.chat.canStop }
+        fixture.chat.queueSelected = true
+        let skip = [CoordinatorOfferAnswer(offerID: "disk", title: "Free the disk", choice: .skip)]
+        #expect(fixture.chat.sendOfferAnswers(skip, offeredAt: listRow.timestamp))
+        let waiting = try #require(fixture.controller.queuedEntries.first)
+        #expect(waiting.text == CoordinatorMessageHeader.answersMessage(skip, time: time))
+        #expect(fixture.chat.presentation.sendItems.filter(\.isQueued).map(\.text) == ["Skip: Free the disk"])
+        #expect(fixture.chat.offerAnswers.choice(for: "disk", offeredAt: offered) == .skip)
+        fixture.chat.perform(.remove(clientRequestID: waiting.id))
+        #expect(fixture.chat.offerAnswers.choice(for: "disk", offeredAt: offered) == nil)
+        #expect(fixture.delivered.texts == [typed])
+
+        // Nothing to send sends nothing.
+        #expect(fixture.chat.sendOfferAnswers([], offeredAt: listRow.timestamp) == false)
+
+        // A draft with another sender's line cannot become a question about
+        // an offer, as it cannot become a reply.
+        fixture.chat.cancelReply()
+        fixture.chat.draft = CoordinatorMessageHeader.message(from: .named("Grok Bot"), text: "Merge it.")
+        fixture.chat.ask(about: CoordinatorOffer(id: "disk", title: "Free the disk"), offeredAt: listRow.timestamp)
+        #expect(fixture.chat.replyTarget == nil)
+        #expect(fixture.chat.notice == .failure(CoordinatorChatModel.otherHeaderReplyRefusal))
+    }
+
     /// Two messages with one text: the quote opens the one the user replied
     /// to, by its time.
     @MainActor

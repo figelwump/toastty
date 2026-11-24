@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 
 /// Layout chunks contain already-parsed content. Parsing the entire message
 /// first preserves document-wide links and block structure across cell seams.
@@ -53,7 +54,10 @@ enum ToasttyMarkdownChunking {
                 currentCount += count
                 // Sparse table sections need their own layout cell even when
                 // their text fits together within the character budget.
-                if case .table = piece.style { flush() }
+                switch piece.style {
+                case .table, .offers: flush()
+                default: break
+                }
             }
         }
         flush()
@@ -71,6 +75,8 @@ enum ToasttyMarkdownChunking {
                 )
             }
         }
+        // The cards of the offers are drawn from the whole block.
+        if case .offers = block.style { return [block] }
         let content = block.content
         let characters = content.characters
         var start = characters.startIndex
@@ -119,10 +125,18 @@ enum ToasttyMarkdownParser {
 
         func flushCurrentBlock() {
             guard currentContent.characters.isEmpty == false else { return }
+            var style = currentStyle
+            // The coordinator's offers: a code block that names them and
+            // holds them as data. Any other block of that language stays
+            // the code it is.
+            if case .code(let language) = style, language == CoordinatorOfferGroup.codeLanguage,
+               let group = CoordinatorOfferGroup(json: String(currentContent.characters)) {
+                style = .offers(group)
+            }
             blocks.append(ToasttyMarkdownBlock(
                 id: blocks.count,
                 content: currentContent,
-                style: currentStyle
+                style: style
             ))
             currentContent = AttributedString()
         }
@@ -239,6 +253,10 @@ public struct ToasttyMarkdownBlock: Identifiable, Equatable, Sendable {
         case blockQuote
         case code(language: String?)
         case table(ToasttyMarkdownTable)
+        /// A `toastty-offers` code block that holds the coordinator's
+        /// offers. A chat that answers offers draws it as cards; any other
+        /// chat draws the block's text, which `content` keeps.
+        case offers(CoordinatorOfferGroup)
     }
 
     public let id: Int

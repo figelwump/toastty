@@ -61,7 +61,8 @@ struct CoordinatorChatView: View {
                 workingIndicator: model.workingIndicator,
                 jumpToLiveEdgeRequest: model.jumpToLiveEdgeRequest,
                 newMessages: model.newMessages,
-                answerStates: model.interactionAnswerStates
+                answerStates: model.interactionAnswerStates,
+                offerAnswers: model.offerAnswers
             )
             .equatable()
             .modifier(TranscriptViewport(settledDockWidth: settledDockWidth))
@@ -372,6 +373,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
     let jumpToLiveEdgeRequest: UInt64
     let newMessages: ToasttyNewMessagesMarker?
     let answerStates: [RemotePendingInteraction.ID: ToasttyInteractionAnswerState]
+    let offerAnswers: ToasttyOfferAnswers
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model === rhs.model
@@ -381,6 +383,7 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             && lhs.jumpToLiveEdgeRequest == rhs.jumpToLiveEdgeRequest
             && lhs.newMessages == rhs.newMessages
             && lhs.answerStates == rhs.answerStates
+            && lhs.offerAnswers == rhs.offerAnswers
     }
 
     var body: some View {
@@ -401,6 +404,10 @@ private struct CoordinatorChatTranscriptPane: View, Equatable {
             canAcknowledgeRead: false,
             options: CoordinatorChatView.transcriptOptions,
             replyToMessage: { model.reply(to: $0) },
+            offers: ToasttyOfferCards(answers: offerAnswers, actions: ToasttyOfferActions(
+                send: { model.sendOfferAnswers($0, offeredAt: $1) },
+                ask: { model.ask(about: $0, offeredAt: $1) }
+            )),
             newMessages: newMessages
         )
     }

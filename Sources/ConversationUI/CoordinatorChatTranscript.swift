@@ -311,7 +311,7 @@ public enum CoordinatorChatTranscript {
                 text: body,
                 style: .sender(name: sender, timeText: timeText)
             )
-        case .reply, .quickEntry, .plain:
+        case .reply, .quickEntry, .answers, .plain:
             return nil
         }
     }

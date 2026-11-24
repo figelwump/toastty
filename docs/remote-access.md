@@ -883,7 +883,11 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   card. A quick entry message shows your text without Toastty's first line,
   then your choices and its files. A reply shows a line with the
   time and opening of the coordinator's message it answers; a tap shows that
-  message. The files stay on the Mac. When the Mac serves the images
+  message. Your answers to the coordinator's offers, sent from the Mac's
+  [offer cards](tasks.md#offer-cards), show as one line for each answer.
+  The phone has no offer cards yet: it shows the coordinator's offers as the
+  text of their `toastty-offers` block, and you answer them in your own
+  words. The files stay on the Mac. When the Mac serves the images
   (`coordinator_attachment_images`, described below), an attached image shows
   as a thumbnail, and a tap opens it full screen; any other file shows by its
   name. With an older Mac, or without read access, the phone shows the names

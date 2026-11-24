@@ -215,6 +215,111 @@ final class ConversationUIRenderTests: XCTestCase {
         try keep(Self.snapshot(hostingView), name: "conversation-ui-macos-user-mention-chip")
     }
 
+    // MARK: - Offers
+
+    /// The offers of a daily list, as the coordinator writes them.
+    static let offersMessage = """
+    5 items block work, and 1 task closes by default. 7 offers are below.
+
+    ```toastty-offers
+    {"offers": [
+      {"id": "plain-send-task", "kind": "task", "title": "Plain `task send` leaves an occupied prompt untouched",
+       "what": "A plain `toastty task send` returns \\"try again\\" when the agent's prompt holds text.",
+       "example": "You type half a message in a task's terminal, and another agent sends that task a message. Today the two texts can mix.",
+       "why": "The third security finding before 0.10.0. You deferred it.",
+       "yes": "A task in toastty from `main`: claude, claude-opus-5-5, xhigh.", "suggested": "yes", "list": 2, "lists": 3},
+      {"id": "release-hold-rule", "kind": "rule", "title": "Releases: hold merges into the default branch while a release task is open",
+       "what": "While a release task of a repository is open, hold merges into that repository's default branch.",
+       "example": "A change merges while the release builds, and the published build no longer matches the checked commit.",
+       "yes": "This line under Releases in `policy.md`.", "suggested": "yes", "list": 2, "lists": 3},
+      {"id": "disk-fix-task", "kind": "task", "title": "Test runs on the Mac mini delete their compiler caches",
+       "example": "On 2026-11-20 the Mac mini had 0.7 GiB free.", "suggested": "yes", "list": 3, "lists": 3},
+      {"id": "toastty-dev-check-task", "kind": "task", "title": "Check that toastty.dev offers 0.10.0", "suggested": "yes", "list": 1, "lists": 3},
+      {"id": "signed-build-check", "kind": "task", "title": "One check of the signed build before a release", "suggested": "yes"},
+      {"id": "busy-agent-message", "kind": "task", "title": "Deliver a message to a busy agent when its turn ends", "suggested": "yes"},
+      {"id": "preamble-chat-task", "kind": "task", "title": "The first-run preamble shows sooner", "suggested": "skip", "list": 3, "lists": 3},
+      {"id": "model-list-task", "kind": "task", "title": "A command that lists each agent's model IDs", "suggested": "skip", "list": 2, "lists": 3}
+    ]}
+    ```
+    """
+
+    /// The coordinator's offers draw as cards in a chat that answers
+    /// offers, and as the block's text in any other chat. The image is the
+    /// cards' evidence; the chat's live check clicks them.
+    func testTheCoordinatorsOffersDrawAsCards() throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("The shared transcript uses scroll APIs from macOS 15.")
+        }
+        let rows = [
+            Self.row(1, .userMessage(text: "What waits for me?", origin: .local)),
+            Self.row(2, .assistantMessage(text: Self.offersMessage, phase: .final)),
+        ]
+        let state = ToasttyConversationPresentationState(rows: rows, phase: .live, revision: .initial, historyTruncated: false)
+        func transcript(offers: ToasttyOfferCards?) -> some View {
+            ToasttyTranscriptView(
+                state: state,
+                isSubmitting: false,
+                readAcknowledgementEpoch: nil,
+                jumpToLiveEdgeRequest: .constant(0),
+                canAcknowledgeRead: false,
+                options: Self.coordinatorOptions,
+                offers: offers
+            )
+        }
+        let size = CGSize(width: 620, height: 760)
+        func shownTexts(_ hostingView: NSView) -> String {
+            Self.descendants(of: hostingView, as: ToasttyTranscriptTextView.self).map(\.string).joined(separator: "\n")
+        }
+
+        // A chat that answers no offers shows the block as it is written.
+        let (plainView, plainWindow) = Self.host(transcript(offers: nil), size: size)
+        XCTAssertTrue(shownTexts(plainView).contains("\"id\": \"plain-send-task\""))
+        plainWindow.close()
+
+        // The user answered one offer before.
+        let answers = ToasttyOfferAnswers().adding(waitingMessages: [CoordinatorMessageHeader.answersMessage(
+            [CoordinatorOfferAnswer(offerID: "disk-fix-task", title: "Test runs on the Mac mini", choice: .yes)], time: nil
+        )])
+        let cards = ToasttyOfferCards(answers: answers, actions: ToasttyOfferActions(send: { _, _ in true }, ask: { _, _ in }))
+        let (hostingView, window) = Self.host(transcript(offers: cards), size: size)
+        defer { window.close() }
+        let shown = shownTexts(hostingView)
+        XCTAssertTrue(shown.contains("5 items block work"), shown)
+        XCTAssertFalse(shown.contains("plain-send-task"), "The cards replace the block's text: \(shown)")
+        try keep(Self.snapshot(hostingView), name: "conversation-ui-macos-offer-cards")
+
+        // The same group with a card open, two choices made and the folded
+        // lines open.
+        let group = try XCTUnwrap(ToasttyMarkdownParser.parse(Self.offersMessage).compactMap { block -> CoordinatorOfferGroup? in
+            if case .offers(let group) = block.style { return group }
+            return nil
+        }.first)
+        let offerRow = ToasttyOfferRow(rowID: rows[1].id, timestamp: rows[1].timestamp)
+        let selections = ToasttyOfferSelections()
+        selections.openOffers = [.init(rowID: offerRow.rowID, offerID: "plain-send-task")]
+        selections.choose(.yes, for: .init(rowID: offerRow.rowID, offerID: "plain-send-task"))
+        selections.groupsShowingMore = [offerRow.rowID]
+        selections.toggleSkipAll(ToasttyOfferGroupLayout(group).skips, in: offerRow, answers: answers)
+        let openSize = CGSize(width: 620, height: 640)
+        let (openView, openWindow) = Self.host(
+            ToasttyOfferGroupView(group: group)
+                .environment(\.toasttyOfferCards, cards)
+                .environment(\.toasttyDrawsOfferCards, true)
+                .environment(\.toasttyOfferRow, offerRow)
+                .environment(selections)
+                .padding(16)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(ConversationDesignTokens.background),
+            size: openSize
+        )
+        defer { openWindow.close() }
+        // The open card's details are the coordinator's text.
+        XCTAssertTrue(shownTexts(openView).contains("returns \"try again\" when the agent's prompt holds text"))
+        XCTAssertEqual(selections.pendingAnswers(for: group, in: offerRow, answers: answers).map(\.offerID),
+                       ["plain-send-task", "preamble-chat-task", "model-list-task"])
+        try keep(Self.snapshot(openView), name: "conversation-ui-macos-offer-cards-open")
+    }
+
     private static func host<Content: View>(_ content: Content, size: CGSize) -> (NSHostingView<some View>, NSWindow) {
         let hostingView = NSHostingView(rootView: content
             .frame(width: size.width, height: size.height)
