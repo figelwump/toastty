@@ -49,9 +49,9 @@ final class QuickEntryPresentation {
         _ shortcut: QuickEntryShortcut?,
         handler: @escaping @MainActor () -> Void
     ) -> QuickEntryShortcutRegistration {
-        guard let frontend else {
-            return shortcut.map { .failed($0, -1) } ?? .off
-        }
+        // The app layer reads the key before the GTK frontend exists; the
+        // frontend reads it again once it is installed.
+        guard let frontend else { return .off }
         return frontend.registerGlobalShortcut(shortcut, handler: handler)
     }
 

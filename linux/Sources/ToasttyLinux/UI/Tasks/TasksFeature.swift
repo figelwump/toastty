@@ -25,6 +25,9 @@ final class TasksUI {
     private var features: [UUID: WeakFeature] = [:]
     private var subscriptions: [AnyCancellable] = []
     private var renderScheduled = false
+    /// Quick entry's GTK window (`QuickEntryPresentation.frontend` holds it
+    /// weakly).
+    var quickEntryFrontend: QuickEntryWindowFrontend?
 
     private struct WeakFeature {
         weak var feature: TasksWindowFeature?
@@ -172,6 +175,14 @@ extension LinuxAppController {
             TasksWindowFeature(ui: ui, controller: controller)
         }
         tasksUI = ui
+        // Quick entry's window and the desktop-wide key. The app layer read
+        // the key before this frontend existed: read it again.
+        let quickEntry = QuickEntryWindowFrontend(application: application) { [weak self] message in
+            self?.selectedWindowController()?.toast(message)
+        }
+        ui.quickEntryFrontend = quickEntry
+        QuickEntryPresentation.frontend = quickEntry
+        ui.tasks.quickEntry.loadShortcutAtLaunch()
         installTasksAutomation(ui: ui)
         installCoordinatorAutomation(ui: ui)
     }

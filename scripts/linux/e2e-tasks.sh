@@ -205,5 +205,37 @@ for shot in coordinator-full coordinator-dock; do
   [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
+
+# Phase D: quick entry creates a task (no coordinator in this run).
+cat > $WORK/quick-entry.script <<SCRIPT
+wait 500
+expect taskCount=0 quickEntry=closed
+perform task.new
+wait 500
+expect quickEntry=open quickEntrySendsToCoordinator=false quickEntryCanSubmit=false
+quick-entry type Write_the_release_notes
+wait 200
+quick-entry picker workspace
+wait 300
+expect quickEntryPicker=workspace
+quick-entry screenshot $WORK/quick-entry-picker.png
+quick-entry choose 0
+wait 300
+expect quickEntryPicker=none quickEntryCanSubmit=true
+quick-entry screenshot $WORK/quick-entry.png
+quick-entry submit
+wait 1500
+expect quickEntry=closed taskCount=1
+quit
+SCRIPT
+(cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/quick-entry.script $APP > $WORK/app-quick-entry.log 2>&1) & APID=$!
+for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+kill -9 $APID 2>/dev/null; wait $APID; QRC=$?
+check "quick entry creates a task (type, Workspace picker, submit)" "[ $QRC = 0 ] && ! grep -q 'FAIL' $WORK/app-quick-entry.log"
+grep 'FAIL' $WORK/app-quick-entry.log | head -8
+for shot in quick-entry quick-entry-picker; do
+  [ -s $WORK/$shot.png ] && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
+done
+pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 [ $fail = 0 ] && echo "e2e-tasks: all checks passed" || { echo "e2e-tasks: FAILED (work dir $WORK)"; trap - EXIT; cleanup; exit 1; }
 rm -rf $WORK

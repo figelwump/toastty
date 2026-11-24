@@ -383,6 +383,29 @@ public enum LinuxTheme {
     .coordinator-dock-status { font-size: 0.8em; opacity: 0.6; }
     .coordinator-panel-button { font-size: 0.8em; font-weight: 600; min-height: 20px; padding: 1px 8px; }
 
+    /* Quick entry (macOS QuickEntryView) */
+    .quick-entry { padding: 14px 16px 14px 16px; }
+    .quick-entry-dot { min-width: 6px; min-height: 6px; border-radius: 999px; background-color: var(--accent-bg-color); }
+    .quick-entry-title { font-size: 0.8em; font-weight: 600; opacity: 0.6; }
+    .quick-entry-hint { font-size: 0.8em; font-weight: 600; color: var(--accent-color); }
+    .quick-entry-field { border-radius: 10px; border: 1px solid alpha(currentColor, 0.15); }
+    .quick-entry-field:focus-within { border-color: var(--accent-bg-color); }
+    .quick-entry-text, .quick-entry-text text { background: transparent; font-size: 1.05em; }
+    .quick-entry-placeholder { opacity: 0.45; font-size: 1.05em; }
+    .quick-entry-attach { font-size: 0.86em; }
+    .quick-entry-error { color: var(--toastty-error); font-size: 0.86em; }
+    .quick-entry-pill { font-size: 0.86em; border-radius: 999px; padding: 2px 10px; }
+    .quick-entry-pill.missing { box-shadow: inset 0 0 0 1px var(--toastty-approval); }
+    .quick-entry-pill.open { background-color: color-mix(in srgb, var(--accent-bg-color) 22%, transparent); }
+    .quick-entry-key { font-size: 0.8em; font-family: monospace; opacity: 0.7; }
+    .quick-entry-picker .quick-entry-section { font-size: 0.72em; font-weight: 800; opacity: 0.5; padding: 6px 6px 2px 6px; }
+    .quick-entry-row { padding: 4px 8px; min-height: 0; }
+    .quick-entry-row.selected { background-color: color-mix(in srgb, var(--accent-bg-color) 22%, transparent); }
+    .quick-entry-row.muted { opacity: 0.55; }
+    .quick-entry-number { font-family: monospace; opacity: 0.55; }
+    .quick-entry-warning { font-size: 0.8em; color: var(--toastty-approval); }
+    .quick-entry-column.focused .quick-entry-section { color: var(--accent-color); opacity: 1; }
+
     /* Attachments */
     .attachment-chip { padding: 3px 6px; border-radius: 8px; background-color: alpha(currentColor, 0.07); }
     .attachment-thumbnail { border-radius: 4px; }

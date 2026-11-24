@@ -57,6 +57,39 @@ extension LinuxAppController {
                 script.reportFailure("tasks: unknown \(argument)")
             }
         }
+        // Quick entry:
+        //     quick-entry open | type Fix_the_build | submit | create | cancel
+        //     quick-entry picker workspace|agent | choose 1 | close-picker
+        //     expect quickEntry=open quickEntryCanSubmit=true quickEntryPicker=agent
+        AutomationScript.extensionCommands["quick-entry"] = { [weak ui] _, argument, script in
+            guard let ui, let frontend = ui.quickEntryFrontend else { script.reportFailure("quick-entry: unavailable"); return }
+            let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+            let model = frontend.automationModel
+            switch parts.first ?? "" {
+            case "open": ui.board.newTask?()
+            case "type": frontend.automationType((parts.count > 1 ? parts[1] : "").replacingOccurrences(of: "_", with: " "))
+            case "submit": model?.submit()
+            case "create": model?.createTask()
+            case "cancel": model?.cancel()
+            case "picker": ui.tasks.quickEntry.togglePicker(parts.count > 1 && parts[1] == "agent" ? .agent : .workspace)
+            case "close-picker": ui.tasks.quickEntry.closePicker(refocusText: true)
+            case "screenshot":
+                let url = script.resolvePath(parts.count > 1 ? parts[1] : "quick-entry.png")
+                if let failure = frontend.automationScreenshot(url) { script.reportFailure("quick-entry screenshot: \(failure)") }
+            case "choose":
+                guard let picker = ui.tasks.quickEntry.picker, parts.count > 1, let index = Int(parts[1]),
+                      picker.rows.indices.contains(index) else {
+                    script.reportFailure("quick-entry choose: no row \(parts.dropFirst().first ?? "")")
+                    return
+                }
+                picker.choose(rowID: picker.rows[index].id)
+            default:
+                script.reportFailure("quick-entry: unknown \(argument)")
+            }
+        }
+        AutomationScript.summaryContributors.append { [weak ui] _ in
+            ui?.quickEntryFrontend?.automationSummary ?? [:]
+        }
         AutomationScript.summaryContributors.append { [weak ui] app in
             guard let ui, let window = app.selectedWindowController(),
                   let page = ui.feature(windowID: window.windowID)?.tasksPage else { return [:] }
