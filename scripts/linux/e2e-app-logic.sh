@@ -48,7 +48,10 @@ envs=(env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=$HOMEDIR CFFIXED_USER_HOME=$
   XDG_DATA_HOME=$HOMEDIR/.local/share XDG_CACHE_HOME=$HOMEDIR/.cache SHELL=/bin/bash TERM=xterm-256color
   LANG=C.UTF-8 GDK_BACKEND=broadway BROADWAY_DISPLAY=:$DISPLAYNUM GTK_A11Y=none NO_AT_BRIDGE=1
   GDK_DEBUG=no-portals GSETTINGS_BACKEND=memory TOASTTY_LINUX_NON_UNIQUE=1 TOASTTY_SOCKET_PATH=$SOCK
-  LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-})
+  LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}
+  # The normal sessions below (TOASTTY_AUTOMATION=0) would ask What's new
+  # at their first launch; e2e-tasks.sh tests the question.
+  TOASTTY_LINUX_TEST_START_OFFER=0)
 "${envs[@]}" gtk4-broadwayd :$DISPLAYNUM > $WORK/broadwayd.log 2>&1 &
 BPID=$!; sleep 0.5
 start_app() { "${envs[@]}" $APP > $WORK/app-$1.log 2>&1 & APID=$!; for i in $(seq 1 100); do [ -S $SOCK ] && $CLI --socket-path $SOCK query list >/dev/null 2>&1 && return 0; sleep 0.1; done; echo "app did not start"; return 1; }
