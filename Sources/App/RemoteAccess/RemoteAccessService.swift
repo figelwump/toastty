@@ -5343,6 +5343,10 @@ extension RemoteAccessService: LocalConversationAccess {
 
     fileprivate func localFollowedSince(subscriptionID: UUID) -> Date? {
         guard let panelID = localSubscriptions[subscriptionID]?.panelID else { return nil }
+        return followedSince(panelID: panelID)
+    }
+
+    func followedSince(panelID: UUID) -> Date? {
         let subscribed = localSubscriptions.values.filter { $0.panelID == panelID }.map(\.since)
         return (subscribed + [gatewayFollowsPanelsSince].compactMap { $0 }).min()
     }

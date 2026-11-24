@@ -53,7 +53,7 @@ struct TaskSteerAgentView: Equatable {
     var sessionID: String
     var state: TaskAgentState
     /// When the agent's latest turn started: the running one, or the last
-    /// one that ended. `nil` when it had no turn since Toastty started.
+    /// one that ended (`TaskSessionInfo.latestTurnStartedAt`).
     var latestTurnStartedAt: Date?
     /// When a person last typed, pasted or dropped a file into the terminal.
     var userTypedAt: Date?

@@ -966,8 +966,11 @@ before the message that names the sender; see `send` under
 [`coordinator`](#coordinator). The coordinator's own `task send` gets a line
 that makes its approvals and decisions count as yours in the task; see
 [Approvals and decisions from the coordinator](tasks.md#approvals-and-decisions-from-the-coordinator).
-`task send` types its message
-whatever the agent does. With `--steer`, it checks the agent first: the message
+`task send` types its message at the agent's open prompt or into its running
+turn. It types nothing, and fails with the reason, while a permission prompt,
+a question or a dialog waits there, or while text that someone typed since the
+agent's latest turn started can still be in the prompt; see
+[Coordinate tasks](tasks.md#coordinate-tasks). With `--steer`, the message
 goes to the agent's open prompt or into its running turn, or Toastty holds it
 for the next open prompt, and nothing is typed into a permission prompt.
 `task watch` tells the calling

@@ -694,19 +694,33 @@ worktree.
   ID. GitHub drops the link, so a pull request names the task by its title.
   The shipped task skills say so.
 - `toastty task send <task-id> "<message>"` types the message into the task's
-  agent and submits it, whatever the agent does. Its first line names the
-  sender as `coordinator send` does, such as
+  agent and submits it, at its open prompt or into its running turn. Its first
+  line names the sender as `coordinator send` does, such as
   `[Toastty] From task [title](toastty://task/<id>): not from the user.`, so
   the agent that reads it can name the task that sent it. A message from the
   coordinator's own session starts with
   `[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's.`
   Only that line approves or decides for you; see
   [Approvals and decisions from the coordinator](#approvals-and-decisions-from-the-coordinator).
-  A busy agent queues it as typed
-  input, and the Return key can answer a permission prompt that is on screen. It
-  fails when the task has no running agent, and says so when the message was
-  typed but may not have been submitted; check that terminal before you send it
-  again.
+  A busy agent gets it as typed input. Toastty types nothing, and the command
+  fails with the reason and when to try again, while the agent's prompt holds
+  something that the message and its Return would join or answer:
+  - A permission prompt or a question, or a dialog of Claude Code's own, such
+    as the compact offer.
+  - Text that someone typed in the task's terminal, or sent from Toastty
+    Mobile, since the agent's latest turn started. A submitted prompt starts a
+    turn, so older text is not in the prompt any more. While Toastty follows
+    the agent's conversation (Remote Access is on, or a `--steer` send went to
+    the task) from before the typing, it also knows when an agent at its
+    prompt recorded that text. Otherwise the message waits for the next turn.
+  - An earlier message that Toastty typed there but whose Return the terminal
+    did not confirm, until a turn starts after it.
+
+  Toastty learns of a permission prompt from the agent's hooks, a short time
+  after the prompt comes on screen. A message that arrives in that time can
+  still reach the prompt. The command also fails when the task has no running
+  agent, and says so when the message was typed but may not have been
+  submitted; check that terminal before you send it again.
 - `toastty task send <task-id> "<message>" --steer` checks the agent first, so
   that the message can go to a busy agent. Toastty types nothing into a
   permission prompt or a question. The result's `delivery` says what it did,
@@ -770,8 +784,9 @@ it waits for something else, fires with that reason. So does a watch for
 `merged` or `to-ship` when Toastty's last merge of the task stopped without
 merging, until a new merge starts; see [Merge a task](#merge-a-task). A fired
 notification stays queued, including after a relaunch, until the receiving agent
-reports idle or ready at its prompt. Toastty waits while it detects a permission
-prompt, a question, or typing that may still be in the prompt. Watches, scheduled
+reports idle or ready at its prompt. Toastty waits while it detects what makes
+a plain `task send` fail: a permission prompt, a question, a dialog of Claude
+Code's own, or text that may still be in the prompt. Watches, scheduled
 wakes, and merge messages share one automatic submission per prompt.
 `toastty task watches` lists watches, with `--task` or
 `--notify` to filter them, and `toastty task unwatch <watch-id>` cancels one.

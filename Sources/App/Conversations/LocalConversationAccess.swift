@@ -15,10 +15,15 @@ protocol LocalConversationAccess: AnyObject {
     func subscribeToConversation(inPanel panelID: UUID) -> any LocalConversationSubscription
     /// Reads input availability if the conversation is already tracked for this session.
     func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability?
+    /// Since when Toastty has followed the panel without a break, as
+    /// `LocalConversationSubscription.followedSince` says; `nil` while
+    /// nothing follows it.
+    func followedSince(panelID: UUID) -> Date?
 }
 
 extension LocalConversationAccess {
     func inputAvailability(panelID: UUID, sessionID: String) -> RemoteInputAvailability? { nil }
+    func followedSince(panelID: UUID) -> Date? { nil }
 }
 
 /// One in-app reader and sender of a panel's conversation.

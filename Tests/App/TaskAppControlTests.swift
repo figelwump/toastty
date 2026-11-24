@@ -603,6 +603,8 @@ struct TaskAppControlTests {
     @MainActor
     final class TypedText {
         var entries: [(text: String, panelID: UUID)] = []
+        /// Panels where Claude Code shows one of its own dialogs.
+        var dialogPanels: Set<UUID> = []
     }
 
     /// `coordinator` defaults to the fixture's; pass one made for a relaunch.
@@ -628,7 +630,8 @@ struct TaskAppControlTests {
             sendText: { text, panelID in
                 typed.entries.append((text, panelID))
                 return true
-            }
+            },
+            claudeHasNativeDialog: { typed.dialogPanels.contains($0) }
         )
         return typed
     }
@@ -636,6 +639,58 @@ struct TaskAppControlTests {
     private func agentState(_ task: [String: AutomationJSONValue]) -> String? {
         guard case .object(let state)? = task["agentState"], case .string(let value)? = state["state"] else { return nil }
         return value
+    }
+
+    /// `task.send` with the live sessions: a permission prompt, Claude
+    /// Code's own dialog and a person's text in the agent's prompt each keep
+    /// the message out, and the answer says why. A turn that starts after
+    /// the text frees the prompt.
+    @Test func taskSendLeavesAnOccupiedPromptUntouched() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let executor = makeExecutor(fixture, coordinator: fixture.coordinator)
+        let typed = useLiveSessions(fixture)
+        let created = try await executor.runActionAsync(
+            id: "task.create",
+            args: ["text": .string("Fix the composer"), "workspace": .string(fixture.workspaceID.uuidString), "agent": .string("claude")],
+            context: context()
+        )
+        let id = try taskID(created.result)
+        await fixture.waitForSetup(id)
+        let task = try #require(fixture.record(id))
+        let session = try #require(task.operation.agentLaunch?.sessionID)
+        let panel = try #require(task.operation.taskSpace?.panelID)
+        func report(_ kind: SessionStatusKind) {
+            fixture.sessionRuntimeStore.updateStatus(sessionID: session, status: SessionStatus(kind: kind, summary: "\(kind)"), at: Date())
+        }
+        func send() throws {
+            _ = try executor.runAction(
+                id: "task.send",
+                args: ["taskID": .string(id.uuidString), "text": .string("status?"), "from": .string("Grok Bot")],
+                context: context()
+            )
+        }
+        let interaction = "Task \(task.title)'s agent waits for an answer to a permission prompt, a question or a dialog, and a typed message could answer it. Toastty typed nothing. Send the message again when the agent's prompt is open, or send it with --steer, which holds it until then."
+        let typedText = "Someone typed in task \(task.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
+        report(.working)
+        report(.idle)
+
+        report(.needsApproval)
+        await expectInvalidPayload(interaction) { try send() }
+        report(.idle)
+        typed.dialogPanels.insert(panel)
+        await expectInvalidPayload(interaction) { try send() }
+        typed.dialogPanels.remove(panel)
+
+        // A draft that a person typed at the agent's prompt.
+        fixture.sessionRuntimeStore.noteUserInput(panelID: panel)
+        await expectInvalidPayload(typedText) { try send() }
+        #expect(typed.entries.isEmpty)
+
+        // The person submits it: the turn it starts takes the message.
+        report(.working)
+        try send()
+        #expect(typed.entries.map(\.panelID) == [panel])
+        #expect(typed.entries.last?.text.hasSuffix("\nstatus?") == true)
     }
 
     @Test func aCoordinatorOutsideToasttyPollsSendsAndWakesATaskWithAWatch() async throws {

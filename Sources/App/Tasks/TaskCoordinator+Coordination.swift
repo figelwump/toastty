@@ -102,12 +102,51 @@ extension TaskCoordinator {
 
     // MARK: - Send
 
-    /// Types `text` into the task's agent and submits it.
+    /// Types `text` into the task's agent and submits it, at its open
+    /// prompt or into its running turn. It types nothing when the prompt
+    /// holds something that the text and its Return would join or answer.
+    /// The check and the typing are one step on the main actor.
     @discardableResult
     func send(taskID: UUID, text: String) throws -> TaskSessionInfo {
         let (record, session) = try sendTarget(taskID: taskID, text: text)
+        if let occupant = promptOccupant(of: session) {
+            ToasttyLog.info("Typed no message into a task's occupied prompt", category: .tasks, metadata: [
+                "task_id": record.id.uuidString,
+                "session_id": session.sessionID,
+                "occupant": "\(occupant)",
+            ])
+            throw Self.occupiedPromptError(occupant, record)
+        }
         try submitTaskMessage(text, to: session, for: record)
         return session
+    }
+
+    /// What is at the agent's prompt that a typed message and its Return
+    /// would join or answer, or `nil` when the prompt is free.
+    ///
+    /// Text is in the prompt from the first key until a submit sends it,
+    /// and that submit starts a turn. So text typed after the latest turn
+    /// started can still be there. The conversation that Toastty follows
+    /// can tell, when it followed the panel from before the typing: an
+    /// agent at rest records sent text in its transcript.
+    func promptOccupant(of session: TaskSessionInfo) -> TaskPromptOccupant? {
+        guard let sessions else { return nil }
+        let view = sessions.promptView(in: session)
+        if session.status?.kind == .needsApproval || view.showsInteraction {
+            return .interaction
+        }
+        let latestTurnStartedAt = session.latestTurnStartedAt ?? .distantPast
+        if let typedAt = unconfirmedDeliveryTimes[session.sessionID], typedAt > latestTurnStartedAt {
+            return .unconfirmedMessage
+        }
+        guard let typedAt = sessions.lastUserInputAt(panelID: session.panelID), typedAt > latestTurnStartedAt else {
+            return nil
+        }
+        let isAtRest = session.status?.kind == .idle || session.status?.kind == .ready
+        if isAtRest, let followedSince = view.openPromptFollowedSince, followedSince < typedAt {
+            return nil
+        }
+        return .typedText
     }
 
     func submitTaskMessage(
@@ -154,9 +193,7 @@ extension TaskCoordinator {
             case .uncertain:
                 throw Self.uncertainSendError(record)
             case .typedInTerminal:
-                throw TaskError(
-                    "Someone typed in task \(record.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
-                )
+                throw Self.occupiedPromptError(.typedText, record)
             case .queueFull:
                 throw TaskError(
                     "Task \(record.title) already has \(TaskSteerSender.maximumHeldMessages) messages that wait for its agent's next prompt. Nothing was added."
@@ -190,6 +227,23 @@ extension TaskCoordinator {
         TaskError("Toastty could not type into task \(record.title)'s terminal.")
     }
 
+    private static func occupiedPromptError(_ occupant: TaskPromptOccupant, _ record: TaskRecord) -> TaskError {
+        switch occupant {
+        case .interaction:
+            TaskError(
+                "Task \(record.title)'s agent waits for an answer to a permission prompt, a question or a dialog, and a typed message could answer it. Toastty typed nothing. Send the message again when the agent's prompt is open, or send it with --steer, which holds it until then."
+            )
+        case .typedText:
+            TaskError(
+                "Someone typed in task \(record.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
+            )
+        case .unconfirmedMessage:
+            TaskError(
+                "An earlier message to task \(record.title) can still be in its agent's prompt: Toastty typed it, but the terminal did not confirm its Return. Toastty typed nothing. Send the message again after the agent's next turn starts."
+            )
+        }
+    }
+
     /// Types `text` and presses Return, with image paths kept as text so
     /// that the Return submits it (`AgentPasteText`).
     private func deliver(
@@ -200,6 +254,7 @@ extension TaskCoordinator {
         if result == .uncertain {
             // The text may still be at the prompt, even after a manual send.
             automaticPromptDeliveryTurnEnds[session.sessionID] = session.lastTurnEndedAt ?? .distantPast
+            unconfirmedDeliveryTimes[session.sessionID] = now()
         } else if result == .delivered, let automaticPromptTurnEnd {
             automaticPromptDeliveryTurnEnds[session.sessionID] = automaticPromptTurnEnd
         }
@@ -332,6 +387,7 @@ extension TaskCoordinator {
         automaticPromptDeliveryTurnEnds = automaticPromptDeliveryTurnEnds.filter {
             sessions?.session($0.key)?.isActive == true
         }
+        unconfirmedDeliveryTimes = unconfirmedDeliveryTimes.filter { sessions?.session($0.key)?.isActive == true }
         // Building the board walks every task, so only a pass with a pending
         // watch that needs it does so, and only once. Archived is read from
         // the record.
@@ -390,10 +446,9 @@ extension TaskCoordinator {
     /// can show an interaction while its hooks report ready, or keep
     /// reporting ready after an automatic submission starts the next turn.
     func automaticPromptTurnEnd(for session: TaskSessionInfo) -> Date? {
-        guard let sessions, let kind = session.status?.kind, kind == .idle || kind == .ready,
-              sessions.hasPendingInteractionOrUserDraft(in: session) == false else { return nil }
+        guard sessions != nil, let kind = session.status?.kind, kind == .idle || kind == .ready,
+              promptOccupant(of: session) == nil else { return nil }
         let turnEnd = session.lastTurnEndedAt ?? .distantPast
-        if let typedAt = sessions.lastUserInputAt(panelID: session.panelID), typedAt > turnEnd { return nil }
         if let previous = automaticPromptDeliveryTurnEnds[session.sessionID], turnEnd <= previous { return nil }
         return turnEnd
     }

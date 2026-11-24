@@ -1403,6 +1403,9 @@ struct ToasttyApp: App {
                     panelID: panelID,
                     focusPolicy: .preserveFirstResponder
                 ) ?? false
+            },
+            claudeHasNativeDialog: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.claudeHasNativeDialog(panelID: panelID) ?? false
             }
         )
         sessionRuntimeStore.sessionExitController = sessionExitController
@@ -1431,6 +1434,9 @@ struct ToasttyApp: App {
                     panelID: panelID,
                     focusPolicy: .preserveFirstResponder
                 ) ?? .unavailable
+            },
+            claudeHasNativeDialog: { [weak terminalRuntimeRegistry] panelID in
+                terminalRuntimeRegistry?.claudeHasNativeDialog(panelID: panelID) ?? false
             }
         )
         taskCoordinator.sessions = taskSessions
