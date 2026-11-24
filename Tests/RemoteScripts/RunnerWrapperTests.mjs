@@ -465,7 +465,6 @@ for (const kind of ["test", "validate"]) {
     succeeds(result);
     assert.match(result.stdout, /had started; its evidence stays/);
     assert.match(result.stdout, /removed the build caches of explicit-run-label/);
-    assert.equal(JSON.parse(readFileSync(join(context.remoteRun, "CANCELLED"), "utf8")).followed, false);
     assert.deepEqual(context.remoteCaches(), []);
     assert.ok(context.remoteLogsKept());
     assert.ok(existsSync(join(context.remoteRun, "detached-exit.json")));
@@ -486,7 +485,7 @@ for (const kind of ["test", "validate"]) {
     assert.equal(context.remoteCaches().length, 4);
   });
 
-  test(`a cancelled ${kind} run's following wrapper removes its build caches after it copies the evidence`, { timeout: 90000 }, async (t) => {
+  test(`a cancelled ${kind} run's following wrapper still copies its evidence while cancel.sh removes the caches`, { timeout: 90000 }, async (t) => {
     const context = fixture(t, kind);
     const gate = join(context.root, "gate");
     const wrapper = context.start({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate });
@@ -494,14 +493,11 @@ for (const kind of ["test", "validate"]) {
     await new Promise((r) => setTimeout(r, 500));
     const result = context.cancel();
     succeeds(result);
-    assert.doesNotMatch(result.stdout, /removed the build caches/);
-    assert.equal(JSON.parse(readFileSync(join(context.remoteRun, "CANCELLED"), "utf8")).followed, true);
+    assert.match(result.stdout, /removed the build caches of explicit-run-label/);
     assert.notEqual(await wrapper.finished, 0);
     assert.ok(context.phases().includes("artifact-verify"));
-    assert.equal(context.phases().at(-1), "cache-cleanup");
     assert.deepEqual(context.remoteCaches(), []);
     assert.ok(context.remoteLogsKept());
-    assert.equal(context.metadata().remoteCachesRemoved, true);
     const copied = kind === "test" ? context.localArtifacts : join(context.localArtifacts, "remote");
     assert.ok(existsSync(join(copied, "detached.stdout")));
   });

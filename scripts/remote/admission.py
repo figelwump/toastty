@@ -665,8 +665,7 @@ def cancel(args, root: Path) -> int:
             print(f"[admission] {args.label} has already ended")
             return 0
         # A cancelled run is never reattached: the same command starts anew.
-        # Only a wrapper that follows it now copies its evidence.
-        write_json(run_dir / "CANCELLED", {"cancelledAt": time.time(), "followed": followed(run_dir)})
+        write_json(run_dir / "CANCELLED", {"cancelledAt": time.time()})
         os.killpg(record["pid"], signal.SIGTERM)
         print(f"[admission] asked {args.label} to stop; its cleanup runs before it ends")
         return 0

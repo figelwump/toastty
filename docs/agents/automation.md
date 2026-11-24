@@ -56,9 +56,9 @@ reattached. A run whose source or options differ starts as a new run. A run
 that waits for a slot with nobody following it for 15 minutes gives up without
 starting. Stop a detached run on purpose with
 `sv exec -- scripts/remote/cancel.sh <run-label>`; its own cleanup still runs.
-A cancelled run that had started keeps its evidence on the remote host. When no
-wrapper followed it, `cancel.sh` removes its build caches, unless the run used
-`--full-artifacts` or `--keep-remote`; a following wrapper removes them after it
+A cancelled run that had started keeps its evidence on the remote host.
+`cancel.sh` removes its build caches unless the run used `--full-artifacts` or
+`--keep-remote`; then a wrapper that follows the run removes them after it
 copies the evidence. A reattach needs the same `--full-artifacts` and
 `--keep-remote` options as the run.
 Runs with `--live-gateway` stay attached to SSH, because their session holds
