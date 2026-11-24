@@ -5,7 +5,8 @@ import RemoteProtocol
 extension AppControlActionID {
     var isCoordinatorAction: Bool {
         switch self {
-        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorReply, .coordinatorWake, .coordinatorWatch: true
+        case .coordinatorOpen, .coordinatorRestart, .coordinatorSend, .coordinatorReply, .coordinatorAnswerQuestion,
+             .coordinatorWake, .coordinatorWatch: true
         default: false
         }
     }
@@ -177,6 +178,57 @@ extension AppControlExecutor {
             )
         }
         return name
+    }
+
+    /// Test-only, and only in a Debug build: an instance launched with
+    /// `TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER=1` takes an answer from a
+    /// caller with no session and no `from` name as the user's, without a
+    /// sender's line. `scripts/automation/remote-coordinator-skill-check.py`
+    /// sets it on its throwaway instance to answer the coordinator's setup
+    /// cards as the user. A release build never reads it.
+    static let terminalAnswersCountAsUser: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER"] == "1"
+        #else
+        false
+        #endif
+    }()
+
+    /// Answers the coordinator's open question card for the caller. The
+    /// answer starts with the first line that `coordinator.send` writes for
+    /// the same caller, so the coordinator reads it as that sender's, never
+    /// as the user's.
+    func runCoordinatorAnswerQuestion(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let controller = try requiredCoordinatorController()
+        try enforceCoordinatorAccess()
+        guard let card = args.coordinatorString("card"), card.isEmpty == false else {
+            throw AutomationSocketError.invalidPayload("card is required: the open card's ID, as coordinator.get gives it")
+        }
+        let sender = messageSender(statedName: try statedSenderName(args: args))
+        let answer: CoordinatorController.QuestionAnswer
+        do {
+            answer = try controller.answerOpenQuestion(
+                card: card,
+                option: args.coordinatorString("option"),
+                text: args.coordinatorString("text"),
+                from: sender == .unknown && Self.terminalAnswersCountAsUser ? nil : sender
+            )
+        } catch let error as CoordinatorError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+        var result = Self.openQuestionJSON(answer.card)
+        result["chosenOption"] = answer.chosenOption.map { .string($0) } ?? .null
+        result["answer"] = .string(answer.answer)
+        return .init(didMutateState: false, result: result)
+    }
+
+    static func openQuestionJSON(_ open: CoordinatorController.OpenQuestion) -> [String: AutomationJSONValue] {
+        [
+            "card": .string(open.card),
+            "header": .string(open.header),
+            "question": .string(open.question),
+            "options": .array(open.options.map { .string($0) }),
+        ]
     }
 
     /// Keeps the coordinator's reply to a message from outside a task. Only
@@ -392,6 +444,7 @@ extension AppControlExecutor {
         }
         if let startFailure = status.startFailure { snapshot["startFailure"] = .string(startFailure) }
         if let hold = status.hold { snapshot["hold"] = .string(hold.rawValue) }
+        if let open = controller.openQuestion() { snapshot["openQuestion"] = .object(openQuestionJSON(open)) }
         return snapshot
     }
 }

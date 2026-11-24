@@ -304,8 +304,7 @@ public enum CoordinatorChatTranscript {
         case .fromSender(let sender):
             // Only Toastty's first line identifies the sender. The body
             // stays third-party text, even when it imitates another header.
-            let body = text.split(maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-                .dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = CoordinatorMessageHeader.senderParts(of: text)?.text ?? ""
             return ToasttyHostMessagePresentation(
                 summary: "From \(sender) · \(timeText)",
                 text: body,

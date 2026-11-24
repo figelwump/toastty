@@ -99,6 +99,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case coordinatorRestart = "coordinator.restart"
     case coordinatorSend = "coordinator.send"
     case coordinatorReply = "coordinator.reply"
+    case coordinatorAnswerQuestion = "coordinator.answer-question"
     case coordinatorWake = "coordinator.wake"
     case coordinatorWatch = "coordinator.watch"
     case webhookAdd = "webhook.add"
@@ -640,6 +641,19 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .init(name: "text", summary: "The reply, for the sender. It leaves Toastty: the sender and any program on this Mac that runs toastty can read it.", valueType: .string, required: true),
                 ]
             )
+        case .coordinatorAnswerQuestion:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Answer the question card that the coordinator's agent shows now: pick a choice by its label, or answer in your own words. card names the card you read with coordinator.get (openQuestion.card); the action fails when another card shows, so an answer never lands on a later card. Pass exactly one of option and text. The card must ask one question; a permission prompt is not answered here. The agent receives the answer as text after the first line that coordinator.send writes for the same caller: the task whose space the calling session is in, else that session, else the name in from, marked as the caller's own, else a terminal command. So the coordinator reads the answer as that sender's, not as the user's, unless its policy names that sender as one that passes on the user's decisions. The user answers in the coordinator's chat or on a paired phone, without such a line. Returns card, header, question, options, chosenOption and answer, the text that the agent received. Fails when there is no coordinator, no open card, another open card, or no choice with that label.",
+                selectors: [],
+                parameters: [
+                    .init(name: "card", summary: "The ID of the card to answer, as coordinator.get gives it in openQuestion.card.", valueType: .string, required: true),
+                    .init(name: "option", summary: "The label of the choice to pick. A label that differs only in case also matches, when only one does.", valueType: .string, required: false),
+                    .init(name: "text", summary: "An answer in your own words, in place of a choice.", valueType: .string, required: false),
+                    .senderName(required: false),
+                ]
+            )
         case .coordinatorWake:
             return .init(
                 id: rawValue,
@@ -1007,7 +1021,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .query,
-                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a change that wakes nothing on its own, such as a task that started running or is Done, or an alert that cleared; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator; and watchedTaskIDs and watchedProjectRoots, what coordinator.watch watches.",
+                summary: "Return the coordinator: exists, and when it does its windowID, workspaceID, the panelID of its terminal, agentState (notRunning, starting or running), the agent session's sessionID, agent and status while one runs, startFailure after a start that did not work, queuedCount for messages from coordinator.send that wait, and hold, the reason the first one waits. wake describes what Toastty will type on its own: pendingTaskCount, the tasks whose stage changes or alerts wait for the next digest, also a change that wakes nothing on its own, such as a task that started running or is Done, or an alert that cleared; nextWakeAt, the time that coordinator.wake set for the next timer wake (null when no time is set, and then no timer runs); lastWakeAt, when Toastty last typed a digest, or when it started to follow tasks for this coordinator; and watchedTaskIDs and watchedProjectRoots, what coordinator.watch watches. openQuestion, while the agent shows a question card that coordinator.answer-question can answer (one card, one question): its card ID, header, question and the labels of its options.",
                 selectors: []
             )
         case .coordinatorReplies:

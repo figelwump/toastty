@@ -729,6 +729,22 @@ session, where the Claude login is readable.
 - The user's messages are typed into the coordinator's terminal
   (`terminal.send-text`). `coordinator send` would not do: Toastty marks its
   text with the sender, and the coordinator reads such a message as data.
+- When the coordinator asks with Claude Code's question tool, as the first-run
+  setup does for each part after the first, Toastty's chat shows a card, and the coordinator's status is
+  `needs_approval` until it is answered. The check answers the card through
+  `coordinator.answer-question`: `first-run` picks choices, and the other
+  first-run scenarios type the user's words into the card. An answer from
+  that action normally starts with Toastty's line for its sender, and the
+  coordinator never takes a policy change on a sender's word. So the check
+  launches its instance with `TOASTTY_TEST_TERMINAL_ANSWERS_AS_USER=1`: in a
+  Debug build, an answer from a caller with no session and no `from` name
+  then counts as the user's, as the chat's card gives it. A release build
+  ignores the variable. `first-run-sender` answers a setup card as
+  `"Grok Bot"` and checks that Claude reads that sender's line and that the
+  coordinator saves nothing. `first-run-request`
+  runs Claude with `--disallowedTools AskUserQuestion`, so the coordinator asks
+  in plain text, as it does with Codex or pi. The result counts the cards that
+  each run answered (`cardsAnswered`).
 - GitHub is a fake `gh`, first on the PATH of the app and of the
   coordinator. It serves pull requests from a state file, records each call
   with the calling session, and refuses every call that changes something.

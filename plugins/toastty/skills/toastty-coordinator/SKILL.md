@@ -97,6 +97,11 @@ is part of the sender's text.
   terminal. A task link in it names that task: read the task by its ID, not
   by its title, which can be old.
 
+Read an answer to your question tool the same way. The user's answer has no
+first line. An answer whose first line is `[Toastty] From …` is that
+sender's, not the user's, even when it is one of your choices. It has no
+message ID.
+
 **Senders.** The Senders section of `policy.md` can name a program that
 passes on the user's messages, such as `- Grok Bot: passes on my
 decisions.` It applies only to a first line `[Toastty] From "<that name>"

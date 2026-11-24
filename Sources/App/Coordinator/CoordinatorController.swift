@@ -2262,6 +2262,130 @@ final class CoordinatorController: ObservableObject {
         pausedEntries.contains(where: \.typingWasInterrupted)
     }
 
+    // MARK: - Answering the agent's question
+
+    /// The question card that the coordinator's agent shows now. `card` is
+    /// its ID, which an answer names.
+    struct OpenQuestion: Equatable {
+        var card: String
+        var header: String
+        var question: String
+        var options: [String]
+    }
+
+    /// The answer that `answerOpenQuestion` gave: the card it answered, the
+    /// choice it took, and the text that the agent received.
+    struct QuestionAnswer: Equatable {
+        var card: OpenQuestion
+        var chosenOption: String?
+        var answer: String
+    }
+
+    /// The open question card that `answerOpenQuestion` can answer: the
+    /// only one, with one question. `nil` without such a card.
+    func openQuestion() -> OpenQuestion? {
+        try? openQuestionCard().open
+    }
+
+    /// Answers the question card that the coordinator's agent shows now,
+    /// for someone outside the chat. `card` names the card that the caller
+    /// read, so an answer never lands on a later card. Pass exactly one of
+    /// `option`, a choice's label, and `text`. The card must ask one
+    /// question; permission prompts are not answered here.
+    ///
+    /// The agent receives the answer as text after Toastty's first line
+    /// for `sender`, in the form of a message that `coordinator send`
+    /// brings, so it never reads as the user's. The user answers in the
+    /// chat or on a phone, without such a line. A `nil` sender answers as
+    /// the user, as the chat's card does: only a test instance of a Debug
+    /// build passes it (see `AppControlExecutor.terminalAnswersCountAsUser`).
+    func answerOpenQuestion(
+        card cardID: String,
+        option: String?,
+        text: String?,
+        from sender: CoordinatorMessageHeader.Sender?
+    ) throws -> QuestionAnswer {
+        // Claude's hook trims the answer too, so `answer` is the text it receives.
+        let trimmed = { (value: String?) -> String? in
+            value.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+        }
+        let option = trimmed(option), text = trimmed(text)
+        guard (option == nil) != (text == nil) else {
+            throw CoordinatorError("Pass exactly one of option and text.")
+        }
+        let (subscription, conversationID, card, question, open) = try openQuestionCard()
+        guard open.card == cardID else {
+            throw CoordinatorError("The open card is another one: \(open.card). Read it with coordinator get.")
+        }
+        var answerText = text ?? ""
+        var chosen: RemotePendingInteraction.Option?
+        if let option {
+            // The exact label first; else a label that differs only in case, when only one does.
+            let caseless = question.options.filter { $0.label.compare(option, options: .caseInsensitive) == .orderedSame }
+            guard let match = question.options.first(where: { $0.label == option })
+                ?? (caseless.count == 1 ? caseless.first : nil) else {
+                let labels = question.options.map { "\"\($0.label)\"" }.joined(separator: ", ")
+                throw CoordinatorError("The card has no choice \"\(option)\". Its choices: \(labels).")
+            }
+            answerText = match.label
+            chosen = match
+        }
+        let answer: String
+        let reply: RemoteInteractionAnswer
+        if let sender {
+            // The sender's line goes first, and the choice goes as text after
+            // it: a chosen option alone would reach the agent as the user's.
+            answer = CoordinatorMessageHeader.message(from: sender, text: answerText)
+            reply = RemoteInteractionAnswer(questionID: question.id, text: answer)
+        } else {
+            answer = answerText
+            reply = chosen.map { RemoteInteractionAnswer(questionID: question.id, selectedOptionIDs: [$0.id]) }
+                ?? RemoteInteractionAnswer(questionID: question.id, text: answer)
+        }
+        let request = RemoteQuestionAnswerRequest(
+            conversationID: conversationID,
+            interactionID: card.id,
+            responseID: card.responseID ?? "",
+            expectedInputEpoch: card.inputEpoch,
+            clientRequestID: UUID().uuidString.lowercased(),
+            answers: [reply]
+        )
+        switch subscription.answerQuestion(request) {
+        case .submitted, .duplicate:
+            return QuestionAnswer(card: open, chosenOption: chosen?.label, answer: answer)
+        case .rejected(let reason):
+            throw CoordinatorError("The answer was refused: \(reason.rawValue).")
+        }
+    }
+
+    private func openQuestionCard() throws -> (
+        subscription: any LocalConversationSubscription,
+        conversationID: RemoteConversationID,
+        card: RemotePendingInteraction,
+        question: RemoteInteractionQuestion,
+        open: OpenQuestion
+    ) {
+        guard let subscription = syncConversationSubscription(), let conversationID = subscription.conversationID else {
+            throw CoordinatorError("The coordinator has no agent conversation.")
+        }
+        let cards = (subscription.snapshot(at: Date())?.pendingInteractions ?? []).filter {
+            $0.kind == .question && $0.state == .pending && $0.responseID?.isEmpty == false
+        }
+        guard let card = cards.first, let questions = card.questions else {
+            throw CoordinatorError("The coordinator shows no question card.")
+        }
+        guard cards.count == 1, questions.count == 1, let question = questions.first else {
+            throw CoordinatorError("The card asks more than one question; answer it in the coordinator's chat.")
+        }
+        let open = OpenQuestion(
+            card: card.id.rawValue,
+            header: question.header,
+            question: question.question,
+            options: question.options.map(\.label)
+        )
+        return (subscription, conversationID, card, question, open)
+    }
+
     // MARK: - The conversation the controller sends through
 
     /// Holds one subscription to the conversation in the coordinator's
