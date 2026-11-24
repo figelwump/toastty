@@ -8,6 +8,16 @@ on:
         required: true
         type: boolean
         default: false
+      source_sha:
+        description: Full 40-character SHA of a commit on main to build. Leave empty to build the commit this run starts from.
+        required: false
+        type: string
+        default: ''
+      ci_override_reason:
+        description: Emergency only. Text here skips the full CI check for this build and records the reason. Leave empty.
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   group: ios-testflight-${{ github.ref }}
@@ -24,10 +34,36 @@ jobs:
       actions: read
 
     steps:
+      # The workflow file comes from the dispatched ref; the build can be an
+      # earlier commit on main, such as a release commit that main moved past.
+      - name: Resolve release source
+        id: source
+        env:
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          sha="${REQUESTED_SHA:-$EVENT_SHA}"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full 40-character lowercase commit SHA." >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Require release source on main
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main; then
+            echo "The release source $SOURCE_SHA is not on main." >&2
+            exit 1
+          fi
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -44,8 +80,19 @@ jobs:
         id: ci
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ github.sha }}
-        run: node scripts/ci/require-ios-ci.mjs --sha "$RELEASE_SHA" --output artifacts/ios-release/ci-evidence.json
+          GATE_SHA: ${{ github.sha }}
+          RELEASE_SHA: ${{ steps.source.outputs.sha }}
+          CI_OVERRIDE_REASON: ${{ inputs.ci_override_reason }}
+        # Run the gate from the dispatched commit, not from the commit it checks:
+        # an earlier commit on main can carry an older or weaker gate.
+        run: |
+          gate="$RUNNER_TEMP/release-gate"
+          mkdir -p "$gate/scripts/ci" "$gate/.github"
+          git fetch --no-tags origin "$GATE_SHA"
+          git show "$GATE_SHA:scripts/ci/require-ios-ci.mjs" > "$gate/scripts/ci/require-ios-ci.mjs"
+          git show "$GATE_SHA:.github/ios-release-ci-jobs.json" > "$gate/.github/ios-release-ci-jobs.json"
+          node "$gate/scripts/ci/require-ios-ci.mjs" --source "$GITHUB_WORKSPACE" --sha "$RELEASE_SHA" \
+            --override-reason="$CI_OVERRIDE_REASON" --output artifacts/ios-release/ci-evidence.json
 
       - name: Select pinned iOS Xcode
         run: bash scripts/ci/select-ios-xcode.sh
@@ -65,6 +112,8 @@ jobs:
       - name: Archive and validate TestFlight build
         env:
           TOASTTY_IOS_VERIFIED_SHA: ${{ steps.ci.outputs.verified_sha }}
+          TOASTTY_IOS_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          TOASTTY_IOS_CI_GATE: ${{ steps.ci.outputs.gate }}
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}

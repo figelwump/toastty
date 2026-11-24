@@ -22,7 +22,7 @@ const fullJobs = requiredNames.map((name) => ({ ...gate, name }));
 
 function invoke({ runs = [run], current = run, final = current, jobs = fullJobs,
   total = runs.length, jobTotal = jobs.length, errorAt, malformedAt, source = sha,
-  repository = repo } = {}) {
+  repository = repo, overrideReason, script = helper, sourceRoot } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'toastty-ci-gate-'));
   try {
     const bin = path.join(dir, 'bin');
@@ -53,12 +53,20 @@ console.log(JSON.stringify(response.body));
 `, { mode: 0o755 });
     const evidence = path.join(dir, 'evidence.json');
     const output = path.join(dir, 'output');
-    const result = spawnSync(process.execPath, [helper, '--sha', source, '--output', evidence], {
+    const summary = path.join(dir, 'summary');
+    const args = [script, '--sha', source, '--output', evidence];
+    // Same form as the workflow, so a reason that starts with a dash stays a value.
+    if (overrideReason !== undefined) args.push(`--override-reason=${overrideReason}`);
+    if (sourceRoot !== undefined) args.push('--source', sourceRoot);
+    const result = spawnSync(process.execPath, args, {
       cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`,
-        CI_FIXTURE: path.join(dir, 'fixture.json'), GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: output },
+        CI_FIXTURE: path.join(dir, 'fixture.json'), GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: summary, GITHUB_ACTOR: 'release-owner', GITHUB_RUN_ID: '777' },
     });
-    return { ...result, evidence: existsSync(evidence) ? JSON.parse(readFileSync(evidence)) : null,
-      output: existsSync(output) ? readFileSync(output, 'utf8') : '' };
+    const apiCalls = JSON.parse(readFileSync(path.join(dir, 'fixture.json'), 'utf8')).index ?? 0;
+    return { ...result, apiCalls, evidence: existsSync(evidence) ? JSON.parse(readFileSync(evidence)) : null,
+      output: existsSync(output) ? readFileSync(output, 'utf8') : '',
+      summary: existsSync(summary) ? readFileSync(summary, 'utf8') : '' };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -75,10 +83,11 @@ for (const event of ['workflow_dispatch']) {
     const trusted = { ...run, event };
     const result = invoke({ runs: [trusted], current: trusted });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(result.evidence, { repository: repo, workflow_id: workflow, workflow_path: run.path,
+    assert.deepEqual(result.evidence, { repository: repo, gate: 'full-ci', workflow_id: workflow, workflow_path: run.path,
       run_id: run.id, run_url: `https://github.com/${repo}/actions/runs/${run.id}/attempts/2`,
       run_attempt: 2, head_sha: sha, head_branch: 'main', event, status: 'completed', conclusion: 'success', required_jobs: requiredNames });
-    assert.equal(result.output, `verified_sha=${sha}\n`);
+    assert.equal(result.output, `verified_sha=${sha}\ngate=full-ci\n`);
+    assert.match(result.summary, /Full CI verified/);
   });
 }
 
@@ -160,4 +169,58 @@ test('ignores legacy push runs when selecting the latest full manual validation'
   const result = invoke({ runs: [{ ...run, id: 999, run_number: 99, event: 'push' }, run] });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.evidence.run_id, run.id);
+});
+
+// The emergency override skips CI evidence but still binds the record to the exact source.
+test('override records the reason and reads no CI evidence', () => {
+  const result = invoke({ overrideReason: '  CI runner outage; Mac-only change since run 120  ', errorAt: 0 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.apiCalls, 0);
+  assert.deepEqual(result.evidence, { repository: repo, gate: 'override', head_sha: sha,
+    override_reason: 'CI runner outage; Mac-only change since run 120', actor: 'release-owner',
+    workflow_run_url: `https://github.com/${repo}/actions/runs/777` });
+  assert.equal(result.output, `verified_sha=${sha}\ngate=override\n`);
+  assert.match(result.stdout, /^::warning title=Full CI check skipped::CI runner outage/m);
+  assert.match(result.summary, /Full CI check skipped[\s\S]*release-owner: CI runner outage/);
+});
+test('override reason stays one warning and literal summary text', () => {
+  const result = invoke({ overrideReason: '- 100% Mac-only ##[error]quoted <!-- runner log -->' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.evidence.override_reason, '- 100% Mac-only ##[error]quoted <!-- runner log -->');
+  const lines = result.stdout.split('\n').filter((line) => line.includes('Mac-only'));
+  assert.deepEqual(lines, ['::warning title=Full CI check skipped::- 100%25 Mac-only ##[error]quoted <!-- runner log -->']);
+  assert.match(result.summary, /- 100% Mac-only ##\[error\]quoted &lt;!-- runner log --&gt;/);
+});
+// The workflow runs the dispatched commit's gate against another checkout.
+test('a gate copy outside the source verifies the given source checkout', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'toastty-gate-copy-'));
+  try {
+    mkdirSync(path.join(dir, 'scripts/ci'), { recursive: true });
+    mkdirSync(path.join(dir, '.github'));
+    writeFileSync(path.join(dir, 'scripts/ci/require-ios-ci.mjs'), readFileSync(helper));
+    writeFileSync(path.join(dir, '.github/ios-release-ci-jobs.json'), JSON.stringify(requiredNames));
+    const script = path.join(dir, 'scripts/ci/require-ios-ci.mjs');
+    const result = invoke({ script, sourceRoot: root });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.evidence.head_sha, sha);
+    rejected({ script, sourceRoot: root, source: '0'.repeat(40) });
+    rejected({ script, sourceRoot: dir });
+    writeFileSync(path.join(dir, '.github/ios-release-ci-jobs.json'), JSON.stringify([...requiredNames, 'New job']));
+    rejected({ script, sourceRoot: root });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('an empty override reason runs the full CI check', () => {
+  const result = invoke({ overrideReason: '' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.evidence.gate, 'full-ci');
+  rejected({ overrideReason: '', runs: [] });
+});
+test('rejects blank, multi-line or long override reasons', () => {
+  for (const overrideReason of ['   ', 'line one\nline two', 'tab\there', 'x'.repeat(301)]) {
+    rejected({ overrideReason });
+  }
+});
+test('override still requires the exact checked-out source and repository', () => {
+  rejected({ overrideReason: 'outage', source: '0'.repeat(40) });
+  rejected({ overrideReason: 'outage', repository: 'fork/toastty' });
 });
