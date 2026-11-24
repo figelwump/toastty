@@ -77,6 +77,9 @@ public final class LinuxAppLogic {
     let focusedPanelCommandController: FocusedPanelCommandController
     let processWatchCommandController: ProcessWatchCommandController
     let remoteAccessService: RemoteAccessService?
+    /// Tasks, the task board, webhooks and the coordinator
+    /// (`LinuxTaskStack`).
+    let tasks: LinuxTaskStack
     /// The Ghostty metadata path (title/cwd normalization, command-finished
     /// session lifecycle, terminal desktop notifications). On macOS the
     /// registry owns it behind TOASTTY_HAS_GHOSTTY_KIT; on Linux the facade
@@ -447,15 +450,35 @@ public final class LinuxAppLogic {
             preferredWindowIDProvider: { [weak store] in store.flatMap(LinuxAppLogic.preferredCommandWindowID(in:)) }
         )
 
+        let tasks = LinuxTaskStack.make(
+            runtimePaths: runtimePaths,
+            environment: environment,
+            usesPersistentPreferences: usesPersistentPreferences,
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            focusedPanelCommandController: focusedPanelCommandController,
+            agentLaunchService: agentLaunchService,
+            agentCatalogStore: agentCatalogStore,
+            workspaceMergeCoordinator: workspaceMergeCoordinator,
+            socketPath: socketPath,
+            cliExecutablePath: cliExecutablePath
+        )
+
         let remoteAccessService: RemoteAccessService?
         if options.allowsRemoteAccess {
             remoteAccessService = RemoteAccessService(
                 store: store,
                 annotationStyleStore: annotationStyleStore,
+                taskBoard: tasks.board,
                 sessionRuntimeStore: sessionRuntimeStore,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 runtimePaths: runtimePaths,
                 sessionLauncher: agentLaunchService,
+                sessionCloseController: tasks.sessionCloseController,
+                sessionExitController: tasks.sessionExitController,
+                taskCoordinator: tasks.coordinator,
                 port: options.remoteAccessPort ?? RemoteAccessPreferences.loadPort(runtimePaths: runtimePaths),
                 pushConfiguration: LinuxAppConfiguration.pushConfiguration(environment: environment),
                 tailnetServeSetup: options.remoteAccessTailnetServeSetup ?? { port, configuredOrigin, configureIfNeeded in
@@ -469,6 +492,7 @@ public final class LinuxAppLogic {
         } else {
             remoteAccessService = nil
         }
+        tasks.connect(remoteAccessService: remoteAccessService)
 
         if let context = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: context)
@@ -496,6 +520,7 @@ public final class LinuxAppLogic {
         self.focusedPanelCommandController = focusedPanelCommandController
         self.processWatchCommandController = processWatchCommandController
         self.remoteAccessService = remoteAccessService
+        self.tasks = tasks
         self.terminalMetadataService = terminalMetadataService
         self.automationLifecycle = bootstrap.automationLifecycle
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
@@ -529,6 +554,7 @@ public final class LinuxAppLogic {
                     agentLaunchService: agentLaunchService,
                     annotationStyleStore: annotationStyleStore,
                     inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
+                    taskCoordinator: tasks.coordinator,
                     reloadConfigurationAction: { [weak self] in self?.reloadConfiguration() }
                 )
                 automationStartupError = nil
@@ -589,6 +615,7 @@ public final class LinuxAppLogic {
     public func shutdown(reason: String = "application_will_terminate") {
         guard isShutDown == false else { return }
         isShutDown = true
+        tasks.prepareForTermination()
         persistenceCoordinator?.flushCurrentState(store.state, reason: reason)
         if let persistenceObserverToken {
             store.removeActionAppliedObserver(persistenceObserverToken)
