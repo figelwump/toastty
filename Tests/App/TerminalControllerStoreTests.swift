@@ -1,5 +1,6 @@
 #if TOASTTY_HAS_GHOSTTY_KIT
 @testable import ToasttyApp
+import AppKit
 import CoreState
 import Foundation
 import GhosttyKit
@@ -127,6 +128,56 @@ final class TerminalControllerStoreTests: XCTestCase {
         store.armCloseTransitionViewportDeferral(for: [livePanelID])
 
         XCTAssertTrue(controller.isCloseTransitionViewportDeferralArmed)
+    }
+
+    func testBackgroundTerminalAcceptsInputAfterViewportReturnsToItsLastSize() async throws {
+        let store = TerminalControllerStore()
+        let delegate = TestTerminalSurfaceControllerDelegate()
+        let controller = store.controller(for: UUID(), delegate: delegate)
+        defer { controller.invalidate() }
+
+        let frame = CGRect(x: 0, y: 0, width: 600, height: 400)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let container = NSView(frame: frame)
+        window.contentView = container
+        let attachment = PanelHostAttachmentToken.next()
+        controller.attachHost(to: container, attachment: attachment)
+        container.layoutSubtreeIfNeeded()
+
+        let state = TerminalPanelHostState(cwd: NSTemporaryDirectory(), launchWorkingDirectory: nil)
+        func updateViewport(_ size: CGSize) {
+            controller.update(
+                hostState: state,
+                focused: false,
+                fontPoints: 12,
+                viewportSize: size,
+                backingScaleFactor: 1,
+                sourceContainer: container,
+                attachment: attachment
+            )
+        }
+
+        updateViewport(frame.size)
+        updateViewport(frame.size)
+        let surface = try XCTUnwrap(controller.currentGhosttySurface())
+        let afterAttachmentSettles = Date(timeIntervalSinceNow: 1)
+        XCTAssertTrue(controller.isReadyForAutomationInput(now: afterAttachmentSettles))
+
+        updateViewport(CGSize(width: 1, height: 1))
+        XCTAssertFalse(controller.isReadyForAutomationInput(now: afterAttachmentSettles))
+        updateViewport(frame.size)
+        XCTAssertFalse(controller.isReadyForAutomationInput(now: afterAttachmentSettles))
+
+        // Background hosts may not get another layout callback at this size.
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        while !controller.isReadyForAutomationInput(now: afterAttachmentSettles), clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertTrue(controller.isReadyForAutomationInput(now: afterAttachmentSettles))
+        XCTAssertEqual(controller.currentGhosttySurface(), surface)
+        XCTAssertFalse(window.isVisible)
     }
 }
 
