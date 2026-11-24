@@ -1844,7 +1844,10 @@ def dependency_busy(run):
               bool(messages) and f'[{first.title}]({first.link})' in messages[0], messages, required=False)
     states = [m['state'] for m in run.get(waiting).get('queuedMessages') or []]
     run.check('task get reports the message as sent', states == ['sent'], states)
-    return turns + later
+    # The fake agent starts no turn, so its finished turn wakes the
+    # coordinator once more. Let that turn end before the checks of every run.
+    last = run.new_turns(wake=True)
+    return turns + later + last
 
 
 def quiet_wake(run):
