@@ -87,11 +87,11 @@ struct TaskMergeEndToEndTests: AutomationSocketServerTestSupport {
     func aTaskSpaceWithATerminalInTheMainCheckoutStillCleansUp() async throws {
         try await withScenario { scenario in
             let store = scenario.store
-            let existing = Set(try #require(store.state.workspacesByID[scenario.taskSpaceID]).allPanelsByID.keys)
+            let before = try #require(store.state.workspacesByID[scenario.taskSpaceID])
             #expect(store.send(.splitFocusedSlot(workspaceID: scenario.taskSpaceID, orientation: .horizontal)))
+            let after = try #require(store.state.workspacesByID[scenario.taskSpaceID])
             let mainCheckoutPanelID = try #require(
-                Set(try #require(store.state.workspacesByID[scenario.taskSpaceID]).allPanelsByID.keys)
-                    .subtracting(existing).first
+                Set(after.allPanelsByID.keys).subtracting(before.allPanelsByID.keys).first
             )
             store.send(.updateTerminalPanelMetadata(panelID: mainCheckoutPanelID, title: nil, cwd: scenario.repo))
             scenario.sessionRuntimeStore.startSession(

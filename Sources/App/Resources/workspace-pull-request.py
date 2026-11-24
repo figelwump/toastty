@@ -58,7 +58,7 @@ the worktree is gone; it adds a refusal if a checkout is found by branch name.
 changing nothing, when that workspace is not the one whose terminals are in the
 worktree (or whose github-pr chip names the PR), when it has unsaved documents,
 a terminal in another worktree, or another PR's chip, or when the worktree is
-locked. With --worktree, a terminal in another worktree does not stop clean-up:
+locked or holds another registered worktree. With --worktree, a terminal in another worktree does not stop clean-up:
 the task record names the workspace, and the close ends that terminal too.
 They reread the workspace just before closing it, recheck the worktree just
 before removing it, and delete each branch only at the commit checked for
@@ -584,6 +584,12 @@ def clean_up(ctx: Context, close_pr: bool) -> tuple[str, str]:
                     return "the worktree is no longer registered on the recorded branch"
                 if current.locked:
                     return "the worktree is locked"
+            # Git status does not show a checkout in an ignored folder, and
+            # removing the worktree would delete it with its files.
+            nested = [w.path for w in list_worktrees(ctx.repo)
+                      if w.path != worktree.path and inside(w.path, worktree.path)]
+            if nested:
+                return f"another worktree is inside it ({nested[0]})"
             return worktree_problem(worktree, cleanup_head, head_label)
         path = ctx.expected_worktree_path
         if path is None:

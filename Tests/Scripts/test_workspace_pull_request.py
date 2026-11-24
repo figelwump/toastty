@@ -679,6 +679,23 @@ class WorkspacePullRequestTests(unittest.TestCase):
         self.assertEqual((other_task / "draft.txt").read_text(), "uncommitted\n")
         self.assertIn(str(self.repo), self.git("worktree", "list", "--porcelain"))
 
+    def test_task_cleanup_keeps_a_worktree_nested_in_an_ignored_folder(self):
+        """Git status hides a checkout in an ignored folder of the task's
+        worktree; removing the task's worktree would delete it."""
+        branch, path = self.task(1)
+        with open(self.repo / ".git" / "info" / "exclude", "a") as exclude:
+            exclude.write("nested/\n")
+        nested = path / "nested" / "other"
+        self.git("worktree", "add", "-q", "-b", "other-work", str(nested), "main")
+        (nested / "draft.txt").write_text("uncommitted\n")
+        self.workspaces[-1]["terminalCwds"].append(str(nested))
+        result = self.run_script("clean-up", 1, repo=self.repo, worktree=path)
+        self.assertEqual(result["status"], "skipped", result)
+        self.assertIn("another worktree is inside it", result["detail"])
+        self.assertEqual((nested / "draft.txt").read_text(), "uncommitted\n")
+        self.assertTrue(self.remote_has(branch))
+        self.assertEqual(self.closed(), [])
+
     def test_missing_worktree_recovery_keeps_moved_or_shared_branches(self):
         for number, shared in ((1, False), (2, True)):
             with self.subTest(shared=shared):
