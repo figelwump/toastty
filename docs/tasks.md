@@ -1048,8 +1048,8 @@ decides itself.
 
 What the coordinator may decide is set in one place: its own instructions
 and your policy. Its instructions keep fixed limits, such as never changing
-production outside a release task, and they ask for a merge only as your
-Merging rules allow; see [What the coordinator does](#what-the-coordinator-does)
+production outside a release task, and it asks for a merge only when you
+tell it to or one of your Merging rules covers the change; see [What the coordinator does](#what-the-coordinator-does)
 and [Merges by the coordinator](#merges-by-the-coordinator). A task does not
 check those limits again.
 
