@@ -1139,9 +1139,12 @@ toastty_remove_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$R
       CLEANUP_REMOTE_REMOVED=1
     else
       warn "Remote directory cleanup failed; inspect retained paths: $remote_run_root"
+      toastty_remove_remote_run_caches "$remote_run_root" || true
       client_status=setup_error
       toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote directory cleanup failed; inspect retained paths" setup_error
     fi
+  elif [[ "$KEEP_REMOTE" != "1" && "$copy_succeeded" == 1 ]]; then
+    toastty_remove_remote_run_caches "$remote_run_root" || true
   fi
 
   # The existing EXIT handler finalizes metadata after any fallback cleanup.

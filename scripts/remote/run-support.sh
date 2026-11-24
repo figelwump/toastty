@@ -85,20 +85,136 @@ toastty_record_infrastructure_failure() {
   fi
 }
 
+# A run's build caches: the DerivedData folders (Derived and run/Derived)
+# that the evidence copy skips. Logs and result bundles are evidence and stay.
+# These definitions are sent over SSH.
+toastty_run_cache_paths() {
+  local base subtree
+  for base in Derived run/Derived; do
+    for subtree in Build/Intermediates.noindex Build/Products Index.noindex ModuleCache.noindex SourcePackages SDKStatCaches.noindex SDKExplicitPrecompiledModules CompilationCache.noindex; do
+      printf '%s/%s\n' "$base" "$subtree"
+    done
+  done
+}
+
+# Copies a run's evidence, then checks that the destination matches the source.
+# The second pass lists any file that differs; it ignores folder times only.
 toastty_copy_run_artifacts() {
   local source="$1" destination="$2" full="$3"
-  local filters=() root subtree
+  local filters=() path differences
+  local ssh_command='ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3'
   if [[ "$full" != 1 ]]; then
-    # Exclude heavy subtrees, not Derived itself: keep Logs and result bundles.
-    for root in /Derived /run/Derived; do
-      for subtree in Build/Intermediates.noindex Build/Products Index.noindex ModuleCache.noindex SourcePackages SDKStatCaches.noindex SDKExplicitPrecompiledModules CompilationCache.noindex; do
-        filters+=(--exclude "$root/$subtree/")
-      done
-    done
+    while IFS= read -r path; do
+      filters+=(--exclude "/$path/")
+    done < <(toastty_run_cache_paths)
   fi
-  rsync -a ${filters[@]+"${filters[@]}"} \
-    -e 'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3' \
-    "$source/" "$destination/"
+  rsync -a ${filters[@]+"${filters[@]}"} -e "$ssh_command" "$source/" "$destination/" || return 1
+  differences="$(rsync -a --omit-dir-times --dry-run --itemize-changes ${filters[@]+"${filters[@]}"} \
+    -e "$ssh_command" "$source/" "$destination/")" || return 1
+  if [[ -n "$differences" ]]; then
+    printf 'error: copied evidence differs from the remote run:\n%s\n' "$differences" >&2
+    return 1
+  fi
+}
+
+toastty_run_paths_have_live_process() {
+  local derived_path="$1"
+  local runtime_home="$2"
+  local pid
+  local command_line
+  local ancestor_pid="$$"
+  local ancestor_pids=""
+  local parent_pid
+  local process_inventory
+
+  [[ -n "$derived_path" && "$derived_path" == /* && "$derived_path" == */Derived ]] || return 0
+  [[ -n "$runtime_home" && "$runtime_home" == /* && "$runtime_home" == */runtime-home ]] || return 0
+
+  while [[ "$ancestor_pid" =~ ^[0-9]+$ && "$ancestor_pid" != "0" ]]; do
+    ancestor_pids+=" $ancestor_pid"
+    [[ "$ancestor_pid" == "1" ]] && break
+    parent_pid="$(ps -o ppid= -p "$ancestor_pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$parent_pid" =~ ^[0-9]+$ ]] || break
+    ancestor_pid="$parent_pid"
+  done
+
+  # A failed inventory is unknown ownership, not evidence that the run is idle.
+  process_inventory="$(ps -axww -o pid=,command=)" || return 0
+  while read -r pid command_line; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    case " $ancestor_pids " in
+      *" $pid "*) continue ;;
+    esac
+    case "$command_line" in
+      *"$derived_path"/*|*"$derived_path "*|*"$derived_path"|\
+      *"$runtime_home"/*|*"$runtime_home "*|*"$runtime_home") return 0 ;;
+    esac
+  done <<<"$process_inventory"
+  return 1
+}
+
+# Build and test helper processes can take a few seconds to exit after their
+# xcodebuild is stopped. Wait a bounded time before cleanup counts a process
+# as left behind, which keeps the desktop reserved.
+toastty_wait_run_paths_idle() {
+  local derived_path="$1" runtime_home="$2" seconds="${3:-15}" waited=0
+  while toastty_run_paths_have_live_process "$derived_path" "$runtime_home"; do
+    if (( waited >= seconds * 2 )); then
+      return 1
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  return 0
+}
+
+# Removes the build caches of one run on the host that holds it. Call it only
+# for a run whose evidence was copied and verified, or that nobody copies.
+# The run must have ended, and no process may refer to its DerivedData or
+# runtime home. Everything else in the run folder stays.
+toastty_remove_run_caches() {
+  local run_root="$1" base path
+  [[ "$run_root" == /* && -d "$run_root" && ! -L "$run_root" ]] || {
+    printf 'error: not a run folder: %s\n' "$run_root" >&2
+    return 1
+  }
+  if [[ -e "$run_root/detached.json" && ! -e "$run_root/detached-exit.json" ]]; then
+    printf 'error: the run has not ended; its build caches stay: %s\n' "$run_root" >&2
+    return 1
+  fi
+  for base in Derived run/Derived; do
+    [[ -e "$run_root/$base" || -L "$run_root/$base" ]] || continue
+    if [[ -L "$run_root/$base" || ! -d "$run_root/$base" || -L "$(dirname "$run_root/$base")" ]]; then
+      printf 'error: unexpected DerivedData entry; its build caches stay: %s\n' "$run_root/$base" >&2
+      return 1
+    fi
+    if ! toastty_wait_run_paths_idle "$run_root/$base" "$(dirname "$run_root/$base")/runtime-home" 15; then
+      printf 'error: a process still refers to %s; its build caches stay\n' "$run_root/$base" >&2
+      return 1
+    fi
+  done
+  while IFS= read -r path; do
+    [[ -e "$run_root/$path" || -L "$run_root/$path" ]] || continue
+    # Never follow a link out of the run folder.
+    [[ ! -L "$(dirname "$run_root/$path")" ]] || return 1
+    rm -rf -- "$run_root/$path" || return 1
+  done < <(toastty_run_cache_paths)
+}
+
+# Sends toastty_remove_run_caches to the remote host for this wrapper's run.
+toastty_remove_remote_run_caches() {
+  log "Removing the remote run's build caches"
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$REMOTE_HOST" /bin/bash -l -s <<EOF
+set -euo pipefail
+$(declare -f toastty_run_cache_paths toastty_run_paths_have_live_process toastty_wait_run_paths_idle toastty_remove_run_caches)
+toastty_remove_run_caches $(printf '%q' "$1")
+EOF
+  then
+    TOASTTY_METADATA_REMOTE_CACHES_REMOVED=true
+  else
+    warn "Could not remove the remote run's build caches: $1"
+    return 1
+  fi
 }
 
 # Keep the selected source export unchanged. The current wrapper and its helpers
@@ -181,14 +297,16 @@ toastty_finish_run_metadata() {
     --arg remoteRunRoot "${TOASTTY_METADATA_REMOTE_RUN_ROOT:-}" \
     --arg remoteWorktree "${TOASTTY_METADATA_REMOTE_WORKTREE:-}" \
     --argjson allocated "${TOASTTY_METADATA_REMOTE_ALLOCATED:-false}" \
-    --argjson removed "${TOASTTY_METADATA_REMOTE_REMOVED:-false}" '
+    --argjson removed "${TOASTTY_METADATA_REMOTE_REMOVED:-false}" \
+    --argjson cachesRemoved "${TOASTTY_METADATA_REMOTE_CACHES_REMOVED:-false}" '
       $metadata + {exitCode: $exitCode, lastPhase: $lastPhase, durationSeconds: $duration,
         status: (if $exitCode == 0 then ($result.status // "pass") else "fail" end),
         executionTarget: ($result.executionTarget // (if $remoteRunRoot != "" then "remote" else null end)),
         fallbackReason: ($result.fallbackReason // null),
         remoteRunRoot: (if $remoteRunRoot == "" then null else $remoteRunRoot end),
         remoteWorktree: (if $remoteWorktree == "" then null else $remoteWorktree end),
-        remoteAllocationConfirmed: $allocated, remoteRemoved: $removed}
+        remoteAllocationConfirmed: $allocated, remoteRemoved: $removed,
+        remoteCachesRemoved: ($removed or $cachesRemoved)}
     ' >"$temporary" && mv "$temporary" "$LOCAL_ARTIFACTS_DIR/run-metadata.json"; then
     TOASTTY_RUN_METADATA_WRITTEN=1
   else

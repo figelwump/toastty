@@ -1065,11 +1065,13 @@ toastty_remove_remote_run \"\$REMOTE_REPO_ROOT\" \"\$REMOTE_WORKTREE_DIR\" \"\$R
       TOASTTY_METADATA_REMOTE_REMOVED=true
     else
       warn "Remote directory cleanup failed; inspect retained paths: $remote_run_root"
+      toastty_remove_remote_run_caches "$remote_run_root" || true
       remote_test_exit_code=1
       toastty_record_infrastructure_failure "$LOCAL_ARTIFACTS_DIR/result.json" "Remote directory cleanup failed; inspect retained paths" fail
     fi
   elif [[ "$KEEP_REMOTE" != "1" ]]; then
     warn "Retaining remote run because run-owned cleanup was not confirmed: $remote_run_root"
+    [[ "$copy_succeeded" != 1 ]] || toastty_remove_remote_run_caches "$remote_run_root" || true
   fi
 
   if [[ "$remote_test_exit_code" != "0" ]]; then

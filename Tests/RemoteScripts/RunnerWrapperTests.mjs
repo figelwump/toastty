@@ -13,6 +13,18 @@ const fixtureHost = "runner-fixture.invalid";
 const realGit = ["/Applications/Xcode.app/Contents/Developer/usr/bin/git", "/Library/Developer/CommandLineTools/usr/bin/git", "/usr/bin/git"].find(existsSync);
 const fixtureExecution = [
   "set -euo pipefail",
+  // Build caches and logs, as xcodebuild leaves them in both DerivedData folders.
+  'for derived in "$2/Derived" "$2/run/Derived"; do',
+  '  mkdir -p "$derived/Build/Products" "$derived/ModuleCache.noindex" "$derived/Logs/Test"',
+  `  printf 'cache\\n' >"$derived/Build/Products/cache.bin"`,
+  `  printf 'cache\\n' >"$derived/ModuleCache.noindex/module.pcm"`,
+  `  printf 'log\\n' >"$derived/Logs/Test/run.log"`,
+  'done',
+  // A process that still refers to the run's DerivedData.
+  'if [[ -n "${FIXTURE_HOLD_PID:-}" ]]; then',
+  `  /bin/bash -c 'sleep 25; :' "$2/Derived/hold" </dev/null >/dev/null 2>&1 &`,
+  '  printf "%s" "$!" >"$FIXTURE_HOLD_PID"',
+  'fi',
   'if [[ -n "${FIXTURE_GATE:-}" ]]; then while [[ ! -e "$FIXTURE_GATE" ]]; do sleep 0.1; done; fi',
   "echo fixture session output",
   'test -f "$3/scripts/remote/run-support.sh"',
@@ -41,6 +53,7 @@ const fixtureExecution = [
 const scripts = [
   "scripts/remote/test.sh",
   "scripts/remote/validate.sh",
+  "scripts/remote/cancel.sh",
   "scripts/remote/run-support.sh", "scripts/remote/admission.py",
   "scripts/remote/live-gateway-test-environment.sh",
   "scripts/remote/ios-simulator-run.sh",
@@ -68,7 +81,9 @@ function git(repo, ...args) {
 
 function fixture(t, kind) {
   const root = mkdtempSync(join(tmpdir(), "toastty-wrapper-contract-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // Open the gate first, so that no session that a failed test left waiting
+  // outlives the test.
+  t.after(() => { writeFileSync(join(root, "gate"), ""); rmSync(root, { recursive: true, force: true }); });
   const repo = join(root, "source");
   const remoteRepo = join(root, "remote-source");
   const remoteRoot = join(root, "remote-runs");
@@ -99,14 +114,14 @@ while (args[hostIndex] === "-o" || args[hostIndex] === "-T") {
 if (args[hostIndex] !== ${JSON.stringify(fixtureHost)}) throw new Error("Unexpected SSH host");
 const script = readFileSync(0, "utf8");
 const execution = script.includes('script_path="$4"');
-const phase = execution ? "execute" : script.includes("toastty_allocate_remote_run") ? "allocate" : script.includes("worktree remove") ? "cleanup" : "preflight";
+const phase = execution ? "execute" : script.includes("def cancel(") ? "admission" : script.includes("toastty_allocate_remote_run") ? "allocate" : /^toastty_remove_run_caches [^(]/m.test(script) ? "cache-cleanup" : script.includes("worktree remove") ? "cleanup" : "preflight";
 appendFileSync(process.env.FIXTURE_TRANSPORT_LOG, phase + "\\n");
 if (execution && process.env.FIXTURE_SSH_PID) require("node:fs").writeFileSync(process.env.FIXTURE_SSH_PID, String(process.pid));
 const fixtureExecution = ${JSON.stringify(fixtureExecution)};
 // Keep command joining faithful while excluding machine-specific login files.
 const command = args.slice(hostIndex + 1);
-if (command[0] !== "/bin/bash") throw new Error("Unexpected remote shell");
-command.splice(1, 0, "--noprofile");
+if (command[0] === "/bin/bash") command.splice(1, 0, "--noprofile");
+else if (!command[0].startsWith("/usr/bin/python3 - ")) throw new Error("Unexpected remote shell");
 const toolPath = "export PATH=" + ${JSON.stringify(`${dirname(realGit)}:/usr/bin:/bin:/usr/sbin:/sbin`)} + "\\n";
 const failRemoval = phase === "cleanup" && process.env.FIXTURE_FAIL_WORKTREE_REMOVAL === "1";
 const removalFailure = failRemoval ? [
@@ -129,7 +144,7 @@ const body = !execution ? script : process.env.FIXTURE_DETACH === "1"
   ? script.replace(session, (_, open, close) => open + fixtureExecution + close)
   : fixtureExecution;
 const result = spawnSync("/bin/bash", ["-c", command.join(" ")], {
-  input: toolPath + removalFailure + body, env: process.env, stdio: ["pipe", "inherit", "inherit"],
+  input: command[0] === "/bin/bash" ? toolPath + removalFailure + body : body, env: process.env, stdio: ["pipe", "inherit", "inherit"],
 });
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);
@@ -154,11 +169,12 @@ for (let index = 0; index < args.length; index += 1) {
   if (args[index] === "-e") { index += 1; continue; }
   localArgs.push(args[index].startsWith(prefix) ? args[index].slice(prefix.length) : args[index]);
 }
-appendFileSync(process.env.FIXTURE_TRANSPORT_LOG, artifactCopy ? "artifact-copy\\n" : "source-sync\\n");
+const verify = args.includes("--dry-run");
+appendFileSync(process.env.FIXTURE_TRANSPORT_LOG, !artifactCopy ? "source-sync\\n" : verify ? "artifact-verify\\n" : "artifact-copy\\n");
 const result = spawnSync("/usr/bin/rsync", localArgs, { stdio: "inherit", env: process.env });
 if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);
-if (artifactCopy && process.env.FIXTURE_FAIL_ARTIFACT_COPY === "1") {
+if (artifactCopy && !verify && process.env.FIXTURE_FAIL_ARTIFACT_COPY === "1") {
   process.stderr.write("fixture: artifact transfer failed after partial copy\\n");
   process.exit(23);
 }
@@ -181,8 +197,8 @@ process.exit(0);
     TOASTTY_REMOTE_GUI_ROOT: remoteRoot,
     FIXTURE_TRANSPORT_LOG: transportLog,
   };
-  function run(extraEnv = {}) {
-    const args = [join(repo, `scripts/remote/${kind}.sh`), "--scope", "working-tree", "--run-label", label];
+  function run(extraEnv = {}, extraArgs = []) {
+    const args = [join(repo, `scripts/remote/${kind}.sh`), "--scope", "working-tree", "--run-label", label, ...extraArgs];
     if (kind === "validate") args.push("--validation-command", "true");
     return spawnSync("/bin/bash", args, { cwd: repo, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 30_000 });
   }
@@ -193,9 +209,20 @@ process.exit(0);
     child.finished = new Promise((resolve) => child.on("exit", resolve));
     return child;
   }
+  function cancel() {
+    return spawnSync("/bin/bash", [join(repo, "scripts/remote/cancel.sh"), label], { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
+  }
   function phases() { return readFileSync(transportLog, "utf8").trim().split("\n"); }
+  // Build caches are removed from both DerivedData folders; logs stay.
+  function remoteCaches() {
+    return ["Derived", "run/Derived"].flatMap((base) => ["Build/Products/cache.bin", "ModuleCache.noindex/module.pcm"]
+      .map((path) => join(remoteRun, base, path))).filter((path) => existsSync(path));
+  }
+  function remoteLogsKept() {
+    return ["Derived", "run/Derived"].every((base) => readFileSync(join(remoteRun, base, "Logs/Test/run.log"), "utf8") === "log\n");
+  }
   function metadata() { return JSON.parse(readFileSync(join(localArtifacts, "run-metadata.json"), "utf8")); }
-  return { run, start, phases, metadata, localArtifacts, remoteRun, remoteWorktree, remoteRepo, repo, root };
+  return { run, start, cancel, phases, metadata, remoteCaches, remoteLogsKept, localArtifacts, remoteRun, remoteWorktree, remoteRepo, repo, root, env, label };
 }
 
 for (const kind of ["test", "validate"]) {
@@ -208,6 +235,9 @@ for (const kind of ["test", "validate"]) {
     assert.equal(context.metadata().remoteRemoved, false);
     assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "fail");
     assert.ok(!context.phases().includes("cleanup"));
+    assert.deepEqual(context.remoteCaches(), []);
+    assert.ok(context.remoteLogsKept());
+    assert.equal(context.metadata().remoteCachesRemoved, true);
   });
   test(`${kind}.sh retains remote evidence and fails when copying a pass result fails`, (t) => {
     const context = fixture(t, kind);
@@ -220,7 +250,9 @@ for (const kind of ["test", "validate"]) {
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
     assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
+    assert.equal(context.remoteCaches().length, 4, "caches stay while the evidence copy is unverified");
     const metadata = context.metadata();
+    assert.equal(metadata.remoteCachesRemoved, false);
     assert.equal(metadata.status, "fail");
     assert.notEqual(metadata.exitCode, 0);
     assert.equal(metadata.remoteRemoved, false);
@@ -265,8 +297,11 @@ for (const kind of ["test", "validate"]) {
     assert.equal(existsSync(context.remoteRun), false);
     assert.equal(existsSync(context.remoteWorktree), false);
     assert.equal(git(context.remoteRepo, "worktree", "list", "--porcelain").includes(context.remoteWorktree), false);
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "cleanup"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "artifact-verify", "cleanup"]);
+    assert.equal(readFileSync(join(copiedArtifacts, "Derived/Logs/Test/run.log"), "utf8"), "log\n");
+    assert.equal(existsSync(join(copiedArtifacts, "Derived/Build/Products")), false);
     assert.equal(context.metadata().status, "pass");
+    assert.equal(context.metadata().remoteCachesRemoved, true);
     assert.equal(context.metadata().remoteRemoved, true);
   });
 
@@ -281,7 +316,9 @@ for (const kind of ["test", "validate"]) {
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
     assert.equal(git(context.remoteRepo, "worktree", "list", "--porcelain").includes(context.remoteWorktree), true);
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "cleanup"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "artifact-verify", "cleanup", "cache-cleanup"]);
+    assert.deepEqual(context.remoteCaches(), []);
+    assert.ok(context.remoteLogsKept());
     assert.equal(context.metadata().status, "fail");
     assert.equal(context.metadata().remoteRemoved, false);
   });
@@ -298,7 +335,9 @@ for (const [mode, rawResult] of [["malformed", '{"status":'], ["partial", '{"sta
     assert.equal(readFileSync(join(context.remoteRun, "result.json"), "utf8"), rawResult);
     assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
+    assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "artifact-verify", "cache-cleanup"]);
+    assert.deepEqual(context.remoteCaches(), []);
+    assert.ok(context.remoteLogsKept());
     assert.equal(context.metadata().status, "fail");
     assert.equal(context.metadata().remoteRemoved, false);
   });
@@ -315,7 +354,9 @@ test("test.sh cannot authorize remote removal from COMPLETED and a synthesized m
   assert.equal(existsSync(join(context.remoteRun, "result.json")), false);
   assert.equal(readFileSync(join(context.remoteRun, "evidence.log"), "utf8"), "remote evidence\n");
   assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
-  assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy"]);
+  assert.deepEqual(context.phases(), ["preflight", "allocate", "source-sync", "source-sync", "execute", "artifact-copy", "artifact-verify", "cache-cleanup"]);
+  assert.deepEqual(context.remoteCaches(), []);
+  assert.ok(context.remoteLogsKept());
   assert.equal(context.metadata().status, "fail");
   assert.equal(context.metadata().remoteRemoved, false);
 });
@@ -387,5 +428,67 @@ for (const kind of ["test", "validate"]) {
     assert.match(second.stdout + second.stderr, /Reattaching to remote run explicit-run-label/);
     assert.equal(JSON.parse(readFileSync(join(context.localArtifacts, "result.json"), "utf8")).status, "pass");
     assert.equal(existsSync(context.remoteRun), false);
+  });
+}
+
+test("test.sh copies build caches with --full-artifacts before it removes them from a retained run", (t) => {
+  const context = fixture(t, "test");
+  const result = context.run({ FIXTURE_RESULT_MODE: "missing" }, ["--full-artifacts"]);
+  assert.notEqual(result.status, 0);
+  assert.equal(readFileSync(join(context.localArtifacts, "Derived/Build/Products/cache.bin"), "utf8"), "cache\n");
+  assert.equal(readFileSync(join(context.localArtifacts, "run/Derived/ModuleCache.noindex/module.pcm"), "utf8"), "cache\n");
+  assert.deepEqual(context.remoteCaches(), []);
+  assert.ok(context.remoteLogsKept());
+  assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
+});
+
+for (const kind of ["test", "validate"]) {
+  test(`${kind}.sh keeps a retained run's build caches while a process still refers to them`, { timeout: 60000 }, (t) => {
+    const context = fixture(t, kind);
+    const holdPid = join(context.root, "hold.pid");
+    t.after(() => { try { process.kill(Number(readFileSync(holdPid, "utf8"))); } catch {} });
+    const result = context.run({ FIXTURE_RESULT_MODE: kind === "test" ? "missing" : "malformed", FIXTURE_HOLD_PID: holdPid });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /a process still refers to .*\/Derived; its build caches stay/);
+    assert.equal(context.remoteCaches().length, 4);
+    assert.equal(context.metadata().remoteCachesRemoved, false);
+  });
+
+  test(`cancel.sh removes the build caches of a started ${kind} run that no wrapper follows`, { timeout: 90000 }, async (t) => {
+    const context = fixture(t, kind);
+    const gate = join(context.root, "gate");
+    const first = context.start({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate });
+    await until(() => existsSync(join(context.remoteRun, "detached.json")) && existsSync(join(context.remoteRun, "run/Derived/Logs/Test/run.log")));
+    process.kill(-first.pid, "SIGTERM");
+    await first.finished;
+    const result = context.cancel();
+    succeeds(result);
+    assert.match(result.stdout, /had started; its evidence stays/);
+    assert.match(result.stdout, /removed the build caches of explicit-run-label/);
+    assert.equal(JSON.parse(readFileSync(join(context.remoteRun, "CANCELLED"), "utf8")).followed, false);
+    assert.deepEqual(context.remoteCaches(), []);
+    assert.ok(context.remoteLogsKept());
+    assert.ok(existsSync(join(context.remoteRun, "detached-exit.json")));
+    assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
+  });
+
+  test(`a cancelled ${kind} run's following wrapper removes its build caches after it copies the evidence`, { timeout: 90000 }, async (t) => {
+    const context = fixture(t, kind);
+    const gate = join(context.root, "gate");
+    const wrapper = context.start({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate });
+    await until(() => existsSync(join(context.remoteRun, "follower.lock")) && existsSync(join(context.remoteRun, "run/Derived/Logs/Test/run.log")));
+    await new Promise((r) => setTimeout(r, 500));
+    const result = context.cancel();
+    succeeds(result);
+    assert.doesNotMatch(result.stdout, /removed the build caches/);
+    assert.equal(JSON.parse(readFileSync(join(context.remoteRun, "CANCELLED"), "utf8")).followed, true);
+    assert.notEqual(await wrapper.finished, 0);
+    assert.ok(context.phases().includes("artifact-verify"));
+    assert.equal(context.phases().at(-1), "cache-cleanup");
+    assert.deepEqual(context.remoteCaches(), []);
+    assert.ok(context.remoteLogsKept());
+    assert.equal(context.metadata().remoteCachesRemoved, true);
+    const copied = kind === "test" ? context.localArtifacts : join(context.localArtifacts, "remote");
+    assert.ok(existsSync(join(copied, "detached.stdout")));
   });
 }
