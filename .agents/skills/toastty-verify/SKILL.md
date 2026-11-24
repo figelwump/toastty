@@ -26,6 +26,7 @@ The workflow, scopes, decision tree and handoff apply to both apps. The toastty-
 4. Choose checks from the decision tree below that together cover each scenario with a real impact. Prefer deterministic tests and smoke scripts; use live GUI checks or Computer Use for scenarios only the real surface shows. When a scenario fails, fix the root cause instead of adding guards.
 5. Run commands through `sv exec --` whenever the documented wrapper needs secret-backed or service-injected environment, especially remote GUI/test wrappers. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI/test environment is injected there.
 6. Report the exact command family, scope, execution target, any explicit local authorization, result, and artifact paths. List the scenarios and say which checks covered them, and which were not covered and why.
+7. Always open the verification report in a Toastty Scratchpad (`toastty-scratchpad` skill), with a short summary in the reply. Publish it as its own Scratchpad (`--additional`) and reuse that document for later reruns. Outside a Toastty-managed session (no `TOASTTY_SESSION_ID`), say so and give the report in the reply.
 
 ## CI Coverage
 
@@ -227,3 +228,4 @@ State:
 - What user-visible behaviors were covered.
 - What remains untested or blocked, with the reason.
 - Artifact paths under `artifacts/` when produced.
+- The report itself is open in a Scratchpad (Core Workflow step 7).
