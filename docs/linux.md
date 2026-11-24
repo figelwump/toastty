@@ -603,33 +603,85 @@ RGBA bitmap/PNG. Push relay configuration comes from
   The fuzzy scorer, file search engine, file-open provider, usage tracker, and
   context compile.
 - Sparkle updates; `RemoteAccessPairingQRCode` (Linux replacement).
-- Tasks, Coordinator and Quick Entry UI (macOS 0.10 task system): the
-  SwiftUI and AppKit views (`TasksView`, `TaskSetupCard`,
-  `TaskWebhookApprovalViews`, `TaskContextMenuItems`, `TaskMarks`, the
-  coordinator chat, composer, dock, mentions and panel chrome,
-  `WhatsNewSheet`, the sidebar's task rows and coordinator row,
-  `LiveColumnResize`, `ToastyIcon+Mac`, the quick entry panel, picker panel,
-  text editor and global hot key, and the draft-attachment views) and their
-  view models (`CoordinatorChatModel`, `QuickEntryModel`,
-  `QuickEntryController`, `DraftAttachments`), plus the AppKit key monitor
-  `CoordinatorTerminalKeyLog`. The task logic compiles: `TaskBoard`,
-  `TaskCoordinator` (start work, merge, archive, release, adopt, fork),
-  `TaskRecordStore`, `TaskCommandRunner`, `TaskWebhookService`,
-  `CoordinatorController` (the coordinator works through its terminal; its
-  chat stays nil), the quick entry picker, preset usage and workspace
-  folders, and the Remote Access task board, task actions, task creation and
-  coordinator queue. Linux has no task UI yet.
-- `Sources/ConversationUI` (the shared SwiftUI conversation module) is not
-  built; `import ConversationUI` is dropped by the mirror, and
-  `Compat/ConversationUIStubs.swift` restates the rule included logic uses
-  (`CoordinatorChatReadPoint.isNewer`).
+- Tasks, Coordinator and Quick Entry views: the SwiftUI and AppKit views
+  (`TasksView`, `TaskSetupCard`, `TaskWebhookApprovalViews`,
+  `TaskContextMenuItems`, `TaskMarks`, the coordinator chat, composer, dock,
+  mentions and panel chrome, `WhatsNewSheet`, the sidebar's task rows and
+  coordinator row, `LiveColumnResize`, `ToastyIcon+Mac`, the quick entry
+  panel, picker panel, text editor and Carbon hot key, the attachment chip
+  and text view) and the macOS halves of the shared view models
+  (`QuickEntryController+Mac`, `CoordinatorChatModel+Mac`,
+  `DraftAttachments+Mac`), plus the AppKit key monitor
+  `CoordinatorTerminalKeyLog`. GTK draws all of it; see "Tasks and the
+  coordinator".
+- `Sources/ConversationUI`: its SwiftUI views are not built. Its model files
+  (rows, blocks, turns, send items, markdown chunks, mentions, the read
+  point, `ToasttyTranscriptLayout`, `ToasttyTranscriptLabels`) build as a
+  Linux `ConversationUI` module (manifest `include` list).
 - Tiny pieces of excluded files that included logic needs are restated in
   `linux/Sources/ToasttyAppLogic/Compat/ExcludedViewStubs.swift`
   (`CursorDiagnostics`, `SessionStatusIndicatorState`, `ToastyTheme` metrics,
-  `DisplayShortcutConfig` counts, `TerminalKeyPress`, and inert
-  `CoordinatorTerminalKeyLog`, `CoordinatorChatModel`, `QuickEntryController`,
-  `QuickEntryChoices` and `QuickEntryModel.Option`); keep them in step with
-  macOS.
+  `DisplayShortcutConfig` counts, `TerminalKeyPress`, and an inert
+  `CoordinatorTerminalKeyLog`); keep them in step with macOS.
+
+### Tasks and the coordinator
+
+The task system runs on Linux as on macOS: `LinuxTaskStack`
+(`linux/Sources/ToasttyAppLogic/Bootstrap`) builds what `ToasttyApp.init`
+builds (`TaskCoordinator`, `TaskBoardStore`, `PullRequestStateCache`,
+`TaskWebhookService`, `LiveTaskSessions`, `CoordinatorController` with its
+`CoordinatorChatModel`, `QuickEntryController`, the session close and exit
+controllers) and hands them to the automation socket and Remote Access, so
+`toastty task …`, `toastty coordinator …` and the phone's task board work.
+
+The GTK views (`linux/Sources/ToasttyLinux/UI/Tasks` and `UI/Coordinator`)
+bind to the shared view models directly: `ToasttyAppLogic` and
+`ConversationUI` build with `-enable-testing` (`linux/Package.swift`), and the
+GTK files use `@testable import`. There is no mirrored public facade to keep
+in step. A window gets the UI through `LinuxWindowFeature`
+(`PanelHostRegistry.windowFeatureFactories`): a covering page, a column
+before the content, rows above the sidebar, palette rows and commands.
+
+| Surface | GTK | Shared logic |
+|---|---|---|
+| Tasks view (Ctrl+Shift+D, Esc, ↑/↓) | `TasksPage` | `TasksViewSections`, `TaskBoardPresentation`, `TaskActions`, `TaskStageMarkKind`, `TaskSetupCardPresentation`, `TaskWebhookApprovalPresentation` |
+| Sidebar with tasks | `SidebarTasksView`, `SidebarTasksModel` | `SidebarBuckets`, `SidebarBucket`, `SidebarSubspacePresentation`, `SidebarRecentToShip`, `SidebarCoordinatorPresentation` |
+| Coordinator chat, full view and dock (Ctrl+Shift+K) | `CoordinatorChatView`, `TranscriptView`, `MarkdownWidgets`, `InteractionCard`, `CoordinatorComposer`, `CoordinatorMentionPopover`, `CoordinatorWindowUI` | `CoordinatorChatModel`, `ToasttyTranscriptLayout`, `CoordinatorChatPresentation`, `CoordinatorDockPresentation`, `CoordinatorMentionRules` |
+| Quick entry (Alt+Shift+T) | `QuickEntryWindowFrontend`, `QuickEntryPickerPopover`, `GlobalShortcutPortal` | `QuickEntryController`, `QuickEntryModel`, `QuickEntryPicker`, `DraftAttachments` |
+| What's new at a first launch | `WhatsNewDialog` | `CoordinatorStartOffer`, `WhatsNewPresentation`, `QuickEntryShortcutAnswer` |
+| Palette rows, menus, New Task from Selection | `TasksWindowFeature.paletteItems`, `LinuxMenus`, `GhosttyTerminalHost` | `TaskBoardStore.currentTask`, `TaskBoardPresentation.detailActions` |
+
+Differences from macOS:
+
+- Keys: Show Tasks is Ctrl+Shift+D (Ctrl+Shift+T is New Tab), the dock
+  Ctrl+Shift+K, New Task Alt+Shift+T inside Toastty. The quick entry key in
+  every app goes through the XDG GlobalShortcuts portal; the desktop asks the
+  user before it binds it, and without the portal the key works in Toastty
+  only. `QuickEntryShortcut.symbolLabel` reads `Alt+Shift+T` on Linux.
+- Quick entry is a normal small window: Wayland gives no floating panel
+  over other apps' full-screen windows.
+- Task webhook keys are kept in `task-webhook-secrets.json` (mode 0600)
+  beside `task-webhooks.json`, not in a keychain
+  (`FileTaskWebhookSecretStore`). Another process of the user can read the
+  file; GNOME Keyring would not isolate it either.
+- Coordinator attachments: Files…, drop and paste (files or an image); no
+  Photos picker. A mention shows as its `[title](toastty://task/<id>)` link
+  in the field, not as a chip; the chat draws it as a chip.
+- The bucketed sidebar is assembled in `SidebarTasksModel` from the shared
+  rules, since macOS builds it inside `SidebarView`. Merged children do not
+  fold into a "N/M merged" line yet, and a held finished task space stays in
+  its bucket rather than under the Done line.
+- Markdown in the transcript comes from swift-markdown through the
+  Foundation shim's `AttributedString(markdown:)`, which now gives Apple's
+  presentation intents (`PresentationIntent`, `InlinePresentationIntent`).
+- Automation runs ask nothing (no What's new), as on macOS;
+  `TOASTTY_LINUX_TEST_START_OFFER=1` makes a scripted run ask, for tests.
+
+`scripts/linux/e2e-tasks.sh` drives all of it on Broadway: CLI task and
+coordinator commands, the Tasks view, the sidebar, the coordinator's chat
+over its terminal and in the dock (with a fake Claude transcript), quick
+entry, and the What's new question. Screenshots go to
+`artifacts/manual/linux-tasks/`.
 
 ## Terminal integration (Ghostty)
 
@@ -1102,13 +1154,20 @@ code (macOS branches unchanged); run a macOS build
 | `Sources/Core/RemoteAccess/RemotePreviewFileReader.swift` | no `/private` aliases for `/tmp`, `/var`, `/etc`; descriptor path via `/proc/self/fd` instead of `F_GETPATH` |
 | `Sources/Core/RemoteAccess/RemoteCoordinatorAttachmentImageReader.swift` | no ImageIO on Linux: `image(atRecordedPath:…)` throws `unsupported`, so a device shows coordinator-chat image attachments without a thumbnail; `encodedImage` is macOS-only |
 | `Sources/App/Tasks/TaskCommandRunner.swift` | Glibc spawn types are structs; `posix_spawn_file_actions_addchdir_np` and `addclosefrom_np(3)` stand in for `addchdir` and `POSIX_SPAWN_CLOEXEC_DEFAULT`; signal sets come from `sigfillset`/`sigemptyset` |
-| `Sources/App/Tasks/TaskActions.swift` | the archive alert has no accessory view on Linux, so its "close the pull request" and "delete unpushed commits" boxes stay unchecked |
+| `Sources/App/Tasks/TaskActions.swift` | the archive alert's two checkboxes go to the Linux alert's `accessoryCheckboxes` (drawn in the `AdwAlertDialog`'s extra child) instead of an `NSStackView` accessory |
+| `Sources/Core/Tasks/QuickEntryShortcut.swift` | `symbolLabel` reads `Alt+Shift+T` on Linux (GTK's form; Command is Super) |
+| `Sources/App/Tasks/QuickEntry/QuickEntryModel.swift` | `QuickEntryKeyLabels`: the picker keys read Ctrl+1/Ctrl+2/Ctrl+→ on Linux; the two `NSPasteboard` methods are macOS-only (GTK reads its clipboard and drops itself) |
+| `Sources/App/Coordinator/CoordinatorComposerDelivery.swift` (new, from `CoordinatorComposerView.swift`) | the send button's help names Ctrl+Return on Linux |
+| `Sources/App/Tasks/TaskWebhookApprovalPresentation.swift` (new) | the sheet names Toastty's key file and "this computer" on Linux, the Keychain and "this Mac" on macOS |
+| `Sources/App/Coordinator/WhatsNewPresentation.swift` (new, from `WhatsNewSheet.swift`) | three lines name the Linux menu and file manager |
+| View/logic splits for the tasks UI (no behaviour change; new files: `tuist generate` on macOS) | `QuickEntryController.swift` (shared core) + `QuickEntryController+Mac.swift` (panels, Carbon hot key, focus handoff, toast) through a per-platform `QuickEntryPresentation`; `QuickEntryShortcutAnswer.swift` (from `QuickEntryHotKey.swift`); `DraftAttachments.swift` + `DraftAttachments+Mac.swift` (pasteboard, promised files, Photos, ImageIO previews, open panel, `AttachmentDropTarget`); `CoordinatorChatModel.swift` + `CoordinatorChatModel+Mac.swift` (composer text views, drop targets, Files…, keyboard) through a per-platform `CoordinatorChatPlatform`; `TaskStageMarkKind.swift` (the mark `TaskStageMark` draws); `TaskSetupCardPresentation.swift`; `CoordinatorChatPresentation.swift` (notices, introduction, placeholder, `CoordinatorChatLinks`); `SidebarCoordinatorPresentation.swift` (from `SidebarCoordinatorRow.swift`; `iconStatus` stays); in `Sources/ConversationUI`: `ToasttyInteractionAnswerState`, `ToasttyNewMessagesMarker`, `ToasttyTurnPresentation` (fold states, working line and indicator, the work strip's summary), `ToasttyToolCall`, `ToasttyMarkdownSegment`, `ConversationHostModels`, `ToasttyAttachedImage`, `ToasttyTranscriptDisplayItem`, `ToasttyTranscriptLayout` (display items, now called by `ToasttyTranscriptView`), `ToasttyTranscriptLabels`. ConversationUI is in both Tuist graphs: build iOS too |
+| `Tests/App/GettingStartedPageDriftTests.swift`, `Tests/Core/QuickEntryShortcutTests.swift` | the page names the macOS key, so its assertion is macOS-only; the label tests expect each platform's form |
 | `Sources/App/Coordinator/ClaudeConfigTrustEdit.swift` | the check of the edited `~/.claude.json` compares the parsed objects itself on Linux, matching keys by Unicode scalars: corelibs `NSDictionary` finds a non-ASCII `NSString` key only for some hash seeds (a folder path with `é` failed about one run in three); `isBoolean` reads `objCType` (no `CFGetTypeID`) |
 | `Sources/App/Coordinator/ClaudeFolderTrust.swift` | (mirror `textRewrites`) Linux `stat` has no birth time: the lock directory's identity uses `st_ctim` with its inode |
 | `Sources/App/HoverTipModels.swift`, `CoordinatorDockPresentation.swift`, `SidebarStatusSections.swift`, `Tasks/TasksViewSections.swift`, `Tasks/TaskContextMenuItems.swift`, `Tasks/TaskMarks.swift` | (unguarded moves, no behaviour change) logic split from SwiftUI view files so Linux compiles it without the views: the hover tip models (`StatusDotColorKind.color` stays in `HoverTipPresenter.swift`), `CoordinatorDockPresentation` (from `CoordinatorDock.swift`; `toggleIconStatus` stays), `SidebarStatusSections`/`SidebarRecentToShip`/`TaskAge` (from `SidebarStatusSegment.swift`; `toShipLabel` stays), `TasksViewSections` (from `TasksView.swift`); the views `TaskContextMenuItems` (from `TaskActions.swift`) and the task glyphs and marks (from `TaskBoardPresentation.swift`) moved out instead. New files: `tuist generate` on macOS |
 | `Sources/App/Tasks/PullRequestStateCache.swift` | stores its `objectWillChange` on Linux: OpenCombine's default for an `ObservableObject` without `@Published` properties returns a new publisher on each read, so the cache's own `objectWillChange.send()` reached no subscriber |
 | `Sources/RemoteProtocol/AgentPasteText.swift` | (unguarded, same result on macOS) splits a paste into lines on the newline scalar: corelibs `components(separatedBy: "\n")` keeps `\r\n` text in one line, since Swift reads CRLF as one character |
-| `Sources/App/Tasks/TaskWebhookSecretStore.swift`, `TaskWebhookService.swift` | no Keychain (`Security`) on Linux: `KeychainTaskWebhookSecretStore` and `TaskWebhookService.init(runtimePaths:)` are macOS-only (only `ToasttyApp.swift` creates the service) |
+| `Sources/App/Tasks/TaskWebhookSecretStore.swift`, `TaskWebhookService.swift` | no Keychain (`Security`) on Linux: `KeychainTaskWebhookSecretStore` and `TaskWebhookService.init(runtimePaths:)` are macOS-only; Linux uses `FileTaskWebhookSecretStore` |
 | `Sources/Core/RemoteAccess/RemoteMessageAttachmentStore.swift` | `discard` compares paths: corelibs URL equality is trailing-slash sensitive |
 | `Sources/Core/Diagnostics/DiagnosticsChecks.swift` | parent PID from `/proc/<pid>/stat` instead of `proc_pidinfo` |
 | `Sources/Core/Diagnostics/DiagnosticsCollector.swift` | hardware model from DMI/device tree instead of `sysctlbyname("hw.model")` |

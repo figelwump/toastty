@@ -18,11 +18,17 @@ coordinator are the UI Toastty is moving to. The user-facing contract is
   split is a move with no behaviour change and is listed in
   `docs/linux.md`. The macOS and iOS graphs need `tuist generate` and a
   build on toastty-mini after each split; a Linux host cannot run them.
-- The GTK layer cannot see `Sources/App` types (module-internal). The
-  facade in `linux/Sources/ToasttyAppLogic` exposes public render models
-  and action methods, as `LinuxAppLogic+Frontend.swift` does for sessions.
-  `ConversationUI`'s pure model files compile on Linux as their own
-  module, so their public types reach the GTK layer directly.
+- `Sources/App` types are module-internal. Rather than a mirrored public
+  facade, `ToasttyAppLogic` and the Linux `ConversationUI` module build
+  with `-enable-testing`, and the GTK task and coordinator views use
+  `@testable import`, so they bind to the shared view models themselves.
+
+## Status
+
+Phases 0–6 are in (see `docs/linux.md` "Tasks and the coordinator").
+Open: the sidebar's "N/M merged" fold and the Done line for held task
+spaces, mention chips in the composer's field, coordinator image
+thumbnails on the phone, and a macOS/iOS build of the shared splits.
 
 ## Phases
 

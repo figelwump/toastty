@@ -89,6 +89,17 @@ turn of its agent and counts toward your agent's usage. Close the Coordinator
 workspace to stop it. See
 [When Toastty wakes the coordinator](#when-toastty-wakes-the-coordinator).
 
+### On Linux
+
+The Linux app has the same tasks, Tasks view, sidebar, quick entry and
+coordinator. The keys differ: Ctrl takes Command's place, Show Tasks is
+`Ctrl+Shift+D` (`Ctrl+Shift+T` opens a tab), the coordinator's dock is
+`Ctrl+Shift+K`, and quick entry is `Alt+Shift+T`. In every app the key
+goes through the desktop's global shortcuts portal, which asks you before
+it binds the key. Quick entry is a normal small window. Webhook keys are
+kept in `task-webhook-secrets.json` beside `task-webhooks.json`, readable
+by you only. See [Linux](linux.md#tasks-and-the-coordinator).
+
 ## Approval prompts
 
 A task's agent runs commands such as `toastty task start-work`, `git push`
