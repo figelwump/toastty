@@ -56,6 +56,11 @@ reattached. A run whose source or options differ starts as a new run. A run
 that waits for a slot with nobody following it for 15 minutes gives up without
 starting. Stop a detached run on purpose with
 `sv exec -- scripts/remote/cancel.sh <run-label>`; its own cleanup still runs.
+A cancelled run that had started keeps its evidence on the remote host.
+`cancel.sh` removes its build caches unless the run used `--full-artifacts` or
+`--keep-remote`; then a wrapper that follows the run removes them after it
+copies the evidence. A reattach needs the same `--full-artifacts` and
+`--keep-remote` options as the run.
 Runs with `--live-gateway` stay attached to SSH, because their session holds
 the gateway credential and is never written to disk.
 
@@ -156,16 +161,26 @@ recordings, runtime metadata, and other evidence. They omit known build product,
 intermediate, dependency, and compiler cache directories under `Derived/` and
 `run/Derived/`. Use `--full-artifacts` at the start of a run to also copy those
 directories, including app binaries and dSYMs. This option controls the local
-copy; `--keep-remote` separately retains the remote files. A failed evidence
-copy makes the wrapper fail and retains the remote run for inspection. Early
-Computer Use exits also retain remote evidence. No historical artifacts are
-removed by these options.
+copy; `--keep-remote` separately retains the remote files. After each copy, the
+wrapper compares the destination with the remote run and fails the copy if any
+copied file differs. A failed evidence copy makes the wrapper fail and retains
+the remote run, build caches included, for inspection. Early Computer Use exits
+also retain remote evidence.
+
+When the wrapper retains a remote run after a verified copy, for example after
+an unconfirmed run cleanup or a failed Git worktree removal, it removes that
+run's build caches: the directories that the evidence copy omits. It removes
+them only when the remote session recorded its end and no process refers to the run's `Derived/`,
+`run/Derived/` or runtime home; otherwise the caches stay and the wrapper
+prints a warning. The evidence, the worktree and simulators stay. With
+`--keep-remote` nothing is removed. `run-metadata.json` records the outcome as
+`remoteCachesRemoved`. No historical artifacts are removed by these options.
 
 Each allocated local run writes `run-metadata.json` next to `result.json`. It
 records the local source commit, scope, dirty state, selected check family,
 execution target, fallback reason, artifact mode, exit code, intended remote
-paths, whether allocation was confirmed, and
-phase durations in whole seconds. Test and smoke phases include their builds;
+paths, whether allocation was confirmed, whether the remote run or its build
+caches were removed, and phase durations in whole seconds. Test and smoke phases include their builds;
 Computer Use records build/launch and agent time separately. Wrapper retries
 are zero; test attempt counts remain unknown and must be read from `.xcresult`.
 For `head` and `ref`, the resolved commit is also used for the Git archive.
