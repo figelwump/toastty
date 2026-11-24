@@ -1,13 +1,17 @@
-import AppKit
+import Combine
 import CoreState
 import Foundation
 import RemoteProtocol
-import SwiftUI
 
 /// Opens the quick entry panel from the global shortcut and from Toastty's
 /// own entry points. While a coordinator exists, the panel sends its text
 /// to the coordinator, and a second key creates the task directly. With no
 /// coordinator, it creates the task through `task.create`.
+///
+/// This file is the shared core. The windows (panel, pickers, toast), the
+/// focus handoff, the file chooser and the global key are the platform's:
+/// `QuickEntryPresentation` in `QuickEntryController+Mac.swift`, and in
+/// linux/Sources/ToasttyAppLogic/Tasks for the GTK frontend.
 @MainActor
 final class QuickEntryController: ObservableObject {
     /// The configured shortcut, shown on File ▸ New Task…; nil when
@@ -28,17 +32,12 @@ final class QuickEntryController: ObservableObject {
     private let configLoader: @MainActor () throws -> TasksConfig
     private let stagingRootURL: URL
     private let registersGlobalHotKey: Bool
-    private let toastDuration: Duration
-    private let frontmostApplication: @MainActor () -> NSRunningApplication?
-    private var hotKey: QuickEntryHotKey?
+    let toastDuration: Duration
+    /// The platform's windows and focus state.
+    let presentation: QuickEntryPresentation
 
-    private(set) var panel: QuickEntryPanel?
     private(set) var model: QuickEntryModel?
     private(set) var picker: QuickEntryPicker?
-    private(set) var pickerPanel: QuickEntryPickerPanel?
-    /// The pill whose mouse-down just closed its picker, and that click's
-    /// event number, so its mouse-up does not open the picker again.
-    private var pickerClosedByPillClick: (kind: QuickEntryPickerKind, eventNumber: Int)?
     /// Models that live sessions of a provider reported recently, most
     /// recent first: the list the iPhone's start-session screen offers. It
     /// comes from remote access, which is set up after this controller.
@@ -77,20 +76,11 @@ final class QuickEntryController: ObservableObject {
     var launchMessageWaits: @MainActor () -> Bool = { false }
     // Removed in deinit, which is not main-actor isolated.
     nonisolated(unsafe) private var terminationObserver: (any NSObjectProtocol)?
-    /// The app in front when the panel opened, if not Toastty.
-    private var previousApplication: NSRunningApplication?
-    private weak var previousKeyWindow: NSWindow?
-    private weak var previousFirstResponder: NSResponder?
-    /// Where the last panel was, so the next one opens there when it opens
-    /// on the same screen. The top stays put because the height follows the
-    /// text.
-    private var lastPanelPlacement: QuickEntryPlacement.Remembered?
-    private(set) var toastPanel: QuickEntryToastPanel?
     /// What the last toast said.
     private(set) var lastToastMessage: String?
-    private var toastTask: Task<Void, Never>?
 
-    var isPresented: Bool { panel != nil }
+    /// A draft is open in the panel.
+    var isPresented: Bool { model != nil }
 
     init(
         store: AppStore,
@@ -102,7 +92,7 @@ final class QuickEntryController: ObservableObject {
             .appending(path: "toastty-quick-entry", directoryHint: .isDirectory),
         registersGlobalHotKey: Bool,
         toastDuration: Duration = .milliseconds(1600),
-        frontmostApplication: @escaping @MainActor () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication }
+        frontmostApplication: @escaping @MainActor () -> QuickEntryFrontmostApplication? = QuickEntryPresentation.frontmostApplication
     ) {
         self.store = store
         self.agentProfiles = agentProfiles
@@ -112,7 +102,7 @@ final class QuickEntryController: ObservableObject {
         self.stagingRootURL = stagingRootURL
         self.registersGlobalHotKey = registersGlobalHotKey
         self.toastDuration = toastDuration
-        self.frontmostApplication = frontmostApplication
+        presentation = QuickEntryPresentation(frontmostApplication: frontmostApplication)
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -195,11 +185,9 @@ final class QuickEntryController: ObservableObject {
             return message
         }
 
-        let hotKey = self.hotKey ?? QuickEntryHotKey { [weak self] in
+        let registration = presentation.registerHotKey(configured) { [weak self] in
             self?.handleHotKey()
         }
-        self.hotKey = hotKey
-        let registration = hotKey.register(configured)
         if case .registered = registration {
             isShortcutGlobal = true
         } else {
@@ -219,7 +207,8 @@ final class QuickEntryController: ObservableObject {
             ])
             // Another app that holds the keys does not make this fail:
             // Carbon refuses a hot key only when both apps register it
-            // exclusively. So the message names no cause.
+            // exclusively, and the Linux portal names no cause either. So
+            // the message names no cause.
             message = message ?? "Toastty could not register the quick entry shortcut \(shortcut.symbolLabel). Set another one with [quick_entry] shortcut in ~/.toastty/tasks.toml."
         }
         return message
@@ -233,25 +222,19 @@ final class QuickEntryController: ObservableObject {
 
     /// Opens the panel, or brings an open one forward and adds the prefill.
     func present(prefill: QuickEntryPrefill) {
-        if let panel, let model {
+        if let model {
             model.apply(prefill)
             // An opener that names a workspace, such as "New Task from
             // Selection…", names the project the message is about.
             if let workspaceID = prefill.workspaceID {
                 model.setSelectedProject(project(workspaceID))
             }
-            panel.orderFrontRegardless()
-            panel.makeKey()
+            presentation.bringPanelForward()
             model.requestFocus()
             return
         }
 
-        let frontmost = frontmostApplication()
-        previousApplication = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : frontmost
-        // The main window rather than the key window: opened from the
-        // command palette, the key window is the palette, which is closing.
-        previousKeyWindow = NSApp.isActive ? (NSApp.mainWindow ?? NSApp.keyWindow) : nil
-        previousFirstResponder = previousKeyWindow?.firstResponder
+        presentation.rememberFocusBeforePresenting()
 
         let stagingDirectoryURL = stagingRootURL.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         // A broken tasks.toml shows its error at once, since the Agent pill
@@ -297,72 +280,25 @@ final class QuickEntryController: ObservableObject {
         }
         self.model = model
 
-        let dropTarget = AttachmentDropTarget(attachments: model.attachmentDraft)
-        let panel = QuickEntryPanel()
-        panel.onSubmit = { [weak model] in model?.submit() }
-        panel.onCreateTask = { [weak model] in model?.createTask() }
-        panel.onCancel = { [weak model] in model?.cancel() }
-        panel.onPicker = { [weak self] kind in self?.togglePicker(kind) }
-        panel.contentView = QuickEntryContentView(
-            rootView: QuickEntryView(
-                model: model,
-                dropTarget: dropTarget,
-                attachFiles: { [weak self] in self?.chooseFiles() },
-                togglePicker: { [weak self] kind in self?.togglePicker(kind) },
-                onHeightChange: { [weak self, weak panel] height in
-                    // Called during SwiftUI layout; resizing the window there
-                    // would start a layout pass inside the current one.
-                    DispatchQueue.main.async { [weak self, weak panel] in
-                        guard let self, let panel, self.panel === panel else { return }
-                        panel.fitContentHeight(height)
-                    }
-                }
-            ),
-            dropTarget: dropTarget
-        )
-        var size = QuickEntryPanel.defaultSize
-        if let fittingHeight = panel.contentView?.fittingSize.height, fittingHeight > 0 {
-            size.height = fittingHeight.rounded(.up)
-        }
-        // The screen of the window the user is working in, not the one with
-        // Toastty's window or the last panel.
-        let frame: NSRect
-        if let screen = QuickEntryPanel.focusedScreen() ?? NSScreen.main {
-            frame = QuickEntryPlacement.frame(
-                size: size,
-                screenFrame: screen.frame,
-                visibleFrame: screen.visibleFrame,
-                remembered: lastPanelPlacement
-            )
-        } else {
-            frame = NSRect(origin: .zero, size: size)
-        }
-        panel.setFrame(frame, display: false)
-        self.panel = panel
-        panel.orderFrontRegardless()
-        panel.makeKey()
+        presentation.showPanel(for: model, controller: self)
         model.requestFocus()
         refreshCodexModels()
         ToasttyLog.info("Opened the quick entry panel", category: .tasks, metadata: [
             "sends_to": coordinator == nil ? "task" : "coordinator",
-            "from_app": previousApplication?.bundleIdentifier ?? "toastty",
-            "window_number": String(panel.windowNumber),
-            "is_key_window": String(panel.isKeyWindow),
-        ])
+        ].merging(presentation.logMetadata) { first, _ in first })
     }
 
     /// Closes the panel without creating a task.
     func dismiss() {
         close()
-        restoreFocus()
+        presentation.restoreFocus()
     }
 
     private func finish(created record: TaskRecord) {
         recordCreatedTask(preset: model?.preset, workspaceID: model?.workspaceID)
-        let frame = panel?.frame
         close()
-        restoreFocus()
-        showToast("Task created", near: frame)
+        presentation.restoreFocus()
+        showToast("Task created")
         ToasttyLog.info("Created a task from quick entry", category: .tasks, metadata: [
             "task_id": record.id.uuidString,
         ])
@@ -371,10 +307,9 @@ final class QuickEntryController: ObservableObject {
     /// The coordinator has the message, or keeps it until its prompt opens.
     /// The staged files are copied, so the draft can end.
     private func finish(sent result: CoordinatorController.SendResult) {
-        let frame = panel?.frame
         close()
-        restoreFocus()
-        showToast(Self.toastMessage(for: result), near: frame)
+        presentation.restoreFocus()
+        showToast(Self.toastMessage(for: result))
         ToasttyLog.info("Sent a quick entry message to the coordinator", category: .tasks, metadata: [
             "typed": result.wasTyped ? "true" : "false",
         ])
@@ -427,70 +362,31 @@ final class QuickEntryController: ObservableObject {
 
     /// Ends the draft; the model removes its staged files once no copy is
     /// still writing them. After a create, `task.create` has made its own
-    /// copies.
+    /// copies. The platform remembers where the panel was, for the next
+    /// panel and for the toast that may follow.
     private func close() {
-        guard let panel else { return }
+        guard let model else { return }
         closePicker(refocusText: false)
-        lastPanelPlacement = panel.screen.map {
-            QuickEntryPlacement.Remembered(
-                topLeft: NSPoint(x: panel.frame.minX, y: panel.frame.maxY),
-                screenFrame: $0.frame
-            )
-        }
-        let model = self.model
-        let windowNumber = panel.windowNumber
-        // Clear presentation before AppKit sends window-close callbacks.
-        self.panel = nil
+        // Clear the draft before the platform closes its window, which can
+        // call back.
         self.model = nil
-        panel.close()
-        panel.contentView = nil
-        model?.close()
-        ToasttyLog.info("Closed the quick entry panel", category: .tasks, metadata: [
-            "window_number": String(windowNumber),
-            "is_visible": String(panel.isVisible),
-        ])
+        presentation.closePanel()
+        model.close()
     }
 
-    /// Gives focus back: to the app that was in front, or to the Toastty
-    /// window and field that had it.
-    private func restoreFocus() {
-        let previousApplication = self.previousApplication
-        let previousKeyWindow = self.previousKeyWindow
-        let previousFirstResponder = self.previousFirstResponder
-        self.previousApplication = nil
-        self.previousKeyWindow = nil
-        self.previousFirstResponder = nil
-
-        if let previousApplication {
-            // Toastty became active only if the user chose files to attach.
-            if NSApp.isActive {
-                previousApplication.activate(options: [])
-            }
-            return
-        }
-        if let previousKeyWindow, previousKeyWindow.isVisible {
-            previousKeyWindow.makeKey()
-            if let previousFirstResponder {
-                previousKeyWindow.makeFirstResponder(previousFirstResponder)
-            }
-        }
-    }
-
-    private func chooseFiles() {
-        guard let panel, let model else { return }
+    /// **Attach**: the platform's file chooser, then back to the text.
+    func chooseFiles() {
+        guard let model else { return }
         closePicker(refocusText: false)
-        let openPanel = DraftAttachments.makeOpenPanel()
-        // Above the floating quick entry panel. A modal panel needs Toastty
-        // to be the active app; focus goes back when the quick entry closes.
-        openPanel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
-        NSApp.activate()
-        let response = openPanel.runModal()
-        if response == .OK {
-            model.attachFiles(openPanel.urls)
-        }
-        if self.panel === panel {
-            panel.makeKey()
-            model.requestFocus()
+        presentation.chooseFiles { [weak self, weak model] urls in
+            guard let self, let model else { return }
+            if urls.isEmpty == false {
+                model.attachFiles(urls)
+            }
+            if self.model === model {
+                self.presentation.focusPanel()
+                model.requestFocus()
+            }
         }
     }
 
@@ -503,31 +399,9 @@ final class QuickEntryController: ObservableObject {
         return CoordinatorMessageHeader.Workspace(id: workspaceID, title: workspace.title)
     }
 
-    private func showToast(_ message: String, near frame: NSRect?) {
-        toastTask?.cancel()
-        toastPanel?.orderOut(nil)
-        let toast = QuickEntryToastPanel(message: message)
+    private func showToast(_ message: String) {
         lastToastMessage = message
-        let anchor = frame ?? QuickEntryPanel.defaultFrame(screen: QuickEntryPanel.focusedScreen())
-        toast.setFrameOrigin(NSPoint(
-            x: (anchor.midX - toast.frame.width / 2).rounded(),
-            y: (anchor.midY - toast.frame.height / 2).rounded()
-        ))
-        toast.orderFrontRegardless()
-        toastPanel = toast
-        let duration = toastDuration
-        toastTask = Task { @MainActor [weak self, weak toast] in
-            try? await Task.sleep(for: duration)
-            guard Task.isCancelled == false, let toast else { return }
-            await NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.25
-                toast.animator().alphaValue = 0
-            }
-            toast.orderOut(nil)
-            if self?.toastPanel === toast {
-                self?.toastPanel = nil
-            }
-        }
+        presentation.showToast(message, duration: toastDuration)
     }
 
     // MARK: - Pickers
@@ -539,21 +413,15 @@ final class QuickEntryController: ObservableObject {
             closePicker(refocusText: true)
             return
         }
-        if let closed = pickerClosedByPillClick {
-            pickerClosedByPillClick = nil
-            // The mouse-down on the pill took focus from the picker and
-            // closed it; this is the same click's mouse-up, which shares
-            // its event number.
-            if closed.kind == kind, let event = NSApp.currentEvent, event.type == .leftMouseUp,
-               event.eventNumber == closed.eventNumber {
-                return
-            }
+        // The click on the pill that just closed this picker.
+        if presentation.consumePillClickThatClosedPicker(kind) {
+            return
         }
         openPicker(kind)
     }
 
     func openPicker(_ kind: QuickEntryPickerKind) {
-        guard let panel, let model, model.isEditable else { return }
+        guard let model, model.isEditable else { return }
         closePicker(refocusText: false)
 
         if kind == .workspace {
@@ -603,63 +471,9 @@ final class QuickEntryController: ObservableObject {
             self?.closePicker(refocusText: true)
         }
 
-        let pickerPanel = QuickEntryPickerPanel()
-        pickerPanel.onPickerShortcut = { [weak self] kind in self?.togglePicker(kind) }
-        pickerPanel.onClose = { [weak picker] in picker?.cancel() }
-        // ⌘↩ and ⌥⌘↩ in the list: choose the row, then act as in the panel.
-        // Only once the choice is made; a row that opens the columns
-        // leaves the picker open.
-        pickerPanel.onSubmitTask = { [weak self, weak picker] in
-            guard let self, let picker else { return }
-            picker.submit()
-            if self.picker == nil {
-                self.model?.submit()
-            }
-        }
-        pickerPanel.onCreateTask = { [weak self, weak picker] in
-            guard let self, let picker else { return }
-            picker.submit()
-            if self.picker == nil {
-                self.model?.createTask()
-            }
-        }
-        pickerPanel.onCommandRight = { [weak picker] in
-            guard let picker, picker.kind == .agent, picker.columns == nil else { return false }
-            picker.openColumns()
-            return true
-        }
-        pickerPanel.onRetryCodexModels = { [weak picker] in
-            guard let picker, picker.showsCodexCatalogStatus, picker.codexCatalogStatus == .unavailable else { return false }
-            picker.onRetryCodexModels()
-            return true
-        }
-        pickerPanel.currentQuery = { [weak picker] in picker?.query ?? "" }
-        pickerPanel.onNumberKey = { [weak picker] number in
-            guard let picker, picker.query.isEmpty else { return false }
-            return picker.chooseFrequent(number: number)
-        }
-        pickerPanel.onResignKey = { [weak self, weak pickerPanel] in
-            guard let self, let pickerPanel, self.pickerPanel === pickerPanel else { return }
-            self.pickerResignedKey(kind: kind)
-        }
-        let hostingView = NSHostingView(rootView: QuickEntryPickerView(picker: picker) { [weak pickerPanel] size in
-            // Called during SwiftUI layout; see the quick entry panel.
-            DispatchQueue.main.async { pickerPanel?.fit(size) }
-        })
-        pickerPanel.contentView = hostingView
-        let pill = model.pillFrames[kind].map {
-            QuickEntryPickerPlacement.screenFrame(of: $0, inPanelFrame: panel.frame)
-        } ?? NSRect(x: panel.frame.minX + 14, y: panel.frame.minY + 10, width: 1, height: 26)
-        pickerPanel.place(
-            size: hostingView.fittingSize,
-            pill: pill,
-            visibleFrame: (panel.screen ?? NSScreen.main)?.visibleFrame ?? panel.frame
-        )
         self.picker = picker
-        self.pickerPanel = pickerPanel
         model.openPicker = kind
-        panel.addChildWindow(pickerPanel, ordered: .above)
-        pickerPanel.makeKey()
+        presentation.showPicker(picker, for: model, controller: self)
         ToasttyLog.debug("Opened a quick entry picker", category: .tasks, metadata: [
             "picker": kind == .workspace ? "workspace" : "agent",
         ])
@@ -668,30 +482,28 @@ final class QuickEntryController: ObservableObject {
     /// Closes the open picker. With `refocusText`, the caret goes back to
     /// the task text; otherwise focus stays where the user put it.
     func closePicker(refocusText: Bool) {
-        guard let pickerPanel else { return }
-        self.pickerPanel = nil
+        guard picker != nil else { return }
         picker = nil
         model?.openPicker = nil
-        pickerPanel.parent?.removeChildWindow(pickerPanel)
-        pickerPanel.orderOut(nil)
-        pickerPanel.contentView = nil
-        if refocusText, let panel {
-            panel.makeKey()
-            model?.requestFocus()
+        presentation.hidePicker()
+        if refocusText, let model {
+            presentation.focusPanel()
+            model.requestFocus()
         }
     }
 
-    /// A click outside the picker, or another app in front, closes it.
-    private func pickerResignedKey(kind: QuickEntryPickerKind) {
-        if let event = NSApp.currentEvent, event.type == .leftMouseDown, let panel, event.window === panel,
-           let pill = model?.pillFrames[kind] {
-            let point = event.locationInWindow
-            let flipped = NSPoint(x: point.x, y: panel.frame.height - point.y)
-            if pill.contains(flipped) {
-                pickerClosedByPillClick = (kind, event.eventNumber)
-            }
+    /// ⌘↩ and ⌥⌘↩ in the picker's list: choose the row, then act as in the
+    /// panel. Only once the choice is made; a row that opens the columns
+    /// leaves the picker open.
+    func submitFromPicker(createsTask: Bool) {
+        guard let picker else { return }
+        picker.submit()
+        guard self.picker == nil else { return }
+        if createsTask {
+            model?.createTask()
+        } else {
+            model?.submit()
         }
-        closePicker(refocusText: false)
     }
 
     // MARK: - Choices for other entry points
@@ -986,6 +798,15 @@ final class QuickEntryController: ObservableObject {
             selectionText: selectionText
         ))
     }
+}
+
+/// What the platform's hot key registration did.
+enum QuickEntryShortcutRegistration: Equatable {
+    case registered(QuickEntryShortcut)
+    /// `tasks.toml` turns the shortcut off.
+    case off
+    /// The system refused it, usually because another app holds it.
+    case failed(QuickEntryShortcut, Int32)
 }
 
 /// The workspaces and agent choices quick entry offers at one moment.

@@ -74,6 +74,22 @@ let package = Package(
             dependencies: ["ToasttyFoundationShim", "ToasttyCLIKit", "RemoteProtocol"],
             path: "\(generated)/ToasttyCLITests"
         ),
+        // The transcript's model half: rows, turns, send items, markdown
+        // chunks, mentions. Its SwiftUI views stay macOS and iOS only.
+        .target(
+            name: "ConversationUI",
+            dependencies: [
+                "ToasttyFoundationShim",
+                "RemoteProtocol",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "\(generated)/ConversationUI"
+        ),
+        .testTarget(
+            name: "ConversationUITests",
+            dependencies: ["ToasttyFoundationShim", "ConversationUI", "RemoteProtocol"],
+            path: "\(generated)/ConversationUITests"
+        ),
         .testTarget(
             name: "CodexReconciliationTests",
             dependencies: ["ToasttyFoundationShim", "CodexReconciliation"],
@@ -150,12 +166,17 @@ let package = Package(
                 "CoreState",
                 "RemoteProtocol",
                 "CodexReconciliation",
+                "ConversationUI",
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "OpenCombine", package: "OpenCombine"),
                 .product(name: "OpenCombineFoundation", package: "OpenCombine"),
                 .product(name: "OpenCombineDispatch", package: "OpenCombine"),
             ],
-            path: "\(generated)/ToasttyAppLogic"
+            path: "\(generated)/ToasttyAppLogic",
+            // The GTK task and coordinator views bind to the shared view
+            // models (`@testable import ToasttyAppLogic`) rather than to a
+            // mirrored public facade; see docs/linux.md "Tasks UI".
+            swiftSettings: [.unsafeFlags(["-enable-testing"])]
         ),
         .testTarget(
             name: "ToasttyAppLogicTests",

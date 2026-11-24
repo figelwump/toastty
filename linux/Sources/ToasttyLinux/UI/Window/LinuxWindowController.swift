@@ -8,14 +8,18 @@ import Foundation
 /// AdwApplicationWindow
 /// └ AdwToastOverlay
 ///   └ AdwOverlaySplitView (workspace sidebar, F9)
-///     ├ sidebar: SidebarController
-///     └ AdwOverlaySplitView (right panel, end side, Shift+F9)
-///       ├ sidebar: RightPanelController
-///       └ AdwToolbarView
-///         ├ AdwHeaderBar (sidebar toggle, new tab, title, zoom pill, menu, right panel)
-///         ├ AdwTabBar (the selected workspace's tabs)
-///         └ GtkStack: workspace content | empty state
+///     ├ sidebar: SidebarController (+ feature rows under its header)
+///     └ GtkBox: feature columns (the coordinator dock) | ...
+///       └ AdwOverlaySplitView (right panel, end side, Shift+F9)
+///         ├ sidebar: RightPanelController
+///         └ AdwToolbarView
+///           ├ AdwHeaderBar (sidebar toggle, new tab, title, zoom pill, menu, right panel)
+///           ├ AdwTabBar (the selected workspace's tabs)
+///           └ GtkStack: workspace content | empty state | feature pages (Tasks)
 /// ```
+///
+/// Features (`LinuxWindowFeature`, from `PanelHostRegistry`) add the pages,
+/// columns, sidebar rows and commands.
 @MainActor
 public final class LinuxWindowController {
     public let windowID: UUID
@@ -37,6 +41,9 @@ public final class LinuxWindowController {
     public let sidebar: SidebarController
     public let content: WorkspaceContentController
     public let rightPanel: RightPanelController
+    /// Holds feature columns before the inner split.
+    private let contentRow: WidgetPtr
+    public private(set) var features: [any LinuxWindowFeature] = []
     private var keyboard: KeyboardShortcutController?
     private var isSyncing = false
     private var sidebarResize: SplitViewResizeHandle!
@@ -145,9 +152,12 @@ public final class LinuxWindowController {
         // Widths follow AppState (render): the sidebar uses its override or
         // the Linux default, capped at half the window.
         let sidebarResize = SplitViewResizeHandle(sidebar: sidebar.root, edge: GTK_ALIGN_END)
+        contentRow = Gtk.hbox()
+        Gtk.expand(innerSplit)
+        Gtk.append(contentRow, innerSplit)
         outerSplit = adw_overlay_split_view_new()
         adw_overlay_split_view_set_sidebar(cast(outerSplit), sidebarResize.root)
-        adw_overlay_split_view_set_content(cast(outerSplit), innerSplit)
+        adw_overlay_split_view_set_content(cast(outerSplit), contentRow)
         adw_overlay_split_view_set_min_sidebar_width(cast(outerSplit), WindowState.minSidebarWidth)
         adw_overlay_split_view_set_sidebar_width_fraction(cast(outerSplit), 0.5)
 
@@ -193,7 +203,23 @@ public final class LinuxWindowController {
             self.updateAgentButtonStates()
         }
         rebuildAgentButtons()
+        installFeatures()
         render(store.state)
+    }
+
+    private func installFeatures() {
+        features = hosts.windowFeatureFactories.map { $0(self) }
+        for feature in features {
+            for (name, page) in feature.pages {
+                gtk_stack_add_named(cast(mainStack), page, name)
+            }
+            if let column = feature.leadingColumn {
+                gtk_box_insert_child_after(cast(contentRow), column, Gtk.children(contentRow).dropLast().last)
+            }
+            if let header = feature.sidebarHeader {
+                sidebar.addHeader(header)
+            }
+        }
     }
 
     /// The command table's global shortcuts plus terminal-profile split
@@ -250,8 +276,13 @@ public final class LinuxWindowController {
             )
         }
 
+        for feature in features { feature.render(state) }
         let hasWorkspaces = windowState.workspaceIDs.isEmpty == false
-        gtk_stack_set_visible_child_name(cast(mainStack), hasWorkspaces ? "workspaces" : "empty")
+        let page = features.lazy.compactMap { $0.coveringPage(state) }.first ?? (hasWorkspaces ? "workspaces" : "empty")
+        if let current = gtk_stack_get_visible_child_name(cast(mainStack)), String(cString: current) == page {
+        } else {
+            gtk_stack_set_visible_child_name(cast(mainStack), page)
+        }
 
         if let workspace = selection?.workspace {
             let paneCount = workspace.layoutTree.allSlotInfos.count
@@ -428,8 +459,13 @@ public final class LinuxWindowController {
         }
         for binding in LinuxCommandTable.all {
             let id = binding.id
+            if let enabled = features.lazy.compactMap({ $0.isEnabled(commandID: id, state: state) }).first {
+                enable(id, enabled)
+                continue
+            }
             switch id {
             case "task.new", "window.toggle-tasks-view":
+                // Tasks are a feature; without it there are none.
                 enable(id, false)
             case "workspace.close", "workspace.rename", "workspace.tab.create", "workspace.tab.rename", "workspace.tab.close",
                  "layout.split.horizontal", "layout.split.vertical", "layout.split.left", "layout.split.up",
@@ -456,6 +492,9 @@ public final class LinuxWindowController {
         if commandID.hasPrefix(PaletteModel.workspacePrefix),
            let id = UUID(uuidString: String(commandID.dropFirst(PaletteModel.workspacePrefix.count))) {
             store.sendNavigation(.selectWorkspace(windowID: windowID, workspaceID: id))
+            return true
+        }
+        if features.contains(where: { $0.perform(commandID: commandID) }) {
             return true
         }
         if hosts.performWindowCommand(commandID, windowID: windowID, window: window) {
@@ -694,6 +733,7 @@ public final class LinuxWindowController {
     /// Destroys the GTK window without asking (state already dropped it).
     public func destroy() {
         isClosing = true
+        for feature in features { feature.teardown() }
         sidebar.teardown()
         gtk_window_destroy(cast(window))
     }
@@ -702,6 +742,11 @@ public final class LinuxWindowController {
 
     public func activateAction(_ name: String, parameter: OpaquePointer? = nil) -> Bool {
         gtk_widget_activate_action_variant(window, name.hasPrefix("win.") ? name : "win.\(name)", parameter).bool
+    }
+
+    /// The page the main stack shows: "workspaces", "empty" or a feature's.
+    public var visibleMainPage: String? {
+        gtk_stack_get_visible_child_name(cast(mainStack)).map { String(cString: $0) }
     }
 
     public var visibleDialog: OpaquePointer? {

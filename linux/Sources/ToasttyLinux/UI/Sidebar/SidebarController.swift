@@ -75,6 +75,11 @@ public final class SidebarController {
 
     }
 
+    /// Rows a feature adds under the header bar, such as the Tasks row.
+    public func addHeader(_ widget: WidgetPtr) {
+        adw_toolbar_view_add_top_bar(cast(root), widget)
+    }
+
     private var isTornDown = false
 
     /// Unparents the context popover; call before the window is destroyed.

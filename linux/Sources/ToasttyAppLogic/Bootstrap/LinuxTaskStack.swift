@@ -1,4 +1,5 @@
 import CoreState
+import RemoteProtocol
 import Foundation
 
 /// The task and coordinator services, built as `ToasttyApp.init` builds them
@@ -6,10 +7,7 @@ import Foundation
 /// "CoordinatorController"). `LinuxAppLogic.init` makes one before Remote
 /// Access and the automation socket, which both take it.
 ///
-/// What macOS does and this does not, yet: the coordinator chat model
-/// (`CoordinatorController.chat`), the What's new start offer, the global
-/// quick entry key and the keyboard link from the coordinator's terminal to
-/// the chat's composer. Each arrives with its GTK view; see
+/// What macOS does and this does not, yet: the What's new start offer. Each arrives with its GTK view; see
 /// docs/plans/linux-tasks-ui.md.
 @MainActor
 struct LinuxTaskStack {
@@ -20,6 +18,9 @@ struct LinuxTaskStack {
     let sessions: LiveTaskSessions
     let sessionCloseController: SessionCloseController
     let sessionExitController: SessionExitController
+    let quickEntry: QuickEntryController
+    let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let userDefaults: UserDefaults?
 
     var coordinatorController: CoordinatorController? { coordinator.coordinatorController }
 
@@ -37,7 +38,9 @@ struct LinuxTaskStack {
         agentCatalogStore: AgentCatalogStore,
         workspaceMergeCoordinator: WorkspaceMergeCoordinator,
         socketPath: String,
-        cliExecutablePath: String?
+        cliExecutablePath: String?,
+        codexProcessPathStore: CodexProcessPathStore,
+        registersGlobalShortcut: Bool
     ) -> LinuxTaskStack {
         let recentWorkspaces = RecentWorkspacesStore(runtimePaths: runtimePaths)
         recentWorkspaces.observe(store)
@@ -99,6 +102,48 @@ struct LinuxTaskStack {
             guard let panelIDs = store?.state.workspacesByID[workspaceID]?.allPanelsByID.keys,
                   let summary = webPanelRuntimeRegistry?.localDocumentCloseConfirmationSummary(panelIDs: panelIDs) else { return 0 }
             return summary.dirtyDraftCount + summary.saveInProgressCount
+        }
+
+        let quickEntry = QuickEntryController(
+            store: store,
+            agentProfiles: { [weak agentLaunchService] in agentLaunchService?.launchProfileSummaries() ?? [] },
+            presetUsage: QuickEntryPresetUsage(runtimePaths: runtimePaths),
+            create: { [weak coordinator] request in
+                guard let coordinator else { throw TaskError("Toastty is quitting.") }
+                return try await coordinator.create(request, caller: .quickEntry)
+            },
+            configLoader: { try TasksConfigFile.load() },
+            // A smoke run or a test host must not take the user's shortcut
+            // from the Toastty they are using.
+            registersGlobalHotKey: registersGlobalShortcut
+        )
+        quickEntry.loadCodexModels = { [weak agentLaunchService] in
+            guard let executable = try agentLaunchService?.profileExecutableState(profileID: AgentKind.codex.rawValue),
+                  // As with launch argument support, only a direct provider
+                  // command is known to accept provider subcommands.
+                  ["codex", "cdx"].contains(URL(fileURLWithPath: executable.command).lastPathComponent),
+                  let executablePath = executable.executablePath else {
+                return []
+            }
+            let processPath = codexProcessPathStore.currentPath()
+            let models = try await Task.detached(priority: .userInitiated) {
+                let runtime = try CodexIntegrationRuntimeLocator.resolve(
+                    preferredProcessPath: processPath,
+                    executableURL: URL(fileURLWithPath: executablePath)
+                )
+                return try CodexModelCatalog().load(runtime: runtime, deadline: Date().addingTimeInterval(5))
+            }.value
+            // A configuration reload can replace the CLI while it runs.
+            guard let currentExecutable = try agentLaunchService?.profileExecutableState(profileID: AgentKind.codex.rawValue).executablePath,
+                  currentExecutable == executablePath, codexProcessPathStore.currentPath() == processPath else { return [] }
+            return models
+        }
+        board.newTask = { [weak quickEntry] in
+            quickEntry?.present(prefill: .empty)
+        }
+        board.showShortcut(of: quickEntry)
+        terminalRuntimeRegistry.presentQuickEntryFromSelection = { [weak quickEntry] text, panelID in
+            quickEntry?.presentFromSelection(text, panelID: panelID)
         }
 
         let sessionCloseController = SessionCloseController(
@@ -199,6 +244,9 @@ struct LinuxTaskStack {
                 coordinatorController?.turnEndsQuietly(sessionID: sessionID) ?? false
             }
         }
+        // While a coordinator exists, quick entry sends to it.
+        quickEntry.coordinatorController = coordinator.coordinatorController
+        quickEntry.loadShortcutAtLaunch()
         return LinuxTaskStack(
             coordinator: coordinator,
             board: board,
@@ -206,7 +254,10 @@ struct LinuxTaskStack {
             pullRequests: pullRequests,
             sessions: sessions,
             sessionCloseController: sessionCloseController,
-            sessionExitController: sessionExitController
+            sessionExitController: sessionExitController,
+            quickEntry: quickEntry,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            userDefaults: userDefaults
         )
     }
 
@@ -214,7 +265,31 @@ struct LinuxTaskStack {
     /// through the conversation path a paired phone uses.
     func connect(remoteAccessService: RemoteAccessService?) {
         sessions.conversationAccess = remoteAccessService
-        coordinatorController?.conversationAccess = remoteAccessService
+        // The coordinator types through its agent's conversation, the path
+        // a paired phone uses, so one prompt check covers every sender.
+        if let coordinatorController, let remoteAccessService {
+            coordinatorController.conversationAccess = remoteAccessService
+            coordinatorController.chat = CoordinatorChatModel(
+                controller: coordinatorController,
+                access: remoteAccessService,
+                defaults: userDefaults
+            )
+            // Keyboard focus meant for the terminal under the chat goes to
+            // the chat's composer, and Show Terminal gives it back.
+            coordinatorController.connectKeyboard(to: terminalRuntimeRegistry)
+        }
+        // The quick entry Agent picker offers the models the iPhone's
+        // start-session screen offers.
+        quickEntry.recentModels = { [weak remoteAccessService] provider in
+            remoteAccessService?.recentModels(for: provider) ?? []
+        }
+    }
+
+    /// Reload Configuration: the quick entry shortcut and the Codex model
+    /// catalog. Returns a message when the shortcut could not be set up.
+    func reloadConfiguration() -> String? {
+        quickEntry.invalidateCodexModels()
+        return quickEntry.reloadShortcut()
     }
 
     /// A quit must leave the marks of turns it cuts off; see

@@ -4,6 +4,20 @@ import CoreState
 import Foundation
 import RemoteProtocol
 
+/// The keys that the panel's hints name. Linux uses Ctrl where macOS uses
+/// Command.
+enum QuickEntryKeyLabels {
+    #if os(Linux)
+    static let workspacePicker = "Ctrl+1"
+    static let agentPicker = "Ctrl+2"
+    static let presetColumns = "Ctrl+→"
+    #else
+    static let workspacePicker = "⌘1"
+    static let agentPicker = "⌘2"
+    static let presetColumns = "⌘→"
+    #endif
+}
+
 /// What an opener fills in before the quick entry panel shows.
 struct QuickEntryPrefill: Equatable {
     /// Chooses the workspace; nil keeps the one the panel starts on.
@@ -170,10 +184,10 @@ final class QuickEntryModel: ObservableObject {
 
     /// Why Create Task waits for the user, when a pill has no value.
     var missingChoiceHint: String? {
-        if workspaceID == nil { return "Pick a workspace with ⌘1" }
+        if workspaceID == nil { return "Pick a workspace with \(QuickEntryKeyLabels.workspacePicker)" }
         // An empty Agent list: no agent can take a task. The list says how
         // to add one.
-        if preset == nil { return agentProfiles.isEmpty ? "Install or configure an agent" : "Pick an agent with ⌘2" }
+        if preset == nil { return agentProfiles.isEmpty ? "Install or configure an agent" : "Pick an agent with \(QuickEntryKeyLabels.agentPicker)" }
         return nil
     }
 
@@ -380,6 +394,9 @@ final class QuickEntryModel: ObservableObject {
         attachmentDraft.attachText(text, named: name)
     }
 
+    // The Linux frontend reads its clipboard and drops itself and calls
+    // the attach methods above.
+    #if !os(Linux)
     @discardableResult
     func pasteAttachments(from pasteboard: NSPasteboard) -> Bool {
         attachmentDraft.pasteAttachments(from: pasteboard)
@@ -389,6 +406,12 @@ final class QuickEntryModel: ObservableObject {
     /// added to the text.
     func handleDrop(from pasteboard: NSPasteboard) -> Bool {
         attachmentDraft.handleDrop(from: pasteboard)
+    }
+    #endif
+
+    /// A web link dropped on the panel, added to the text.
+    func addLink(_ link: String) {
+        appendLine(link)
     }
 
     func beginPromisedAttachment() -> DraftAttachments.PromisedAttachment? {

@@ -169,10 +169,15 @@ struct LinuxAppConfiguration {
         codexProcessPathStore: CodexProcessPathStore,
         resolutionContextStore: ManagedAgentResolutionContextStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
-        agentHookDispatcher: AgentHookDispatcher
+        agentHookDispatcher: AgentHookDispatcher,
+        tasks: LinuxTaskStack? = nil
     ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
+
+        if let quickEntryMessage = tasks?.reloadConfiguration() {
+            warningMessages.append(quickEntryMessage)
+        }
 
         if case .failure(let error) = agentCatalogStore.reload() {
             failureMessages.append(error.localizedDescription)

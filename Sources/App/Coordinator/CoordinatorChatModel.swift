@@ -21,6 +21,11 @@ import RemoteProtocol
 /// and the dock beside the workspace. Only one is on screen at a time, but
 /// while the window switches between them both can be, so each says which
 /// one it is.
+///
+/// The composer's fields, the drops on the chat and the file chooser are
+/// the platform's: `CoordinatorChatPlatform` in
+/// `CoordinatorChatModel+Mac.swift`, and in
+/// linux/Sources/ToasttyAppLogic/Coordinator for the GTK frontend.
 @MainActor
 final class CoordinatorChatModel: ObservableObject {
     /// Where a view of the chat is.
@@ -85,10 +90,8 @@ final class CoordinatorChatModel: ObservableObject {
     /// The files attached to the composer's message, kept here with the
     /// text. Their changes are the model's changes.
     let attachmentDraft: DraftAttachments
-    /// Take files dropped on each view's chat or composer's field. A drop
-    /// gives that view's field the keyboard.
-    private let panelDropTarget: AttachmentDropTarget
-    private let dockDropTarget: AttachmentDropTarget
+    /// The platform's composer fields and drop targets.
+    let platform: CoordinatorChatPlatform
     /// A message with files is being sent: Toastty copies its files into
     /// the coordinator's folder. The composer waits until it is done.
     @Published private(set) var isSendingFiles = false
@@ -107,20 +110,9 @@ final class CoordinatorChatModel: ObservableObject {
     /// See "What the user has read".
     @Published private(set) var newMessages: ToasttyNewMessagesMarker?
 
-    /// The composer's text view of the view that showed last, so that
-    /// keyboard focus meant for the terminal under the chat can go to it.
-    var composerTextView: NSTextView? {
-        get {
-            if let activeHost, let view = composerTextViews[activeHost]?.view { return view }
-            return composerTextViews.values.lazy.compactMap(\.view).first
-        }
-        set { setComposerTextView(newValue, host: .panel) }
-    }
-
-    /// Each view's composer text view, held weakly.
-    private var composerTextViews: [Host: WeakTextView] = [:]
-    /// The views on screen now, with the panel each reads.
-    private var viewers: [Host: UUID] = [:]
+    /// The views on screen now, with the panel each reads. Internal for
+    /// the platform file.
+    private(set) var viewers: [Host: UUID] = [:]
     /// The view that showed last. Its composer takes the keyboard.
     private(set) var activeHost: Host?
     /// The view whose composer takes the keyboard when it shows.
@@ -128,14 +120,15 @@ final class CoordinatorChatModel: ObservableObject {
 
     static let pageSize = 200
 
-    private weak var controller: CoordinatorController?
+    /// Internal for the platform file.
+    private(set) weak var controller: CoordinatorController?
     private let access: any LocalConversationAccess
     private let now: () -> Date
     /// Whether Toastty is the active app: a chat on screen behind another
     /// app is not read.
     private let isAppActive: () -> Bool
-    /// Makes Toastty the active app.
-    private let activateApp: () -> Void
+    /// Makes Toastty the active app. Internal for the platform file.
+    let activateApp: () -> Void
     /// The user left the chat, or has not read it yet in this run: the next
     /// read of the rows places the new messages' line again.
     private var placesNewMessagesLine = true
@@ -196,15 +189,13 @@ final class CoordinatorChatModel: ObservableObject {
             .map(Self.normalizedTextScale) ?? Self.defaultTextScale
         let attachmentDraft = DraftAttachments(stagingDirectoryURL: attachmentStagingURL)
         self.attachmentDraft = attachmentDraft
-        panelDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
-        dockDropTarget = AttachmentDropTarget(attachments: attachmentDraft)
+        platform = CoordinatorChatPlatform(attachmentDraft: attachmentDraft)
         attachmentDraft.isEditable = { [weak self] in self?.isSendingFiles == false }
         attachmentDraft.onError = { [weak self] message in
             self?.transientNotice = .failure(message)
             self?.publishMetadata()
         }
-        panelDropTarget.onDrop = { [weak self] in self?.takeKeyboardAfterDrop(host: .panel) }
-        dockDropTarget.onDrop = { [weak self] in self?.takeKeyboardAfterDrop(host: .dock) }
+        platform.connect(to: self)
         attachmentDraft.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -287,18 +278,6 @@ final class CoordinatorChatModel: ObservableObject {
         activeHost = nil
         placesNewMessagesLine = true
         endSubscription()
-    }
-
-    /// The composer's text view of the view at `host`.
-    func setComposerTextView(_ textView: NSTextView?, host: Host) {
-        composerTextViews[host] = textView.map(WeakTextView.init)
-    }
-
-    /// Whether the composer of the view at `host` has the keyboard in its
-    /// window.
-    func composerHasKeyboard(host: Host) -> Bool {
-        guard let view = composerTextViews[host]?.view, let window = view.window else { return false }
-        return window.firstResponder === view
     }
 
     private func subscribe(to panelID: UUID) {
@@ -885,26 +864,6 @@ final class CoordinatorChatModel: ObservableObject {
         jumpToLiveEdgeRequest = lastJumpRequest
     }
 
-    /// **Files…** in the composer's ＋ menu.
-    func chooseFiles() {
-        guard attachmentDraft.canEdit, attachmentDraft.canAttachMore else { return }
-        let openPanel = DraftAttachments.makeOpenPanel()
-        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if response == .OK {
-                    self.attachmentDraft.attachFiles(openPanel.urls)
-                }
-                self.requestComposerFocus()
-            }
-        }
-        if let window = composerTextView?.window {
-            openPanel.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            openPanel.begin(completionHandler: finish)
-        }
-    }
-
     /// Reply on one of the coordinator's messages: the composer's message
     /// answers it, and the composer takes the keyboard. A second Reply
     /// replaces the first.
@@ -1050,30 +1009,6 @@ final class CoordinatorChatModel: ObservableObject {
         }
     }
 
-    /// Takes files dropped on the chat or on the composer's field of the
-    /// view at `host`.
-    func attachmentDropTarget(host: Host) -> AttachmentDropTarget {
-        switch host {
-        case .panel: panelDropTarget
-        case .dock: dockDropTarget
-        }
-    }
-
-    /// Files were dropped on the view at `host`, perhaps from another app:
-    /// Toastty becomes the active app, the view's window comes to the
-    /// front, and the view's field takes the keyboard, so that the user can
-    /// type the message that goes with the files.
-    func takeKeyboardAfterDrop(host: Host) {
-        if host == .panel {
-            // Another panel in the coordinator's workspace, such as
-            // policy.md's, can have the focus.
-            controller?.focusPanelForDrop()
-        }
-        composerTextViews[host]?.view?.window?.makeKeyAndOrderFront(nil)
-        activateApp()
-        requestComposerFocus(host: host)
-    }
-
     /// A waiting message's text without its list of files, and the files,
     /// for Edit. `nil` when the files cannot come back as attachments: a
     /// file that is not a copy in a folder that the message owns (`owned`),
@@ -1214,21 +1149,6 @@ final class CoordinatorChatModel: ObservableObject {
         return (clamped * 10).rounded() / 10
     }
 
-    // MARK: - The keyboard
-
-    /// Gives the composer the keyboard, in place of the terminal under the
-    /// chat. Returns whether the chat has the keyboard now. A reader who
-    /// selects text in the transcript keeps the keyboard there, so that
-    /// Copy still copies the selection.
-    @discardableResult
-    func focusComposer() -> Bool {
-        guard let composerTextView, let window = composerTextView.window else { return false }
-        if window.firstResponder === composerTextView || window.firstResponder is ToasttyTranscriptTextView {
-            return true
-        }
-        return window.makeFirstResponder(composerTextView)
-    }
-
     // MARK: - What the transcript needs about the session
 
     var sessionStatus: ToasttyTranscriptSessionStatus? {
@@ -1249,12 +1169,6 @@ final class CoordinatorChatModel: ObservableObject {
             )
         })
     }
-}
-
-/// A text view held weakly, so a view that goes away takes its composer
-/// with it.
-private struct WeakTextView {
-    weak var view: NSTextView?
 }
 
 private extension CoordinatorChatModel.LoadedPage {

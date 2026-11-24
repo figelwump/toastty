@@ -57,49 +57,42 @@ struct TaskStageMark: View {
 
     var body: some View {
         Group {
-            switch item.stage {
+            switch TaskStageMarkKind(item) {
             case .starting:
                 RoundedRectangle(cornerRadius: 1.5)
                     .strokeBorder(ToastyTheme.sidebarTaskStartingMark, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
                     .frame(width: 9, height: 9)
-            case .needsYou(let attention):
-                switch attention {
-                case .review, .readyForReview:
-                    tinted(ToastyTheme.sidebarTaskReviewMarkBackground) {
-                        Circle().fill(ToastyTheme.sidebarTaskReviewMark).frame(width: 4.5, height: 4.5)
-                    }
-                case .awaitingReply:
-                    tinted(ToastyTheme.sidebarTaskQuestionMarkBackground) {
-                        TaskQuestionGlyph()
-                    }
-                case .pickWorkspace, .setupFailed, .moveFailed:
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .strokeBorder(ToastyTheme.sessionNeedsApprovalText, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
-                        .frame(width: 9, height: 9)
-                case .agentError:
-                    RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionErrorText).frame(width: 7, height: 7)
-                case .agentFinished:
-                    readySquare
-                case .agentNeedsInput, .startWaitsInTerminal, .taskSpaceClosed, .cleanupStopped:
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(ToastyTheme.sessionNeedsApprovalText)
-                        .frame(width: 7, height: 7)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 1.5).stroke(ToastyTheme.sidebarSessionRailApprovalHalo, lineWidth: 3)
-                        }
+            case .review:
+                tinted(ToastyTheme.sidebarTaskReviewMarkBackground) {
+                    Circle().fill(ToastyTheme.sidebarTaskReviewMark).frame(width: 4.5, height: 4.5)
                 }
-            case .running, .idle:
-                if TaskBoardPresentation.showsUnreadTurnOverStage(item) {
-                    readySquare
-                } else if item.agent == .working {
-                    SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
-                } else if TaskBoardPresentation.restingWait(item) != nil {
-                    TaskWaitingGlyph()
-                } else {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
-                        .frame(width: 7, height: 7)
+            case .question:
+                tinted(ToastyTheme.sidebarTaskQuestionMarkBackground) {
+                    TaskQuestionGlyph()
                 }
+            case .setupProblem:
+                RoundedRectangle(cornerRadius: 1.5)
+                    .strokeBorder(ToastyTheme.sessionNeedsApprovalText, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5]))
+                    .frame(width: 9, height: 9)
+            case .error:
+                RoundedRectangle(cornerRadius: 1.5).fill(ToastyTheme.sessionErrorText).frame(width: 7, height: 7)
+            case .ready:
+                readySquare
+            case .needsInput:
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(ToastyTheme.sessionNeedsApprovalText)
+                    .frame(width: 7, height: 7)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 1.5).stroke(ToastyTheme.sidebarSessionRailApprovalHalo, lineWidth: 3)
+                    }
+            case .working:
+                SessionStatusIndicator(state: .spinner, size: 9, lineWidth: 1.4)
+            case .waiting:
+                TaskWaitingGlyph()
+            case .quiet:
+                RoundedRectangle(cornerRadius: 1.5)
+                    .strokeBorder(ToastyTheme.sidebarSubspaceQuietMark, lineWidth: 1.2)
+                    .frame(width: 7, height: 7)
             case .toShip:
                 tinted(ToastyTheme.sidebarTaskToShipMarkBackground) {
                     Image(systemName: "arrow.up")

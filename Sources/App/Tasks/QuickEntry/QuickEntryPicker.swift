@@ -458,7 +458,7 @@ final class QuickEntryPicker: ObservableObject {
                 id: "columns",
                 section: "Other",
                 title: "Choose agent, model, effort…",
-                detail: "⌘→",
+                detail: QuickEntryKeyLabels.presetColumns,
                 detailIsShortcut: true,
                 action: .columns(agent: nil, model: nil),
                 searchText: "Choose agent model effort custom"

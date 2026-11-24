@@ -375,9 +375,14 @@ public final class NSAlert {
                 LinuxAlertRequest.Button(title: $0.title, keyEquivalent: $0.keyEquivalent)
             },
             showsSuppressionButton: showsSuppressionButton,
-            suppressionButtonTitle: showsSuppressionButton ? suppressionButton?.title : nil
+            suppressionButtonTitle: showsSuppressionButton ? suppressionButton?.title : nil,
+            checkboxTitles: accessoryCheckboxes.map(\.title)
         )
     }
+
+    /// Checkboxes under the text, in place of an AppKit accessory view of
+    /// them. Each box's `state` holds the user's answer after the alert.
+    public var accessoryCheckboxes: [NSButton] = []
 
     @discardableResult
     public func runModal() -> NSApplication.ModalResponse {
@@ -401,7 +406,10 @@ public final class NSAlert {
         if showsSuppressionButton {
             suppressionButton?.state = suppressed ? .on : .off
         }
-        let buttonIndex = index & ~LinuxAlertResponse.suppressionFlag
+        for (offset, box) in accessoryCheckboxes.enumerated() {
+            box.state = index & LinuxAlertResponse.checkboxFlag(offset) != 0 ? .on : .off
+        }
+        let buttonIndex = index & LinuxAlertResponse.buttonIndexMask
         return NSApplication.ModalResponse(rawValue: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + buttonIndex)
     }
 }
@@ -410,6 +418,13 @@ public enum LinuxAlertResponse {
     /// OR this into a button index when the alert's suppression checkbox
     /// ("Always quit without asking") was checked.
     public static let suppressionFlag = 1 << 16
+
+    /// OR this into a button index when accessory checkbox `index` was
+    /// checked.
+    public static func checkboxFlag(_ index: Int) -> Int { 1 << (17 + index) }
+
+    /// The button index in an answer.
+    public static let buttonIndexMask = (1 << 16) - 1
 }
 
 /// RGBA8 bitmap with PNG encoding; the Linux backing for `NSImage`.

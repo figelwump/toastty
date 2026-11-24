@@ -171,6 +171,30 @@ private final class CombineLatestSubscription<A: Publisher, B: Publisher, S: Sub
 }
 
 extension Publishers {
+    /// Apple's `Merge`: as `Merge3`, for two upstreams.
+    public struct Merge<A: Publisher, B: Publisher>: Publisher
+        where A.Output == B.Output, A.Failure == B.Failure {
+        public typealias Output = A.Output
+        public typealias Failure = A.Failure
+
+        public let a: A
+        public let b: B
+
+        public init(_ a: A, _ b: B) {
+            self.a = a
+            self.b = b
+        }
+
+        public func receive<S: Subscriber>(subscriber: S) where S.Input == Output, S.Failure == Failure {
+            let merger = MergeAll<Output, Failure>(upstreamCount: 2)
+            merger.subject
+                .handleEvents(receiveCancel: { [merger] in merger.cancel() })
+                .receive(subscriber: subscriber)
+            merger.attach(a)
+            merger.attach(b)
+        }
+    }
+
     /// Apple's `Merge3`: the values of three upstreams of one type, as they
     /// come; finishes when all three finish; fails when one fails. OpenCombine
     /// has no `Merge`; this one asks each upstream for unlimited values and

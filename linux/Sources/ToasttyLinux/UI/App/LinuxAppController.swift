@@ -18,6 +18,8 @@ public final class LinuxAppController {
     private var sessionObservation: LinuxObservation?
     private var hasActivated = false
     public var automation: AutomationScript?
+    /// App-wide UI features the app keeps alive (tasks and the coordinator).
+    var tasksUI: AnyObject?
     /// Marks unread panels read once seen (macOS WorkspaceView behavior).
     public private(set) lazy var seenUnreadClearer = SeenUnreadClearScheduler(store: store) { [weak self] in
         self?.isApplicationActive ?? false

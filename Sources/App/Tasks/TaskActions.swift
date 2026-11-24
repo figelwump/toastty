@@ -281,9 +281,8 @@ enum TaskActions {
             checkboxes.append(box)
         }
         #if os(Linux)
-        // The Linux alert has no accessory view yet: the boxes stay
-        // unchecked, so nothing on GitHub or in git goes with the archive.
-        _ = checkboxes
+        // GTK draws them under the text (`AdwAlertDialog`'s extra child).
+        alert.accessoryCheckboxes = checkboxes
         #else
         if checkboxes.isEmpty == false {
             let stack = NSStackView(views: checkboxes)

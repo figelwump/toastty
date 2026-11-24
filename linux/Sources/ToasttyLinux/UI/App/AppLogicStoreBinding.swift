@@ -179,6 +179,7 @@ extension ToasttyLinuxMain {
         logic.setBrowserHostMaterializer { [weak app] panelID in app?.materializeWebPanel(panelID: panelID) }
         app.installTerminals { app in AppLogicTerminalRuntimeBridge(logic: logic, store: app.store) }
         app.installRemoteAccessUI(logic: logic)
+        app.installTasksUI(logic: logic)
         // Agent profiles: header buttons, "Run Agent" palette entries and
         // Ctrl+Alt+key launches through the macOS AgentLaunchUI path.
         let agentLauncher = AppLogicAgentLauncher(logic: logic)

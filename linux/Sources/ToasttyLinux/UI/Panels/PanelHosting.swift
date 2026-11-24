@@ -77,6 +77,33 @@ public protocol WindowCommandHandling: AnyObject {
     func perform(commandID: String, windowID: UUID, window: WidgetPtr) -> Bool
 }
 
+/// One window's part of a feature that adds window-level UI around the
+/// workspace content, such as tasks and the coordinator: a page that covers
+/// the content, a column before it, rows at the top of the sidebar, and
+/// commands. `LinuxWindowController` asks every installed feature.
+@MainActor
+public protocol LinuxWindowFeature: AnyObject {
+    /// A page that covers the workspace content while `coveringPage(_:)`
+    /// names it, keyed by page name. Built once, when the window is.
+    var pages: [String: WidgetPtr] { get }
+    /// The page that covers the content now, or nil for the workspaces.
+    func coveringPage(_ state: AppState) -> String?
+    /// A column between the sidebar and the content, or nil.
+    var leadingColumn: WidgetPtr? { get }
+    /// Rows at the top of the sidebar, under its header bar, or nil.
+    var sidebarHeader: WidgetPtr? { get }
+    func render(_ state: AppState)
+    /// Runs a command for this window. Return true when handled.
+    func perform(commandID: String) -> Bool
+    /// Whether a command is available now, or nil to leave it alone.
+    func isEnabled(commandID: String, state: AppState) -> Bool?
+    /// The window is closing.
+    func teardown()
+}
+
+/// Makes a window's feature once its controller exists.
+public typealias LinuxWindowFeatureFactory = @MainActor (_ controller: LinuxWindowController) -> any LinuxWindowFeature
+
 /// Routes each panel to the host for its kind.
 @MainActor
 public final class PanelHostRegistry {
@@ -86,6 +113,8 @@ public final class PanelHostRegistry {
 
     /// Window commands handled outside `CommandRouter` (see `WindowCommandHandling`).
     public var windowCommandHandlers: [any WindowCommandHandling] = []
+    /// Window-level UI added by features (see `LinuxWindowFeature`).
+    public var windowFeatureFactories: [LinuxWindowFeatureFactory] = []
 
     private var hostByPanelID: [UUID: any PanelContentHosting] = [:]
 

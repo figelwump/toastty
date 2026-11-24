@@ -93,6 +93,10 @@ public struct LinuxAlertRequest: Equatable, Sendable {
     public var buttons: [Button]
     public var showsSuppressionButton: Bool
     public var suppressionButtonTitle: String?
+    /// Unchecked boxes under the text (AppKit's accessory view of
+    /// checkboxes); the answer carries each box's state
+    /// (`LinuxAlertResponse.checkboxFlag`).
+    public var checkboxTitles: [String] = []
 
     /// The button a non-interactive presenter should pick: the explicit
     /// cancel button, a button titled like a cancel action, the only button,

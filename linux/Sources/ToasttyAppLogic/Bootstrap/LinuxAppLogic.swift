@@ -31,6 +31,9 @@ public final class LinuxAppLogic {
         public var allowsRemoteAccess: Bool
         /// Run the startup-only skill-artifact sweep and Codex hook maintenance.
         public var runsBackgroundMaintenance: Bool
+        /// Register the quick entry shortcut with the desktop (only in a run
+        /// with saved preferences, never in a smoke run).
+        public var registersGlobalShortcut: Bool = true
         /// Test seams: gateway port and the Tailscale Serve step.
         var remoteAccessPort: UInt16?
         var remoteAccessTailnetServeSetup: RemoteAccessService.TailnetServeSetup?
@@ -463,7 +466,9 @@ public final class LinuxAppLogic {
             agentCatalogStore: agentCatalogStore,
             workspaceMergeCoordinator: workspaceMergeCoordinator,
             socketPath: socketPath,
-            cliExecutablePath: cliExecutablePath
+            cliExecutablePath: cliExecutablePath,
+            codexProcessPathStore: codexProcessPathStore,
+            registersGlobalShortcut: usesPersistentPreferences && options.registersGlobalShortcut
         )
 
         let remoteAccessService: RemoteAccessService?
@@ -479,6 +484,7 @@ public final class LinuxAppLogic {
                 sessionCloseController: tasks.sessionCloseController,
                 sessionExitController: tasks.sessionExitController,
                 taskCoordinator: tasks.coordinator,
+                quickEntryController: tasks.quickEntry,
                 port: options.remoteAccessPort ?? RemoteAccessPreferences.loadPort(runtimePaths: runtimePaths),
                 pushConfiguration: LinuxAppConfiguration.pushConfiguration(environment: environment),
                 tailnetServeSetup: options.remoteAccessTailnetServeSetup ?? { port, configuredOrigin, configureIfNeeded in
@@ -642,7 +648,8 @@ public final class LinuxAppLogic {
             codexProcessPathStore: codexProcessPathStoreForReload,
             resolutionContextStore: resolutionContextStoreForReload,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            agentHookDispatcher: agentHookDispatcher
+            agentHookDispatcher: agentHookDispatcher,
+            tasks: tasks
         )
     }
 

@@ -46,8 +46,29 @@ public final class GtkPlatformServices: LinuxPlatformServices {
 
     // MARK: Alerts
 
-    private func makeDialog(_ alert: LinuxAlertRequest) -> (WidgetPtr, [String]) {
+    private func makeDialog(_ alert: LinuxAlertRequest) -> (WidgetPtr, [String], () -> Int) {
         let dialog = widget(adw_alert_dialog_new(alert.messageText, alert.informativeText.isEmpty ? nil : alert.informativeText)!)
+        // The suppression box and the accessory boxes, under the text.
+        var boxes: [(WidgetPtr, Int)] = []
+        if alert.showsSuppressionButton, let title = alert.suppressionButtonTitle {
+            boxes.append((gtk_check_button_new_with_label(title)!, LinuxAlertResponse.suppressionFlag))
+        }
+        for (index, title) in alert.checkboxTitles.enumerated() {
+            boxes.append((gtk_check_button_new_with_label(title)!, LinuxAlertResponse.checkboxFlag(index)))
+        }
+        if boxes.isEmpty == false {
+            let column = Gtk.vbox(spacing: 6)
+            for (index, (box, _)) in boxes.enumerated() {
+                Gtk.setName(box, "alert-checkbox-\(index)")
+                Gtk.append(column, box)
+            }
+            adw_alert_dialog_set_extra_child(cast(dialog), column)
+        }
+        let flags: () -> Int = {
+            boxes.reduce(0) { result, entry in
+                gtk_check_button_get_active(cast(entry.0)).bool ? result | entry.1 : result
+            }
+        }
         var ids: [String] = []
         for (index, button) in alert.buttons.enumerated() {
             let id = "b\(index)"
@@ -66,7 +87,7 @@ public final class GtkPlatformServices: LinuxPlatformServices {
         }
         let cancel = alert.safeDefaultButtonIndex
         adw_alert_dialog_set_close_response(cast(dialog), ids[min(cancel, ids.count - 1)])
-        return (dialog, ids)
+        return (dialog, ids, flags)
     }
 
     private func parentWindow(_ windowID: UUID?) -> WidgetPtr? {
@@ -95,13 +116,19 @@ public final class GtkPlatformServices: LinuxPlatformServices {
     }
 
     private func present(_ alert: LinuxAlertRequest, parent: WidgetPtr, completion: @escaping @MainActor (Int) -> Void) {
-        let (dialog, ids) = makeDialog(alert)
+        let (dialog, ids, flags) = makeDialog(alert)
         var answered = false
         Signal.connectPointer(dialog, "response") { response in
             guard answered == false else { return }
             answered = true
             let id = response.map { String(cString: $0.assumingMemoryBound(to: CChar.self)) } ?? ""
-            completion(ids.firstIndex(of: id) ?? alert.safeDefaultButtonIndex)
+            guard let index = ids.firstIndex(of: id) else {
+                completion(alert.safeDefaultButtonIndex)
+                return
+            }
+            // A box's answer goes with a chosen button only, never with
+            // closing the dialog.
+            completion(index | flags())
         }
         adw_dialog_present(cast(dialog), parent)
     }

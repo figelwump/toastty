@@ -50,8 +50,24 @@ public struct QuickEntryShortcut: Equatable, Sendable {
     public static let `default` = QuickEntryShortcut(modifiers: [.option, .shift], key: .character("t"))
 
     /// The shortcut as a menu shows it, such as `⌥⇧T`, with modifiers in
-    /// the order macOS uses.
+    /// the order macOS uses. On Linux, as GTK shows it: `Alt+Shift+T`,
+    /// with Command as Super.
     public var symbolLabel: String {
+        #if os(Linux)
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("Ctrl") }
+        if modifiers.contains(.option) { parts.append("Alt") }
+        if modifiers.contains(.shift) { parts.append("Shift") }
+        if modifiers.contains(.command) { parts.append("Super") }
+        switch key {
+        case .character(let character): parts.append(character.uppercased())
+        case .space: parts.append("Space")
+        case .return: parts.append("Return")
+        case .tab: parts.append("Tab")
+        case .function(let number): parts.append("F\(number)")
+        }
+        return parts.joined(separator: "+")
+        #else
         var label = ""
         if modifiers.contains(.control) { label += "⌃" }
         if modifiers.contains(.option) { label += "⌥" }
@@ -70,6 +86,7 @@ public struct QuickEntryShortcut: Equatable, Sendable {
             label += "F\(number)"
         }
         return label
+        #endif
     }
 
     private static let modifierNames: [String: Modifiers] = [

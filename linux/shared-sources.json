@@ -18,6 +18,38 @@
         "ToasttyFoundationShim"
       ]
     },
+    "ConversationUI": {
+      "source": "Sources/ConversationUI",
+      "include": [
+        "ConversationHostModels.swift",
+        "ConversationInlineLinks.swift",
+        "CoordinatorChatReadPoint.swift",
+        "CoordinatorChatTranscript.swift",
+        "CoordinatorMentionRules.swift",
+        "ToasttyAttachedImage.swift",
+        "ToasttyConversationPresentation.swift",
+        "ToasttyInteractionAnswerState.swift",
+        "ToasttyMarkdownChunking.swift",
+        "ToasttyMarkdownSegment.swift",
+        "ToasttyMarkdownTable.swift",
+        "ToasttyNewMessagesMarker.swift",
+        "ToasttyOutcomeFeedback.swift",
+        "ToasttySendPresentation.swift",
+        "ToasttyToolCall.swift",
+        "ToasttyTranscriptDisplayItem.swift",
+        "ToasttyTranscriptSessionStatus.swift",
+        "ToasttyTurnPresentation.swift"
+      ],
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
+    "ConversationUITests": {
+      "source": "Tests/ConversationUI",
+      "implicitImports": [
+        "ToasttyFoundationShim"
+      ]
+    },
     "ToasttyCLIKit": {
       "source": "Sources/CLIKit",
       "extraSources": [
@@ -70,8 +102,8 @@
       "exclude": [
         "Attachments/AttachmentChip.swift",
         "Attachments/AttachmentTextView.swift",
-        "Attachments/DraftAttachments.swift",
-        "Coordinator/CoordinatorChatModel.swift",
+        "Attachments/DraftAttachments+Mac.swift",
+        "Coordinator/CoordinatorChatModel+Mac.swift",
         "Coordinator/CoordinatorTerminalKeyLog.swift",
         "Coordinator/CoordinatorChatView.swift",
         "Coordinator/CoordinatorComposerView.swift",
@@ -83,9 +115,8 @@
         "SidebarCoordinatorRow.swift",
         "SidebarStatusSegment.swift",
         "SidebarTasksHeader.swift",
-        "Tasks/QuickEntry/QuickEntryController.swift",
+        "Tasks/QuickEntry/QuickEntryController+Mac.swift",
         "Tasks/QuickEntry/QuickEntryHotKey.swift",
-        "Tasks/QuickEntry/QuickEntryModel.swift",
         "Tasks/QuickEntry/QuickEntryPanel.swift",
         "Tasks/QuickEntry/QuickEntryPickerPanel.swift",
         "Tasks/QuickEntry/QuickEntryPickerView.swift",
@@ -188,7 +219,6 @@
         "SwiftUI": [
           "ToasttyAppKitShim"
         ],
-        "ConversationUI": [],
         "Security": []
       },
       "darwinQualifier": "ToasttyAppKitShim",

@@ -1,6 +1,5 @@
 import Foundation
 import Markdown
-import ToasttyFoundationShim
 
 extension AttributedString {
     /// Darwin's markdown parsing options, as far as Toastty uses them.

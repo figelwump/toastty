@@ -30,7 +30,11 @@ final class GettingStartedPageDriftTests: XCTestCase {
         XCTAssertTrue(pageSource.contains("toastty://action/open-coordinator"))
         // The first task, with the keys the app uses.
         XCTAssertTrue(pageSource.contains("git repository"))
+        // The page names the macOS keys; Linux labels them as GTK does
+        // (`QuickEntryShortcut.symbolLabel`).
+        #if !os(Linux)
         XCTAssertTrue(pageSource.contains("<kbd>\(QuickEntryShortcut.default.symbolLabel)</kbd>"))
+        #endif
         XCTAssertTrue(pageSource.contains("<kbd>\(ToasttyKeyboardShortcuts.toggleTasksView.symbolLabel)</kbd>"))
         XCTAssertTrue(pageSource.contains("~/.toastty/skills"))
         XCTAssertFalse(pageSource.contains("setup print-skill"))

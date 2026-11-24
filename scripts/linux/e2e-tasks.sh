@@ -7,7 +7,9 @@
 #   3. `toastty task workspace-choices` lists the open workspace;
 #   4. `toastty coordinator open` makes the Coordinator workspace with its
 #      agent, and `coordinator status` reports it;
-#   5. the task survives a quit and restart.
+#   5. the task survives a quit and restart;
+#   6. the Tasks view (Broadway, smoke script): open, rows, selection with
+#      the arrows, Esc, the Show Tasks toggle.
 # Build first: scripts/linux/build.sh --product toastty-linux --product toastty
 # Usage: scripts/linux/e2e-tasks.sh   (exit status 0 when every check passes)
 set -uo pipefail
@@ -92,5 +94,58 @@ stop_app
 start_app 2 || { tail -30 $WORK/app-2.log; exit 1; }
 cli task get "$TASK" > $WORK/get2.json 2>&1
 check "the task survives a restart" "grep -q 'E2E task: add a README' $WORK/get2.json"
+stop_app
+
+# Phase B: the Tasks view, driven by a smoke script while the CLI makes tasks.
+cat > $WORK/ui.script <<SCRIPT
+wait-file $WORK/go
+wait 500
+action window.toggle-tasks-view
+wait 300
+expect tasksView=shown tasksRows=2
+screenshot $WORK/tasks-view.png
+tasks select 1
+wait 200
+expect tasksDetail=E2E_task:_add_a_README tasksSelected=E2E_task:_add_a_README
+tasks key up
+wait 200
+expect tasksSelected=Second_task tasksDetail=Second_task
+tasks key down
+wait 200
+expect tasksSelected=E2E_task:_add_a_README
+tasks key escape
+wait 300
+expect tasksView=hidden
+action window.toggle-tasks-view
+wait 200
+expect tasksView=shown
+action window.toggle-tasks-view
+wait 200
+expect tasksView=hidden
+state $WORK/ui-state.json
+quit
+SCRIPT
+(cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/ui.script $APP > $WORK/app-ui.log 2>&1) & APID=$!
+for i in $(seq 1 100); do [ -S $SOCK ] && $CLI --socket-path $SOCK query list >/dev/null 2>&1 && break; sleep 0.1; done
+# A smoke-script run starts from a fresh layout and task store: make the
+# project workspace and two tasks in it.
+WIN=$(cli query run workspace.list | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result",d); print(r["windows"][0]["id"] if "windows" in r else r["workspaces"][0]["windowID"])')
+cli action run workspace.create --window "$WIN" title=Project > $WORK/ws2.json
+WSID=$(json $WORK/ws2.json 'r["workspaceID"]')
+PANEL=$(cli query run terminal.state --workspace "$WSID" | python3 -c 'import json,sys; r=json.load(sys.stdin)["result"]; print(r.get("panelID") or r.get("panel",{}).get("id",""))')
+sleep 1
+cli action run terminal.send-text --panel "$PANEL" text="cd $PROJECT" submit=true > /dev/null
+for i in $(seq 1 50); do cli task workspace-choices > $WORK/choices2.json 2>&1; sed 's|\\/|/|g' $WORK/choices2.json | grep -q "$PROJECT" && break; sleep 0.2; done
+cli task create "E2E task: add a README" --workspace "$WSID" --agent claude > $WORK/create1b.json 2>&1
+cli task create "Second task" --workspace "$WSID" --agent claude > $WORK/create2.json 2>&1
+check "two tasks are created for the UI phase" "grep -q '\"ok\" : true' $WORK/create1b.json && grep -q '\"ok\" : true' $WORK/create2.json"
+sleep 1; touch $WORK/go
+for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+wait $APID; UIRC=$?
+check "the Tasks view script passes (open, rows, select, arrows, Esc, toggle)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
+grep 'FAIL' $WORK/app-ui.log | head -5
+check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
+[ -s $WORK/tasks-view.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/tasks-view.png $REPO/artifacts/manual/linux-tasks/tasks-view.png
+pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 [ $fail = 0 ] && echo "e2e-tasks: all checks passed" || { echo "e2e-tasks: FAILED (work dir $WORK)"; trap - EXIT; cleanup; exit 1; }
 rm -rf $WORK

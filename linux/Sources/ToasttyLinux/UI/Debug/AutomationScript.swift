@@ -8,6 +8,7 @@ import Foundation
 /// line (`#` comments):
 ///
 ///     wait 300                      # milliseconds
+///     wait-file go                  # until a file exists (a driver outside the app is ready)
 ///     action layout.split.horizontal  # activate win.<command-id> in the selected window
 ///     screenshot artifacts/manual/linux-ui/split.png
 ///     state out/state.json          # write a JSON summary of state + widgets
@@ -130,6 +131,25 @@ public final class AutomationScript {
                 MainLoop.timeout(milliseconds: delay) { [weak self] in
                     self?.step()
                     return false
+                }
+                return
+            case "wait-file":
+                // Waits up to 60 s for a file that a driver outside the app
+                // (an e2e script using the CLI) writes when it is ready.
+                let path = resolve(argument).path
+                let deadline = Date().addingTimeInterval(60)
+                MainLoop.timeout(milliseconds: 100) { [weak self] in
+                    guard let self else { return false }
+                    if FileManager.default.fileExists(atPath: path) {
+                        self.step()
+                        return false
+                    }
+                    if Date() > deadline {
+                        self.fail("wait-file \(argument): timed out")
+                        self.step()
+                        return false
+                    }
+                    return true
                 }
                 return
             case "action":

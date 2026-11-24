@@ -19,7 +19,7 @@ struct TaskWebhookApprovalBanner: View {
                     .foregroundStyle(ToastyTheme.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button(first.status == .disabled && first.auth.needsSecret ? "Enter new key…" : "Review…") {
+                Button(TaskWebhookApprovalPresentation.reviewTitle(first)) {
                     error = nil
                     reviewing = first
                 }
@@ -39,7 +39,7 @@ struct TaskWebhookApprovalBanner: View {
             .sheet(item: $reviewing) { webhook in
                 TaskWebhookApprovalSheet(
                     webhook: webhook,
-                    needsKey: webhook.auth.needsSecret && (webhook.status == .disabled || webhooks.hasSecret(webhook.id) == false),
+                    needsKey: TaskWebhookApprovalPresentation.needsKey(webhook, hasSecret: webhooks.hasSecret(webhook.id)),
                     error: error,
                     approve: { key in decide { try webhooks.approve(id: webhook.id, shownDigest: webhook.settingsDigest, secret: key) } },
                     deny: { decide { try webhooks.deny(id: webhook.id) } },
@@ -50,12 +50,8 @@ struct TaskWebhookApprovalBanner: View {
     }
 
     static func message(_ webhook: TaskWebhook) -> Text {
-        if webhook.status == .disabled {
-            return Text("\"\(webhook.name)\" stopped:").fontWeight(.semibold)
-                + Text(" \(webhook.host) refused it (\(webhook.disabledReason ?? "refused")). Task events are not being sent.")
-        }
-        return Text("\"\(webhook.name)\" wants to receive task events").fontWeight(.semibold)
-            + Text(" at \(webhook.host). It is paused until you review it.")
+        let message = TaskWebhookApprovalPresentation.bannerMessage(webhook)
+        return Text(message.lead).fontWeight(.semibold) + Text(message.rest)
     }
 
     private func decide(_ action: () throws -> Void) {
@@ -88,9 +84,7 @@ struct TaskWebhookApprovalSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(webhook.status == .disabled
-                ? "Turn \"\(webhook.name)\" on again?"
-                : "Allow \"\(webhook.name)\" to receive task events?")
+            Text(TaskWebhookApprovalPresentation.sheetTitle(webhook))
                 .font(.system(size: 14, weight: .semibold))
             Text(Self.explanation(webhook))
                 .font(.system(size: 12))
@@ -109,9 +103,7 @@ struct TaskWebhookApprovalSheet: View {
                 row("Events") { Text(webhook.eventTitles.joined(separator: ", ")) }
                 row("Tasks") { Text(Self.taskFilter(webhook)) }
                 row("Sign-in") {
-                    Text(webhook.auth.needsSecret && needsKey == false
-                        ? "\(webhook.auth.title), key saved in the Keychain (••••••••)"
-                        : webhook.auth.title)
+                    Text(TaskWebhookApprovalPresentation.signIn(webhook, needsKey: needsKey))
                 }
                 if needsKey {
                     row("Key") { keyEntry }
@@ -132,7 +124,7 @@ struct TaskWebhookApprovalSheet: View {
             }
             Divider()
             HStack(spacing: 8) {
-                Button(webhook.status == .disabled ? "Remove" : "Deny", role: .destructive, action: deny)
+                Button(TaskWebhookApprovalPresentation.denyTitle(webhook), role: .destructive, action: deny)
                     .accessibilityIdentifier("tasks.webhook.deny")
                 Spacer()
                 Button("Not now", action: notNow)
@@ -152,7 +144,7 @@ struct TaskWebhookApprovalSheet: View {
 
     private var keyEntry: some View {
         VStack(alignment: .leading, spacing: 6) {
-            SecureField("Paste the key, saved in the Keychain", text: $key)
+            SecureField(TaskWebhookApprovalPresentation.keyPlaceholder, text: $key)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("tasks.webhook.key")
             if let hint = webhook.secretHint {
@@ -202,30 +194,19 @@ struct TaskWebhookApprovalSheet: View {
     }
 
     static func explanation(_ webhook: TaskWebhook) -> String {
-        let events = webhook.events.map { $0.title.lowercased() }
-        let stopped = webhook.status == .disabled
-            ? "Toastty stopped sending after \(webhook.host) refused a request (\(webhook.disabledReason ?? "refused")). "
-            : ""
-        return stopped + "Toastty will POST an event to this address when a task changes to: \(events.joined(separator: ", ")). "
-            + "Each event includes the task's title, project path, external reference, pull request link, "
-            + "and the question an agent asked you. Reply text and attachments are never sent."
+        TaskWebhookApprovalPresentation.explanation(webhook)
     }
 
     static func taskFilter(_ webhook: TaskWebhook) -> String {
-        let roots = webhook.roots.isEmpty ? "All projects" : webhook.roots.joined(separator: ", ")
-        let ref = webhook.externalRefPrefix.map { "external reference starting with \($0)" } ?? "any external reference"
-        return "\(roots) · \(ref)"
+        TaskWebhookApprovalPresentation.taskFilter(webhook)
     }
 
     static func requester(_ webhook: TaskWebhook) -> String {
-        let source = webhook.requestedBy.isAgentSession ? "an agent session" : "toastty webhook add, outside an agent session"
-        let age = RelativeDateTimeFormatter().localizedString(for: webhook.requestedAt, relativeTo: Date())
-        return "\(source) · \(age)"
+        TaskWebhookApprovalPresentation.requester(webhook)
     }
 
     static func agentWarning(_ webhook: TaskWebhook) -> String {
-        let task = webhook.requestedBy.agentTaskTitle.map { " in task \"\($0)\"" } ?? ""
-        return "Requested from an agent session\(task). An agent should not need to send task data off this Mac. Deny it unless you asked for this."
+        TaskWebhookApprovalPresentation.agentWarning(webhook)
     }
 }
 
@@ -240,7 +221,7 @@ struct TaskWebhookPendingPill: View {
         let count = webhooks.pendingWebhooks.count + webhooks.stoppedWebhooks.count
         if count > 0 {
             Button(action: open) {
-                Text(count == 1 ? "1 webhook" : "\(count) webhooks")
+                Text(TaskWebhookApprovalPresentation.pillTitle(count: count))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
                     .padding(.horizontal, 6)

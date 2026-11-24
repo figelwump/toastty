@@ -210,5 +210,99 @@ public enum LinuxTheme {
 
     /* Empty state */
     .toastty-empty-state .shortcut-hint { font-size: 0.85em; }
+
+    /* Task marks (macOS TaskStageMark) */
+    :root {
+      --toastty-review: #6e9fe6;
+      --toastty-question: #e8a635;
+      --toastty-to-ship: #b98ce0;
+      --toastty-done: #7cc47f;
+      --toastty-quiet: #8a8279;
+    }
+    .task-mark { min-width: 10px; min-height: 10px; border-radius: 2px; font-size: 7pt; font-weight: 900; }
+    .task-mark.starting { min-width: 8px; min-height: 8px; border: 1px dashed var(--toastty-quiet); border-radius: 2px; }
+    .task-mark.setup-problem { min-width: 8px; min-height: 8px; border: 1px dashed var(--toastty-approval); border-radius: 2px; }
+    .task-mark.review { background-color: color-mix(in srgb, var(--toastty-review) 22%, transparent); }
+    .task-mark.review .task-mark-dot { min-width: 5px; min-height: 5px; border-radius: 999px; background-color: var(--toastty-review); }
+    .task-mark.question { color: var(--toastty-question); background-color: color-mix(in srgb, var(--toastty-question) 22%, transparent); }
+    .task-mark.error { min-width: 7px; min-height: 7px; background-color: var(--toastty-error); }
+    .task-mark.ready { min-width: 7px; min-height: 7px; background-color: var(--toastty-ready); }
+    .task-mark.needs-input { min-width: 7px; min-height: 7px; background-color: var(--toastty-approval);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--toastty-approval) 22%, transparent); }
+    .task-mark.quiet { min-width: 6px; min-height: 6px; border: 1.2px solid var(--toastty-quiet); border-radius: 2px; }
+    .task-mark.to-ship { color: var(--toastty-to-ship); background-color: color-mix(in srgb, var(--toastty-to-ship) 22%, transparent); }
+    .task-mark.done { color: var(--toastty-done); background-color: color-mix(in srgb, var(--toastty-done) 20%, transparent); }
+    .task-mark.archived { color: var(--toastty-quiet); background-color: alpha(currentColor, 0.1); }
+    .task-mark-icon.waiting { color: var(--toastty-quiet); }
+    .task-mark-slot spinner { min-width: 9px; min-height: 9px; }
+    .task-release-mark { color: var(--toastty-to-ship); font-size: 0.75em; }
+    .task-tag {
+      font-size: 0.78em; padding: 0 5px; border-radius: 4px;
+      background-color: alpha(currentColor, 0.08); opacity: 0.85;
+    }
+    .task-pr-tag {
+      font-size: 0.78em; font-family: monospace; font-weight: 600; padding: 0 5px; border-radius: 4px;
+      color: var(--toastty-done); border: 1px solid color-mix(in srgb, var(--toastty-done) 45%, transparent);
+    }
+    .task-branch { font-size: 0.78em; font-family: monospace; opacity: 0.7; }
+
+    /* Tasks view (macOS TasksView) */
+    .tasks-view { background-color: var(--view-bg-color); }
+    .tasks-header { padding: 14px 18px 10px 18px; }
+    .tasks-title { font-size: 1.15em; font-weight: 700; }
+    .tasks-new-key {
+      font-size: 0.75em; font-weight: 600; padding: 0 4px; border-radius: 3px;
+      border: 1px solid alpha(currentColor, 0.45);
+    }
+    .tasks-banners { padding: 0 18px 8px 18px; }
+    .tasks-banner { padding: 8px 10px; border-radius: 8px; font-size: 0.9em; }
+    .tasks-banner.webhook, .tasks-banner.config-error {
+      background-color: color-mix(in srgb, var(--toastty-approval) 16%, transparent);
+      border-left: 3px solid var(--toastty-approval);
+    }
+    .tasks-list { padding-bottom: 16px; }
+    .tasks-group { padding: 14px 18px 6px 18px; font-size: 0.8em; font-weight: 700; opacity: 0.6; }
+    .tasks-group.hot { color: var(--toastty-question); opacity: 1; }
+    .tasks-group.review { color: var(--toastty-review); opacity: 1; }
+    .tasks-group-count { font-family: monospace; opacity: 0.7; }
+    .tasks-group-toggle { padding: 0; border-radius: 0; }
+    .tasks-group-toggle .tasks-group { padding-left: 18px; }
+    .tasks-lane { padding: 6px 18px; font-size: 0.9em; font-weight: 600; color: var(--toastty-to-ship); }
+    .tasks-row { padding: 9px 18px; border-top: 1px solid alpha(currentColor, 0.06); }
+    .tasks-row:hover { background-color: alpha(currentColor, 0.04); }
+    .tasks-row.selected { background-color: alpha(currentColor, 0.08); box-shadow: inset 2px 0 var(--accent-bg-color); }
+    .tasks-row.child { padding-left: 36px; }
+    .tasks-row.context { opacity: 0.65; }
+    .tasks-child-arrow { opacity: 0.55; font-size: 0.85em; }
+    .tasks-row-title { font-weight: 500; }
+    .tasks-row-title.unread { font-weight: 700; }
+    .tasks-row-status { font-size: 0.86em; opacity: 0.6; }
+    .tasks-row-age { font-size: 0.86em; opacity: 0.5; }
+    .tasks-detail { padding: 18px 18px 16px 18px; }
+    .tasks-detail-origin { font-size: 0.86em; opacity: 0.55; }
+    .tasks-detail-title { font-size: 1.15em; font-weight: 700; }
+    .tasks-detail-text { font-size: 0.92em; opacity: 0.8; }
+    .tasks-detail-error { font-size: 0.86em; color: var(--toastty-error); }
+    .tasks-card { border-radius: 8px; background-color: alpha(currentColor, 0.04); border: 1px solid alpha(currentColor, 0.1); }
+    .tasks-card-title { font-size: 0.75em; font-weight: 700; opacity: 0.55; padding: 8px 12px; }
+    .tasks-card-body { padding: 12px; }
+    .tasks-key { font-size: 0.92em; opacity: 0.55; }
+    .tasks-value { font-size: 0.92em; }
+    .tasks-why { font-size: 0.84em; opacity: 0.55; }
+    .tasks-history-line { font-size: 0.92em; opacity: 0.8; }
+    .tasks-action { font-size: 0.92em; }
+    .tasks-empty { opacity: 0.6; }
+    .task-setup-text { font-size: 0.95em; opacity: 0.85; }
+    .task-setup-note { font-size: 0.88em; opacity: 0.65; padding-left: 10px; border-left: 2px solid alpha(currentColor, 0.2); }
+    .task-setup-note.problem { opacity: 0.85; border-left-color: color-mix(in srgb, var(--toastty-error) 55%, transparent); }
+    .task-setup-workspace { padding: 12px 16px; border-radius: 10px; border: 1px solid alpha(currentColor, 0.1); }
+    .webhook-agent-warning { padding: 8px; border-radius: 6px; background-color: color-mix(in srgb, var(--toastty-approval) 15%, transparent); }
+    .webhook-hint { padding: 6px 8px; border-radius: 4px; background-color: alpha(currentColor, 0.06); }
+
+    /* Attachments */
+    .attachment-chip { padding: 3px 6px; border-radius: 8px; background-color: alpha(currentColor, 0.07); }
+    .attachment-thumbnail { border-radius: 4px; }
+    .attachment-name { font-size: 0.86em; }
+    .attachment-remove { min-width: 18px; min-height: 18px; padding: 0; }
     """
 }
