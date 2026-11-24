@@ -1649,7 +1649,9 @@ def approval_passed_on(run):
     run.check("Toastty's first line says that the coordinator passes on the user's approval",
               text.split('\n')[0] == APPROVAL_LINE, text[:200])
     body = typed_text(text).lower()
-    run.check('the message says that the user approved', 'user' in body and re.search(r'approv|yes|decid', body), body)
+    refusal = re.search(r"\b(not|no|never|n't|without)\b[^.\n]{0,40}\b(approv|yes\b|agree)", body)
+    run.check('the message says that the user approved',
+              'user' in body and re.search(r'\bapproved?\b|\bapproves\b|\byes\b', body) and not refusal, body)
     run.check('the message names the action', 'delet' in body and '45' in body, body)
     run.check('the message asks for no second yes in the task', not SECOND_YES.search(body), body)
 

@@ -1060,7 +1060,9 @@ Three parts make this work:
   coordinator's instructions tell it to name the exact action, to quote your
   words or the rule, and never to ask a task for a yes typed in the task. A
   decision that the coordinator says is its own approves no merge,
-  deployment, production change or deletion.
+  deployment, production change or deletion. A task that starts with
+  another skill, such as a release skill, gets the rule in its first
+  message.
 - **Claude Code's auto mode.** In auto mode, Claude Code's own check decides
   whether a command has your approval, and it reads a message from another
   agent as that agent's text. Toastty starts each Claude session with one
@@ -1068,7 +1070,10 @@ Three parts make this work:
   `--settings`. The entry names the coordinator's whole first line and says
   that an approval in such a message is yours, also when Claude Code shows
   the message inside `<pasted_content>` tags. Your own `autoMode` settings
-  stay in force, and `claude auto-mode config` shows them.
+  stay in force, and `claude auto-mode config` shows them. Toastty names
+  Claude Code's built-in entries (`$defaults`) only when neither your
+  Claude settings nor the profile's `--settings` have an
+  `autoMode.environment` list.
 
 Limits:
 

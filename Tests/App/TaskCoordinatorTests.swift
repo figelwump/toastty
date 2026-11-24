@@ -357,7 +357,9 @@ struct TaskCoordinatorTests {
             #expect(skillLine.upperBound < path.lowerBound)
             #expect(path.upperBound < text.lowerBound)
             #expect(sent.contains(TaskPrompt.replyLine), "\(agent)")
-            #expect(sent.contains(TaskPrompt.coordinatorLine), "\(agent)")
+            // The line quotes the coordinator's first line, which has
+            // apostrophes: the check reads the parts between them.
+            #expect(TaskPrompt.coordinatorLine.split(separator: "'").allSatisfy { sent.contains($0) }, "\(agent)")
             let session = try #require(record.operation.agentLaunch?.sessionID)
             #expect(fixture.launcher.lacksShippedSkills(sessionID: session))
 

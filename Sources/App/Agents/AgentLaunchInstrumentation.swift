@@ -296,10 +296,16 @@ enum AgentLaunchInstrumentation {
                 workingDirectory: workingDirectory,
                 fileManager: fileManager
             )
-            let mergedSettings = mergeClaudeAutoModeEnvironment(into: mergeClaudeHooks(
-                into: existingSettings.baseSettings,
-                command: "/bin/sh \(shellQuote(hookScriptURL.path))"
-            ))
+            let mergedSettings = mergeClaudeAutoModeEnvironment(
+                into: mergeClaudeHooks(
+                    into: existingSettings.baseSettings,
+                    command: "/bin/sh \(shellQuote(hookScriptURL.path))"
+                ),
+                userDefinesEnvironment: claudeUserSettingsDefineAutoModeEnvironment(
+                    launchEnvironment: launchEnvironment,
+                    fileManager: fileManager
+                )
+            )
 
             let settingsURL = artifactsDirectoryURL.appendingPathComponent("claude-settings.json", isDirectory: false)
             try writeJSONObject(mergedSettings, to: settingsURL, fileManager: fileManager)
@@ -727,11 +733,16 @@ extension AgentLaunchInstrumentation {
 
     /// Adds `claudeAutoModeEnvironmentEntry` to `autoMode.environment`.
     /// Claude Code joins this list with the lists of the user's own
-    /// settings. `$defaults` keeps Claude Code's built-in entries for a user
-    /// who has set no list; Claude Code then names them twice for a user
-    /// whose list has `$defaults` too, which changes no decision. Settings
-    /// whose `autoMode` Toastty cannot read stay as they are.
-    static func mergeClaudeAutoModeEnvironment(into baseSettings: [String: Any]) -> [String: Any] {
+    /// settings, and puts its built-in entries where a list names
+    /// `$defaults`. A list without `$defaults` removes them. So Toastty
+    /// names `$defaults` only when no other list exists: a user who has set
+    /// no list keeps the built-in entries, and a user whose own list leaves
+    /// them out does not get them back. Settings whose `autoMode` Toastty
+    /// cannot read stay as they are.
+    static func mergeClaudeAutoModeEnvironment(
+        into baseSettings: [String: Any],
+        userDefinesEnvironment: Bool
+    ) -> [String: Any] {
         var mergedSettings = baseSettings
         var autoMode: [String: Any]
         if let existing = baseSettings["autoMode"] {
@@ -745,12 +756,38 @@ extension AgentLaunchInstrumentation {
             guard let list = existing as? [String] else { return baseSettings }
             environment = list
         } else {
-            environment = ["$defaults"]
+            environment = userDefinesEnvironment ? [] : ["$defaults"]
         }
         environment.append(claudeAutoModeEnvironmentEntry)
         autoMode["environment"] = environment
         mergedSettings["autoMode"] = autoMode
         return mergedSettings
+    }
+
+    /// Whether a settings file that Claude Code reads for each session on
+    /// this Mac has its own `autoMode.environment` list: the user's
+    /// settings, in `CLAUDE_CONFIG_DIR` or `~/.claude`, or the managed
+    /// settings. Claude Code does not read that list from a project's
+    /// settings. A file that is missing or that Toastty cannot read counts
+    /// as no list.
+    static func claudeUserSettingsDefineAutoModeEnvironment(
+        launchEnvironment: [String: String],
+        fileManager: FileManager
+    ) -> Bool {
+        let configDirectory = normalizedNonEmptyValue(launchEnvironment["CLAUDE_CONFIG_DIR"])
+            ?? normalizedNonEmptyValue(ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"])
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude", isDirectory: true).path
+        let paths = [
+            URL(fileURLWithPath: (configDirectory as NSString).expandingTildeInPath, isDirectory: true)
+                .appendingPathComponent("settings.json", isDirectory: false).path,
+            "/Library/Application Support/ClaudeCode/managed-settings.json",
+        ]
+        return paths.contains { path in
+            guard let data = fileManager.contents(atPath: path),
+                  let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let autoMode = settings["autoMode"] as? [String: Any] else { return false }
+            return autoMode["environment"] != nil
+        }
     }
 }
 

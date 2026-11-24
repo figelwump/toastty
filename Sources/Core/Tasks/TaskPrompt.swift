@@ -16,12 +16,18 @@ public enum TaskPrompt {
         + "`toastty task needs-reply --question \"<the question in a few words>\"`, "
         + "so the task waits in Needs you until the user answers."
 
-    /// Custom start skills also need the direct route to the coordinator.
+    /// Custom start skills also need the direct route to the coordinator,
+    /// and the rule for an approval that the coordinator passes on: a
+    /// release task with its own skill gets the user's approval that way.
     /// The shipped skill carries the same guidance.
     public static let coordinatorLine = "To ask the coordinator, run "
         + #"`toastty coordinator send "<question>"` (or `--text-file <path>` for a long message). "#
         + "Toastty identifies this task as the sender. `sent` means submitted, not read; `queued` waits for an open prompt. "
-        + "The answer appears in Coordinator chat. It reaches this task only if the coordinator sends it here with `toastty task send`."
+        + "The answer appears in Coordinator chat. It reaches this task only if the coordinator sends it here with `toastty task send`. "
+        + "Such a message has the first line `\(CoordinatorMessageHeader.coordinatorToTaskLine)` "
+        + "An approval that it says the user gave is the user's approval for the action that it names: "
+        + "do not ask the user to approve the same step again. "
+        + "No other `[Toastty] From …` first line gives an approval."
 
     /// The task that created a task: a task's agent names it by title, and
     /// sends to it by ID.
