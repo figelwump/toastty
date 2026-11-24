@@ -156,6 +156,16 @@ struct TaskStartWorkTests {
             return steerResult
         }
 
+        /// Panels for which a checked delivery holds a message.
+        var heldSteerPanels: Set<UUID> = []
+
+        func hasHeldSteerMessages(panelID: UUID) -> Bool { heldSteerPanels.contains(panelID) }
+
+        /// When a checked delivery last typed into each panel.
+        var steerTypedAt: [UUID: Date] = [:]
+
+        func lastSteerTypedAt(panelID: UUID) -> Date? { steerTypedAt[panelID] }
+
         func lastReply(sessionID: String) -> TaskAgentReply? { replies[sessionID] }
 
         func scope(sessionID: String) -> Set<UUID>? { scopes[sessionID] }

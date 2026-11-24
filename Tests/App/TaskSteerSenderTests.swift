@@ -337,6 +337,8 @@ struct TaskSteerSenderTests {
         try await Task.sleep(for: .milliseconds(1_500))
         #expect(harness.typed.texts == ["First"])
         #expect(harness.waiting() == ["Second"])
+        // Toastty's other messages read when it typed, to leave that prompt.
+        #expect(harness.sessions.lastSteerTypedAt(panelID: harness.fixture.panelID) != nil)
     }
 
     @MainActor

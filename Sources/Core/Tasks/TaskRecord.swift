@@ -62,6 +62,10 @@ public struct TaskRecord: Codable, Equatable, Identifiable, Sendable {
     /// This task's requests to be told when other tasks reach a condition.
     /// Optional so records saved before watches existed still load.
     public var watches: [TaskWatch]?
+    /// Messages that `task send --queue` left for the task's agent, which
+    /// wait for its next open prompt, and the ones that left the queue in
+    /// the last day. Optional so records saved before it existed still load.
+    public var queuedMessages: [TaskQueuedMessage]?
     /// The workspace scope of the session that created the task, saved
     /// when it was created; `nil` when that session was unscoped. The
     /// task's agent gets this scope, plus its task space, even when setup

@@ -245,6 +245,13 @@ struct ToasttyCLITaskTests {
             == .appControlRun(kind: .action, id: "task.send", args: [
                 "taskID": .string(taskID), "text": .string("Use the new name"), "steer": .bool(true),
             ]))
+        #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "--queue", "--text-file", "note.md"], environment: ["PWD": directory.path]).command
+            == .appControlRun(kind: .action, id: "task.send", args: [
+                "taskID": .string(taskID), "text": .string("Rebase on main.\nThen push."), "queue": .bool(true),
+            ]))
+        #expect(throws: ToasttyCLIError.self) {
+            try ToasttyCLI.parse(arguments: ["task", "send", taskID, "status?", "--steer", "--queue"], environment: [:])
+        }
         #expect(try ToasttyCLI.parse(arguments: ["task", "send", taskID, "--from", "Grok Bot", "Yes, ship it"], environment: [:]).command
             == .appControlRun(kind: .action, id: "task.send", args: [
                 "taskID": .string(taskID), "text": .string("Yes, ship it"), "from": .string("Grok Bot"),

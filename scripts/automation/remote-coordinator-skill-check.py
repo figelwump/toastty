@@ -1083,17 +1083,19 @@ class Run:
                 interrupted.append(f'{task.title} was {before[-1]}: {message["text"][:120]}')
         self.check('no message to an agent that works or waits at a prompt, but a --steer send to one that works',
                    not interrupted, interrupted)
+        # A `task send --queue` waits in Toastty for the end of the turn; the
+        # check above sees when it is typed.
         unchecked = []
         for turn in turns:
             started = parse_time(turn['at']) if turn.get('at') else time.time()
             for command in turn['commands']:
-                if not re.search(r'task\s+send\b', command) or '--steer' in command:
+                if not re.search(r'task\s+send\b', command) or '--steer' in command or '--queue' in command:
                     continue
                 for task in self.tasks:
                     before = [kind for at, kind in task.statuses if at <= started]
                     if task.id in command and before and before[-1] == 'working':
                         unchecked.append(f'{task.title} was working: {command[:300]}')
-        self.check('no send without --steer to a task whose agent works', not unchecked, unchecked)
+        self.check('no send without --steer or --queue to a task whose agent works', not unchecked, unchecked)
         missing = [turn['prompt'][:200] for turn in turns if turn['wake']
                    and not any(re.search(r'coordinator\s+wake\s+--(in|at|clear)', c) for c in turn['commands'])]
         wakes = len([turn for turn in turns if turn['wake']])
@@ -1801,6 +1803,51 @@ def dependency(run):
     watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
     run.check("the merge ended the coordinator's watch", first.id not in watched, watched)
     return turns + later
+
+
+def dependency_busy(run):
+    """The task that waits for a merge works when the merge comes: the coordinator queues its message, and Toastty types it when the turn ends."""
+    first = run.create_task('Add the export API')
+    waiting = run.create_task('Export button in the toolbar', status='working')
+    run.set_pr(first, 13, body=GOOD_PROOF.format(head='0' * 39 + 'd'))
+    run.seed_policy()
+    run.refresh_prs()
+    run.open_coordinator()
+    run.reply(waiting, f'The toolbar button is ready, but it calls the export API from the task "{first.title}" '
+                       f'({first.link}). I will open my pull request after that task merges. I am waiting for it.')
+    run.status(waiting, 'ready')
+    turns = run.new_turns(wake=True)
+    watched = run.coordinator()['wake'].get('watchedTaskIDs') or []
+    run.check('it asks Toastty to watch the other task', first.id in watched, watched)
+    # The waiting task's agent starts other work, and is busy when the merge comes.
+    run.reply(waiting, 'While I wait, I am adding tests for the toolbar layout.')
+    run.status(waiting, 'working')
+    run.update_pr(first, state='MERGED', mergedAt=now_iso())
+    run.wait_task(first, 'merged', lambda t: t.get('mergedAt'))
+    later = run.new_turns(wake=True)
+    commands = [c for t in later for c in t['commands']]
+    sends = [c for c in commands if re.search(r'task\s+send\b', c) and waiting.id in c]
+    run.check('it leaves the busy task its message with --queue', any('--queue' in c for c in sends), commands)
+    run.check('the busy agent reads nothing during its turn', run.messages(waiting) == [], run.messages(waiting))
+    states = [m['state'] for m in run.get(waiting).get('queuedMessages') or []]
+    run.check('task get lists the message as queued', states == ['queued'], states)
+    # The turn ends: Toastty types the message at the open prompt.
+    run.status(waiting, 'ready')
+    try:
+        wait_for('the queued message to be typed', lambda: run.messages(waiting), timeout=30, interval=1)
+    except AssertionError:
+        pass
+    time.sleep(SETTLE)
+    messages = [m['text'] for m in run.messages(waiting)]
+    run.check('after its turn, the task reads the message once', len(messages) == 1 and 'merged' in messages[0].lower(), messages)
+    run.check('the message names the other task by its title as a link',
+              bool(messages) and f'[{first.title}]({first.link})' in messages[0], messages, required=False)
+    states = [m['state'] for m in run.get(waiting).get('queuedMessages') or []]
+    run.check('task get reports the message as sent', states == ['sent'], states)
+    # The fake agent starts no turn, so its finished turn wakes the
+    # coordinator once more. Let that turn end before the checks of every run.
+    last = run.new_turns(wake=True)
+    return turns + later + last
 
 
 def quiet_wake(run):
@@ -3461,6 +3508,7 @@ SCENARIOS = {
     'ci-rerun-fails': ci_rerun_fails,
     'conflict': conflict,
     'dependency': dependency,
+    'dependency-busy': dependency_busy,
     'quiet-wake': quiet_wake,
     'weak-proof': weak_proof,
     'good-proof': good_proof,
@@ -3498,7 +3546,7 @@ SCENARIOS = {
 }
 # The scenarios whose result depends on the coordinator's judgment.
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-sender', 'first-run-one-project', 'first-run-upgrade', 'question-settled',
-            'question-open', 'approval-passed-on', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
+            'question-open', 'approval-passed-on', 'dependency', 'dependency-busy', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
             'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted', 'sender-add',
             'sender-reply', 'sender-reply-after-user', 'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',

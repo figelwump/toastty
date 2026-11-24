@@ -39,8 +39,9 @@ public struct TaskWatch: Codable, Equatable, Identifiable, Sendable {
 
 public enum TaskWatchCondition: String, Codable, CaseIterable, Equatable, Sendable {
     /// The agent finished a turn after the watch was made and waits for a
-    /// prompt. A turn that ended before the watch does not count, so a
-    /// caller can send a request and then watch for its answer.
+    /// prompt, with no queued message left to type there. A turn that
+    /// ended before the watch does not count, so a caller can send a
+    /// request and then watch for its answer.
     case idle
     /// The agent waits for an approval or an answer to a question.
     case waiting
@@ -159,19 +160,29 @@ public struct TaskWatchFacts: Equatable, Sendable {
     /// Why Toastty's last merge of the task stopped without merging, when
     /// no merge was started since.
     public var mergeFailure: String?
+    /// Whether messages from `task send --queue` wait for the agent's next
+    /// open prompt. Toastty types one there, so the agent is not idle yet.
+    public var messagesWaiting: Bool
+    /// When Toastty last typed such a message. The agent is idle only after
+    /// a turn that ended later: its hooks can still report the turn before.
+    public var messageTypedAt: Date?
 
     public init(
         activity: TaskAgentState,
         activityChangedAt: Date?,
         turnEndedAt: Date? = nil,
         stages: Set<TaskWatchCondition> = [],
-        mergeFailure: String? = nil
+        mergeFailure: String? = nil,
+        messagesWaiting: Bool = false,
+        messageTypedAt: Date? = nil
     ) {
         self.activity = activity
         self.activityChangedAt = activityChangedAt
         self.turnEndedAt = turnEndedAt
         self.stages = stages
         self.mergeFailure = mergeFailure
+        self.messagesWaiting = messagesWaiting
+        self.messageTypedAt = messageTypedAt
     }
 }
 
@@ -182,9 +193,12 @@ public enum TaskWatchEvaluation {
         case .idle:
             // Only a turn that ended after the watch was made: an agent that
             // was idle all along, or was just restored, has not answered
-            // anything yet.
-            guard facts.activity == .idle, let endedAt = facts.turnEndedAt else { return false }
-            return endedAt > createdAt
+            // anything yet. A queued message goes to that prompt first, so a
+            // sender that watches after `task send --queue` is told after
+            // the turn that read its message.
+            guard facts.activity == .idle, facts.messagesWaiting == false,
+                  let endedAt = facts.turnEndedAt else { return false }
+            return endedAt > max(createdAt, facts.messageTypedAt ?? .distantPast)
         case .waiting:
             return facts.activity == .waiting
         case .readyForReview, .merged, .toShip, .done, .archived:

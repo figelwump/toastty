@@ -114,6 +114,14 @@ final class LiveTaskSessions: TaskSessionProviding {
         return await steerSender.send(text, panelID: panelID)
     }
 
+    func hasHeldSteerMessages(panelID: UUID) -> Bool {
+        steerSender.heldTexts(panelID: panelID).isEmpty == false
+    }
+
+    func lastSteerTypedAt(panelID: UUID) -> Date? {
+        steerSender.lastTypedAt(panelID: panelID)
+    }
+
     func lastReply(sessionID: String) -> TaskAgentReply? {
         guard let info = session(sessionID) else { return nil }
         if let path = info.transcriptPath {

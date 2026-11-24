@@ -149,6 +149,13 @@ protocol TaskSessionProviding: AnyObject {
     /// running turn that can read it, or held for the next open prompt.
     /// Nothing is typed into a permission prompt or a question.
     func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure>
+    /// Whether `deliverSteering` holds messages for the panel's next open
+    /// prompt. Toastty's other messages leave that prompt to them.
+    func hasHeldSteerMessages(panelID: UUID) -> Bool
+    /// When `deliverSteering` last typed into the panel. A prompt that it
+    /// typed at after the turn ended is taken, also while the agent's hooks
+    /// still report it open.
+    func lastSteerTypedAt(panelID: UUID) -> Date?
     /// The session's latest agent message, read from its transcript.
     func lastReply(sessionID: String) -> TaskAgentReply?
     /// The managed session's workspace scope; `nil` when it is unscoped or
@@ -178,6 +185,8 @@ extension TaskSessionProviding {
     func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
         .failure(.stateUnknown)
     }
+    func hasHeldSteerMessages(panelID: UUID) -> Bool { false }
+    func lastSteerTypedAt(panelID: UUID) -> Date? { nil }
     func lastReply(sessionID: String) -> TaskAgentReply? { nil }
     func scope(sessionID: String) -> Set<UUID>? { nil }
     func lastOutputAt(sessionID: String) -> Date? { nil }

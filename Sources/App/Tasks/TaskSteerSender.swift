@@ -121,6 +121,10 @@ final class TaskSteerSender {
     /// One entry for each panel that got a message. It stays until
     /// `releasePanels` finds its agent gone.
     private var panels: [UUID: Panel] = [:]
+    /// When this class last typed a message into each panel. The hooks can
+    /// report the open prompt for a moment after that, so Toastty's other
+    /// messages read it to leave the prompt to this one.
+    private var typedAt: [UUID: Date] = [:]
     private let settleTimeout: Duration
     private let now: () -> Date
 
@@ -155,8 +159,10 @@ final class TaskSteerSender {
             }
             switch step {
             case .typed(let delivery):
+                typedAt[panelID] = now()
                 return .success(delivery)
             case .failed(let failure):
+                if failure == .uncertain { typedAt[panelID] = now() }
                 return .failure(failure)
             case .hold:
                 return hold(message, panelID: panelID)
@@ -171,6 +177,12 @@ final class TaskSteerSender {
         panels[panelID]?.held.map(\.text) ?? []
     }
 
+    /// When this class last typed a message into the panel, also one whose
+    /// Return the terminal did not confirm.
+    func lastTypedAt(panelID: UUID) -> Date? {
+        typedAt[panelID]
+    }
+
     /// Forgets the panels that `isGone` names, with the messages that wait
     /// for them: panels with no agent any more.
     func releasePanels(where isGone: (UUID) -> Bool) {
@@ -178,6 +190,7 @@ final class TaskSteerSender {
             panel.delivery?.cancel()
             panel.subscription.cancel()
             panels[panelID] = nil
+            typedAt[panelID] = nil
         }
     }
 
@@ -224,6 +237,7 @@ final class TaskSteerSender {
         switch look(panelID: panelID, message: message, isHeld: true) {
         case .typed, .failed(.uncertain):
             // Typed, or typed without a confirmed Return: not typed again.
+            typedAt[panelID] = now()
             panels[panelID]?.held.removeFirst()
             ToasttyLog.info("Typed a message held for a task's agent", category: .tasks, metadata: [
                 "panel_id": panelID.uuidString,

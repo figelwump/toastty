@@ -364,7 +364,11 @@ extension TaskCoordinator {
             turnEndedAt: status.session?.lastTurnEndedAt,
             stages: record.archivedAt != nil ? [.archived] : stages[record.id] ?? [],
             // A pull request merged on GitHub after a failed merge.
-            mergeFailure: record.mergedAt == nil ? record.mergeFailure?.reason : nil
+            mergeFailure: record.mergedAt == nil ? record.mergeFailure?.reason : nil,
+            messagesWaiting: record.waitingMessages.isEmpty == false,
+            messageTypedAt: record.queuedMessages?.compactMap { message in
+                message.outcome.flatMap { $0.kind == .dropped ? nil : $0.at }
+            }.max()
         )
     }
 
@@ -382,7 +386,9 @@ extension TaskCoordinator {
     }
 
     /// Fires every pending watch whose condition holds or can no longer
-    /// hold, and delivers fired messages that have not gone out yet.
+    /// hold, delivers fired messages that have not gone out yet, then
+    /// types the queued messages that an open prompt can take. A watch's
+    /// line goes first: its agent ended its turn to wait for it.
     func evaluateWatches() {
         let at = now()
         automaticPromptDeliveryTurnEnds = automaticPromptDeliveryTurnEnds.filter {
@@ -441,15 +447,21 @@ extension TaskCoordinator {
                 waitWatches[id] = nil
             }
         }
+        deliverQueuedMessages(at: at)
     }
 
-    /// The open prompt a watch, wake or merge message can use. A provider
-    /// can show an interaction while its hooks report ready, or keep
-    /// reporting ready after an automatic submission starts the next turn.
+    /// The open prompt a watch, wake, merge or queued message can use, one
+    /// message for each open prompt. A provider can show an interaction
+    /// while its hooks report ready, or keep reporting ready after an
+    /// automatic submission starts the next turn. A message that
+    /// `task send --steer` holds takes the prompt first, and one that it
+    /// typed there took it.
     func automaticPromptTurnEnd(for session: TaskSessionInfo) -> Date? {
-        guard sessions != nil, let kind = session.status?.kind, kind == .idle || kind == .ready,
-              promptOccupant(of: session) == nil else { return nil }
+        guard let sessions, let kind = session.status?.kind, kind == .idle || kind == .ready,
+              promptOccupant(of: session) == nil,
+              sessions.hasHeldSteerMessages(panelID: session.panelID) == false else { return nil }
         let turnEnd = session.lastTurnEndedAt ?? .distantPast
+        if let steeredAt = sessions.lastSteerTypedAt(panelID: session.panelID), steeredAt > turnEnd { return nil }
         if let previous = automaticPromptDeliveryTurnEnds[session.sessionID], turnEnd <= previous { return nil }
         return turnEnd
     }
@@ -495,9 +507,10 @@ extension TaskCoordinator {
         return "\(prefix). Read it with: toastty task get \(target)"
     }
 
-    /// Checks watches once a second while any is waiting. Record and status
-    /// changes are frequent and spread across the app; a short poll over the
-    /// few tasks with watches is simpler than hooking each of them.
+    /// Checks watches and queued messages once a second while any is
+    /// waiting. Record and status changes are frequent and spread across
+    /// the app; a short poll over the few tasks with watches or queued
+    /// messages is simpler than hooking each of them.
     func startWatchMonitorIfNeeded() {
         guard watchMonitor == nil, hasActiveWatches else { return }
         watchMonitor = Task { [weak self] in
@@ -513,8 +526,10 @@ extension TaskCoordinator {
         }
     }
 
+    /// Whether a watch or a queued message still has a line to type.
     private var hasActiveWatches: Bool {
-        waitWatches.isEmpty == false || records.records.contains { $0.activeWatches.isEmpty == false }
+        waitWatches.isEmpty == false
+            || records.records.contains { $0.activeWatches.isEmpty == false || $0.waitingMessages.isEmpty == false }
     }
 
     // MARK: - Wakes of waiting tasks
@@ -560,15 +575,8 @@ extension TaskCoordinator {
                 continue
             }
             // A finished task waits on nothing: a wake would start new work
-            // in it, which clears a done mark. The sidebar's done box marks
-            // only the task space. A mark that records a merge's acceptance
-            // is not finished work: new work keeps it while the merge waits.
-            let taskSpaceDone = record.taskSpaceWorkspaceID.flatMap { id in
-                TaskBoard.isInMergeFlow(record, request: merges?.request(workspaceID: id))
-                    ? nil : store.state.workspacesByID[id]?.doneAt
-            } != nil
-            let mergedTask = record.release == nil && record.mergedAt != nil
-            if record.archivedAt != nil || record.doneAt != nil || record.shippedAt != nil || mergedTask || taskSpaceDone {
+            // in it, which clears a done mark.
+            if finishedReason(record) != nil {
                 saveOrDefer(taskID: record.id) { $0.waiting = nil }
                 continue
             }
@@ -620,5 +628,125 @@ extension TaskCoordinator {
         return "[Toastty wake] The time you set with toastty task waiting has come (\(time)). "
             + "The task waited for: \(waiting.on). Go on with that work. "
             + "If the task still waits when this turn ends, run toastty task waiting again."
+    }
+
+    // MARK: - Queued messages
+
+    /// Why the task's work is finished, if it is: it merged (a task that is
+    /// not a release), shipped, was marked Done or was archived. New work in
+    /// it would reopen it. The sidebar's done box marks only the task
+    /// space. A mark that records a merge's acceptance is not finished
+    /// work: new work keeps it while the merge waits.
+    func finishedReason(_ record: TaskRecord) -> String? {
+        if record.archivedAt != nil { return "the task was archived" }
+        if record.shippedAt != nil { return "the task shipped" }
+        if record.release == nil, record.mergedAt != nil { return "the task merged" }
+        let taskSpaceDone = record.taskSpaceWorkspaceID.flatMap { id in
+            TaskBoard.isInMergeFlow(record, request: merges?.request(workspaceID: id))
+                ? nil : store.state.workspacesByID[id]?.doneAt
+        } != nil
+        if record.doneAt != nil || taskSpaceDone { return "the task was marked Done" }
+        return nil
+    }
+
+    /// `task send --queue`: leaves `text` for the task's agent, typed at
+    /// its next open prompt, after the messages that already wait. The
+    /// prompt can be open now, and then Toastty types the oldest waiting
+    /// message at once. Returns the message as it is after that, and its
+    /// place in the queue while it waits.
+    func queueMessage(taskID: UUID, text: String, from: String) throws -> (message: TaskQueuedMessage, position: Int?) {
+        let (record, _) = try sendTarget(taskID: taskID, text: text)
+        if let reason = finishedReason(record) {
+            throw TaskError(
+                "Toastty queues no message for task \(record.title): \(reason). A send without --queue types it at once and reopens the task."
+            )
+        }
+        guard record.waitingMessages.count < TaskRecord.maximumWaitingMessages else {
+            throw TaskError(
+                "Task \(record.title) already has \(TaskRecord.maximumWaitingMessages) messages that wait for its agent's next prompt. Nothing was added."
+            )
+        }
+        let message = TaskQueuedMessage(text: text, from: from, queuedAt: now())
+        do {
+            try records.save(id: taskID) { $0.queuedMessages = ($0.queuedMessages ?? []) + [message] }
+        } catch {
+            throw TaskError("Toastty could not save the message: \(error.localizedDescription)")
+        }
+        ToasttyLog.info("Queued a message for a task's agent", category: .tasks, metadata: [
+            "task_id": taskID.uuidString,
+            "message_id": message.id.uuidString,
+            "utf8_count": String(text.utf8.count),
+        ])
+        evaluateWatches()
+        startWatchMonitorIfNeeded()
+        let saved = records.record(id: taskID)
+        let position = saved?.waitingMessages.firstIndex { $0.id == message.id }.map { $0 + 1 }
+        return (saved?.queuedMessages?.first { $0.id == message.id } ?? message, position)
+    }
+
+    /// Types the oldest waiting message of each task whose agent has an
+    /// open prompt that no other message of Toastty's took, and drops the
+    /// waiting messages of a task that finished.
+    ///
+    /// Messages also wait while the task's question waits for the user,
+    /// since the turn a message starts clears the question, as a wake
+    /// waits; and while a quit cut off the agent's turn, since that turn
+    /// still needs to go on and a new turn hides that it was cut off.
+    private func deliverQueuedMessages(at: Date) {
+        for record in records.records where record.queuedMessages?.isEmpty == false {
+            guard let message = record.waitingMessages.first else {
+                var pruned = record
+                pruned.pruneSettledMessages(now: at)
+                if pruned.queuedMessages != record.queuedMessages {
+                    saveOrDefer(taskID: record.id) { $0.pruneSettledMessages(now: at) }
+                }
+                continue
+            }
+            if let reason = finishedReason(record) {
+                saveOrDefer(taskID: record.id) { $0.dropWaitingMessages(reason: reason, at: at) }
+                ToasttyLog.info("Dropped the queued messages of a finished task", category: .tasks, metadata: [
+                    "task_id": record.id.uuidString,
+                    "count": String(record.waitingMessages.count),
+                    "reason": reason,
+                ])
+                continue
+            }
+            // A merge prompt or a due wake that waits for the same prompt
+            // goes first.
+            guard record.replyRequest == nil, wasInterruptedAtQuit(record) == false,
+                  mergeDeliveryTasks[record.id] == nil, record.waiting?.wakeIsDue(at: at) != true,
+                  let session = liveAgentSession(of: record),
+                  let turnEnd = automaticPromptTurnEnd(for: session) else { continue }
+            // Marked first, as a wake is, so that a quit between the typing
+            // and the save never types it again.
+            func settle(_ outcome: TaskQueuedMessage.Outcome?) {
+                saveOrDefer(taskID: record.id) { saved in
+                    saved.queuedMessages = saved.queuedMessages?.map { entry in
+                        guard entry.id == message.id else { return entry }
+                        return outcome.map(message.settled) ?? message
+                    }
+                    saved.pruneSettledMessages(now: at)
+                }
+            }
+            settle(.init(kind: .sentUnconfirmed, at: at, sessionID: session.sessionID))
+            let result = deliver(message.text, to: session, taskID: record.id, automaticPromptTurnEnd: turnEnd)
+            guard result != .unavailable else {
+                // Nothing was typed: it waits again.
+                settle(nil)
+                continue
+            }
+            // `.uncertain` stays typed: a second copy would land in the same
+            // prompt.
+            let outcome = TaskQueuedMessage.Outcome(
+                kind: result == .delivered ? .sent : .sentUnconfirmed, at: at, sessionID: session.sessionID
+            )
+            if outcome.kind == .sent { settle(outcome) }
+            ToasttyLog.info("Typed a queued message for a task's agent", category: .tasks, metadata: [
+                "task_id": record.id.uuidString,
+                "message_id": message.id.uuidString,
+                "session_id": session.sessionID,
+                "outcome": outcome.kind.rawValue,
+            ])
+        }
     }
 }

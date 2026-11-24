@@ -115,11 +115,20 @@ extension AppControlExecutor {
         case .taskReleaseComplete:
             throw AutomationSocketError.invalidPayload("task.release-complete checks git before it returns; send it through app_control.run_action")
         case .taskSend:
+            let queue = try args.taskBool("queue") == true
             guard try args.taskBool("steer") != true else {
-                throw AutomationSocketError.invalidPayload("task.send with steer waits for the agent's state; send it through app_control.run_action")
+                throw AutomationSocketError.invalidPayload(
+                    queue ? "pass steer or queue, not both"
+                        : "task.send with steer waits for the agent's state; send it through app_control.run_action"
+                )
             }
             let record = try visibleTask(args: args, coordinator: coordinator)
             let message = try taskSendMessage(args: args)
+            if queue {
+                let from = Self.senderName(messageSender(statedName: try statedSenderName(args: args)))
+                let (queued, position) = try perform { try coordinator.queueMessage(taskID: record.id, text: message, from: from) }
+                return .init(didMutateState: true, result: Self.queuedSendResult(queued, taskID: record.id, position: position))
+            }
             let session = try perform { try coordinator.send(taskID: record.id, text: message) }
             return .init(didMutateState: false, result: [
                 "taskID": .string(record.id.uuidString),
@@ -184,10 +193,56 @@ extension AppControlExecutor {
         }
     }
 
+    /// What a `task.send` with `queue` returns: what happened to the message
+    /// now, and its ID, which `task.get` lists under `queuedMessages`.
+    private static func queuedSendResult(_ message: TaskQueuedMessage, taskID: UUID, position: Int?) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = [
+            "taskID": .string(taskID.uuidString),
+            "messageID": .string(message.id.uuidString),
+        ]
+        switch message.outcome?.kind {
+        case .sent?:
+            result["delivery"] = .string("sent")
+            result["delivered"] = .bool(true)
+            result["message"] = .string("The agent was at its prompt. Toastty typed the message there.")
+        case .sentUnconfirmed?:
+            result["delivery"] = .string("sentUnconfirmed")
+            result["delivered"] = .bool(true)
+            result["message"] = .string(
+                "Toastty typed the message at the agent's prompt, but the terminal did not confirm the Return key. Check the task's terminal before you send it again."
+            )
+        case .dropped?, nil:
+            result["delivery"] = .string("queued")
+            result["delivered"] = .bool(false)
+            result["queuePosition"] = position.map(AutomationJSONValue.int) ?? .null
+            result["message"] = .string(
+                "Toastty saved the message and types it at the agent's next open prompt, after its turn ends. Nothing is typed until then. task get lists it under queuedMessages."
+            )
+        }
+        if let sessionID = message.outcome?.sessionID {
+            result["sessionID"] = .string(sessionID)
+        }
+        return result
+    }
+
+    /// The sender as `task.get` lists it under `queuedMessages`.
+    static func senderName(_ sender: CoordinatorMessageHeader.Sender) -> String {
+        switch sender {
+        case .task(let id, let title): CoordinatorTaskLink.markdown(taskID: id, title: title)
+        case .coordinator: "the coordinator"
+        case .session(let id, let agent, _): "agent session \(id) (\(agent))"
+        case .named(let name): "\(name) (named by the caller)"
+        case .unknown: "a terminal command"
+        }
+    }
+
     /// The checks of a `task.send` with `steer`, in this request's context.
     /// `nil` for a send without it, which does not wait.
     func prepareTaskSteerSend(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, UUID, String)? {
         guard try args.taskBool("steer") == true else { return nil }
+        guard try args.taskBool("queue") != true else {
+            throw AutomationSocketError.invalidPayload("pass steer or queue, not both")
+        }
         let coordinator = try requiredTaskCoordinator()
         let record = try visibleTask(args: args, coordinator: coordinator)
         return (coordinator, record.id, try taskSendMessage(args: args))
@@ -927,6 +982,18 @@ extension AppControlExecutor {
             "waiting": record.waiting.map {
                 .object(["on": .string($0.on), "since": date($0.since), "wakeAt": date($0.wakeAt), "wokenAt": date($0.wokenAt)])
             } ?? .null,
+            // Messages from task.send with queue, and their outcome.
+            "queuedMessages": .array((record.queuedMessages ?? []).map { message in
+                .object([
+                    "messageID": .string(message.id.uuidString),
+                    "from": .string(message.from),
+                    "queuedAt": date(message.queuedAt),
+                    "state": .string(message.outcome?.kind.rawValue ?? "queued"),
+                    "at": date(message.outcome?.at),
+                    "sessionID": optional(message.outcome?.sessionID),
+                    "reason": optional(message.outcome?.reason),
+                ])
+            }),
             "mergeRequestedAt": date(record.mergeRequestedAt),
             "mergeCancelledAt": date(record.mergeCancelledAt),
             "mergeFailure": record.mergeFailure.map {
