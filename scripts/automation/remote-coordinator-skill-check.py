@@ -1620,9 +1620,8 @@ def question_open(run):
 
 
 # Toastty's first line on the coordinator's message to a task. It tells the
-# task to take an approval in the message as the user's.
-APPROVAL_LINE = ("[Toastty] From the coordinator: it acts for the user, and an approval that it says the user gave "
-                 "is the user's approval.")
+# task to take the coordinator's approvals and decisions as the user's.
+APPROVAL_LINE = "[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's."
 # Wording that sends the user to the task for a second yes.
 SECOND_YES = re.compile(r'typed in (this|the|your|its) task|not from the user')
 
@@ -1646,7 +1645,7 @@ def approval_passed_on(run):
     messages = [m['text'] for m in run.messages(task)]
     run.check('the task gets one message', len(messages) == 1, messages)
     text = messages[0].lstrip() if messages else ''
-    run.check("Toastty's first line says that the coordinator passes on the user's approval",
+    run.check("Toastty's first line says that the coordinator's approvals and decisions count as the user's",
               text.split('\n')[0] == APPROVAL_LINE, text[:200])
     body = typed_text(text).lower()
     refusal = re.search(r"\b(not|no|never|n't|without)\b[^.\n]{0,40}\b(approv|yes\b|agree)", body)

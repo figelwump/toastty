@@ -23,8 +23,8 @@ public enum CoordinatorMessageHeader {
         /// A session in a task's space.
         case task(id: UUID, title: String)
         /// The coordinator's own agent session. Tasks get the coordinator's
-        /// messages, including the user's words and approvals that it
-        /// passes on, so the line names it apart from any other session.
+        /// messages, including the user's words that it passes on and its
+        /// own decisions, so the line names it apart from any other session.
         case coordinator
         /// A managed session that belongs to no task.
         case session(id: String, agent: String, workspaceTitle: String?)
@@ -51,16 +51,19 @@ public enum CoordinatorMessageHeader {
 
     /// The first line of a message that the coordinator sends to a task
     /// with `task send`. The coordinator passes the user's decisions on to
-    /// tasks, so the line says that such an approval counts. An agent
+    /// tasks and decides for the user within the user's policy, so the line
+    /// says that its approvals and decisions count as the user's. What the
+    /// coordinator may decide is a matter of its own instructions and the
+    /// policy; a task does not check that again. An agent
     /// program's permission check reads the line too: Toastty quotes it in
     /// the rule that it gives Claude Code's auto mode
     /// (`AgentLaunchInstrumentation.claudeAutoModeEnvironmentEntry`).
     public static let coordinatorToTaskLine =
-        "\(senderPrefix)the coordinator: it acts for the user, and an approval that it says the user gave is the user's approval."
+        "\(senderPrefix)the coordinator: it acts for the user, and its approvals and decisions count as the user's."
 
     /// `toTask` is true for a message that `task send` types into a task's
     /// agent. Only the coordinator's line differs there: no other sender
-    /// passes on the user's approval.
+    /// approves or decides for the user.
     public static func senderLine(_ sender: Sender, toTask: Bool = false) -> String {
         switch sender {
         case .task(let id, let title):

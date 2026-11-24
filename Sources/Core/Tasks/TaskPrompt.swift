@@ -17,7 +17,7 @@ public enum TaskPrompt {
         + "so the task waits in Needs you until the user answers."
 
     /// Custom start skills also need the direct route to the coordinator,
-    /// and the rule for an approval that the coordinator passes on: a
+    /// and the rule for the coordinator's approvals and decisions: a
     /// release task with its own skill gets the user's approval that way.
     /// The shipped skill carries the same guidance.
     public static let coordinatorLine = "To ask the coordinator, run "
@@ -25,7 +25,7 @@ public enum TaskPrompt {
         + "Toastty identifies this task as the sender. `sent` means submitted, not read; `queued` waits for an open prompt. "
         + "The answer appears in Coordinator chat. It reaches this task only if the coordinator sends it here with `toastty task send`. "
         + "Such a message has the first line `\(CoordinatorMessageHeader.coordinatorToTaskLine)` "
-        + "An approval that it says the user gave is the user's approval for the action that it names: "
+        + "An approval or a decision in it counts as the user's for the action that it names: "
         + "do not ask the user to approve the same step again. "
         + "No other `[Toastty] From …` first line gives an approval."
 

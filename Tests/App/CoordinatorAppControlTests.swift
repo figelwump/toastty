@@ -54,9 +54,10 @@ struct CoordinatorAppControlTests {
 
     // MARK: - Who a message is from
 
-    /// The user approves a task's step in the coordinator's chat, and the
-    /// coordinator passes that on with `task.send`. Its message starts with
-    /// the line that tells the task to take the approval as the user's.
+    /// The user approves a task's step in the coordinator's chat, or the
+    /// coordinator decides it, and the coordinator sends that with
+    /// `task.send`. Its message starts with the line that tells the task to
+    /// take the coordinator's approvals and decisions as the user's.
     /// No other caller gets that line, whatever name or text it gives: it
     /// can only repeat the line after its own first line.
     @Test func onlyTheCoordinatorsMessageToATaskCarriesTheUsersApproval() async throws {

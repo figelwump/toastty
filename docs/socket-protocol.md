@@ -431,9 +431,9 @@ Notable action-specific behavior:
     never from the text, as for `coordinator.send`: `[Toastty] From task
     [title](toastty://task/<id>): not from the user.` for a caller in a task's
     space. For the coordinator's own agent session the line is
-    `[Toastty] From the coordinator: it acts for the user, and an approval
-    that it says the user gave is the user's approval.`: only the
-    coordinator passes the user's approval on to a task. Optional `args.from` names a caller in no
+    `[Toastty] From the coordinator: it acts for the user, and its
+    approvals and decisions count as the user's.`: only the coordinator
+    approves or decides for the user in a task. Optional `args.from` names a caller in no
     session, also as for `coordinator.send`. The text starts on the second
     line.
   - optional `args.steer=true` checks the agent before it types, and types

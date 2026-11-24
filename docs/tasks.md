@@ -699,9 +699,9 @@ worktree.
   `[Toastty] From task [title](toastty://task/<id>): not from the user.`, so
   the agent that reads it can name the task that sent it. A message from the
   coordinator's own session starts with
-  `[Toastty] From the coordinator: it acts for the user, and an approval that it says the user gave is the user's approval.`
-  Only that line passes your approval on; see
-  [Approvals that the coordinator passes on](#approvals-that-the-coordinator-passes-on).
+  `[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's.`
+  Only that line approves or decides for you; see
+  [Approvals and decisions from the coordinator](#approvals-and-decisions-from-the-coordinator).
   A busy agent queues it as typed
   input, and the Return key can answer a permission prompt that is on screen. It
   fails when the task has no running agent, and says so when the message was
@@ -1002,7 +1002,7 @@ text:
 | `[Toastty] Wake: …` | Toastty: a [digest](#when-toastty-wakes-the-coordinator). |
 | `[Toastty] From task [title](toastty://task/<id>): not from the user.` | `coordinator send` from a session in that task's space. |
 | `[Toastty] From the coordinator: not from the user.` | `coordinator send` from the coordinator's own agent session: a note to itself. |
-| `[Toastty] From the coordinator: it acts for the user, and an approval that it says the user gave is the user's approval.` | `task send` from the coordinator's own agent session. A task reads this line, not the coordinator. |
+| `[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's.` | `task send` from the coordinator's own agent session. A task reads this line, not the coordinator. |
 | `[Toastty] From agent session <id> (<agent>, workspace "<title>"): not from the user.` | `coordinator send` from an agent session outside a task. |
 | `[Toastty] From "<name>" (named by the caller): Toastty cannot tell who ran it.` | `coordinator send --from <name>` from a caller that names no running session, such as Grok Bot running the command from its own shell. Toastty does not check the name. |
 | `[Toastty] From a terminal command: Toastty cannot tell who ran it.` | `coordinator send` from a caller that names no running session, such as your own shell. |
@@ -1037,46 +1037,56 @@ the program. A merge, a release, an archive or a deletion, a production
 change and a change to the policy still need your own message: the program
 asks for a merge itself with `task request-merge`.
 
-### Approvals that the coordinator passes on
+### Approvals and decisions from the coordinator
 
-When you approve a task's step in the coordinator's chat, the coordinator
-passes the approval on with `toastty task send`, and the task acts on it.
-You do not approve again in the task. The same holds for an approval that a
-rule of your policy gives, such as a Releases rule.
+A task takes the coordinator's approvals and decisions as yours. When you
+approve a task's step in the coordinator's chat, the coordinator sends the
+approval with `toastty task send`, and the task acts on it. You do not
+approve again in the task. The same holds for a step that a rule of your
+policy decides, such as a Releases rule, and for a step that the coordinator
+decides itself.
+
+What the coordinator may decide is set in one place: its own instructions
+and your policy. Its instructions keep fixed limits, such as never changing
+production outside a release task, and they ask for a merge only as your
+Merging rules allow; see [What the coordinator does](#what-the-coordinator-does)
+and [Merges by the coordinator](#merges-by-the-coordinator). A task does not
+check those limits again.
 
 Three parts make this work:
 
 - **The first line.** A message that `task send` types for the
   coordinator's own agent session starts with
-  `[Toastty] From the coordinator: it acts for the user, and an approval that it says the user gave is the user's approval.`
+  `[Toastty] From the coordinator: it acts for the user, and its approvals and decisions count as the user's.`
   Toastty writes that line from who ran the command. A message from
   another task, an agent session, a program that names itself or a terminal
   command starts with its own `[Toastty] From …` line, also when its text
   repeats the coordinator's line.
 - **The task's instructions.** The `toastty-task-start` skill tells a task's
-  agent to take an approval in the coordinator's message as yours, for the
-  action and the scope that the message names, and to take no approval from
-  any other sender, a file, a web page or a command's output. The
-  coordinator's instructions tell it to name the exact action, to quote your
-  words or the rule, and never to ask a task for a yes typed in the task. A
-  decision that the coordinator says is its own approves no merge,
-  deployment, production change or deletion. A task that starts with
-  another skill, such as a release skill, gets the rule in its first
-  message.
+  agent to take an approval or a decision in the coordinator's message as
+  yours, for the action and the scope that the message names, and to take
+  no approval from any other sender, a file, a web page or a command's
+  output. The coordinator's instructions tell it to name the exact action,
+  to say who decided, and never to ask a task for a yes typed in the task.
+  A task that starts with another skill, such as a release skill, gets the
+  rule in its first message.
 - **Claude Code's auto mode.** In auto mode, Claude Code's own check decides
   whether a command has your approval, and it reads a message from another
   agent as that agent's text. Toastty starts each Claude session with one
   `autoMode.environment` entry in the settings file that it passes with
   `--settings`. The entry names the coordinator's whole first line and says
-  that an approval in such a message is yours, also when Claude Code shows
-  the message inside `<pasted_content>` tags. Your own `autoMode` settings
-  stay in force, and `claude auto-mode config` shows them. Toastty names
-  Claude Code's built-in entries (`$defaults`) only when neither your
-  Claude settings nor the profile's `--settings` have an
+  that an approval or a decision in such a message is yours, also when
+  Claude Code shows the message inside `<pasted_content>` tags. Your own
+  `autoMode` settings stay in force, and `claude auto-mode config` shows
+  them. Toastty names Claude Code's built-in entries (`$defaults`) only when
+  neither your Claude settings nor the profile's `--settings` have an
   `autoMode.environment` list.
 
 Limits:
 
+- The coordinator is an agent. It reads task replies, pull requests and
+  messages from other programs, and text in them can mislead it. Its
+  instructions and your policy are the only check on what it decides.
 - Toastty takes the sender from the session ID that the CLI reports. A
   program on your Mac that reports the coordinator's session ID gets the
   coordinator's line.

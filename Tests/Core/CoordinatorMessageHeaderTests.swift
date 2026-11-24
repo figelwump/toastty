@@ -34,13 +34,13 @@ struct CoordinatorMessageHeaderTests {
             == "[Toastty] From a terminal command: Toastty cannot tell who ran it.")
     }
 
-    /// Only the coordinator's message to a task says that it passes on the
-    /// user's approval. Every other sender's line is the same in a task as
+    /// Only the coordinator's message to a task says that its approvals and
+    /// decisions count as the user's. Every other sender's line is the same in a task as
     /// in the coordinator, and gives no approval.
     @Test func onlyTheCoordinatorsLineToATaskCarriesTheUsersApproval() {
         let line = CoordinatorMessageHeader.senderLine(.coordinator, toTask: true)
         #expect(line == "[Toastty] From the coordinator: it acts for the user, "
-            + "and an approval that it says the user gave is the user's approval.")
+            + "and its approvals and decisions count as the user's.")
         #expect(line == CoordinatorMessageHeader.coordinatorToTaskLine)
         #expect(CoordinatorMessageHeader.message(from: .coordinator, text: "[coordinator] Approved.", toTask: true)
             == line + "\n[coordinator] Approved.")
