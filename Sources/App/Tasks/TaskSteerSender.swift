@@ -53,10 +53,14 @@ struct TaskSteerAgentView: Equatable {
     var sessionID: String
     var state: TaskAgentState
     /// When the agent's latest turn started: the running one, or the last
-    /// one that ended. `nil` when it had no turn since Toastty started.
+    /// one that ended (`TaskSessionInfo.latestTurnStartedAt`).
     var latestTurnStartedAt: Date?
-    /// When a person last typed, pasted or dropped a file into the terminal.
+    /// When a person last typed, pasted or dropped a file into the agent's
+    /// prompt (`SessionRuntimeStore.lastPromptInputAt`).
     var userTypedAt: Date?
+    /// Claude Code shows one of its own dialogs, such as the compact offer.
+    /// It reports no interaction for them, and Return picks a choice there.
+    var showsDialog = false
 }
 
 /// Gives a message to the agent in a terminal panel without typing into a
@@ -269,6 +273,9 @@ final class TaskSteerSender {
             ), byUser: false)
         }
 
+        if agent.showsDialog {
+            return .hold
+        }
         switch (summary.inputAvailability, agent.state) {
         case (_, .waiting), (.pendingInteraction, _):
             // A permission prompt or a question is on screen, by either

@@ -711,7 +711,16 @@ extension TaskCoordinator {
         if sessions.hasInput(panelID: source.panelID, since: requestedAt) {
             return .kept(reason: "Someone typed into this session after the move began.")
         }
-        return sessions.closeMovedSessionPane(panelID: source.panelID, agent: session.agent)
+        // The close can type the agent's exit, which would submit that text
+        // or answer that dialog.
+        switch promptOccupant(of: session) {
+        case .interaction?:
+            return .kept(reason: "A permission prompt, a question or a dialog waits in this session.")
+        case .typedText?, .unconfirmedMessage?:
+            return .kept(reason: "This session's prompt can still hold text that was typed during its last turn.")
+        case nil:
+            return sessions.closeMovedSessionPane(panelID: source.panelID, agent: session.agent)
+        }
     }
 
     /// The session the conversation moves from, or that a new task's agent

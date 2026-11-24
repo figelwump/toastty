@@ -78,7 +78,7 @@ struct TaskLifecycleTests {
         let task = try await taskInWorktree(fixture)
         let session = try #require(task.operation.agentLaunch?.sessionID)
         let panel = try #require(task.operation.taskSpace?.panelID)
-        fixture.sessions.sessionsWithPendingInput.insert(session)
+        fixture.sessions.sessionsShowingInteraction.insert(session)
         if initiallyBusy { fixture.sessions.report(session, .working) }
 
         try fixture.coordinator.requestMerge(taskID: task.id)
@@ -90,18 +90,18 @@ struct TaskLifecycleTests {
         // The polling path must check for occupied input after the agent
         // leaves its turn, even when its hooks now say ready.
         fixture.sessions.report(session, .ready)
-        let checks = fixture.sessions.pendingInputChecks[session, default: 0]
+        let checks = fixture.sessions.promptChecks[session, default: 0]
         await fixture.waitUntil("merge polls with a tracked interaction") {
-            fixture.sessions.pendingInputChecks[session, default: 0] > checks
+            fixture.sessions.promptChecks[session, default: 0] > checks
         }
         #expect(fixture.sessions.delivered.isEmpty)
         #expect(fixture.record(task.id)?.mergeRequestedAt == accepted)
 
         fixture.sessions.userInputAt[panel] = Date()
-        fixture.sessions.sessionsWithPendingInput.remove(session)
-        let draftChecks = fixture.sessions.pendingInputChecks[session, default: 0]
+        fixture.sessions.sessionsShowingInteraction.remove(session)
+        let draftChecks = fixture.sessions.promptChecks[session, default: 0]
         await fixture.waitUntil("merge polls with an unsubmitted draft") {
-            fixture.sessions.pendingInputChecks[session, default: 0] > draftChecks
+            fixture.sessions.promptChecks[session, default: 0] > draftChecks
         }
         #expect(fixture.sessions.delivered.isEmpty)
         #expect(fixture.record(task.id)?.mergeRequestedAt == accepted)
@@ -120,12 +120,12 @@ struct TaskLifecycleTests {
         let fixture = try Fixture()
         let task = try await taskInWorktree(fixture)
         let session = try #require(task.operation.agentLaunch?.sessionID)
-        fixture.sessions.sessionsWithPendingInput.insert(session)
+        fixture.sessions.sessionsShowingInteraction.insert(session)
         try fixture.coordinator.requestMerge(taskID: task.id)
         let queued = try #require(fixture.coordinator.mergeDeliveryTasks[task.id])
 
         try fixture.coordinator.cancelMerge(taskID: task.id)
-        fixture.sessions.sessionsWithPendingInput.remove(session)
+        fixture.sessions.sessionsShowingInteraction.remove(session)
         await queued.value
         #expect(fixture.sessions.delivered.isEmpty)
         #expect(fixture.record(task.id)?.mergeRequestedAt == nil)
@@ -141,7 +141,7 @@ struct TaskLifecycleTests {
         let fixture = try Fixture(mergePromptTurnTimeout: .milliseconds(40))
         let task = try await taskInWorktree(fixture)
         let session = try #require(task.operation.agentLaunch?.sessionID)
-        fixture.sessions.sessionsWithPendingInput.insert(session)
+        fixture.sessions.sessionsShowingInteraction.insert(session)
         try fixture.coordinator.requestMerge(taskID: task.id)
         let queued = try #require(fixture.coordinator.mergeDeliveryTasks[task.id])
         defer { queued.cancel() }

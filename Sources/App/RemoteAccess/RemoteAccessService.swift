@@ -641,6 +641,9 @@ final class RemoteAccessService: ObservableObject {
     /// Toastty's action and does not move it. An in-app send that no person
     /// made does not move it either.
     private var lastRemoteUserInputAtByPanelID: [UUID: Date] = [:]
+    /// When Toastty last typed a message into each panel without a
+    /// confirmed Return, for any sender.
+    private var lastUnconfirmedDeliveryAtByPanelID: [UUID: Date] = [:]
     private let queueUpdateBridge = RemoteAccessQueueUpdateBridge()
     private let interruptBridge = RemoteAccessInterruptBridge()
     private let localDraftReleaseBridge = RemoteAccessLocalDraftReleaseBridge()
@@ -4088,6 +4091,7 @@ final class RemoteAccessService: ObservableObject {
                 return .rejected(reason: .surfaceUnavailable)
             case .uncertain:
                 coordinator.markSteerUncertain(request)
+                recordUnconfirmedDelivery(panelID: panelID)
                 recordPendingSend(
                     request, for: conversationID, deliveredText: typedText, startedAt: deliveryStartedAt,
                     confirmationTimeout: steerConfirmationTimeout, deliveryMode: .steer
@@ -4552,6 +4556,7 @@ final class RemoteAccessService: ObservableObject {
             case .uncertain:
                 let previous = coordinator.availability(for: conversationID)
                 coordinator.markUncertain(request)
+                recordUnconfirmedDelivery(panelID: panelID)
                 logCoordinatorAvailabilityTransition(
                     for: conversationID,
                     source: "remote_delivery_uncertain",
@@ -5343,6 +5348,10 @@ extension RemoteAccessService: LocalConversationAccess {
 
     fileprivate func localFollowedSince(subscriptionID: UUID) -> Date? {
         guard let panelID = localSubscriptions[subscriptionID]?.panelID else { return nil }
+        return followedSince(panelID: panelID)
+    }
+
+    func followedSince(panelID: UUID) -> Date? {
         let subscribed = localSubscriptions.values.filter { $0.panelID == panelID }.map(\.since)
         return (subscribed + [gatewayFollowsPanelsSince].compactMap { $0 }).min()
     }
@@ -5594,5 +5603,18 @@ extension RemoteAccessService: SessionRemoteInputProbe {
 
     func lastRemoteUserInputAt(panelID: UUID) -> Date? {
         lastRemoteUserInputAtByPanelID[panelID]
+    }
+
+    /// A delivery whose Return was not confirmed. Rare, so each write also
+    /// drops panels that are gone.
+    private func recordUnconfirmedDelivery(panelID: UUID) {
+        lastUnconfirmedDeliveryAtByPanelID = lastUnconfirmedDeliveryAtByPanelID.filter {
+            store.state.workspaceSelection(containingPanelID: $0.key) != nil
+        }
+        lastUnconfirmedDeliveryAtByPanelID[panelID] = Date()
+    }
+
+    func lastUnconfirmedRemoteDeliveryAt(panelID: UUID) -> Date? {
+        lastUnconfirmedDeliveryAtByPanelID[panelID]
     }
 }

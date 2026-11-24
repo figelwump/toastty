@@ -103,6 +103,10 @@ struct TaskCoordinationTests {
         #expect(throws: TaskError("Toastty typed the message into task \(watcher.title)'s terminal but may not have submitted it. Check that terminal before you send it again.")) {
             try fixture.coordinator.send(taskID: watcher.id, text: "status?")
         }
+        // Another sender's message does not go in after it either.
+        #expect(throws: unconfirmedMessageError(watcher)) {
+            try fixture.coordinator.send(taskID: watcher.id, text: "another")
+        }
 
         _ = try fixture.coordinator.addWatch(targetTaskID: target.id, condition: .waiting, notifyTaskID: watcher.id)
         fixture.sessions.report(try sessionID(target), .needsApproval)
@@ -118,6 +122,80 @@ struct TaskCoordinationTests {
             Issue.record("an uncertain delivery should not be retried")
             return
         }
+
+        // A turn that starts after the last unconfirmed message took it.
+        #expect(throws: unconfirmedMessageError(watcher)) {
+            try fixture.coordinator.send(taskID: watcher.id, text: "another")
+        }
+        fixture.sessions.deliveryResult = .delivered
+        fixture.sessions.report(watcherSession, .working)
+        try fixture.coordinator.send(taskID: watcher.id, text: "another")
+        #expect(try messages(fixture, to: watcher).last == "another")
+    }
+
+    private func interactionError(_ task: TaskRecord) -> TaskError {
+        TaskError(
+            "Task \(task.title)'s agent waits for an answer to a permission prompt, a question or a dialog, and a typed message could answer it. Toastty typed nothing. Send the message again when the agent's prompt is open, or send it with --steer, which holds it until then."
+        )
+    }
+
+    private func typedTextError(_ task: TaskRecord) -> TaskError {
+        TaskError(
+            "Someone typed in task \(task.title)'s terminal since its agent's latest turn started, and that text can still be in the agent's prompt. Toastty typed nothing, so the two do not mix. Send the message again after the agent's next turn starts, or type it in the task."
+        )
+    }
+
+    private func unconfirmedMessageError(_ task: TaskRecord) -> TaskError {
+        TaskError(
+            "An earlier message to task \(task.title) can still be in its agent's prompt: Toastty typed it, but the terminal did not confirm its Return. Toastty typed nothing. Send the message again after the agent's next turn starts."
+        )
+    }
+
+    /// A plain send types nothing where its text and Return would join or
+    /// answer something at the agent's prompt, and says why. Once the
+    /// prompt is free it types, at rest or into a running turn.
+    @Test func aPlainSendLeavesAnOccupiedPromptUntouched() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        let panel = try panelID(task)
+        let start = Date()
+        fixture.sessions.report(session, .working, at: start)
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(10))
+        func send(_ text: String) throws { try fixture.coordinator.send(taskID: task.id, text: text) }
+
+        // A permission prompt or a question that the hooks report, and a
+        // dialog or an interaction that only the screen or the followed
+        // conversation shows.
+        fixture.sessions.report(session, .needsApproval, at: start.addingTimeInterval(11))
+        #expect(throws: interactionError(task)) { try send("status?") }
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(12))
+        fixture.sessions.sessionsShowingInteraction.insert(session)
+        #expect(throws: interactionError(task)) { try send("status?") }
+        fixture.sessions.sessionsShowingInteraction.remove(session)
+
+        // A person typed during the turn and did not submit it. Only a
+        // conversation that Toastty followed from before that turn started
+        // can tell that the agent recorded that text: following that began
+        // during the turn can miss the typing.
+        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(5)
+        #expect(throws: typedTextError(task)) { try send("status?") }
+        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(1)
+        #expect(throws: typedTextError(task)) { try send("status?") }
+        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(-60)
+        try send("first")
+        fixture.sessions.openPromptFollowedSince[session] = nil
+
+        // Typing at the open prompt, then a turn that submits it: a running
+        // turn takes a message, until someone types into that turn.
+        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(13)
+        #expect(throws: typedTextError(task)) { try send("status?") }
+        fixture.sessions.report(session, .working, at: start.addingTimeInterval(14))
+        try send("second")
+        fixture.sessions.userInputAt[panel] = start.addingTimeInterval(15)
+        fixture.sessions.openPromptFollowedSince[session] = start.addingTimeInterval(-60)
+        #expect(throws: typedTextError(task)) { try send("status?") }
+        #expect(try messages(fixture, to: task) == ["first", "second"])
     }
 
     @Test func sendFailsWhenTheTaskHasNoRunningAgent() async throws {
@@ -241,12 +319,12 @@ struct TaskCoordinationTests {
         fixture.sessions.report(session, .ready)
         // A tracked interaction can still occupy the prompt while the
         // session reports ready and there is no recent user input.
-        fixture.sessions.sessionsWithPendingInput.insert(session)
+        fixture.sessions.sessionsShowingInteraction.insert(session)
         coordinator.wakeRetryAt = [:]
         #expect(coordinator.evaluateWakes() == TaskCoordinator.wakeRetryInterval)
         #expect(try wakes().isEmpty)
         #expect(waiting()?.wokenAt == nil)
-        fixture.sessions.sessionsWithPendingInput.remove(session)
+        fixture.sessions.sessionsShowingInteraction.remove(session)
 
         fixture.sessions.userInputAt[panel] = Date()
         coordinator.wakeRetryAt = [:]
@@ -377,12 +455,12 @@ struct TaskCoordinationTests {
         }
 
         // A provider can still show an interaction while its hooks say ready.
-        fixture.sessions.sessionsWithPendingInput.insert(watcherSession)
+        fixture.sessions.sessionsShowingInteraction.insert(watcherSession)
         fixture.sessions.report(watcherSession, .ready)
         fixture.coordinator.evaluateWatches()
         #expect(try messages(fixture, to: watcher).isEmpty)
 
-        fixture.sessions.sessionsWithPendingInput.remove(watcherSession)
+        fixture.sessions.sessionsShowingInteraction.remove(watcherSession)
         await fixture.waitUntil("the watch is delivered after the interaction closes", timeout: .seconds(5)) {
             (try? messages(fixture, to: watcher).count) == 1
         }
