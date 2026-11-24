@@ -713,16 +713,60 @@ class WorkspacePullRequestTests(unittest.TestCase):
 
     def test_cleanup_checks_recorded_branch_and_exact_registered_path(self):
         branch, path = self.task(1)
-        result = self.run_script("clean-up", 1, worktree=path, worktree_branch="another-branch")
-        self.assertEqual(result["status"], "skipped", result)
-        self.assertIn("recorded branch", result["detail"])
+        # A branch that is neither the recorded branch nor the PR's branch.
         self.git("checkout", "-q", "-b", "another-branch", cwd=path)
-        result = self.run_script("clean-up", 1, worktree=path)
-        self.assertEqual(result["status"], "skipped", result)
-        self.assertNotIn("refusal", result)
-        self.assertTrue(path.exists())
-        self.assertTrue(self.remote_has(branch))
-        self.assertEqual(self.closed(), [])
+        for recorded in ("task-1", "first-pr-branch"):
+            with self.subTest(recorded=recorded):
+                result = self.run_script("clean-up", 1, worktree=path, worktree_branch=recorded)
+                self.assertEqual(result["status"], "skipped", result)
+                self.assertIn("recorded branch", result["detail"])
+                self.assertNotIn("refusal", result)
+                self.assertTrue(path.exists())
+                self.assertTrue(self.remote_has(branch))
+                self.assertEqual(self.closed(), [])
+
+    def test_cleanup_worktree_moved_onto_a_later_pr_branch(self):
+        """The task merged its first PR from the recorded branch, then a second PR
+        from another branch that its worktree now has checked out."""
+        # Number 4: the first branch's commit is only on the PR's own branch,
+        # as after a squash merge, so deleting that remote branch loses it.
+        for number, first_on_origin, dirty in ((1, True, False), (2, False, False), (3, True, True),
+                                               (4, False, False)):
+            with self.subTest(number=number, first_on_origin=first_on_origin, dirty=dirty):
+                pr_branch, path = self.task(number)
+                first = f"first-{number}"
+                if first_on_origin:
+                    self.git("branch", first, "origin/main")
+                elif number == 4:
+                    self.git("branch", first, pr_branch)
+                else:
+                    self.git("branch", first, self.commit(self.repo, f"unpushed {number}"))
+                    self.git("reset", "-q", "--hard", "origin/main")
+                first_head = self.git("rev-parse", first)
+                if dirty:
+                    (path / "file.txt").write_text("not committed\n")
+                closes_before = len(self.closed())
+
+                result = self.run_script("clean-up", number, worktree=path, worktree_branch=first)
+                if dirty:
+                    self.assertEqual(result["status"], "skipped", result)
+                    self.assertIn("uncommitted changes", result["detail"])
+                    self.assertTrue(path.exists())
+                    self.assertTrue(self.remote_has(pr_branch))
+                    self.assertEqual(self.git("rev-parse", first), first_head)
+                    self.assertEqual(len(self.closed()), closes_before)
+                    continue
+                self.assertEqual(result["status"], "cleaned", result)
+                self.assertFalse(path.exists())
+                self.assertEqual(self.git("branch", "--list", pr_branch), "")
+                self.assertFalse(self.remote_has(pr_branch))
+                self.assertEqual(len(self.closed()), closes_before + 1)
+                if first_on_origin:
+                    self.assertIn(f"deleted local branch {first}", result["detail"])
+                    self.assertEqual(self.git("branch", "--list", first), "")
+                else:
+                    self.assertIn(f"kept local branch {first}", result["detail"])
+                    self.assertEqual(self.git("rev-parse", first), first_head)
 
     def task_on_another_branch(self):
         pr_branch, path = self.task(1)
