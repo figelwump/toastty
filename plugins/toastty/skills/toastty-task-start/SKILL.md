@@ -248,7 +248,10 @@ On GitHub:
   another pull request, keeps the task space open. When the recorded worktree
   is on a different branch, cleanup keeps the pull request's local branch and
   both remote branches. It keeps the local task branch if it cannot verify
-  that its commits are on origin.
+  that its commits are on origin. When the recorded worktree has moved onto
+  the pull request's own branch, such as for a second pull request from
+  another branch, cleanup handles that branch as usual, and deletes the
+  recorded local branch only when its commits are on origin.
 
 In a repository without pull requests, report the verified commit instead.
 
