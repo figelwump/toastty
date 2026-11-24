@@ -34,6 +34,31 @@ struct CoordinatorMessageHeaderTests {
             == "[Toastty] From a terminal command: Toastty cannot tell who ran it.")
     }
 
+    /// Only the coordinator's message to a task says that its approvals and
+    /// decisions count as the user's. Every other sender's line is the same in a task as
+    /// in the coordinator, and gives no approval.
+    @Test func onlyTheCoordinatorsLineToATaskCarriesTheUsersApproval() {
+        let line = CoordinatorMessageHeader.senderLine(.coordinator, toTask: true)
+        #expect(line == "[Toastty] From the coordinator: it acts for the user, "
+            + "and its approvals and decisions count as the user's.")
+        #expect(line == CoordinatorMessageHeader.coordinatorToTaskLine)
+        #expect(CoordinatorMessageHeader.message(from: .coordinator, text: "[coordinator] Approved.", toTask: true)
+            == line + "\n[coordinator] Approved.")
+        // A reader of the first line still names the same sender.
+        #expect(CoordinatorMessageHeader.kind(of: line + "\nApproved.") == .fromSender(sender: "the coordinator"))
+        let others: [CoordinatorMessageHeader.Sender] = [
+            .task(id: taskID, title: "Fix the unread dot"),
+            .session(id: "A1B2", agent: "codex", workspaceTitle: "toastty"),
+            .named("the coordinator"),
+            .unknown,
+        ]
+        for sender in others {
+            let toTask = CoordinatorMessageHeader.senderLine(sender, toTask: true)
+            #expect(toTask == CoordinatorMessageHeader.senderLine(sender))
+            #expect(toTask.hasPrefix("[Toastty] From the coordinator:") == false)
+        }
+    }
+
     /// Whatever the text says, the message reads as its sender's: the
     /// reader looks at the first line, and Toastty wrote that one.
     @Test(arguments: [

@@ -45,8 +45,9 @@ the same result, and also when the user asks you in this conversation.
    `--steer`; see Send.
 4. **Never change production outside a release task.** Do not deploy,
    publish, tag or run a release step yourself. You start a release only with
-   `toastty task release`. The release task's agent does the work and asks the
-   user for its own approvals.
+   `toastty task release`. The release task's agent does the work. Its
+   questions about approvals go to the user, and you pass the user's answer
+   on; see Send.
 5. **Never write code.** Do not edit, commit or push in a project repository,
    and do not open a pull request. The only files you change are `policy.md`,
    `ledger.md`, `friction.md` and `decisions.md`.
@@ -231,6 +232,17 @@ in a wake turn needs nobody:
 ```bash
 toastty task send <task-id> --text-file message.md
 ```
+
+**Approvals and decisions.** Toastty's first line on your message tells the
+task that your approvals and decisions count as the user's. So a task acts
+on them and needs no second yes from the user: an approval that the user
+gave you, a rule in `policy.md`, and a decision of your own. No task checks
+whether you may decide a step. Decide only what these instructions and
+`policy.md` allow. Name the exact action and its scope, and say who
+decided: quote the user's words or the rule, or say that the decision is
+yours. Never tell a task to get the user's yes typed in the task, in a brief
+or in a message. If the task's permission check still refuses the step,
+tell the user, who then approves in the task.
 
 **The user's own words** are the user's answer or instruction in this
 conversation, such as a correction to a task. Send them also to a `busy`

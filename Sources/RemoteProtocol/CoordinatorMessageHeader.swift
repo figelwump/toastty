@@ -23,8 +23,8 @@ public enum CoordinatorMessageHeader {
         /// A session in a task's space.
         case task(id: UUID, title: String)
         /// The coordinator's own agent session. Tasks get the coordinator's
-        /// messages, including the user's words that it passes on, so the
-        /// line names it apart from any other session.
+        /// messages, including the user's words that it passes on and its
+        /// own decisions, so the line names it apart from any other session.
         case coordinator
         /// A managed session that belongs to no task.
         case session(id: String, agent: String, workspaceTitle: String?)
@@ -49,12 +49,28 @@ public enum CoordinatorMessageHeader {
 
     // MARK: - coordinator send
 
-    public static func senderLine(_ sender: Sender) -> String {
+    /// The first line of a message that the coordinator sends to a task
+    /// with `task send`. The coordinator passes the user's decisions on to
+    /// tasks and decides for the user within the user's policy, so the line
+    /// says that its approvals and decisions count as the user's. What the
+    /// coordinator may decide is a matter of its own instructions and the
+    /// policy; a task does not check that again. An agent
+    /// program's permission check reads the line too: Toastty quotes it in
+    /// the rule that it gives Claude Code's auto mode
+    /// (`AgentLaunchInstrumentation.claudeAutoModeEnvironmentEntry`).
+    public static let coordinatorToTaskLine =
+        "\(senderPrefix)the coordinator: it acts for the user, and its approvals and decisions count as the user's."
+
+    /// `toTask` is true for a message that `task send` types into a task's
+    /// agent. Only the coordinator's line differs there: no other sender
+    /// approves or decides for the user.
+    public static func senderLine(_ sender: Sender, toTask: Bool = false) -> String {
         switch sender {
         case .task(let id, let title):
             return "\(senderPrefix)task [\(CoordinatorTaskLink.linkText(title))](toastty://task/\(id.uuidString)): not from the user."
         case .coordinator:
-            return "\(senderPrefix)the coordinator: not from the user."
+            // The coordinator's note to itself is not the user's word.
+            return toTask ? coordinatorToTaskLine : "\(senderPrefix)the coordinator: not from the user."
         case .session(let id, let agent, let workspaceTitle):
             let place = workspaceTitle.map { ", workspace \(quoted($0))" } ?? ""
             return "\(senderPrefix)agent session \(word(id)) (\(word(agent))\(place)): not from the user."
@@ -76,8 +92,8 @@ public enum CoordinatorMessageHeader {
     /// With `messageID`, the first line ends with it, after Toastty's note,
     /// so a reader that takes the sender's name from before the note's
     /// `": "` reads the same name. The coordinator replies to that ID.
-    public static func message(from sender: Sender, text: String, messageID: UUID? = nil) -> String {
-        senderLine(sender) + (messageID.map { " Message ID \($0.uuidString)." } ?? "") + "\n" + text
+    public static func message(from sender: Sender, text: String, messageID: UUID? = nil, toTask: Bool = false) -> String {
+        senderLine(sender, toTask: toTask) + (messageID.map { " Message ID \($0.uuidString)." } ?? "") + "\n" + text
     }
 
     /// Whether a message from this sender gets an ID that the coordinator

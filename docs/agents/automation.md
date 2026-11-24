@@ -773,7 +773,7 @@ session, where the Claude login is readable.
 
 The scenarios are `first-run`, `first-run-instructions`, `first-run-request`,
 `first-run-upgrade`, `first-run-improving`, `friction-note`, `decision-record`,
-`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
+`review-ask`, `review-timer`, `review-empty`, `followup-merge`, `daily-list`, `daily-list-quiet`, `permission`, `question-settled`, `question-open`, `approval-passed-on`, `ci-failed`, `ci-rerun-passes`, `ci-rerun-fails`, `conflict`, `weak-proof`, `good-proof`,
 `no-merge-rule`, `merge-rule-setup`, `merge-simple`, `merge-outside-rule`, `merge-release`, `merge-error`,
 `merge-error-new-commit`, `merge-refused`, `release`, `user-typed`, `busy-silent`,
 `user-words-busy`, `sender-trusted`, `sender-untrusted`, `sender-reply`, `sender-reply-after-user`, `sender-reply-webhook`, `new-task`, `dependency`, `quiet-wake` and `interrupted`. `user-words-busy` gives the coordinator a
