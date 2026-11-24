@@ -406,6 +406,41 @@ public enum LinuxTheme {
     .quick-entry-warning { font-size: 0.8em; color: var(--toastty-approval); }
     .quick-entry-column.focused .quick-entry-section { color: var(--accent-color); opacity: 1; }
 
+    /* Sidebar with tasks (macOS SidebarTasksHeader, bucketed cards) */
+    .sidebar-tasks-header { padding: 4px 8px 8px 8px; }
+    .sidebar-coordinator, .sidebar-tasks-row { padding: 5px 8px; border-radius: 8px; }
+    .sidebar-coordinator:hover, .sidebar-tasks-row:hover { background-color: alpha(currentColor, 0.06); }
+    .sidebar-coordinator.selected { background-color: color-mix(in srgb, var(--accent-bg-color) 16%, transparent); }
+    .sidebar-coordinator-title, .sidebar-tasks-title { font-weight: 700; }
+    .sidebar-coordinator-status { font-size: 0.78em; opacity: 0.6; }
+    .sidebar-coordinator-status.working { color: var(--toastty-working); opacity: 1; }
+    .sidebar-coordinator-status.unread { color: var(--toastty-ready); opacity: 1; }
+    .sidebar-coordinator-status.approval { color: var(--toastty-approval); opacity: 1; }
+    .sidebar-coordinator-status.error { color: var(--toastty-error); opacity: 1; }
+    .sidebar-webhook-pill { font-size: 0.72em; font-weight: 700; color: var(--toastty-approval); min-height: 0; padding: 0 6px;
+      border: 1px solid var(--toastty-approval); border-radius: 999px; }
+    .sidebar-segment { margin-top: 6px; }
+    .sidebar-segment button { font-size: 0.86em; padding: 2px 6px; min-height: 0; }
+    .sidebar-count { font-size: 0.72em; font-weight: 800; padding: 0 5px; border-radius: 999px; }
+    .sidebar-count.needs-you { background-color: color-mix(in srgb, var(--toastty-approval) 30%, transparent); }
+    .sidebar-count.review { background-color: color-mix(in srgb, var(--toastty-review) 30%, transparent); }
+    .sidebar-task-cards { padding: 4px 6px 10px 6px; }
+    .sidebar-chevron { min-width: 18px; min-height: 18px; padding: 0; }
+    .sidebar-bucket { font-size: 0.68em; font-weight: 800; opacity: 0.55; padding: 6px 4px 2px 4px; }
+    .sidebar-bucket.needs-you { color: var(--toastty-approval); opacity: 1; }
+    .sidebar-bucket.review { color: var(--toastty-review); opacity: 1; }
+    .sidebar-bucket-counts { font-size: 0.72em; }
+    .sidebar-count-mark { min-width: 6px; min-height: 6px; border-radius: 999px; background-color: var(--toastty-idle); }
+    .sidebar-count-mark.needs-you { background-color: var(--toastty-approval); }
+    .sidebar-count-mark.review { background-color: var(--toastty-review); border-radius: 1px; }
+    .sidebar-count-number { opacity: 0.7; }
+    .session-row.child { margin-left: 14px; }
+    .session-row.context { opacity: 0.6; }
+    .sidebar-finished { padding-top: 4px; }
+    .sidebar-to-ship { font-size: 0.78em; font-weight: 700; color: var(--toastty-to-ship); padding: 0 4px; min-height: 0; }
+    .sidebar-done, .sidebar-more { font-size: 0.78em; padding: 0 4px; min-height: 0; opacity: 0.7; }
+    .sidebar-nothing { padding: 18px; }
+
     /* Attachments */
     .attachment-chip { padding: 3px 6px; border-radius: 8px; background-color: alpha(currentColor, 0.07); }
     .attachment-thumbnail { border-radius: 4px; }

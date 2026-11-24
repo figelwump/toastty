@@ -16,6 +16,9 @@ public final class SidebarController {
     private var hintLabels: [WidgetPtr] = []
     private var showsShortcutHints = false
     private let contextMenu: WidgetPtr
+    /// The workspace list, or a feature's content in its place (the
+    /// bucketed task sidebar).
+    private let contentStack: WidgetPtr
     private static let dragMimePrefix = "toastty-workspace:"
 
     public var onRenameWorkspace: ((UUID) -> Void)?
@@ -28,6 +31,8 @@ public final class SidebarController {
         let toolbar = adw_toolbar_view_new()!
         root = toolbar
         Gtk.addClasses(root, ["toastty-sidebar"])
+        contentStack = gtk_stack_new()!
+        Gtk.expand(contentStack)
 
         let header = adw_header_bar_new()!
         let title = adw_window_title_new("Workspaces", nil)!
@@ -71,13 +76,27 @@ public final class SidebarController {
         gtk_scrolled_window_set_policy(cast(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
         gtk_scrolled_window_set_child(cast(scroller), list)
         Gtk.expand(scroller)
-        adw_toolbar_view_set_content(cast(toolbar), scroller)
+        gtk_stack_add_named(cast(contentStack), scroller, "workspaces")
+        adw_toolbar_view_set_content(cast(toolbar), contentStack)
 
     }
 
     /// Rows a feature adds under the header bar, such as the Tasks row.
     public func addHeader(_ widget: WidgetPtr) {
         adw_toolbar_view_add_top_bar(cast(root), widget)
+    }
+
+    /// A feature's content in place of the workspace list while
+    /// `showsAlternateContent` (the bucketed task sidebar).
+    public func setAlternateContent(_ widget: WidgetPtr) {
+        gtk_stack_add_named(cast(contentStack), widget, "alternate")
+    }
+
+    public var showsAlternateContent = false {
+        didSet {
+            guard showsAlternateContent != oldValue else { return }
+            gtk_stack_set_visible_child_name(cast(contentStack), showsAlternateContent ? "alternate" : "workspaces")
+        }
     }
 
     private var isTornDown = false

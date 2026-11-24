@@ -90,6 +90,7 @@ final class TasksWindowFeature: LinuxWindowFeature {
     private weak var controller: LinuxWindowController?
     let tasksPage: TasksPage
     let coordinatorUI: CoordinatorWindowUI
+    let sidebarView: SidebarTasksView
 
     init(ui: TasksUI, controller: LinuxWindowController) {
         self.ui = ui
@@ -97,6 +98,8 @@ final class TasksWindowFeature: LinuxWindowFeature {
         windowID = controller.windowID
         tasksPage = TasksPage(ui: ui, windowID: controller.windowID)
         coordinatorUI = CoordinatorWindowUI(ui: ui, controller: controller)
+        sidebarView = SidebarTasksView(ui: ui, controller: controller)
+        controller.sidebar.setAlternateContent(sidebarView.content)
         ui.register(self)
     }
 
@@ -108,12 +111,18 @@ final class TasksWindowFeature: LinuxWindowFeature {
     }
 
     var leadingColumn: WidgetPtr? { coordinatorUI.dockRoot }
-    var sidebarHeader: WidgetPtr? { nil }
+    var sidebarHeader: WidgetPtr? { sidebarView.header }
 
     func render(_ state: AppState) {
         let shows = coveringPage(state) != nil
         tasksPage.render(state, isShown: shows)
         coordinatorUI.render(state)
+        if let controller {
+            // The bucketed sidebar replaces the workspace list while tasks
+            // are on, as on macOS.
+            controller.sidebar.showsAlternateContent = ui.board.isEnabled
+            sidebarView.render(state, sessions: controller.sessions)
+        }
     }
 
     func perform(commandID: String) -> Bool {
@@ -160,6 +169,7 @@ final class TasksWindowFeature: LinuxWindowFeature {
     func teardown() {
         tasksPage.teardown()
         coordinatorUI.teardown()
+        sidebarView.teardown()
     }
 
     func toast(_ message: String) {

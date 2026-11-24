@@ -94,6 +94,7 @@ extension LinuxAppController {
             guard let ui, let window = app.selectedWindowController(),
                   let page = ui.feature(windowID: window.windowID)?.tasksPage else { return [:] }
             var summary = page.automationSummary
+            summary.merge(ui.feature(windowID: window.windowID)?.sidebarView.automationSummary ?? [:]) { first, _ in first }
             summary["tasksView"] = window.visibleMainPage == TasksWindowFeature.tasksPageName ? "shown" : "hidden"
             summary["taskCount"] = String(ui.board.items().filter { $0.record != nil }.count)
             return summary

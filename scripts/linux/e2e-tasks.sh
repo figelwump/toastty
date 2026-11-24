@@ -141,6 +141,14 @@ expect tasksView=shown
 action window.toggle-tasks-view
 wait 200
 expect tasksView=hidden
+expect sidebarTaskRows=2 sidebarSegment=all
+screenshot $WORK/sidebar.png
+click sidebar.segment.needsYou
+wait 300
+expect sidebarSegment=needsYou
+click sidebar.segment.all
+wait 300
+expect sidebarSegment=all
 state $WORK/ui-state.json
 quit
 SCRIPT
@@ -164,6 +172,7 @@ wait $APID; UIRC=$?
 check "the Tasks view script passes (open, rows, select, arrows, Esc, toggle)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
+[ -s $WORK/sidebar.png ] && cp $WORK/sidebar.png $REPO/artifacts/manual/linux-tasks/sidebar.png
 [ -s $WORK/tasks-view.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/tasks-view.png $REPO/artifacts/manual/linux-tasks/tasks-view.png
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 
