@@ -57,8 +57,10 @@ that waits for a slot with nobody following it for 15 minutes gives up without
 starting. Stop a detached run on purpose with
 `sv exec -- scripts/remote/cancel.sh <run-label>`; its own cleanup still runs.
 A cancelled run that had started keeps its evidence on the remote host. When no
-wrapper followed it, `cancel.sh` removes its build caches; a following wrapper
-removes them after it copies the evidence.
+wrapper followed it, `cancel.sh` removes its build caches, unless the run used
+`--full-artifacts` or `--keep-remote`; a following wrapper removes them after it
+copies the evidence. A reattach needs the same `--full-artifacts` and
+`--keep-remote` options as the run.
 Runs with `--live-gateway` stay attached to SSH, because their session holds
 the gateway credential and is never written to disk.
 
@@ -168,7 +170,7 @@ also retain remote evidence.
 When the wrapper retains a remote run after a verified copy, for example after
 an unconfirmed run cleanup or a failed Git worktree removal, it removes that
 run's build caches: the directories that the evidence copy omits. It removes
-them only when the run has ended and no process refers to the run's `Derived/`,
+them only when the remote session recorded its end and no process refers to the run's `Derived/`,
 `run/Derived/` or runtime home; otherwise the caches stay and the wrapper
 prints a warning. The evidence, the worktree and simulators stay. With
 `--keep-remote` nothing is removed. `run-metadata.json` records the outcome as

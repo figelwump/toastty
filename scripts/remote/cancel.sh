@@ -4,8 +4,9 @@ set -euo pipefail
 # A run that never left the queue has no evidence: its remote worktree and run
 # folder are removed. A run that had started keeps its evidence on the remote
 # host for inspection. Its build caches are removed unless a wrapper followed
-# the run when it was cancelled: that wrapper removes them after it copies the
-# evidence. The same command run again starts a new run.
+# the run when it was cancelled (that wrapper removes them after it copies the
+# evidence), or the run copies them (--full-artifacts) or keeps them
+# (--keep-remote). The same command run again starts a new run.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 source "$ROOT_DIR/scripts/remote/run-support.sh"
 [[ $# -eq 1 && "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo 'usage: scripts/remote/cancel.sh <run-label>' >&2; exit 64; }
@@ -35,7 +36,9 @@ for parent in test-runs runs; do
     printf '[cancel] %s never started; removed its remote folders\n' "\$label"
   else
     printf '[cancel] %s had started; its evidence stays: %s\n' "\$label" "\$run_root"
-    if [[ -f "\$run_root/CANCELLED" ]] && jq -e '.followed == false' "\$run_root/CANCELLED" >/dev/null; then
+    if [[ -f "\$run_root/CANCELLED" && -f "\$run_root/cache-policy.json" ]] \
+      && jq -e '.followed == false' "\$run_root/CANCELLED" >/dev/null \
+      && jq -e '.fullArtifacts == false and .keepRemote == false' "\$run_root/cache-policy.json" >/dev/null; then
       toastty_remove_run_caches "\$run_root"
       printf '[cancel] removed the build caches of %s\n' "\$label"
     fi

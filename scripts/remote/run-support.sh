@@ -194,11 +194,20 @@ toastty_remove_run_caches() {
     fi
   done
   while IFS= read -r path; do
-    [[ -e "$run_root/$path" || -L "$run_root/$path" ]] || continue
+    # Only real folders: the evidence copy keeps any link at these paths.
+    [[ -d "$run_root/$path" && ! -L "$run_root/$path" ]] || continue
     # Never follow a link out of the run folder.
     [[ ! -L "$(dirname "$run_root/$path")" ]] || return 1
     rm -rf -- "$run_root/$path" || return 1
   done < <(toastty_run_cache_paths)
+}
+
+# The run's options that keep its build caches, for cancel.sh. Printed as a
+# remote command that runs after allocation.
+toastty_emit_cache_policy() {
+  printf 'printf %%s %q >"$REMOTE_RUN_ROOT/cache-policy.json"\n' \
+    "$(jq -cn --argjson full "$FULL_ARTIFACTS" --argjson keep "$KEEP_REMOTE" \
+      '{fullArtifacts: ($full == 1), keepRemote: ($keep == 1)}')"
 }
 
 # Sends toastty_remove_run_caches to the remote host for this wrapper's run.

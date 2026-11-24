@@ -202,8 +202,8 @@ process.exit(0);
     if (kind === "validate") args.push("--validation-command", "true");
     return spawnSync("/bin/bash", args, { cwd: repo, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 30_000 });
   }
-  function start(extraEnv = {}) {
-    const args = [join(repo, `scripts/remote/${kind}.sh`), "--scope", "working-tree", "--run-label", label];
+  function start(extraEnv = {}, extraArgs = []) {
+    const args = [join(repo, `scripts/remote/${kind}.sh`), "--scope", "working-tree", "--run-label", label, ...extraArgs];
     if (kind === "validate") args.push("--validation-command", "true");
     const child = spawn("/bin/bash", args, { cwd: repo, env: { ...env, ...extraEnv }, detached: true, stdio: "ignore" });
     child.finished = new Promise((resolve) => child.on("exit", resolve));
@@ -470,6 +470,20 @@ for (const kind of ["test", "validate"]) {
     assert.ok(context.remoteLogsKept());
     assert.ok(existsSync(join(context.remoteRun, "detached-exit.json")));
     assert.equal(git(context.remoteWorktree, "rev-parse", "--is-inside-work-tree"), "true");
+  });
+
+  test(`cancel.sh keeps the build caches of a started ${kind} run that keeps its remote files`, { timeout: 90000 }, async (t) => {
+    const context = fixture(t, kind);
+    const gate = join(context.root, "gate");
+    const first = context.start({ FIXTURE_DETACH: "1", FIXTURE_GATE: gate }, ["--keep-remote"]);
+    await until(() => existsSync(join(context.remoteRun, "detached.json")) && existsSync(join(context.remoteRun, "run/Derived/Logs/Test/run.log")));
+    process.kill(-first.pid, "SIGTERM");
+    await first.finished;
+    const result = context.cancel();
+    succeeds(result);
+    assert.doesNotMatch(result.stdout, /removed the build caches/);
+    assert.deepEqual(JSON.parse(readFileSync(join(context.remoteRun, "cache-policy.json"), "utf8")), { fullArtifacts: false, keepRemote: true });
+    assert.equal(context.remoteCaches().length, 4);
   });
 
   test(`a cancelled ${kind} run's following wrapper removes its build caches after it copies the evidence`, { timeout: 90000 }, async (t) => {
