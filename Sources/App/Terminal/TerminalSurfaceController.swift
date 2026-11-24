@@ -82,6 +82,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var lastPresentationSignature: SurfacePresentationSignature?
     private weak var latestViewportSourceContainer: NSView?
     private var latestViewportUpdate: PendingViewportUpdate?
+    private var viewportResumeTask: Task<Void, Never>?
     private var closeTransitionViewportDeferralArmed = false
     private var closeTransitionViewportUpdatePending = false
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
@@ -465,7 +466,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             sourceContainerID: ObjectIdentifier(sourceContainer),
             attachment: attachment
         )
-        if updateSignature == lastCompletedHostUpdateSignature {
+        // A deferred viewport still needs stable layout passes, even when
+        // the host returns to the layout of the last completed update.
+        if temporarilyHiddenForViewportDeferral == false,
+           updateSignature == lastCompletedHostUpdateSignature {
             diagnostics.skippedUnchangedUpdateCount += 1
             return
         }
@@ -553,6 +557,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                     "logical_height": String(logicalHeight),
                 ]
             )
+            if viewportDeferralReason == .unstableBounds {
+                scheduleViewportResumeCheck()
+            }
             return
         }
         let resumedFromViewportDeferral = lastViewportDeferralReason != nil
@@ -764,6 +771,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastPresentationSignature = nil
         latestViewportSourceContainer = nil
         latestViewportUpdate = nil
+        viewportResumeTask?.cancel()
+        viewportResumeTask = nil
         closeTransitionViewportReplayTask?.cancel()
         closeTransitionViewportReplayTask = nil
         closeTransitionViewportDeferralArmed = false
@@ -2115,6 +2124,31 @@ extension TerminalSurfaceController {
             backingScaleFactor: backingScaleFactor,
             attachment: attachment
         )
+    }
+
+    private func scheduleViewportResumeCheck() {
+        guard viewportResumeTask == nil else { return }
+        viewportResumeTask = Task { @MainActor [weak self] in
+            // A background host may get only one callback at its final size.
+            await Task.yield()
+            guard Task.isCancelled == false, let self else { return }
+            defer { self.viewportResumeTask = nil }
+            guard self.lastViewportDeferralReason == .unstableBounds,
+                  let update = self.latestViewportUpdate,
+                  let container = self.latestViewportSourceContainer,
+                  update.attachment == self.activeAttachment,
+                  container === self.activeSourceContainer,
+                  container.bounds.size == update.viewportSize else { return }
+            self.update(
+                hostState: update.hostState,
+                focused: update.focused,
+                fontPoints: update.fontPoints,
+                viewportSize: update.viewportSize,
+                backingScaleFactor: update.backingScaleFactor,
+                sourceContainer: container,
+                attachment: update.attachment
+            )
+        }
     }
 
     private func shouldDeferCloseTransitionViewportResize(
