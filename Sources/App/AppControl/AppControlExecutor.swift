@@ -913,9 +913,19 @@ final class AppControlExecutor {
         )
     ) async throws -> AppControlActionOutcome {
         if AppControlActionID.resolve(rawID) == .taskCreate {
-            let (coordinator, preparation) = try withRequestContext(context) {
+            let (coordinator, request, caller) = try withRequestContext(context) {
                 try validateTabParameter(args, descriptor: AppControlActionID.taskCreate.descriptor)
-                return try prepareTaskCreate(args: args)
+                return try taskCreateInputs(args: args)
+            }
+            let (ready, made) = try await makeTaskNewProject(coordinator, request, caller: caller)
+            let preparation: TaskCreatePreparation
+            do {
+                preparation = try withRequestContext(context) {
+                    try prepareTaskCreate(coordinator, ready, caller: caller)
+                }
+            } catch {
+                coordinator.removeNewProject(made)
+                throw error
             }
             return try await finishTaskCreate(coordinator, preparation)
         }

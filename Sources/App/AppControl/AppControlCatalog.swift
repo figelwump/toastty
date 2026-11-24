@@ -531,6 +531,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .taskSlug(required: false),
                     .taskWorkspace(required: false),
                     .init(name: "rootDirectory", summary: "A project directory, instead of workspace: the open top-level workspace on it, or a new one that Toastty opens once the other checks pass. Absolute or starting with ~.", valueType: .string, required: false),
+                    .init(name: "newProject", summary: "true makes rootDirectory a new project first: Toastty makes the folder in a parent folder that exists, an empty git repository and a first empty commit. The folder must be missing or empty; Toastty never writes into a folder with files.", valueType: .boolean, required: false),
                     .init(name: "externalRef", summary: "The issue or report the task came from, such as github:owner/repo#123: printable ASCII with no spaces, at most 128 characters. task.get and task.list return it.", valueType: .string, required: false),
                     .init(name: "externalURL", summary: "The http or https page of externalRef.", valueType: .string, required: false),
                     .taskAgent(required: false),

@@ -2568,6 +2568,36 @@ def new_task(run):
               and 'revert' in run.git('log', '-1', '--format=%s').lower(), run.git('log', '--oneline'))
 
 
+def new_project(run):
+    """A request for a new project: Toastty makes its folder next to the other projects, and the user types nothing."""
+    history(run)
+    run.seed_policy()
+    run.open_coordinator()
+    before = {t['taskID'] for t in run.cli('task', 'list')['tasks']}
+    turns = run.tell('Can we start a new project: a website where we make Minecraft mods with AI? '
+                     'It lists our mods, and a chat box makes a new mod from a description.')
+    said = run.said(turns)
+    commands = [command for turn in turns for command in turn['commands']]
+    created = created_since(run, before)
+    roots = [os.path.realpath(t.get('projectRoot') or '') for t in created]
+    known = {os.path.realpath(str(run.project(name))) for name in ('app', 'marketing-site')}
+    projects = os.path.realpath(str(run.root / 'projects'))
+    run.check('it creates one task in a new folder next to the other projects',
+              len(created) == 1 and os.path.dirname(roots[0]) == projects and roots[0] not in known,
+              [(t['title'], t.get('projectRoot')) for t in created])
+    run.check('Toastty made the folder: it was passed with --new-project',
+              any('--new-project' in command for command in commands), commands)
+    run.check('the coordinator made no folder or repository itself',
+              not any(re.search(r'\bmkdir\b|\bgit\b.*\binit\b', command) for command in commands), commands)
+    if len(created) == 1:
+        run.check('the new folder is a git repository with one first commit',
+                  subprocess.run(['git', '-C', roots[0], 'rev-list', '--count', 'HEAD'], capture_output=True,
+                                 text=True).stdout.strip() == '1', roots[0])
+    run.check('it asks the user to make no folder', not re.search(r'\bmkdir\b|git init|git -C', said), said)
+    run.check('it names the new folder in its answer', bool(created) and os.path.basename(roots[0]) in said, said,
+              required=False)
+
+
 def interrupted(run):
     """After a relaunch: the resumed coordinator has its instructions and continues an interrupted agent."""
     task = run.create_task('Port the importer to async', status='working')
@@ -3483,6 +3513,7 @@ SCENARIOS = {
     'sender-reply-after-user': sender_reply_after_user,
     'sender-reply-webhook': sender_reply_webhook,
     'new-task': new_task,
+    'new-project': new_project,
     'interrupted': interrupted,
     'friction-note': friction_note,
     'decision-record': decision_record,
@@ -3500,7 +3531,7 @@ SCENARIOS = {
 JUDGMENT = ('first-run', 'first-run-instructions', 'first-run-request', 'first-run-sender', 'first-run-one-project', 'first-run-upgrade', 'question-settled',
             'question-open', 'approval-passed-on', 'dependency', 'quiet-wake', 'weak-proof', 'good-proof', 'no-merge-rule', 'merge-rule-setup',
             'merge-simple', 'merge-outside-rule', 'merge-release', 'merge-error', 'merge-error-new-commit', 'merge-refused',
-            'new-task', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted', 'sender-add',
+            'new-task', 'new-project', 'release', 'user-words-busy', 'ci-rerun-passes', 'ci-rerun-fails', 'sender-trusted', 'sender-untrusted', 'sender-add',
             'sender-reply', 'sender-reply-after-user', 'first-run-improving', 'friction-note', 'decision-record', 'review-ask', 'review-timer', 'review-empty',
             'followup-merge', 'daily-list', 'daily-list-quiet', 'done-no-pr', 'waits-for-person', 'ui-mockup')
 

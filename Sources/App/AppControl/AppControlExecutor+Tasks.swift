@@ -167,12 +167,29 @@ extension AppControlExecutor {
         }
     }
 
+    /// The request and its caller, read in this request's context.
+    func taskCreateInputs(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, TaskCreateRequest, TaskCaller) {
+        (try requiredTaskCoordinator(), try taskCreateRequest(args: args), taskCaller())
+    }
+
+    /// For `newProject`, makes the folder and its repository off the main
+    /// thread, before the other checks.
+    func makeTaskNewProject(
+        _ coordinator: TaskCoordinator,
+        _ request: TaskCreateRequest,
+        caller: TaskCaller
+    ) async throws -> (request: TaskCreateRequest, made: TaskNewProject?) {
+        do {
+            return try await coordinator.makeNewProjectIfRequested(request, caller: caller)
+        } catch let error as TaskError {
+            throw AutomationSocketError.invalidPayload(error.message)
+        }
+    }
+
     /// The checks run now, in this request's context; the files are copied
     /// after an await, off the main thread.
-    func prepareTaskCreate(args: [String: AutomationJSONValue]) throws -> (TaskCoordinator, TaskCreatePreparation) {
-        let coordinator = try requiredTaskCoordinator()
-        let preparation = try perform { try coordinator.prepareCreate(try taskCreateRequest(args: args), caller: taskCaller()) }
-        return (coordinator, preparation)
+    func prepareTaskCreate(_ coordinator: TaskCoordinator, _ request: TaskCreateRequest, caller: TaskCaller) throws -> TaskCreatePreparation {
+        try perform { try coordinator.prepareCreate(request, caller: caller) }
     }
 
     func finishTaskCreate(_ coordinator: TaskCoordinator, _ preparation: TaskCreatePreparation) async throws -> AppControlActionOutcome {
@@ -643,6 +660,10 @@ extension AppControlExecutor {
             }
             rootDirectory = path
         }
+        let newProject = try args.taskBool("newProject") ?? false
+        if newProject, rootDirectory == nil {
+            throw AutomationSocketError.invalidPayload("newProject needs rootDirectory, the new project's folder")
+        }
         return TaskCreateRequest(
             text: args.taskString("text") ?? "",
             files: try Self.taskStrings("files", args: args),
@@ -651,6 +672,7 @@ extension AppControlExecutor {
             slug: args.taskString("slug"),
             workspaceID: workspaceID,
             rootDirectory: rootDirectory,
+            newProject: newProject,
             externalRefID: args.taskString("externalRef"),
             externalRefURL: args.taskString("externalURL"),
             agent: args.taskString("agent"),

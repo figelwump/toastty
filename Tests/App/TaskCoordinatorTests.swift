@@ -114,7 +114,11 @@ struct TaskCoordinatorTests {
         deinit { try? FileManager.default.removeItem(at: root) }
 
         /// A coordinator as a new app launch would make one, over `records`.
-        func makeCoordinator(records: TaskRecordStore, readinessTimeout: Duration = .seconds(3)) -> TaskCoordinator {
+        func makeCoordinator(
+            records: TaskRecordStore,
+            readinessTimeout: Duration = .seconds(3),
+            worktreeCreator: TaskWorktreeCreator = TaskWorktreeCreator()
+        ) -> TaskCoordinator {
             TaskCoordinator(
                 records: records,
                 store: store,
@@ -133,6 +137,7 @@ struct TaskCoordinatorTests {
                 grantScope: { [unowned self] sessionID, workspaceID in
                     scopeGrants.append((sessionID, workspaceID))
                 },
+                worktreeCreator: worktreeCreator,
                 now: { [unowned self] in clock ?? Date() },
                 terminalReadinessTimeout: readinessTimeout,
                 triageRunner: triage,

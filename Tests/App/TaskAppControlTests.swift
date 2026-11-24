@@ -555,6 +555,44 @@ struct TaskAppControlTests {
         }
     }
 
+    @Test func createMakesANewProjectAndOpensIt() async throws {
+        let fixture = try TaskCoordinatorTests.Fixture()
+        let coordinator = fixture.makeCoordinator(
+            records: TaskRecordStore(fileURL: fixture.recordsFile),
+            worktreeCreator: TaskGitTestRepository.creator()
+        )
+        fixture.replaceCoordinator(coordinator)
+        let executor = makeExecutor(fixture, coordinator: coordinator)
+        let folder = TasksConfigFile.normalizedPath(fixture.root.appendingPathComponent("minecraft-mods").path)
+
+        await expectInvalidPayload("newProject needs rootDirectory, the new project's folder") {
+            _ = try await executor.runActionAsync(id: "task.create", args: [
+                "text": .string("x"), "agent": .string("claude"), "newProject": .bool(true),
+            ], context: context())
+        }
+        // A check after the folder was made removes the folder again.
+        await expectInvalidPayload("--base and --branch-prefix need --start-work.") {
+            _ = try await executor.runActionAsync(id: "task.create", args: [
+                "text": .string("x"), "agent": .string("claude"), "base": .string("main"),
+                "rootDirectory": .string(folder), "newProject": .bool(true),
+            ], context: context())
+        }
+        #expect(FileManager.default.fileExists(atPath: folder) == false)
+
+        let outcome = try await executor.runActionAsync(id: "task.create", args: [
+            "text": .string("Build the mods site"), "agent": .string("claude"),
+            "rootDirectory": .string(folder), "newProject": .bool(true),
+        ], context: context())
+        let id = try taskID(outcome.result)
+        await fixture.waitForSetup(id)
+        let record = try #require(fixture.record(id))
+        #expect(record.projectRoot == folder)
+        #expect(try TaskGitTestRepository.git(["log", "--format=%s"], in: folder) == "Initial commit")
+        let opened = try #require(record.workspaceID.flatMap { fixture.store.state.workspacesByID[$0] })
+        #expect(opened.rootDirectory == folder)
+        #expect(opened.title == "minecraft-mods")
+    }
+
     @Test func triagesSuggestionIsInTheChoicesAndRootDirectoryOpensIt() async throws {
         let fixture = try TaskCoordinatorTests.Fixture()
         fixture.config.triage = TasksConfig.Triage(command: "fake-triage")
