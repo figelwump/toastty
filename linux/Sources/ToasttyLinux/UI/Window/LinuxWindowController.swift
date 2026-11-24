@@ -138,6 +138,11 @@ public final class LinuxWindowController {
         adw_toolbar_view_add_top_bar(cast(toolbar), tabBar)
 
         mainStack = gtk_stack_new()
+        // Sized by the page it shows: a hidden covering page (the Tasks
+        // view, the coordinator) must not widen the content's minimum and
+        // squeeze the sidebar and right panel.
+        gtk_stack_set_hhomogeneous(cast(mainStack), 0)
+        gtk_stack_set_vhomogeneous(cast(mainStack), 0)
         gtk_stack_add_named(cast(mainStack), content.stack, "workspaces")
         gtk_stack_add_named(cast(mainStack), Self.makeEmptyState(), "empty")
         adw_toolbar_view_set_content(cast(toolbar), mainStack)
