@@ -104,6 +104,11 @@ final class QuickEntryController: ObservableObject {
         self.registersGlobalHotKey = registersGlobalHotKey
         self.toastDuration = toastDuration
         presentation = QuickEntryPresentation(frontmostApplication: frontmostApplication)
+        // Linux calls `handleTermination()` from its shutdown instead:
+        // corelibs runs a queue-targeted observer by enqueueing it and
+        // waiting, which deadlocks a main-actor poster that is not
+        // `OperationQueue.current` (Swift Testing's main actor).
+        #if !os(Linux)
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -113,6 +118,7 @@ final class QuickEntryController: ObservableObject {
                 self?.handleTermination()
             }
         }
+        #endif
     }
 
     deinit {

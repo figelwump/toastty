@@ -674,8 +674,9 @@ Differences from macOS:
 - Markdown in the transcript comes from swift-markdown through the
   Foundation shim's `AttributedString(markdown:)`, which now gives Apple's
   presentation intents (`PresentationIntent`, `InlinePresentationIntent`).
-- Automation runs ask nothing (no What's new), as on macOS;
-  `TOASTTY_LINUX_TEST_START_OFFER=1` makes a scripted run ask, for tests.
+- Automation runs ask nothing (no What's new), as on macOS.
+  `TOASTTY_LINUX_TEST_START_OFFER=1` makes a scripted run ask, and `=0`
+  keeps a normal session from asking (the restart tests).
 
 `scripts/linux/e2e-tasks.sh` drives all of it on Broadway: CLI task and
 coordinator commands, the Tasks view, the sidebar, the coordinator's chat
@@ -1156,6 +1157,7 @@ code (macOS branches unchanged); run a macOS build
 | `Sources/App/Tasks/TaskCommandRunner.swift` | Glibc spawn types are structs; `posix_spawn_file_actions_addchdir_np` and `addclosefrom_np(3)` stand in for `addchdir` and `POSIX_SPAWN_CLOEXEC_DEFAULT`; signal sets come from `sigfillset`/`sigemptyset` |
 | `Sources/App/Tasks/TaskActions.swift` | the archive alert's two checkboxes go to the Linux alert's `accessoryCheckboxes` (drawn in the `AdwAlertDialog`'s extra child) instead of an `NSStackView` accessory |
 | `Sources/Core/Tasks/QuickEntryShortcut.swift` | `symbolLabel` reads `Alt+Shift+T` on Linux (GTK's form; Command is Super) |
+| `Sources/App/Tasks/QuickEntry/QuickEntryController.swift` | no `willTerminate` observer on Linux: `LinuxTaskStack.prepareForTermination` calls `handleTermination()` from the shutdown (a `queue: .main` observer deadlocked the shutdown under Swift Testing, see Known issues) |
 | `Sources/App/Tasks/QuickEntry/QuickEntryModel.swift` | `QuickEntryKeyLabels`: the picker keys read Ctrl+1/Ctrl+2/Ctrl+→ on Linux; the two `NSPasteboard` methods are macOS-only (GTK reads its clipboard and drops itself) |
 | `Sources/App/Coordinator/CoordinatorComposerDelivery.swift` (new, from `CoordinatorComposerView.swift`) | the send button's help names Ctrl+Return on Linux |
 | `Sources/App/Tasks/TaskWebhookApprovalPresentation.swift` (new) | the sheet names Toastty's key file and "this computer" on Linux, the Keychain and "this Mac" on macOS |
@@ -1234,8 +1236,10 @@ list). Inside mirrored files, these are guarded (`#if os(macOS)` or
   blocks the poster until the main queue runs the observer. In the app every
   post comes from the main thread (no wait); a post from a background thread
   waits for the main loop, and one from main-actor code running off the main
-  thread (Swift Testing) deadlocks, which is why the two Linux-compiled
-  observers use no target queue.
+  thread (Swift Testing) deadlocks, which is why the Linux-compiled
+  observers use no target queue (or, for quick entry's termination
+  cleanup, none at all). A test that hangs with no output after its last
+  CLI call is usually this, in its teardown.
 - `RemoteAccessGatewayServerTests.stopAndRestartKeepsExistingCredentialValid`
   can fail when other gateway tests run concurrently: corelibs
   `URLSession.shared` merges its cookie jar (keyed by host, not port) into

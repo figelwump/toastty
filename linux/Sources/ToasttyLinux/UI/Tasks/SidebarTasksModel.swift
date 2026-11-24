@@ -43,9 +43,24 @@ struct SidebarTasksModel: Equatable {
         let isContext: Bool
     }
 
+    /// A row, or a parent's merged children folded into one line.
+    enum SectionItem: Equatable {
+        case row(Row)
+        case folded(parent: SidebarRowKey, rows: [Row], isExpanded: Bool)
+    }
+
     struct Section: Equatable {
         let bucket: SidebarBucket
-        let rows: [Row]
+        let items: [SectionItem]
+
+        var rows: [Row] {
+            items.flatMap { item -> [Row] in
+                switch item {
+                case .row(let row): [row]
+                case .folded(_, let rows, _): rows
+                }
+            }
+        }
     }
 
     struct Card: Equatable {
@@ -60,6 +75,10 @@ struct SidebarTasksModel: Equatable {
         let doneCount: Int
         let toShipRows: [TaskRow]
         let isToShipExpanded: Bool
+        /// Merged tasks whose task spaces Toastty still keeps open, in
+        /// families with nothing open: they list under the Done line.
+        let heldDoneRows: [Row]
+        let isDoneExpanded: Bool
     }
 
     var segment: SidebarSegment
@@ -84,7 +103,9 @@ struct SidebarTasksModel: Equatable {
         windowID: UUID,
         sessions: any LinuxSessionSource,
         memory: inout Memory,
-        expandedToShip: Set<UUID>
+        expandedToShip: Set<UUID>,
+        expandedDone: Set<UUID> = [],
+        expandedFolds: Set<SidebarRowKey> = []
     ) -> SidebarTasksModel? {
         let board = ui.board
         guard board.isEnabled, let window = state.window(id: windowID) else { return nil }
@@ -145,10 +166,23 @@ struct SidebarTasksModel: Equatable {
         func card(
             workspaceID: UUID?,
             title: String,
-            candidates: [SidebarBucketCandidate<RowKind>],
+            candidates allCandidates: [SidebarBucketCandidate<RowKind>],
+            heldFinished: Set<SidebarRowKey> = [],
+            ownProjectKeys: Set<SidebarRowKey> = [],
+            mergedAt: [SidebarRowKey: Date] = [:],
             isSelected: Bool
         ) -> Card {
-            let counts = SidebarBuckets.counts(candidates)
+            // Families with nothing open leave the buckets for the Done
+            // line; a family with an open row folds its merged children
+            // under the parent (macOS `makeBucketedSidebar`). The Done line
+            // lists its project's tasks: a task space moved under another
+            // project's card stays in that card's buckets.
+            let finishedKeys = SidebarBuckets.finishedFamilyKeys(allCandidates, keeping: pin?.key) {
+                workspaceID != nil && heldFinished.contains($0.key) && ownProjectKeys.contains($0.key)
+            }
+            let candidates = allCandidates.filter { finishedKeys.contains($0.key) == false }
+            let folded = SidebarBuckets.foldedKeys(candidates) { heldFinished.contains($0.key) }
+            let counts = SidebarBuckets.counts(candidates.filter { folded.contains($0.key) == false })
             let layout = segment == .all
                 ? SidebarBuckets.layout(candidates, pin: pin)
                 : SidebarBuckets.needsYou(candidates, pin: pin)
@@ -156,12 +190,26 @@ struct SidebarTasksModel: Equatable {
             nextPin = layout.pin ?? nextPin
             model.needsYouCount += counts[.needsYou] ?? 0
             model.readyToReviewCount += counts[.readyToReview] ?? 0
+            func row(_ entry: SidebarBucketEntry<RowKind>) -> Row {
+                Row(key: entry.key, kind: entry.payload, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext)
+            }
             let sections = SidebarBucket.allCases.compactMap { bucket -> Section? in
                 let entries = layout.entries(bucket)
                 guard entries.isEmpty == false else { return nil }
-                return Section(bucket: bucket, rows: entries.map { entry in
-                    Row(key: entry.key, kind: entry.payload, isLinkedChild: entry.isLinkedChild, isContext: entry.isContext)
-                })
+                let items = SidebarBuckets.items(entries, folded: segment == .all ? folded : []).map { item -> SectionItem in
+                    switch item {
+                    case .row(let entry): .row(row(entry))
+                    case .finishedChildren(let parent, let rows):
+                        .folded(parent: parent, rows: rows.map(row), isExpanded: expandedFolds.contains(parent))
+                    }
+                }
+                return Section(bucket: bucket, items: items)
+            }
+            let heldDone = allCandidates
+                .filter { finishedKeys.contains($0.key) }
+                .sorted { (mergedAt[$0.key] ?? .distantPast) > (mergedAt[$1.key] ?? .distantPast) }
+                .map { candidate in
+                Row(key: candidate.key, kind: candidate.payload, isLinkedChild: false, isContext: false)
             }
             let shownTaskSpaceIDs = Set(candidates.compactMap { candidate -> UUID? in
                 if case .workspace(let id) = candidate.key { return id }
@@ -183,7 +231,9 @@ struct SidebarTasksModel: Equatable {
                 toShipCount: toShip.shown.count + toShip.hidden.count,
                 doneCount: doneCount,
                 toShipRows: expandedToShip.contains(cardKey) ? toShip.shown.map(taskRow) : [],
-                isToShipExpanded: expandedToShip.contains(cardKey)
+                isToShipExpanded: expandedToShip.contains(cardKey),
+                heldDoneRows: heldDone,
+                isDoneExpanded: expandedDone.contains(cardKey)
             )
         }
 
@@ -191,6 +241,9 @@ struct SidebarTasksModel: Equatable {
             guard let workspace = state.workspacesByID[workspaceID] else { continue }
             let isCardSelected = selectedWorkspace.map { $0.id == workspaceID || $0.parentWorkspaceID == workspaceID } ?? false
             var candidates: [SidebarBucketCandidate<RowKind>] = []
+            var heldFinished: Set<SidebarRowKey> = []
+            var ownProjectKeys: Set<SidebarRowKey> = []
+            var mergedAt: [SidebarRowKey: Date] = [:]
             for status in sessions.sessions(workspaceID: workspaceID) {
                 let row = SidebarModel.sessionRow(
                     status,
@@ -226,8 +279,14 @@ struct SidebarTasksModel: Equatable {
                 // (`SidebarSubspacePresentation.isHiddenAsFinished`: finished,
                 // not held open, and no agent in it works or waits.)
                 let isQuiet = lines.contains { [.working, .needsApproval, .error].contains($0.kind) } == false
-                if status == .done || status == .toShip, item?.cleanupHeldUntil == nil, isQuiet {
-                    continue
+                if status == .done || status == .toShip, isQuiet {
+                    // Held open after its merge: a finished row.
+                    guard item?.cleanupHeldUntil != nil else { continue }
+                    heldFinished.insert(.workspace(subspaceID))
+                }
+                if let item {
+                    if item.projectWorkspaceID == workspaceID { ownProjectKeys.insert(.workspace(subspaceID)) }
+                    mergedAt[.workspace(subspaceID)] = SidebarRecentToShip.mergedAt(item)
                 }
                 let mark: TaskStageMarkKind = item.map(TaskStageMarkKind.init) ?? Self.mark(status)
                 let summary: String? = item.flatMap { item in
@@ -253,7 +312,11 @@ struct SidebarTasksModel: Equatable {
                 ))
             }
             candidates += recordCandidates(recordItems.filter { $0.projectWorkspaceID == workspaceID })
-            model.cards.append(card(workspaceID: workspaceID, title: workspace.title, candidates: candidates, isSelected: isCardSelected))
+            model.cards.append(card(
+                workspaceID: workspaceID, title: workspace.title, candidates: candidates,
+                heldFinished: heldFinished, ownProjectKeys: ownProjectKeys, mergedAt: mergedAt,
+                isSelected: isCardSelected
+            ))
         }
         let topLevelSet = Set(topLevel)
         let otherCandidates = recordCandidates(recordItems.filter { $0.projectWorkspaceID.map(topLevelSet.contains) != true })

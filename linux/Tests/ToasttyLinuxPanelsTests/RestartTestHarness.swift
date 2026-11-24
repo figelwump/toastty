@@ -75,6 +75,9 @@ final class RestartTestHarness {
             // A normal (non-automation) session, like the user's, in a
             // runtime home that every launch shares.
             "TOASTTY_AUTOMATION": "0",
+            // No What's new question: it would take the dialog slot the
+            // scripts' alerts need.
+            "TOASTTY_LINUX_TEST_START_OFFER": "0",
             "TOASTTY_RUNTIME_HOME": runtimeHome.path,
             "TOASTTY_LINUX_EPHEMERAL_BROWSER": "1",
             "TOASTTY_LINUX_AUTOMATION_ROOT": work.path,

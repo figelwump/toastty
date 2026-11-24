@@ -36,6 +36,8 @@ final class SidebarTasksView {
     private var model: SidebarTasksModel?
     private var memory = SidebarTasksModel.Memory()
     private var expandedToShip: Set<UUID> = []
+    private var expandedDone: Set<UUID> = []
+    private var expandedFolds: Set<SidebarRowKey> = []
     private var menuEntries: [(item: TaskBoardItem, menuItem: TaskBoardPresentation.MenuItem)] = []
     private var isSyncing = false
 
@@ -127,7 +129,8 @@ final class SidebarTasksView {
     func render(_ state: AppState, sessions: any LinuxSessionSource) {
         let next = SidebarTasksModel.make(
             ui: ui, state: state, windowID: windowID, sessions: sessions,
-            memory: &memory, expandedToShip: expandedToShip
+            memory: &memory, expandedToShip: expandedToShip,
+            expandedDone: expandedDone, expandedFolds: expandedFolds
         )
         renderCoordinatorRow(state)
         guard let next else { return }
@@ -216,11 +219,25 @@ final class SidebarTasksView {
         for section in card.sections {
             let sectionHeader = Gtk.label(section.bucket.title.uppercased(), classes: ["sidebar-bucket", Self.bucketClass(section.bucket)])
             Gtk.append(box, sectionHeader)
-            for row in section.rows {
-                Gtk.append(box, makeRow(row))
+            for item in section.items {
+                switch item {
+                case .row(let row):
+                    Gtk.append(box, makeRow(row))
+                case .folded(let parent, let rows, let isExpanded):
+                    let line = Gtk.button("\(isExpanded ? "⌄" : "›") ☑ \(rows.count) merged", classes: ["flat", "sidebar-folded"])
+                    Signal.connect(line, "clicked") { [weak self] in
+                        guard let self else { return }
+                        if self.expandedFolds.remove(parent) == nil { self.expandedFolds.insert(parent) }
+                        self.ui.scheduleRender()
+                    }
+                    Gtk.append(box, line)
+                    if isExpanded {
+                        for row in rows { Gtk.append(box, makeRow(row)) }
+                    }
+                }
             }
         }
-        if segment == .all, card.toShipCount > 0 || card.doneCount > 0 {
+        if segment == .all, card.toShipCount > 0 || card.doneCount > 0 || card.heldDoneRows.isEmpty == false {
             let footer = Gtk.hbox(spacing: 6, classes: ["sidebar-finished"])
             if card.toShipCount > 0 {
                 let toShip = Gtk.button("\(card.isToShipExpanded ? "⌄" : "›") To ship \(card.toShipCount)", classes: ["flat", "sidebar-to-ship"])
@@ -236,12 +253,26 @@ final class SidebarTasksView {
             let spacer = Gtk.hbox()
             gtk_widget_set_hexpand(spacer, 1)
             Gtk.append(footer, spacer)
-            if card.doneCount > 0 {
+            let cardKey = card.workspaceID ?? SidebarTasksModel.otherTasksCardID
+            if card.heldDoneRows.isEmpty == false {
+                // Done tasks whose task spaces Toastty keeps open: their
+                // rows under the Done line, which expands in place.
+                let done = Gtk.button("\(card.isDoneExpanded ? "⌄" : "›") Done \(card.doneCount) · \(card.heldDoneRows.count) open", classes: ["flat", "sidebar-done"])
+                Signal.connect(done, "clicked") { [weak self] in
+                    guard let self else { return }
+                    if self.expandedDone.remove(cardKey) == nil { self.expandedDone.insert(cardKey) }
+                    self.ui.scheduleRender()
+                }
+                Gtk.append(footer, done)
+            } else if card.doneCount > 0 {
                 let done = Gtk.button("Done \(card.doneCount)", classes: ["flat", "sidebar-done"])
                 Signal.connect(done, "clicked") { [weak self] in self?.openTasksView(selecting: nil, revealing: .done) }
                 Gtk.append(footer, done)
             }
             Gtk.append(box, footer)
+            if card.isDoneExpanded {
+                for row in card.heldDoneRows { Gtk.append(box, makeRow(row)) }
+            }
             for row in card.toShipRows {
                 Gtk.append(box, makeTaskRow(row, key: .task(row.subject)))
             }

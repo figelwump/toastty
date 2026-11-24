@@ -57,6 +57,9 @@ step "Release build" scripts/linux/build.sh --release --product toastty-linux --
 # Smoke runs use the shared smoke scripts on Broadway.
 step "Workspace tabs smoke" scripts/automation/workspace-tabs-smoke.sh
 step "UI smoke" scripts/automation/smoke-ui.sh
+# Tasks and the coordinator: CLI, Tasks view, sidebar, chat and dock, quick
+# entry, What's new (debug build, Broadway).
+step "Tasks end-to-end" scripts/linux/e2e-tasks.sh
 # The release install layout (bundled CLI, shim, skills, web panels) and the
 # app-logic end-to-end run against it.
 step "Release install end-to-end" scripts/linux/e2e-install.sh --release

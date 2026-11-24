@@ -440,6 +440,7 @@ public enum LinuxTheme {
     .sidebar-to-ship { font-size: 0.78em; font-weight: 700; color: var(--toastty-to-ship); padding: 0 4px; min-height: 0; }
     .sidebar-done, .sidebar-more { font-size: 0.78em; padding: 0 4px; min-height: 0; opacity: 0.7; }
     .sidebar-nothing { padding: 18px; }
+    .sidebar-folded { font-size: 0.78em; padding: 0 4px 0 18px; min-height: 0; opacity: 0.7; }
 
     /* Attachments */
     .attachment-chip { padding: 3px 6px; border-radius: 8px; background-color: alpha(currentColor, 0.07); }

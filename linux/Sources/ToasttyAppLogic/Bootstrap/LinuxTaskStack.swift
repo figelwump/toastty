@@ -296,5 +296,7 @@ struct LinuxTaskStack {
     /// `TaskCoordinator.recordStateTimes`.
     func prepareForTermination() {
         coordinator.prepareForTermination()
+        // macOS reaches this through NSApplication.willTerminateNotification.
+        quickEntry.handleTermination()
     }
 }

@@ -148,12 +148,16 @@ extension TasksUI {
     /// macOS connects them in `ToasttyApp.init`.
     func installStartOffer(app: LinuxAppController) {
         guard let controller = tasks.coordinatorController else { return }
-        // An automation run asks nothing, as on macOS. A test of the
-        // question sets TOASTTY_LINUX_TEST_START_OFFER=1 for throwaway
-        // preferences.
-        let defaults = tasks.userDefaults
-            ?? (ProcessInfo.processInfo.environment["TOASTTY_LINUX_TEST_START_OFFER"] == "1"
-                ? UserDefaults(suiteName: "toastty.test-start-offer.\(ProcessInfo.processInfo.processIdentifier)") : nil)
+        // An automation run asks nothing, as on macOS. Tests set
+        // TOASTTY_LINUX_TEST_START_OFFER: 1 asks in an automation run (with
+        // throwaway preferences), 0 asks nothing in a normal session (the
+        // restart tests, which need the dialog slot for their own alerts).
+        let defaults: UserDefaults? = switch ProcessInfo.processInfo.environment["TOASTTY_LINUX_TEST_START_OFFER"] {
+        case "0": nil
+        case "1": tasks.userDefaults
+            ?? UserDefaults(suiteName: "toastty.test-start-offer.\(ProcessInfo.processInfo.processIdentifier)")
+        default: tasks.userDefaults
+        }
         startOfferDefaults = defaults
         let offer = CoordinatorStartOffer(
             controller: controller,
