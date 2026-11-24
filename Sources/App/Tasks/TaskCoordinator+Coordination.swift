@@ -397,13 +397,15 @@ extension TaskCoordinator {
     /// message for each open prompt. A provider can show an interaction
     /// while its hooks report ready, or keep reporting ready after an
     /// automatic submission starts the next turn. A message that
-    /// `task send --steer` holds takes the prompt first.
+    /// `task send --steer` holds takes the prompt first, and one that it
+    /// typed there took it.
     func automaticPromptTurnEnd(for session: TaskSessionInfo) -> Date? {
         guard let sessions, let kind = session.status?.kind, kind == .idle || kind == .ready,
               sessions.hasPendingInteractionOrUserDraft(in: session) == false,
               sessions.hasHeldSteerMessages(panelID: session.panelID) == false else { return nil }
         let turnEnd = session.lastTurnEndedAt ?? .distantPast
         if let typedAt = sessions.lastUserInputAt(panelID: session.panelID), typedAt > turnEnd { return nil }
+        if let steeredAt = sessions.lastSteerTypedAt(panelID: session.panelID), steeredAt > turnEnd { return nil }
         if let previous = automaticPromptDeliveryTurnEnds[session.sessionID], turnEnd <= previous { return nil }
         return turnEnd
     }
@@ -653,20 +655,36 @@ extension TaskCoordinator {
                 ])
                 continue
             }
+            // A merge prompt or a due wake that waits for the same prompt
+            // goes first.
             guard record.replyRequest == nil, wasInterruptedAtQuit(record) == false,
+                  mergeDeliveryTasks[record.id] == nil, record.waiting?.wakeIsDue(at: at) != true,
                   let session = liveAgentSession(of: record),
                   let turnEnd = automaticPromptTurnEnd(for: session) else { continue }
+            // Marked first, as a wake is, so that a quit between the typing
+            // and the save never types it again.
+            func settle(_ outcome: TaskQueuedMessage.Outcome?) {
+                saveOrDefer(taskID: record.id) { saved in
+                    saved.queuedMessages = saved.queuedMessages?.map { entry in
+                        guard entry.id == message.id else { return entry }
+                        return outcome.map(message.settled) ?? message
+                    }
+                    saved.pruneSettledMessages(now: at)
+                }
+            }
+            settle(.init(kind: .sentUnconfirmed, at: at, sessionID: session.sessionID))
             let result = deliver(message.text, to: session, taskID: record.id, automaticPromptTurnEnd: turnEnd)
-            guard result != .unavailable else { continue }
-            // `.uncertain` counts as typed: a second copy would land in the
-            // same prompt.
+            guard result != .unavailable else {
+                // Nothing was typed: it waits again.
+                settle(nil)
+                continue
+            }
+            // `.uncertain` stays typed: a second copy would land in the same
+            // prompt.
             let outcome = TaskQueuedMessage.Outcome(
                 kind: result == .delivered ? .sent : .sentUnconfirmed, at: at, sessionID: session.sessionID
             )
-            saveOrDefer(taskID: record.id) { saved in
-                saved.queuedMessages = saved.queuedMessages?.map { $0.id == message.id ? $0.settled(outcome) : $0 }
-                saved.pruneSettledMessages(now: at)
-            }
+            if outcome.kind == .sent { settle(outcome) }
             ToasttyLog.info("Typed a queued message for a task's agent", category: .tasks, metadata: [
                 "task_id": record.id.uuidString,
                 "message_id": message.id.uuidString,

@@ -713,8 +713,12 @@ struct TaskCoordinationTests {
         endTurn(1)
         #expect(try messages(fixture, to: task) == ["First"])
 
-        // The held message took that prompt.
+        // The held message took that prompt, also while the hooks still
+        // report it open.
         fixture.sessions.heldSteerPanels.remove(panel)
+        fixture.sessions.steerTypedAt[panel] = start.addingTimeInterval(1.2)
+        coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task) == ["First"])
         endTurn(2)
         let typed = try messages(fixture, to: task)
         #expect(typed.count == 2)
@@ -724,6 +728,37 @@ struct TaskCoordinationTests {
         endTurn(5)
         #expect(try messages(fixture, to: task).suffix(2) == ["Second", "Third"])
         #expect(try messages(fixture, to: task).count == 4)
+    }
+
+    /// A merge prompt or a due wake that waits for the same open prompt
+    /// goes first.
+    @Test func aQueuedMessageLeavesThePromptToAWaitingMergeOrWake() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        let session = try sessionID(task)
+        let coordinator = fixture.coordinator!
+        let start = Date()
+        fixture.sessions.report(session, .working, at: start)
+        _ = try coordinator.queueMessage(taskID: task.id, text: "Facts", from: "a")
+
+        coordinator.mergeDeliveryTasks[task.id] = Task {}
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(1))
+        coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task).isEmpty)
+        coordinator.mergeDeliveryTasks[task.id] = nil
+
+        _ = try coordinator.setWaiting(taskID: task.id, reason: "email replies", wakeAt: Date().addingTimeInterval(3600))
+        try coordinator.records.save(id: task.id) { $0.waiting?.wakeAt = Date().addingTimeInterval(-1) }
+        coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task).isEmpty)
+        coordinator.evaluateWakes()
+        #expect(try messages(fixture, to: task).count == 1)
+        #expect(try messages(fixture, to: task).first?.hasPrefix("[Toastty wake]") == true)
+
+        fixture.sessions.report(session, .working, at: start.addingTimeInterval(2))
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(3))
+        coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task).last == "Facts")
     }
 
     /// A queued message is saved with the task: it survives a relaunch and
