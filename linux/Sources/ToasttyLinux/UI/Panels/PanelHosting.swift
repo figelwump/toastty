@@ -86,7 +86,8 @@ public protocol LinuxWindowFeature: AnyObject {
     /// A page that covers the workspace content while `coveringPage(_:)`
     /// names it, keyed by page name. Built once, when the window is.
     var pages: [String: WidgetPtr] { get }
-    /// The page that covers the content now, or nil for the workspaces.
+    /// The page that covers the workspace content and right panel now, or nil
+    /// for the workspaces.
     func coveringPage(_ state: AppState) -> String?
     /// A column between the sidebar and the content, or nil.
     var leadingColumn: WidgetPtr? { get }

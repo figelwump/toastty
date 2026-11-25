@@ -9,7 +9,8 @@
 #      agent, and `coordinator status` reports it;
 #   5. the task survives a quit and restart;
 #   6. the Tasks view (Broadway, smoke script): open, rows, mark widths,
-#      selection with the arrows, Esc, the Show Tasks toggle.
+#      selection with the arrows, Esc, the Show Tasks toggle, and the right
+#      panel.
 # Build first: scripts/linux/build.sh --product toastty-linux --product toastty
 # Usage: scripts/linux/e2e-tasks.sh   (exit status 0 when every check passes)
 set -uo pipefail
@@ -119,9 +120,12 @@ stop_app
 cat > $WORK/ui.script <<SCRIPT
 wait-file $WORK/go
 wait 500
+perform browser.create
+wait 300
+expect rightPanel=true rightPanelTabs=1 rightPanelMapped=true
 action window.toggle-tasks-view
 wait 300
-expect tasksView=shown tasksRows=2
+expect tasksView=shown tasksRows=2 rightPanel=true rightPanelTabs=1 rightPanelMapped=false
 # Each mark keeps its 12-wide slot, however short the row's text.
 expect tasksMarkWidths=12,12
 screenshot $WORK/tasks-view.png
@@ -136,13 +140,17 @@ wait 200
 expect tasksSelected=E2E_task:_add_a_README
 tasks key escape
 wait 300
-expect tasksView=hidden
+expect tasksView=hidden rightPanel=true rightPanelTabs=1 rightPanelMapped=true
+screenshot $WORK/tasks-right-panel-restored.png
+action window.toggle-right-panel
+wait 300
+expect rightPanel=false rightPanelTabs=1 rightPanelMapped=false
 action window.toggle-tasks-view
 wait 200
-expect tasksView=shown
+expect tasksView=shown rightPanel=false rightPanelMapped=false
 action window.toggle-tasks-view
 wait 200
-expect tasksView=hidden
+expect tasksView=hidden rightPanel=false rightPanelTabs=1 rightPanelMapped=false
 expect sidebarTaskRows=2 sidebarSegment=all sidebarMarkWidths=12,12
 screenshot $WORK/sidebar.png
 click sidebar.segment.needsYou
@@ -171,11 +179,12 @@ check "two tasks are created for the UI phase" "grep -q '\"ok\" : true' $WORK/cr
 sleep 1; touch $WORK/go
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 wait $APID; UIRC=$?
-check "the Tasks view script passes (open, rows, select, arrows, Esc, toggle)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
+check "the Tasks view script passes (rows, selection, Esc, toggle, right panel)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
-[ -s $WORK/sidebar.png ] && cp $WORK/sidebar.png $REPO/artifacts/manual/linux-tasks/sidebar.png
-[ -s $WORK/tasks-view.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/tasks-view.png $REPO/artifacts/manual/linux-tasks/tasks-view.png
+for shot in tasks-view tasks-right-panel-restored sidebar; do
+  [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
+done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 
 # Phase C: the coordinator's chat over its terminal and the dock.

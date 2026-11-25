@@ -437,6 +437,7 @@ public final class AutomationScript {
         result["agentShortcuts"] = TerminalProfileShortcuts.shared.agentCommands.compactMap(\.accelerator).joined(separator: ",")
         result["sidebarWidth"] = "\(gtk_widget_get_width(controller.sidebar.root))"
         result["rightPanelWidth"] = "\(gtk_widget_get_width(controller.rightPanel.root))"
+        result["rightPanelMapped"] = "\(gtk_widget_get_mapped(controller.rightPanel.root).bool)"
         result["dialog"] = controller.visibleDialog.map { typeName($0) } ?? "none"
         // The response Enter picks in the visible alert, and the focused widget.
         result["dialogDefault"] = controller.visibleDialog
