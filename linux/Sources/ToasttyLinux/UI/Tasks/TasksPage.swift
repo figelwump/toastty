@@ -659,6 +659,16 @@ final class TasksPage {
             context = Self.contextSummary(item, service: ui.logic.workspaceOverview, now: now)
         }
 
+        /// Markdown headings as labels ("## Remaining" reads "Remaining:"),
+        /// so a one-paragraph excerpt keeps them apart from the text.
+        static func labeledHeadings(_ text: String) -> String {
+            text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+                guard line.hasPrefix("#") else { return String(line) }
+                let heading = line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
+                return heading.isEmpty || heading.hasSuffix(":") ? heading : heading + ":"
+            }.joined(separator: "\n")
+        }
+
         /// What the Context card shows for a task that can be continued:
         /// its agent's context, else its last reply.
         @MainActor
@@ -666,7 +676,7 @@ final class TasksPage {
             guard TaskBoardPresentation.canContinueAsNewTask(item), let record = item.record else { return nil }
             if let context = service.context(taskID: record.id) {
                 return ContextSummary(
-                    excerpt: WorkspaceOverviewPage.plainExcerpt(context.text),
+                    excerpt: WorkspaceOverviewPage.plainExcerpt(labeledHeadings(context.text)),
                     caption: "Written by the agent · \(TaskAge.label(since: context.at, now: now))"
                 )
             }
