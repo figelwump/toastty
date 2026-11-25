@@ -310,6 +310,7 @@ expect coordinatorCover=terminal
 click coordinator.panel.mode
 wait 300
 expect coordinatorCover=chat
+$RESTART_SCROLL_CHECK
 perform coordinator.dock.toggle
 wait 800
 expect coordinatorDock=shown
@@ -318,7 +319,6 @@ screenshot $WORK/coordinator-dock.png
 perform coordinator.dock.toggle
 wait 500
 expect coordinatorDock=hidden
-$RESTART_SCROLL_CHECK
 state $WORK/coordinator-state.json
 quit
 SCRIPT
