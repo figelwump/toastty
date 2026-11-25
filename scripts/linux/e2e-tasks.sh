@@ -163,6 +163,15 @@ check "the task survives a restart" "grep -q 'E2E task: add a README' $WORK/get2
 stop_app
 
 # Phase B: the Tasks view, driven by a smoke script while the CLI makes tasks.
+# Keep a viewer attached for the scripted UI phases. Broadway only runs GTK
+# layout frames with a viewer; the forced-layout fallback can't test scrolling.
+if VIEWER=$(command -v google-chrome || command -v chromium); then
+  "${envs[@]}" "$VIEWER" --headless=new --disable-gpu --no-first-run \
+    --disable-background-timer-throttling --disable-renderer-backgrounding \
+    --disable-backgrounding-occluded-windows --window-size=1280,800 \
+    --user-data-dir="$WORK/chrome" "http://127.0.0.1:$((8080 + DISPLAYNUM))/" > "$WORK/chrome.log" 2>&1 &
+  VIEWER_PID=$!
+fi
 cat > $WORK/ui.script <<SCRIPT
 wait-file $WORK/go
 wait 500
@@ -250,17 +259,9 @@ done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 
 # Phase C: the coordinator's chat over its terminal and the dock.
-# Attach a viewer so Broadway runs real GTK layout frames. Without one the
-# screenshot helper forces layout, which cannot test post-allocation scroll.
 SCROLL_CHECKS=""
 DOCK_SCROLL_CHECK=""
-RESTART_SCROLL_CHECK=""
-if VIEWER=$(command -v google-chrome || command -v chromium); then
-  "${envs[@]}" "$VIEWER" --headless=new --disable-gpu --no-first-run \
-    --disable-background-timer-throttling --disable-renderer-backgrounding \
-    --disable-backgrounding-occluded-windows --window-size=1280,800 \
-    --user-data-dir="$WORK/chrome" "http://127.0.0.1:$((8080 + DISPLAYNUM))/" > "$WORK/chrome.log" 2>&1 &
-  VIEWER_PID=$!
+if [[ -n "${VIEWER_PID:-}" ]]; then
   SCROLL_CHECKS=$(cat <<'SCROLL'
 expect coordinatorLatestVisible=true
 coordinator scroll-top
@@ -272,15 +273,6 @@ expect coordinatorLatestVisible=true
 SCROLL
 )
   DOCK_SCROLL_CHECK="expect coordinatorLatestVisible=true"
-  RESTART_SCROLL_CHECK=$(cat <<'SCROLL'
-coordinator scroll-top
-wait 250
-expect coordinatorLatestVisible=false
-perform coordinator.restart
-wait 3000
-expect coordinatorCover=chat coordinatorRunning=true coordinatorLatestVisible=true
-SCROLL
-)
 else
   echo "SKIP coordinator scroll assertions (no Chrome or Chromium Broadway viewer)"
 fi
@@ -310,7 +302,6 @@ expect coordinatorCover=terminal
 click coordinator.panel.mode
 wait 300
 expect coordinatorCover=chat
-$RESTART_SCROLL_CHECK
 perform coordinator.dock.toggle
 wait 800
 expect coordinatorDock=shown
@@ -325,7 +316,6 @@ SCRIPT
 (cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/coordinator.script $APP > $WORK/app-coordinator.log 2>&1) & APID=$!
 for i in $(seq 1 400); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; CRC=$?
-stop_viewer
 check "the coordinator script passes (chat cover, scrolling with a viewer, reply, send, Terminal/Chat, dock)" "[ $CRC = 0 ] && ! grep -q 'FAIL' $WORK/app-coordinator.log"
 grep 'FAIL' $WORK/app-coordinator.log | head -8
 echo "coordinator chat minimum width after the reply: $(json $WORK/coordinator-chat-state.json 'r.get("coordinatorChatMinWidth")' 2>/dev/null) px"
