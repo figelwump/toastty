@@ -78,8 +78,8 @@ final class ToasttyNewTaskModel: Identifiable {
     static let unrecognizedSendAnswerMessage = "Your Mac sent an answer this app doesn't understand. Check the coordinator on the Mac before you send again, and update Toastty Mobile."
     static let autoTitle = "Auto"
     static let unrecognizedAnswerMessage = "Your Mac sent an answer this app doesn't understand. Check the Mac before you try again, and update Toastty Mobile."
-    static let textTooLongMessage = "That task is too long to send. Shorten it and tap Create again."
-    static let attachmentsTooLargeMessage = "That task and its attachments are too large to send. Shorten the task or remove a file, then tap Create again."
+    static let textTooLongMessage = "That task is too long to send. Shorten it and try again."
+    static let attachmentsTooLargeMessage = "That task and its attachments are too large to send. Shorten the task or remove a file, then try again."
     static let attachmentsUnsupportedMessage = "Update Toastty on your Mac to attach files."
     static let invalidModelMessage = "That isn't a model ID the Mac can use. Use one word with no spaces that doesn't start with a dash."
 
@@ -186,7 +186,8 @@ final class ToasttyNewTaskModel: Identifiable {
     /// One line before a send when the message will wait, as the Mac's
     /// panel says it in its header.
     var coordinatorNote: String? {
-        guard let coordinator else { return nil }
+        // Create makes the task on the Mac; nothing waits for the coordinator.
+        guard let coordinator, createsDirectly == false else { return nil }
         switch coordinator.agent {
         case .notRunning:
             return "The coordinator is not running. Your message waits on your Mac until it starts."
@@ -352,9 +353,12 @@ final class ToasttyNewTaskModel: Identifiable {
         switch outcome {
         case .loaded(let response):
             apply(response)
-            if errorMessage == Self.unreachableMessage { errorMessage = nil }
+            if errorMessage == Self.unreachableMessage || errorMessage == Self.sendUnreachableMessage {
+                errorMessage = nil
+            }
         case .unreachable:
-            errorMessage = Self.unreachableMessage
+            // Name the button the sheet shows now.
+            errorMessage = createsDirectly ? Self.unreachableMessage : Self.sendUnreachableMessage
         }
     }
 

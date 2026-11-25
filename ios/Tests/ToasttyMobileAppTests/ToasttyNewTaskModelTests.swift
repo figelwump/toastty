@@ -517,6 +517,11 @@ final class ToasttyNewTaskModelTests: XCTestCase {
 
         let (atRest, _) = await coordinatorSheet()
         XCTAssertNil(atRest.coordinatorNote)
+
+        // Create does not go through the coordinator, so nothing waits.
+        notRunning.selectWorkspace(toastty.id)
+        notRunning.selectPreset(opus)
+        XCTAssertNil(notRunning.coordinatorNote)
     }
 
     func testOnlyAMissingPermissionBlocksASend() async {
@@ -578,6 +583,12 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         XCTAssertEqual(model.workspacePillTitle, "emptyos")
         XCTAssertEqual(model.text, "Fix it", "The draft stays")
         XCTAssertTrue(model.canCreate)
+        // A lost reload names the button the sheet shows.
+        let (sending, sendingHost) = await coordinatorSheet()
+        sending.updateText("Fix it")
+        sendingHost.options = .unreachable
+        await sending.reloadOptions()
+        XCTAssertEqual(sending.errorMessage, ToasttyNewTaskModel.sendUnreachableMessage)
     }
 
     func testTheNoticeSaysWhereTheMessageWent() {
