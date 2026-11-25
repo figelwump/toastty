@@ -385,7 +385,8 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         XCTAssertFalse(model.canSend, "Nothing to send yet")
         model.updateText("Unread dot stays on")
         XCTAssertTrue(model.canSend)
-        XCTAssertTrue(model.canCreate, "Create uses the values the pills started on")
+        XCTAssertFalse(model.createsDirectly)
+        XCTAssertFalse(model.canCreate, "Under Auto the coordinator chooses; nothing is created from hidden values")
 
         // An older Mac: a coordinator in the options, but no capability.
         let older = ToasttyNewTaskModel(host: FakeNewTaskHost(options: options(coordinator: running)))
@@ -420,11 +421,20 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         XCTAssertEqual(model.phase, .sent(.sent))
         XCTAssertTrue(host.requests.isEmpty, "Send makes no task itself")
 
+        // A chosen project goes, with the agent left to the coordinator.
+        let (project, projectHost) = await coordinatorSheet()
+        project.updateText("Fix the computer update")
+        project.selectWorkspace(emptyos.id)
+        XCTAssertEqual(project.workspacePillTitle, "emptyos", "Choosing the value it started on is still a choice")
+        XCTAssertTrue(project.canSend)
+        projectHost.sendOutcomes = [.answered(.sent)]
+        await project.send()
+        XCTAssertEqual(projectHost.sendRequests.last?.workspaceID, emptyos.id)
+        XCTAssertNil(projectHost.sendRequests.last?.profileID)
+
         // A chosen agent starts on Default: only what the user sets goes.
         let (chosen, chosenHost) = await coordinatorSheet()
         chosen.updateText("Fix the computer update")
-        chosen.selectWorkspace(emptyos.id)
-        XCTAssertEqual(chosen.workspacePillTitle, "emptyos", "Choosing the value it started on is still a choice")
         chosen.selectAgent(chosen.agents[1])
         XCTAssertEqual([chosen.agentPillTitle, chosen.modelTitle, chosen.effortTitle], ["Codex", "Default", "Default"])
         XCTAssertTrue(chosen.showsModelAndEffort)
@@ -432,7 +442,7 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         chosenHost.sendOutcomes = [.answered(.waiting(reason: .working))]
         await chosen.send()
         let request = chosenHost.sendRequests.last
-        XCTAssertEqual(request?.workspaceID, emptyos.id)
+        XCTAssertNil(request?.workspaceID)
         XCTAssertEqual(request?.profileID, "codex")
         XCTAssertNil(request?.model)
         XCTAssertEqual(request?.effort, "high")
@@ -454,27 +464,40 @@ final class ToasttyNewTaskModelTests: XCTestCase {
         XCTAssertEqual(frequentHost.sendRequests.last?.effort, "xhigh")
     }
 
-    func testCreateMakesTheTaskDirectlyWithTheStartingValuesForAutoPills() async {
+    func testSettingBothPillsTurnsSendIntoCreate() async {
         let (model, host) = await coordinatorSheet()
         model.updateText("Fix the composer")
         host.outcomes = [.answered(.created(taskID: UUID()))]
         await model.create()
-        XCTAssertEqual(host.requests.last?.workspaceID, emptyos.id)
-        XCTAssertEqual(host.requests.last?.profileID, "codex")
-        XCTAssertEqual(host.requests.last?.model, "gpt-6.1-sol")
-        XCTAssertEqual(host.requests.last?.effort, "high")
+        XCTAssertTrue(host.requests.isEmpty, "Under Auto there is nothing to create directly")
+
+        // One pill is not enough: the coordinator still chooses the agent.
+        model.selectWorkspace(toastty.id)
+        XCTAssertFalse(model.createsDirectly)
+        XCTAssertTrue(model.canSend)
+
+        // Both pills set: the one action is Create.
+        model.selectPreset(opus)
+        XCTAssertTrue(model.createsDirectly)
+        XCTAssertFalse(model.canSend)
+        XCTAssertTrue(model.canCreate)
+        await model.send()
+        XCTAssertTrue(host.sendRequests.isEmpty, "Send is not offered once both pills are set")
+
+        // Back to Auto: Send again.
+        model.selectAutoAgent()
+        XCTAssertFalse(model.createsDirectly)
+        XCTAssertTrue(model.canSend)
+        XCTAssertFalse(model.canCreate)
+
+        model.selectPreset(opus)
+        await model.create()
+        XCTAssertEqual(host.requests.last?.workspaceID, toastty.id)
+        XCTAssertEqual(host.requests.last?.profileID, "claude")
+        XCTAssertEqual(host.requests.last?.model, "claude-opus-5-5")
+        XCTAssertEqual(host.requests.last?.effort, "xhigh")
         XCTAssertTrue(host.sendRequests.isEmpty, "Create sends nothing to the coordinator")
         XCTAssertEqual(model.phase, .created)
-
-        // A pill the user set is used.
-        let (chosen, chosenHost) = await coordinatorSheet()
-        chosen.updateText("Fix the composer")
-        chosen.selectWorkspace(toastty.id)
-        chosen.selectAutoAgent()
-        chosenHost.outcomes = [.answered(.created(taskID: UUID()))]
-        await chosen.create()
-        XCTAssertEqual(chosenHost.requests.last?.workspaceID, toastty.id)
-        XCTAssertEqual(chosenHost.requests.last?.profileID, "codex")
     }
 
     func testTheSheetSaysWhenTheMessageWillWait() async {

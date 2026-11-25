@@ -276,8 +276,8 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertTrue(newTask.waitForExistence(timeout: 10))
         newTask.tap()
 
-        // The Mac's panel with a coordinator: To coordinator, Send first,
-        // both pills on Auto, and Create Task kept.
+        // The Mac's panel with a coordinator: To coordinator, both pills on
+        // Auto, and Send as the one action.
         let send = app.buttons["toastty-mobile-new-task-send"]
         XCTAssertTrue(send.waitForExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["To Coordinator"].exists)
@@ -288,7 +288,9 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         XCTAssertEqual(agent.value as? String, "Auto")
         XCTAssertFalse(app.buttons["toastty-mobile-new-task-model"].exists, "Model and Effort belong to a chosen agent")
         XCTAssertFalse(app.buttons["toastty-mobile-new-task-effort"].exists)
-        XCTAssertTrue(app.buttons["toastty-mobile-new-task-create"].exists)
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertFalse(create.exists, "Under Auto there is nothing to create directly")
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-new-task-footer"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-new-task-coordinator-note"].exists,
                        "A coordinator at its prompt takes the message at once")
         attachScreenshot(named: "coordinator-new-task-empty", of: app)
@@ -312,11 +314,19 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         claude.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "Claude" })
         XCTAssertEqual(app.buttons["toastty-mobile-new-task-model"].value as? String, "Default")
+        // Both pills set: nothing is left for the coordinator, so Send
+        // becomes Create.
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertFalse(send.exists)
+        XCTAssertTrue(app.navigationBars["New Task"].exists)
+        attachScreenshot(named: "coordinator-new-task-both-pills-set", of: app)
         agent.tap()
         let auto = app.buttons["Auto"]
         XCTAssertTrue(auto.waitForExistence(timeout: 5))
         auto.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { agent.value as? String == "Auto" })
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "A pill back on Auto brings Send back")
+        XCTAssertFalse(create.exists)
         attachScreenshot(named: "coordinator-new-task-filled", of: app)
 
         send.tap()
@@ -358,17 +368,29 @@ final class ToasttyMobileCoordinatorUITests: XCTestCase {
         let newTask = app.buttons["toastty-mobile-home-new-task"]
         XCTAssertTrue(newTask.waitForExistence(timeout: 10))
         newTask.tap()
-        let create = app.buttons["toastty-mobile-new-task-create"]
-        XCTAssertTrue(create.waitForExistence(timeout: 5))
-        XCTAssertFalse(create.isEnabled, "A task needs its text")
+        let send = app.buttons["toastty-mobile-new-task-send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
         let text = app.textViews["toastty-mobile-new-task-text"]
         text.tap()
         text.typeText("Composer keeps a blank line after send.")
-        XCTAssertTrue(waitUntil(timeout: 5) { create.isEnabled })
-        // The line under Create Task names what Auto falls back to.
+
+        // Choosing a project and an agent turns Send into Create.
+        let workspace = app.buttons["toastty-mobile-new-task-workspace"]
+        workspace.tap()
+        let research = app.buttons["herdr research"]
+        XCTAssertTrue(research.waitForExistence(timeout: 5))
+        research.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { workspace.value as? String == "herdr research" })
+        XCTAssertTrue(send.exists, "The coordinator still chooses the agent")
+        app.buttons["toastty-mobile-new-task-frequent-0"].tap()
+        let create = app.buttons["toastty-mobile-new-task-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertTrue(create.isEnabled)
+        XCTAssertFalse(send.exists)
+        // The line under the pills says why, and names only chosen values.
         let footer = app.descendants(matching: .any)["toastty-mobile-new-task-footer"]
-        XCTAssertTrue(footer.label.contains("Create Task makes it now in toastty with codex · gpt-6.1-sol · high."),
-                      footer.label)
+        XCTAssertEqual(footer.label, "Create makes the task now in herdr research with claude · opus-5.5 · xhigh, without the coordinator.")
+        attachScreenshot(named: "coordinator-new-task-create", of: app)
         create.tap()
 
         let notice = app.staticTexts["toastty-subspace-done-notice"]
