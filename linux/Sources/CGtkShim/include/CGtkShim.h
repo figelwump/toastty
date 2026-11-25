@@ -59,4 +59,9 @@ const char *toastty_value_get_string(const GValue *value);
 // user gesture would, e.g. AdwEntryRow "apply".
 void toastty_signal_emit_void(gpointer instance, const char *signal_name);
 
+// A spinner whose angle follows the frame clock's time, so one recreated by
+// a row rebuild keeps turning from where the old one was (GtkSpinner starts
+// again at 0°). CSS node "spinner", class "clock-spinner". ClockSpinner.c.
+GtkWidget *toastty_clock_spinner_new(void);
+
 G_END_DECLS

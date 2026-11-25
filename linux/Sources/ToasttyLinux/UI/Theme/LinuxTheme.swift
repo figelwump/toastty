@@ -72,6 +72,10 @@ public enum LinuxTheme {
 
     public static let css = """
     /* ---- Toastty Linux host chrome ---------------------------------- */
+    /* toastty_clock_spinner (CGtkShim): Adwaita hides a spinner that is not
+       :checked; this one draws its own turn. Placed first so the per-context
+       sizes below win. */
+    spinner.clock-spinner { opacity: 1; min-width: 16px; min-height: 16px; }
     :root {
       --toastty-working: #e8a635;
       --toastty-approval: #e8a635;

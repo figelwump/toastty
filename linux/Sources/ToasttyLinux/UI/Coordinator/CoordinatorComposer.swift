@@ -208,8 +208,7 @@ final class CoordinatorComposer: CoordinatorComposerField {
             ))
         }
         if model.attachmentDraft.pendingCount > 0 {
-            let spinner = gtk_spinner_new()!
-            gtk_spinner_start(cast(spinner))
+            let spinner = toastty_clock_spinner_new()!
             gtk_flow_box_append(cast(attachmentsBox), spinner)
         }
         Gtk.setVisible(attachmentsBox, model.attachmentDraft.isEmpty == false)

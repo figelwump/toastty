@@ -345,6 +345,21 @@ Testing parks the main thread in `dispatchMain()`, where the handle is
 unavailable; the frontend must never call `dispatchMain()` or use an async
 `main`.
 
+Views coalesce redraws with `RenderScheduler` (`UI/GLib/RenderScheduler.swift`),
+not a bare `G_PRIORITY_HIGH_IDLE` idle. A request from outside a render runs
+at high idle priority, before GTK's layout and paint (`GDK_PRIORITY_REDRAW`).
+A request made while a scheduled render runs waits at default idle priority,
+after the paint. A render that changed published state its views observe
+used to re-queue itself ahead of the paint forever: the Tasks list updated
+only while the pointer moved over the window. Such a loop is now logged once
+a minute ("A view keeps re-rendering itself", with the view's name) and
+should be fixed at its source.
+
+Spinners in rows that rebuild use `toastty_clock_spinner_new()` (CGtkShim
+`ClockSpinner.c`), not `GtkSpinner`: its angle follows the frame clock's
+time, so a spinner recreated by a rebuild keeps turning instead of jumping
+back to 0°.
+
 Edits app-logic made in other workstreams' files for the wiring:
 `linux/Package.swift` gtk-shell block (`ToasttyLinuxUI` depends on
 `ToasttyAppLogic`, defines `TOASTTY_LINUX_APP_LOGIC`),

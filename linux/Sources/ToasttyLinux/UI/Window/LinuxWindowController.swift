@@ -54,7 +54,10 @@ public final class LinuxWindowController {
     /// Linux sidebar width without an override (the cards are wider than the
     /// macOS rows, so the macOS 180/280 defaults do not carry over).
     static let defaultSidebarWidth: Double = 248
-    private var renderScheduled = false
+    private lazy var renderScheduler = RenderScheduler("window") { [weak self] in
+        guard let self else { return }
+        self.render(self.store.state)
+    }
     private var isClosing = false
     public private(set) var palette: CommandPaletteDialog?
 
@@ -245,13 +248,7 @@ public final class LinuxWindowController {
     // MARK: Rendering
 
     public func scheduleRender() {
-        guard renderScheduled == false else { return }
-        renderScheduled = true
-        MainLoop.idle(priority: Int32(G_PRIORITY_HIGH_IDLE)) { [weak self] in
-            guard let self else { return }
-            self.renderScheduled = false
-            self.render(self.store.state)
-        }
+        renderScheduler.schedule()
     }
 
     public func render(_ state: AppState) {
