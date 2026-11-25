@@ -839,7 +839,8 @@ struct ToasttyMobileRootView: View {
             },
             offerAnswers: conversationOfferAnswers(for: conversationID),
             sendOfferAnswers: conversationOfferAnswersSendAction(for: conversationID),
-            newMessages: conversationNewMessages(for: conversationID)
+            newMessages: conversationNewMessages(for: conversationID),
+            retryConnection: sessionController.refreshLiveSessions
         )
         .id(conversationID)
 #if DEBUG

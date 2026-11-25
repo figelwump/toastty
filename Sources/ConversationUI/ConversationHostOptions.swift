@@ -22,19 +22,27 @@ public struct ToasttyTranscriptOptions: Equatable, Sendable {
     /// running turn's work is open, so that the agent's notes show as they
     /// come, and the line at the end of the chat shows that it works.
     public var foldsRunningWork: Bool
+    /// Whether the transcript shows its own banner while its connection is
+    /// paused, has failed, or it catches up. The iPhone sets it to false:
+    /// its header and a floating notice show the connection, and a banner
+    /// above the messages would move them each time the app reconnects.
+    /// The working row then also stays while the transcript recovers.
+    public var showsConnectionStatus: Bool
 
     public init(
         maximumContentWidth: CGFloat? = nil,
         readOnlyInteractionMessage: String = "Respond on the desktop",
         shortenedPreviewMessage: String = "Preview shortened. Check the desktop for the full request.",
         showsMessageCopyButton: Bool = false,
-        foldsRunningWork: Bool = false
+        foldsRunningWork: Bool = false,
+        showsConnectionStatus: Bool = true
     ) {
         self.maximumContentWidth = maximumContentWidth
         self.readOnlyInteractionMessage = readOnlyInteractionMessage
         self.shortenedPreviewMessage = shortenedPreviewMessage
         self.showsMessageCopyButton = showsMessageCopyButton
         self.foldsRunningWork = foldsRunningWork
+        self.showsConnectionStatus = showsConnectionStatus
     }
 }
 
