@@ -93,7 +93,9 @@ def row(kind, uuid, parent, content, **extra):
 with open(sys.argv[1], "w") as out:
     out.write(row("assistant", "a-2", "u-2", [{"type": "text", "text": long_message}]) + "\n")
     out.write(row("user", "u-3", "a-2", reply) + "\n")
-    out.write(row("assistant", "a-3", "u-3", [{"type": "text", "text": "Merging it now."}]) + "\n")
+    # Force the fresh chat's first layout to overflow the viewport.
+    report = "\n\n".join(f"Checked task {i}." for i in range(1, 41))
+    out.write(row("assistant", "a-3", "u-3", [{"type": "text", "text": report + "\n\nMerging it now."}]) + "\n")
 PY
 cat > $HOMEDIR/.toastty/agents.toml <<TOML
 [claude]
@@ -113,7 +115,14 @@ stop_app() { kill -TERM $APID 2>/dev/null; for i in $(seq 1 50); do kill -0 $API
 cli() { "${envs[@]}" $CLI --json --socket-path $SOCK "$@"; }
 json() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); r=d.get('result',d); print(eval(sys.argv[2]))" "$@"; }
 fail=0; check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
-cleanup() { stop_app; { kill -9 $BPID; wait $BPID; } 2>/dev/null; }
+stop_viewer() {
+  if [[ -n "${VIEWER_PID:-}" ]]; then
+    kill "$VIEWER_PID" 2>/dev/null
+    wait "$VIEWER_PID" 2>/dev/null
+    VIEWER_PID=""
+  fi
+}
+cleanup() { stop_viewer; stop_app; { kill -9 $BPID; wait $BPID; } 2>/dev/null; }
 trap cleanup EXIT
 
 start_app 1 || { tail -30 $WORK/app-1.log; exit 1; }
@@ -241,11 +250,46 @@ done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 
 # Phase C: the coordinator's chat over its terminal and the dock.
+# Attach a viewer so Broadway runs real GTK layout frames. Without one the
+# screenshot helper forces layout, which cannot test post-allocation scroll.
+SCROLL_CHECKS=""
+DOCK_SCROLL_CHECK=""
+RESTART_SCROLL_CHECK=""
+if VIEWER=$(command -v google-chrome || command -v chromium); then
+  "${envs[@]}" "$VIEWER" --headless=new --disable-gpu --no-first-run \
+    --disable-background-timer-throttling --disable-renderer-backgrounding \
+    --disable-backgrounding-occluded-windows --window-size=1280,800 \
+    --user-data-dir="$WORK/chrome" "http://127.0.0.1:$((8080 + DISPLAYNUM))/" > "$WORK/chrome.log" 2>&1 &
+  VIEWER_PID=$!
+  SCROLL_CHECKS=$(cat <<'SCROLL'
+expect coordinatorLatestVisible=true
+coordinator scroll-top
+wait 250
+expect coordinatorLatestVisible=false
+coordinator jump
+wait 400
+expect coordinatorLatestVisible=true
+SCROLL
+)
+  DOCK_SCROLL_CHECK="expect coordinatorLatestVisible=true"
+  RESTART_SCROLL_CHECK=$(cat <<'SCROLL'
+coordinator scroll-top
+wait 250
+expect coordinatorLatestVisible=false
+perform coordinator.restart
+wait 3000
+expect coordinatorCover=chat coordinatorRunning=true coordinatorLatestVisible=true
+SCROLL
+)
+else
+  echo "SKIP coordinator scroll assertions (no Chrome or Chromium Broadway viewer)"
+fi
 cat > $WORK/coordinator.script <<SCRIPT
 wait 500
 perform coordinator.open
 wait 3000
 expect coordinatorRunning=true coordinatorCover=chat
+$SCROLL_CHECKS
 screenshot $WORK/coordinator-full.png
 expect coordinatorChatFits=true
 coordinator reply
@@ -269,17 +313,20 @@ expect coordinatorCover=chat
 perform coordinator.dock.toggle
 wait 800
 expect coordinatorDock=shown
+$DOCK_SCROLL_CHECK
 screenshot $WORK/coordinator-dock.png
 perform coordinator.dock.toggle
 wait 500
 expect coordinatorDock=hidden
+$RESTART_SCROLL_CHECK
 state $WORK/coordinator-state.json
 quit
 SCRIPT
 (cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/coordinator.script $APP > $WORK/app-coordinator.log 2>&1) & APID=$!
 for i in $(seq 1 400); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; CRC=$?
-check "the coordinator script passes (chat cover, a reply to a long message fits, send, Terminal/Chat, dock)" "[ $CRC = 0 ] && ! grep -q 'FAIL' $WORK/app-coordinator.log"
+stop_viewer
+check "the coordinator script passes (chat cover, scrolling with a viewer, reply, send, Terminal/Chat, dock)" "[ $CRC = 0 ] && ! grep -q 'FAIL' $WORK/app-coordinator.log"
 grep 'FAIL' $WORK/app-coordinator.log | head -8
 echo "coordinator chat minimum width after the reply: $(json $WORK/coordinator-chat-state.json 'r.get("coordinatorChatMinWidth")' 2>/dev/null) px"
 for shot in coordinator-full coordinator-replying coordinator-reply-sent coordinator-dock; do
