@@ -1212,9 +1212,11 @@ you when it is not sure, and creates the task.
   The terminal shows the message as typed.
 - **From the iPhone**, **+** in Home or the Tasks tab, and content shared to
   Toastty, open the New Task sheet as **To Coordinator** while the coordinator's
-  workspace exists. It works as this panel does: **Send**, Auto pills,
-  **Create Task**, and a note when the coordinator is not running or is
-  starting. The phone sends no project hint; set Workspace to name a project.
+  workspace exists. It works as this panel does: **Send**, Auto pills, and a
+  note when the coordinator is not running or is starting. It has one action:
+  once you set both Workspace and Agent, **Send** becomes **Create** and makes
+  the task directly, with only the values you chose. The phone sends no
+  project hint; set Workspace to name a project.
   See [To the coordinator](remote-access.md#to-the-coordinator).
 
 A message looks like this in the coordinator's terminal:

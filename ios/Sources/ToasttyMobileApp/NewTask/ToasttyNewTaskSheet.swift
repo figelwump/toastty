@@ -8,9 +8,10 @@ import ToasttyMobileDomain
 /// decision; this view only draws it and forwards edits.
 ///
 /// While the Mac has a coordinator, the form is titled To Coordinator, as
-/// the Mac's panel is labeled: Send is the main action, the Workspace and
-/// Agent pills start as Auto, and Create Task under the pills makes the
-/// task directly.
+/// the Mac's panel is labeled: the Workspace and Agent pills start as Auto,
+/// and the action is Send. Once the user sets both pills, the form has
+/// nothing left for the coordinator to choose: it is titled New Task, and
+/// the action becomes Create, which makes the task directly.
 struct ToasttyNewTaskSheet: View {
     let model: ToasttyNewTaskModel
     /// Called once the Mac saved the task, before the sheet dismisses itself.
@@ -30,7 +31,7 @@ struct ToasttyNewTaskSheet: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(ToasttyDesignTokens.background)
-                .navigationTitle(model.sendsToCoordinator ? "To Coordinator" : "New Task")
+                .navigationTitle(model.createsDirectly ? "New Task" : "To Coordinator")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -52,7 +53,7 @@ struct ToasttyNewTaskSheet: View {
                             ProgressView()
                                 .accessibilityLabel("Sending")
                                 .accessibilityIdentifier("toastty-mobile-new-task-sending")
-                        } else if model.sendsToCoordinator {
+                        } else if model.createsDirectly == false {
                             Button("Send") {
                                 textIsFocused = false
                                 Task { await model.send() }
@@ -192,10 +193,8 @@ struct ToasttyNewTaskSheet: View {
                 if model.frequentPresets.isEmpty == false {
                     frequent
                 }
-                if model.sendsToCoordinator {
-                    createDirectly
-                } else {
-                    Text("The Mac saves the task at once and runs setup.")
+                if let line = createLine {
+                    Text(line)
                         .font(.footnote)
                         .foregroundStyle(ToasttyDesignTokens.mutedText)
                         .padding(.top, 4)
@@ -365,48 +364,13 @@ struct ToasttyNewTaskSheet: View {
         .accessibilityIdentifier("toastty-mobile-new-task-frequent-\(index)")
     }
 
-    /// Create Task while the sheet sends to the coordinator: the task is
-    /// made directly, with the values the pills started on for a pill left
-    /// on Auto, which the line under the button names.
-    private var createDirectly: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                textIsFocused = false
-                Task { await model.create() }
-            } label: {
-                HStack(spacing: 6) {
-                    if model.phase == .creating {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text("Create Task")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(model.canCreate ? ToasttyDesignTokens.primaryText : ToasttyDesignTokens.mutedText)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(ToasttyDesignTokens.raisedSurface, in: Capsule())
-                .overlay {
-                    Capsule().stroke(ToasttyDesignTokens.border, lineWidth: 1)
-                }
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(model.canCreate == false)
-            .accessibilityIdentifier("toastty-mobile-new-task-create")
-            Text(createSummary)
-                .font(.footnote)
-                .foregroundStyle(ToasttyDesignTokens.mutedText)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("toastty-mobile-new-task-footer")
-        }
-        .padding(.top, 4)
-    }
-
-    private var createSummary: String {
-        guard model.workspaces.contains(where: { $0.id == model.workspaceID }), let preset = model.preset else {
-            return "Send leaves Auto to the coordinator, which creates the task. Create Task needs a project and an agent on your Mac."
-        }
-        return "Send leaves Auto to the coordinator, which creates the task. Create Task makes it now in \(model.workspaceTitle) with \(ToasttyNewTaskModel.title(preset))."
+    /// The line under the pills. Without a coordinator it says what Create
+    /// does. With one, it shows only once the user set both pills, to say
+    /// why Send became Create. Under Auto the form needs no line.
+    private var createLine: String? {
+        guard model.sendsToCoordinator else { return "The Mac saves the task at once and runs setup." }
+        guard model.createsDirectly, let preset = model.preset else { return nil }
+        return "Create makes the task now in \(model.workspaceTitle) with \(ToasttyNewTaskModel.title(preset)), without the coordinator."
     }
 
     // MARK: - Pieces

@@ -1346,10 +1346,12 @@ not sure, and creates the task.
   Tasks tab, which show every project, and the Mac's selection says where you
   last worked on the Mac, not what you look at on the phone. Set Workspace to
   name a project.
-- **Create Task** under the pills makes the task directly, without the
-  coordinator, as the sheet does without one. A pill left on Auto uses the
-  value the sheet starts on without a coordinator, and the line under the
-  button names both.
+- **Create** takes the place of **Send** once you set both Workspace and
+  Agent: the coordinator has nothing left to choose, so the sheet, now titled
+  **New Task**, makes the task directly, as it does without a coordinator. A
+  line under the pills names the project and agent. Set either pill back to
+  Auto and the action is **Send** again. A value you did not choose is never
+  used for a create.
 - **The message waits on the Mac** until the coordinator's prompt takes it,
   and never goes into a running turn, as for quick entry on the Mac. When the
   coordinator is not running or is starting, the sheet says so before you
