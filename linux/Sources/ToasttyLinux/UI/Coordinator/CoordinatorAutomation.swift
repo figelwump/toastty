@@ -13,6 +13,8 @@ extension LinuxAppController {
     ///     coordinator queue                # Ctrl+Return in that field
     ///     coordinator focus-dock           # give the dock's field the keyboard
     ///     coordinator reply                # Reply on the visible chat's first agent message
+    ///     coordinator scroll-top           # move the visible chat's scrollbar to the top
+    ///     coordinator jump                 # press Jump to latest in the visible chat
     ///     expect coordinatorDock=shown coordinatorCover=chat coordinatorIntro=true
     func installCoordinatorAutomation(ui: TasksUI) {
         AutomationScript.extensionCommands["coordinator"] = { [weak ui] app, argument, script in
@@ -45,6 +47,15 @@ extension LinuxAppController {
                     return
                 }
                 gtk_widget_activate(button)
+            case "scroll-top":
+                guard let chat else { script.reportFailure("coordinator scroll-top: no chat on screen"); return }
+                chat.automationScrollToTop()
+            case "jump":
+                guard let chat, let button = Gtk.find(named: "coordinator.chat.jump", in: chat.root),
+                      gtk_widget_get_mapped(button).bool, gtk_widget_activate(button).bool else {
+                    script.reportFailure("coordinator jump: no Jump to latest button on screen")
+                    return
+                }
             default:
                 script.reportFailure("coordinator: unknown \(argument)")
             }
@@ -91,6 +102,7 @@ extension CoordinatorWindowUI {
             gtk_widget_measure(chat.root, GTK_ORIENTATION_HORIZONTAL, -1, &minimum, nil, nil, nil)
             summary["coordinatorChatMinWidth"] = String(minimum)
             summary["coordinatorChatFits"] = String(minimum <= Self.chatMinimumWidthLimit)
+            summary["coordinatorLatestVisible"] = String(chat.automationLatestVisible)
             // The reply bar's start: who and when, never `Optional(…)`.
             summary["coordinatorReplyBar"] = chat.composer.replyBarLine.map { String($0.prefix(29)) } ?? ""
             summary["coordinatorReplyBarTimeOK"] = String(chat.composer.replyBarLine?.contains("Optional(") == false)

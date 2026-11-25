@@ -304,6 +304,8 @@ final class CoordinatorChatView {
     // MARK: - Automation
 
     var automationTranscriptKeys: [String] { transcript.automationItemKeys }
+    var automationLatestVisible: Bool { transcript.automationLatestVisible }
+    func automationScrollToTop() { transcript.automationScrollToTop() }
     var automationComposerText: String { composer.text }
 }
 #endif

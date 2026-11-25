@@ -51,6 +51,7 @@ final class TranscriptView {
     private var openSubagents: Set<ToasttyTranscriptRowID> = []
     private var lastState: ToasttyConversationPresentationState?
     private var lastInputs: Inputs?
+    private var lastConversationID: UUID?
     private var followsLiveEdge = true
     private var lastJumpRequest: UInt64 = 0
     private var elapsedLabels: [(label: WidgetPtr, prefix: String, suffix: String)] = []
@@ -103,7 +104,7 @@ final class TranscriptView {
 
         if let adjustment = gtk_scrolled_window_get_vadjustment(cast(scroller)) {
             Signal.connect(adjustment, "value-changed") { [weak self] in self?.scrollChanged() }
-            Signal.connect(adjustment, "changed") { [weak self] in self?.layoutChanged() }
+            Signal.connect(adjustment, "changed") { [weak self] in self?.scrollRangeChanged() }
         }
     }
 
@@ -139,6 +140,9 @@ final class TranscriptView {
         )
         let jump = jumpRequest != lastJumpRequest
         lastJumpRequest = jumpRequest
+        let conversationID = state.rows.last?.id.conversationID
+        let replacesConversation = conversationID != nil && lastConversationID != nil && conversationID != lastConversationID
+        if let conversationID { lastConversationID = conversationID }
         let opensTranscript = lastState?.blocks.isEmpty != false && state.blocks.isEmpty == false
         if inputs != lastInputs {
             keepScrollForUpdate()
@@ -152,11 +156,14 @@ final class TranscriptView {
         updateBanner(state.phase, truncated: state.historyTruncated)
         if jump {
             jumpToLiveEdge()
-        } else if opensTranscript, entries.contains(where: { $0.item.key == "new" }) {
+        } else if opensTranscript || replacesConversation, entries.contains(where: { $0.item.key == "new" }) {
             // An unread divider is a destination when the chat opens, not
             // when a live message is appended while the reader is elsewhere.
             followsLiveEdge = false
             requestScroll(.widget("new"))
+        } else if replacesConversation {
+            // Reading history in the old chat shouldn't leave a fresh one detached.
+            jumpToLiveEdge()
         }
         updateElapsedTimer()
         updateJumpButton()
@@ -885,7 +892,7 @@ final class TranscriptView {
                 selfRef.scrollIdle = MainLoop.idle { [weak selfRef] in
                     guard let selfRef else { return }
                     selfRef.scrollIdle = 0
-                    selfRef.layoutChanged()
+                    selfRef.applyPendingScroll()
                     selfRef.pendingScroll = nil
                     selfRef.updateJumpButton()
                 }
@@ -894,21 +901,28 @@ final class TranscriptView {
         }, Unmanaged.passUnretained(self).toOpaque(), nil)
     }
 
-    /// GTK has allocated the changed content and updated the scroll range.
-    private func layoutChanged() {
-        guard let adjustment else { return }
+    private func scrollRangeChanged() {
+        // GtkViewport updates the range during allocation, before positioning its
+        // child. Setting the value here can be overwritten by that allocation:
+        // the scrollbar then says "bottom" while the content still shows the top.
+        if pendingScroll == nil, followsLiveEdge {
+            requestScroll(.liveEdge)
+        }
+        updateJumpButton()
+    }
+
+    private func applyPendingScroll() {
+        guard let adjustment, let pendingScroll else { return }
         let upper = gtk_adjustment_get_upper(cast(adjustment))
         let page = gtk_adjustment_get_page_size(cast(adjustment))
         switch pendingScroll {
-        case .liveEdge?:
+        case .liveEdge:
             gtk_adjustment_set_value(cast(adjustment), upper - page)
-        case .widget(let key)?:
+        case .widget(let key):
             if let y = rowTop(key: key) { gtk_adjustment_set_value(cast(adjustment), max(0, y - 24)) }
-        case .position(let key, let offset, let fallback)?:
+        case .position(let key, let offset, let fallback):
             let value = key.flatMap { rowTop(key: $0) }.map { $0 + offset } ?? fallback
             gtk_adjustment_set_value(cast(adjustment), value)
-        case nil:
-            if followsLiveEdge { gtk_adjustment_set_value(cast(adjustment), upper - page) }
         }
         updateJumpButton()
     }
@@ -916,7 +930,7 @@ final class TranscriptView {
     func jumpToLiveEdge() {
         followsLiveEdge = true
         requestScroll(.liveEdge)
-        layoutChanged()
+        applyPendingScroll()
     }
 
     private func reveal(rowID: ToasttyTranscriptRowID) {
@@ -926,7 +940,7 @@ final class TranscriptView {
         }) else { return }
         followsLiveEdge = false
         requestScroll(.widget(entry.item.key))
-        layoutChanged()
+        applyPendingScroll()
     }
 
     private func loadOlder() {
@@ -968,5 +982,20 @@ final class TranscriptView {
     }
 
     var automationItemKeys: [String] { entries.map(\.item.key) }
+
+    var automationLatestVisible: Bool {
+        // The adjustment can report that it is at the bottom even if GTK
+        // allocated the last row outside the viewport. Check the actual row.
+        guard let last = entries.last else { return false }
+        var bounds = graphene_rect_t()
+        guard gtk_widget_compute_bounds(last.widget.widgetPointer, scroller, &bounds).bool else { return false }
+        let bottom = bounds.origin.y + bounds.size.height
+        return bottom > 0 && bottom <= Float(gtk_widget_get_height(scroller)) + 1
+    }
+
+    func automationScrollToTop() {
+        guard let adjustment else { return }
+        gtk_adjustment_set_value(cast(adjustment), gtk_adjustment_get_lower(cast(adjustment)))
+    }
 }
 #endif
