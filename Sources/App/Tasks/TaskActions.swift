@@ -107,6 +107,10 @@ enum TaskActions {
             try coordinator.retry(taskID: taskID)
         case .delete(let taskID):
             try coordinator.delete(taskID: taskID)
+        #if os(Linux)
+        case .continueAsNewTask(let taskID):
+            coordinator.board?.continueAsNewTask?(taskID)
+        #endif
         }
     }
 
@@ -131,6 +135,10 @@ enum TaskActions {
         case .trackAsTask(let workspaceID): subject = .taskSpace(workspaceID)
         case .action(_, let taskID, _), .retry(let taskID, _), .retryTriage(let taskID), .delete(let taskID):
             subject = .task(taskID)
+        #if os(Linux)
+        case .continueAsNewTask(let taskID):
+            subject = .task(taskID)
+        #endif
         }
         guard let board = coordinator.board,
               let current = board.items().first(where: { $0.id == subject }) else { return false }
@@ -148,6 +156,9 @@ enum TaskActions {
         case .action(let action, let id, _): (start, taskID) = (action.failureTitle, id)
         case .retry(let id, _), .retryTriage(let id): (start, taskID) = ("Unable to Retry", id)
         case .delete(let id): (start, taskID) = ("Unable to Delete", id)
+        #if os(Linux)
+        case .continueAsNewTask(let id): (start, taskID) = ("Unable to Continue", id)
+        #endif
         }
         guard let title = coordinator.records.record(id: taskID)?.title else { return start }
         return "\(start) \(title)"

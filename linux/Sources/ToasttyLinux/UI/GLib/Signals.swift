@@ -32,6 +32,7 @@ public typealias KeyReleaseHandler = @MainActor (_ keyval: UInt32, _ keycode: UI
 public typealias PressHandler = @MainActor (_ nPress: Int32, _ x: Double, _ y: Double) -> Void
 public typealias DoubleHandler = @MainActor (Double, Double) -> Void
 public typealias UIntHandler = @MainActor (UInt32) -> Void
+public typealias IntPairHandler = @MainActor (Int32, Int32) -> Void
 public typealias PointerBoolHandler = @MainActor (UnsafeMutableRawPointer?) -> Bool
 public typealias PointerUIntHandler = @MainActor (UnsafeMutableRawPointer?, UInt32) -> Void
 
@@ -72,6 +73,12 @@ private let pointerUIntTrampoline: @convention(c) (gpointer?, gpointer?, guint, 
 private let uintTrampoline: @convention(c) (gpointer?, guint, gpointer?) -> Void = { _, value, data in
     let b: SignalBox<UIntHandler> = box(data)
     MainActor.assumeIsolated { b.handler(value) }
+}
+
+// (instance, int, int, user_data), as GtkDrawingArea::resize
+private let intPairTrampoline: @convention(c) (gpointer?, gint, gint, gpointer?) -> Void = { _, first, second, data in
+    let b: SignalBox<IntPairHandler> = box(data)
+    MainActor.assumeIsolated { b.handler(first, second) }
 }
 
 // GtkEventControllerKey::key-pressed (controller, keyval, keycode, state, user_data) -> gboolean
@@ -184,6 +191,12 @@ public enum Signal {
     @discardableResult
     public static func connectUInt(_ instance: some GPointer, _ name: String, after: Bool = false, _ handler: @escaping UIntHandler) -> gulong {
         connectRaw(instance, name, trampoline: unsafeBitCast(uintTrampoline, to: UnsafeMutableRawPointer.self), handler: handler, after: after)
+    }
+
+    /// A signal with two `int` arguments, such as `GtkDrawingArea::resize`.
+    @discardableResult
+    public static func connectIntPair(_ instance: some GPointer, _ name: String, _ handler: @escaping IntPairHandler) -> gulong {
+        connectRaw(instance, name, trampoline: unsafeBitCast(intPairTrampoline, to: UnsafeMutableRawPointer.self), handler: handler, after: false)
     }
 
     @discardableResult

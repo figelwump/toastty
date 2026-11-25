@@ -805,6 +805,18 @@ final class QuickEntryController: ObservableObject {
             selectionText: selectionText
         ))
     }
+
+    /// Opens the panel to continue a finished task: its context attached,
+    /// and its top-level workspace chosen while that workspace is open.
+    func presentContinuation(_ continuation: QuickEntryContinuation, workspaceID: UUID?) {
+        let state = store.state
+        var rootID: UUID?
+        if let workspaceID, state.workspacesByID[workspaceID] != nil {
+            let root = state.subspaceParentIDsByWorkspaceID()[workspaceID] ?? workspaceID
+            rootID = state.isCoordinatorWorkspace(root) ? nil : root
+        }
+        present(prefill: QuickEntryPrefill(workspaceID: rootID, continuation: continuation))
+    }
 }
 
 /// What the platform's hot key registration did.

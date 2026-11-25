@@ -63,10 +63,22 @@ struct WorkspaceTaskOutcome: Codable, Equatable, Sendable {
     var at: Date
 }
 
-/// `~/.toastty/workspace-overview.json`: kept Scratchpads, browser pins, synopses and task
-/// outcomes. Dates use Foundation's default encoding, so a reread equals
-/// what was written. Written whole on every change; a file it cannot read starts
-/// empty and is left in place until the next write.
+/// What a finished task's agent wrote for whoever continues its work: a
+/// Markdown brief (goal, what was done, state, decisions, what remains, open
+/// questions, where to look). **Continue as New Task** attaches it, with the
+/// facts Toastty knows, to the new task.
+struct WorkspaceTaskContext: Codable, Equatable, Sendable {
+    var text: String
+    var at: Date
+    var sessionID: String?
+    /// The task's title when the context was written.
+    var taskTitle: String?
+}
+
+/// `~/.toastty/workspace-overview.json`: kept Scratchpads, browser pins,
+/// synopses, task outcomes and task contexts. Dates use Foundation's default
+/// encoding, so a reread equals what was written. Written whole on every
+/// change; a file it cannot read starts empty and is left in place until the next write.
 final class WorkspaceOverviewStore {
     struct Contents: Codable, Equatable {
         var version = 1
@@ -75,14 +87,29 @@ final class WorkspaceOverviewStore {
         var synopses: [String: WorkspaceSynopsis] = [:]
         /// By task ID.
         var outcomes: [String: WorkspaceTaskOutcome] = [:]
-        /// Optional so files written before browser pins still decode.
-        var browserPins: [WorkspaceBrowserPin]?
+        /// By task ID.
+        var contexts: [String: WorkspaceTaskContext] = [:]
+        var browserPins: [WorkspaceBrowserPin] = []
+
+        init() {}
+
+        // A file written before a key existed still reads.
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            scratchpads = try container.decodeIfPresent([WorkspaceScratchpadEntry].self, forKey: .scratchpads) ?? []
+            synopses = try container.decodeIfPresent([String: WorkspaceSynopsis].self, forKey: .synopses) ?? [:]
+            outcomes = try container.decodeIfPresent([String: WorkspaceTaskOutcome].self, forKey: .outcomes) ?? [:]
+            contexts = try container.decodeIfPresent([String: WorkspaceTaskContext].self, forKey: .contexts) ?? [:]
+            browserPins = try container.decodeIfPresent([WorkspaceBrowserPin].self, forKey: .browserPins) ?? []
+        }
     }
 
     static let fileName = "workspace-overview.json"
     /// Outcomes keep at most this much text.
     static let maxOutcomeCharacters = 1_200
     static let maxSynopsisCharacters = 4_000
+    static let maxContextCharacters = 8_000
 
     let fileURL: URL
     private(set) var contents: Contents

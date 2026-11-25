@@ -589,7 +589,7 @@ final class AppControlExecutor {
             return try manageScratchpad(action: action, args: args)
         #if os(Linux)
         case .workspaceScratchpadKeep, .workspaceScratchpadOpen, .workspaceScratchpadExport,
-             .workspaceScratchpadDelete, .workspaceSynopsisSet:
+             .workspaceScratchpadDelete, .workspaceSynopsisSet, .workspaceTaskContextSet:
             return try runWorkspaceOverviewAction(action, args: args)
         #endif
 
@@ -1144,7 +1144,7 @@ final class AppControlExecutor {
             return try runWebhookList(args: args)
 
         #if os(Linux)
-        case .workspaceOverview, .workspaceScratchpadList:
+        case .workspaceOverview, .workspaceScratchpadList, .workspaceTaskContext:
             return try runWorkspaceOverviewQuery(query, args: args)
         #endif
         }

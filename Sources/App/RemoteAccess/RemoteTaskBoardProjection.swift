@@ -223,6 +223,11 @@ enum RemoteTaskBoardProjection {
                 return RemoteTaskActionItem(action: .retry, title: menuItem.title)
             case .delete:
                 return RemoteTaskActionItem(action: .delete, title: menuItem.title)
+            #if os(Linux)
+            case .continueAsNewTask:
+                // It opens New Task on the computer; the iPhone has no such panel.
+                return nil
+            #endif
             }
         }
     }
