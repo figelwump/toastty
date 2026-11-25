@@ -191,6 +191,98 @@ struct WorkspaceOverviewTests {
         #expect(WorkspaceOverviewModel.generatedSynopsis(title: "New house", projectRoot: nil, items: [], finished: 0)
             == "It has no tasks yet.")
     }
+
+    @Test func browserPinsSaveTheCurrentPageInTheParentAndSurviveTheSource() throws {
+        let fixture = try WorkspaceOverviewFixture()
+        let service = fixture.service
+        let store = fixture.store
+        let url = "https://example.com/docs#setup"
+        #expect(store.send(.setWorkspaceRootDirectory(workspaceID: fixture.parentID, rootDirectory: fixture.tempURL.path)))
+        #expect(store.createBrowserPanel(
+            workspaceID: fixture.taskSpaceID,
+            request: BrowserPanelCreateRequest(initialURL: "https://example.com/", placementOverride: .rightPanel)
+        ))
+        let source = try #require(store.state.workspacesByID[fixture.taskSpaceID]?.rightAuxPanel.activePanelID)
+        #expect(store.send(.updateWebPanelMetadata(panelID: source, title: "Setup Guide", url: url)))
+        let result = try service.pinBrowser(panelID: source)
+        #expect(result.workspaceID == fixture.parentID)
+        #expect(result.created)
+        #expect(try service.pinBrowser(panelID: source).created == false)
+        let pins = service.browserPins(forWorkspace: fixture.parentID)
+        #expect(pins.count == 1)
+        let pin = try #require(pins.first)
+        #expect(pin.url == url)
+        #expect(pin.title == "Setup Guide")
+        #expect(service.browserPins(forWorkspace: fixture.taskSpaceID).isEmpty)
+        #expect(throws: WorkspaceOverviewError.browserNotPinned) {
+            try service.openBrowser(pin, in: fixture.taskSpaceID)
+        }
+        #expect(store.send(.updateWebPanelMetadata(panelID: source, title: "Another Page", url: "https://example.com/other")))
+        #expect(store.send(.closeWorkspace(workspaceID: fixture.taskSpaceID)))
+        let taskID = UUID().uuidString
+        let context = WorkspaceTaskContext(text: "Continue the release", at: Date(), sessionID: nil, taskTitle: "Release")
+        try service.overviewStore.update { $0.contexts[taskID] = context }
+        let reread = WorkspaceOverviewStore(fileURL: service.overviewStore.fileURL)
+        #expect(reread.contents.browserPins == [pin])
+        #expect(reread.contents.contexts[taskID] == context)
+        #expect(service.browserPins(forWorkspace: fixture.parentID) == [pin])
+
+        // As with Scratchpads, reopening the project under a new workspace ID finds the pin.
+        let before = Set(store.state.workspacesByID.keys)
+        #expect(store.send(.createWorkspace(windowID: fixture.windowID, title: "Project reopened", activate: true)))
+        let reopened = try #require(store.state.workspacesByID.keys.first { !before.contains($0) })
+        #expect(store.send(.setWorkspaceRootDirectory(workspaceID: reopened, rootDirectory: fixture.tempURL.path)))
+        #expect(service.browserPins(forWorkspace: reopened) == [pin])
+    }
+
+    @Test func browserPinsRevealAndReuseRightPanelTabsAndCanBeUnpinned() throws {
+        let fixture = try WorkspaceOverviewFixture()
+        let store = fixture.store
+        let service = fixture.service
+        let workspaceID = fixture.parentID
+        let url = "file:///tmp/toastty-guide.html"
+        #expect(store.createBrowserPanel(
+            workspaceID: fixture.taskSpaceID,
+            request: BrowserPanelCreateRequest(initialURL: url, placementOverride: .rightPanel)
+        ))
+        let source = try #require(store.state.workspacesByID[fixture.taskSpaceID]?.rightAuxPanel.activePanelID)
+        #expect(try service.pinBrowser(panelID: source).created)
+        let pin = try #require(service.browserPins(forWorkspace: workspaceID).first)
+        try service.openBrowser(pin, in: workspaceID)
+        let panel = try #require(store.state.workspacesByID[workspaceID]?.rightAuxPanel)
+        let browser = try #require(panel.orderedTabs.first)
+        guard case .web(let web) = browser.panelState else { Issue.record("Expected a browser"); return }
+        #expect(web.definition == .browser)
+        #expect(web.restorableURL == url)
+        #expect(panel.isVisible)
+
+        #expect(store.send(.toggleRightAuxPanel(workspaceID: workspaceID)))
+        try service.openBrowser(pin, in: workspaceID)
+        let reopened = try #require(store.state.workspacesByID[workspaceID]?.rightAuxPanel)
+        #expect(reopened.isVisible)
+        #expect(reopened.activeTabID == browser.id)
+        #expect(reopened.orderedTabs.count == 1)
+
+        try service.unpinBrowser(pin, in: workspaceID)
+        #expect(service.browserPins(forWorkspace: workspaceID).isEmpty)
+        #expect(store.state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID == browser.id)
+        #expect(WorkspaceOverviewStore(fileURL: service.overviewStore.fileURL).contents.browserPins.isEmpty)
+    }
+
+    @Test func olderOverviewFilesAndBlankBrowsersStillWork() throws {
+        let fixture = try WorkspaceOverviewFixture()
+        let file = fixture.service.overviewStore.fileURL
+        try Data("""
+        {"version":1,"scratchpads":[],"outcomes":{},"synopses":{"old":{"text":"About","updatedAt":0}}}
+        """.utf8).write(to: file)
+        let reread = WorkspaceOverviewStore(fileURL: file)
+        #expect(reread.contents.synopses["old"]?.text == "About")
+        #expect(reread.contents.browserPins.isEmpty)
+        #expect(WorkspaceOverviewService.pinnableBrowserURL(.init(definition: .browser)) == nil)
+        #expect(WorkspaceOverviewService.pinnableBrowserURL(.init(
+            definition: .browser, initialURL: "https://example.com", currentURL: "about:blank"
+        )) == nil)
+    }
 }
 
 @MainActor

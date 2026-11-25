@@ -40,6 +40,14 @@ struct WorkspaceScratchpadEntry: Codable, Equatable, Sendable {
     var keptBy: String?
 }
 
+/// A saved page, independent of the browser tab it was pinned from.
+struct WorkspaceBrowserPin: Codable, Equatable, Sendable {
+    var workspaceID: UUID
+    var projectRoot: String?
+    var url: String
+    var title: String
+}
+
 /// What a workspace is about, as an agent last wrote it.
 struct WorkspaceSynopsis: Codable, Equatable, Sendable {
     var text: String
@@ -67,10 +75,10 @@ struct WorkspaceTaskContext: Codable, Equatable, Sendable {
     var taskTitle: String?
 }
 
-/// `~/.toastty/workspace-overview.json`: kept Scratchpads, synopses, task
-/// outcomes and task contexts. Dates use Foundation's default encoding, so a
-/// reread equals what was written. Written whole on every change; a file it
-/// cannot read starts empty and is left in place until the next write.
+/// `~/.toastty/workspace-overview.json`: kept Scratchpads, browser pins,
+/// synopses, task outcomes and task contexts. Dates use Foundation's default
+/// encoding, so a reread equals what was written. Written whole on every
+/// change; a file it cannot read starts empty and is left in place until the next write.
 final class WorkspaceOverviewStore {
     struct Contents: Codable, Equatable {
         var version = 1
@@ -81,6 +89,7 @@ final class WorkspaceOverviewStore {
         var outcomes: [String: WorkspaceTaskOutcome] = [:]
         /// By task ID.
         var contexts: [String: WorkspaceTaskContext] = [:]
+        var browserPins: [WorkspaceBrowserPin] = []
 
         init() {}
 
@@ -92,6 +101,7 @@ final class WorkspaceOverviewStore {
             synopses = try container.decodeIfPresent([String: WorkspaceSynopsis].self, forKey: .synopses) ?? [:]
             outcomes = try container.decodeIfPresent([String: WorkspaceTaskOutcome].self, forKey: .outcomes) ?? [:]
             contexts = try container.decodeIfPresent([String: WorkspaceTaskContext].self, forKey: .contexts) ?? [:]
+            browserPins = try container.decodeIfPresent([WorkspaceBrowserPin].self, forKey: .browserPins) ?? []
         }
     }
 
