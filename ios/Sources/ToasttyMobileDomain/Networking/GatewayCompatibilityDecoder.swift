@@ -181,6 +181,7 @@ public struct GatewayCompatibilityDecoder: Sendable {
             title: title,
             group: group,
             mark: object.lossyString("mark").flatMap(RemoteTaskMark.init(rawValue:)),
+            showsAgentActivity: (try? object.optionalBool("showsAgentActivity")) ?? false,
             statusLine: statusLine,
             rowSummary: object.lossyString("rowSummary"),
             stageTitle: object.lossyString("stageTitle") ?? "",

@@ -485,7 +485,7 @@ struct CoordinatorTaskChips {
                 markColor: Self.chipColor(Self.markColor(for: item)),
                 title: ConversationLinkChip.taskTitle(item.title),
                 detail: item.pullRequest.map { "#\($0.number)" },
-                showsActivity: Self.showsActivity(for: item)
+                showsActivity: TaskBoardPresentation.showsAgentActivity(item)
             )
         }
         self.chips = chips
@@ -493,15 +493,6 @@ struct CoordinatorTaskChips {
 
     var presenter: ConversationLinkPresenter {
         .taskChips(chips)
-    }
-
-    /// A spinner in place of the dot while the task's agent works, as the
-    /// Tasks view draws it.
-    static func showsActivity(for item: TaskBoardItem) -> Bool {
-        switch item.stage {
-        case .running, .idle: item.agent == .working
-        default: false
-        }
     }
 
     /// The color of the task's stage mark, as the Tasks view draws it.
