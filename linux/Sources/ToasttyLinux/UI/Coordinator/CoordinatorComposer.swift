@@ -29,6 +29,12 @@ final class CoordinatorComposer: CoordinatorComposerField {
     private var isSyncing = false
     private var lastFocusRequest = 0
     private var attachmentsModel: [URL] = []
+    /// The reply the bar shows, so typing does not redo its line.
+    private var shownReplyTarget: CoordinatorReplyTarget?
+    /// The reply bar's line, for automation.
+    var replyBarLine: String? {
+        gtk_widget_get_visible(replyBar).bool ? gtk_label_get_text(cast(replyLabel)).map { String(cString: $0) } : nil
+    }
     private let mentions: CoordinatorMentionPopover
     var onShowTerminal: (() -> Void)?
 
@@ -124,6 +130,13 @@ final class CoordinatorComposer: CoordinatorComposerField {
 
     // MARK: - Render
 
+    /// The reply bar's line, as the Mac's: who and when, then the start of
+    /// the message on one line (the label cuts it to its width).
+    static func replyBarText(_ reply: CoordinatorReplyTarget) -> String {
+        let who = reply.time.map { "Replying to the coordinator · \($0)" } ?? "Replying to the coordinator"
+        return "\(who) · \(ToasttyMessageQuote.excerpt(of: reply.text))"
+    }
+
     func render(placeholderText: String) {
         guard let model else { return }
         if text != model.draft {
@@ -135,11 +148,12 @@ final class CoordinatorComposer: CoordinatorComposerField {
         Gtk.setVisible(placeholder, model.draft.isEmpty)
         gtk_text_view_set_editable(cast(textView), (model.isSendingFiles == false).gboolean)
 
-        if let reply = model.replyTarget {
-            Gtk.setLabel(replyLabel, "Replying to the coordinator · \(reply.time) · \(ToasttyMessageQuote.excerpt(of: reply.text))")
-            Gtk.setVisible(replyBar, true)
-        } else {
-            Gtk.setVisible(replyBar, false)
+        if model.replyTarget != shownReplyTarget {
+            shownReplyTarget = model.replyTarget
+            if let reply = model.replyTarget {
+                Gtk.setLabel(replyLabel, Self.replyBarText(reply))
+            }
+            Gtk.setVisible(replyBar, model.replyTarget != nil)
         }
 
         let urls = model.attachmentDraft.attachments.map(\.url)
