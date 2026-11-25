@@ -45,7 +45,9 @@ case "$PWD" in
     printf '{"type":"user","sessionId":"%s","uuid":"u-1","parentUuid":null,"isSidechain":false,"timestamp":"%s","message":{"role":"user","content":"What needs me?"}}\n' "$sid" "$(ts)"
     printf '{"type":"assistant","sessionId":"%s","uuid":"a-1","parentUuid":"u-1","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"toastty task list --json"}}]}}\n' "$sid" "$(ts)"
     printf '{"type":"user","sessionId":"%s","uuid":"u-2","parentUuid":"a-1","isSidechain":false,"timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"[]"}]}}\n' "$sid" "$(ts)"
-    printf '{"type":"assistant","sessionId":"%s","uuid":"a-2","parentUuid":"u-2","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"## Nothing needs you\\n\\n**All clear.** Next check:\\n\\n- the `build` task\\n- [docs](https://example.com)\\n\\n| Task | Stage |\\n|---|---|\\n| Build | Running |"}]}}\n' "$sid" "$(ts)"
+    # The rest: an 11-line message with links and a list, the user's reply
+    # that quotes it, and the answer (written by the e2e script below).
+    sed -e "s/@SID@/$sid/g" -e "s/@TS@/$(ts)/g" "$(dirname "$0")/../coordinator-tail.jsonl"
   } > "$t"
   printf '{"hook_event_name":"SessionStart","session_id":"%s","transcript_path":"%s","cwd":"%s","source":"startup"}' "$sid" "$t" "$PWD" \
     | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
@@ -57,6 +59,40 @@ echo "fake agent up"
 sleep 600
 AGENT
 chmod +x $WORK/bin/claude
+# The coordinator's long message and a reply that quotes it. A reply's quote
+# once set the chat's width, as one line of up to 2,000 characters.
+python3 - "$WORK/coordinator-tail.jsonl" <<'PY'
+import json, sys
+long_message = "\n".join([
+    "## Three tasks need you",
+    "**All clear** on the build. [Fix the sidebar width](https://example.com/tasks/sidebar-width) is ready for review, and its pull request passed every check on the first run.",
+    "",
+    "- [Linux tasks UI flows](https://example.com/tasks/linux-tasks-ui) waits for your answer on the dock shortcut and the names of the two new menu items",
+    "- [Coordinator chat reply layout](https://example.com/tasks/reply-layout) reproduced the wide chat offscreen and is testing a fix now",
+    "- the `build` task",
+    "- [docs](https://example.com)",
+    "",
+    "| Task | Stage |",
+    "|---|---|",
+    "| Build | Running |",
+])
+quote = long_message.split("\n")
+reply = "\n".join(
+    ["[Toastty] Reply from the user | quotes your message of 06:40, %d lines" % len(quote)]
+    + [">" if line == "" else "> " + line for line in quote]
+    + ["Merge the sidebar fix first."]
+)
+def row(kind, uuid, parent, content, **extra):
+    message = {"role": kind, "content": content}
+    if kind == "assistant":
+        message.update(model="claude-opus-5", stop_reason="end_turn")
+    return json.dumps({"type": kind, "sessionId": "@SID@", "uuid": uuid, "parentUuid": parent,
+                       "isSidechain": False, "timestamp": "@TS@", "message": message})
+with open(sys.argv[1], "w") as out:
+    out.write(row("assistant", "a-2", "u-2", [{"type": "text", "text": long_message}]) + "\n")
+    out.write(row("user", "u-3", "a-2", reply) + "\n")
+    out.write(row("assistant", "a-3", "u-3", [{"type": "text", "text": "Merging it now."}]) + "\n")
+PY
 cat > $HOMEDIR/.toastty/agents.toml <<TOML
 [claude]
 displayName = "Fake Claude"
@@ -183,12 +219,19 @@ perform coordinator.open
 wait 3000
 expect coordinatorRunning=true coordinatorCover=chat
 screenshot $WORK/coordinator-full.png
+expect coordinatorChatFits=true
+coordinator reply
+wait 300
+expect coordinatorReplying=true coordinatorChatFits=true coordinatorReplyBar=Replying_to_the_coordinator_· coordinatorReplyBarTimeOK=true
+screenshot $WORK/coordinator-replying.png
 coordinator type Hello_Toasty
 wait 200
 expect coordinatorComposer=Hello_Toasty
 coordinator send
 wait 800
-expect coordinatorComposerEmpty=true
+expect coordinatorComposerEmpty=true coordinatorReplying=false coordinatorChatFits=true
+screenshot $WORK/coordinator-reply-sent.png
+state $WORK/coordinator-chat-state.json
 click coordinator.panel.mode
 wait 300
 expect coordinatorCover=terminal
@@ -208,9 +251,10 @@ SCRIPT
 (cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/coordinator.script $APP > $WORK/app-coordinator.log 2>&1) & APID=$!
 for i in $(seq 1 400); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; CRC=$?
-check "the coordinator script passes (chat cover, send, Terminal/Chat, dock)" "[ $CRC = 0 ] && ! grep -q 'FAIL' $WORK/app-coordinator.log"
+check "the coordinator script passes (chat cover, a reply to a long message fits, send, Terminal/Chat, dock)" "[ $CRC = 0 ] && ! grep -q 'FAIL' $WORK/app-coordinator.log"
 grep 'FAIL' $WORK/app-coordinator.log | head -8
-for shot in coordinator-full coordinator-dock; do
+echo "coordinator chat minimum width after the reply: $(json $WORK/coordinator-chat-state.json 'r.get("coordinatorChatMinWidth")' 2>/dev/null) px"
+for shot in coordinator-full coordinator-replying coordinator-reply-sent coordinator-dock; do
   [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK

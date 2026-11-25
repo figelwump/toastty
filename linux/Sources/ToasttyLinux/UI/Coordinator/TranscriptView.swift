@@ -504,6 +504,10 @@ final class TranscriptView {
         return label
     }
 
+    /// The widest a reply's quote line asks to be, in characters. A short
+    /// reply's bubble stays narrow; the line cuts the rest with "…".
+    static let quoteMaxWidthChars: Int32 = 48
+
     /// The user's message, at the right (macOS bubble): a quote line when it
     /// replies, the text, its files and a caption.
     private func userBubble(
@@ -517,7 +521,15 @@ final class TranscriptView {
         gtk_widget_set_halign(column, GTK_ALIGN_END)
         let bubble = Gtk.vbox(spacing: 6, classes: ["transcript-bubble"])
         if let quote {
-            let quoteLine = Gtk.button("↩ \(quote.timeText.map { "\($0) · " } ?? "")\(quote.excerpt)", classes: ["flat", "transcript-quote"])
+            // One line, cut with "…": the excerpt is the whole quoted
+            // message on one line, and a label that cannot cut it would
+            // make the chat as wide as the message.
+            let quoteText = Gtk.label("↩ \(quote.timeText.map { "\($0) · " } ?? "")\(quote.excerpt)", classes: ["transcript-quote-text"])
+            gtk_label_set_single_line_mode(cast(quoteText), 1)
+            gtk_label_set_max_width_chars(cast(quoteText), Self.quoteMaxWidthChars)
+            let quoteLine = gtk_button_new()!
+            Gtk.addClasses(quoteLine, ["flat", "transcript-quote"])
+            gtk_button_set_child(cast(quoteLine), quoteText)
             gtk_widget_set_tooltip_text(quoteLine, quote.text)
             if let rowID = quote.sourceRowID {
                 Signal.connect(quoteLine, "clicked") { [weak self] in self?.reveal(rowID: rowID) }
@@ -583,7 +595,8 @@ final class TranscriptView {
         case .sender(let name, let timeText):
             let card = Gtk.vbox(spacing: 6, classes: ["transcript-sender"])
             let header = Gtk.hbox(spacing: 6)
-            Gtk.append(header, Gtk.label(name, classes: ["transcript-sender-name"], ellipsize: false))
+            // A task's title can be long: cut it rather than widen the chat.
+            Gtk.append(header, Gtk.label(name, classes: ["transcript-sender-name"]))
             Gtk.append(header, Gtk.label(timeText, classes: ["transcript-caption"], ellipsize: false))
             Gtk.append(card, header)
             let isLong = presentation.text.count > 600
