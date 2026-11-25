@@ -260,7 +260,7 @@ expect rightPanel=true rightPanelTabs=1 rightPanelMapped=true
 action window.toggle-tasks-view
 expect tasksView=shown tabs=1 rightPanel=true rightPanelMapped=false
 action workspace.tab.create
-expect tasksView=hidden tabs=2 rightPanel=false rightPanelTabs=0 rightPanelMapped=false
+expect tasksView=hidden tabs=2 tabBar=shown rightPanel=false rightPanelTabs=0 rightPanelMapped=false
 action window.toggle-tasks-view
 action workspace.tab.select-1
 expect tasksView=hidden tabs=2 tabIndex=0 rightPanel=true rightPanelTabs=1 rightPanelMapped=true
@@ -269,7 +269,7 @@ click sidebar.segment.needsYou
 wait 300
 expect sidebarSegment=needsYou
 action workspace.create
-expect tasksView=hidden sidebarSegment=all tabs=1
+expect tasksView=hidden sidebarSegment=all tabs=1 tabBar=shown
 state $WORK/ui-state.json
 expect workspaceTaskControl=none
 file-write $WORK/test-complete go
@@ -277,7 +277,15 @@ wait-file $WORK/complete-selected
 expect tasksView=hidden workspaceTaskControl=Archive_Task…
 file-write $WORK/finish-second go
 wait-file $WORK/review-ready
-expect tasksView=hidden workspaceTaskControl=Complete_Task
+expect tasksView=hidden workspaceTaskControl=Complete_Task workspaceTaskButtons=primary
+# A task space shows its tab row only while it has a second tab.
+expect tabs=1 tabBar=hidden
+action workspace.tab.create
+wait 300
+expect tabs=2 tabBar=shown
+action workspace.tab.close
+wait 300
+expect tabs=1 tabBar=hidden dialog=none
 screenshot $WORK/workspace-complete.png
 click workspace.task-control.primary
 wait 400
@@ -292,8 +300,16 @@ dialog-respond confirm
 wait 400
 file-write $WORK/complete-clicked go
 wait-file $WORK/merge-selected
-expect tasksView=hidden workspaceTaskControl=Merge_PR
+# 1024 wide with the sidebar: the column is narrow, so the labels shorten.
+expect tasksView=hidden workspaceTaskControl=Merge workspaceTaskCompact=true workspaceTaskButtons=open-pr,primary,options workspaceTaskStatus=none tabBar=hidden
 screenshot $WORK/workspace-merge.png
+resize 1440 800
+wait 400
+expect workspaceTaskControl=Merge_PR workspaceTaskCompact=false workspaceTaskButtons=open-pr,primary,options
+screenshot $WORK/workspace-merge-wide.png
+resize 1024 713
+wait 400
+expect workspaceTaskControl=Merge workspaceTaskCompact=true
 click workspace.task-control.primary
 wait 400
 expect workspaceTaskControl=progress
@@ -305,8 +321,14 @@ action window.toggle-tasks-view
 expect workspaceTaskControl=none
 action window.toggle-tasks-view
 terminal-wait-state 10000 workspaceTaskControl=Open_PR
-expect tasksView=hidden
+expect tasksView=hidden workspaceTaskButtons=open-pr,options workspaceTaskStatus=Checks_running
 screenshot $WORK/workspace-open-pr.png
+resize 1440 800
+wait 400
+expect workspaceTaskControl=Open_PR workspaceTaskCompact=false
+screenshot $WORK/workspace-open-pr-wide.png
+resize 1024 713
+wait 400
 action workspace.merge
 expect tasksView=hidden workspaceTaskControl=progress
 quit
@@ -378,7 +400,7 @@ wait $APID; UIRC=$?
 check "the Tasks view and workspace header script passes" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
-for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-merge workspace-open-pr; do
+for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-merge workspace-merge-wide workspace-open-pr workspace-open-pr-wide; do
   [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK

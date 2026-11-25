@@ -93,7 +93,8 @@ public protocol LinuxWindowFeature: AnyObject {
     var leadingColumn: WidgetPtr? { get }
     /// Rows at the top of the sidebar, under its header bar, or nil.
     var sidebarHeader: WidgetPtr? { get }
-    /// Controls below the workspace title, in place of the usual subtitle.
+    /// Controls at the end of the header bar, before the agent buttons.
+    /// While they show, the title drops its tab and pane subtitle.
     var workspaceHeaderControls: WidgetPtr? { get }
     func render(_ state: AppState)
     /// Runs a command for this window. Return true when handled.

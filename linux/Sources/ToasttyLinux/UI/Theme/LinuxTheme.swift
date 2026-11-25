@@ -194,11 +194,12 @@ public enum LinuxTheme {
       font-size: 0.8em; font-weight: 700; padding: 2px 10px; border-radius: 999px;
       background-color: var(--accent-bg-color); color: var(--accent-fg-color);
     }
-    .workspace-task-control { font-size: 0.85em; margin-bottom: 3px; }
-    .workspace-task-control button { min-height: 20px; min-width: 20px; padding: 0 6px; }
+    .workspace-task-control { margin-start: 12px; }
     .workspace-task-control popover button { min-height: 28px; padding: 2px 8px; }
-    .workspace-task-control spinner { min-height: 12px; min-width: 12px; }
     .workspace-task-control .workspace-task-done { color: var(--toastty-done); }
+    .workspace-task-status { font-size: 0.9em; margin-end: 2px; }
+    .workspace-task-status-dot { min-width: 8px; min-height: 8px; border-radius: 999px; background-color: var(--toastty-working); }
+    .workspace-task-separator { margin: 8px 2px 8px 4px; }
 
     .terminal-placeholder { font-family: monospace; font-size: 11pt; padding: 10px 12px; }
     .terminal-placeholder .prompt { color: #7ec2b2; }

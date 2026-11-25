@@ -13,8 +13,8 @@ import Foundation
 ///       └ AdwOverlaySplitView (right panel, end side, Shift+F9)
 ///         ├ sidebar: RightPanelController
 ///         └ AdwToolbarView
-///           ├ AdwHeaderBar (sidebar toggle, new tab, title, zoom pill, menu, right panel)
-///           ├ AdwTabBar (the selected workspace's tabs)
+///           ├ AdwHeaderBar (sidebar toggle, new tab, title, feature controls, agents, zoom pill, menu, right panel)
+///           ├ AdwTabBar (the selected workspace's tabs; only with 2+ tabs in a task space)
 ///           └ GtkStack: workspace content | empty state | feature pages (Tasks)
 /// ```
 ///
@@ -32,8 +32,8 @@ public final class LinuxWindowController {
     private let toastOverlay: WidgetPtr
     private let outerSplit: WidgetPtr
     private let innerSplit: WidgetPtr
+    private let header: WidgetPtr
     private let windowTitle: WidgetPtr
-    private let workspaceHeader: WidgetPtr
     private let tabBar: WidgetPtr
     private let zoomPill: WidgetPtr
     /// Header agent buttons (macOS top bar): one per agent profile, or
@@ -61,6 +61,11 @@ public final class LinuxWindowController {
     }
     private var isClosing = false
     public private(set) var palette: CommandPaletteDialog?
+
+    /// The width of the main column (header bar, tabs, content), and
+    /// handlers for when it changes, for header controls that shorten.
+    public private(set) var contentWidth: Int32 = 0
+    public var onContentWidthChanged: [@MainActor (Int32) -> Void] = []
 
     /// Window-level request to run an app command (quit, new window …).
     public var onAppCommand: ((String, UUID) -> Void)?
@@ -90,7 +95,7 @@ public final class LinuxWindowController {
 
         // Main column.
         let toolbar = adw_toolbar_view_new()!
-        let header = adw_header_bar_new()!
+        header = adw_header_bar_new()!
         let sidebarButton = Gtk.iconButton(
             "sidebar-show-symbolic",
             tooltip: "Toggle Sidebar (\(ShortcutLabels.label(forCommand: "window.toggle-sidebar") ?? ""))",
@@ -104,10 +109,7 @@ public final class LinuxWindowController {
         )
         adw_header_bar_pack_start(cast(header), newTabButton)
         windowTitle = adw_window_title_new("Toastty", nil)
-        workspaceHeader = Gtk.vbox(spacing: 2)
-        gtk_widget_set_valign(workspaceHeader, GTK_ALIGN_CENTER)
-        Gtk.append(workspaceHeader, windowTitle)
-        adw_header_bar_set_title_widget(cast(header), workspaceHeader)
+        adw_header_bar_set_title_widget(cast(header), windowTitle)
 
         let menuButton = gtk_menu_button_new()!
         gtk_menu_button_set_icon_name(cast(menuButton), "open-menu-symbolic")
@@ -143,6 +145,11 @@ public final class LinuxWindowController {
         adw_tab_bar_set_autohide(cast(tabBar), preferences.tabBarAutohide.gboolean)
         adw_tab_bar_set_expand_tabs(cast(tabBar), 0)
         adw_toolbar_view_add_top_bar(cast(toolbar), tabBar)
+        // A zero-height strip across the column that reports its width.
+        let widthProbe = gtk_drawing_area_new()!
+        gtk_widget_set_hexpand(widthProbe, 1)
+        gtk_widget_set_can_target(widthProbe, 0)
+        adw_toolbar_view_add_top_bar(cast(toolbar), widthProbe)
 
         mainStack = gtk_stack_new()
         // Sized by the page it shows: a hidden covering page (the Tasks
@@ -199,6 +206,12 @@ public final class LinuxWindowController {
         sidebarResize.onWidthChanged = { [weak self] width in self?.resizeSidebar(to: width) }
         rightPanelResize.onWidthChanged = { [weak self] width in self?.resizeRightPanel(to: width) }
 
+        Signal.connectIntPair(widthProbe, "resize") { [weak self] width, _ in
+            guard let self, width != self.contentWidth else { return }
+            self.contentWidth = width
+            for handler in self.onContentWidthChanged { handler(width) }
+        }
+
         installActions()
         keyboard = KeyboardShortcutController(
             window: window,
@@ -233,8 +246,9 @@ public final class LinuxWindowController {
             if let header = feature.sidebarHeader {
                 sidebar.addHeader(header)
             }
+            // Packed after the agent buttons, so they sit to their left.
             if let controls = feature.workspaceHeaderControls {
-                Gtk.append(workspaceHeader, controls)
+                adw_header_bar_pack_end(cast(header), controls)
             }
         }
     }
@@ -304,6 +318,10 @@ public final class LinuxWindowController {
             adw_window_title_set_title(cast(windowTitle), workspace.title)
             gtk_window_set_title(cast(window), "\(workspace.title) — Toastty")
             Gtk.setVisible(zoomPill, workspace.focusedPanelModeActive)
+            // A task space has one terminal, and the sidebar lists the
+            // task: its tab row shows only once a second tab opens.
+            let isTaskSpace = workspace.parentWorkspaceID != nil && workspace.taskID != nil
+            setTabBarAutohide(preferences.tabBarAutohide || isTaskSpace)
         } else {
             adw_window_title_set_title(cast(windowTitle), "Toastty")
             adw_window_title_set_subtitle(cast(windowTitle), "")
@@ -314,6 +332,16 @@ public final class LinuxWindowController {
         updateAgentButtonStates()
     }
 
+    private func setTabBarAutohide(_ autohide: Bool) {
+        if adw_tab_bar_get_autohide(cast(tabBar)).bool != autohide {
+            adw_tab_bar_set_autohide(cast(tabBar), autohide.gboolean)
+        }
+    }
+
+    /// Whether the tab row is on screen, for automation checks. An
+    /// autohidden AdwTabBar stays mapped and collapses to no height.
+    var isTabBarShown: Bool { gtk_widget_get_mapped(tabBar).bool && gtk_widget_get_height(tabBar) > 0 }
+
     /// Task record, session and GitHub updates can arrive independently
     /// of layout changes. Refresh only the parts of the window they affect.
     func updateWorkspaceHeader() {
@@ -321,7 +349,7 @@ public final class LinuxWindowController {
         if let workspace = state.workspaceSelection(in: windowID)?.workspace {
             let paneCount = workspace.layoutTree.allSlotInfos.count
             let subtitle = "\(workspace.selectedTabDisplayTitle) · \(paneCount == 1 ? "1 pane" : "\(paneCount) panes")"
-            let hasControls = Gtk.children(workspaceHeader).dropFirst().contains { gtk_widget_get_visible($0).bool }
+            let hasControls = features.contains { $0.workspaceHeaderControls.map { gtk_widget_get_visible($0).bool } ?? false }
             adw_window_title_set_subtitle(cast(windowTitle), hasControls ? "" : subtitle)
         }
         updateActionStates(state)
