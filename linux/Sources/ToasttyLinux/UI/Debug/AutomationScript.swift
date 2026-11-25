@@ -433,6 +433,7 @@ public final class AutomationScript {
         if let window = app.store.state.window(id: controller.windowID) {
             result["windowFrame"] = "\(Int(window.frame.width))x\(Int(window.frame.height))"
         }
+        result["tabBar"] = controller.isTabBarShown ? "shown" : "hidden"
         result["agentButtons"] = controller.agentButtonTitles.joined(separator: ",")
         result["agentShortcuts"] = TerminalProfileShortcuts.shared.agentCommands.compactMap(\.accelerator).joined(separator: ",")
         result["sidebarWidth"] = "\(gtk_widget_get_width(controller.sidebar.root))"

@@ -120,6 +120,9 @@ extension LinuxAppController {
             summary["tasksView"] = window.visibleMainPage == TasksWindowFeature.tasksPageName ? "shown" : "hidden"
             summary["taskCount"] = String(ui.board.items().filter { $0.record != nil }.count)
             summary["workspaceTaskControl"] = feature.workspaceTaskControl.automationLabel
+            summary["workspaceTaskButtons"] = feature.workspaceTaskControl.automationButtons
+            summary["workspaceTaskCompact"] = String(feature.workspaceTaskControl.automationCompact)
+            summary["workspaceTaskStatus"] = feature.workspaceTaskControl.automationStatus
             summary["workspacePage"] = window.visibleMainPage == TasksWindowFeature.overviewPageName ? "shown" : "hidden"
             summary.merge(feature.overviewPage.automationSummary) { first, _ in first }
             summary["keepButton"] = gtk_widget_get_visible(feature.keepButton).bool
