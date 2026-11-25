@@ -107,11 +107,12 @@ final class WorkspaceTaskControl {
         return true
     }
 
-    private func perform(_ action: Action, expected: Presentation) {
+    private func perform(_ action: Action, expected: Presentation, fromPrimaryButton: Bool = false) {
         // A menu or delayed click must not act on a different task or PR
-        // after a workspace selection or status change.
+        // after a workspace selection, or merge when the button now opens the PR.
         guard let current = presentation(ui.store.state),
-              current.taskID == expected.taskID, current.link == expected.link else { return }
+              current.taskID == expected.taskID, current.link == expected.link,
+              !fromPrimaryButton || current.primary == action else { return }
         switch action {
         case .openPullRequest:
             guard current.primary == action else { return }
@@ -165,7 +166,9 @@ final class WorkspaceTaskControl {
             let button = Gtk.button(next.title, classes: suggested ? ["suggested-action"] : [])
             if let help = next.help { gtk_widget_set_tooltip_text(button, help) }
             Gtk.setName(button, "workspace.task-control.primary")
-            Signal.connect(button, "clicked") { [weak self] in self?.perform(primary, expected: next) }
+            Signal.connect(button, "clicked") { [weak self] in
+                self?.perform(primary, expected: next, fromPrimaryButton: true)
+            }
             Gtk.append(buttons, button)
         }
         if !next.menu.isEmpty {

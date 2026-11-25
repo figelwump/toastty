@@ -105,6 +105,7 @@ public final class LinuxWindowController {
         adw_header_bar_pack_start(cast(header), newTabButton)
         windowTitle = adw_window_title_new("Toastty", nil)
         workspaceHeader = Gtk.vbox(spacing: 2)
+        gtk_widget_set_valign(workspaceHeader, GTK_ALIGN_CENTER)
         Gtk.append(workspaceHeader, windowTitle)
         adw_header_bar_set_title_widget(cast(header), workspaceHeader)
 

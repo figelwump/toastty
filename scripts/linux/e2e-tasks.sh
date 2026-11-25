@@ -296,9 +296,11 @@ action window.toggle-tasks-view
 terminal-wait-state 10000 workspaceTaskControl=Open_PR
 expect tasksView=hidden
 screenshot $WORK/workspace-open-pr.png
+action workspace.merge
+expect tasksView=hidden workspaceTaskControl=progress
 quit
 SCRIPT
-(cd $PROJECT && "${envs[@]}" PATH="$WORK/bin:/usr/local/bin:/usr/bin:/bin" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/ui.script $APP > $WORK/app-ui.log 2>&1) & APID=$!
+(cd $PROJECT && exec "${envs[@]}" PATH="$WORK/bin:/usr/local/bin:/usr/bin:/bin" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/ui.script $APP > $WORK/app-ui.log 2>&1) & APID=$!
 for i in $(seq 1 100); do [ -S $SOCK ] && $CLI --socket-path $SOCK query list >/dev/null 2>&1 && break; sleep 0.1; done
 # A smoke-script run starts from a fresh layout and task store: make the
 # project workspace and two tasks in it.
@@ -313,7 +315,7 @@ cli task create "E2E task: add a README" --workspace "$WSID" --agent claude > $W
 cli task create "Second task" --workspace "$WSID" --agent claude > $WORK/create2.json 2>&1
 check "two tasks are created for the UI phase" "grep -q '\"ok\" : true' $WORK/create1b.json && grep -q '\"ok\" : true' $WORK/create2.json"
 wait_for_file() {
-  for _ in $(seq 1 150); do
+  for _ in $(seq 1 "${2:-300}"); do
     [[ -f "$1" ]] && return 0
     kill -0 "$APID" 2>/dev/null || return 1
     sleep 0.1
@@ -323,7 +325,8 @@ wait_for_file() {
 TASK1=$(json "$WORK/create1b.json" 'r["taskID"]')
 TASK2=$(json "$WORK/create2.json" 'r["taskID"]')
 sleep 1; touch $WORK/go
-if wait_for_file "$WORK/test-complete"; then
+# The task-list checks above wait for GTK frames before starting the header checks.
+if wait_for_file "$WORK/test-complete" 900; then
   cli task get "$TASK1" > "$WORK/task1.json"
   cli task get "$TASK2" > "$WORK/task2.json"
   SPACE1=$(json "$WORK/task1.json" 'r["setup"]["taskSpaceWorkspaceID"]')
@@ -361,7 +364,7 @@ fi
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null
 wait $APID; UIRC=$?
-check "the Tasks view script passes (rows, selection, Esc, toggle, right panel, sidebar collapse)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
+check "the Tasks view and workspace header script passes" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
 for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-merge workspace-open-pr; do
