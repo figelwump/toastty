@@ -59,6 +59,11 @@ final class AppControlExecutor {
             if action.isCoordinatorAction, coordinatorController == nil {
                 return nil
             }
+            #if os(Linux)
+            if action.isWorkspaceOverviewAction, WorkspaceOverviewService.current == nil {
+                return nil
+            }
+            #endif
             return action.descriptor
         }
     }
@@ -67,6 +72,9 @@ final class AppControlExecutor {
         AppControlQueryID.allCases.compactMap { query in
             if query.isTaskQuery, taskCoordinator == nil { return nil }
             if query == .coordinatorGet || query == .coordinatorReplies, coordinatorController == nil { return nil }
+            #if os(Linux)
+            if query.isWorkspaceOverviewQuery, WorkspaceOverviewService.current == nil { return nil }
+            #endif
             return query.descriptor
         }
     }
@@ -579,6 +587,11 @@ final class AppControlExecutor {
             return try exportScratchpad(args: args)
         case .panelScratchpadUpdateMetadata, .panelScratchpadMakeDefault, .panelScratchpadUnbind:
             return try manageScratchpad(action: action, args: args)
+        #if os(Linux)
+        case .workspaceScratchpadKeep, .workspaceScratchpadOpen, .workspaceScratchpadExport,
+             .workspaceScratchpadDelete, .workspaceSynopsisSet:
+            return try runWorkspaceOverviewAction(action, args: args)
+        #endif
 
         case .panelLocalDocumentSearchStart:
             let resolved = try resolveLocalDocumentTarget(payload: args)
@@ -1129,6 +1142,11 @@ final class AppControlExecutor {
 
         case .webhookList:
             return try runWebhookList(args: args)
+
+        #if os(Linux)
+        case .workspaceOverview, .workspaceScratchpadList:
+            return try runWorkspaceOverviewQuery(query, args: args)
+        #endif
         }
         }
     }
@@ -3292,6 +3310,28 @@ extension AppControlExecutor {
         runtimeState: BrowserPanelRuntimeAutomationState
     ) -> [String: AutomationJSONValue] {
         browserPanelStateSnapshot(workspaceID: workspaceID, panelID: panelID, webState: webState, runtimeState: runtimeState)
+    }
+}
+#endif
+
+#if os(Linux)
+/// Internal doors to this file's private helpers, for the Linux-only
+/// workspace page commands (linux/Sources/ToasttyAppLogic/WorkspaceOverview).
+extension AppControlExecutor {
+    func workspaceIDDefaultingToCallerSession(_ args: [String: AutomationJSONValue]) throws -> UUID {
+        try resolveWorkspaceIDDefaultingToCallerSession(args: args)
+    }
+
+    func scratchpadDocumentIDArgument(_ args: [String: AutomationJSONValue], required: Bool) throws -> UUID? {
+        try scratchpadDocumentID(args: args, required: required)
+    }
+
+    func scratchpadSessionIDArgument(_ args: [String: AutomationJSONValue]) throws -> String {
+        try scratchpadSessionID(args: args)
+    }
+
+    func boundScratchpad(sessionID: String, documentID: UUID?) throws -> ScratchpadPanelReference? {
+        try sessionScratchpadTarget(sessionID: sessionID, documentID: documentID)
     }
 }
 #endif

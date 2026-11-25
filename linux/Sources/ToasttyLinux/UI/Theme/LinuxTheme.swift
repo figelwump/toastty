@@ -299,6 +299,24 @@ public enum LinuxTheme {
     .tasks-key { font-size: 0.92em; opacity: 0.55; }
     .tasks-value { font-size: 0.92em; }
     .tasks-why { font-size: 0.84em; opacity: 0.55; }
+    /* The workspace page (Tasks/WorkspaceOverviewPage.swift). */
+    .workspace-overview-subtitle { font-size: 0.86em; opacity: 0.6; }
+    .workspace-overview-main { padding: 4px 18px 18px 18px; }
+    .workspace-overview-card .tasks-card-body { padding: 10px 12px 12px 12px; }
+    .workspace-overview-synopsis { font-size: 1.02em; line-height: 1.4; }
+    .workspace-overview-outcome { font-size: 0.86em; opacity: 0.75; }
+    .workspace-overview-recent { padding: 6px 4px; border-radius: 6px; }
+    .workspace-overview-recent:hover, .workspace-overview .tasks-card .tasks-row:hover { background-color: alpha(currentColor, 0.05); }
+    .workspace-overview-pads { background-color: var(--sidebar-bg-color); }
+    .workspace-overview-pads-header { padding: 10px 12px 2px 6px; }
+    .workspace-overview-pad-list { padding: 0 8px 8px 8px; }
+    .workspace-overview-pads-empty { padding: 4px 6px 10px 6px; }
+    .workspace-overview-pad { padding: 7px 8px; border-radius: 6px; }
+    .workspace-overview-pad-icon { opacity: 0.6; }
+    .workspace-overview-live { color: var(--toastty-ready); }
+    .workspace-overview-preview { border-top: 1px solid alpha(currentColor, 0.1); }
+    .workspace-overview-preview-header { padding: 6px 8px 6px 14px; }
+    button.kept { color: var(--accent-color); }
     .tasks-history-line { font-size: 0.92em; opacity: 0.8; }
     .tasks-action { font-size: 0.92em; }
     .tasks-empty { opacity: 0.6; }

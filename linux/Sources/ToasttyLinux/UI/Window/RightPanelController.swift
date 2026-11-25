@@ -13,6 +13,7 @@ public final class RightPanelController {
     private let tabs = TabViewSync()
     private let content: WidgetPtr
     private let tabBar: WidgetPtr
+    private let header: WidgetPtr
     private var workspaceID: UUID?
     private var lastFocusedPanelID: UUID?
 
@@ -23,7 +24,7 @@ public final class RightPanelController {
 
         root = adw_toolbar_view_new()
         Gtk.addClasses(root, ["right-panel"])
-        let header = adw_header_bar_new()!
+        header = adw_header_bar_new()!
         adw_header_bar_set_title_widget(cast(header), adw_window_title_new("Right Panel", nil))
         let newBrowser = Gtk.iconButton(
             "tab-new-symbolic",
@@ -69,6 +70,12 @@ public final class RightPanelController {
         hosts.rightPanel.observeTabDecorations { [weak self] panelID in
             self?.refreshDecoration(panelID: panelID)
         }
+    }
+
+    /// Adds a control at the end of the header bar, such as the workspace
+    /// page's Keep in Workspace pin.
+    public func addHeaderEndWidget(_ widget: WidgetPtr) {
+        adw_header_bar_pack_end(cast(header), widget)
     }
 
     private func refreshDecoration(panelID: UUID) {

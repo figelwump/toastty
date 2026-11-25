@@ -31,6 +31,9 @@ final class SidebarTasksView {
     private let needsYouCount: WidgetPtr
     private let reviewCount: WidgetPtr
     private let cards: WidgetPtr
+    /// Each card's title click, by card index, for automation.
+    private var cardTitleActions: [Int: @MainActor () -> Void] = [:]
+    private var cardIndexByWorkspaceID: [UUID: Int] = [:]
     private let menu: WidgetPtr
     private var menuRef: GObjectRef?
     private var model: SidebarTasksModel?
@@ -189,6 +192,8 @@ final class SidebarTasksView {
 
     private func rebuild(_ model: SidebarTasksModel) {
         Gtk.removeAllChildren(cards)
+        cardTitleActions = [:]
+        cardIndexByWorkspaceID = [:]
         if model.segment == .needsYou, model.cards.allSatisfy({ $0.sections.isEmpty }) {
             let empty = Gtk.label("Nothing needs you", classes: ["dim-label", "sidebar-nothing"], xalign: 0.5)
             Gtk.setName(empty, "sidebar.needsYou.empty")
@@ -233,9 +238,23 @@ final class SidebarTasksView {
         Gtk.append(titleLine, titleContent)
         Gtk.append(box, titleLine)
         if let workspaceID = card.workspaceID {
+            Gtk.setName(titleContent, "sidebar.card.\(index).title")
+            gtk_widget_set_tooltip_text(titleContent, "Show \(card.title)'s workspace page")
+            cardIndexByWorkspaceID[workspaceID] = index
+            cardTitleActions[index] = { [weak self] in
+                guard let self else { return }
+                self.ui.feature(windowID: self.windowID)?.toggleOverview(workspaceID: workspaceID)
+            }
             click(titleContent) { [weak self] in
                 guard let self else { return }
-                _ = self.ui.logic.sendNavigation([.selectWorkspace(windowID: self.windowID, workspaceID: workspaceID)])
+                // The workspace page (Linux-first): its synopsis, latest
+                // tasks and kept Scratchpads. A second click returns to the
+                // workspace's own tabs.
+                if let feature = self.ui.feature(windowID: self.windowID) {
+                    feature.toggleOverview(workspaceID: workspaceID)
+                } else {
+                    _ = self.ui.logic.sendNavigation([.selectWorkspace(windowID: self.windowID, workspaceID: workspaceID)])
+                }
             }
         }
         guard card.isCollapsed == false || segment == .needsYou else { return box }
@@ -596,6 +615,18 @@ final class SidebarTasksView {
 
     func automationDismissContextMenu() {
         gtk_popover_popdown(cast(menu))
+    }
+
+    /// The index of the card that shows `workspaceID`, for automation.
+    func automationCardIndex(workspaceID: UUID) -> Int? {
+        cardIndexByWorkspaceID[workspaceID]
+    }
+
+    /// Runs card `index`'s title click; false when no card has one.
+    func automationClickCardTitle(_ index: Int) -> Bool {
+        guard let action = cardTitleActions[index] else { return false }
+        action()
+        return true
     }
 
     var automationSummary: [String: String] {

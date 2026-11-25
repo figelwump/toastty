@@ -665,6 +665,7 @@ before the content, rows above the sidebar, palette rows and commands.
 | Quick entry (Alt+Shift+T) | `QuickEntryWindowFrontend`, `QuickEntryPickerPopover`, `GlobalShortcutPortal` | `QuickEntryController`, `QuickEntryModel`, `QuickEntryPicker`, `DraftAttachments` |
 | What's new at a first launch | `WhatsNewDialog` | `CoordinatorStartOffer`, `WhatsNewPresentation`, `QuickEntryShortcutAnswer` |
 | Palette rows, menus, New Task from Selection | `TasksWindowFeature.paletteItems`, `LinuxMenus`, `GhosttyTerminalHost` | `TaskBoardStore.currentTask`, `TaskBoardPresentation.detailActions` |
+| Workspace page (a card's title; Linux-first) and the right panel's Keep in Workspace pin | `WorkspaceOverviewPage`, `TasksWindowFeature` (`toggleOverview`, `keepButton`) | `WorkspaceOverviewService`, `WorkspaceOverviewStore`, `WorkspaceOverviewModel` (in `linux/Sources/ToasttyAppLogic/WorkspaceOverview`, written to move to `Sources/App`) |
 
 On Linux, opening a workspace or a tab takes you out of the Tasks view. The
 tab strip still lets you close a tab while the Tasks view is open. If the
@@ -674,6 +675,14 @@ workspace you just made.
 
 Differences from macOS:
 
+- A project card's title opens the workspace page: a synopsis, the latest
+  tasks and what they did, the workspace's tasks, and its kept Scratchpads.
+  On macOS the title selects the workspace's own tab. Kept Scratchpads,
+  synopses and task outcomes live in `workspace-overview.json`. The socket
+  commands `workspace.overview`, `workspace.scratchpad.*` and
+  `workspace.synopsis.set` exist only on Linux. See
+  `docs/plans/workspace-overview.md`, which is also the macOS
+  implementation plan.
 - Keys: Show Tasks is Ctrl+Shift+D (Ctrl+Shift+T is New Tab), the dock
   Ctrl+Shift+K, New Task Alt+Shift+T inside Toastty. The quick entry key in
   every app goes through the XDG GlobalShortcuts portal; the desktop asks the
@@ -1191,6 +1200,7 @@ code (macOS branches unchanged); run a macOS build
 | `Sources/App/Tasks/PullRequestStateCache.swift` | stores its `objectWillChange` on Linux: OpenCombine's default for an `ObservableObject` without `@Published` properties returns a new publisher on each read, so the cache's own `objectWillChange.send()` reached no subscriber |
 | `Sources/RemoteProtocol/AgentPasteText.swift` | (unguarded, same result on macOS) splits a paste into lines on the newline scalar: corelibs `components(separatedBy: "\n")` keeps `\r\n` text in one line, since Swift reads CRLF as one character |
 | `Sources/App/Tasks/TaskWebhookSecretStore.swift`, `TaskWebhookService.swift` | no Keychain (`Security`) on Linux: `KeychainTaskWebhookSecretStore` and `TaskWebhookService.init(runtimePaths:)` are macOS-only; Linux uses `FileTaskWebhookSecretStore` |
+| `Sources/App/AppControl/AppControlCatalog.swift`, `Sources/App/AppControl/AppControlExecutor.swift` | the workspace page's commands (`workspace.overview`, `workspace.scratchpad.keep/list/open/export/delete`, `workspace.synopsis.set`) are listed and dispatched only on Linux, to the handlers in `linux/Sources/ToasttyAppLogic/WorkspaceOverview/`; internal doors at the end of the executor reach its file-private argument helpers. See `docs/plans/workspace-overview.md` |
 | `Sources/Core/RemoteAccess/RemoteMessageAttachmentStore.swift` | `discard` compares paths: corelibs URL equality is trailing-slash sensitive |
 | `Sources/Core/Diagnostics/DiagnosticsChecks.swift` | parent PID from `/proc/<pid>/stat` instead of `proc_pidinfo` |
 | `Sources/Core/Diagnostics/DiagnosticsCollector.swift` | hardware model from DMI/device tree instead of `sysctlbyname("hw.model")` |

@@ -123,7 +123,58 @@ extension LinuxAppController {
             summary["workspaceTaskButtons"] = feature.workspaceTaskControl.automationButtons
             summary["workspaceTaskCompact"] = String(feature.workspaceTaskControl.automationCompact)
             summary["workspaceTaskStatus"] = feature.workspaceTaskControl.automationStatus
+            summary["workspacePage"] = window.visibleMainPage == TasksWindowFeature.overviewPageName ? "shown" : "hidden"
+            summary.merge(feature.overviewPage.automationSummary) { first, _ in first }
+            summary["keepButton"] = gtk_widget_get_visible(feature.keepButton).bool
+                ? (gtk_widget_has_css_class(feature.keepButton, "kept").bool ? "kept" : "keep") : "hidden"
             return summary
+        }
+        // The workspace page (Linux-first):
+        //     workspace-page card 1          # click card 1's title, as a pointer does
+        //     workspace-page card selected   # the selected workspace's card
+        //     workspace-page scratchpad 0    # select kept Scratchpad 0
+        //     workspace-page open 0          # open kept Scratchpad 0 in the right panel
+        //     workspace-page delete 0        # delete kept Scratchpad 0, past its dialog
+        //     workspace-page recent 0        # click the latest task's row
+        //     expect workspacePage=shown overviewScratchpads=1 keepButton=kept
+        AutomationScript.extensionCommands["workspace-page"] = { [weak ui] app, argument, script in
+            guard let ui, let window = app.selectedWindowController(), let feature = ui.feature(windowID: window.windowID) else {
+                script.reportFailure("workspace-page: no window")
+                return
+            }
+            let parts = argument.split(separator: " ").map(String.init)
+            var index = parts.count > 1 ? Int(parts[1]) : nil
+            // `card selected`: the card of the selected workspace's top-level workspace.
+            if parts.first == "card", parts.count > 1, parts[1] == "selected",
+               let selected = ui.store.state.window(id: window.windowID)?.selectedWorkspaceID,
+               let topLevel = ui.logic.workspaceOverview.topLevelWorkspaceID(for: selected) {
+                index = feature.sidebarView.automationCardIndex(workspaceID: topLevel)
+            }
+            let pads = feature.overviewPage.automationScratchpadIDs
+            switch parts.first ?? "" {
+            case "card":
+                guard let index, feature.sidebarView.automationClickCardTitle(index) else {
+                    script.reportFailure("workspace-page card: no card \(parts.dropFirst().first ?? "")")
+                    return
+                }
+            case "scratchpad", "open", "delete":
+                guard let index, pads.indices.contains(index) else {
+                    script.reportFailure("workspace-page \(parts[0]): no Scratchpad \(parts.dropFirst().first ?? "")")
+                    return
+                }
+                switch parts[0] {
+                case "scratchpad": feature.overviewPage.selectScratchpad(pads[index])
+                case "open": feature.overviewPage.openScratchpad(pads[index])
+                default: feature.overviewPage.deleteScratchpad(pads[index])
+                }
+            case "recent":
+                guard let index, feature.overviewPage.automationOpenRecent(index) else {
+                    script.reportFailure("workspace-page recent: no row \(parts.dropFirst().first ?? "")")
+                    return
+                }
+            default:
+                script.reportFailure("workspace-page: unknown \(argument)")
+            }
         }
     }
 }

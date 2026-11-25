@@ -83,6 +83,9 @@ public final class LinuxAppLogic {
     /// Tasks, the task board, webhooks and the coordinator
     /// (`LinuxTaskStack`).
     let tasks: LinuxTaskStack
+    /// Kept Scratchpads, synopses and task outcomes for the workspace page
+    /// (Linux-first; docs/plans/workspace-overview.md).
+    let workspaceOverview: WorkspaceOverviewService
     /// The Ghostty metadata path (title/cwd normalization, command-finished
     /// session lifecycle, terminal desktop notifications). On macOS the
     /// registry owns it behind TOASTTY_HAS_GHOSTTY_KIT; on Linux the facade
@@ -470,6 +473,14 @@ public final class LinuxAppLogic {
             codexProcessPathStore: codexProcessPathStore,
             registersGlobalShortcut: usesPersistentPreferences && options.registersGlobalShortcut
         )
+        let workspaceOverview = WorkspaceOverviewService(
+            store: store,
+            documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore,
+            overviewStore: WorkspaceOverviewStore(runtimePaths: runtimePaths),
+            coordinator: tasks.coordinator,
+            board: tasks.board
+        )
+        WorkspaceOverviewService.current = workspaceOverview
 
         let remoteAccessService: RemoteAccessService?
         if options.allowsRemoteAccess {
@@ -527,6 +538,7 @@ public final class LinuxAppLogic {
         self.processWatchCommandController = processWatchCommandController
         self.remoteAccessService = remoteAccessService
         self.tasks = tasks
+        self.workspaceOverview = workspaceOverview
         self.terminalMetadataService = terminalMetadataService
         self.automationLifecycle = bootstrap.automationLifecycle
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
