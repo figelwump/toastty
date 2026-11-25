@@ -33,6 +33,7 @@ public final class LinuxWindowController {
     private let outerSplit: WidgetPtr
     private let innerSplit: WidgetPtr
     private let windowTitle: WidgetPtr
+    private let workspaceHeader: WidgetPtr
     private let tabBar: WidgetPtr
     private let zoomPill: WidgetPtr
     /// Header agent buttons (macOS top bar): one per agent profile, or
@@ -103,7 +104,10 @@ public final class LinuxWindowController {
         )
         adw_header_bar_pack_start(cast(header), newTabButton)
         windowTitle = adw_window_title_new("Toastty", nil)
-        adw_header_bar_set_title_widget(cast(header), windowTitle)
+        workspaceHeader = Gtk.vbox(spacing: 2)
+        gtk_widget_set_valign(workspaceHeader, GTK_ALIGN_CENTER)
+        Gtk.append(workspaceHeader, windowTitle)
+        adw_header_bar_set_title_widget(cast(header), workspaceHeader)
 
         let menuButton = gtk_menu_button_new()!
         gtk_menu_button_set_icon_name(cast(menuButton), "open-menu-symbolic")
@@ -229,6 +233,9 @@ public final class LinuxWindowController {
             if let header = feature.sidebarHeader {
                 sidebar.addHeader(header)
             }
+            if let controls = feature.workspaceHeaderControls {
+                Gtk.append(workspaceHeader, controls)
+            }
         }
     }
 
@@ -294,10 +301,7 @@ public final class LinuxWindowController {
 
         for feature in features { feature.render(state) }
         if let workspace = selection?.workspace {
-            let paneCount = workspace.layoutTree.allSlotInfos.count
-            let subtitle = "\(workspace.selectedTabDisplayTitle) · \(paneCount == 1 ? "1 pane" : "\(paneCount) panes")"
             adw_window_title_set_title(cast(windowTitle), workspace.title)
-            adw_window_title_set_subtitle(cast(windowTitle), subtitle)
             gtk_window_set_title(cast(window), "\(workspace.title) — Toastty")
             Gtk.setVisible(zoomPill, workspace.focusedPanelModeActive)
         } else {
@@ -306,8 +310,21 @@ public final class LinuxWindowController {
             Gtk.setVisible(zoomPill, false)
         }
         hosts.terminal.setFontSize(points: state.effectiveTerminalFontPoints(for: windowID), windowID: windowID)
-        updateActionStates(state)
+        updateWorkspaceHeader()
         updateAgentButtonStates()
+    }
+
+    /// Task record, session and GitHub updates can arrive independently
+    /// of layout changes. Refresh only the parts of the window they affect.
+    func updateWorkspaceHeader() {
+        let state = store.state
+        if let workspace = state.workspaceSelection(in: windowID)?.workspace {
+            let paneCount = workspace.layoutTree.allSlotInfos.count
+            let subtitle = "\(workspace.selectedTabDisplayTitle) · \(paneCount == 1 ? "1 pane" : "\(paneCount) panes")"
+            let hasControls = Gtk.children(workspaceHeader).dropFirst().contains { gtk_widget_get_visible($0).bool }
+            adw_window_title_set_subtitle(cast(windowTitle), hasControls ? "" : subtitle)
+        }
+        updateActionStates(state)
     }
 
     private func rebuildAgentButtons() {
@@ -473,7 +490,7 @@ public final class LinuxWindowController {
                 continue
             }
             switch id {
-            case "task.new", "window.toggle-tasks-view":
+            case "task.new", "window.toggle-tasks-view", "workspace.merge":
                 // Tasks are a feature; without it there are none.
                 enable(id, false)
             case "workspace.close", "workspace.rename", "workspace.tab.create", "workspace.tab.rename", "workspace.tab.close",

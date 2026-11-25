@@ -10,7 +10,7 @@
 #   5. the task survives a quit and restart;
 #   6. the Tasks view (Broadway, smoke script): open, rows, mark widths,
 #      selection with the arrows, Esc, the Show Tasks toggle, and the right
-#      panel.
+#      panel, plus Merge and Complete Task directly in the workspace header.
 # Build first: scripts/linux/build.sh --product toastty-linux --product toastty
 # Usage: scripts/linux/e2e-tasks.sh   (exit status 0 when every check passes)
 set -uo pipefail
@@ -58,6 +58,11 @@ case "$PWD" in
   ;;
 esac
 echo "fake agent up"
+if [[ "$*" == *"Second task"* ]]; then
+  while [[ ! -f "$(dirname "$0")/../finish-second" ]]; do sleep 0.1; done
+  printf '{"hook_event_name":"Stop","session_id":"native-%s"}' "$TOASTTY_SESSION_ID" \
+    | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
+fi
 sleep 600
 AGENT
 chmod +x $WORK/bin/claude
@@ -163,6 +168,19 @@ check "the task survives a restart" "grep -q 'E2E task: add a README' $WORK/get2
 stop_app
 
 # Phase B: the Tasks view, driven by a smoke script while the CLI makes tasks.
+# A local fixture answers PR lookups. The PR task's fake agent stays in
+# its turn, so the header's Merge action queues the merge skill.
+cat > "$WORK/bin/gh" <<'GH'
+#!/bin/bash
+[[ "$1 $2 $3" == "pr view https://github.com/fixture/toastty/pull/42" ]] || exit 1
+if [[ -f "$(dirname "$0")/../pending-pr" ]]; then
+  echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"BLOCKED","statusCheckRollup":[{"status":"IN_PROGRESS"}]}'
+else
+  echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN"}'
+fi
+GH
+chmod +x "$WORK/bin/gh"
+printf 'export PATH="%s:$PATH"\n' "$WORK/bin" > "$HOMEDIR/.profile"
 # Keep a viewer attached for the scripted UI phases. Broadway only runs GTK
 # layout frames with a viewer; the forced-layout fallback can't test scrolling.
 if VIEWER=$(command -v google-chrome || command -v chromium); then
@@ -242,9 +260,47 @@ expect sidebarSegment=needsYou
 action workspace.create
 expect tasksView=hidden sidebarSegment=all tabs=1
 state $WORK/ui-state.json
+expect workspaceTaskControl=none
+file-write $WORK/test-complete go
+wait-file $WORK/complete-selected
+expect tasksView=hidden workspaceTaskControl=Archive_Task…
+file-write $WORK/finish-second go
+wait-file $WORK/review-ready
+expect tasksView=hidden workspaceTaskControl=Complete_Task
+screenshot $WORK/workspace-complete.png
+click workspace.task-control.primary
+wait 400
+expect dialog=AdwAlertDialog
+screenshot $WORK/workspace-complete-confirm.png
+dialog-respond cancel
+wait 400
+expect tasksView=hidden workspaceTaskControl=Complete_Task
+click workspace.task-control.primary
+wait 400
+dialog-respond confirm
+wait 400
+file-write $WORK/complete-clicked go
+wait-file $WORK/merge-selected
+expect tasksView=hidden workspaceTaskControl=Merge_PR
+screenshot $WORK/workspace-merge.png
+click workspace.task-control.primary
+wait 400
+expect workspaceTaskControl=progress
+file-write $WORK/merge-clicked go
+wait-file $WORK/test-pending
+# Opening Tasks triggers a pull request refresh without waiting for the
+# board's periodic poll. Verify the result back in the workspace.
+action window.toggle-tasks-view
+expect workspaceTaskControl=none
+action window.toggle-tasks-view
+terminal-wait-state 10000 workspaceTaskControl=Open_PR
+expect tasksView=hidden
+screenshot $WORK/workspace-open-pr.png
+action workspace.merge
+expect tasksView=hidden workspaceTaskControl=progress
 quit
 SCRIPT
-(cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/ui.script $APP > $WORK/app-ui.log 2>&1) & APID=$!
+(cd $PROJECT && exec "${envs[@]}" PATH="$WORK/bin:/usr/local/bin:/usr/bin:/bin" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/ui.script $APP > $WORK/app-ui.log 2>&1) & APID=$!
 for i in $(seq 1 100); do [ -S $SOCK ] && $CLI --socket-path $SOCK query list >/dev/null 2>&1 && break; sleep 0.1; done
 # A smoke-script run starts from a fresh layout and task store: make the
 # project workspace and two tasks in it.
@@ -258,13 +314,60 @@ for i in $(seq 1 50); do cli task workspace-choices > $WORK/choices2.json 2>&1; 
 cli task create "E2E task: add a README" --workspace "$WSID" --agent claude > $WORK/create1b.json 2>&1
 cli task create "Second task" --workspace "$WSID" --agent claude > $WORK/create2.json 2>&1
 check "two tasks are created for the UI phase" "grep -q '\"ok\" : true' $WORK/create1b.json && grep -q '\"ok\" : true' $WORK/create2.json"
+wait_for_file() {
+  for _ in $(seq 1 "${2:-300}"); do
+    [[ -f "$1" ]] && return 0
+    kill -0 "$APID" 2>/dev/null || return 1
+    sleep 0.1
+  done
+  return 1
+}
+TASK1=$(json "$WORK/create1b.json" 'r["taskID"]')
+TASK2=$(json "$WORK/create2.json" 'r["taskID"]')
 sleep 1; touch $WORK/go
+# The task-list checks above wait for GTK frames before starting the header checks.
+if wait_for_file "$WORK/test-complete" 900; then
+  cli task get "$TASK1" > "$WORK/task1.json"
+  cli task get "$TASK2" > "$WORK/task2.json"
+  SPACE1=$(json "$WORK/task1.json" 'r["setup"]["taskSpaceWorkspaceID"]')
+  SPACE2=$(json "$WORK/task2.json" 'r["setup"]["taskSpaceWorkspaceID"]')
+  cli action run workspace.select --workspace "$SPACE2" > "$WORK/select2.json"
+  touch "$WORK/complete-selected"
+  wait_for_file "$WORK/finish-second"
+  cli task ready-for-review "$TASK2" > "$WORK/review.json"
+  for _ in $(seq 1 50); do
+    cli task get "$TASK2" > "$WORK/review-get.json"
+    grep -q '"attention" : "readyForReview"' "$WORK/review-get.json" && break
+    sleep 0.1
+  done
+  touch "$WORK/review-ready"
+fi
+if wait_for_file "$WORK/complete-clicked"; then
+  cli task get "$TASK2" > "$WORK/completed.json"
+  cli query run workspace.list > "$WORK/after-complete.json"
+  DONE_AT=$(json "$WORK/completed.json" 'r.get("doneAt")')
+  check "Complete Task marks the task done and closes its workspace" \
+    "[ -n '$DONE_AT' ] && [ '$DONE_AT' != None ] && ! grep -qi '$SPACE2' '$WORK/after-complete.json'"
+  cli action run workspace.set-annotation --workspace "$SPACE1" key=github-pr text="PR #42" \
+    url=https://github.com/fixture/toastty/pull/42 > "$WORK/pr.json"
+  cli action run workspace.select --workspace "$SPACE1" > "$WORK/select1.json"
+  touch "$WORK/merge-selected"
+fi
+if wait_for_file "$WORK/merge-clicked"; then
+  cli task get "$TASK1" > "$WORK/merge.json"
+  MERGE_REQUESTED_AT=$(json "$WORK/merge.json" 'r.get("mergeRequestedAt")')
+  check "Merge from the header requests the task’s merge flow" \
+    "[ -n '$MERGE_REQUESTED_AT' ] && [ '$MERGE_REQUESTED_AT' != None ]"
+  cli task cancel-merge "$TASK1" > "$WORK/cancel-merge.json"
+  touch "$WORK/pending-pr" "$WORK/test-pending"
+fi
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+kill -9 $APID 2>/dev/null
 wait $APID; UIRC=$?
-check "the Tasks view script passes (rows, selection, Esc, toggle, right panel, sidebar collapse)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
+check "the Tasks view and workspace header script passes" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
-for shot in tasks-view tasks-right-panel-restored sidebar; do
+for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-merge workspace-open-pr; do
   [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK

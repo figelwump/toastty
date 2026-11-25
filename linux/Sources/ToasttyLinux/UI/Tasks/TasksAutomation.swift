@@ -100,11 +100,12 @@ extension LinuxAppController {
         }
         AutomationScript.summaryContributors.append { [weak ui] app in
             guard let ui, let window = app.selectedWindowController(),
-                  let page = ui.feature(windowID: window.windowID)?.tasksPage else { return [:] }
-            var summary = page.automationSummary
-            summary.merge(ui.feature(windowID: window.windowID)?.sidebarView.automationSummary ?? [:]) { first, _ in first }
+                  let feature = ui.feature(windowID: window.windowID) else { return [:] }
+            var summary = feature.tasksPage.automationSummary
+            summary.merge(feature.sidebarView.automationSummary) { first, _ in first }
             summary["tasksView"] = window.visibleMainPage == TasksWindowFeature.tasksPageName ? "shown" : "hidden"
             summary["taskCount"] = String(ui.board.items().filter { $0.record != nil }.count)
+            summary["workspaceTaskControl"] = feature.workspaceTaskControl.automationLabel
             return summary
         }
     }
