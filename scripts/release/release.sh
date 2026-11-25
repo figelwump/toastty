@@ -48,6 +48,7 @@ SPARKLE_PUBLIC_ED_KEY=""
 SPARKLE_MINIMUM_SYSTEM_VERSION=""
 SPARKLE_ED_SIGNATURE=""
 SPARKLE_ENCLOSURE_LENGTH=""
+SPARKLE_DMG_SHA256=""
 RELEASE_NOTES_PATH=""
 RELEASE_METADATA_PATH=""
 
@@ -68,6 +69,7 @@ Required environment:
   TOASTTY_NOTARY_PASSWORD
   TOASTTY_TEAM_ID
   TOASTTY_SPARKLE_PRIVATE_KEY
+  TOASTTY_REMOTE_GUI_HOST
 
 Additional requirements:
   - clean Toastty git working tree
@@ -77,6 +79,7 @@ Outputs:
   artifacts/release/<version>-<build>/release-metadata.env
   artifacts/release/<version>-<build>/ghostty-metadata.env
   artifacts/release/<version>-<build>/sparkle-metadata.env
+  artifacts/release/<version>-<build>/first-launch/remote/result.json
   artifacts/release/<version>-<build>/Toastty-<version>.dmg
 
 Recommended invocation:
@@ -407,6 +410,7 @@ snapshot_sparkle_metadata() {
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_MINIMUM_SYSTEM_VERSION" "$SPARKLE_MINIMUM_SYSTEM_VERSION"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_PATH" "$DMG_PATH"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_FILENAME" "$(basename "$DMG_PATH")"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_SHA256" "$SPARKLE_DMG_SHA256"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_ENCLOSURE_LENGTH" "$SPARKLE_ENCLOSURE_LENGTH"
   write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_ED_SIGNATURE" "$SPARKLE_ED_SIGNATURE"
 }
@@ -889,6 +893,7 @@ sign_dmg_for_sparkle() {
   local sign_update_path="$SPARKLE_TOOLS_DIRECTORY/sign_update"
 
   log "Signing DMG for Sparkle updates"
+  SPARKLE_DMG_SHA256="$(/usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" digest "$DMG_PATH")"
   SPARKLE_ED_SIGNATURE="$(
     printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
       | "$sign_update_path" --ed-key-file - -p "$DMG_PATH" \
@@ -903,6 +908,8 @@ sign_dmg_for_sparkle() {
 
   printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
     | "$sign_update_path" --ed-key-file - --verify "$DMG_PATH" "$SPARKLE_ED_SIGNATURE" >/dev/null
+  [[ "$SPARKLE_DMG_SHA256" == "$(/usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" digest "$DMG_PATH")" ]] \
+    || fail "DMG changed while signing for Sparkle"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -943,6 +950,7 @@ require_env TOASTTY_APPLE_ID
 require_env TOASTTY_NOTARY_PASSWORD
 require_env TOASTTY_TEAM_ID
 require_env TOASTTY_SPARKLE_PRIVATE_KEY
+require_env TOASTTY_REMOTE_GUI_HOST
 
 validate_build_number
 validate_version_string
@@ -997,6 +1005,7 @@ sign_dmg_for_sparkle
 snapshot_ghostty_metadata
 snapshot_sparkle_metadata
 write_release_metadata
+"$ROOT_DIR/scripts/release/verify-first-launch.sh" "$DMG_PATH" "$SOURCE_COMMIT" "$RELEASE_DIR/first-launch"
 
 log "Release DMG ready: $DMG_PATH"
 log "Release metadata snapshot: $RELEASE_METADATA_PATH"
