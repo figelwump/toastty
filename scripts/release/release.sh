@@ -79,7 +79,7 @@ Outputs:
   artifacts/release/<version>-<build>/release-metadata.env
   artifacts/release/<version>-<build>/ghostty-metadata.env
   artifacts/release/<version>-<build>/sparkle-metadata.env
-  artifacts/release/<version>-<build>/first-launch/remote/result.json
+  artifacts/release/<version>-<build>/candidate-check/remote/result.json
   artifacts/release/<version>-<build>/Toastty-<version>.dmg
 
 Recommended invocation:
@@ -893,7 +893,7 @@ sign_dmg_for_sparkle() {
   local sign_update_path="$SPARKLE_TOOLS_DIRECTORY/sign_update"
 
   log "Signing DMG for Sparkle updates"
-  SPARKLE_DMG_SHA256="$(/usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" digest "$DMG_PATH")"
+  SPARKLE_DMG_SHA256="$(/usr/bin/python3 "$ROOT_DIR/scripts/release/candidate-check.py" digest "$DMG_PATH")"
   SPARKLE_ED_SIGNATURE="$(
     printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
       | "$sign_update_path" --ed-key-file - -p "$DMG_PATH" \
@@ -908,7 +908,7 @@ sign_dmg_for_sparkle() {
 
   printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
     | "$sign_update_path" --ed-key-file - --verify "$DMG_PATH" "$SPARKLE_ED_SIGNATURE" >/dev/null
-  [[ "$SPARKLE_DMG_SHA256" == "$(/usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" digest "$DMG_PATH")" ]] \
+  [[ "$SPARKLE_DMG_SHA256" == "$(/usr/bin/python3 "$ROOT_DIR/scripts/release/candidate-check.py" digest "$DMG_PATH")" ]] \
     || fail "DMG changed while signing for Sparkle"
 }
 
@@ -962,6 +962,7 @@ ensure_developer_id_identity
 ensure_ghostty_release_artifact
 ensure_ghostty_release_metadata
 resolve_source_provenance
+[[ -n "$PREVIOUS_RELEASE_TAG" ]] || fail "The candidate check needs a previous published release to update from"
 
 RELEASE_LABEL="${TOASTTY_VERSION}-${TOASTTY_BUILD_NUMBER}"
 RELEASE_DIR="$ROOT_DIR/artifacts/release/$RELEASE_LABEL"
@@ -1005,7 +1006,7 @@ sign_dmg_for_sparkle
 snapshot_ghostty_metadata
 snapshot_sparkle_metadata
 write_release_metadata
-"$ROOT_DIR/scripts/release/verify-first-launch.sh" "$DMG_PATH" "$SOURCE_COMMIT" "$RELEASE_DIR/first-launch"
+"$ROOT_DIR/scripts/release/verify-candidate.sh" "$DMG_PATH" "$SOURCE_COMMIT" "$PREVIOUS_RELEASE_TAG" "$RELEASE_DIR/candidate-check"
 
 log "Release DMG ready: $DMG_PATH"
 log "Release metadata snapshot: $RELEASE_METADATA_PATH"

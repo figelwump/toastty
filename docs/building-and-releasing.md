@@ -351,7 +351,8 @@ The release script expects:
 - a local `Developer ID Application` certificate
 - notarization credentials injected at runtime
 - a Sparkle private key injected at runtime as `TOASTTY_SPARKLE_PRIVATE_KEY`
-- the configured Toastty Mac mini, with its validation desktop unlocked and Accessibility available
+- the configured Toastty Mac mini, with its validation desktop unlocked, Accessibility available, and the Claude CLI signed in
+- `gh` signed in, to download the previous release's DMG for the candidate check
 
 Before building a release artifact, run the full automated gate on the release candidate:
 
@@ -370,30 +371,55 @@ sv exec -- env \
 ```
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
-Before reporting the candidate ready, it sends the finished DMG to the Mac mini
-and reserves the shared desktop through the remote admission queue. It copies
-the app from a read-only mount into a disposable run directory and starts it
-with fresh runtime data and preferences. The check requires the first-launch
-sheet, presses **Not Now**, and queries the still-running app after dismissal.
-A crash, matching AppKit startup exception, timeout, or unconfirmed cleanup
-stops the release build.
+Before reporting the candidate ready, it runs the candidate check: one check
+of the signed app as a user meets it. A release that fails it does not go to
+the user. The check sends the finished DMG, and the DMG of the previous
+release (`RELEASE_PREVIOUS_TAG`, downloaded from its GitHub release), to the
+Toastty validation Mac mini, and holds the mini's desktop through the remote
+admission queue. It copies each app from a read-only mount into disposable
+folders. Every stage has its own runtime home and user home; the mini's
+installed Toastty is not touched. The stages:
+
+| Stage | What it does with the candidate |
+| --- | --- |
+| `firstLaunch` | Starts with no saved state. The What's New sheet must show, **Not Now** must close it, and the app must answer a query after that. A crash or an AppKit startup exception fails it. |
+| `update` | The previous release saves a layout with two workspaces. The candidate replaces the app at the same path, restores the layout, and shows the What's New sheet over it. **Start Coordinator** opens the coordinator, and the first message gets its answer. |
+| `sessions` | The previous release saves a coordinator conversation and two task agents, and quits from its menu. The candidate replaces it. Each new shell takes three seconds to its first prompt. The coordinator answers in its saved conversation, and each task agent starts once, with its saved conversation. |
+| `restart` | The coordinator's agent ends and a chat message waits. **Restart Coordinator** in the chat's notice starts a new agent, which gets the message once. |
+| `compact` | Claude Code's real "We recommend compacting earlier" offer: **Show Terminal**, arrow keys, the scroll wheel, Escape, and the waiting message delivered once. |
+
+The coordinator is the real Claude CLI with the mini's Claude account; a
+task's agent is a script that records each start. A run takes about four
+minutes after the queue, and uses about eight short Claude turns plus one turn
+with about 230k input tokens. The receipt,
+`artifacts/release/<version>-<build>/candidate-check/remote/result.json`,
+records each stage, the mini's macOS version, the Claude CLI version, and the
+SHA-256 of both DMGs.
+
+The check does not cover: a macOS version or display setup other than the
+mini's (it records its version, and has one display); the user's own shell
+startup files, plugins, agents and saved state; installation through a
+Sparkle update or a Gatekeeper prompt for a downloaded file; an Intel Mac; and
+the iPhone.
 
 To check an existing candidate separately, use the full source commit from
-the candidate build and a new evidence directory:
+the candidate build, the previous release's tag, and a new evidence
+directory. Set `TOASTTY_PREVIOUS_DMG` to a local DMG of that release to skip
+the download:
 
 ```bash
-sv exec -- ./scripts/release/verify-first-launch.sh \
+sv exec -- ./scripts/release/verify-candidate.sh \
   artifacts/release/<version>-<build>/Toastty-<version>.dmg \
-  <full-source-commit> <new-evidence-directory>
+  <full-source-commit> <previous-release-tag> <new-evidence-directory>
 ```
 
-The command runs on the Mac mini and writes its result, desktop admission
-record, app logs, and sheet evidence to the supplied directory. The release
-build keeps this directory at `artifacts/release/<version>-<build>/first-launch/`.
-If the desktop or connection was unavailable, move any failed evidence
-directory aside and rerun the check with `first-launch/` as the destination
-inside that same release directory. The staged DMG and release metadata
-remain available for the retry.
+The release build keeps the evidence at
+`artifacts/release/<version>-<build>/candidate-check/`: the receipt, the
+desktop admission record, the app logs, Claude's transcripts, and frames of
+each stage under `remote/use/`. If the desktop or connection was unavailable,
+move any failed evidence directory aside and rerun the check with
+`candidate-check/` as the destination inside that same release directory.
+The staged DMG and release metadata remain available for the retry.
 If macOS displays a crash alert for the failed candidate, dismiss it on the
 validation desktop before retrying.
 `sv exec` must provide `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` and `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY`; release builds fail if the generated project would embed empty diagnostics submit endpoint or upload-key settings.
@@ -424,9 +450,9 @@ After the DMG exists locally, publish it to GitHub Releases with the helper scri
 Prerequisites:
 - `gh` is installed and authenticated for the target repo
 - the recorded release commit is available in the current checkout
-- the `first-launch/remote/` evidence records a successful desktop check for the
-  recorded source commit and the SHA-256 of the DMG being uploaded. This also
-  applies to draft releases and dry runs.
+- the `candidate-check/remote/` receipt records a successful desktop check,
+  with every stage passed, for the recorded source commit and the SHA-256 of
+  the DMG being uploaded. This also applies to draft releases and dry runs.
 - the upload matches the SHA-256 and file size recorded alongside the
   Sparkle signature
 
