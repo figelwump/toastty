@@ -13,6 +13,7 @@ extension LinuxAppController {
     ///     tasks open 2                   # double-click row 2 (opens its task space)
     ///     tasks key down|up|escape       # a key press in the Tasks view
     ///     tasks menu 0 Archive…          # row 0's context menu, choose an item by title
+    ///     tasks sidebar-menu open|close  # open the first visible task space's sidebar menu, or dismiss it
     ///     expect tasksView=shown tasksRows=3 tasksSelected=Fix_the_build
     func installTasksAutomation(ui: TasksUI) {
         AutomationScript.extensionCommands["click"] = { app, name, script in
@@ -60,6 +61,19 @@ extension LinuxAppController {
                 }
                 if page.automationRunMenuItem(row, title: parts[2].replacingOccurrences(of: "_", with: " ")) == false {
                     script.reportFailure("tasks menu: no item \(parts[2])")
+                }
+            case "sidebar-menu":
+                guard let sidebar = ui.feature(windowID: window.windowID)?.sidebarView else {
+                    script.reportFailure("tasks sidebar-menu: no sidebar")
+                    return
+                }
+                switch parts.dropFirst().first {
+                case "open":
+                    if !sidebar.automationOpenTaskSpaceMenu() {
+                        script.reportFailure("tasks sidebar-menu: no visible task space")
+                    }
+                case "close": sidebar.automationDismissContextMenu()
+                default: script.reportFailure("tasks sidebar-menu: open or close")
                 }
             default:
                 script.reportFailure("tasks: unknown \(argument)")
