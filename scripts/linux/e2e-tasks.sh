@@ -209,6 +209,17 @@ wait 200
 expect tasksView=hidden rightPanel=false rightPanelTabs=1 rightPanelMapped=false
 expect sidebarTaskRows=2 sidebarSegment=all sidebarMarkWidths=12,12
 screenshot $WORK/sidebar.png
+action workspace.select-1
+action window.toggle-tasks-view
+expect workspaceIndex=0 tasksView=shown sidebarVisibleRows=2
+click sidebar.card.1.disclosure
+wait 300
+expect workspaceIndex=0 tasksView=shown sidebarVisibleRows=0
+click sidebar.card.1.disclosure
+wait 300
+expect workspaceIndex=0 tasksView=shown sidebarVisibleRows=2
+action window.toggle-tasks-view
+action workspace.select-2
 click sidebar.segment.needsYou
 wait 300
 expect sidebarSegment=needsYou
@@ -250,7 +261,7 @@ check "two tasks are created for the UI phase" "grep -q '\"ok\" : true' $WORK/cr
 sleep 1; touch $WORK/go
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 wait $APID; UIRC=$?
-check "the Tasks view script passes (rows, selection, Esc, toggle, right panel)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
+check "the Tasks view script passes (rows, selection, Esc, toggle, right panel, sidebar collapse)" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
 for shot in tasks-view tasks-right-panel-restored sidebar; do
