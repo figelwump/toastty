@@ -30,9 +30,7 @@ final class WorkspaceOverviewPage {
     private let titleLabel: WidgetPtr
     private let subtitleLabel: WidgetPtr
     private let mainBox: WidgetPtr
-    private let padTabs = TabViewSync()
-    private let padsTabBar: WidgetPtr
-    private let padsEmpty: WidgetPtr
+    private let padsList: WidgetPtr
     private let padsCount: WidgetPtr
     private let previewBox: WidgetPtr
     private let previewBoxRef: GObjectRef
@@ -41,6 +39,8 @@ final class WorkspaceOverviewPage {
     private let previewPurpose: WidgetPtr
     private let previewOpen: WidgetPtr
     private let previewDelete: WidgetPtr
+    private let padTabs = TabViewSync()
+    private let padsEmpty: WidgetPtr
     private var preview: ScratchpadPanelController?
     private let previewPanelID = UUID()
     private var previewDocument: (id: UUID, revision: Int)?
@@ -136,11 +136,11 @@ final class WorkspaceOverviewPage {
         Gtk.append(sideHeader, padsCount)
         Gtk.append(side, sideHeader)
         let tabBar = adw_tab_bar_new()!
-        padsTabBar = widget(tabBar)
-        Gtk.setName(padsTabBar, "workspace.overview.scratchpads.tabs")
+        padsList = widget(tabBar)
+        Gtk.setName(padsList, "workspace.overview.scratchpads.tabs")
         adw_tab_bar_set_view(tabBar, padTabs.view)
         adw_tab_bar_set_autohide(tabBar, 0)
-        Gtk.append(side, padsTabBar)
+        Gtk.append(side, padsList)
         Gtk.append(side, padTabs.widget)
         padsEmpty = Gtk.label(
             "Keep a task's Scratchpad here with the pin in the right panel's header, or ask its agent to keep it. Kept Scratchpads stay after their task finishes.",
@@ -173,8 +173,6 @@ final class WorkspaceOverviewPage {
         Gtk.append(previewBox, previewHeader)
         Gtk.append(root, side)
 
-        padTabs.onSelect = { [weak self] in self?.selectScratchpad($0) }
-        padTabs.onCloseRequest = { [weak self] in self?.confirmDelete($0) }
         Signal.connect(terminal, "clicked") { [weak self] in self?.onClose?() }
         Signal.connect(newTask, "clicked") { [weak self] in self?.ui.board.newTask?() }
         Signal.connect(previewOpen, "clicked") { [weak self] in
@@ -185,6 +183,8 @@ final class WorkspaceOverviewPage {
             guard let self, let id = self.selectedScratchpadID else { return }
             self.confirmDelete(id)
         }
+        padTabs.onSelect = { [weak self] in self?.selectScratchpad($0) }
+        padTabs.onCloseRequest = { [weak self] in self?.confirmDelete($0) }
         installKeys()
         serviceToken = ui.logic.workspaceOverview.observeChanges { [weak self] in
             self?.drawn = nil
@@ -450,7 +450,7 @@ final class WorkspaceOverviewPage {
             if let selectedChild { Gtk.append(selectedChild, previewBox) }
         }
         padTabs.sync(items, selectedID: drawn.selectedScratchpadID)
-        Gtk.setVisible(padsTabBar, !items.isEmpty)
+        Gtk.setVisible(padsList, !items.isEmpty)
         Gtk.setVisible(padTabs.widget, !items.isEmpty)
         Gtk.setVisible(padsEmpty, items.isEmpty)
         Gtk.setLabel(padsCount, items.isEmpty ? "" : "\(items.count)")
