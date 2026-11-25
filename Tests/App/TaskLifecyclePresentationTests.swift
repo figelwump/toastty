@@ -199,7 +199,14 @@ struct TaskLifecyclePresentationTests {
         ])
         // Nothing to run while Toastty merges, or once the task finished.
         #expect(menu(item(.running, merge: .merging)) == [[.openTaskSpace(workspaceID: space), pullRequest]])
+        #if os(Linux)
+        // On Linux a finished task, merged or marked done, can hand its
+        // context to a new task; an archived one cannot.
+        #expect(menu(item(.done, pullRequest: false, taskSpace: nil)) == [[.continueAsNewTask(taskID: task.id)]])
+        #expect(menu(item(.toShip, taskSpace: nil)) == [[pullRequest], [.continueAsNewTask(taskID: task.id)]])
+        #else
         #expect(menu(item(.done, pullRequest: false, taskSpace: nil)).isEmpty)
+        #endif
         #expect(menu(item(.archived, taskSpace: nil)) == [[pullRequest]])
         // Each stage's actions are the detail pane's, in its order.
         for stage in [TaskStage.running, .needsYou(.review), .needsYou(.cleanupStopped(reason: "dirty")), .toShip] {

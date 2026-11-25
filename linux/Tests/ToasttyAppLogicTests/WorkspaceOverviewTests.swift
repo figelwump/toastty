@@ -119,6 +119,74 @@ struct WorkspaceOverviewTests {
         #expect(reread.contents.synopses[fixture.parentID.uuidString]?.text == "About")
     }
 
+    @Test func aTasksContextIsSetReadAndCleared() throws {
+        let fixture = try WorkspaceOverviewFixture()
+        let tasks = fixture.makeTaskCoordinator()
+        var record = TaskRecord(
+            createdAt: Date(timeIntervalSince1970: 50), text: "Add the jig's clamp\nand its bolts",
+            title: "Clamp the jig", slug: "clamp-the-jig", source: .cli, projectRoot: "/work/bike"
+        )
+        record.pullRequestURL = "https://github.com/o/r/pull/12"
+        record.mergedAt = Date(timeIntervalSince1970: 90)
+        record.mergeCommit = "abc1234"
+        try tasks.records.insert(record)
+
+        let empty = try fixture.query(.workspaceTaskContext, ["taskID": .string(record.id.uuidString)])
+        #expect(empty["text"] == .null)
+        #expect(empty["continuation"]?.objectValue?["hasWrittenContext"] == .bool(false))
+
+        let written = try fixture.run(.workspaceTaskContextSet, [
+            "taskID": .string(record.id.uuidString),
+            "text": .string("## What was done\n- Added the clamp\n\n## Remaining\n- Order bolts"),
+        ])
+        #expect(written["text"] == .string("## What was done\n- Added the clamp\n\n## Remaining\n- Order bolts"))
+        let read = try fixture.query(.workspaceTaskContext, ["taskID": .string(record.id.uuidString)])
+        let continuation = try #require(read["continuation"]?.objectValue)
+        #expect(continuation["fileName"] == .string("continues-clamp-the-jig.md"))
+        #expect(continuation["hasWrittenContext"] == .bool(true))
+        let text = try #require(continuation["text"]?.stringValue)
+        #expect(text.hasPrefix("# Continues \u{201C}Clamp the jig\u{201D}"))
+        #expect(text.contains("- Task: [Clamp the jig](toastty://task/\(record.id.uuidString))"))
+        #expect(text.contains("- Pull request: https://github.com/o/r/pull/12, merged as `abc1234`"))
+        #expect(text.contains("- Project folder: `/work/bike`"))
+        #expect(text.contains("> Add the jig's clamp\n> and its bolts"))
+        #expect(text.contains("## Context from its agent\n\n### What was done\n- Added the clamp\n\n### Remaining"))
+
+        _ = try fixture.run(.workspaceTaskContextSet, ["taskID": .string(record.id.uuidString), "text": .string(" ")])
+        #expect(fixture.service.context(taskID: record.id) == nil)
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.run(.workspaceTaskContextSet, ["text": .string("no task")])
+        }
+        withExtendedLifetime(tasks) {}
+    }
+
+    @Test func aContinuationWithoutAContextCarriesTheLastReply() throws {
+        let fixture = try WorkspaceOverviewFixture()
+        let record = TaskRecord(createdAt: Date(), text: "Plan welds", title: "Plan welds", slug: "plan-welds", source: .cli)
+        try fixture.service.overviewStore.update {
+            $0.outcomes[record.id.uuidString] = WorkspaceTaskOutcome(text: "Wrote the weld order.", at: Date())
+        }
+        let continuation = fixture.service.continuation(of: record)
+        #expect(continuation.hasWrittenContext == false)
+        #expect(continuation.text.contains("## Its agent's last reply"))
+        #expect(continuation.text.contains("Wrote the weld order."))
+        #expect(continuation.text.contains("## Context from its agent") == false)
+    }
+
+    @Test func theAgentsHeadingsNestUnderTheContextHeading() {
+        #expect(TaskContinuation.nestedHeadings("# Goal\ntext\n```\n# a shell comment\n```\n## State")
+            == "## Goal\ntext\n```\n# a shell comment\n```\n### State")
+    }
+
+    @Test func aFileFromBeforeContextsStillReads() throws {
+        let fixture = try WorkspaceOverviewFixture()
+        let url = fixture.tempURL.appendingPathComponent("old-overview.json")
+        try Data(#"{"version":1,"scratchpads":[],"synopses":{},"outcomes":{}}"#.utf8).write(to: url)
+        let store = WorkspaceOverviewStore(fileURL: url)
+        #expect(store.contents.contexts.isEmpty)
+        #expect(store.contents.version == 1)
+    }
+
     @Test func generatedSynopsisNamesTheFolderAndLatestTasks() {
         #expect(WorkspaceOverviewModel.generatedSynopsis(title: "New house", projectRoot: nil, items: [], finished: 0)
             == "It has no tasks yet.")
@@ -206,6 +274,20 @@ private final class WorkspaceOverviewFixture {
 
     deinit {
         try? FileManager.default.removeItem(at: tempURL)
+    }
+
+    /// A task coordinator the service and the commands read records from.
+    /// The caller keeps it alive (the service holds it weakly).
+    func makeTaskCoordinator() -> TaskCoordinator {
+        let tasks = TaskCoordinator(
+            records: TaskRecordStore(fileURL: tempURL.appendingPathComponent("tasks.json")),
+            store: store, launcher: nil,
+            configLoader: { TasksConfig() },
+            attachmentsDirectoryURL: tempURL.appendingPathComponent("attachments"),
+            hasActiveSession: { _ in false }, grantScope: { _, _ in }
+        )
+        service.coordinator = tasks
+        return tasks
     }
 
     /// Sets the session's default Scratchpad, as an agent's set-content does.

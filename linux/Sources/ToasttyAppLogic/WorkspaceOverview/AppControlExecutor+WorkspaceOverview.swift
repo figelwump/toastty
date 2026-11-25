@@ -1,15 +1,15 @@
 import CoreState
 import Foundation
 
-// The `workspace.overview`, `workspace.scratchpad.*` and
-// `workspace.synopsis.set` socket commands. Linux-only: the catalog lists
+// The `workspace.overview`, `workspace.scratchpad.*`,
+// `workspace.synopsis.set` and `workspace.task-context*` socket commands. Linux-only: the catalog lists
 // them under `#if os(Linux)` (Sources/App/AppControl/AppControlCatalog.swift).
 
 extension AppControlActionID {
     var isWorkspaceOverviewAction: Bool {
         switch self {
         case .workspaceScratchpadKeep, .workspaceScratchpadOpen, .workspaceScratchpadExport,
-             .workspaceScratchpadDelete, .workspaceSynopsisSet: true
+             .workspaceScratchpadDelete, .workspaceSynopsisSet, .workspaceTaskContextSet: true
         default: false
         }
     }
@@ -18,7 +18,7 @@ extension AppControlActionID {
 extension AppControlQueryID {
     var isWorkspaceOverviewQuery: Bool {
         switch self {
-        case .workspaceOverview, .workspaceScratchpadList: true
+        case .workspaceOverview, .workspaceScratchpadList, .workspaceTaskContext: true
         default: false
         }
     }
@@ -30,6 +30,13 @@ extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("the workspace page is not available")
         }
         return service
+    }
+
+    private func overviewTaskCoordinator(_ service: WorkspaceOverviewService) throws -> TaskCoordinator {
+        guard let coordinator = service.coordinator else {
+            throw AutomationSocketError.invalidPayload("tasks are not available")
+        }
+        return coordinator
     }
 
     /// The top-level workspace a command names, or the caller's own.
@@ -125,6 +132,14 @@ extension AppControlExecutor {
                     "synopsis": synopsis.map { .string($0.text) } ?? .null,
                 ])
 
+            case .workspaceTaskContextSet:
+                guard case .string(let text)? = args["text"] else {
+                    throw AutomationSocketError.invalidPayload("text is required")
+                }
+                let record = try ownOrVisibleTask(args: args, coordinator: try overviewTaskCoordinator(service))
+                try service.setContext(text, for: record, sessionID: requestContext().callerSessionID)
+                return .init(didMutateState: true, result: Self.taskContextSnapshot(record, service: service))
+
             default:
                 throw AutomationSocketError.invalidPayload("unsupported action: \(action.rawValue)")
             }
@@ -137,6 +152,10 @@ extension AppControlExecutor {
 
     func runWorkspaceOverviewQuery(_ query: AppControlQueryID, args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
         let service = try requiredWorkspaceOverview()
+        if query == .workspaceTaskContext {
+            let record = try ownOrVisibleTask(args: args, coordinator: try overviewTaskCoordinator(service))
+            return Self.taskContextSnapshot(record, service: service)
+        }
         let workspaceID = try overviewWorkspaceID(args: args, service: service)
         switch query {
         case .workspaceScratchpadList:
@@ -155,6 +174,23 @@ extension AppControlExecutor {
 
     private static func date(_ date: Date?) -> AutomationJSONValue {
         date.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null
+    }
+
+    static func taskContextSnapshot(_ record: TaskRecord, service: WorkspaceOverviewService) -> [String: AutomationJSONValue] {
+        let context = service.context(taskID: record.id)
+        let continuation = service.continuation(of: record)
+        return [
+            "taskID": .string(record.id.uuidString),
+            "title": .string(record.title),
+            "text": context.map { .string($0.text) } ?? .null,
+            "updatedAt": date(context?.at),
+            "sessionID": context?.sessionID.map { .string($0) } ?? .null,
+            "continuation": .object([
+                "fileName": .string(continuation.fileName),
+                "text": .string(continuation.text),
+                "hasWrittenContext": .bool(continuation.hasWrittenContext),
+            ]),
+        ]
     }
 
     static func scratchpadSnapshot(_ entry: WorkspaceScratchpadEntry, service: WorkspaceOverviewService) -> [String: AutomationJSONValue] {
@@ -211,6 +247,7 @@ extension AppControlExecutor {
                 var entry = task(recent.item)
                 entry["outcome"] = recent.outcome.map { .string($0) } ?? .null
                 entry["outcomeSource"] = .string(recent.outcomeIsRequest ? "request" : "reply")
+                entry["hasContext"] = .bool(recent.item.taskID.flatMap { service.context(taskID: $0) } != nil)
                 return .object(entry)
             }),
             "tasks": .array(model.items.map { .object(task($0)) }),

@@ -481,6 +481,21 @@ public final class LinuxAppLogic {
             board: tasks.board
         )
         WorkspaceOverviewService.current = workspaceOverview
+        // Continue as New Task: New Task with the finished task's context.
+        tasks.board.continueAsNewTask = { [weak workspaceOverview, weak quickEntry = tasks.quickEntry] taskID in
+            guard let workspaceOverview, let quickEntry,
+                  let record = workspaceOverview.coordinator?.records.record(id: taskID) else { return }
+            let continuation = workspaceOverview.continuation(of: record)
+            quickEntry.presentContinuation(
+                QuickEntryContinuation(
+                    taskID: continuation.taskID,
+                    taskTitle: continuation.taskTitle,
+                    fileName: continuation.fileName,
+                    text: continuation.text
+                ),
+                workspaceID: record.workspaceID ?? record.taskSpaceWorkspaceID
+            )
+        }
 
         let remoteAccessService: RemoteAccessService?
         if options.allowsRemoteAccess {

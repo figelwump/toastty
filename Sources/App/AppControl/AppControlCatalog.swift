@@ -115,6 +115,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceScratchpadExport = "workspace.scratchpad.export"
     case workspaceScratchpadDelete = "workspace.scratchpad.delete"
     case workspaceSynopsisSet = "workspace.synopsis.set"
+    case workspaceTaskContextSet = "workspace.task-context.set"
     #endif
 
     static func resolve(_ rawValue: String) -> Self? {
@@ -217,9 +218,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(
                 id: rawValue,
                 kind: .action,
-                summary: "Set what a top-level workspace is about, shown at the top of its workspace page (Linux): a few plain sentences on its purpose and current state. Empty text clears it, and the page goes back to a summary Toastty makes from the tasks. A task space means its top-level workspace; a managed caller defaults to its own.",
+                summary: "Set what a top-level workspace is about, shown at the top of its workspace page (Linux): a few plain sentences on its purpose and current state, then a short Recent work list of what its latest tasks did, at most 4,000 characters. Empty text clears it, and the page goes back to a summary Toastty makes from the tasks. A task space means its top-level workspace; a managed caller defaults to its own.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.text(required: true)]
+            )
+        case .workspaceTaskContextSet:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Save what a task's agent leaves for whoever continues its work (Linux): Markdown with the goal, what was done, where it stands, decisions, what remains, open questions and where to look, at most 8,000 characters. Continue as New Task attaches it to the new task, after the facts Toastty knows (request, branch, pull request, merge commit, kept Scratchpads). Writing again replaces it; empty text clears it. Without taskID, a task's agent writes its own task's.",
+                selectors: [],
+                parameters: [.taskID(required: false), .text(required: true)]
             )
         #endif
         case .windowCreate:
@@ -944,6 +953,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     #if os(Linux)
     case workspaceOverview = "workspace.overview"
     case workspaceScratchpadList = "workspace.scratchpad.list"
+    case workspaceTaskContext = "workspace.task-context"
     #endif
 
     static func resolve(_ rawValue: String) -> Self? {
@@ -982,6 +992,14 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
                 kind: .query,
                 summary: "List a top-level workspace's kept Scratchpads, newest first (Linux): documentID, title, purpose, revision, updatedAt, keptAt, keptBy, linked (whether changes to the source still copy over) and the source task. Read one with workspace.scratchpad.export. A task space means its top-level workspace; a managed caller defaults to its own.",
                 selectors: [.windowID, .workspaceID]
+            )
+        case .workspaceTaskContext:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return a task's saved context (Linux): the text its agent wrote with workspace.task-context.set (null when none), when and by which session, and continuation, the file Continue as New Task attaches to a new task (fileName, text, hasWrittenContext). Without taskID, a task's agent reads its own task's.",
+                selectors: [],
+                parameters: [.taskID(required: false)]
             )
         #endif
         case .annotationKeys:

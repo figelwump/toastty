@@ -370,11 +370,13 @@ toastty action run workspace.scratchpad.export --json "documentID=<copy-id>"
 
 `toastty query run workspace.overview --json` returns the whole page: the
 synopsis, the latest tasks and what each did, every task of the workspace, and
-the kept Scratchpads. When the user asks you to describe the workspace, or
-you finish work that changes what it is about, write the page's synopsis. Use
-a few plain sentences on the workspace's purpose and current state, not a task
-log:
+the kept Scratchpads. When the user asks you to describe the workspace, write
+the page's synopsis: a few plain sentences on the workspace's purpose and
+current state, then the `Recent work:` list of what recent tasks did, one
+line each. A task's agent rewrites the synopsis each time its task finishes,
+as `toastty-task-start` describes under *Record what the task did*. Keep the
+lines already there, so the list is not lost:
 
 ```bash
-toastty action run workspace.synopsis.set --json "text=<two to four sentences>"
+toastty action run workspace.synopsis.set --json --stdin text < synopsis.txt
 ```
