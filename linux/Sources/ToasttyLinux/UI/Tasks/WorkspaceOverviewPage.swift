@@ -30,6 +30,7 @@ final class WorkspaceOverviewPage {
     private let titleLabel: WidgetPtr
     private let subtitleLabel: WidgetPtr
     private let mainBox: WidgetPtr
+    private let browserPins = WorkspaceOverviewBrowserPins()
     private let padsList: WidgetPtr
     private let padsCount: WidgetPtr
     private let previewBox: WidgetPtr
@@ -156,6 +157,24 @@ final class WorkspaceOverviewPage {
         Gtk.append(side, previewBox)
         Gtk.append(root, side)
 
+        gtk_box_prepend(cast(side), browserPins.root)
+        browserPins.onOpen = { [weak self] pin in
+            guard let self, let workspaceID = self.workspaceID else { return }
+            do {
+                try self.ui.logic.workspaceOverview.openBrowser(pin, in: workspaceID)
+                self.onClose?()
+            } catch {
+                TaskActions.presentFailure("Could Not Open the Browser Page", error.localizedDescription)
+            }
+        }
+        browserPins.onRemove = { [weak self] pin in
+            guard let self, let workspaceID = self.workspaceID else { return }
+            do {
+                try self.ui.logic.workspaceOverview.unpinBrowser(pin, in: workspaceID)
+            } catch {
+                TaskActions.presentFailure("Could Not Unpin the Browser Page", error.localizedDescription)
+            }
+        }
         Signal.connect(terminal, "clicked") { [weak self] in self?.onClose?() }
         Signal.connect(newTask, "clicked") { [weak self] in self?.ui.board.newTask?() }
         Signal.connect(previewOpen, "clicked") { [weak self] in
@@ -197,6 +216,7 @@ final class WorkspaceOverviewPage {
         self.workspaceID = workspaceID
         guard isShown, let workspaceID,
               let model = WorkspaceOverviewModel.make(workspaceID: workspaceID, service: ui.logic.workspaceOverview) else { return }
+        browserPins.render(workspaceID: workspaceID, pins: ui.logic.workspaceOverview.browserPins(forWorkspace: workspaceID))
         if let selected = selectedScratchpadID, model.scratchpads.contains(where: { $0.entry.documentID == selected }) == false {
             selectedScratchpadID = nil
         }

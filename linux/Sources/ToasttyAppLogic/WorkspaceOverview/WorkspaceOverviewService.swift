@@ -6,18 +6,24 @@ enum WorkspaceOverviewError: LocalizedError, Equatable {
     case notAScratchpad
     case missingDocument(UUID)
     case unknownScratchpad(UUID)
+    case noPinnableBrowserPage
+    case browserNotPinned
+    case couldNotOpenBrowser
 
     var errorDescription: String? {
         switch self {
-        case .noWorkspace: "no open workspace holds that Scratchpad"
+        case .noWorkspace: "no open workspace holds that panel"
         case .notAScratchpad: "the panel is not a Scratchpad"
         case .missingDocument(let id): "Scratchpad document \(id.uuidString) is missing"
         case .unknownScratchpad(let id): "no workspace Scratchpad has documentID \(id.uuidString)"
+        case .noPinnableBrowserPage: "Open a web page or local file in the right panel first."
+        case .browserNotPinned: "That browser page is not pinned in this workspace."
+        case .couldNotOpenBrowser: "The browser page could not be opened in the right panel."
         }
     }
 }
 
-/// Keeps Scratchpads in their top-level workspace, follows a kept
+/// Keeps Scratchpads and browser pins in their top-level workspace, follows a kept
 /// Scratchpad's source while its task lives, and holds each workspace's
 /// synopsis and its tasks' last replies. Linux-first (see
 /// docs/plans/workspace-overview.md); the GTK workspace page and the
@@ -104,6 +110,65 @@ final class WorkspaceOverviewService {
         guard let workspace = store.state.workspacesByID[workspaceID] else { return nil }
         if let root = workspace.rootDirectory, root.isEmpty == false { return root }
         return try? coordinator?.resolvedProjectRoot(workspaceID: workspaceID).path
+    }
+
+    // MARK: Browser pins
+
+    static func pinnableBrowserURL(_ web: WebPanelState) -> String? {
+        guard web.definition == .browser, let address = web.restorableURL,
+              let url = URL(string: address) else { return nil }
+        switch url.scheme?.lowercased() {
+        case "http", "https": return url.host?.isEmpty == false ? address : nil
+        case "file": return url.path.hasPrefix("/") ? address : nil
+        default: return nil
+        }
+    }
+
+    func browserPins(forWorkspace workspaceID: UUID) -> [WorkspaceBrowserPin] {
+        let root = projectRoot(of: workspaceID)
+        return (overviewStore.contents.browserPins ?? []).reversed().filter {
+            $0.workspaceID == workspaceID || (root != nil && $0.projectRoot == root)
+        }
+    }
+
+    /// Pins the current address, not the browser's history or future navigation.
+    func pinBrowser(panelID: UUID) throws -> (workspaceID: UUID, created: Bool) {
+        guard let selection = store.state.workspaceSelection(containingPanelID: panelID),
+              let workspaceID = topLevelWorkspaceID(for: selection.workspaceID),
+              case .web(let web)? = selection.workspace.allPanelsByID[panelID],
+              let url = Self.pinnableBrowserURL(web) else { throw WorkspaceOverviewError.noPinnableBrowserPage }
+        if browserPins(forWorkspace: workspaceID).contains(where: { $0.url == url }) {
+            return (workspaceID, false)
+        }
+        let title = web.title == WebPanelDefinition.browser.defaultTitle ? (URL(string: url)?.host ?? url) : web.title
+        let pin = WorkspaceBrowserPin(workspaceID: workspaceID, projectRoot: projectRoot(of: workspaceID), url: url, title: title)
+        try write { $0.browserPins = ($0.browserPins ?? []) + [pin] }
+        return (workspaceID, true)
+    }
+
+    /// Removing the saved address does not close any browser tab.
+    func unpinBrowser(_ pin: WorkspaceBrowserPin, in workspaceID: UUID) throws {
+        guard browserPins(forWorkspace: workspaceID).contains(pin) else { throw WorkspaceOverviewError.browserNotPinned }
+        try write { $0.browserPins?.removeAll { $0 == pin } }
+    }
+
+    func openBrowser(_ pin: WorkspaceBrowserPin, in workspaceID: UUID) throws {
+        guard let workspace = store.state.workspacesByID[workspaceID] else { throw WorkspaceOverviewError.noWorkspace }
+        guard browserPins(forWorkspace: workspaceID).contains(pin) else { throw WorkspaceOverviewError.browserNotPinned }
+        let panel = workspace.rightAuxPanel
+        if let tab = panel.orderedTabs.first(where: {
+            if case .web(let web) = $0.panelState { return web.definition == .browser && web.restorableURL == pin.url }
+            return false
+        }) {
+            // Selecting a tab also reveals a hidden right panel. A no-op
+            // here is fine when the matching tab already has focus.
+            _ = store.sendNavigation(.selectRightAuxPanelTab(workspaceID: workspaceID, tabID: tab.id, focus: true))
+        } else if !store.createBrowserPanel(
+            workspaceID: workspaceID,
+            request: BrowserPanelCreateRequest(initialURL: pin.url, placementOverride: .rightPanel)
+        ) {
+            throw WorkspaceOverviewError.couldNotOpenBrowser
+        }
     }
 
     // MARK: Kept Scratchpads

@@ -40,6 +40,14 @@ struct WorkspaceScratchpadEntry: Codable, Equatable, Sendable {
     var keptBy: String?
 }
 
+/// A saved page, independent of the browser tab it was pinned from.
+struct WorkspaceBrowserPin: Codable, Equatable, Sendable {
+    var workspaceID: UUID
+    var projectRoot: String?
+    var url: String
+    var title: String
+}
+
 /// What a workspace is about, as an agent last wrote it.
 struct WorkspaceSynopsis: Codable, Equatable, Sendable {
     var text: String
@@ -55,7 +63,7 @@ struct WorkspaceTaskOutcome: Codable, Equatable, Sendable {
     var at: Date
 }
 
-/// `~/.toastty/workspace-overview.json`: kept Scratchpads, synopses and task
+/// `~/.toastty/workspace-overview.json`: kept Scratchpads, browser pins, synopses and task
 /// outcomes. Dates use Foundation's default encoding, so a reread equals
 /// what was written. Written whole on every change; a file it cannot read starts
 /// empty and is left in place until the next write.
@@ -67,6 +75,8 @@ final class WorkspaceOverviewStore {
         var synopses: [String: WorkspaceSynopsis] = [:]
         /// By task ID.
         var outcomes: [String: WorkspaceTaskOutcome] = [:]
+        /// Optional so files written before browser pins still decode.
+        var browserPins: [WorkspaceBrowserPin]?
     }
 
     static let fileName = "workspace-overview.json"

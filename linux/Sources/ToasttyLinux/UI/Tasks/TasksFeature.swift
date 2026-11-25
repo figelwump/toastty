@@ -119,7 +119,14 @@ final class TasksWindowFeature: LinuxWindowFeature {
         controller.sidebar.setAlternateContent(sidebarView.content)
         ui.register(self)
         overviewPage.onClose = { [weak self] in self?.closeOverview() }
-        Signal.connect(keepButton, "clicked") { [weak self] in _ = self?.perform(commandID: "scratchpad.keep-in-workspace") }
+        Signal.connect(keepButton, "clicked") { [weak self] in
+            guard let self else { return }
+            if self.activeRightPanelWeb(self.ui.store.state)?.web.definition == .browser {
+                self.pinActiveBrowser()
+            } else {
+                self.keepActiveScratchpad()
+            }
+        }
         // The What's new question shows over the window that gets the
         // keyboard, as on macOS.
         let windowID = controller.windowID
@@ -189,22 +196,38 @@ final class TasksWindowFeature: LinuxWindowFeature {
         MainLoop.idle { [weak self] in self?.controller?.content.refocus() }
     }
 
-    /// The Scratchpad the right panel shows now, when it is one.
-    private func activeRightPanelScratchpad(_ state: AppState) -> (workspaceID: UUID, panelID: UUID, documentID: UUID)? {
+    private func activeRightPanelWeb(_ state: AppState) -> (workspaceID: UUID, panelID: UUID, web: WebPanelState)? {
         guard let selection = state.workspaceSelection(in: windowID),
               selection.workspace.rightAuxPanel.isVisible,
               let panelID = selection.workspace.rightAuxPanel.activePanelID,
-              case .web(let web)? = selection.workspace.allPanelsByID[panelID],
-              web.definition == .scratchpad, let documentID = web.scratchpad?.documentID else { return nil }
-        return (selection.workspaceID, panelID, documentID)
+              case .web(let web)? = selection.workspace.allPanelsByID[panelID] else { return nil }
+        return (selection.workspaceID, panelID, web)
+    }
+
+    private func activeRightPanelScratchpad(_ state: AppState) -> (panelID: UUID, documentID: UUID)? {
+        guard let active = activeRightPanelWeb(state), active.web.definition == .scratchpad,
+              let documentID = active.web.scratchpad?.documentID else { return nil }
+        return (active.panelID, documentID)
     }
 
     private func renderKeepButton(_ state: AppState) {
+        let service = ui.logic.workspaceOverview
+        if let active = activeRightPanelWeb(state),
+           let url = WorkspaceOverviewService.pinnableBrowserURL(active.web),
+           let workspaceID = service.topLevelWorkspaceID(for: active.workspaceID, state: state) {
+            let pinned = service.browserPins(forWorkspace: workspaceID).contains { $0.url == url }
+            Gtk.setVisible(keepButton, true)
+            Gtk.setClass(keepButton, "kept", pinned)
+            gtk_widget_set_tooltip_text(
+                keepButton,
+                pinned ? "Pinned in Workspace: show it on the workspace page" : "Pin this browser page to the workspace"
+            )
+            return
+        }
         guard let active = activeRightPanelScratchpad(state) else {
             Gtk.setVisible(keepButton, false)
             return
         }
-        let service = ui.logic.workspaceOverview
         let kept = service.entry(documentID: active.documentID) ?? service.linkedEntry(sourceDocumentID: active.documentID)
         Gtk.setVisible(keepButton, true)
         Gtk.setClass(keepButton, "kept", kept != nil)
@@ -212,6 +235,22 @@ final class TasksWindowFeature: LinuxWindowFeature {
             keepButton,
             kept == nil ? "Keep in Workspace: save this Scratchpad on the workspace page, where it stays after the task" : "Kept in Workspace: show it on the workspace page"
         )
+    }
+
+    private func pinActiveBrowser() {
+        guard let active = activeRightPanelWeb(ui.store.state) else { return }
+        do {
+            let result = try ui.logic.workspaceOverview.pinBrowser(panelID: active.panelID)
+            if result.created {
+                let title = ui.store.state.workspacesByID[result.workspaceID]?.title ?? "the workspace"
+                controller?.toast("Pinned in \(title)")
+                ui.scheduleRender()
+            } else {
+                showOverview(workspaceID: result.workspaceID, selectingScratchpad: nil)
+            }
+        } catch {
+            controller?.toast(error.localizedDescription)
+        }
     }
 
     /// Keeps the right panel's Scratchpad in its workspace, or shows the
@@ -279,6 +318,9 @@ final class TasksWindowFeature: LinuxWindowFeature {
         case "scratchpad.keep-in-workspace":
             keepActiveScratchpad()
             return true
+        case "browser.pin-in-workspace":
+            pinActiveBrowser()
+            return true
         case "workspace.overview.toggle":
             if let workspaceID = ui.store.state.window(id: windowID)?.selectedWorkspaceID {
                 toggleOverview(workspaceID: workspaceID)
@@ -314,6 +356,7 @@ final class TasksWindowFeature: LinuxWindowFeature {
         case "window.toggle-tasks-view": ui.board.isEnabled
         case "task.new": ui.board.newTask != nil
         case "scratchpad.keep-in-workspace": activeRightPanelScratchpad(state) != nil
+        case "browser.pin-in-workspace": activeRightPanelWeb(state).flatMap { WorkspaceOverviewService.pinnableBrowserURL($0.web) } != nil
         case "workspace.overview.toggle": state.window(id: windowID)?.selectedWorkspaceID != nil
         case "coordinator.dock.toggle", "coordinator.open": ui.tasks.coordinatorController != nil
         case "coordinator.restart": ui.tasks.coordinatorController?.location != nil
@@ -365,6 +408,14 @@ final class TasksWindowFeature: LinuxWindowFeature {
                 title: "Keep Scratchpad in Workspace",
                 subtitle: "Save the right panel's Scratchpad on its workspace page",
                 keywords: ["scratchpad", "keep", "pin", "promote", "sticky", "workspace", "save"]
+            ))
+        }
+        if isEnabled(commandID: "browser.pin-in-workspace", state: state) == true {
+            items.append(PaletteItem(
+                id: "browser.pin-in-workspace",
+                title: "Pin Browser Page to Workspace",
+                subtitle: "Save the right panel’s current address on its workspace page",
+                keywords: ["browser", "bookmark", "pin", "workspace", "save"]
             ))
         }
         if let controller = ui.tasks.coordinatorController {
