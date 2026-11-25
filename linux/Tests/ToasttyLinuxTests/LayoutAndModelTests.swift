@@ -133,6 +133,31 @@ struct CommandRouterTests {
         #expect(CommandRouter.route("workspace.tab.select-9", windowID: fixture.windowID, state: fixture.store.state) == .none)
     }
 
+    @Test func creatingOrSelectingATabRevealsWorkspaceFromTasks() {
+        let fixture = Fixture()
+        fixture.store.send(.setTasksViewShown(windowID: fixture.windowID, shown: true))
+        fixture.perform("workspace.tab.create")
+        let workspace = fixture.store.state.workspacesByID[fixture.workspaceID]!
+        #expect(workspace.tabIDs.count == 2)
+        #expect(workspace.selectedTabID == workspace.tabIDs.last)
+        #expect(fixture.store.state.windows[0].showsTasksView == false)
+
+        fixture.store.send(.setTasksViewShown(windowID: fixture.windowID, shown: true))
+        fixture.perform("workspace.tab.select-2")
+        #expect(fixture.store.state.windows[0].showsTasksView == false, "selecting the active tab by shortcut also leaves Tasks")
+    }
+
+    @Test func newWorkspaceRevealsItsTerminalAndSidebarCard() {
+        let fixture = Fixture()
+        let first = fixture.workspaceID
+        fixture.store.send(.setTasksViewShown(windowID: fixture.windowID, shown: true))
+        fixture.store.send(.setSidebarSegment(windowID: fixture.windowID, segment: .needsYou))
+        fixture.perform("workspace.create")
+        #expect(fixture.workspaceID != first)
+        #expect(fixture.store.state.windows[0].showsTasksView == false)
+        #expect(fixture.store.state.windows[0].sidebarSegment == .all)
+    }
+
     @Test func workspaceSelectionByNumber() {
         let fixture = Fixture()
         let first = fixture.workspaceID

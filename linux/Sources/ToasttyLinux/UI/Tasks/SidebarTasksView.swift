@@ -61,11 +61,17 @@ final class SidebarTasksView {
 
         // The Tasks row.
         let tasksRow = Gtk.hbox(spacing: 8, classes: ["sidebar-tasks-row"])
-        Gtk.setName(tasksRow, "sidebar.tasks")
-        Gtk.append(tasksRow, Gtk.image("view-list-bullet-symbolic", pixelSize: 16))
-        let tasksTitle = Gtk.label("Tasks", classes: ["sidebar-tasks-title"])
-        gtk_widget_set_hexpand(tasksTitle, 1)
-        Gtk.append(tasksRow, tasksTitle)
+        // Independent targets: the row's activation must not claim the
+        // pointer sequence of New Task or the webhook button.
+        let openTasks = gtk_button_new()!
+        Gtk.setName(openTasks, "sidebar.tasks")
+        Gtk.addClasses(openTasks, ["flat", "sidebar-tasks-open"])
+        gtk_widget_set_hexpand(openTasks, 1)
+        let openLabel = Gtk.hbox(spacing: 8)
+        Gtk.append(openLabel, Gtk.image("view-list-bullet-symbolic", pixelSize: 16))
+        Gtk.append(openLabel, Gtk.label("Tasks", classes: ["sidebar-tasks-title"]))
+        gtk_button_set_child(cast(openTasks), openLabel)
+        Gtk.append(tasksRow, openTasks)
         webhookPill = Gtk.button("", classes: ["flat", "sidebar-webhook-pill"])
         gtk_widget_set_tooltip_text(webhookPill, "A webhook needs you in the Tasks view")
         Gtk.setName(webhookPill, "sidebar.tasks.webhooks")
@@ -112,7 +118,7 @@ final class SidebarTasksView {
 
         click(coordinatorRow) { [weak self] in self?.coordinatorClicked() }
         contextClick(coordinatorRow) { [weak self] x, y in self?.showCoordinatorMenu(x: x, y: y) }
-        click(tasksRow) { [weak self] in self?.openTasksView(selecting: nil) }
+        Signal.connect(openTasks, "clicked") { [weak self] in self?.openTasksView(selecting: nil) }
         Signal.connect(newTask, "clicked") { [weak self] in self?.ui.board.newTask?() }
         Signal.connect(webhookPill, "clicked") { [weak self] in self?.openTasksView(selecting: nil) }
         Signal.connect(allToggle, "toggled") { [weak self] in self?.segmentToggled() }
@@ -182,6 +188,13 @@ final class SidebarTasksView {
             let empty = Gtk.label("Nothing needs you", classes: ["dim-label", "sidebar-nothing"], xalign: 0.5)
             Gtk.setName(empty, "sidebar.needsYou.empty")
             Gtk.append(cards, empty)
+            let showAll = Gtk.button("Show all workspaces", classes: ["flat"])
+            Gtk.setName(showAll, "sidebar.needsYou.showAll")
+            Signal.connect(showAll, "clicked") { [weak self] in
+                guard let self else { return }
+                _ = self.ui.store.send(.setSidebarSegment(windowID: self.windowID, segment: .all))
+            }
+            Gtk.append(cards, showAll)
             return
         }
         for (index, card) in model.cards.enumerated() {

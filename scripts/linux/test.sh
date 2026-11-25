@@ -113,6 +113,9 @@ for run_filter in "${runs[@]}"; do
     export XDG_STATE_HOME="$isolation/home/.local/state"
     export XDG_CACHE_HOME="$isolation/home/.cache"
     export PATH="$test_path"
+    # Linux has no .app bundle. Point skill-loading tests at this checkout's
+    # resources, as the running Linux app does, without inheriting a live app path.
+    export TOASTTY_APP_RESOURCES_PATH="$repo_root/Sources/App/Resources"
     swift test --skip-build "${parallel[@]}" --filter "$run_filter" "${extra[@]}"
   ) || status=$?
 done

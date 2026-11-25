@@ -45,6 +45,14 @@ extension LinuxAppController {
                 case "escape": _ = ui.store.send(.setTasksViewShown(windowID: window.windowID, shown: false))
                 default: script.reportFailure("tasks key: down, up or escape")
                 }
+            case "wait-idle":
+                // GTK defers tab closes and other button work to default
+                // idle. An endlessly scheduled Tasks render must not starve it.
+                var reachedIdle = false
+                MainLoop.idle { reachedIdle = true }
+                if !MainLoop.spin(untilMilliseconds: 2000, { reachedIdle }) {
+                    script.reportFailure("tasks: a default-priority idle never ran")
+                }
             case "menu":
                 guard parts.count > 2, let index = Int(parts[1]), let row = page.rowSubject(at: index) else {
                     script.reportFailure("tasks menu: usage tasks menu <row> <title>")

@@ -26,10 +26,9 @@ struct TranscriptActions {
 /// working line. The layout decisions are `ToasttyTranscriptLayout`'s, as on
 /// macOS and iPhone.
 ///
-/// Updates are differential: each display item becomes a `RenderItem`, and
-/// only the items after the first one that changed are rebuilt, so a
-/// streaming answer redraws its tail and a selection in older messages
-/// stays.
+/// Reconcile rows by identity so transcript updates leave unaffected
+/// selections and answer fields attached. Preserve the first visible row
+/// while reading history, even when rows are inserted before it.
 @MainActor
 final class TranscriptView {
     let root: WidgetPtr
@@ -41,7 +40,9 @@ final class TranscriptView {
     var foldsRunningWork = true
     var readOnlyInteractionMessage = CoordinatorChatPresentation.readOnlyInteractionMessage
 
-    private var entries: [(item: RenderItem, widget: GObjectRef)] = []
+    private typealias Entry = (item: RenderItem, widget: GObjectRef)
+    private var entries: [Entry] = []
+    private var interactionCards: [WidgetPtr: InteractionCard] = [:]
     private var turnFold = ToasttyTurnFoldState()
     private var quietCheckFold = ToasttyQuietCheckFoldState()
     private var openHostMessages: Set<ToasttyTranscriptRowID> = []
@@ -57,11 +58,13 @@ final class TranscriptView {
     private var workingIndicator: ToasttyTranscriptWorkingIndicator?
     private var newMessages: ToasttyNewMessagesMarker?
     private var pendingScroll: ScrollRequest?
+    private var scrollTick: guint = 0
+    private var scrollIdle: guint = 0
 
     private enum ScrollRequest {
         case liveEdge
-        case widget(WidgetPtr)
-        case keepDistanceFromBottom(Double)
+        case widget(String)
+        case position(key: String?, offset: Double, fallback: Double)
     }
 
     struct Inputs: Equatable {
@@ -107,6 +110,13 @@ final class TranscriptView {
     func teardown() {
         MainLoop.cancel(elapsedTimer)
         elapsedTimer = 0
+        if scrollTick != 0 {
+            gtk_widget_remove_tick_callback(scroller, scrollTick)
+            scrollTick = 0
+        }
+        MainLoop.cancel(scrollIdle)
+        scrollIdle = 0
+        pendingScroll = nil
     }
 
     // MARK: - Update
@@ -127,14 +137,12 @@ final class TranscriptView {
             state: state, answerStates: answerStates, sessionStatus: sessionStatus,
             isWorking: workingIndicator != nil, newMessages: newMessages, chipsRevision: chipsRevision
         )
-        if jumpRequest != lastJumpRequest {
-            lastJumpRequest = jumpRequest
-            followsLiveEdge = true
-            pendingScroll = .liveEdge
-        }
-        let isFirst = lastState == nil
-        let previous = lastState
+        let jump = jumpRequest != lastJumpRequest
+        lastJumpRequest = jumpRequest
+        let opensTranscript = lastState?.blocks.isEmpty != false && state.blocks.isEmpty == false
         if inputs != lastInputs {
+            keepScrollForUpdate()
+            let previous = lastState
             lastInputs = inputs
             reconcileFolds(state: state, sessionStatus: sessionStatus, previous: previous)
             lastState = state
@@ -142,16 +150,13 @@ final class TranscriptView {
             rebuild()
         }
         updateBanner(state.phase, truncated: state.historyTruncated)
-        if isFirst {
-            // The chat opens at the first message the reader has not seen,
-            // or at the live edge.
-            pendingScroll = newMessagesDivider.map(ScrollRequest.widget) ?? .liveEdge
-        }
-        if case .prepended = state.revision, let previous, previous.blocks.first?.id != state.blocks.first?.id {
-            pendingScroll = pendingScroll ?? .keepDistanceFromBottom(distanceFromBottom)
-        }
-        if followsLiveEdge, pendingScroll == nil {
-            pendingScroll = .liveEdge
+        if jump {
+            jumpToLiveEdge()
+        } else if opensTranscript, entries.contains(where: { $0.item.key == "new" }) {
+            // An unread divider is a destination when the chat opens, not
+            // when a live message is appended while the reader is elsewhere.
+            followsLiveEdge = false
+            requestScroll(.widget("new"))
         }
         updateElapsedTimer()
         updateJumpButton()
@@ -160,6 +165,7 @@ final class TranscriptView {
     /// Draws again with the current inputs, after a fold changed.
     private func redraw() {
         guard lastState != nil else { return }
+        keepScrollForUpdate()
         rebuild()
         updateJumpButton()
     }
@@ -188,22 +194,15 @@ final class TranscriptView {
     // MARK: - Render items
 
     /// One shown item and everything its widget depends on.
-    /// What a question card's widgets depend on: not the typed text or
-    /// the checked options, which the widgets hold, so typing an answer does
-    /// not rebuild the card and take the keyboard from it.
+    /// Only the control structure determines whether the card is reused.
+    /// Draft text, selections, and button sensitivity are applied in place.
     struct AnswerKey: Equatable {
-        var status: ToasttyInteractionAnswerStatus
+        var key: ToasttyInteractionAnswerKey
         var questions: [RemoteInteractionQuestion]
-        var connectionIsLive: Bool
-        var customTextQuestionIDs: Set<String>
-        var canSubmit: Bool
 
         init(_ state: ToasttyInteractionAnswerState) {
-            status = state.status
+            key = state.key
             questions = state.questions
-            connectionIsLive = state.connectionIsLive
-            customTextQuestionIDs = Set(state.drafts.filter(\.value.usesCustomText).keys)
-            canSubmit = state.canonicalAnswers != nil
         }
     }
 
@@ -295,27 +294,47 @@ final class TranscriptView {
 
     private func rebuild() {
         let items = renderItems()
-        var keep = 0
-        while keep < entries.count, keep < items.count, entries[keep].item == items[keep] {
-            keep += 1
-        }
-        for entry in entries[keep...] {
-            gtk_box_remove(cast(list), entry.widget.widgetPointer)
-        }
-        entries.removeSubrange(keep...)
-        elapsedLabels.removeAll { label in
-            gtk_widget_get_parent(label.label) == nil || entries.contains { gtk_widget_is_ancestor(label.label, $0.widget.widgetPointer).bool } == false
-        }
-        for item in items[keep...] {
-            let widget = makeWidget(item)
-            gtk_widget_set_name(widget, "transcript.\(item.key)")
-            Gtk.append(list, widget)
-            entries.append((item, GObjectRef(sinking: widget)))
-        }
-    }
+        if items != entries.map(\.item) {
+            var previousByKey = Dictionary(grouping: entries, by: { $0.item.key })
+            let matches = items.map { item -> Entry? in
+                guard let index = previousByKey[item.key]?.firstIndex(where: { $0.item == item }) else { return nil }
+                return previousByKey[item.key]?.remove(at: index)
+            }
+            let removed = previousByKey.values.flatMap { $0 }.map { $0.widget.widgetPointer }
+            // Clear borrowed child pointers while their parent refs are
+            // still alive. GTK may free them when the old entry goes away.
+            elapsedLabels.removeAll { label in
+                removed.contains { gtk_widget_is_ancestor(label.label, $0).bool }
+            }
+            interactionCards = interactionCards.filter { widget, _ in
+                !removed.contains { widget == $0 || gtk_widget_is_ancestor(widget, $0).bool }
+            }
+            for widget in removed { gtk_box_remove(cast(list), widget) }
 
-    private var newMessagesDivider: WidgetPtr? {
-        entries.first { if case .newDivider = $0.item { true } else { false } }?.widget.widgetPointer
+            var previous: WidgetPtr?
+            entries = zip(items, matches).map { item, match in
+                let entry: Entry
+                if let match {
+                    entry = match
+                } else {
+                    let widget = makeWidget(item)
+                    gtk_widget_set_name(widget, "transcript.\(item.key)")
+                    Gtk.append(list, widget)
+                    entry = (item, GObjectRef(sinking: widget))
+                }
+                let widget = entry.widget.widgetPointer
+                if gtk_widget_get_prev_sibling(widget) != previous {
+                    gtk_box_reorder_child_after(cast(list), widget, previous)
+                }
+                previous = widget
+                return entry
+            }
+        }
+        for card in interactionCards.values {
+            if let answer = lastInputs?.answerStates[card.id] {
+                card.update(answer)
+            }
+        }
     }
 
     // MARK: - Widgets
@@ -469,13 +488,19 @@ final class TranscriptView {
         case .toolFinished(let callID, let name, let outcome, let detail):
             return toolLine(name: name, detail: detail, outcome: outcome, id: callID, isOpen: open.contains("tool-\(callID)"))
         case .interaction(let presentation):
-            return InteractionCard.make(
+            let showTerminal: () -> Void = { [weak self] in self?.actions.showTerminal() }
+            guard let answer else {
+                return InteractionCard.readOnly(presentation: presentation, message: readOnlyInteractionMessage, showTerminal: showTerminal)
+            }
+            let id = presentation.interaction.id
+            let card = InteractionCard(
                 presentation: presentation, answer: answer,
-                readOnlyMessage: readOnlyInteractionMessage,
-                edit: { [weak self] edit in self?.actions.editAnswer(presentation.interaction.id, edit) },
-                submit: { [weak self] in self?.actions.submitAnswer(presentation.interaction.id) },
-                showTerminal: { [weak self] in self?.actions.showTerminal() }
+                edit: { [weak self] edit in self?.actions.editAnswer(id, edit) },
+                submit: { [weak self] in self?.actions.submitAnswer(id) },
+                showTerminal: showTerminal
             )
+            interactionCards[card.root] = card
+            return card.root
         case .interactionResolved(_, let resolution):
             return Gtk.label(ToasttyTranscriptLabels.resolution(resolution), classes: ["transcript-muted"], xalign: 0.5)
         case .subagentSummary(let name, let phase, let detail):
@@ -809,8 +834,57 @@ final class TranscriptView {
         updateJumpButton()
     }
 
-    /// The content's height changed: apply a pending scroll, or keep
-    /// following the live edge.
+    private func keepScrollForUpdate() {
+        guard pendingScroll == nil, let adjustment else { return }
+        if followsLiveEdge && isAtLiveEdge {
+            requestScroll(.liveEdge)
+            return
+        }
+        followsLiveEdge = false
+        let value = gtk_adjustment_get_value(cast(adjustment))
+        for entry in entries {
+            let widget = entry.widget.widgetPointer
+            guard let y = rowTop(widget), y + Double(gtk_widget_get_height(widget)) > value else { continue }
+            requestScroll(.position(key: entry.item.key, offset: value - y, fallback: value))
+            return
+        }
+        requestScroll(.position(key: nil, offset: 0, fallback: value))
+    }
+
+    private func rowTop(_ widget: WidgetPtr) -> Double? {
+        var source = graphene_point_t(x: 0, y: 0)
+        var target = graphene_point_t(x: 0, y: 0)
+        return gtk_widget_compute_point(widget, list, &source, &target).bool ? Double(target.y) : nil
+    }
+
+    private func rowTop(key: String) -> Double? {
+        entries.first(where: { $0.item.key == key }).flatMap { rowTop($0.widget.widgetPointer) }
+    }
+
+    private func requestScroll(_ request: ScrollRequest) {
+        pendingScroll = request
+        guard scrollTick == 0, scrollIdle == 0 else { return }
+        // Expire the request after this frame's allocation even if GTK did
+        // not emit "changed" (an edit can leave the content height intact).
+        // Otherwise a stale live-edge request suppresses the next user scroll.
+        scrollTick = gtk_widget_add_tick_callback(scroller, { _, _, data in
+            guard let data else { return 0 }
+            MainActor.assumeIsolated {
+                let selfRef = Unmanaged<TranscriptView>.fromOpaque(data).takeUnretainedValue()
+                selfRef.scrollTick = 0
+                selfRef.scrollIdle = MainLoop.idle { [weak selfRef] in
+                    guard let selfRef else { return }
+                    selfRef.scrollIdle = 0
+                    selfRef.layoutChanged()
+                    selfRef.pendingScroll = nil
+                    selfRef.updateJumpButton()
+                }
+            }
+            return 0
+        }, Unmanaged.passUnretained(self).toOpaque(), nil)
+    }
+
+    /// GTK has allocated the changed content and updated the scroll range.
     private func layoutChanged() {
         guard let adjustment else { return }
         let upper = gtk_adjustment_get_upper(cast(adjustment))
@@ -818,27 +892,20 @@ final class TranscriptView {
         switch pendingScroll {
         case .liveEdge?:
             gtk_adjustment_set_value(cast(adjustment), upper - page)
-        case .widget(let widget)?:
-            var source = graphene_point_t(x: 0, y: 0)
-            var target = graphene_point_t(x: 0, y: 0)
-            if gtk_widget_compute_point(widget, list, &source, &target).bool {
-                gtk_adjustment_set_value(cast(adjustment), max(0, Double(target.y) - 24))
-            }
-            followsLiveEdge = false
-        case .keepDistanceFromBottom(let distance)?:
-            gtk_adjustment_set_value(cast(adjustment), max(0, upper - page - distance))
+        case .widget(let key)?:
+            if let y = rowTop(key: key) { gtk_adjustment_set_value(cast(adjustment), max(0, y - 24)) }
+        case .position(let key, let offset, let fallback)?:
+            let value = key.flatMap { rowTop(key: $0) }.map { $0 + offset } ?? fallback
+            gtk_adjustment_set_value(cast(adjustment), value)
         case nil:
             if followsLiveEdge { gtk_adjustment_set_value(cast(adjustment), upper - page) }
-        }
-        if pendingScroll != nil {
-            MainLoop.idle { [weak self] in self?.pendingScroll = nil }
         }
         updateJumpButton()
     }
 
     func jumpToLiveEdge() {
         followsLiveEdge = true
-        pendingScroll = .liveEdge
+        requestScroll(.liveEdge)
         layoutChanged()
     }
 
@@ -847,12 +914,12 @@ final class TranscriptView {
             if case .block(let block, _, _, _, _, _) = entry.item { return block.id.rowID == rowID }
             return false
         }) else { return }
-        pendingScroll = .widget(entry.widget.widgetPointer)
+        followsLiveEdge = false
+        requestScroll(.widget(entry.item.key))
         layoutChanged()
     }
 
     private func loadOlder() {
-        pendingScroll = .keepDistanceFromBottom(distanceFromBottom)
         actions.loadOlder()
     }
 

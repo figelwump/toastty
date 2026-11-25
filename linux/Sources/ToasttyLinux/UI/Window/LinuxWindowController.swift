@@ -261,8 +261,16 @@ public final class LinuxWindowController {
 
         let isActive = gtk_window_is_active(cast(window)).bool
         let coveringPage = features.lazy.compactMap { $0.coveringPage(state) }.first
+        let hasWorkspaces = windowState.workspaceIDs.isEmpty == false
+        let page = coveringPage ?? (hasWorkspaces ? "workspaces" : "empty")
+        let previousPage = gtk_stack_get_visible_child_name(cast(mainStack)).map { String(cString: $0) }
+        if previousPage != page {
+            gtk_stack_set_visible_child_name(cast(mainStack), page)
+        }
         sidebar.render(state)
-        content.render(state, windowIsActive: isActive)
+        let workspaceIsActive = isActive && page == "workspaces"
+        content.render(state, windowIsActive: workspaceIsActive)
+        if workspaceIsActive && previousPage != page { content.refocus() }
         rightPanel.render(state)
 
         setShowSidebar(outerSplit, windowState.sidebarVisible)
@@ -288,13 +296,6 @@ public final class LinuxWindowController {
         }
 
         for feature in features { feature.render(state) }
-        let hasWorkspaces = windowState.workspaceIDs.isEmpty == false
-        let page = coveringPage ?? (hasWorkspaces ? "workspaces" : "empty")
-        if let current = gtk_stack_get_visible_child_name(cast(mainStack)), String(cString: current) == page {
-        } else {
-            gtk_stack_set_visible_child_name(cast(mainStack), page)
-        }
-
         if let workspace = selection?.workspace {
             let paneCount = workspace.layoutTree.allSlotInfos.count
             let subtitle = "\(workspace.selectedTabDisplayTitle) · \(paneCount == 1 ? "1 pane" : "\(paneCount) panes")"
@@ -716,7 +717,9 @@ public final class LinuxWindowController {
                 if self.store.state.selectedWindowID != self.windowID {
                     self.store.send(.selectWindow(windowID: self.windowID))
                 }
-                self.content.refocus()
+                if self.store.state.window(id: self.windowID)?.showsTasksView != true {
+                    self.content.refocus()
+                }
             } else {
                 self.keyboard?.resetModifiers()
             }

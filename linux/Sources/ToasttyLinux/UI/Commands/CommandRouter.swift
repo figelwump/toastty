@@ -53,9 +53,20 @@ public enum CommandRouter {
             return .actions([make(workspaceID)])
         }
 
+        func revealWorkspace(_ action: AppAction, exposeInSidebar: Bool = false) -> LinuxCommandRoute {
+            var actions = [action]
+            if state.window(id: windowID)?.showsTasksView == true {
+                actions.append(.setTasksViewShown(windowID: windowID, shown: false))
+            }
+            if exposeInSidebar, state.window(id: windowID)?.sidebarSegment == .needsYou {
+                actions.append(.setSidebarSegment(windowID: windowID, segment: .all))
+            }
+            return .actions(actions)
+        }
+
         if let number = suffixNumber(commandID, prefix: "workspace.tab.select-") {
             guard let workspace, let workspaceID, number <= workspace.tabIDs.count else { return .none }
-            return .actions([.selectWorkspaceTab(workspaceID: workspaceID, tabID: workspace.tabIDs[number - 1])])
+            return revealWorkspace(.selectWorkspaceTab(workspaceID: workspaceID, tabID: workspace.tabIDs[number - 1]))
         }
         if let number = suffixNumber(commandID, prefix: "workspace.select-") {
             guard let window = state.window(id: windowID), number <= window.workspaceIDs.count else { return .none }
@@ -83,7 +94,7 @@ public enum CommandRouter {
         case "window.toggle-sidebar":
             return .actions([.toggleSidebar(windowID: windowID)])
         case "workspace.create":
-            return .actions([.createWorkspace(windowID: windowID, title: nil, activate: true)])
+            return revealWorkspace(.createWorkspace(windowID: windowID, title: nil, activate: true), exposeInSidebar: true)
         case "workspace.close":
             guard let workspaceID else { return .none }
             return .ui(.confirmCloseWorkspace(workspaceID: workspaceID))
@@ -100,7 +111,8 @@ public enum CommandRouter {
 
         // Tabs
         case "workspace.tab.create":
-            return withWorkspace { .createWorkspaceTab(workspaceID: $0, seed: nil) }
+            guard let workspaceID else { return .none }
+            return revealWorkspace(.createWorkspaceTab(workspaceID: workspaceID, seed: nil))
         case "workspace.tab.rename":
             guard let workspaceID, let tabID = workspace?.resolvedSelectedTabID else { return .none }
             return .ui(.renameTab(workspaceID: workspaceID, tabID: tabID))
@@ -112,7 +124,7 @@ public enum CommandRouter {
                   let index = workspace.tabIDs.firstIndex(of: tabID), workspace.tabIDs.count > 1 else { return .none }
             let step = commandID.hasSuffix("next") ? 1 : -1
             let target = workspace.tabIDs[(index + step + workspace.tabIDs.count) % workspace.tabIDs.count]
-            return .actions([.selectWorkspaceTab(workspaceID: workspaceID, tabID: target)])
+            return revealWorkspace(.selectWorkspaceTab(workspaceID: workspaceID, tabID: target))
         case "workspace.tab.move-left", "workspace.tab.move-right":
             guard let workspace, let workspaceID, let tabID = workspace.resolvedSelectedTabID,
                   let index = workspace.tabIDs.firstIndex(of: tabID) else { return .none }

@@ -15,6 +15,7 @@
 # Usage: scripts/linux/e2e-tasks.sh   (exit status 0 when every check passes)
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+mkdir -p "$REPO/artifacts/manual/linux-tasks"
 B=${TOASTTY_LINUX_E2E_BIN:-$REPO/linux/.build/debug}
 [ -x $B/toastty-linux ] || B=$(dirname $(find $REPO/linux/.build -name toastty-linux -type f -perm -u+x | head -1))
 APP=$B/toastty-linux; CLI=$B/toastty
@@ -126,6 +127,7 @@ expect rightPanel=true rightPanelTabs=1 rightPanelMapped=true
 action window.toggle-tasks-view
 wait 300
 expect tasksView=shown tasksRows=2 rightPanel=true rightPanelTabs=1 rightPanelMapped=false
+tasks wait-idle
 # Each mark keeps its 12-wide slot, however short the row's text.
 expect tasksMarkWidths=12,12
 screenshot $WORK/tasks-view.png
@@ -159,6 +161,21 @@ expect sidebarSegment=needsYou
 click sidebar.segment.all
 wait 300
 expect sidebarSegment=all
+action window.toggle-right-panel
+expect rightPanel=true rightPanelTabs=1 rightPanelMapped=true
+action window.toggle-tasks-view
+expect tasksView=shown tabs=1 rightPanel=true rightPanelMapped=false
+action workspace.tab.create
+expect tasksView=hidden tabs=2 rightPanel=false rightPanelTabs=0 rightPanelMapped=false
+action window.toggle-tasks-view
+action workspace.tab.select-1
+expect tasksView=hidden tabs=2 tabIndex=0 rightPanel=true rightPanelTabs=1 rightPanelMapped=true
+action window.toggle-tasks-view
+click sidebar.segment.needsYou
+wait 300
+expect sidebarSegment=needsYou
+action workspace.create
+expect tasksView=hidden sidebarSegment=all tabs=1
 state $WORK/ui-state.json
 quit
 SCRIPT
@@ -230,7 +247,13 @@ pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 cat > $WORK/quick-entry.script <<SCRIPT
 wait 500
 expect taskCount=0 quickEntry=closed
-perform task.new
+click sidebar.segment.needsYou
+wait 300
+expect sidebarSegment=needsYou
+click sidebar.needsYou.showAll
+wait 300
+expect sidebarSegment=all
+click sidebar.tasks.new
 wait 500
 expect quickEntry=open quickEntrySendsToCoordinator=false quickEntryCanSubmit=false
 quick-entry type Write_the_release_notes
@@ -251,7 +274,7 @@ SCRIPT
 (cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/quick-entry.script $APP > $WORK/app-quick-entry.log 2>&1) & APID=$!
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; QRC=$?
-check "quick entry creates a task (type, Workspace picker, submit)" "[ $QRC = 0 ] && ! grep -q 'FAIL' $WORK/app-quick-entry.log"
+check "empty Needs you can return to All, and sidebar New Task opens quick entry (type, Workspace picker, submit)" "[ $QRC = 0 ] && ! grep -q 'FAIL' $WORK/app-quick-entry.log"
 grep 'FAIL' $WORK/app-quick-entry.log | head -8
 for shot in quick-entry quick-entry-picker; do
   [ -s $WORK/$shot.png ] && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png

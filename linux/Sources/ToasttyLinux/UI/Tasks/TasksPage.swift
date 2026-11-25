@@ -192,7 +192,11 @@ final class TasksPage {
 
     /// Opens the group the sidebar or a task link asked for, once.
     private func applyRevealRequest(board: TaskBoardStore) {
-        guard let group = board.revealGroupByWindowID.removeValue(forKey: windowID) else { return }
+        // Mutating the published dictionary even when the key is absent
+        // requeues this render at high idle priority and starves GTK's
+        // default-idle work, including the native tab close button.
+        guard let group = board.revealGroupByWindowID[windowID] else { return }
+        board.revealGroupByWindowID.removeValue(forKey: windowID)
         let revealsSelectedRow = board.revealsSelectedRowWindowIDs.remove(windowID) != nil
         switch group {
         case .done: isDoneExpanded = true

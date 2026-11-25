@@ -411,6 +411,7 @@ public enum LinuxTheme {
     .sidebar-coordinator, .sidebar-tasks-row { padding: 5px 8px; border-radius: 8px; }
     .sidebar-coordinator:hover, .sidebar-tasks-row:hover { background-color: alpha(currentColor, 0.06); }
     .sidebar-coordinator.selected { background-color: color-mix(in srgb, var(--accent-bg-color) 16%, transparent); }
+    .sidebar-tasks-open { padding: 0; min-height: 0; }
     .sidebar-coordinator-title, .sidebar-tasks-title { font-weight: 700; }
     .sidebar-coordinator-status { font-size: 0.78em; opacity: 0.6; }
     .sidebar-coordinator-status.working { color: var(--toastty-working); opacity: 1; }
