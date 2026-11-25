@@ -119,13 +119,17 @@ struct ToasttyChatConnectionTimeline: Sendable {
         isInBackground = true
     }
 
-    /// Counts again from `now` after a time in the background. A return
-    /// from the inactive state (Control Center, a system alert) keeps the
-    /// count, so it cannot hide Retry during an outage. Call `update` next.
+    /// Counts again from `now` after a time in the background. A chat that
+    /// left live starts quiet; one that left reconnecting or offline goes on
+    /// saying it reconnects, so the header does not go blank and come back.
+    /// A return from the inactive state (Control Center, a system alert)
+    /// keeps the count, so it cannot hide Retry during an outage. Call
+    /// `update` next.
     mutating func enterForeground(now: ContinuousClock.Instant) {
         guard isInBackground else { return }
         isInBackground = false
-        if notLiveSince != nil { notLiveSince = now }
+        guard notLiveSince != nil else { return }
+        notLiveSince = connection == .live ? now : now.advanced(by: .zero - reconnectingDelay)
     }
 
     /// The user asked to reconnect: the chat says it reconnects at once.

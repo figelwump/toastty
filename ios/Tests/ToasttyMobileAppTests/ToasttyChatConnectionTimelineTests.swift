@@ -55,15 +55,18 @@ final class ToasttyChatConnectionTimelineTests: XCTestCase {
         XCTAssertEqual(subject.connection, .reconnecting)
     }
 
-    func testAReturnRestartsTheQuietStartEvenAfterTheChatWentOffline() {
-        var subject = timeline()
-        _ = subject.update(freshness: .reconnecting, now: at(0))
-        _ = subject.update(freshness: .reconnecting, now: at(15_000))
-        XCTAssertEqual(subject.connection, .offline)
-        subject.enterBackground()
-        subject.enterForeground(now: at(40_000))
-        XCTAssertEqual(subject.update(freshness: .reconnecting, now: at(40_000)), at(41_500))
-        XCTAssertEqual(subject.connection, .live)
+    func testAChatThatLeftReconnectingOrOfflineSaysReconnectingOnReturnAndCountsAgain() {
+        for leftAt in [1_600, 15_000] {
+            var subject = timeline()
+            _ = subject.update(freshness: .reconnecting, now: at(0))
+            _ = subject.update(freshness: .reconnecting, now: at(leftAt))
+            XCTAssertNotEqual(subject.connection, .live)
+            subject.enterBackground()
+            subject.enterForeground(now: at(40_000))
+            // No blank header between the screen that left and the return.
+            XCTAssertEqual(subject.update(freshness: .reconnecting, now: at(40_000)), at(53_500))
+            XCTAssertEqual(subject.connection, .reconnecting)
+        }
     }
 
     func testAReturnFromControlCenterKeepsTheCountAndRetry() {
