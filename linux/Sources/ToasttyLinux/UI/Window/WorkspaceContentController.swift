@@ -128,7 +128,12 @@ public final class WorkspaceContentController {
         entries[workspaceID] = entry
         gtk_stack_add_named(cast(stack), entry.tabs.widget, workspaceID.uuidString)
         entry.tabs.onSelect = { [weak self] tabID in
-            self?.store.sendNavigation(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+            guard let self else { return }
+            var actions: [AppAction] = [.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID)]
+            if self.store.state.window(id: self.windowID)?.showsTasksView == true {
+                actions.append(.setTasksViewShown(windowID: self.windowID, shown: false))
+            }
+            self.store.sendNavigation(actions)
         }
         entry.tabs.onCloseRequest = { [weak self] tabID in
             self?.onTabCloseRequest?(workspaceID, tabID)

@@ -651,6 +651,12 @@ before the content, rows above the sidebar, palette rows and commands.
 | What's new at a first launch | `WhatsNewDialog` | `CoordinatorStartOffer`, `WhatsNewPresentation`, `QuickEntryShortcutAnswer` |
 | Palette rows, menus, New Task from Selection | `TasksWindowFeature.paletteItems`, `LinuxMenus`, `GhosttyTerminalHost` | `TaskBoardStore.currentTask`, `TaskBoardPresentation.detailActions` |
 
+On Linux, opening a workspace or a tab takes you out of the Tasks view. The
+tab strip still lets you close a tab while the Tasks view is open. If the
+sidebar's **Needs you** filter has no entries, **Show all workspaces** returns
+to the unfiltered list. New Workspace also shows that list so you can see the
+workspace you just made.
+
 Differences from macOS:
 
 - Keys: Show Tasks is Ctrl+Shift+D (Ctrl+Shift+T is New Tab), the dock
