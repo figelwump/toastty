@@ -175,6 +175,7 @@ enum RemoteTaskBoardProjection {
             title: item.title,
             group: group(item.stage.group),
             mark: mark(item.stage, waitsOutside: item.record?.waiting != nil),
+            showsAgentActivity: TaskBoardPresentation.showsAgentActivity(item),
             statusLine: TaskBoardPresentation.statusLine(item),
             rowSummary: rowSummary(item),
             stageTitle: stage.stage,

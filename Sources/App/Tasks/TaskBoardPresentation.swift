@@ -30,6 +30,14 @@ enum TaskBoardPresentation {
         return "\(line) · \(heldCleanupPhrase(until: until, now: now))"
     }
 
+    /// The coordinator's task chip shows the agent's activity for these stages.
+    static func showsAgentActivity(_ item: TaskBoardItem) -> Bool {
+        switch item.stage {
+        case .running, .idle: item.agent == .working
+        default: false
+        }
+    }
+
     /// Whether the task lists in Needs you for its unread finished turn
     /// while its stage is calmer, as a task whose agent ended its turn to
     /// wait on another task does. The sidebar draws its task space's row as

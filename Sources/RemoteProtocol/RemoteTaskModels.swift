@@ -182,6 +182,9 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
     public var title: String
     public var group: RemoteTaskGroup
     public var mark: RemoteTaskMark?
+    /// Whether the Mac's task chip shows a spinner for the agent. Older
+    /// hosts omit this field, which reads as false.
+    public var showsAgentActivity: Bool
     /// One line on what the task is doing or waiting for, as the Mac's
     /// Status rows word it.
     public var statusLine: String
@@ -230,6 +233,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         title: String,
         group: RemoteTaskGroup,
         mark: RemoteTaskMark? = nil,
+        showsAgentActivity: Bool = false,
         statusLine: String,
         rowSummary: String? = nil,
         stageTitle: String,
@@ -252,6 +256,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         self.title = Self.bounded(title)
         self.group = group
         self.mark = mark
+        self.showsAgentActivity = showsAgentActivity
         self.statusLine = Self.bounded(statusLine)
         self.rowSummary = rowSummary.map(Self.bounded)
         self.stageTitle = Self.bounded(stageTitle)
@@ -271,7 +276,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, hasRecord, title, group, mark, statusLine, rowSummary, stageTitle, stageReason
+        case id, hasRecord, title, group, mark, showsAgentActivity, statusLine, rowSummary, stageTitle, stageReason
         case projectWorkspaceID, projectTitle, taskSpaceWorkspaceID, pullRequest, activityAt, mergeControl, actions
         case releaseAfterMergeRequestedAt, parentTaskID, parentTaskTitle, childProgress, macStep
     }
@@ -283,6 +288,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         title = try container.decode(String.self, forKey: .title)
         group = try container.decode(RemoteTaskGroup.self, forKey: .group)
         mark = try container.decodeIfPresent(RemoteTaskMark.self, forKey: .mark)
+        showsAgentActivity = try container.decodeIfPresent(Bool.self, forKey: .showsAgentActivity) ?? false
         statusLine = try container.decode(String.self, forKey: .statusLine)
         rowSummary = try container.decodeIfPresent(String.self, forKey: .rowSummary)
         stageTitle = try container.decode(String.self, forKey: .stageTitle)
@@ -308,6 +314,7 @@ public struct RemoteTaskSummary: Codable, Equatable, Sendable, Identifiable {
         try container.encode(title, forKey: .title)
         try container.encode(group, forKey: .group)
         try container.encodeIfPresent(mark, forKey: .mark)
+        if showsAgentActivity { try container.encode(true, forKey: .showsAgentActivity) }
         try container.encode(statusLine, forKey: .statusLine)
         try container.encodeIfPresent(rowSummary, forKey: .rowSummary)
         try container.encode(stageTitle, forKey: .stageTitle)

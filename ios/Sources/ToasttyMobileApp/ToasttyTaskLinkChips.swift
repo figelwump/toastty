@@ -6,8 +6,8 @@ import UIKit
 
 /// The chips for the tasks the Mac shares: a `toastty://task/<id>` link to
 /// a task on its task board, or to one of its recent Done and archived
-/// tasks, is drawn with the task's stage color, current title and pull
-/// request number, as the Mac's Coordinator chat draws it. A `toastty:`
+/// tasks, is drawn with the task's stage color, agent activity, current
+/// title and pull request number, as the Mac's Coordinator chat draws it. A `toastty:`
 /// link to anything else is plain text.
 struct ToasttyTaskLinkChips {
     let chips: [UUID: ConversationLinkChip]
@@ -36,9 +36,10 @@ struct ToasttyTaskLinkChips {
 
     static func chip(_ task: RemoteTaskSummary) -> ConversationLinkChip {
         ConversationLinkChip(
-            markColor: chipColor(ToasttyTaskDetailSheet.stageColor(task)),
+            markColor: chipColor(task.showsAgentActivity ? ToasttyDesignTokens.amber : ToasttyTaskDetailSheet.stageColor(task)),
             title: ConversationLinkChip.taskTitle(task.title),
-            detail: task.pullRequest.map { "#\($0.number)" }
+            detail: task.pullRequest.map { "#\($0.number)" },
+            showsActivity: task.showsAgentActivity
         )
     }
 

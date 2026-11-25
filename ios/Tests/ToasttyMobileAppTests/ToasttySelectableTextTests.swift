@@ -1,5 +1,7 @@
 @testable import ConversationUI
+import RemoteProtocol
 import SwiftUI
+import ToasttyMobileDomain
 import UIKit
 import UniformTypeIdentifiers
 import XCTest
@@ -68,6 +70,72 @@ final class ToasttySelectableTextTests: XCTestCase {
         let enlargedFont = try XCTUnwrap(enlarged.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
         XCTAssertGreaterThan(enlargedFont.pointSize, pointSize)
         XCTAssertGreaterThan(enlarged.bounds.height, height)
+    }
+
+    func testTaskChipFollowsAgentActivityFromTheSessionList() async throws {
+        let id = UUID()
+        let url = CoordinatorTaskLink.url(taskID: id)
+        let source = "See \(CoordinatorTaskLink.markdown(taskID: id, title: "Check the build"))."
+        let runID = RemoteProjectionRunID()
+        func message(showsActivity: Bool, dynamicTypeSize: DynamicTypeSize = .large) throws -> AnyView {
+            let task = RemoteTaskSummary(
+                id: id, title: "Check the build", group: .running, showsAgentActivity: showsActivity,
+                statusLine: "Merging…", stageTitle: "Running", stageReason: "Merging…", activityAt: Date()
+            )
+            let snapshot = RemoteSessionListSnapshot(
+                projectionRunID: runID, conversations: [], generatedAt: Date(),
+                tasks: RemoteTaskBoard(tasks: [task], running: [RemoteTaskBoardEntry(taskID: id)])
+            )
+            let bytes = try ConversationEventCoding.makeEncoder().encode(RemoteGatewayStreamMessage.sessionList(snapshot))
+            let decoded = try GatewayCompatibilityDecoder().decodeStreamMessage(bytes)
+            let tasks: RemoteTaskBoard? = if case .sessionList(let snapshot) = decoded { snapshot.tasks } else { nil }
+            let board = try MobileTaskBoard(XCTUnwrap(tasks))
+            return AnyView(ToasttyMarkdownText(text: source)
+                .environment(\.conversationLinkPresenter, ToasttyTaskLinkChips(board: board).presenter)
+                .dynamicTypeSize(dynamicTypeSize)
+                .frame(width: 280))
+        }
+        func spinners(in textView: UITextView) -> [ToasttyLayerAnimationUIView] {
+            textView.subviews.compactMap { $0 as? ToasttyLayerAnimationUIView }
+        }
+        let (window, host) = try await host(message(showsActivity: false))
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let textView = try XCTUnwrap(findTextView(in: host.view) as? ToasttyTranscriptTextView)
+        let quietBounds = textView.bounds
+        let quietText = textView.text
+        XCTAssertTrue(spinners(in: textView).isEmpty)
+        XCTAssertTrue(textView.becomeFirstResponder())
+        let selection = (textView.text as NSString).range(of: "See")
+        textView.selectedRange = selection
+
+        host.rootView = try message(showsActivity: true)
+        await settleLayout()
+        XCTAssertTrue(findTextView(in: host.view) === textView)
+        XCTAssertEqual(textView.bounds, quietBounds)
+        XCTAssertEqual(textView.text, quietText)
+        XCTAssertEqual(textView.selectedRange, selection)
+        let dotIndex = (textView.attributedText.string as NSString).range(of: "●").location
+        XCTAssertEqual(textView.attributedText.attribute(.link, at: dotIndex, effectiveRange: nil) as? URL, url)
+        let spinner = try XCTUnwrap(spinners(in: textView).first)
+        XCTAssertTrue(textView.bounds.contains(spinner.frame))
+        XCTAssertEqual(spinner.playingAnimationKeys, [[ToasttyLayerAnimationView.Animation.Property.rotation.rawValue]])
+
+        textView.animatesChipSpinners = false
+        textView.layoutIfNeeded()
+        XCTAssertEqual(spinners(in: textView).first?.playingAnimationKeys, [[]])
+
+        host.rootView = try message(showsActivity: false)
+        await settleLayout()
+        XCTAssertTrue(spinners(in: textView).isEmpty)
+        XCTAssertEqual(textView.bounds, quietBounds)
+        XCTAssertEqual(textView.text, quietText)
+        XCTAssertEqual(textView.selectedRange, selection)
+
+        host.rootView = try message(showsActivity: true, dynamicTypeSize: .accessibility5)
+        await settleLayout()
+        XCTAssertGreaterThan(textView.bounds.height, quietBounds.height)
+        let wrappedSpinner = try XCTUnwrap(spinners(in: textView).first)
+        XCTAssertTrue(textView.bounds.contains(wrappedSpinner.frame))
     }
 
     private func host(_ view: some View) async throws -> (UIWindow, UIHostingController<AnyView>) {

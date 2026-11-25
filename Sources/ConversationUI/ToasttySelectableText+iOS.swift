@@ -11,6 +11,7 @@ struct ToasttySelectableText: UIViewRepresentable {
     @Environment(\.legibilityWeight) private var legibilityWeight
     @Environment(\.conversationTextScale) private var textScale
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let text: AttributedString
     var textStyle: UIFont.TextStyle = .body
@@ -59,6 +60,7 @@ struct ToasttySelectableText: UIViewRepresentable {
 
     func updateUIView(_ view: ToasttyTranscriptTextView, context: Context) {
         context.coordinator.openURL = openURL
+        view.animatesChipSpinners = !reduceMotion
         let input = RenderingInput(
             text: text, textStyle: textStyle, weight: weight, monospaced: monospaced,
             textColor: textColor, lineSpacing: lineSpacing, alignment: alignment,
@@ -83,8 +85,10 @@ struct ToasttySelectableText: UIViewRepresentable {
                 location: previous.length, length: rendered.length - previous.length
             )))
         } else if !rendered.isEqual(to: previous) {
+            // A task chip can change its mark without changing the text.
+            let selection = rendered.string == previous.string ? view.selectedRange : NSRange(location: 0, length: 0)
             view.attributedText = rendered
-            view.selectedRange = NSRange(location: 0, length: 0)
+            view.selectedRange = selection
         }
         // Room for a chip's outline above the first line and below the last.
         let chipRoom = ToasttyTranscriptTextView.chipRoom(in: rendered)
@@ -169,12 +173,18 @@ struct ToasttySelectableText: UIViewRepresentable {
                 if let color = run.backgroundColor { attributes[.backgroundColor] = UIColor(color) }
                 if let link = run.link { attributes[.link] = link }
                 var characters = String(text[run.range].characters)
-                // A chip's dot stays a dot here: this view draws no spinner.
                 // The chip's link names it, so two chips side by side keep
                 // two outlines.
                 if run[ConversationChipAttribute.self] != nil {
                     attributes[.toasttyChip] = run.link ?? true
                     characters = Self.unbreakable(characters)
+                }
+                if run[ConversationChipSpinnerAttribute.self] == true {
+                    // The spinner gets its own run. Keep the joiners that
+                    // the dot has when it shares a run with its padding.
+                    characters = wordJoiner + characters + wordJoiner
+                    attributes[.toasttyChipSpinner] = attributes[.foregroundColor]
+                    attributes[.foregroundColor] = UIColor.clear
                 }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
                 result.append(NSAttributedString(string: characters, attributes: attributes))
@@ -235,6 +245,13 @@ struct ToasttySelectableText: UIViewRepresentable {
 
 @MainActor
 final class ToasttyTranscriptTextView: UITextView {
+    var animatesChipSpinners = true {
+        didSet {
+            if oldValue != animatesChipSpinners { setNeedsLayout() }
+        }
+    }
+    private var chipSpinners: [ToasttyLayerAnimationUIView] = []
+
     /// The outline of each chip, behind the text.
     private let chipOutlines: CAShapeLayer = {
         let layer = CAShapeLayer()
@@ -249,6 +266,7 @@ final class ToasttyTranscriptTextView: UITextView {
         if chipOutlines.superlayer == nil { layer.insertSublayer(chipOutlines, at: 0) }
         chipOutlines.frame = bounds
         chipOutlines.path = chipOutlinePath()
+        layoutChipSpinners()
     }
 
     override func copy(_ sender: Any?) {
@@ -287,33 +305,75 @@ final class ToasttyTranscriptTextView: UITextView {
     /// One rounded rect for each line a chip is on, around that line's part
     /// of the chip, drawn half a point inside so the stroke stays whole.
     private func chipOutlinePath() -> CGPath? {
-        guard let layout = textLayoutManager, let content = layout.textContentManager else { return nil }
-        let storage = textStorage
         let path = CGMutablePath()
+        forEachChipSegment(with: .toasttyChip) { _, font, frame, baseline in
+            let height = Self.chipOutlineHeight(font)
+            let middle = frame.minY + baseline - font.capHeight / 2
+            let outline = CGRect(x: frame.minX, y: middle - height / 2,
+                                 width: frame.width, height: height).insetBy(dx: 0.5, dy: 0.5)
+            path.addRoundedRect(in: outline, cornerWidth: outline.height / 2, cornerHeight: outline.height / 2)
+        }
+        return path.isEmpty ? nil : path
+    }
+
+    private func layoutChipSpinners() {
+        var count = 0
+        forEachChipSegment(with: .toasttyChipSpinner) { value, font, frame, baseline in
+            guard let color = value as? UIColor else { return }
+            // Fit the spinner inside the dot's character advance.
+            let side = min(frame.width, font.capHeight) * 0.72
+            let middle = frame.minY + baseline - font.capHeight / 2
+            let spinnerFrame = CGRect(x: frame.midX - side / 2, y: middle - side / 2,
+                                      width: side, height: side)
+            let spinner: ToasttyLayerAnimationUIView
+            if count < chipSpinners.count {
+                spinner = chipSpinners[count]
+                if spinner.frame != spinnerFrame { spinner.frame = spinnerFrame }
+            } else {
+                spinner = ToasttyLayerAnimationUIView(frame: spinnerFrame)
+                chipSpinners.append(spinner)
+                addSubview(spinner)
+            }
+            count += 1
+
+            let arc = ToasttyLayerAnimationView.Shape.spinnerArc(
+                size: side, lineWidth: max(1, side * 0.16), color: Color(uiColor: color)
+            )
+            spinner.show([.init(shape: arc, strokeColor: color.cgColor, fillColor: nil)], animates: animatesChipSpinners)
+        }
+        while chipSpinners.count > count {
+            chipSpinners.removeLast().removeFromSuperview()
+        }
+    }
+
+    private func forEachChipSegment(
+        with key: NSAttributedString.Key,
+        _ visit: (Any, UIFont, CGRect, CGFloat) -> Void
+    ) {
+        guard let layout = textLayoutManager, let content = layout.textContentManager else { return }
+        let storage = textStorage
         let inset = textContainerInset
-        storage.enumerateAttribute(.toasttyChip, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-            guard value != nil,
+        storage.enumerateAttribute(key, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let value,
                   let font = storage.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont,
                   let start = content.location(content.documentRange.location, offsetBy: range.location),
                   let end = content.location(start, offsetBy: range.length),
                   let textRange = NSTextRange(location: start, end: end) else { return }
             layout.ensureLayout(for: textRange)
-            let height = Self.chipOutlineHeight(font)
             layout.enumerateTextSegments(in: textRange, type: .standard, options: [.rangeNotRequired]) { _, frame, baseline, _ in
-                guard frame.width > 0 else { return true }
-                let middle = frame.minY + baseline - font.capHeight / 2
-                let outline = CGRect(x: inset.left + frame.minX, y: inset.top + middle - height / 2,
-                                     width: frame.width, height: height).insetBy(dx: 0.5, dy: 0.5)
-                path.addRoundedRect(in: outline, cornerWidth: outline.height / 2, cornerHeight: outline.height / 2)
+                if frame.width > 0 {
+                    visit(value, font, frame.offsetBy(dx: inset.left, dy: inset.top), baseline)
+                }
                 return true
             }
         }
-        return path.isEmpty ? nil : path
     }
 }
 
 extension NSAttributedString.Key {
     /// Marks the characters of a chip. See `ConversationChipAttribute`.
     static let toasttyChip = NSAttributedString.Key("toastty.conversationChip")
+    /// The color of the spinner that replaces a chip's dot.
+    static let toasttyChipSpinner = NSAttributedString.Key("toastty.conversationChipSpinner")
 }
 #endif

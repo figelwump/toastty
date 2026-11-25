@@ -854,8 +854,9 @@ the end of Home's **All** says that the coordinator starts on the Mac, with
   which hides the bar as every session screen does. Back returns to the chat.
 - **Task chips.** A link `[title](toastty://task/<id>)` in a chat, the
   user's message or the agent's, shows as a chip with the task's stage color,
-  its current title and its pull request number. This works for the tasks on
-  the Mac's task board and for its 200 most recently active Done and archived
+  its current title and its pull request number. A spinner replaces the dot
+  while the task's agent works, when the Mac shares its activity. This works
+  for the tasks on the Mac's task board and for its 200 most recently active Done and archived
   tasks, which the phone reads apart (see the finished tasks below). A Done
   task's chip is green; an archived task's is gray, as the Mac marks it
   quiet. A tap opens the task's space as its row in Task Spaces opens it:
