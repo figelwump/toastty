@@ -45,6 +45,7 @@ remote() {
 }
 
 toastty_allocate_local_artifacts "$evidence"
+evidence="$(toastty_canonical_path "$evidence")"
 
 previous_dmg="${TOASTTY_PREVIOUS_DMG:-}"
 if [[ -z "$previous_dmg" ]]; then

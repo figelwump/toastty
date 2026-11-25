@@ -261,30 +261,40 @@ def extract_bundle(root, image, dmg, name):
                 signal.signal(number, handler)
 
 
-def end_processes(work):
-    """Ends every process whose command names the work folder: the apps the
-    stages installed there, their agents, and a stage script still running."""
+def end_processes(*paths):
+    """Ends every process whose command names one of `paths`: the apps the
+    stages run from there, their agents, and a stage script still running."""
     def remaining():
         listing = run("/bin/ps", "-axo", "pid=,command=").stdout
         return [int(line.split(None, 1)[0]) for line in listing.splitlines()
-                if str(work) in line and int(line.split(None, 1)[0]) != os.getpid()]
+                if any(str(path) in line for path in paths) and int(line.split(None, 1)[0]) != os.getpid()]
 
-    for number in (signal.SIGTERM, signal.SIGKILL):
-        for pid in remaining():
-            try:
-                os.kill(pid, number)
-            except ProcessLookupError:
-                pass
-        deadline = time.monotonic() + 10
-        while remaining() and time.monotonic() < deadline:
-            time.sleep(0.5)
-    left = remaining()
+    try:
+        for number in (signal.SIGTERM, signal.SIGKILL):
+            for pid in remaining():
+                try:
+                    os.kill(pid, number)
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + 10
+            while remaining() and time.monotonic() < deadline:
+                time.sleep(0.5)
+        left = remaining()
+    except Exception as error:
+        raise CleanupUnconfirmed(f"Could not confirm that the candidate stages ended: {error}") from error
     if left:
         raise CleanupUnconfirmed(f"Processes of the candidate stages still run: {left}")
 
 
+def interrupted(number, _frame):
+    # Admission ends a cancelled run with a signal: run the cleanup first.
+    signal.signal(number, signal.SIG_IGN)
+    raise RuntimeError(f"The candidate check was interrupted (signal {number})")
+
+
 def use_check(root, candidate, previous, evidence):
-    """Runs candidate-use-check.py in the GUI session, and returns its stages."""
+    """Runs candidate-use-check.py in the GUI session, and returns its report
+    and exit status."""
     artifacts = evidence / "use"
     artifacts.mkdir()
     # Sockets go in this folder: a short path keeps them under the length limit.
@@ -292,17 +302,21 @@ def use_check(root, candidate, previous, evidence):
     environment = dict(os.environ, TOASTTY_APP_BUNDLE=str(candidate), TOASTTY_ARTIFACTS_DIR=str(artifacts))
     try:
         with (evidence / "use.log").open("w") as log:
-            subprocess.run([sys.executable, root / "candidate-use-check.py", "--gui-session",
-                            "--previous", previous, "--work-root", work],
-                           cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=USE_TIMEOUT)
+            completed = subprocess.run([sys.executable, root / "candidate-use-check.py", "--gui-session",
+                                        "--previous", previous, "--work-root", work],
+                                       cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT,
+                                       timeout=USE_TIMEOUT)
     finally:
-        end_processes(work)
+        # The `compact` stage runs the candidate from its staged bundle. The
+        # bundle paths, not their folders: `<run>/candidate` is also a prefix
+        # of `<run>/candidate-check.py` in admission's own command.
+        end_processes(work, candidate, previous)
         for runtime in work.glob("*/runtime-home"):
             clear_preferences(preference_suite(runtime))
         shutil.rmtree(work)
     report = artifacts / "candidate-use-check.json"
     require(report.is_file(), f"The candidate stages wrote no report. See {evidence / 'use.log'}")
-    return read_json(report)
+    return read_json(report), completed.returncode
 
 
 def check(root, commit, expected_digest, previous_digest):
@@ -329,16 +343,21 @@ def check(root, commit, expected_digest, previous_digest):
         require(status == "trusted=true locked=false", f"Desktop is unavailable: {status}")
         wake = subprocess.Popen(["/usr/bin/caffeinate", "-dis", "-w", str(os.getpid())])
         marker.touch(exist_ok=False)
+        for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(number, interrupted)
         try:
             with tempfile.TemporaryDirectory(prefix="tt-rc-", dir="/private/tmp") as isolated:
                 check_process(root, bundle, Path(isolated), evidence)
             result["stages"]["firstLaunch"] = "pass"
-            use = use_check(root, bundle, previous, evidence)
+            use, exit_code = use_check(root, bundle, previous, evidence)
             for stage in USE_STAGES:
                 result["stages"][stage] = use.get("stages", {}).get(stage, "not run")
             result.update(claudeCLI=use.get("cliVersion"), stageFailures=use.get("failures"))
             failed = [stage for stage in STAGES if result["stages"][stage] != "pass"]
             require(not failed, f"Candidate stages failed: {', '.join(failed)}. See {evidence / 'use'}")
+            # The stages' own cleanup, such as Claude's config file, counts too.
+            require(exit_code == 0 and use.get("status") == "passed",
+                    f"The candidate stages ended with {exit_code}: {use.get('failure')}. See {evidence / 'use'}")
         except CleanupUnconfirmed:
             # Keep admission's marker: processes of the check may still use the desktop.
             stop(wake)

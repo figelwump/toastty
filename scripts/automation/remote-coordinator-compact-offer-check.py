@@ -223,8 +223,10 @@ def run(check, claude, host, record_bytes):
         current.ui.run('scroll-at', *point, '4')
         # Claude Code moves its own page and shows "Jump to bottom", or the
         # terminal moves its view up: either way the choices leave the screen.
+        # A failed read of the terminal is empty text, not a scroll.
         wait_for("the offer's choices away from the screen",
-                 lambda: SCROLLED in (screen := current.screen()) or not current.offer(screen), timeout=10)
+                 lambda: (screen := current.screen()).strip()
+                 and (SCROLLED in screen or not current.offer(screen)), timeout=10)
         time.sleep(2)
         status = current.status()
         check.step('The wheel moved the page up', offerOnPage=TITLE in current.screen(), hold=status.get('hold'),

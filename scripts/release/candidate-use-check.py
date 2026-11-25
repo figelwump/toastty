@@ -185,11 +185,14 @@ class State(first.Run):
     def workspaces(self):
         return self.instance.query('workspace.list')['workspaces']
 
-    def agent_starts(self):
-        """Each start of a task's agent, oldest first."""
+    def agent_events(self, kind):
+        """The task agents' events of one kind, oldest first."""
         log = self.bin / 'agent/events.jsonl'
         events = [json.loads(line) for line in log.read_text().splitlines()] if log.is_file() else []
-        return [event for event in events if event['event'] == 'started']
+        return [event for event in events if event['event'] == kind]
+
+    def agent_starts(self):
+        return self.agent_events('started')
 
     def conversations(self):
         """The coordinator's Claude conversations, oldest first."""
@@ -312,6 +315,7 @@ def sessions(check, run, previous):
     run.slow_shell.write_text(str(SLOW_SHELL_SECONDS))
     run.asks_start_offer = True
     run.install(check.candidate)
+    launched = time.time()
     run.launch()
     run.ui.run('activate')
     run.no_question_for(5)
@@ -325,6 +329,10 @@ def sessions(check, run, previous):
     require(sorted((start['native'], start['resumed'], start['panel']) for start in again)
             == sorted((start['native'], True, start['panel']) for start in saved),
             f'After the update the tasks\' agents started as {again}, saved were {saved}')
+    # A launch command typed again after its agent started reaches the agent
+    # as input. Nothing else types into a task's agent in this stage.
+    typed = [event for event in run.agent_events('message') if event['at'] >= launched]
+    require(not typed, f'After the update, text was typed into a task\'s agent: {typed}')
     run.slow_shell.unlink()
     run.ui.send(one_word('AFTER-UPDATE'))
     run.wait_for_reply('AFTER-UPDATE')
@@ -332,6 +340,10 @@ def sessions(check, run, previous):
             f'The coordinator answered in {run.conversations()}, not in the saved conversation {conversation}')
     delivered = run.deliveries('AFTER-UPDATE')
     require(delivered == 1, f'Claude got the message {delivered} times')
+    # The same for the coordinator: a launch command typed into Claude.
+    launch_text = [entry['text'][:300] for entry in run.transcript()
+                   if entry['role'] == 'user' and ('TOASTTY_' in entry['text'] or '--resume' in entry['text'])]
+    require(not launch_text, f'A launch command was typed into Claude: {launch_text}')
     run.capture('after-update')
     step('the candidate resumed the coordinator and each task agent once', coordinator=resumed, tasks=again,
          chat=run.ui.texts()[-400:])
