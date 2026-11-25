@@ -37,9 +37,9 @@ enum ToasttyComposerDisabledReason: Equatable, Sendable {
         case .pendingInteraction:
             "Respond to the pending interaction on the Mac"
         case .connection(.reconnecting):
-            "Reconnecting to your Mac — your draft is saved"
+            "Send waits until Toastty reconnects to your Mac"
         case .connection(.catchingUp):
-            "Catching up with your Mac — your draft is saved"
+            "Send waits until this chat catches up with your Mac"
         case .prompt(.starting):
             "The session is starting — input opens when the agent is ready"
         case .prompt(.working):
@@ -145,9 +145,6 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     let inlineFeedback: String?
     /// The running turn can be stopped from this device.
     let canInterrupt: Bool
-    /// The shared presentation grace hides brief connection checks. The
-    /// domain gate still blocks sends until the retained stream is verified.
-    let suppressesConnectionNotice: Bool
     /// The Mac draft epoch a Release would name, while a Mac draft holds the
     /// prompt closed and this device may release it.
     let releasableLocalDraftEpoch: RemoteInputEpoch?
@@ -163,7 +160,6 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         gate: ToasttyComposerGate,
         inlineFeedback: String? = nil,
         canInterrupt: Bool = false,
-        suppressesConnectionNotice: Bool = false,
         releasableLocalDraftEpoch: RemoteInputEpoch? = nil,
         localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil,
         runningTurnEpoch: RemoteInputEpoch? = nil
@@ -172,8 +168,6 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         self.gate = gate
         self.inlineFeedback = inlineFeedback
         self.canInterrupt = canInterrupt
-        self.suppressesConnectionNotice = suppressesConnectionNotice
-            && gate == .disabled(.connection(.reconnecting))
         let releasable = gate == .disabled(.localDraft) ? releasableLocalDraftEpoch : nil
         self.releasableLocalDraftEpoch = releasable
         self.localDraftReleaseRefusal = releasable == nil ? nil : localDraftReleaseRefusal
@@ -183,7 +177,6 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
     static func make(
         agentDisplayName: String,
         authority: ConversationComposerAuthority,
-        suppressesConnectionNotice: Bool = false,
         releasableLocalDraftEpoch: RemoteInputEpoch? = nil,
         localDraftReleaseRefusal: ToasttyLocalDraftReleaseRefusal? = nil
     ) -> ToasttyComposerPresentation {
@@ -192,7 +185,6 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
             gate: gate(for: authority),
             inlineFeedback: feedback(for: authority.gateFailure),
             canInterrupt: authority.canInterrupt,
-            suppressesConnectionNotice: suppressesConnectionNotice,
             releasableLocalDraftEpoch: releasableLocalDraftEpoch,
             localDraftReleaseRefusal: localDraftReleaseRefusal,
             runningTurnEpoch: authority.inputControl?.turnEpoch
@@ -223,10 +215,18 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
         )
     }
 
+    /// Send waits for the connection to the Mac, and nothing else blocks
+    /// input. The chat's header shows the connection, so the composer keeps
+    /// its field open, its placeholder and its height: the user can go on
+    /// typing, and the chat does not move when the connection comes back.
+    var waitsForConnection: Bool {
+        if case .disabled(.connection) = gate { return true }
+        return false
+    }
+
     var placeholder: String {
-        if suppressesConnectionNotice { return "Message \(agentDisplayName)…" }
-        return switch gate {
-        case .enabled:
+        switch gate {
+        case .enabled, .disabled(.connection):
             "Message \(agentDisplayName)…"
         case .disabled(.deviceScope):
             "Read-only on this iPhone"
@@ -236,10 +236,6 @@ struct ToasttyComposerPresentation: Equatable, Sendable {
             "Draft in progress on Mac"
         case .disabled(.pendingInteraction):
             "Pending request — input paused"
-        case .disabled(.connection(.reconnecting)):
-            "Reconnecting to Mac…"
-        case .disabled(.connection(.catchingUp)):
-            "Syncing with Mac…"
         case .disabled(.prompt(.starting)):
             "Session starting…"
         case .disabled(.prompt(.working)):

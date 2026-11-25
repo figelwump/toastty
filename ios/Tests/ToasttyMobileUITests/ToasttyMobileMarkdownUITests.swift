@@ -39,11 +39,14 @@ final class ToasttyMobileMarkdownUITests: XCTestCase {
         let profile = app.staticTexts["toastty-mobile-session-execution-profile"]
         let input = app.textViews["toastty-mobile-composer-input"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        XCTAssertFalse(input.isEnabled)
+        // The fixture chat waits to catch up with the Mac: the field takes
+        // text and keeps its place, and only Send and Attach wait.
+        XCTAssertTrue(input.isEnabled)
         XCTAssertFalse(app.buttons["toastty-mobile-attachment-add"].isEnabled)
-        XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
+        XCTAssertFalse(app.buttons["toastty-mobile-composer-send"].isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-composer-status"].exists)
         XCTAssertFalse(app.staticTexts["Update Toastty on your Mac to attach files."].exists,
-                       "An existing composer gate should explain the disabled controls without a second update notice")
+                       "A connection wait must not show the update notice for attachments")
         let navigationBar = app.navigationBars.firstMatch
         XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))
         let bottom = min(transcript.frame.maxY, profile.exists ? profile.frame.minY : input.frame.minY) - 20

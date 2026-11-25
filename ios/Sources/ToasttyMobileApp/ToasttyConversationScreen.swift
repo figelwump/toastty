@@ -66,6 +66,8 @@ struct ToasttyConversationScreen: View {
     let sendOfferAnswers: ([CoordinatorOfferAnswer], _ offeredAt: Date) -> Bool
     /// The coordinator chat's New line, from the read point the Mac shares.
     let newMessages: ToasttyNewMessagesMarker?
+    /// Retry on the notice that shows while the chat is offline.
+    let retryConnection: () async -> Void
 
     init(
         conversationID: UUID,
@@ -99,7 +101,8 @@ struct ToasttyConversationScreen: View {
         cancelReply: @escaping () -> Void = {},
         offerAnswers: ToasttyOfferAnswers = ToasttyOfferAnswers(),
         sendOfferAnswers: @escaping ([CoordinatorOfferAnswer], _ offeredAt: Date) -> Bool = { _, _ in false },
-        newMessages: ToasttyNewMessagesMarker? = nil
+        newMessages: ToasttyNewMessagesMarker? = nil,
+        retryConnection: @escaping () async -> Void = {}
     ) {
         self.conversationID = conversationID
         self.controller = controller
@@ -130,6 +133,7 @@ struct ToasttyConversationScreen: View {
         self.offerAnswers = offerAnswers
         self.sendOfferAnswers = sendOfferAnswers
         self.newMessages = newMessages
+        self.retryConnection = retryConnection
     }
 
     /// The coordinator's offers as cards, as in the Mac's coordinator chat.
@@ -154,8 +158,11 @@ struct ToasttyConversationScreen: View {
     /// on the Mac, a turn's work stays folded under one line while it runs.
     static let coordinatorTranscriptOptions = ToasttyTranscriptOptions(
         showsMessageCopyButton: true,
-        foldsRunningWork: true
+        foldsRunningWork: true,
+        showsConnectionStatus: false
     )
+    /// The header shows the connection; see `ToasttyChatConnection`.
+    static let sessionTranscriptOptions = ToasttyTranscriptOptions(showsConnectionStatus: false)
 
     var body: some View {
         let taskChips = ToasttyTaskLinkChips(board: controller.snapshot.taskBoard, finished: controller.finishedTasks)
@@ -189,7 +196,7 @@ struct ToasttyConversationScreen: View {
                     onVisibleLiveEdge: {
                         onVisibleLiveEdge(conversation.state)
                     },
-                    options: isCoordinatorRoot ? Self.coordinatorTranscriptOptions : ToasttyTranscriptOptions(),
+                    options: isCoordinatorRoot ? Self.coordinatorTranscriptOptions : Self.sessionTranscriptOptions,
                     replyToMessage: isCoordinatorRoot ? { request in
                         // The field takes the keyboard, as on the Mac.
                         if replyToMessage(CoordinatorReplyTarget(request)) { isComposerFocused = true }
@@ -211,11 +218,20 @@ struct ToasttyConversationScreen: View {
                         ToasttyMentionListOverlay(picker: mentionPicker)
                     }
                 }
+                // Over the chat, so the chat does not move when it shows.
+                .overlay(alignment: .top) {
+                    if controller.chatConnection == .offline {
+                        ToasttyChatOfflineNotice(retry: retryConnection)
+                            .padding(.top, 10)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.2), value: controller.chatConnection == .offline)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     ToasttyConversationComposerBar(
                         conversation: conversation,
                         composer: composer ?? Self.lockedComposerFallback(conversation),
-                        isLastReported: controller.freshness != .live,
+                        isLastReported: controller.chatConnection == .offline,
                         drafts: drafts,
                         draftDidChange: draftDidChange,
                         draftReplacementCompleted: draftReplacementCompleted,
@@ -239,8 +255,9 @@ struct ToasttyConversationScreen: View {
                     if let task = task(for: conversation) {
                         VStack(spacing: 0) {
                             ToasttyTaskBar(task: task, controller: controller)
-                            if conversation.agent == .codex, conversation.state.bucket == .needsApproval,
-                               controller.freshness == .live {
+                            // The last reported state: the chat keeps its
+                            // layout while offline.
+                            if conversation.agent == .codex, conversation.state.bucket == .needsApproval {
                                 Label("Open this task’s terminal on your Mac to answer.", systemImage: "macwindow")
                                     .font(.footnote)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -495,7 +512,7 @@ struct ToasttyConversationScreen: View {
                 .font(.subheadline.weight(.bold))
                 // Last-known status while disconnected reads muted, like the
                 // rows it came from.
-                .foregroundStyle(controller.freshness == .live
+                .foregroundStyle(controller.chatConnection != .offline
                     ? ToasttyDesignTokens.color(for: first.state.bucket)
                     : ToasttyDesignTokens.mutedText)
             } primaryAction: {
@@ -610,9 +627,9 @@ struct ToasttyConversationScreen: View {
 
     private func headerStatusLine(_ conversation: MobileConversation, metadata: String) -> some View {
         HStack(spacing: 5) {
-            ToasttySessionStatusLabel(
+            ToasttyChatConnectionStatusLabel(
                 bucket: conversation.state.bucket,
-                freshness: controller.freshness
+                connection: controller.chatConnection
             )
             .accessibilityIdentifier("toastty-mobile-conversation-status")
             if metadata.isEmpty == false {
@@ -641,7 +658,8 @@ struct ToasttyConversationScreen: View {
     private func transcriptWorkingIndicator(
         _ conversation: MobileConversation
     ) -> ToasttyTranscriptWorkingIndicator? {
-        guard conversation.state.bucket == .working, controller.freshness == .live else { return nil }
+        // It stays while the chat reconnects, so the chat does not move.
+        guard conversation.state.bucket == .working, controller.chatConnection != .offline else { return nil }
         let gate = (composer ?? Self.lockedComposerFallback(conversation)).gate
         if gate == .disabled(.prompt(.working)) { return nil }
         return ToasttyTranscriptWorkingIndicator(turnElapsed: conversation.turnElapsed.map { .init($0) })
@@ -729,8 +747,11 @@ private struct ToasttyConversationComposerBar: View {
     /// after each turn, for example. Only the user's own actions take the
     /// keyboard away (Send, a dismissal, leaving the chat, the background);
     /// Send waits for the gate.
+    /// While Send waits for the connection, the field stays open, so the
+    /// user can type at once after a return to the app, and a draft keeps
+    /// its tall field.
     private func fieldTakesText(_ presentation: ToasttyComposerPresentation) -> Bool {
-        presentation.gate.allowsInput || isComposerFocused
+        presentation.gate.allowsInput || presentation.waitsForConnection || isComposerFocused
     }
 
     private func composerBar(_ conversation: MobileConversation) -> some View {
@@ -813,7 +834,7 @@ private struct ToasttyConversationComposerBar: View {
 
             if presentation.canReleaseLocalDraft {
                 localDraftReleaseStatus(presentation)
-            } else if case .disabled(let reason) = presentation.gate, !presentation.suppressesConnectionNotice {
+            } else if case .disabled(let reason) = presentation.gate, !presentation.waitsForConnection {
                 composerDisabledStatus(reason)
                     .font(.caption.monospaced())
                     .foregroundStyle(composerStatusColor(reason))
@@ -1176,7 +1197,6 @@ private struct ToasttyConversationComposerBar: View {
     private func disabledAccessibilityHint(
         _ presentation: ToasttyComposerPresentation
     ) -> String {
-        if presentation.suppressesConnectionNotice { return "Checking connection. Composer locked." }
         guard case .disabled(let reason) = presentation.gate else { return "" }
         return reason.message
     }

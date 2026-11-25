@@ -44,7 +44,12 @@ final class LiveConversationController {
     let conversationID: UUID
 
     private(set) var events: [CompatibleConversationEvent] = []
-    private(set) var phase: LiveConversationPhase = .idle
+    private(set) var phase: LiveConversationPhase = .idle {
+        didSet { if phase != oldValue { onPhaseChange() } }
+    }
+    /// The chat's header shows the connection from this phase too.
+    @ObservationIgnored
+    var onPhaseChange: @MainActor () -> Void = {}
     private(set) var runtimePhase: ConversationRuntimePhase = .idle
     private(set) var change: LiveConversationChange = .initial
     private(set) var cursor: ConversationEventCursor?

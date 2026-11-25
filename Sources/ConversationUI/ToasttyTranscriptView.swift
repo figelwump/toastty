@@ -636,12 +636,23 @@ public struct ToasttyTranscriptView: View {
     private var workingLine: ToasttyTranscriptWorkingLine {
         let liveTurnID = self.liveTurnID
         return .place(
-            isWorking: workingIndicator != nil && state.phase == .live,
+            isWorking: workingIndicator != nil && isPhaseShowingWork,
             foldsRunningWork: options.foldsRunningWork,
             sendItems: state.sendItems,
             liveTurn: liveTurnID == nil ? nil : state.turns.last,
             isLiveTurnExpanded: liveTurnID.map(turnFold.isExpanded) ?? false
         )
+    }
+
+    /// A host that shows the connection itself keeps the working row while
+    /// the transcript recovers, so the chat does not move; it supplies no
+    /// indicator once the work is no longer known.
+    private var isPhaseShowingWork: Bool {
+        switch state.phase {
+        case .live: true
+        case .resyncing, .stale, .failure: options.showsConnectionStatus == false
+        case .loading: false
+        }
     }
 
     /// Blocks interleaved with per-turn work strips; a folded turn's work
@@ -806,7 +817,7 @@ public struct ToasttyTranscriptView: View {
                 Text("Loading transcript…")
             }
             .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
-        case .resyncing:
+        case .resyncing where options.showsConnectionStatus:
             HStack(spacing: 9) {
                 ProgressView()
                     .tint(ConversationDesignTokens.amber)
@@ -814,14 +825,14 @@ public struct ToasttyTranscriptView: View {
             }
             .transcriptBannerStyle(color: ConversationDesignTokens.amberText)
             .accessibilityIdentifier("toastty-mobile-transcript-resyncing")
-        case .stale:
+        case .stale where options.showsConnectionStatus:
             Label("Connection paused — transcript may be stale", systemImage: "wifi.slash")
                 .transcriptBannerStyle(color: ConversationDesignTokens.secondaryText)
                 .accessibilityIdentifier("toastty-mobile-transcript-stale")
-        case .failure(let message):
+        case .failure(let message) where options.showsConnectionStatus:
             Label(message, systemImage: "exclamationmark.triangle")
                 .transcriptBannerStyle(color: ConversationDesignTokens.red)
-        case .live:
+        case .live, .resyncing, .stale, .failure:
             EmptyView()
         }
 
@@ -836,7 +847,11 @@ public struct ToasttyTranscriptView: View {
     }
 
     private var showsStatusContent: Bool {
-        state.phase != .live || state.historyTruncated
+        switch state.phase {
+        case .live: state.historyTruncated
+        case .resyncing, .stale, .failure: options.showsConnectionStatus || state.historyTruncated
+        case .loading: true
+        }
     }
 
     @ViewBuilder

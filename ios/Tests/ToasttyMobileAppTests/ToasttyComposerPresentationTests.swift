@@ -6,27 +6,22 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class ToasttyComposerPresentationTests: XCTestCase {
-    func testConnectionGraceHidesReconnectCopyWithoutUnlockingSendOrOtherGates() {
-        let checking = ToasttyComposerPresentation.make(
-            agentDisplayName: "Codex",
-            authority: authority(failure: .coordinatorNotLive),
-            suppressesConnectionNotice: true
-        )
-        XCTAssertTrue(checking.suppressesConnectionNotice)
-        XCTAssertEqual(checking.placeholder, "Message Codex…")
-        XCTAssertFalse(checking.canSubmit(draft: "saved draft"))
-        XCTAssertFalse(checking.canSubmit(draft: "", attachments: [
-            RemoteMessageAttachment(filename: "note.txt", data: Data("saved attachment".utf8)),
-        ]))
-        XCTAssertFalse(checking.canInterrupt)
+    func testConnectionWaitKeepsTheFieldInvitingWithoutUnlockingSendOrOtherGates() {
+        for failure in [ConversationSendGateFailure.coordinatorNotLive, .transcriptNotCaughtUp, .staleComposerAuthority] {
+            let waiting = ToasttyComposerPresentation.make(agentDisplayName: "Codex", authority: authority(failure: failure))
+            XCTAssertTrue(waiting.waitsForConnection, "\(failure)")
+            XCTAssertEqual(waiting.placeholder, "Message Codex…", "\(failure)")
+            XCTAssertFalse(waiting.canSubmit(draft: "saved draft"))
+            XCTAssertFalse(waiting.canSubmit(draft: "", attachments: [
+                RemoteMessageAttachment(filename: "note.txt", data: Data("saved attachment".utf8)),
+            ]))
+            XCTAssertFalse(waiting.canInterrupt)
+        }
 
-        let failures: [ConversationSendGateFailure] = [.deviceSendScopeDenied, .inputUnavailable, .transcriptNotCaughtUp]
+        let failures: [ConversationSendGateFailure] = [.deviceSendScopeDenied, .inputUnavailable]
         for failure in failures {
-            let blocked = ToasttyComposerPresentation.make(
-                agentDisplayName: "Codex", authority: authority(failure: failure),
-                suppressesConnectionNotice: true
-            )
-            XCTAssertFalse(blocked.suppressesConnectionNotice, "Grace must only hide reconnect copy")
+            let blocked = ToasttyComposerPresentation.make(agentDisplayName: "Codex", authority: authority(failure: failure))
+            XCTAssertFalse(blocked.waitsForConnection, "Only a connection wait keeps the field open")
             XCTAssertFalse(blocked.canSubmit(draft: "saved draft"))
         }
         let unavailableInputs: [CompatibleInputAvailability] = [
@@ -37,10 +32,9 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         for availability in unavailableInputs {
             let verifying = ToasttyComposerPresentation.make(
                 agentDisplayName: "Codex",
-                authority: authority(availability: availability, failure: .coordinatorNotLive),
-                suppressesConnectionNotice: true
+                authority: authority(availability: availability, failure: .coordinatorNotLive)
             )
-            XCTAssertTrue(verifying.suppressesConnectionNotice)
+            XCTAssertTrue(verifying.waitsForConnection)
             XCTAssertFalse(verifying.canSubmit(draft: "saved draft"))
             XCTAssertFalse(verifying.canInterrupt)
             XCTAssertFalse(verifying.canReleaseLocalDraft)
@@ -157,15 +151,16 @@ final class ToasttyComposerPresentationTests: XCTestCase {
         XCTAssertTrue(working.gateMessage.contains("working"))
     }
 
-    func testComposerPlaceholderExplainsEachBlockedStateAndInvitesInputOnlyWhenEnabled() {
+    func testComposerPlaceholderExplainsEachBlockedStateAndInvitesInputWhenEnabledOrWaitingForConnection() {
         XCTAssertEqual(presentation(enabledAuthority).placeholder, "Message Codex…")
         let cases: [(ToasttyComposerDisabledReason, String)] = [
             (.deviceScope, "Read-only on this iPhone"),
             (.sessionWrites, "Remote input is off"),
             (.localDraft, "Draft in progress on Mac"),
             (.pendingInteraction, "Pending request — input paused"),
-            (.connection(.reconnecting), "Reconnecting to Mac…"),
-            (.connection(.catchingUp), "Syncing with Mac…"),
+            // The header shows the connection; the field keeps inviting input.
+            (.connection(.reconnecting), "Message Codex…"),
+            (.connection(.catchingUp), "Message Codex…"),
             (.prompt(.starting), "Session starting…"),
             (.prompt(.working), "Agent working…"),
             (.prompt(.offline), "Session offline"),
