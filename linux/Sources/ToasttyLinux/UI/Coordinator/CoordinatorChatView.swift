@@ -32,7 +32,7 @@ final class CoordinatorChatView {
     private let scaleClass: String
     private var subscriptions: [AnyCancellable] = []
     private var shownPanelID: UUID?
-    private var renderScheduled = false
+    private lazy var renderScheduler = RenderScheduler("coordinator-chat") { [weak self] in self?.render() }
     private var lastNotice: CoordinatorChatModel.Notice??
     private var lastScale: Double = 0
     private static var nextScaleID = 0
@@ -159,13 +159,7 @@ final class CoordinatorChatView {
     // MARK: - Render
 
     func scheduleRender() {
-        guard renderScheduled == false else { return }
-        renderScheduled = true
-        MainLoop.idle(priority: Int32(G_PRIORITY_HIGH_IDLE)) { [weak self] in
-            guard let self else { return }
-            self.renderScheduled = false
-            self.render()
-        }
+        renderScheduler.schedule()
     }
 
     func render() {

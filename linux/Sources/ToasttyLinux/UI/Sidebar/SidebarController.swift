@@ -151,8 +151,7 @@ public final class SidebarController {
         Gtk.setClass(badge, "active", summary.hasActive)
         gtk_widget_set_valign(badge, GTK_ALIGN_CENTER)
         if summary.hasActive {
-            let spinner = gtk_spinner_new()!
-            gtk_spinner_start(cast(spinner))
+            let spinner = toastty_clock_spinner_new()!
             gtk_widget_set_size_request(spinner, 8, 8)
             gtk_widget_set_valign(spinner, GTK_ALIGN_CENTER)
             Gtk.append(badge, spinner)

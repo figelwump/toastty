@@ -24,7 +24,13 @@ final class TasksUI {
     var sessionRuntimeStore: SessionRuntimeStore { logic.sessionRuntimeStore }
     private var features: [UUID: WeakFeature] = [:]
     private var subscriptions: [AnyCancellable] = []
-    private var renderScheduled = false
+    private lazy var renderScheduler = RenderScheduler("tasks") { [weak self] in
+        guard let self else { return }
+        let state = self.store.state
+        for entry in self.features.values {
+            entry.feature?.render(state)
+        }
+    }
     /// Quick entry's GTK window (`QuickEntryPresentation.frontend` holds it
     /// weakly).
     var quickEntryFrontend: QuickEntryWindowFrontend?
@@ -59,16 +65,7 @@ final class TasksUI {
     /// Redraws every window's task views on the next idle turn, after the
     /// change the publisher announced has happened.
     func scheduleRender() {
-        guard renderScheduled == false else { return }
-        renderScheduled = true
-        MainLoop.idle(priority: Int32(G_PRIORITY_HIGH_IDLE)) { [weak self] in
-            guard let self else { return }
-            self.renderScheduled = false
-            let state = self.store.state
-            for entry in self.features.values {
-                entry.feature?.render(state)
-            }
-        }
+        renderScheduler.schedule()
     }
 
     /// Opens a task's space, from a row or a link.
@@ -317,8 +314,7 @@ enum TaskMarkWidget {
         let mark: WidgetPtr
         switch kind {
         case .working:
-            let spinner = gtk_spinner_new()!
-            gtk_spinner_start(cast(spinner))
+            let spinner = toastty_clock_spinner_new()!
             gtk_widget_set_size_request(spinner, 9, 9)
             mark = spinner
         case .question:

@@ -386,8 +386,7 @@ final class TranscriptView {
             return sendItemWidget(item, isWorkingLine: isWorkingLine)
         case .workingRow:
             let row = Gtk.hbox(spacing: 8, classes: ["transcript-working"])
-            let spinner = gtk_spinner_new()!
-            gtk_spinner_start(cast(spinner))
+            let spinner = toastty_clock_spinner_new()!
             Gtk.append(row, spinner)
             let label = Gtk.label("working", classes: ["transcript-working-text"], ellipsize: false)
             elapsedLabels.append((label, "working", ""))
@@ -403,8 +402,7 @@ final class TranscriptView {
         let content = Gtk.hbox(spacing: 6)
         gtk_widget_set_halign(content, GTK_ALIGN_CENTER)
         if spinner {
-            let spin = gtk_spinner_new()!
-            gtk_spinner_start(cast(spin))
+            let spin = toastty_clock_spinner_new()!
             Gtk.append(content, spin)
         }
         let label = Gtk.label(text, classes: ["transcript-disclosure-text"], ellipsize: false)
@@ -419,8 +417,7 @@ final class TranscriptView {
     private func workStrip(_ turn: ToasttyTranscriptTurn, isExpanded: Bool, isLive: Bool, isWorking: Bool) -> WidgetPtr {
         let chip = Gtk.hbox(spacing: 8, classes: ["transcript-strip"])
         if isWorking {
-            let spinner = gtk_spinner_new()!
-            gtk_spinner_start(cast(spinner))
+            let spinner = toastty_clock_spinner_new()!
             Gtk.append(chip, spinner)
         } else {
             Gtk.append(chip, Gtk.image(isExpanded ? "pan-down-symbolic" : "pan-end-symbolic", pixelSize: 10))

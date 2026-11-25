@@ -26,7 +26,7 @@ final class QuickEntryWindowFrontend: QuickEntryFrontend {
     private var previousWindow: WidgetPtr?
     private var widgets: Widgets?
     private var picker: QuickEntryPickerPopover?
-    private var renderScheduled = false
+    private lazy var renderScheduler = RenderScheduler("quick-entry") { [weak self] in self?.render() }
     private var isSyncing = false
     private var lastFocusRequest = -1
     private var attachmentURLs: [URL] = []
@@ -341,13 +341,7 @@ final class QuickEntryWindowFrontend: QuickEntryFrontend {
     // MARK: - Render
 
     private func scheduleRender() {
-        guard renderScheduled == false else { return }
-        renderScheduled = true
-        MainLoop.idle(priority: Int32(G_PRIORITY_HIGH_IDLE)) { [weak self] in
-            guard let self else { return }
-            self.renderScheduled = false
-            self.render()
-        }
+        renderScheduler.schedule()
     }
 
     private func render() {
@@ -384,8 +378,7 @@ final class QuickEntryWindowFrontend: QuickEntryFrontend {
                 ))
             }
             if model.pendingAttachmentCount > 0 {
-                let spinner = gtk_spinner_new()!
-                gtk_spinner_start(cast(spinner))
+                let spinner = toastty_clock_spinner_new()!
                 gtk_flow_box_append(cast(widgets.attachments), spinner)
             }
         }

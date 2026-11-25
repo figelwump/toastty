@@ -305,8 +305,7 @@ final class SidebarTasksView {
         for (index, bucket) in SidebarBucket.allCases.enumerated() where counts.indices.contains(index) && counts[index] > 0 {
             let part = Gtk.hbox(spacing: 3)
             if bucket == .running {
-                let spinner = gtk_spinner_new()!
-                gtk_spinner_start(cast(spinner))
+                let spinner = toastty_clock_spinner_new()!
                 gtk_widget_set_size_request(spinner, 8, 8)
                 Gtk.append(part, spinner)
             } else {
