@@ -487,6 +487,69 @@ for shot in quick-entry quick-entry-picker; do
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 
+# Phase W: the workspace page (Linux-first). Keep a Scratchpad with the
+# right panel's pin, open the page from the card's title, read the synopsis
+# an agent sets, leave by Terminal and by a second title click, open the
+# kept Scratchpad in the right panel, then delete it.
+cat > $WORK/workspace-page.script <<SCRIPT
+wait 800
+expect workspacePage=hidden keepButton=hidden
+perform scratchpad.create
+wait 500
+expect keepButton=keep rightPanel=true
+click right-panel.keep-in-workspace
+wait 300
+expect keepButton=kept
+workspace-page card selected
+wait 500
+expect workspacePage=shown tasksView=hidden rightPanelMapped=false overviewScratchpads=1 overviewLiveScratchpads=1 overviewSynopsis=toastty
+file-write $WORK/page-shown go
+wait-file $WORK/synopsis-set
+wait 500
+expect overviewSynopsis=agent
+screenshot $WORK/workspace-page.png
+click workspace.overview.terminal
+wait 300
+expect workspacePage=hidden
+workspace-page card selected
+wait 300
+expect workspacePage=shown
+workspace-page card selected
+wait 300
+expect workspacePage=hidden
+workspace-page card selected
+wait 300
+action window.toggle-tasks-view
+wait 300
+expect tasksView=shown workspacePage=hidden
+action window.toggle-tasks-view
+wait 300
+workspace-page card selected
+wait 300
+workspace-page open 0
+wait 500
+expect workspacePage=hidden rightPanel=true keepButton=kept
+workspace-page card selected
+wait 300
+workspace-page delete 0
+wait 500
+expect workspacePage=shown overviewScratchpads=0
+quit
+SCRIPT
+(cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/workspace-page.script $APP > $WORK/app-workspace-page.log 2>&1) & APID=$!
+for i in $(seq 1 150); do [ -f $WORK/page-shown ] && break; kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+PAGE_WS=$(cli query run workspace.list | python3 -c 'import json,sys; r=json.load(sys.stdin)["result"]; print([w["workspaceID"] for w in r["workspaces"] if w["isSelected"]][0])' 2>/dev/null)
+cli action run workspace.synopsis.set --workspace "$PAGE_WS" "text=E2E: the project the e2e tasks run in." > $WORK/synopsis.json 2>&1
+cli query run workspace.overview --workspace "$PAGE_WS" > $WORK/overview.json 2>&1
+touch $WORK/synopsis-set
+for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+kill -9 $APID 2>/dev/null; wait $APID; PRC=$?
+check "the workspace page: keep a Scratchpad, open the page from the card title, agent synopsis, leave, open, delete" "[ $PRC = 0 ] && ! grep -q 'FAIL' $WORK/app-workspace-page.log"
+check "workspace.overview reads the synopsis and the kept Scratchpad" "grep -q '\"agent\"' $WORK/overview.json && grep -q 'E2E: the project' $WORK/overview.json && grep -q '\"linked\" : true' $WORK/overview.json"
+grep 'FAIL' $WORK/app-workspace-page.log | head -8
+[ -s $WORK/workspace-page.png ] && cp $WORK/workspace-page.png $REPO/artifacts/manual/linux-tasks/workspace-page.png
+pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
+
 # Phase E: a first launch asks What's new; Start Coordinator starts it.
 FRESH=$WORK/fresh-home; mkdir -p $FRESH/.toastty; cp $HOMEDIR/.toastty/agents.toml $FRESH/.toastty/
 cat > $WORK/whats-new.script <<SCRIPT
