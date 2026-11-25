@@ -8,8 +8,8 @@
 #   4. `toastty coordinator open` makes the Coordinator workspace with its
 #      agent, and `coordinator status` reports it;
 #   5. the task survives a quit and restart;
-#   6. the Tasks view (Broadway, smoke script): open, rows, selection with
-#      the arrows, Esc, the Show Tasks toggle.
+#   6. the Tasks view (Broadway, smoke script): open, rows, mark widths,
+#      selection with the arrows, Esc, the Show Tasks toggle.
 # Build first: scripts/linux/build.sh --product toastty-linux --product toastty
 # Usage: scripts/linux/e2e-tasks.sh   (exit status 0 when every check passes)
 set -uo pipefail
@@ -122,6 +122,8 @@ wait 500
 action window.toggle-tasks-view
 wait 300
 expect tasksView=shown tasksRows=2
+# Each mark keeps its 12-wide slot, however short the row's text.
+expect tasksMarkWidths=12,12
 screenshot $WORK/tasks-view.png
 tasks select 1
 wait 200
@@ -141,7 +143,7 @@ expect tasksView=shown
 action window.toggle-tasks-view
 wait 200
 expect tasksView=hidden
-expect sidebarTaskRows=2 sidebarSegment=all
+expect sidebarTaskRows=2 sidebarSegment=all sidebarMarkWidths=12,12
 screenshot $WORK/sidebar.png
 click sidebar.segment.needsYou
 wait 300

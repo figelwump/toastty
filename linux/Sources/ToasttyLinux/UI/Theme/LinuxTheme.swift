@@ -234,7 +234,7 @@ public enum LinuxTheme {
     .task-mark.done { color: var(--toastty-done); background-color: color-mix(in srgb, var(--toastty-done) 20%, transparent); }
     .task-mark.archived { color: var(--toastty-quiet); background-color: alpha(currentColor, 0.1); }
     .task-mark-icon.waiting { color: var(--toastty-quiet); }
-    .task-mark-slot spinner { min-width: 9px; min-height: 9px; }
+    .task-mark-slot spinner { min-width: 9px; min-height: 9px; -gtk-icon-size: 9px; }
     .task-release-mark { color: var(--toastty-to-ship); font-size: 0.75em; }
     .task-tag {
       font-size: 0.78em; padding: 0 5px; border-radius: 4px;
