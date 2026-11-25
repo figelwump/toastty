@@ -490,7 +490,7 @@ pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 # Phase W: the workspace page (Linux-first). Keep a Scratchpad with the
 # right panel's pin, open the page from the card's title, read the synopsis
 # an agent sets, leave by Terminal and by a second title click, open the
-# kept Scratchpad in the right panel, then delete it.
+# kept Scratchpad in the right panel, then switch and delete tabs.
 cat > $WORK/workspace-page.script <<SCRIPT
 wait 800
 expect workspacePage=hidden keepButton=hidden
@@ -503,6 +503,7 @@ expect keepButton=kept
 workspace-page card selected
 wait 500
 expect workspacePage=shown tasksView=hidden rightPanelMapped=false overviewScratchpads=1 overviewLiveScratchpads=1 overviewSynopsis=toastty
+expect overviewScratchpadTabs=1 overviewSelectedScratchpad=0
 file-write $WORK/page-shown go
 wait-file $WORK/synopsis-set
 wait 500
@@ -526,14 +527,38 @@ action window.toggle-tasks-view
 wait 300
 workspace-page card selected
 wait 300
-workspace-page open 0
+click workspace.overview.preview.open
 wait 500
 expect workspacePage=hidden rightPanel=true keepButton=kept
+perform scratchpad.create
+wait 500
+expect keepButton=keep
+click right-panel.keep-in-workspace
+wait 300
+expect keepButton=kept
 workspace-page card selected
 wait 300
-workspace-page delete 0
+expect overviewScratchpads=2 overviewScratchpadTabs=2 overviewSelectedScratchpad=1
+workspace-page scratchpad 0
+wait 300
+expect overviewSelectedScratchpad=0
+workspace-page scratchpad 1
+wait 300
+expect overviewSelectedScratchpad=1
+workspace-page close 1
+wait 300
+dialog-respond cancel
+expect overviewScratchpadTabs=2 overviewSelectedScratchpad=1
+workspace-page close 1
+wait 300
+dialog-respond confirm
 wait 500
-expect workspacePage=shown overviewScratchpads=0
+expect overviewScratchpadTabs=1 overviewSelectedScratchpad=0
+click workspace.overview.preview.delete
+wait 300
+dialog-respond confirm
+wait 500
+expect workspacePage=shown overviewScratchpads=0 overviewScratchpadTabs=0 overviewPreview=none
 quit
 SCRIPT
 (cd $PROJECT && "${envs[@]}" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/workspace-page.script $APP > $WORK/app-workspace-page.log 2>&1) & APID=$!
@@ -542,9 +567,9 @@ PAGE_WS=$(cli query run workspace.list | python3 -c 'import json,sys; r=json.loa
 cli action run workspace.synopsis.set --workspace "$PAGE_WS" "text=E2E: the project the e2e tasks run in." > $WORK/synopsis.json 2>&1
 cli query run workspace.overview --workspace "$PAGE_WS" > $WORK/overview.json 2>&1
 touch $WORK/synopsis-set
-for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
+for i in $(seq 1 600); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; PRC=$?
-check "the workspace page: keep a Scratchpad, open the page from the card title, agent synopsis, leave, open, delete" "[ $PRC = 0 ] && ! grep -q 'FAIL' $WORK/app-workspace-page.log"
+check "the workspace page: keep, switch, open and delete Scratchpad tabs, navigate and set the synopsis" "[ $PRC = 0 ] && ! grep -q 'FAIL' $WORK/app-workspace-page.log"
 check "workspace.overview reads the synopsis and the kept Scratchpad" "grep -q '\"agent\"' $WORK/overview.json && grep -q 'E2E: the project' $WORK/overview.json && grep -q '\"linked\" : true' $WORK/overview.json"
 grep 'FAIL' $WORK/app-workspace-page.log | head -8
 [ -s $WORK/workspace-page.png ] && cp $WORK/workspace-page.png $REPO/artifacts/manual/linux-tasks/workspace-page.png
