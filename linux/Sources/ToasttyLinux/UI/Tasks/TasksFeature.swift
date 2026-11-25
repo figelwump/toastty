@@ -309,6 +309,11 @@ enum TaskMarkWidget {
         let slot = Gtk.hbox(classes: ["task-mark-slot"])
         gtk_widget_set_size_request(slot, 12, 16)
         gtk_widget_set_valign(slot, GTK_ALIGN_START)
+        // The mark below expands to center itself, and GTK passes a child's
+        // expand up to its parent. Without this the slot would share the
+        // row's spare width with the text, and the mark would move whenever
+        // the row's text changed length (a running task's status line).
+        gtk_widget_set_hexpand(slot, 0)
         let mark: WidgetPtr
         switch kind {
         case .working:
@@ -343,6 +348,15 @@ enum TaskMarkWidget {
         Gtk.append(slot, mark)
         Gtk.setName(slot, "task-mark.\(Self.cssClass(kind))")
         return slot
+    }
+
+    /// The drawn width of each mark slot under `root`, in tree order, for
+    /// automation: every slot is 12 wide, whatever the row's text.
+    static func slotWidths(in root: WidgetPtr) -> [Int32] {
+        if let name = gtk_widget_get_name(root), String(cString: name).hasPrefix("task-mark.") {
+            return gtk_widget_get_mapped(root).bool ? [gtk_widget_get_width(root)] : []
+        }
+        return Gtk.children(root).flatMap { slotWidths(in: $0) }
     }
 
     static func cssClass(_ kind: TaskStageMarkKind) -> String {

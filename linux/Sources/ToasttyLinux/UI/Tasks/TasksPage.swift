@@ -811,6 +811,7 @@ final class TasksPage {
     // MARK: - Automation
 
     var automationListModel: [ListItem] { listModel }
+    var automationMarkWidths: [Int32] { TaskMarkWidget.slotWidths(in: listBox) }
     var automationDetailTitle: String? { detailModel?.title }
     var automationDetailError: String? { detailModel?.error }
     var automationBanner: String? { bannerModel?.webhooks?.message ?? bannerModel?.configError }
