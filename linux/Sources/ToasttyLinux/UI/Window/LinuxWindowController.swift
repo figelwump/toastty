@@ -260,8 +260,9 @@ public final class LinuxWindowController {
         defer { isSyncing = false }
 
         let isActive = gtk_window_is_active(cast(window)).bool
+        let coveringPage = features.lazy.compactMap { $0.coveringPage(state) }.first
         let hasWorkspaces = windowState.workspaceIDs.isEmpty == false
-        let page = features.lazy.compactMap { $0.coveringPage(state) }.first ?? (hasWorkspaces ? "workspaces" : "empty")
+        let page = coveringPage ?? (hasWorkspaces ? "workspaces" : "empty")
         let previousPage = gtk_stack_get_visible_child_name(cast(mainStack)).map { String(cString: $0) }
         if previousPage != page {
             gtk_stack_set_visible_child_name(cast(mainStack), page)
@@ -274,7 +275,10 @@ public final class LinuxWindowController {
 
         setShowSidebar(outerSplit, windowState.sidebarVisible)
         let selection = state.workspaceSelection(in: windowID)
-        setShowSidebar(innerSplit, selection?.workspace.rightAuxPanel.isVisible ?? false)
+        // Like on macOS, Tasks covers the right panel as well as the workspace
+        // content. Only hide the GTK sidebar, leaving the workspace's tabs and
+        // saved visibility alone. isSyncing suppresses the widget's notify.
+        setShowSidebar(innerSplit, coveringPage == nil && selection?.workspace.rightAuxPanel.isVisible == true)
         let sidebarWidth = windowState.sidebarWidthPointsOverride ?? Self.defaultSidebarWidth
         adw_overlay_split_view_set_max_sidebar_width(cast(outerSplit), WindowState.clampedSidebarWidth(sidebarWidth))
         // The right panel takes 40% of the space until it is resized, then
