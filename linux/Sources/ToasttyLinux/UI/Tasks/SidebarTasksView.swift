@@ -211,19 +211,24 @@ final class SidebarTasksView {
         if let workspaceID = card.workspaceID, segment == .all {
             let chevron = Gtk.iconButton(card.isCollapsed ? "pan-end-symbolic" : "pan-down-symbolic",
                                          tooltip: card.isCollapsed ? "Expand" : "Collapse", classes: ["flat", "sidebar-chevron"])
+            Gtk.setName(chevron, "sidebar.card.\(index).disclosure")
             Signal.connect(chevron, "clicked") { [weak self] in
                 guard let self else { return }
                 _ = self.ui.store.send(.setSidebarWorkspaceCollapsed(windowID: self.windowID, workspaceID: workspaceID, collapsed: card.isCollapsed == false))
             }
             Gtk.append(titleLine, chevron)
         }
+        // Keep selection off the chevron's ancestor chain so its press gesture
+        // cannot claim the pointer sequence before the button's release.
+        let titleContent = Gtk.hbox(spacing: 6)
         let title = Gtk.label(card.title, classes: ["workspace-title"])
         gtk_widget_set_hexpand(title, 1)
-        Gtk.append(titleLine, title)
-        Gtk.append(titleLine, countsBadge(card.counts))
+        Gtk.append(titleContent, title)
+        Gtk.append(titleContent, countsBadge(card.counts))
+        Gtk.append(titleLine, titleContent)
         Gtk.append(box, titleLine)
         if let workspaceID = card.workspaceID {
-            click(titleLine) { [weak self] in
+            click(titleContent) { [weak self] in
                 guard let self else { return }
                 _ = self.ui.logic.sendNavigation([.selectWorkspace(windowID: self.windowID, workspaceID: workspaceID)])
             }
@@ -573,6 +578,7 @@ final class SidebarTasksView {
     var automationSummary: [String: String] {
         guard let model else { return [:] }
         let rows = model.cards.flatMap { $0.sections.flatMap(\.rows) }
+        let markWidths = TaskMarkWidget.slotWidths(in: cards)
         return [
             "sidebarSegment": model.segment.rawValue,
             "sidebarNeedsYou": String(model.needsYouCount),
@@ -581,7 +587,8 @@ final class SidebarTasksView {
             "sidebarBuckets": model.cards.flatMap { card in card.sections.map { "\(Self.bucketClass($0.bucket)):\($0.rows.count)" } }.joined(separator: ","),
             "sidebarTaskRows": String(rows.filter { if case .session = $0.kind { false } else { true } }.count),
             "sidebarCoordinator": gtk_widget_get_visible(coordinatorRow).bool ? "shown" : "hidden",
-            "sidebarMarkWidths": TaskMarkWidget.slotWidths(in: cards).map(String.init).joined(separator: ","),
+            "sidebarVisibleRows": String(markWidths.count),
+            "sidebarMarkWidths": markWidths.map(String.init).joined(separator: ","),
         ]
     }
 }
