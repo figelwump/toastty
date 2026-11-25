@@ -582,6 +582,7 @@ final class SidebarTasksView {
             "sidebarBuckets": model.cards.flatMap { card in card.sections.map { "\(Self.bucketClass($0.bucket)):\($0.rows.count)" } }.joined(separator: ","),
             "sidebarTaskRows": String(rows.filter { if case .session = $0.kind { false } else { true } }.count),
             "sidebarCoordinator": gtk_widget_get_visible(coordinatorRow).bool ? "shown" : "hidden",
+            "sidebarMarkWidths": TaskMarkWidget.slotWidths(in: cards).map(String.init).joined(separator: ","),
         ]
     }
 }

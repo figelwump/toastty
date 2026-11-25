@@ -139,6 +139,7 @@ extension TasksPage {
             "tasksGroups": groups.joined(separator: ","),
             "tasksSelected": rows.first(where: \.isSelected)?.title ?? "",
             "tasksMarks": rows.map { TaskMarkWidget.cssClass($0.mark) }.joined(separator: ","),
+            "tasksMarkWidths": automationMarkWidths.map(String.init).joined(separator: ","),
         ]
         summary["tasksDetail"] = automationDetailTitle ?? ""
         summary["tasksDetailError"] = automationDetailError ?? ""
