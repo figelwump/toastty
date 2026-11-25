@@ -108,13 +108,16 @@ final class SidebarTasksView {
         gtk_scrolled_window_set_policy(cast(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
         gtk_scrolled_window_set_child(cast(scroller), cards)
         Gtk.expand(scroller)
-        content = scroller
+        content = gtk_overlay_new()!
+        gtk_overlay_set_child(cast(content), scroller)
 
         menu = gtk_popover_menu_new_from_model(nil)
         gtk_popover_set_has_arrow(cast(menu), 0)
         gtk_widget_set_halign(menu, GTK_ALIGN_START)
         menuRef = GObjectRef(sinking: menu)
-        gtk_widget_set_parent(menu, cards)
+        // Card rebuilds remove every child of `cards`. Keep the shared
+        // popover beside the scroller so it stays rooted across rebuilds.
+        gtk_overlay_add_overlay(cast(content), menu)
 
         click(coordinatorRow) { [weak self] in self?.coordinatorClicked() }
         contextClick(coordinatorRow) { [weak self] x, y in self?.showCoordinatorMenu(x: x, y: y) }
@@ -127,7 +130,9 @@ final class SidebarTasksView {
     }
 
     func teardown() {
-        Gtk.unparentIfAttached(menu)
+        if gtk_widget_get_parent(menu) != nil {
+            gtk_overlay_remove_overlay(cast(content), menu)
+        }
     }
 
     // MARK: - Render
@@ -409,10 +414,7 @@ final class SidebarTasksView {
             self.ui.openTaskSpace(workspaceID, windowID: self.windowID)
         }
         contextClick(line) { [weak self] x, y in
-            guard let self, let workspace = self.ui.store.state.workspacesByID[workspaceID],
-                  let taskID = workspace.taskID,
-                  let item = self.ui.board.items().first(where: { $0.taskID == taskID }) else { return }
-            self.showTaskMenu(item, from: line, x: x, y: y)
+            self?.showTaskSpaceMenu(workspaceID: workspaceID, from: line, x: x, y: y)
         }
         return line
     }
@@ -505,9 +507,15 @@ final class SidebarTasksView {
         }
         g_action_map_add_action(cast(group), cast(document))
         g_object_unref(UnsafeMutableRawPointer(document))
-        gtk_widget_insert_action_group(cards, "sidebartasks", cast(group))
+        gtk_widget_insert_action_group(content, "sidebartasks", cast(group))
         gtk_widget_insert_action_group(header, "sidebartasks", cast(group))
         g_object_unref(UnsafeMutableRawPointer(group))
+    }
+
+    private func showTaskSpaceMenu(workspaceID: UUID, from row: WidgetPtr, x: Double, y: Double) {
+        guard let taskID = ui.store.state.workspacesByID[workspaceID]?.taskID,
+              let item = ui.board.items().first(where: { $0.taskID == taskID }) else { return }
+        showTaskMenu(item, from: row, x: x, y: y)
     }
 
     private func showTaskMenu(_ item: TaskBoardItem, from widget: WidgetPtr, x: Double, y: Double) {
@@ -550,7 +558,7 @@ final class SidebarTasksView {
         g_object_unref(UnsafeMutableRawPointer(model))
         var source = graphene_point_t(x: Float(x), y: Float(y))
         var target = graphene_point_t(x: 0, y: 0)
-        guard gtk_widget_compute_point(widget, cards, &source, &target).bool else { return }
+        guard gtk_widget_compute_point(widget, content, &source, &target).bool else { return }
         var rect = GdkRectangle(x: Int32(target.x), y: Int32(target.y), width: 1, height: 1)
         gtk_popover_set_pointing_to(cast(menu), &rect)
         gtk_popover_popup(cast(menu))
@@ -575,6 +583,21 @@ final class SidebarTasksView {
 
     // MARK: - Automation
 
+    func automationOpenTaskSpaceMenu() -> Bool {
+        for row in model?.cards.flatMap(\.sections).flatMap(\.rows) ?? [] {
+            guard case .taskSpace(let space) = row.kind,
+                  let widget = Gtk.find(named: "sidebar.taskSpace.\(space.workspaceID.uuidString)", in: cards),
+                  gtk_widget_get_mapped(widget).bool else { continue }
+            showTaskSpaceMenu(workspaceID: space.workspaceID, from: widget, x: 12, y: 12)
+            return true
+        }
+        return false
+    }
+
+    func automationDismissContextMenu() {
+        gtk_popover_popdown(cast(menu))
+    }
+
     var automationSummary: [String: String] {
         guard let model else { return [:] }
         let rows = model.cards.flatMap { $0.sections.flatMap(\.rows) }
@@ -587,6 +610,7 @@ final class SidebarTasksView {
             "sidebarBuckets": model.cards.flatMap { card in card.sections.map { "\(Self.bucketClass($0.bucket)):\($0.rows.count)" } }.joined(separator: ","),
             "sidebarTaskRows": String(rows.filter { if case .session = $0.kind { false } else { true } }.count),
             "sidebarCoordinator": gtk_widget_get_visible(coordinatorRow).bool ? "shown" : "hidden",
+            "sidebarContextMenu": gtk_widget_get_mapped(menu).bool ? "shown" : "hidden",
             "sidebarVisibleRows": String(markWidths.count),
             "sidebarMarkWidths": markWidths.map(String.init).joined(separator: ","),
         ]

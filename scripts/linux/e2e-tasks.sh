@@ -216,6 +216,12 @@ tasks key escape
 wait 300
 expect tasksView=hidden rightPanel=true rightPanelTabs=1 rightPanelMapped=true
 screenshot $WORK/tasks-right-panel-restored.png
+# The first card render already rebuilt the sidebar. Opening a task-space
+# menu must still map a native popup.
+tasks sidebar-menu open
+expect sidebarContextMenu=shown
+tasks sidebar-menu close
+expect sidebarContextMenu=hidden
 action window.toggle-right-panel
 wait 300
 expect rightPanel=false rightPanelTabs=1 rightPanelMapped=false
@@ -244,6 +250,11 @@ expect sidebarSegment=needsYou
 click sidebar.segment.all
 wait 300
 expect sidebarSegment=all
+# Changing segments rebuilt the cards again.
+tasks sidebar-menu open
+expect sidebarContextMenu=shown
+tasks sidebar-menu close
+expect sidebarContextMenu=hidden
 action window.toggle-right-panel
 expect rightPanel=true rightPanelTabs=1 rightPanelMapped=true
 action window.toggle-tasks-view
