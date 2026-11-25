@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Check the app inside one release DMG on an admitted macOS desktop."""
+"""Check the app inside one release DMG on an admitted macOS desktop, as a
+user meets it: a clean first launch, then the stages of
+`candidate-use-check.py` over the state of the last published version. The
+receipt (`result.json`) names each stage, and passes only when all pass."""
 import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import plistlib
 import re
 import shutil
@@ -20,6 +24,16 @@ EXCEPTIONS = (
     "uncaught exception",
 )
 EXCEPTION_PATTERN = re.compile("|".join(map(re.escape, EXCEPTIONS)), re.IGNORECASE)
+# Every stage a receipt must pass. `firstLaunch` runs here; the others run in
+# candidate-use-check.py.
+STAGES = ("firstLaunch", "update", "sessions", "restart", "compact")
+USE_STAGES = STAGES[1:]
+# candidate-use-check.py gives up after 40 minutes in the GUI session.
+USE_TIMEOUT = 2700
+
+
+class CleanupUnconfirmed(RuntimeError):
+    """A process of the check may still use the desktop."""
 
 
 def require(condition, message):
@@ -43,7 +57,8 @@ def confirmed_cleanup(root):
     admission = read_json(root / "evidence/admission.json")
     require(admission["state"] == "finished" and not (root / "desktop-active").exists(),
             f"Desktop cleanup is unconfirmed. Retaining {root}")
-    require(not os.path.ismount(root / "image"), f"DMG is still mounted. Retaining {root}")
+    for image in ("image", "previous-image"):
+        require(not os.path.ismount(root / image), f"A DMG is still mounted. Retaining {root}")
 
 
 def verify(dmg, commit, evidence, sparkle_digest=None, sparkle_length=None):
@@ -51,7 +66,10 @@ def verify(dmg, commit, evidence, sparkle_digest=None, sparkle_length=None):
     admission = read_json(evidence / "admission.json")
     require(admission["state"] == "finished" and admission["exitCode"] == 0
             and admission["resource"] == "desktop" and result["status"] == "pass",
-            "Candidate has no successful desktop first-launch check")
+            "Candidate has no successful desktop candidate check")
+    stages = result.get("stages") or {}
+    missing = [stage for stage in STAGES if stages.get(stage) != "pass"]
+    require(not missing, f"The candidate check did not pass every stage: {', '.join(missing)}")
     actual_digest = digest(dmg)
     require(result["sourceCommit"] == commit and result["dmgSHA256"] == actual_digest,
             "First-launch evidence does not match the candidate DMG and source commit")
@@ -123,10 +141,8 @@ def check_process(root, bundle, isolated, evidence):
                        TOASTTY_SOCKET_PATH=str(socket), TOASTTY_LOG_STDERR="1",
                        TOASTTY_SKIP_QUIT_CONFIRMATION="1")
     started = time.strftime("%Y-%m-%d %H:%M:%S")
-    marker = root / "desktop-active"
     with (evidence / "app.log").open("w") as log:
         app = None
-        marker.touch(exist_ok=False)
         try:
             app = subprocess.Popen([binary], cwd=user_home, env=environment,
                                    stdout=log, stderr=subprocess.STDOUT)
@@ -135,8 +151,6 @@ def check_process(root, bundle, isolated, evidence):
         finally:
             if app is not None:
                 stop(app)
-            # Keep admission's marker if process cleanup cannot be confirmed.
-            marker.unlink()
             clear_preferences(suite)
             if app is not None:
                 scan_exceptions(app.pid, started, evidence)
@@ -227,14 +241,14 @@ def interrupted_mount(number, _frame):
     raise RuntimeError(f"Candidate DMG preparation was interrupted (signal {number})")
 
 
-def extract_bundle(root, image, dmg):
+def extract_bundle(root, image, dmg, name):
     handlers = {number: signal.signal(number, interrupted_mount)
                 for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
     try:
         image.mkdir()
         run("/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen",
             "-mountpoint", image, dmg, timeout=45)
-        bundle = root / "candidate/Toastty.app"
+        bundle = root / name / "Toastty.app"
         bundle.parent.mkdir()
         run("/usr/bin/ditto", image / "Toastty.app", bundle, timeout=45)
         return bundle
@@ -247,28 +261,94 @@ def extract_bundle(root, image, dmg):
                 signal.signal(number, handler)
 
 
-def check(root, commit, expected_digest):
+def end_processes(work):
+    """Ends every process whose command names the work folder: the apps the
+    stages installed there, their agents, and a stage script still running."""
+    def remaining():
+        listing = run("/bin/ps", "-axo", "pid=,command=").stdout
+        return [int(line.split(None, 1)[0]) for line in listing.splitlines()
+                if str(work) in line and int(line.split(None, 1)[0]) != os.getpid()]
+
+    for number in (signal.SIGTERM, signal.SIGKILL):
+        for pid in remaining():
+            try:
+                os.kill(pid, number)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + 10
+        while remaining() and time.monotonic() < deadline:
+            time.sleep(0.5)
+    left = remaining()
+    if left:
+        raise CleanupUnconfirmed(f"Processes of the candidate stages still run: {left}")
+
+
+def use_check(root, candidate, previous, evidence):
+    """Runs candidate-use-check.py in the GUI session, and returns its stages."""
+    artifacts = evidence / "use"
+    artifacts.mkdir()
+    # Sockets go in this folder: a short path keeps them under the length limit.
+    work = Path(tempfile.mkdtemp(prefix="tt-use-", dir="/private/tmp")).resolve()
+    environment = dict(os.environ, TOASTTY_APP_BUNDLE=str(candidate), TOASTTY_ARTIFACTS_DIR=str(artifacts))
+    try:
+        with (evidence / "use.log").open("w") as log:
+            subprocess.run([sys.executable, root / "candidate-use-check.py", "--gui-session",
+                            "--previous", previous, "--work-root", work],
+                           cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=USE_TIMEOUT)
+    finally:
+        end_processes(work)
+        for runtime in work.glob("*/runtime-home"):
+            clear_preferences(preference_suite(runtime))
+        shutil.rmtree(work)
+    report = artifacts / "candidate-use-check.json"
+    require(report.is_file(), f"The candidate stages wrote no report. See {evidence / 'use.log'}")
+    return read_json(report)
+
+
+def check(root, commit, expected_digest, previous_digest):
     evidence = root / "evidence"
-    image = root / "image"
-    dmg = root / "candidate.dmg"
+    dmg, previous_dmg = root / "candidate.dmg", root / "previous.dmg"
     admission = root / "admission.py"
-    result = dict(status="fail", sourceCommit=commit, dmgSHA256=None)
+    marker = root / "desktop-active"
+    result = dict(status="fail", sourceCommit=commit, dmgSHA256=None, previousDMGSHA256=None,
+                  macOS=platform.mac_ver()[0], stages={stage: "not run" for stage in STAGES})
     try:
         result["dmgSHA256"] = digest(dmg)
         require(result["dmgSHA256"] == expected_digest, "Candidate DMG changed during transfer")
+        result["previousDMGSHA256"] = digest(previous_dmg)
+        require(result["previousDMGSHA256"] == previous_digest, "Previous version's DMG changed during transfer")
         run("/usr/bin/xcrun", "swiftc", "-O", root / "ax-drive.swift",
             "-o", root / "ax-drive", timeout=120)
-        bundle = extract_bundle(root, image, dmg)
+        bundle = extract_bundle(root, root / "image", dmg, "candidate")
+        previous = extract_bundle(root, root / "previous-image", previous_dmg, "previous")
+        result["previousVersion"] = plistlib.loads((previous / "Contents/Info.plist").read_bytes()).get(
+            "CFBundleShortVersionString")
         subprocess.run([sys.executable, admission, "acquire-desktop", "--root",
                         os.environ["TOASTTY_ADMISSION_ROOT"]], check=True)
         status = run(root / "ax-drive", str(os.getpid()), "status").stdout.strip()
         require(status == "trusted=true locked=false", f"Desktop is unavailable: {status}")
-        wake = subprocess.Popen(["/usr/bin/caffeinate", "-dis", "-t", "180"])
+        wake = subprocess.Popen(["/usr/bin/caffeinate", "-dis", "-w", str(os.getpid())])
+        marker.touch(exist_ok=False)
         try:
             with tempfile.TemporaryDirectory(prefix="tt-rc-", dir="/private/tmp") as isolated:
                 check_process(root, bundle, Path(isolated), evidence)
-        finally:
+            result["stages"]["firstLaunch"] = "pass"
+            use = use_check(root, bundle, previous, evidence)
+            for stage in USE_STAGES:
+                result["stages"][stage] = use.get("stages", {}).get(stage, "not run")
+            result.update(claudeCLI=use.get("cliVersion"), stageFailures=use.get("failures"))
+            failed = [stage for stage in STAGES if result["stages"][stage] != "pass"]
+            require(not failed, f"Candidate stages failed: {', '.join(failed)}. See {evidence / 'use'}")
+        except CleanupUnconfirmed:
+            # Keep admission's marker: processes of the check may still use the desktop.
             stop(wake)
+            raise
+        except BaseException:
+            stop(wake)
+            marker.unlink()
+            raise
+        stop(wake)
+        marker.unlink()
         result["status"] = "pass"
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         result["error"] = str(error)
@@ -287,7 +367,7 @@ def main():
     elif command == "verify":
         verify(args[0], args[1], Path(args[2]), *args[3:])
     elif command == "check":
-        check(Path(args[0]).resolve(), args[1], args[2])
+        check(Path(args[0]).resolve(), args[1], args[2], args[3])
     elif command == "cleanup":
         root = Path(args[0]).resolve()
         confirmed_cleanup(root)

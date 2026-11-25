@@ -527,8 +527,8 @@ prepare_verified_dmg() {
     UPLOAD_DMG_PATH="$UPLOAD_DIR/$(basename "$DMG_PATH")"
     cp "$DMG_PATH" "$UPLOAD_DMG_PATH"
   fi
-  /usr/bin/python3 "$ROOT_DIR/scripts/release/first-launch.py" verify \
-    "$UPLOAD_DMG_PATH" "$RELEASE_SOURCE_COMMIT" "$RELEASE_DIR/first-launch/remote" \
+  /usr/bin/python3 "$ROOT_DIR/scripts/release/candidate-check.py" verify \
+    "$UPLOAD_DMG_PATH" "$RELEASE_SOURCE_COMMIT" "$RELEASE_DIR/candidate-check/remote" \
     "$SPARKLE_DMG_SHA256" "$SPARKLE_ENCLOSURE_LENGTH"
 }
 

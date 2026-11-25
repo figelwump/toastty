@@ -342,7 +342,7 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
 | `TOASTTY_SPARKLE_PRIVATE_KEY` | none | Required Sparkle EdDSA private key used to sign the final stapled DMG. Store it in `sv` and inject it with `sv exec --`. |
-| `TOASTTY_REMOTE_GUI_HOST` | none | Required SSH host for the clean first-launch check of the finished DMG. Use the dedicated Toastty validation Mac mini. |
+| `TOASTTY_REMOTE_GUI_HOST` | none | Required SSH host for the candidate check of the finished DMG. Use the dedicated Toastty validation Mac mini. |
 Additional release behavior:
 
 - run automated validation before the build; prefer `./scripts/automation/check.sh` on the release candidate checkout
@@ -355,7 +355,7 @@ Additional release behavior:
   - `artifacts/release/<version>-<build>/release-metadata.env`
   - `artifacts/release/<version>-<build>/ghostty-metadata.env`
   - `artifacts/release/<version>-<build>/sparkle-metadata.env`
-  - `artifacts/release/<version>-<build>/first-launch/remote/result.json` and `admission.json`
+  - `artifacts/release/<version>-<build>/candidate-check/remote/result.json` and `admission.json`
 - the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is drafted later by an agent or human using the recorded release diff and Ghostty metadata; the repo-local `toastty-release` skill documents that workflow and the repo-local `toastty-publish` skill handles later publication
 
 The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
@@ -384,7 +384,7 @@ Prerequisites:
 - `gh` must be installed and authenticated
 - the release metadata file must exist at `artifacts/release/<version>-<build>/release-metadata.env`
 - the Sparkle metadata file must exist at `artifacts/release/<version>-<build>/sparkle-metadata.env`
-- the successful first-launch result and desktop admission record in `artifacts/release/<version>-<build>/first-launch/remote/` must match the DMG and recorded source commit
+- the successful candidate check receipt, with every stage passed, and the desktop admission record in `artifacts/release/<version>-<build>/candidate-check/remote/` must match the DMG and recorded source commit
 - the recorded release commit must exist in the current checkout
 - the tag must already exist locally and on `origin`, unless `--create-tag` is used
 

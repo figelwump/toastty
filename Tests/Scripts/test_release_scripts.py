@@ -22,7 +22,8 @@ sys.dont_write_bytecode = True
 REPO = Path(__file__).resolve().parents[2]
 PIN_SCRIPT = REPO / "scripts/release/check-ghostty-pin.sh"
 PUBLISH_SCRIPT = REPO / "scripts/release/publish-github-release.sh"
-FIRST_LAUNCH_SCRIPT = REPO / "scripts/release/first-launch.py"
+CANDIDATE_SCRIPT = REPO / "scripts/release/candidate-check.py"
+STAGES = ("firstLaunch", "update", "sessions", "restart", "compact")
 HIGHLIGHTS_SCRIPT = REPO / "scripts/release/release_notes_highlights.py"
 NOTICES_SCRIPT = REPO / "scripts/release/generate-third-party-notices.mjs"
 
@@ -142,7 +143,7 @@ class PublishNotesTests(unittest.TestCase):
         script_dir = self.root / "scripts/release"
         script_dir.mkdir(parents=True)
         shutil.copy2(PUBLISH_SCRIPT, script_dir / PUBLISH_SCRIPT.name)
-        shutil.copy2(FIRST_LAUNCH_SCRIPT, script_dir / FIRST_LAUNCH_SCRIPT.name)
+        shutil.copy2(CANDIDATE_SCRIPT, script_dir / CANDIDATE_SCRIPT.name)
         shutil.copy2(HIGHLIGHTS_SCRIPT, script_dir / HIGHLIGHTS_SCRIPT.name)
 
         origin = self.tmp / "origin.git"
@@ -161,10 +162,11 @@ class PublishNotesTests(unittest.TestCase):
         self.release_dir.mkdir(parents=True)
         dmg = self.dmg = self.release_dir / f"Toastty-{self.VERSION}.dmg"
         dmg.write_bytes(b"dmg")
-        self.evidence = self.release_dir / "first-launch/remote"
+        self.evidence = self.release_dir / "candidate-check/remote"
         self.evidence.mkdir(parents=True)
         self.receipt = dict(status="pass", sourceCommit=commit,
-                            dmgSHA256=hashlib.sha256(dmg.read_bytes()).hexdigest())
+                            dmgSHA256=hashlib.sha256(dmg.read_bytes()).hexdigest(),
+                            stages={stage: "pass" for stage in STAGES})
         self.result = self.evidence / "result.json"
         self.result.write_text(json.dumps(self.receipt))
         self.admission = self.evidence / "admission.json"
@@ -260,18 +262,29 @@ class PublishNotesTests(unittest.TestCase):
         self.assertNotIn("Dry run tag command", result.stdout)
         self.assertFalse(self.gh_log.exists(), "publication contacted GitHub")
 
-    def test_missing_first_launch_evidence_blocks_publication(self):
+    def test_missing_candidate_evidence_blocks_publication(self):
         self.result.unlink()
-        self.assert_publication_blocked("first-launch/remote/result.json")
+        self.assert_publication_blocked("candidate-check/remote/result.json")
 
     def test_unconfirmed_desktop_cleanup_blocks_publication(self):
         self.admission.write_text(json.dumps(dict(state="blocked", exitCode=78, resource="desktop")))
-        self.assert_publication_blocked("no successful desktop first-launch check")
+        self.assert_publication_blocked("no successful desktop candidate check")
 
-    def test_failed_first_launch_blocks_publication(self):
+    def test_failed_candidate_check_blocks_publication(self):
         self.receipt["status"] = "fail"
         self.result.write_text(json.dumps(self.receipt))
-        self.assert_publication_blocked("no successful desktop first-launch check")
+        self.assert_publication_blocked("no successful desktop candidate check")
+
+    def test_receipt_without_every_stage_blocks_publication(self):
+        # A first-launch-only receipt, as the earlier check wrote it.
+        del self.receipt["stages"]
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("did not pass every stage: firstLaunch, update, sessions, restart, compact")
+
+    def test_failed_stage_blocks_publication(self):
+        self.receipt["stages"]["restart"] = "fail"
+        self.result.write_text(json.dumps(self.receipt))
+        self.assert_publication_blocked("did not pass every stage: restart")
 
     def test_changed_dmg_blocks_publication(self):
         self.dmg.write_bytes(b"different dmg")

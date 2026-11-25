@@ -221,7 +221,10 @@ def run(check, claude, host, record_bytes):
         # 3. The wheel moves the offer out of the page. The message still waits.
         point = current.terminal_point()
         current.ui.run('scroll-at', *point, '4')
-        wait_for("Claude's page away from its bottom", lambda: SCROLLED in current.screen(), timeout=10)
+        # Claude Code moves its own page and shows "Jump to bottom", or the
+        # terminal moves its view up: either way the choices leave the screen.
+        wait_for("the offer's choices away from the screen",
+                 lambda: SCROLLED in (screen := current.screen()) or not current.offer(screen), timeout=10)
         time.sleep(2)
         status = current.status()
         check.step('The wheel moved the page up', offerOnPage=TITLE in current.screen(), hold=status.get('hold'),
@@ -231,8 +234,8 @@ def run(check, claude, host, record_bytes):
                 'Toastty typed the waiting message while the offer was out of the page')
         require(status.get('hold') == 'terminalDialog', f"The message waits for {status.get('hold')}")
         current.ui.run('scroll-at', *point, '-8')
-        wait_for('the offer on the page again', lambda: SCROLLED not in current.screen()
-                 and TITLE in current.screen(), timeout=10)
+        wait_for('the offer on the page again', lambda: SCROLLED not in (screen := current.screen())
+                 and current.offer(screen), timeout=10)
         require(current.press('down'), 'After the wheel, the arrow key did not move the offer')
 
         # 4. Escape closes the offer, and Claude gets the message once.
