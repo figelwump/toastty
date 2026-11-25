@@ -28,7 +28,7 @@ final class TasksUI {
         guard let self else { return }
         let state = self.store.state
         for entry in self.features.values {
-            entry.feature?.render(state)
+            entry.feature?.renderBoardChange(state)
         }
     }
     /// Quick entry's GTK window (`QuickEntryPresentation.frontend` holds it
@@ -90,6 +90,7 @@ final class TasksWindowFeature: LinuxWindowFeature {
     let tasksPage: TasksPage
     let coordinatorUI: CoordinatorWindowUI
     let sidebarView: SidebarTasksView
+    let workspaceTaskControl: WorkspaceTaskControl
 
     init(ui: TasksUI, controller: LinuxWindowController) {
         self.ui = ui
@@ -98,6 +99,7 @@ final class TasksWindowFeature: LinuxWindowFeature {
         tasksPage = TasksPage(ui: ui, windowID: controller.windowID)
         coordinatorUI = CoordinatorWindowUI(ui: ui, controller: controller)
         sidebarView = SidebarTasksView(ui: ui, controller: controller)
+        workspaceTaskControl = WorkspaceTaskControl(ui: ui, controller: controller)
         controller.sidebar.setAlternateContent(sidebarView.content)
         ui.register(self)
         // The What's new question shows over the window that gets the
@@ -125,9 +127,16 @@ final class TasksWindowFeature: LinuxWindowFeature {
 
     var leadingColumn: WidgetPtr? { coordinatorUI.dockRoot }
     var sidebarHeader: WidgetPtr? { sidebarView.header }
+    var workspaceHeaderControls: WidgetPtr? { workspaceTaskControl.root }
+
+    func renderBoardChange(_ state: AppState) {
+        render(state)
+        controller?.updateWorkspaceHeader()
+    }
 
     func render(_ state: AppState) {
         let shows = coveringPage(state) != nil
+        workspaceTaskControl.render(state)
         tasksPage.render(state, isShown: shows)
         coordinatorUI.render(state)
         if let controller {
@@ -140,6 +149,8 @@ final class TasksWindowFeature: LinuxWindowFeature {
 
     func perform(commandID: String) -> Bool {
         switch commandID {
+        case "workspace.merge":
+            return workspaceTaskControl.performMergeShortcut()
         case "window.toggle-tasks-view":
             guard ui.board.isEnabled, let window = ui.store.state.window(id: windowID) else { return true }
             _ = ui.store.send(.setTasksViewShown(windowID: windowID, shown: window.showsTasksView == false))
@@ -173,6 +184,7 @@ final class TasksWindowFeature: LinuxWindowFeature {
 
     func isEnabled(commandID: String, state: AppState) -> Bool? {
         switch commandID {
+        case "workspace.merge": workspaceTaskControl.canMerge(state)
         case "window.toggle-tasks-view": ui.board.isEnabled
         case "task.new": ui.board.newTask != nil
         case "coordinator.dock.toggle", "coordinator.open": ui.tasks.coordinatorController != nil
