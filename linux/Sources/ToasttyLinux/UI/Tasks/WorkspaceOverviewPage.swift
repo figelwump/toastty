@@ -33,9 +33,14 @@ final class WorkspaceOverviewPage {
     private let padsList: WidgetPtr
     private let padsCount: WidgetPtr
     private let previewBox: WidgetPtr
+    private let previewBoxRef: GObjectRef
     private let previewTitle: WidgetPtr
+    private let previewStatus: WidgetPtr
+    private let previewPurpose: WidgetPtr
     private let previewOpen: WidgetPtr
     private let previewDelete: WidgetPtr
+    private let padTabs = TabViewSync()
+    private let padsEmpty: WidgetPtr
     private var preview: ScratchpadPanelController?
     private let previewPanelID = UUID()
     private var previewDocument: (id: UUID, revision: Int)?
@@ -120,7 +125,7 @@ final class WorkspaceOverviewPage {
 
         Gtk.append(root, gtk_separator_new(GTK_ORIENTATION_VERTICAL))
 
-        // Scratchpads column: the list, then the selected one's preview.
+        // Kept Scratchpads use the same tab widgets as the Tasks right panel.
         let side = Gtk.vbox(classes: ["workspace-overview-pads"])
         Gtk.setName(side, "workspace.overview.scratchpads")
         gtk_widget_set_size_request(side, 380, -1)
@@ -132,21 +137,35 @@ final class WorkspaceOverviewPage {
         padsCount = Gtk.label("", classes: ["tasks-group-count"], ellipsize: false)
         Gtk.append(sideHeader, padsCount)
         Gtk.append(side, sideHeader)
-        padsList = Gtk.vbox(spacing: 2, classes: ["workspace-overview-pad-list"])
-        let listScroller = gtk_scrolled_window_new()!
-        gtk_scrolled_window_set_policy(cast(listScroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
-        gtk_scrolled_window_set_propagate_natural_height(cast(listScroller), 1)
-        gtk_scrolled_window_set_max_content_height(cast(listScroller), 240)
-        gtk_scrolled_window_set_child(cast(listScroller), padsList)
-        Gtk.append(side, listScroller)
+        let tabBar = adw_tab_bar_new()!
+        padsList = widget(tabBar)
+        Gtk.setName(padsList, "workspace.overview.scratchpads.tabs")
+        adw_tab_bar_set_view(tabBar, padTabs.view)
+        adw_tab_bar_set_autohide(tabBar, 0)
+        Gtk.append(side, padsList)
+        Gtk.append(side, padTabs.widget)
+        padsEmpty = Gtk.label(
+            "Keep a task's Scratchpad here with the pin in the right panel's header, or ask its agent to keep it. Kept Scratchpads stay after their task finishes.",
+            classes: ["tasks-why", "workspace-overview-pads-empty"], ellipsize: false
+        )
+        gtk_label_set_wrap(cast(padsEmpty), 1)
+        Gtk.setName(padsEmpty, "workspace.overview.scratchpads.empty")
+        Gtk.append(side, padsEmpty)
 
         previewBox = Gtk.vbox(classes: ["workspace-overview-preview"])
+        previewBoxRef = GObjectRef(sinking: previewBox)
         Gtk.setName(previewBox, "workspace.overview.preview")
         Gtk.expand(previewBox)
         let previewHeader = Gtk.hbox(spacing: 6, classes: ["workspace-overview-preview-header"])
+        let previewLabels = Gtk.vbox(spacing: 2)
+        gtk_widget_set_hexpand(previewLabels, 1)
         previewTitle = Gtk.label("", classes: ["tasks-row-title"])
-        gtk_widget_set_hexpand(previewTitle, 1)
-        Gtk.append(previewHeader, previewTitle)
+        previewStatus = Gtk.label("", classes: ["tasks-row-status"])
+        previewPurpose = Gtk.label("", classes: ["tasks-why"])
+        Gtk.append(previewLabels, previewTitle)
+        Gtk.append(previewLabels, previewStatus)
+        Gtk.append(previewLabels, previewPurpose)
+        Gtk.append(previewHeader, previewLabels)
         previewOpen = Gtk.iconButton("view-dual-symbolic", tooltip: "Open in the right panel")
         Gtk.setName(previewOpen, "workspace.overview.preview.open")
         Gtk.append(previewHeader, previewOpen)
@@ -154,8 +173,6 @@ final class WorkspaceOverviewPage {
         Gtk.setName(previewDelete, "workspace.overview.preview.delete")
         Gtk.append(previewHeader, previewDelete)
         Gtk.append(previewBox, previewHeader)
-        Gtk.setVisible(previewBox, false)
-        Gtk.append(side, previewBox)
         Gtk.append(root, side)
 
         Signal.connect(terminal, "clicked") { [weak self] in self?.onClose?() }
@@ -168,6 +185,8 @@ final class WorkspaceOverviewPage {
             guard let self, let id = self.selectedScratchpadID else { return }
             self.confirmDelete(id)
         }
+        padTabs.onSelect = { [weak self] in self?.selectScratchpad($0) }
+        padTabs.onCloseRequest = { [weak self] in self?.confirmDelete($0) }
         installKeys()
         serviceToken = ui.logic.workspaceOverview.observeChanges { [weak self] in
             self?.drawn = nil
@@ -443,63 +462,24 @@ final class WorkspaceOverviewPage {
     // MARK: - Scratchpads column
 
     private func rebuildScratchpads(_ drawn: Drawn) {
-        Gtk.removeAllChildren(padsList)
-        Gtk.setLabel(padsCount, drawn.scratchpads.isEmpty ? "" : "\(drawn.scratchpads.count)")
-        if drawn.scratchpads.isEmpty {
-            let empty = Gtk.label(
-                "Keep a task's Scratchpad here with the pin in the right panel's header, or ask its agent to keep it. Kept Scratchpads stay after their task finishes.",
-                classes: ["tasks-why", "workspace-overview-pads-empty"], ellipsize: false
-            )
-            gtk_label_set_wrap(cast(empty), 1)
-            Gtk.setName(empty, "workspace.overview.scratchpads.empty")
-            Gtk.append(padsList, empty)
+        let items = drawn.scratchpads.map { pad in
+            let id = pad.entry.documentID
+            let child = padTabs.page(for: id).flatMap { adw_tab_page_get_child($0) } ?? Gtk.vbox()
+            return TabItem(id: id, title: pad.title, child: child)
         }
-        for (index, pad) in drawn.scratchpads.enumerated() {
-            Gtk.append(padsList, makePadRow(pad, index: index, isSelected: pad.entry.documentID == drawn.selectedScratchpadID))
+        let selectedChild = items.first { $0.id == drawn.selectedScratchpadID }?.child
+        // Only the selected tab needs a WebKit preview. Hold the preview box
+        // across moves (and across removal of its previous tab).
+        if gtk_widget_get_parent(previewBox) != selectedChild {
+            Gtk.detachFromParent(previewBox)
+            if let selectedChild { Gtk.append(selectedChild, previewBox) }
         }
+        padTabs.sync(items, selectedID: drawn.selectedScratchpadID)
+        Gtk.setVisible(padsList, !items.isEmpty)
+        Gtk.setVisible(padTabs.widget, !items.isEmpty)
+        Gtk.setVisible(padsEmpty, items.isEmpty)
+        Gtk.setLabel(padsCount, items.isEmpty ? "" : "\(items.count)")
         updatePreview(drawn.scratchpads.first { $0.entry.documentID == drawn.selectedScratchpadID })
-    }
-
-    private func makePadRow(_ pad: WorkspaceOverviewModel.Scratchpad, index: Int, isSelected: Bool) -> WidgetPtr {
-        let line = Gtk.hbox(spacing: 8, classes: ["tasks-row", "workspace-overview-pad"])
-        Gtk.setClass(line, "selected", isSelected)
-        Gtk.setName(line, "workspace.overview.scratchpad.\(index)")
-        Gtk.append(line, Gtk.image("text-x-generic-symbolic", pixelSize: 14, classes: ["workspace-overview-pad-icon"]))
-        let text = Gtk.vbox(spacing: 2)
-        gtk_widget_set_hexpand(text, 1)
-        let titleLine = Gtk.hbox(spacing: 6)
-        let title = Gtk.label(pad.title, classes: ["tasks-row-title"])
-        gtk_widget_set_hexpand(title, 1)
-        Gtk.append(titleLine, title)
-        if pad.isLinked {
-            let live = Gtk.label("Live", classes: ["task-tag", "workspace-overview-live"], ellipsize: false)
-            gtk_widget_set_tooltip_text(live, "Its task is open: changes to the task's Scratchpad copy here.")
-            Gtk.append(titleLine, live)
-        }
-        Gtk.append(text, titleLine)
-        var detail: [String] = []
-        if let task = pad.sourceTaskTitle { detail.append("From \(task)") }
-        if let updated = pad.updatedAt { detail.append("updated \(TaskAge.label(since: updated, now: Date()))") }
-        if pad.isMissing { detail = ["Its file is missing"] }
-        Gtk.append(text, Gtk.label(detail.joined(separator: " · "), classes: ["tasks-row-status"]))
-        if let purpose = pad.purpose, purpose.isEmpty == false {
-            Gtk.append(text, Gtk.label(purpose, classes: ["tasks-why"]))
-        }
-        Gtk.append(line, text)
-        let id = pad.entry.documentID
-        let click = gtk_gesture_click_new()!
-        gtk_gesture_single_set_button(cast(click), guint(GDK_BUTTON_PRIMARY))
-        Signal.connectPress(click) { [weak self] count, _, _ in
-            guard let self else { return }
-            gtk_gesture_set_state(cast(click), GTK_EVENT_SEQUENCE_CLAIMED)
-            if count == 2 {
-                self.openScratchpad(id)
-            } else {
-                self.selectScratchpad(id)
-            }
-        }
-        gtk_widget_add_controller(line, cast(click))
-        return line
     }
 
     func selectScratchpad(_ documentID: UUID) {
@@ -510,16 +490,26 @@ final class WorkspaceOverviewPage {
     }
 
     private func updatePreview(_ pad: WorkspaceOverviewModel.Scratchpad?) {
+        if let pad {
+            Gtk.setLabel(previewTitle, pad.title)
+            var detail: [String] = []
+            if pad.isLinked { detail.append("Live") }
+            if let task = pad.sourceTaskTitle { detail.append("From \(task)") }
+            if let updated = pad.updatedAt { detail.append("Updated \(TaskAge.label(since: updated, now: Date()))") }
+            if pad.isMissing { detail = ["Its file is missing"] }
+            Gtk.setLabel(previewStatus, detail.joined(separator: " · "))
+            Gtk.setVisible(previewStatus, !detail.isEmpty)
+            Gtk.setLabel(previewPurpose, pad.purpose ?? "")
+            Gtk.setVisible(previewPurpose, pad.purpose?.isEmpty == false)
+        }
+        Gtk.setVisible(previewOpen, pad?.isMissing == false)
         guard let pad, pad.isMissing == false, let webServices else {
-            Gtk.setVisible(previewBox, false)
             preview?.close()
             preview.map { Gtk.unparentIfAttached($0.root) }
             preview = nil
             previewDocument = nil
             return
         }
-        Gtk.setVisible(previewBox, true)
-        Gtk.setLabel(previewTitle, pad.title)
         let webState = WebPanelState(
             definition: .scratchpad,
             title: pad.title,
@@ -579,6 +569,18 @@ final class WorkspaceOverviewPage {
 
     var automationScratchpadIDs: [UUID] { drawn?.scratchpads.map(\.entry.documentID) ?? [] }
 
+    func automationSelectScratchpad(_ documentID: UUID) {
+        if let page = padTabs.page(for: documentID) {
+            adw_tab_view_set_selected_page(padTabs.view, page)
+        }
+    }
+
+    func automationCloseScratchpad(_ documentID: UUID) {
+        if let page = padTabs.page(for: documentID) {
+            adw_tab_view_close_page(padTabs.view, page)
+        }
+    }
+
     func automationOpenRecent(_ index: Int) -> Bool {
         guard let recent = drawn?.recent, recent.indices.contains(index) else { return false }
         open(subject: recent[index].subject, taskSpace: recent[index].taskSpaceWorkspaceID)
@@ -603,6 +605,8 @@ final class WorkspaceOverviewPage {
             "overviewContinuable": String(drawn.recent.filter { $0.continuesTaskID != nil }.count),
             "overviewTasks": String(rows.count),
             "overviewScratchpads": String(drawn.scratchpads.count),
+            "overviewScratchpadTabs": String(adw_tab_view_get_n_pages(padTabs.view)),
+            "overviewSelectedScratchpad": String(selectedScratchpadID.flatMap { automationScratchpadIDs.firstIndex(of: $0) } ?? -1),
             "overviewLiveScratchpads": String(drawn.scratchpads.filter(\.isLinked).count),
             "overviewPreview": preview == nil ? "none" : (previewDocument.map { "r\($0.revision)" } ?? "none"),
         ]

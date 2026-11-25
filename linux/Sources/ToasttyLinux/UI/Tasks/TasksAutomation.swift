@@ -143,7 +143,8 @@ extension LinuxAppController {
         // The workspace page (Linux-first):
         //     workspace-page card 1          # click card 1's title, as a pointer does
         //     workspace-page card selected   # the selected workspace's card
-        //     workspace-page scratchpad 0    # select kept Scratchpad 0
+        //     workspace-page scratchpad 0    # select kept Scratchpad tab 0
+        //     workspace-page close 0         # request a close of tab 0, opening the delete dialog
         //     workspace-page open 0          # open kept Scratchpad 0 in the right panel
         //     workspace-page delete 0        # delete kept Scratchpad 0, past its dialog
         //     workspace-page recent 0        # click the latest task's row
@@ -169,13 +170,14 @@ extension LinuxAppController {
                     script.reportFailure("workspace-page card: no card \(parts.dropFirst().first ?? "")")
                     return
                 }
-            case "scratchpad", "open", "delete":
+            case "scratchpad", "close", "open", "delete":
                 guard let index, pads.indices.contains(index) else {
                     script.reportFailure("workspace-page \(parts[0]): no Scratchpad \(parts.dropFirst().first ?? "")")
                     return
                 }
                 switch parts[0] {
-                case "scratchpad": feature.overviewPage.selectScratchpad(pads[index])
+                case "scratchpad": feature.overviewPage.automationSelectScratchpad(pads[index])
+                case "close": feature.overviewPage.automationCloseScratchpad(pads[index])
                 case "open": feature.overviewPage.openScratchpad(pads[index])
                 default: feature.overviewPage.deleteScratchpad(pads[index])
                 }
