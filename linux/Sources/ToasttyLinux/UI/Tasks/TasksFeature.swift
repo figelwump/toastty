@@ -83,6 +83,7 @@ final class TasksUI {
 @MainActor
 final class TasksWindowFeature: LinuxWindowFeature {
     static let tasksPageName = "tasks"
+    static let overviewPageName = "workspace-overview"
 
     let windowID: UUID
     private let ui: TasksUI
@@ -91,6 +92,13 @@ final class TasksWindowFeature: LinuxWindowFeature {
     let coordinatorUI: CoordinatorWindowUI
     let sidebarView: SidebarTasksView
     let workspaceTaskControl: WorkspaceTaskControl
+    let overviewPage: WorkspaceOverviewPage
+    /// The workspace page shows for this workspace while it stays selected
+    /// on this tab (see `coveringPage`).
+    private(set) var overviewWorkspaceID: UUID?
+    private var overviewTabID: UUID?
+    /// The right panel header's Keep in Workspace pin.
+    let keepButton: WidgetPtr
 
     init(ui: TasksUI, controller: LinuxWindowController) {
         self.ui = ui
@@ -100,8 +108,18 @@ final class TasksWindowFeature: LinuxWindowFeature {
         coordinatorUI = CoordinatorWindowUI(ui: ui, controller: controller)
         sidebarView = SidebarTasksView(ui: ui, controller: controller)
         workspaceTaskControl = WorkspaceTaskControl(ui: ui, controller: controller)
+        overviewPage = WorkspaceOverviewPage(
+            ui: ui, windowID: controller.windowID,
+            webServices: (controller.hosts.rightPanel as? WebPanelHost)?.services ?? (controller.hosts.web as? WebPanelHost)?.services
+        )
+        keepButton = Gtk.iconButton("view-pin-symbolic", tooltip: "Keep in Workspace")
+        Gtk.setName(keepButton, "right-panel.keep-in-workspace")
+        Gtk.setVisible(keepButton, false)
+        controller.rightPanel.addHeaderEndWidget(keepButton)
         controller.sidebar.setAlternateContent(sidebarView.content)
         ui.register(self)
+        overviewPage.onClose = { [weak self] in self?.closeOverview() }
+        Signal.connect(keepButton, "clicked") { [weak self] in _ = self?.perform(commandID: "scratchpad.keep-in-workspace") }
         // The What's new question shows over the window that gets the
         // keyboard, as on macOS.
         let windowID = controller.windowID
@@ -118,11 +136,104 @@ final class TasksWindowFeature: LinuxWindowFeature {
         }
     }
 
-    var pages: [String: WidgetPtr] { [Self.tasksPageName: tasksPage.root] }
+    var pages: [String: WidgetPtr] { [Self.tasksPageName: tasksPage.root, Self.overviewPageName: overviewPage.root] }
 
     func coveringPage(_ state: AppState) -> String? {
-        guard ui.board.isEnabled, state.window(id: windowID)?.showsTasksView == true else { return nil }
-        return Self.tasksPageName
+        guard ui.board.isEnabled, let window = state.window(id: windowID) else { return nil }
+        if window.showsTasksView { return Self.tasksPageName }
+        return overviewIsShown(state) ? Self.overviewPageName : nil
+    }
+
+    // MARK: - Workspace page
+
+    /// The page shows while its workspace stays selected on the tab it was
+    /// opened over. Selecting anything else, or another tab, leaves it.
+    func overviewIsShown(_ state: AppState) -> Bool {
+        guard let overviewWorkspaceID, let selection = state.workspaceSelection(in: windowID),
+              selection.workspaceID == overviewWorkspaceID,
+              selection.workspace.selectedTabID == overviewTabID else { return false }
+        return true
+    }
+
+    /// What a top-level workspace card's title does: shows the workspace's
+    /// page, or, when it already shows, returns to the workspace's own tabs.
+    func toggleOverview(workspaceID: UUID) {
+        if overviewIsShown(ui.store.state), overviewWorkspaceID == workspaceID {
+            closeOverview()
+            return
+        }
+        showOverview(workspaceID: workspaceID, selectingScratchpad: nil)
+    }
+
+    func showOverview(workspaceID: UUID, selectingScratchpad documentID: UUID?) {
+        guard let topLevel = ui.logic.workspaceOverview.topLevelWorkspaceID(for: workspaceID) else { return }
+        if ui.store.state.window(id: windowID)?.selectedWorkspaceID != topLevel || ui.store.state.window(id: windowID)?.showsTasksView == true {
+            _ = ui.logic.sendNavigation([.selectWorkspace(windowID: windowID, workspaceID: topLevel)])
+        }
+        overviewWorkspaceID = topLevel
+        overviewTabID = ui.store.state.workspacesByID[topLevel]?.selectedTabID
+        if let documentID { overviewPage.selectScratchpad(documentID) }
+        controller?.scheduleRender()
+        ui.scheduleRender()
+        MainLoop.idle { [weak self] in
+            guard let self, self.overviewIsShown(self.ui.store.state) else { return }
+            gtk_widget_grab_focus(self.overviewPage.root)
+        }
+    }
+
+    func closeOverview() {
+        guard overviewWorkspaceID != nil else { return }
+        overviewWorkspaceID = nil
+        overviewTabID = nil
+        controller?.scheduleRender()
+        MainLoop.idle { [weak self] in self?.controller?.content.refocus() }
+    }
+
+    /// The Scratchpad the right panel shows now, when it is one.
+    private func activeRightPanelScratchpad(_ state: AppState) -> (workspaceID: UUID, panelID: UUID, documentID: UUID)? {
+        guard let selection = state.workspaceSelection(in: windowID),
+              selection.workspace.rightAuxPanel.isVisible,
+              let panelID = selection.workspace.rightAuxPanel.activePanelID,
+              case .web(let web)? = selection.workspace.allPanelsByID[panelID],
+              web.definition == .scratchpad, let documentID = web.scratchpad?.documentID else { return nil }
+        return (selection.workspaceID, panelID, documentID)
+    }
+
+    private func renderKeepButton(_ state: AppState) {
+        guard let active = activeRightPanelScratchpad(state) else {
+            Gtk.setVisible(keepButton, false)
+            return
+        }
+        let service = ui.logic.workspaceOverview
+        let kept = service.entry(documentID: active.documentID) ?? service.linkedEntry(sourceDocumentID: active.documentID)
+        Gtk.setVisible(keepButton, true)
+        Gtk.setClass(keepButton, "kept", kept != nil)
+        gtk_widget_set_tooltip_text(
+            keepButton,
+            kept == nil ? "Keep in Workspace: save this Scratchpad on the workspace page, where it stays after the task" : "Kept in Workspace: show it on the workspace page"
+        )
+    }
+
+    /// Keeps the right panel's Scratchpad in its workspace, or shows the
+    /// copy on the workspace page when it is kept already.
+    private func keepActiveScratchpad() {
+        guard let active = activeRightPanelScratchpad(ui.store.state) else {
+            controller?.toast("Show a Scratchpad in the right panel first")
+            return
+        }
+        let service = ui.logic.workspaceOverview
+        do {
+            let result = try service.keep(panelID: active.panelID, keptBy: "user")
+            if result.created {
+                let title = ui.store.state.workspacesByID[result.entry.workspaceID]?.title ?? "the workspace"
+                controller?.toast("Kept in \(title)")
+                ui.scheduleRender()
+            } else {
+                showOverview(workspaceID: result.entry.workspaceID, selectingScratchpad: result.entry.documentID)
+            }
+        } catch {
+            controller?.toast(error.localizedDescription)
+        }
     }
 
     var leadingColumn: WidgetPtr? { coordinatorUI.dockRoot }
@@ -135,9 +246,16 @@ final class TasksWindowFeature: LinuxWindowFeature {
     }
 
     func render(_ state: AppState) {
-        let shows = coveringPage(state) != nil
+        let covering = coveringPage(state)
+        let shows = covering == Self.tasksPageName
+        if overviewWorkspaceID != nil, overviewIsShown(state) == false {
+            overviewWorkspaceID = nil
+            overviewTabID = nil
+        }
         workspaceTaskControl.render(state)
         tasksPage.render(state, isShown: shows)
+        overviewPage.render(workspaceID: overviewWorkspaceID, isShown: covering == Self.overviewPageName)
+        renderKeepButton(state)
         coordinatorUI.render(state)
         if let controller {
             // The bucketed sidebar replaces the workspace list while tasks
@@ -157,6 +275,14 @@ final class TasksWindowFeature: LinuxWindowFeature {
             return true
         case "task.new":
             ui.board.newTask?()
+            return true
+        case "scratchpad.keep-in-workspace":
+            keepActiveScratchpad()
+            return true
+        case "workspace.overview.toggle":
+            if let workspaceID = ui.store.state.window(id: windowID)?.selectedWorkspaceID {
+                toggleOverview(workspaceID: workspaceID)
+            }
             return true
         case let id where id.hasPrefix("task.palette."):
             return performPaletteTaskCommand(id)
@@ -187,6 +313,8 @@ final class TasksWindowFeature: LinuxWindowFeature {
         case "workspace.merge": workspaceTaskControl.canMerge(state)
         case "window.toggle-tasks-view": ui.board.isEnabled
         case "task.new": ui.board.newTask != nil
+        case "scratchpad.keep-in-workspace": activeRightPanelScratchpad(state) != nil
+        case "workspace.overview.toggle": state.window(id: windowID)?.selectedWorkspaceID != nil
         case "coordinator.dock.toggle", "coordinator.open": ui.tasks.coordinatorController != nil
         case "coordinator.restart": ui.tasks.coordinatorController?.location != nil
         default: nil
@@ -220,6 +348,24 @@ final class TasksWindowFeature: LinuxWindowFeature {
                 items.append(PaletteItem(id: "task.palette.task-space", title: "Task: Open Task Space", subtitle: subtitle,
                                          keywords: keywords + ["open", "space", "workspace"]))
             }
+        }
+        if ui.board.isEnabled, let selected = ui.store.state.window(id: windowID)?.selectedWorkspaceID {
+            let shows = overviewIsShown(ui.store.state)
+            let title = ui.store.state.workspacesByID[ui.logic.workspaceOverview.topLevelWorkspaceID(for: selected) ?? selected]?.title ?? "Workspace"
+            items.append(PaletteItem(
+                id: "workspace.overview.toggle",
+                title: shows ? "Hide Workspace Page" : "Show Workspace Page",
+                subtitle: shows ? nil : "\(title): its synopsis, latest tasks and kept Scratchpads",
+                keywords: ["workspace", "page", "overview", "history", "synopsis", "scratchpad", "summary"]
+            ))
+        }
+        if activeRightPanelScratchpad(ui.store.state) != nil {
+            items.append(PaletteItem(
+                id: "scratchpad.keep-in-workspace",
+                title: "Keep Scratchpad in Workspace",
+                subtitle: "Save the right panel's Scratchpad on its workspace page",
+                keywords: ["scratchpad", "keep", "pin", "promote", "sticky", "workspace", "save"]
+            ))
         }
         if let controller = ui.tasks.coordinatorController {
             if controller.location != nil {
@@ -273,6 +419,7 @@ final class TasksWindowFeature: LinuxWindowFeature {
 
     func teardown() {
         tasksPage.teardown()
+        overviewPage.teardown()
         coordinatorUI.teardown()
         sidebarView.teardown()
     }

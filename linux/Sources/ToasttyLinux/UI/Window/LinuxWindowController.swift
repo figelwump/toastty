@@ -27,7 +27,7 @@ public final class LinuxWindowController {
     private let store: any LinuxStoreBinding
     /// The store's sessions, for features that draw session rows.
     public var sessions: any LinuxSessionSource { store.sessions }
-    private let hosts: PanelHostRegistry
+    let hosts: PanelHostRegistry
     private let preferences: LinuxUIPreferences
     private let toastOverlay: WidgetPtr
     private let outerSplit: WidgetPtr

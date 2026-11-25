@@ -2442,6 +2442,34 @@ and Archived, and the detail pane follows. When the selected task leaves the
 list, for example after **Archive…** or **Mark Done** into collapsed Done, the
 next row is selected, or the previous one when it was the last.
 
+### The workspace page (Linux)
+
+On Linux, clicking a project card's title in the sidebar opens the
+project's **workspace page** over the workspace, as the Tasks view does:
+
+- **About** says what the workspace is about. An agent writes this with
+  `workspace.synopsis.set`; until one does, Toastty summarizes the tasks.
+- **Recently** lists the latest tasks and what each did: the agent's last
+  reply, kept after its session ends, or else the request.
+- **Tasks** lists every task of the workspace in the Tasks view's groups.
+- **Workspace Scratchpads**, on the right, lists the Scratchpads the
+  workspace keeps, with a preview of the selected one.
+
+**Terminal**, Esc, or a second click on the title returns to the workspace's
+own tabs. Selecting anything else also leaves the page. **Show Workspace
+Page** in the command palette opens it for the selected workspace.
+
+A task's Scratchpad closes with its task space. To keep one, click the pin
+in the right panel's header, or choose **Keep Scratchpad in Workspace** in
+the command palette. Agents can also keep one with
+`workspace.scratchpad.keep`. The workspace then has its own copy. While the
+task space stays open, the copy follows every change to the task's
+Scratchpad and shows **Live**. Afterwards it stays as it was last, until you
+delete it from the page. Agents list kept Scratchpads with
+`workspace.scratchpad.list`, read them with `workspace.scratchpad.export`,
+and read the whole page with `workspace.overview`. The Mac app does not have
+the workspace page yet; `docs/plans/workspace-overview.md` describes it.
+
 ### The command palette
 
 Type `task`, `done` or `merge` in the command palette to act on the current
