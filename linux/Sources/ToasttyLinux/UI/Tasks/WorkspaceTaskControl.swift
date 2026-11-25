@@ -6,7 +6,7 @@ import Foundation
 
 /// The selected task space's actions, at the end of the window's header bar
 /// (the macOS workspace header's task controls). Open PR and the primary
-/// action are separate buttons; rarer actions are in a ⋯ menu. Task actions
+/// action are separate buttons; rarer actions are in a menu. Task actions
 /// go through the same coordinator and confirmations as Tasks.
 @MainActor
 final class WorkspaceTaskControl {
@@ -195,8 +195,11 @@ final class WorkspaceTaskControl {
         if next.progress {
             let spinner = gtk_spinner_new()!
             gtk_spinner_start(cast(spinner))
+            gtk_widget_set_tooltip_text(spinner, next.title)
             Gtk.append(root, spinner)
-            Gtk.append(root, Gtk.label(next.title, classes: ["dim-label"]))
+            if !next.compact {
+                Gtk.append(root, Gtk.label(next.title, classes: ["dim-label"], ellipsize: false))
+            }
         }
         if let link = next.link {
             let button = next.compact
