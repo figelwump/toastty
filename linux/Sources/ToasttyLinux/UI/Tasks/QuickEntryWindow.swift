@@ -352,12 +352,17 @@ final class QuickEntryWindowFrontend: QuickEntryFrontend {
             isSyncing = false
         }
         Gtk.setVisible(widgets.placeholder, model.text.isEmpty)
+        Gtk.setLabel(widgets.placeholder, model.continuesTaskTitle == nil ? "What needs doing?" : "What should the new task do next?")
         gtk_text_view_set_editable(cast(widgets.textView), model.isEditable.gboolean)
         Gtk.setLabel(widgets.title, (model.sendsToCoordinator ? "To coordinator" : "New task").uppercased())
         let hint: String? = if model.isDropTargeted {
             "Drop to attach"
-        } else if let coordinator = model.coordinator {
-            coordinator.hint
+        } else if let coordinator = model.coordinator, let hint = coordinator.hint {
+            hint
+        } else if let title = model.continuesTaskTitle {
+            "Continues \u{201C}\(title)\u{201D}"
+        } else if model.coordinator != nil {
+            nil
         } else {
             model.missingChoiceHint
         }
@@ -419,6 +424,9 @@ final class QuickEntryWindowFrontend: QuickEntryFrontend {
             "quickEntryAgent": model.agentPillTitle,
             "quickEntryPicker": model.openPicker.map { $0 == .workspace ? "workspace" : "agent" } ?? "none",
             "quickEntryPickerRows": picker.map { String($0.rowCount) } ?? "0",
+            "quickEntryAttachments": model.attachments.map(\.displayName).joined(separator: ","),
+            "quickEntryContinues": model.continuesTaskTitle.map { _ in "true" } ?? "false",
+            "quickEntryHint": widgets.map { String(cString: gtk_label_get_label(cast($0.hint))) } ?? "",
         ]
     }
 

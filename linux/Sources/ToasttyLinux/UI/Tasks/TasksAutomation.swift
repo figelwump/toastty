@@ -13,6 +13,7 @@ extension LinuxAppController {
     ///     tasks open 2                   # double-click row 2 (opens its task space)
     ///     tasks key down|up|escape       # a key press in the Tasks view
     ///     tasks menu 0 Archive…          # row 0's context menu, choose an item by title
+    ///     tasks show Fix_the_build       # open the Tasks view on the task with that title, as the page's rows do
     ///     tasks sidebar-menu open|close  # open the first visible task space's sidebar menu, or dismiss it
     ///     expect tasksView=shown tasksRows=3 tasksSelected=Fix_the_build
     func installTasksAutomation(ui: TasksUI) {
@@ -39,6 +40,16 @@ extension LinuxAppController {
                     return
                 }
                 page.automationClick(row, count: parts[0] == "open" ? 2 : 1)
+            case "show":
+                let title = parts.dropFirst().joined(separator: " ").replacingOccurrences(of: "_", with: " ")
+                guard let item = ui.board.items().first(where: { $0.title == title }) else {
+                    script.reportFailure("tasks show: no task \(title)")
+                    return
+                }
+                ui.board.showTasksView(
+                    windowID: window.windowID, selecting: item.id, revealing: nil,
+                    store: ui.store, source: .ui("automation")
+                )
             case "key":
                 switch parts.dropFirst().first ?? "" {
                 case "down": page.moveSelection(by: 1)
@@ -133,6 +144,7 @@ extension LinuxAppController {
         //     workspace-page open 0          # open kept Scratchpad 0 in the right panel
         //     workspace-page delete 0        # delete kept Scratchpad 0, past its dialog
         //     workspace-page recent 0        # click the latest task's row
+        //     workspace-page continue 0      # the latest task's Continue button
         //     expect workspacePage=shown overviewScratchpads=1 keepButton=kept
         AutomationScript.extensionCommands["workspace-page"] = { [weak ui] app, argument, script in
             guard let ui, let window = app.selectedWindowController(), let feature = ui.feature(windowID: window.windowID) else {
@@ -167,6 +179,11 @@ extension LinuxAppController {
             case "recent":
                 guard let index, feature.overviewPage.automationOpenRecent(index) else {
                     script.reportFailure("workspace-page recent: no row \(parts.dropFirst().first ?? "")")
+                    return
+                }
+            case "continue":
+                guard let index, feature.overviewPage.automationContinueRecent(index) else {
+                    script.reportFailure("workspace-page continue: no finished row \(parts.dropFirst().first ?? "")")
                     return
                 }
             default:
@@ -210,6 +227,7 @@ extension TasksPage {
         summary["tasksDetail"] = automationDetailTitle ?? ""
         summary["tasksDetailError"] = automationDetailError ?? ""
         summary["tasksBanner"] = automationBanner ?? ""
+        summary["tasksDetailContext"] = automationDetailContext
         return summary
     }
 }

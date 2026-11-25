@@ -378,6 +378,11 @@ enum TaskBoardPresentation {
         case retry(taskID: UUID, title: String)
         case retryTriage(taskID: UUID)
         case delete(taskID: UUID)
+        #if os(Linux)
+        /// A finished task: opens New Task with the task's saved context
+        /// attached (Linux-first, docs/plans/workspace-overview.md).
+        case continueAsNewTask(taskID: UUID)
+        #endif
 
         var title: String {
             switch self {
@@ -389,6 +394,9 @@ enum TaskBoardPresentation {
             case .retry(_, let title): title
             case .retryTriage: "Retry Triage"
             case .delete: "Delete Task"
+            #if os(Linux)
+            case .continueAsNewTask: "Continue as New Task"
+            #endif
             }
         }
 
@@ -443,9 +451,26 @@ enum TaskBoardPresentation {
             if item.stage == .needsYou(.taskSpaceClosed) {
                 actions.append(.delete(taskID: record.id))
             }
+            #if os(Linux)
+            if canContinueAsNewTask(item) {
+                actions.append(.continueAsNewTask(taskID: record.id))
+            }
+            #endif
         }
         return [navigation, actions].filter { $0.isEmpty == false }
     }
+
+    #if os(Linux)
+    /// A task whose work finished, merged or marked done, can hand its
+    /// context to a new task. An archived task's work was dropped.
+    static func canContinueAsNewTask(_ item: TaskBoardItem) -> Bool {
+        guard item.record != nil else { return false }
+        switch item.stage.group {
+        case .done, .toShip: return true
+        case .needsYou, .running, .idle, .archived: return false
+        }
+    }
+    #endif
 
     /// A task that has not started yet: retry what failed, or delete it.
     static func setupMenuItems(_ record: TaskRecord, isTriageConfigured: @autoclosure () -> Bool) -> [MenuItem] {

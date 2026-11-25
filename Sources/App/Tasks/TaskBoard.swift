@@ -605,6 +605,11 @@ final class TaskBoardStore: ObservableObject {
     /// Opens the quick entry panel, for the sidebar's ＋ and the Tasks
     /// view's New Task. `nil` hides them.
     var newTask: (@MainActor () -> Void)?
+    #if os(Linux)
+    /// Opens the quick entry panel with a finished task's context attached,
+    /// for Continue as New Task. `nil` does nothing.
+    var continueAsNewTask: (@MainActor (UUID) -> Void)?
+    #endif
     /// The quick entry shortcut, shown on New Task, the sidebar's ＋ and the
     /// empty Tasks view; nil when it is off. Published so a configuration
     /// reload redraws them.

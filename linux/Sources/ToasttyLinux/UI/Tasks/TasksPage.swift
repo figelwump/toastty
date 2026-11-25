@@ -595,6 +595,13 @@ final class TasksPage {
         var history: [String]
         var actions: [[TaskBoardPresentation.MenuItem]]
         var error: String?
+        /// A finished task's saved context, for Continue as New Task.
+        var context: ContextSummary?
+
+        struct ContextSummary: Equatable {
+            var excerpt: String
+            var caption: String
+        }
 
         struct KeyValue: Equatable {
             var key: String
@@ -621,6 +628,7 @@ final class TasksPage {
                 source = nil
                 history = []
                 actions = []
+                context = nil
                 return
             }
             isSetup = false
@@ -648,6 +656,30 @@ final class TasksPage {
             source = item.record?.externalRef
             history = TaskBoardPresentation.history(item)
             actions = TaskBoardPresentation.menuItems(item)
+            context = Self.contextSummary(item, service: ui.logic.workspaceOverview, now: now)
+        }
+
+        /// What the Context card shows for a task that can be continued:
+        /// its agent's context, else its last reply.
+        @MainActor
+        static func contextSummary(_ item: TaskBoardItem, service: WorkspaceOverviewService, now: Date) -> ContextSummary? {
+            guard TaskBoardPresentation.canContinueAsNewTask(item), let record = item.record else { return nil }
+            if let context = service.context(taskID: record.id) {
+                return ContextSummary(
+                    excerpt: WorkspaceOverviewPage.plainExcerpt(context.text),
+                    caption: "Written by the agent · \(TaskAge.label(since: context.at, now: now))"
+                )
+            }
+            if let outcome = service.outcome(taskID: record.id) {
+                return ContextSummary(
+                    excerpt: WorkspaceOverviewPage.plainExcerpt(outcome.text),
+                    caption: "Its agent wrote no context: Continue as New Task attaches the request and this last reply"
+                )
+            }
+            return ContextSummary(
+                excerpt: "No context or reply was saved.",
+                caption: "Continue as New Task attaches the request, branch and pull request"
+            )
         }
     }
 
@@ -691,6 +723,20 @@ final class TasksPage {
                 Gtk.append(status.body, sourceRow(source))
             }
             Gtk.append(detailBox, status.card)
+            if let context = detail.context {
+                let card = makeCard("Context")
+                Gtk.setName(card.card, "tasks.view.detail.context")
+                let excerpt = Gtk.label(context.excerpt, classes: ["tasks-value"], ellipsize: false)
+                gtk_label_set_wrap(cast(excerpt), 1)
+                gtk_label_set_lines(cast(excerpt), 4)
+                gtk_label_set_ellipsize(cast(excerpt), PANGO_ELLIPSIZE_END)
+                gtk_label_set_selectable(cast(excerpt), 1)
+                Gtk.append(card.body, excerpt)
+                let caption = Gtk.label(context.caption, classes: ["tasks-why"], ellipsize: false)
+                gtk_label_set_wrap(cast(caption), 1)
+                Gtk.append(card.body, caption)
+                Gtk.append(detailBox, card.card)
+            }
             if detail.history.isEmpty == false {
                 let history = makeCard("History")
                 for line in detail.history {
@@ -793,6 +839,11 @@ final class TasksPage {
             (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.delete")
         case .retry, .retryTriage:
             (isPrimary, help, identifier) = (false, nil, "tasks.view.detail.retry")
+        case .continueAsNewTask:
+            (isPrimary, help, identifier) = (
+                true, "Start a new task with this task's context attached: what it did, where it stopped and what remains",
+                "tasks.view.detail.continue"
+            )
         }
         var classes = ["tasks-action"]
         if isPrimary { classes.append("suggested-action") }
@@ -818,6 +869,12 @@ final class TasksPage {
     var automationMarkWidths: [Int32] { TaskMarkWidget.slotWidths(in: listBox) }
     var automationDetailTitle: String? { detailModel?.title }
     var automationDetailError: String? { detailModel?.error }
+    /// The Context card: `agent` for a written context, `fallback` for the
+    /// last reply or the request, `none` without the card.
+    var automationDetailContext: String {
+        guard let context = detailModel?.context else { return "none" }
+        return context.caption.hasPrefix("Written by") ? "agent" : "fallback"
+    }
     var automationBanner: String? { bannerModel?.webhooks?.message ?? bannerModel?.configError }
 
     /// A click on a row, as the row's gesture handles it.

@@ -331,7 +331,7 @@ extension AppControlExecutor {
     }
 
     /// The named task, or without a taskID the calling agent's own task.
-    private func ownOrVisibleTask(args: [String: AutomationJSONValue], coordinator: TaskCoordinator) throws -> TaskRecord {
+    func ownOrVisibleTask(args: [String: AutomationJSONValue], coordinator: TaskCoordinator) throws -> TaskRecord {
         if args.taskString("taskID") == nil {
             guard let own = coordinator.task(inWorkspace: callerManagedSession()?.workspaceID) else {
                 throw AutomationSocketError.invalidPayload("taskID is required outside a task's agent session")

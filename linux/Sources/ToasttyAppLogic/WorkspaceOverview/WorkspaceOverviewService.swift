@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import RemoteProtocol
 
 enum WorkspaceOverviewError: LocalizedError, Equatable {
     case noWorkspace
@@ -367,5 +368,129 @@ final class WorkspaceOverviewService {
             try? write { $0.outcomes[record.id.uuidString] = next }
         }
         return outcome(taskID: record.id) ?? next
+    }
+
+    // MARK: Task contexts
+
+    func context(taskID: UUID) -> WorkspaceTaskContext? {
+        overviewStore.contents.contexts[taskID.uuidString]
+    }
+
+    /// Sets what a task's agent wrote for whoever continues its work; empty
+    /// text clears it.
+    func setContext(_ text: String, for record: TaskRecord, sessionID: String?) throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        try write { contents in
+            if trimmed.isEmpty {
+                contents.contexts.removeValue(forKey: record.id.uuidString)
+            } else {
+                contents.contexts[record.id.uuidString] = WorkspaceTaskContext(
+                    text: WorkspaceOverviewStore.clipped(trimmed, to: WorkspaceOverviewStore.maxContextCharacters),
+                    at: now(),
+                    sessionID: sessionID,
+                    taskTitle: record.title
+                )
+            }
+        }
+    }
+
+    /// The kept Scratchpads whose source was the task's.
+    func scratchpads(fromTask taskID: UUID) -> [WorkspaceScratchpadEntry] {
+        overviewStore.contents.scratchpads
+            .filter { $0.source?.taskID == taskID }
+            .sorted { $0.keptAt > $1.keptAt }
+    }
+
+    /// What **Continue as New Task** attaches to the new task: the facts
+    /// Toastty knows about the earlier task, then the context its agent
+    /// wrote, or without one its last reply.
+    func continuation(of record: TaskRecord) -> TaskContinuation {
+        let outcome = context(taskID: record.id) == nil ? refreshOutcome(of: record) : nil
+        let scratchpads = scratchpads(fromTask: record.id).map { entry in
+            (title: document(entry.documentID)?.title ?? "Scratchpad", documentID: entry.documentID)
+        }
+        return TaskContinuation.make(
+            record: record,
+            context: context(taskID: record.id),
+            outcome: outcome,
+            scratchpads: scratchpads
+        )
+    }
+}
+
+/// The file **Continue as New Task** attaches to the new task.
+struct TaskContinuation: Equatable {
+    var taskID: UUID
+    var taskTitle: String
+    var fileName: String
+    var text: String
+    /// The earlier task's agent wrote a context; otherwise the text holds
+    /// its last reply or only its request.
+    var hasWrittenContext: Bool
+
+    static let requestCharacters = 1_500
+
+    static func make(
+        record: TaskRecord,
+        context: WorkspaceTaskContext?,
+        outcome: WorkspaceTaskOutcome?,
+        scratchpads: [(title: String, documentID: UUID)]
+    ) -> TaskContinuation {
+        var facts = ["- Task: \(CoordinatorTaskLink.markdown(taskID: record.id, title: record.title))"]
+        if let branch = record.worktree?.branch {
+            let base = record.startWork?.base.map { " (from `\($0)`)" } ?? ""
+            facts.append("- Branch: `\(branch)`\(base)")
+        }
+        if let url = record.pullRequestURL {
+            var line = "- Pull request: \(url)"
+            if record.mergedAt != nil {
+                line += record.mergeCommit.map { ", merged as `\($0)`" } ?? ", merged"
+            }
+            facts.append(line)
+        }
+        if let projectRoot = record.projectRoot {
+            facts.append("- Project folder: `\(projectRoot)`")
+        }
+        for scratchpad in scratchpads {
+            facts.append(
+                "- Kept Scratchpad: \(scratchpad.title) (`documentID=\(scratchpad.documentID.uuidString)`; "
+                    + "read it with `workspace.scratchpad.export`)"
+            )
+        }
+
+        var sections = [
+            "# Continues \u{201C}\(record.title)\u{201D}",
+            "This task continues an earlier Toastty task. Read this file before you start: it says what the earlier task did and where it stopped. The earlier task's worktree may be gone; start from this task's own worktree.",
+            "## The earlier task\n\n" + facts.joined(separator: "\n"),
+        ]
+        let request = WorkspaceOverviewStore.clipped(record.text, to: requestCharacters)
+        if request.isEmpty == false {
+            sections.append("## Its request\n\n" + request.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { "> \($0)" }.joined(separator: "\n"))
+        }
+        if let context {
+            sections.append("## Context from its agent\n\n" + nestedHeadings(context.text))
+        } else if let outcome {
+            sections.append("## Its agent's last reply\n\nIts agent wrote no context for the next task; this is its last reply.\n\n" + outcome.text)
+        }
+        let slug = record.slug.isEmpty ? "task" : record.slug
+        return TaskContinuation(
+            taskID: record.id,
+            taskTitle: record.title,
+            fileName: "continues-\(slug).md",
+            text: sections.joined(separator: "\n\n") + "\n",
+            hasWrittenContext: context != nil
+        )
+    }
+
+    /// The agent's headings one level down, so they sit under Toastty's
+    /// "Context from its agent". Lines in code fences stay as they are.
+    static func nestedHeadings(_ text: String) -> String {
+        var inFence = false
+        return text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            if line.hasPrefix("```") || line.hasPrefix("~~~") { inFence.toggle() }
+            guard inFence == false, line.hasPrefix("#") else { return String(line) }
+            return "#" + line
+        }.joined(separator: "\n")
     }
 }

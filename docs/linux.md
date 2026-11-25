@@ -678,9 +678,13 @@ Differences from macOS:
 - A project card's title opens the workspace page: a synopsis, the latest
   tasks and what they did, the workspace's tasks, and its kept Scratchpads.
   On macOS the title selects the workspace's own tab. Kept Scratchpads,
-  synopses and task outcomes live in `workspace-overview.json`. The socket
-  commands `workspace.overview`, `workspace.scratchpad.*` and
-  `workspace.synopsis.set` exist only on Linux. See
+  synopses, task outcomes and task contexts live in
+  `workspace-overview.json`. A finished task offers **Continue as New Task**
+  (detail pane, task menus, the page's Recently rows), which opens New Task
+  with the task's context attached. The socket commands
+  `workspace.overview`, `workspace.scratchpad.*`, `workspace.synopsis.set`
+  and `workspace.task-context.set`/`workspace.task-context` exist only on
+  Linux. See
   `docs/plans/workspace-overview.md`, which is also the macOS
   implementation plan.
 - Keys: Show Tasks is Ctrl+Shift+D (Ctrl+Shift+T is New Tab), the dock
@@ -1200,7 +1204,8 @@ code (macOS branches unchanged); run a macOS build
 | `Sources/App/Tasks/PullRequestStateCache.swift` | stores its `objectWillChange` on Linux: OpenCombine's default for an `ObservableObject` without `@Published` properties returns a new publisher on each read, so the cache's own `objectWillChange.send()` reached no subscriber |
 | `Sources/RemoteProtocol/AgentPasteText.swift` | (unguarded, same result on macOS) splits a paste into lines on the newline scalar: corelibs `components(separatedBy: "\n")` keeps `\r\n` text in one line, since Swift reads CRLF as one character |
 | `Sources/App/Tasks/TaskWebhookSecretStore.swift`, `TaskWebhookService.swift` | no Keychain (`Security`) on Linux: `KeychainTaskWebhookSecretStore` and `TaskWebhookService.init(runtimePaths:)` are macOS-only; Linux uses `FileTaskWebhookSecretStore` |
-| `Sources/App/AppControl/AppControlCatalog.swift`, `Sources/App/AppControl/AppControlExecutor.swift` | the workspace page's commands (`workspace.overview`, `workspace.scratchpad.keep/list/open/export/delete`, `workspace.synopsis.set`) are listed and dispatched only on Linux, to the handlers in `linux/Sources/ToasttyAppLogic/WorkspaceOverview/`; internal doors at the end of the executor reach its file-private argument helpers. See `docs/plans/workspace-overview.md` |
+| `Sources/App/AppControl/AppControlCatalog.swift`, `Sources/App/AppControl/AppControlExecutor.swift` | the workspace page's commands (`workspace.overview`, `workspace.scratchpad.keep/list/open/export/delete`, `workspace.synopsis.set`, `workspace.task-context.set`, `workspace.task-context`) are listed and dispatched only on Linux, to the handlers in `linux/Sources/ToasttyAppLogic/WorkspaceOverview/`; internal doors at the end of the executor reach its file-private argument helpers. See `docs/plans/workspace-overview.md` |
+| `Sources/App/Tasks/TaskBoardPresentation.swift`, `TaskActions.swift`, `TaskBoard.swift`, `RemoteAccess/RemoteTaskBoardProjection.swift`, `Tests/App/TaskLifecyclePresentationTests.swift` | Continue as New Task (Linux-first): the `MenuItem.continueAsNewTask` case, `canContinueAsNewTask`, and `TaskBoardStore.continueAsNewTask` (set by `LinuxAppLogic`) are Linux-only; the iPhone projection leaves the item out; the menu test expects it on Linux. Also unguarded, unused on macOS: `QuickEntryPrefill.continuation`, `QuickEntryContinuation`, `QuickEntryModel.continuesTaskTitle` and `QuickEntryController.presentContinuation`. `ownOrVisibleTask` in `AppControlExecutor+Tasks.swift` is no longer `private`, for `workspace.task-context*` |
 | `Sources/Core/RemoteAccess/RemoteMessageAttachmentStore.swift` | `discard` compares paths: corelibs URL equality is trailing-slash sensitive |
 | `Sources/Core/Diagnostics/DiagnosticsChecks.swift` | parent PID from `/proc/<pid>/stat` instead of `proc_pidinfo` |
 | `Sources/Core/Diagnostics/DiagnosticsCollector.swift` | hardware model from DMI/device tree instead of `sysctlbyname("hw.model")` |

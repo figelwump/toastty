@@ -132,6 +132,28 @@ after its link ended makes a new copy.
 with `updatedAt`, the writing session and `projectRoot` (for the same
 reopen rule). Empty text clears it.
 
+**Synopsis shape.** The `toastty-task-start` skill has each task's agent
+rewrite the synopsis when its task finishes (*Record what the task did*):
+two to four sentences on the workspace's purpose and current state, then
+`Recent work:` with one line per task, newest first, at most six, naming
+each task's pull request number but not its state.
+
+**Task contexts.** When a task finishes, its agent also saves a Markdown
+brief for whoever continues the work, with `workspace.task-context.set`:
+Goal, What was done, State, Decisions, Remaining, Open questions, Where to
+look (at most 8,000 characters). It is kept under the task ID with its time,
+session and the task's title.
+
+**Continue as New Task.** A finished task (stage group Done or To ship; not
+Archived) offers it in the Tasks view's detail pane (with a **Context** card
+that shows the saved context, or the last reply), in the task's menus, and
+as **Continue** on the workspace page's Recently rows. It opens quick entry
+in the task's top-level workspace with `continues-<slug>.md` attached
+(`TaskContinuation`): a heading, the task's link, branch and base, pull
+request and merge commit, project folder and kept Scratchpads, the request
+as a quote, then the agent's context or, without one, its last saved reply.
+The panel's hint reads *Continues “<title>”* while the file is attached.
+
 **Outcomes.** A task's latest agent reply is only readable while its agent
 session lives. When the page or `workspace.overview` reads a reply, Toastty
 saves the first 1,200 characters under the task ID. Recently can then still
@@ -140,7 +162,8 @@ say what the task did after its session ends.
 **Storage.** `~/.toastty/workspace-overview.json` (the runtime home's config
 directory), written whole and atomically:
 `{version: 1, scratchpads: [entry], synopses: {workspaceID: synopsis},
-outcomes: {taskID: {text, at}}}`. Copies live in `scratchpad-documents/`
+outcomes: {taskID: {text, at}}, contexts: {taskID: {text, at, sessionID,
+taskTitle}}}`. A file without one of the keys reads it as empty. Copies live in `scratchpad-documents/`
 like every Scratchpad. Deleting removes both the entry and the copy's file.
 
 **Which tasks are the workspace's.** Tasks placed in the workspace
@@ -158,6 +181,8 @@ workspace's project folder.
 | `workspace.scratchpad.open` | action | Opens a copy in a workspace's right panel (changes the view; only on the user's request). |
 | `workspace.scratchpad.delete` | action | Deletes a copy and closes the panels that show it (only on the user's request). |
 | `workspace.synopsis.set` | action | Sets or clears (`text=`) the synopsis. |
+| `workspace.task-context.set` | action | Sets or clears (`text=`) a task's context; without `taskID`, the caller's own task. |
+| `workspace.task-context` | query | The task's context (`text`, `updatedAt`, `sessionID`) and `continuation`, the file Continue as New Task attaches (`fileName`, `text`, `hasWrittenContext`). |
 | `workspace.overview` | query | The page's content: title, `projectRoot`, synopsis with its `source` (`agent` or `toastty`), counts, `recent` with `outcome` and `outcomeSource` (`reply` or `request`), `tasks`, and `scratchpads`. |
 
 A workspace selector that names a task space means its top-level workspace.
@@ -197,9 +222,22 @@ The Linux code splits so the Mac can take most of it:
     `sessionLink: nil`.
   - The pin is a toolbar button in the right panel's Scratchpad header,
     beside the binding chip.
+  - Continue as New Task: drop the `#if os(Linux)` around
+    `TaskBoardPresentation.MenuItem.continueAsNewTask`,
+    `canContinueAsNewTask`, `TaskBoardStore.continueAsNewTask` and their
+    cases in `TaskActions` and `RemoteTaskBoardProjection`; handle the case
+    in `TasksView.menuButton`; set `board.continueAsNewTask` where the
+    service is made (Linux: `LinuxAppLogic`) to call
+    `QuickEntryController.presentContinuation`; show *Continues “title”* in
+    the quick entry panel while `continuesTaskTitle` is set; add the Context
+    card to the detail pane.
 - **Skills.** The `toastty-scratchpad` skill's *Keep a Scratchpad in the
-  workspace* section says the commands are Linux-only. Make it say they
-  apply everywhere. Only then mention the IDs in `toastty-capabilities`:
+  workspace* section says the commands are Linux-only, and
+  `toastty-task-start`'s *Record what the task did* runs each step only
+  where `toastty action list` lists its command, so a Mac agent skips it
+  today. Once the Mac has the commands, the Mac agents start writing with
+  no skill change. Make the Scratchpad skill say they apply everywhere. Only
+  then mention the IDs in `toastty-capabilities`:
   `SetupResourcesDriftTests` fails on IDs the running platform does not
   know.
 

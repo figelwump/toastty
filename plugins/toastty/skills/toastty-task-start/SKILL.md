@@ -246,6 +246,61 @@ task's status. Put work that goes on after a merge under the heading
 `Remaining after merge`, as in the description. Point to the evidence in this
 task's Scratchpad.
 
+### Record what the task did
+
+Each time the task hands finished work to the user, record what it did
+before you set the status: for a completed answer or investigation, work
+without a pull request, a pull request that is ready, and a coordinating
+task's work when its children are done. Do it again after later changes, so
+the record says what is true now. A turn that ends with `task needs-reply`
+has nothing finished to record.
+
+Run `toastty action list` first. Each step below runs only where the list has
+its command, `workspace.synopsis.set` or `workspace.task-context.set`: the
+Linux app for now. Where neither is listed, as on a Mac, skip this section.
+Without a saved context, Toastty builds the next task's context from the
+request, the last reply and the pull request.
+
+1. **The workspace synopsis**, at the top of the workspace page. Read the
+   current text with `toastty query run workspace.overview --json`, under
+   `synopsis`: `source` is `agent` when an agent wrote it and `toastty` when
+   nothing was written yet. Write the whole text again, at most 4,000
+   characters:
+   - Two to four plain sentences on what the workspace is for and where it
+     stands now, updated for this task's work.
+   - Then a line `Recent work:` and one line per task, newest first, at most
+     six: what the task did, and its pull request number. Leave out the pull
+     request's state, which changes after you write: the page shows it. Put
+     this task's line first, replace an earlier line of this task, and drop
+     lines past the sixth. Keep the other tasks' lines as they are, unless
+     this task changed what they say.
+
+   ```bash
+   toastty action run workspace.synopsis.set --json --stdin text < synopsis.txt
+   ```
+
+2. **The task's context**, for whoever continues the work. A finished task
+   has a **Continue as New Task** button: it starts a new task with this
+   context attached, after facts Toastty adds itself (the request, branch,
+   pull request, merge commit and kept Scratchpads), so leave those out.
+   Write Markdown for an agent that has not seen this conversation, at most
+   8,000 characters, under these headings, leaving out a heading with nothing
+   to say: `## Goal`, `## What was done`, `## State` (where the work stands and
+   what is verified), `## Decisions` (each with its reason), `## Remaining`,
+   `## Open questions` (each with the answer you suggest), and
+   `## Where to look` (files, documents, Scratchpads).
+
+   ```bash
+   toastty action run workspace.task-context.set --json --stdin text < context.md
+   ```
+
+   Without `taskID`, it writes this task's context. Require `ok=true` from
+   both commands; if one fails, report it and still set the status.
+
+Write the two files in a temporary directory, not in the repository.
+
+### Set the status
+
 - **A question for the user:** run
   `toastty task needs-reply --question "<the question in a few words>"`
   just before you end the turn. The task then waits in Needs you until the

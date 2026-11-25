@@ -68,6 +68,8 @@ final class WorkspaceOverviewPage {
         var outcome: String?
         var outcomeIsRequest: Bool
         var taskSpaceWorkspaceID: UUID?
+        /// The finished task Continue starts a new task from.
+        var continuesTaskID: UUID?
     }
 
     init(ui: TasksUI, windowID: UUID, webServices: (any WebPanelServices)?) {
@@ -245,7 +247,8 @@ final class WorkspaceOverviewPage {
             age: item.activityAt > .distantPast ? TaskAge.label(since: item.activityAt, now: now) : nil,
             outcome: recent.outcome.map(Self.plainExcerpt),
             outcomeIsRequest: recent.outcomeIsRequest,
-            taskSpaceWorkspaceID: item.taskSpaceWorkspaceID
+            taskSpaceWorkspaceID: item.taskSpaceWorkspaceID,
+            continuesTaskID: TaskBoardPresentation.canContinueAsNewTask(item) ? item.taskID : nil
         )
     }
 
@@ -361,8 +364,25 @@ final class WorkspaceOverviewPage {
             gtk_widget_set_valign(label, GTK_ALIGN_START)
             Gtk.append(line, label)
         }
-        addOpen(line, subject: entry.subject, taskSpace: entry.taskSpaceWorkspaceID)
+        var continueButton: WidgetPtr?
+        if let taskID = entry.continuesTaskID {
+            let button = Gtk.button("Continue", classes: ["flat", "workspace-overview-continue"])
+            continueButton = button
+            gtk_widget_set_valign(button, GTK_ALIGN_START)
+            gtk_widget_set_tooltip_text(button, "Continue as New Task: start a new task with this task's context attached")
+            Gtk.setName(button, "workspace.overview.recent.\(index).continue")
+            Signal.connect(button, "clicked") { [weak self] in
+                self?.continueTask(taskID)
+            }
+            Gtk.append(line, button)
+        }
+        addOpen(line, subject: entry.subject, taskSpace: entry.taskSpaceWorkspaceID, excluding: continueButton)
         return line
+    }
+
+    /// Opens New Task with the finished task's context attached.
+    func continueTask(_ taskID: UUID) {
+        TaskActions.runFromMenu(.continueAsNewTask(taskID: taskID), coordinator: ui.coordinator) { _ in }
     }
 
     private func makeTaskRow(_ row: TasksPage.Row) -> WidgetPtr {
@@ -396,11 +416,16 @@ final class WorkspaceOverviewPage {
 
     /// A click opens the task's space when it is open, else the task in the
     /// Tasks view.
-    private func addOpen(_ line: WidgetPtr, subject: TaskBoardItem.Subject, taskSpace: UUID?) {
+    /// A press on `excluding` (the row's Continue button) is the button's.
+    private func addOpen(_ line: WidgetPtr, subject: TaskBoardItem.Subject, taskSpace: UUID?, excluding: WidgetPtr? = nil) {
         let click = gtk_gesture_click_new()!
         gtk_gesture_single_set_button(cast(click), guint(GDK_BUTTON_PRIMARY))
-        Signal.connectPress(click) { [weak self] _, _, _ in
+        Signal.connectPress(click) { [weak self] _, x, y in
             guard let self else { return }
+            if let excluding, let picked = gtk_widget_pick(line, x, y, GTK_PICK_DEFAULT),
+               picked == excluding || gtk_widget_is_ancestor(picked, excluding).bool {
+                return
+            }
             gtk_gesture_set_state(cast(click), GTK_EVENT_SEQUENCE_CLAIMED)
             self.open(subject: subject, taskSpace: taskSpace)
         }
@@ -560,6 +585,14 @@ final class WorkspaceOverviewPage {
         return true
     }
 
+    /// Continue on the Recent row at `index`, as a click does.
+    func automationContinueRecent(_ index: Int) -> Bool {
+        guard let recent = drawn?.recent, recent.indices.contains(index),
+              let taskID = recent[index].continuesTaskID else { return false }
+        continueTask(taskID)
+        return true
+    }
+
     var automationSummary: [String: String] {
         guard let drawn else { return ["overviewScratchpads": "0"] }
         let rows = drawn.tasks.filter { if case .row = $0 { return true } else { return false } }
@@ -567,6 +600,7 @@ final class WorkspaceOverviewPage {
             "overviewWorkspace": drawn.title.replacingOccurrences(of: " ", with: "_"),
             "overviewSynopsis": drawn.synopsis.isWritten ? "agent" : "toastty",
             "overviewRecent": String(drawn.recent.count),
+            "overviewContinuable": String(drawn.recent.filter { $0.continuesTaskID != nil }.count),
             "overviewTasks": String(rows.count),
             "overviewScratchpads": String(drawn.scratchpads.count),
             "overviewLiveScratchpads": String(drawn.scratchpads.filter(\.isLinked).count),

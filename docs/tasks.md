@@ -2447,13 +2447,26 @@ next row is selected, or the previous one when it was the last.
 On Linux, clicking a project card's title in the sidebar opens the
 project's **workspace page** over the workspace, as the Tasks view does:
 
-- **About** says what the workspace is about. An agent writes this with
-  `workspace.synopsis.set`; until one does, Toastty summarizes the tasks.
+- **About** says what the workspace is about, then a short *Recent work*
+  list. A task's agent rewrites it with `workspace.synopsis.set` each time
+  its task finishes (the `toastty-task-start` skill's *Record what the task
+  did*); until one does, Toastty summarizes the tasks.
 - **Recently** lists the latest tasks and what each did: the agent's last
-  reply, kept after its session ends, or else the request.
+  reply, kept after its session ends, or else the request. A finished task's
+  row has **Continue**.
 - **Tasks** lists every task of the workspace in the Tasks view's groups.
 - **Workspace Scratchpads**, on the right, lists the Scratchpads the
   workspace keeps, with a preview of the selected one.
+
+**Continue as New Task** is on a finished task (Done or To ship, not
+Archived): the Tasks view's detail pane, which also shows the saved context
+in a **Context** card, the task's right-click menu, and **Continue** on the
+workspace page. It opens New Task in the task's workspace with a file
+`continues-<slug>.md` attached: a link to the earlier task, its request,
+branch, pull request and merge commit, its kept Scratchpads, then the
+context its agent wrote with `workspace.task-context.set`, or without one
+its last reply. You type what the new task should do next; removing the
+file starts a plain task.
 
 **Terminal**, Esc, or a second click on the title returns to the workspace's
 own tabs. Selecting anything else also leaves the page. **Show Workspace
