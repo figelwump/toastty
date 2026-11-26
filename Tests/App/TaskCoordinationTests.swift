@@ -215,27 +215,28 @@ struct TaskCoordinationTests {
         let task = try await fixture.startedTask()
         let panel = try panelID(task)
 
-        fixture.sessions.steerResult = .success(.queued(position: 2))
-        let reached = try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
-        #expect(reached.session.sessionID == (try sessionID(task)))
-        #expect(reached.delivery == .queued(position: 2))
+        fixture.sessions.steerResult = .success(.steered)
+        let reached = try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "a")
+        guard case .typed(.steered, let session) = reached else {
+            Issue.record("Expected a typed message, got \(reached)")
+            return
+        }
+        #expect(session.sessionID == (try sessionID(task)))
         #expect(fixture.sessions.steered.map(\.panelID) == [panel])
         #expect(fixture.sessions.steered.map(\.text) == ["Use the new name"])
-        // Nothing went through the unchecked path.
+        // Nothing went through the unchecked path, and nothing was saved.
         #expect(try messages(fixture, to: task).isEmpty)
+        #expect(fixture.record(task.id)?.queuedMessages == nil)
 
         // A send that types nothing says so, with the reason.
         fixture.sessions.steerResult = .failure(.stateUnknown)
         await #expect(throws: TaskError("Toastty cannot tell what task \(task.title)'s agent does now, so it typed nothing. Send the message again when the agent is idle.")) {
-            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
+            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "a")
         }
-        fixture.sessions.steerResult = .failure(.queueFull)
-        await #expect(throws: TaskError("Task \(task.title) already has 5 messages that wait for its agent's next prompt. Nothing was added.")) {
-            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
-        }
+        #expect(fixture.record(task.id)?.queuedMessages == nil)
         fixture.sessions.stop(try sessionID(task))
         await #expect(throws: TaskError("Task \(task.title) has no running agent.")) {
-            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name")
+            try await fixture.coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "a")
         }
     }
 
@@ -251,7 +252,7 @@ struct TaskCoordinationTests {
         #expect(try messages(fixture, to: task) == [typed])
 
         fixture.sessions.steerResult = .success(.steered)
-        _ = try await fixture.coordinator.sendSteering(taskID: task.id, text: text)
+        _ = try await fixture.coordinator.sendSteering(taskID: task.id, text: text, from: "a")
         #expect(fixture.sessions.steered.map(\.text) == [typed])
     }
 
@@ -774,8 +775,8 @@ struct TaskCoordinationTests {
         #expect(try messages(fixture, to: task).count == 1)
     }
 
-    /// One message of Toastty's for each open prompt: a message that
-    /// `--steer` holds first, then a watch's line, then queued messages,
+    /// One message of Toastty's for each open prompt: a `--steer` message
+    /// that had to wait first, then a watch's line, then queued messages,
     /// oldest first. An agent at its open prompt gets the first at once.
     @Test func queuedMessagesTakeOneOpenPromptEachInOrder() async throws {
         let fixture = try Fixture()
@@ -805,25 +806,53 @@ struct TaskCoordinationTests {
         }
         _ = try coordinator.addWatch(targetTaskID: other.id, condition: .waiting, notifyTaskID: task.id)
         fixture.sessions.report(try sessionID(other), .needsApproval)
-        fixture.sessions.heldSteerPanels.insert(panel)
-        endTurn(1)
+        // The prompt that took "First" is still reported open: a `--steer`
+        // send that cannot type now is saved, ahead of the queued messages.
+        fixture.sessions.steerResult = .success(.mustWait)
+        let steered = try await coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "the coordinator")
+        guard case .saved(let saved, let position) = steered else {
+            Issue.record("Expected a saved message, got \(steered)")
+            return
+        }
+        #expect(saved.isSteer && saved.isWaiting && position == 1)
+        // A send that waited for the agent's state may not type at this
+        // prompt either: "First" took it.
+        let mayTypeAtPrompt = try #require(fixture.sessions.mayTypeAtPrompt)
+        #expect(mayTypeAtPrompt() == false)
+        // A second one waits behind it, without a try to type it first.
+        let behind = try await coordinator.sendSteering(taskID: task.id, text: "And the new path", from: "the coordinator")
+        guard case .saved(_, .some(2)) = behind else {
+            Issue.record("Expected the second saved message, got \(behind)")
+            return
+        }
+        #expect(fixture.sessions.steered.count == 1)
         #expect(try messages(fixture, to: task) == ["First"])
 
-        // The held message took that prompt, also while the hooks still
-        // report it open.
-        fixture.sessions.heldSteerPanels.remove(panel)
-        fixture.sessions.steerTypedAt[panel] = start.addingTimeInterval(1.2)
-        coordinator.evaluateWatches()
-        #expect(try messages(fixture, to: task) == ["First"])
+        // They go before the watch's line, one for each open prompt.
+        endTurn(1)
+        #expect(try messages(fixture, to: task) == ["First", "Use the new name"])
         endTurn(2)
-        let typed = try messages(fixture, to: task)
-        #expect(typed.count == 2)
-        #expect(typed.last?.hasPrefix("[Toastty watch") == true)
-        endTurn(3)
+        #expect(try messages(fixture, to: task) == ["First", "Use the new name", "And the new path"])
+
+        // A `--steer` message typed at once took the next prompt, also
+        // while the hooks still report it open.
+        fixture.sessions.report(session, .working, at: start.addingTimeInterval(2.5))
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(3))
+        fixture.sessions.steerTypedAt[panel] = start.addingTimeInterval(3.2)
+        coordinator.evaluateWatches()
+        #expect(try messages(fixture, to: task).count == 3)
         endTurn(4)
+        let typed = try messages(fixture, to: task)
+        #expect(typed.count == 4)
+        #expect(typed.last?.hasPrefix("[Toastty watch") == true)
         endTurn(5)
+        endTurn(6)
         #expect(try messages(fixture, to: task).suffix(2) == ["Second", "Third"])
-        #expect(try messages(fixture, to: task).count == 4)
+        #expect(try messages(fixture, to: task).count == 6)
+        // A prompt that nothing took and no message waits for is free.
+        fixture.sessions.report(session, .working, at: start.addingTimeInterval(6.5))
+        fixture.sessions.report(session, .ready, at: start.addingTimeInterval(7))
+        #expect(mayTypeAtPrompt())
     }
 
     /// A merge prompt or a due wake that waits for the same open prompt
@@ -900,6 +929,59 @@ struct TaskCoordinationTests {
             (try? messages(fixture, to: task)) == ["Review points"]
         }
         #expect(fixture.record(task.id)?.queuedMessages?.first?.outcome?.sessionID == "restored")
+    }
+
+    /// A `--steer` message that had to wait is saved on the task, so it
+    /// survives a relaunch. Unlike a `--queue` message, it does not wait for
+    /// a turn that the quit cut off, for the task's question, or for a task
+    /// that merged: a `--steer` send to an open prompt types at once there
+    /// too. Only an archived task drops it.
+    @Test func aSteerMessageThatWaitsSurvivesARelaunch() async throws {
+        let fixture = try Fixture()
+        let task = try await fixture.startedTask()
+        fixture.sessions.report(try sessionID(task), .working)
+        fixture.sessions.steerResult = .success(.mustWait)
+        _ = try await fixture.coordinator.sendSteering(taskID: task.id, text: "The user says: use 300 ms", from: "the coordinator")
+        _ = try fixture.coordinator.queueMessage(taskID: task.id, text: "Review points", from: "the coordinator")
+        let quitLaunch = fixture.coordinator.launchID
+        try fixture.coordinator.records.save(id: task.id) {
+            $0.stateTimes = TaskStateTimes()
+            $0.stateTimes?.turnLaunchID = quitLaunch
+            $0.replyRequest = TaskReplyRequest(askedAt: Date(), question: "Which delay?")
+            $0.mergedAt = Date()
+        }
+
+        fixture.sessions.stop(try sessionID(task))
+        fixture.sessions.sessions["restored"] = TaskSessionInfo(
+            sessionID: "restored", agent: .claude, panelID: try panelID(task), workspaceID: try #require(task.taskSpaceWorkspaceID),
+            cwd: nil, isActive: true, isInTurn: false, nativeConversationID: nil, title: nil
+        )
+        let relaunched = fixture.makeCoordinator(records: TaskRecordStore(fileURL: fixture.recordsFile))
+        fixture.replaceCoordinator(relaunched)
+        relaunched.reconcileAfterLaunch()
+        fixture.sessions.report("restored", .idle)
+        #expect(relaunched.wasInterruptedAtQuit(try #require(fixture.record(task.id))))
+        // The monitor that reconcileAfterLaunch started types it.
+        await fixture.waitUntil("the saved --steer message is typed", timeout: .seconds(5)) {
+            (try? messages(fixture, to: task)) == ["The user says: use 300 ms"]
+        }
+        let saved = try #require(fixture.record(task.id)?.queuedMessages)
+        #expect(saved.first?.isSteer == true)
+        #expect(saved.first?.outcome?.kind == .sent)
+        #expect(saved.first?.outcome?.sessionID == "restored")
+        // The `--queue` message was dropped: the task merged.
+        #expect(saved.last?.outcome?.kind == .dropped)
+        #expect(saved.last?.outcome?.reason == "the task merged")
+
+        // An archived task drops one that waits.
+        fixture.sessions.report("restored", .working)
+        _ = try await relaunched.sendSteering(taskID: task.id, text: "Too late", from: "the coordinator")
+        try relaunched.records.save(id: task.id) { $0.archivedAt = Date() }
+        relaunched.evaluateWatches()
+        #expect(fixture.record(task.id)?.queuedMessages?.last?.outcome?.reason == "the task was archived")
+        await #expect(throws: TaskError("Toastty cannot hold a message for task \(task.title): the task was archived. Nothing was typed.")) {
+            try await relaunched.sendSteering(taskID: task.id, text: "Later still", from: "the coordinator")
+        }
     }
 
     /// What a sender learns: an idle watch made after a queued send fires

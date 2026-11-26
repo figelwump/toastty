@@ -47,7 +47,7 @@ struct TaskSteerSenderTests {
         }
 
         func send(_ text: String) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
-            await sessions.deliverSteering(text, panelID: fixture.panelID)
+            await sessions.deliverSteering(text, panelID: fixture.panelID) { true }
         }
 
         /// What the agent's hooks report.
@@ -94,11 +94,6 @@ struct TaskSteerSenderTests {
             return sessionID
         }
 
-        /// The messages Toastty holds for the agent's next open prompt.
-        func waiting() -> [String] {
-            sessions.steerSender.heldTexts(panelID: fixture.panelID)
-        }
-
         func tearDown() {
             sessions.conversationAccess = nil
             fixture.removeRuntimeFiles()
@@ -115,6 +110,8 @@ struct TaskSteerSenderTests {
         // The sender is not the user at the task's terminal.
         #expect(harness.fixture.service.lastRemoteUserInputAt(panelID: harness.fixture.panelID) == nil)
         #expect(harness.sessions.lastUserInputAt(panelID: harness.fixture.panelID) == nil)
+        // Toastty's other messages read when it typed, to leave that prompt.
+        #expect(harness.sessions.lastSteerTypedAt(panelID: harness.fixture.panelID) != nil)
     }
 
     @MainActor
@@ -131,7 +128,6 @@ struct TaskSteerSenderTests {
 
         #expect(await harness.send("Use 300 ms") == .success(.sent))
         #expect(harness.typed.texts == ["Use 300 ms"])
-        #expect(harness.waiting().isEmpty)
     }
 
     @MainActor
@@ -144,11 +140,10 @@ struct TaskSteerSenderTests {
         // until the transcript shows the turn that the hooks report.
         #expect(await harness.send("Use 300 ms") == .success(.steered))
         #expect(harness.typed.texts == ["Use 300 ms"])
-        #expect(harness.waiting().isEmpty)
     }
 
     @MainActor
-    @Test func aPromptOnScreenHoldsTheMessageUntilTheTurnEnds() async throws {
+    @Test func aPromptOnScreenLeavesTheMessageToWaitForTheTurnsEnd() async throws {
         let harness = try Harness()
         defer { harness.tearDown() }
         try harness.startTurn()
@@ -156,23 +151,19 @@ struct TaskSteerSenderTests {
         // that; only its hooks do.
         harness.report(.needsApproval)
 
-        #expect(await harness.send("Use 300 ms") == .success(.queued(position: 1)))
+        // The task coordinator saves it for the next open prompt.
+        #expect(await harness.send("Use 300 ms") == .success(.mustWait))
         #expect(harness.typed.texts.isEmpty)
-        #expect(harness.waiting() == ["Use 300 ms"])
 
-        // The user answers the prompt and the turn goes on: still held.
+        // At the turn's end, a new send types at once.
         harness.report(.working)
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(harness.typed.texts.isEmpty)
-
         try harness.endTurn()
-        try await Transcript.waitUntil("the held message at the next prompt") { harness.typed.texts.isEmpty == false }
+        #expect(await harness.send("Use 300 ms") == .success(.sent))
         #expect(harness.typed.texts == ["Use 300 ms"])
-        #expect(harness.waiting().isEmpty)
     }
 
     @MainActor
-    @Test func aTurnTheUserTypedInHoldsTheMessage() async throws {
+    @Test func aTurnTheUserTypedInLeavesTheMessageToWait() async throws {
         let harness = try Harness()
         defer { harness.tearDown() }
         try harness.startTurn()
@@ -181,9 +172,8 @@ struct TaskSteerSenderTests {
         // The user types in the task's terminal during the turn.
         harness.fixture.terminalRuntimeRegistry.handleLocalInput(for: harness.fixture.panelID, kind: .key)
 
-        #expect(await harness.send("Second") == .success(.queued(position: 1)))
+        #expect(await harness.send("Second") == .success(.mustWait))
         #expect(harness.typed.texts == ["First"])
-        #expect(harness.waiting() == ["Second"])
     }
 
     @MainActor
@@ -199,7 +189,6 @@ struct TaskSteerSenderTests {
 
         #expect(await harness.send("Use 300 ms") == .failure(.typedInTerminal))
         #expect(harness.typed.texts.isEmpty)
-        #expect(harness.waiting().isEmpty)
 
         // The next turn starts after that typing, so it takes a message.
         harness.report(.working)
@@ -225,9 +214,9 @@ struct TaskSteerSenderTests {
         harness.fixture.sessionRuntimeStore.noteUserInput(panelID: harness.fixture.panelID)
         harness.fixture.terminalRuntimeRegistry.handleLocalInput(for: harness.fixture.panelID, kind: .key)
 
-        // The conversation knows of the typing: it holds the message for
-        // the turn's end, and the send does not fail.
-        #expect(await harness.send("Use 300 ms") == .success(.queued(position: 1)))
+        // The conversation knows of the typing: the message waits for the
+        // turn's end, and the send does not fail.
+        #expect(await harness.send("Use 300 ms") == .success(.mustWait))
         #expect(harness.typed.texts.isEmpty)
     }
 
@@ -244,26 +233,6 @@ struct TaskSteerSenderTests {
         harness.replaceAgent()
         #expect(await result == .failure(.unavailable))
         #expect(harness.typed.texts.isEmpty)
-        #expect(harness.waiting().isEmpty)
-    }
-
-    @MainActor
-    @Test func aNewAgentsHeldMessageStaysWhenTheOldAgentsMessagesAreDropped() async throws {
-        let harness = try Harness()
-        defer { harness.tearDown() }
-        try harness.startTurn()
-        harness.report(.needsApproval)
-        #expect(await harness.send("For the first agent") == .success(.queued(position: 1)))
-
-        let second = harness.replaceAgent()
-        harness.fixture.sessionRuntimeStore.updateStatus(
-            sessionID: second, status: SessionStatus(kind: .needsApproval, summary: "Needs approval"), at: Date()
-        )
-        #expect(await harness.send("For the second agent") == .success(.queued(position: 2)))
-        try await Transcript.waitUntil("the first agent's message to be dropped") {
-            harness.waiting() == ["For the second agent"]
-        }
-        #expect(harness.typed.texts.isEmpty)
     }
 
     @MainActor
@@ -277,15 +246,12 @@ struct TaskSteerSenderTests {
         try harness.endTurn()
         harness.report(.needsApproval)
 
-        #expect(await harness.send("Use 300 ms") == .success(.queued(position: 1)))
-        // Several looks at the open prompt later, it is still held.
-        try await Task.sleep(for: .milliseconds(1_500))
+        #expect(await harness.send("Use 300 ms") == .success(.mustWait))
         #expect(harness.typed.texts.isEmpty)
-        #expect(harness.waiting() == ["Use 300 ms"])
 
         // The hooks report the prompt answered and the agent idle again.
         harness.report(.idle)
-        try await Transcript.waitUntil("the held message at the open prompt") { harness.typed.texts.isEmpty == false }
+        #expect(await harness.send("Use 300 ms") == .success(.sent))
         #expect(harness.typed.texts == ["Use 300 ms"])
     }
 
@@ -293,7 +259,7 @@ struct TaskSteerSenderTests {
     /// interaction in the conversation and leave the hooks at rest. Return
     /// picks a choice there, so the message waits until the dialog closes.
     @MainActor
-    @Test func aDialogOfTheAgentsOwnHoldsTheMessage() async throws {
+    @Test func aDialogOfTheAgentsOwnLeavesTheMessageToWait() async throws {
         final class Dialog { var shows = true }
         let harness = try Harness()
         defer { harness.tearDown() }
@@ -312,61 +278,12 @@ struct TaskSteerSenderTests {
         sender.access = harness.fixture.service
         defer { sender.releasePanels { _ in true } }
 
-        #expect(await sender.send("Use 300 ms", panelID: harness.fixture.panelID) == .success(.queued(position: 1)))
-        try await Task.sleep(for: .milliseconds(1_200))
+        #expect(await sender.send("Use 300 ms", panelID: harness.fixture.panelID) == .success(.mustWait))
         #expect(harness.typed.texts.isEmpty)
 
         dialog.shows = false
-        try await Transcript.waitUntil("the held message after the dialog closed") { harness.typed.texts.isEmpty == false }
+        #expect(await sender.send("Use 300 ms", panelID: harness.fixture.panelID) == .success(.sent))
         #expect(harness.typed.texts == ["Use 300 ms"])
-    }
-
-    @MainActor
-    @Test func heldMessagesAreTypedInOrderOneForEachOpenPrompt() async throws {
-        let harness = try Harness()
-        defer { harness.tearDown() }
-        try harness.startTurn()
-        harness.report(.needsApproval)
-        #expect(await harness.send("First") == .success(.queued(position: 1)))
-        #expect(await harness.send("Second") == .success(.queued(position: 2)))
-
-        harness.report(.working)
-        try harness.endTurn()
-        try await Transcript.waitUntil("the first held message") { harness.typed.texts.isEmpty == false }
-        // The first one started a turn. The second waits for that turn's end.
-        try await Task.sleep(for: .milliseconds(1_500))
-        #expect(harness.typed.texts == ["First"])
-        #expect(harness.waiting() == ["Second"])
-        // Toastty's other messages read when it typed, to leave that prompt.
-        #expect(harness.sessions.lastSteerTypedAt(panelID: harness.fixture.panelID) != nil)
-    }
-
-    @MainActor
-    @Test func aHeldMessageIsDroppedWhenItsAgentEnds() async throws {
-        let harness = try Harness()
-        defer { harness.tearDown() }
-        try harness.startTurn()
-        harness.report(.needsApproval)
-        #expect(await harness.send("Use 300 ms") == .success(.queued(position: 1)))
-
-        harness.fixture.sessionRuntimeStore.stopSession(sessionID: harness.fixture.sessionID, at: Date())
-        try await Transcript.waitUntil("the held message to be dropped") { harness.waiting().isEmpty }
-        #expect(harness.typed.texts.isEmpty)
-    }
-
-    @MainActor
-    @Test func theSixthHeldMessageIsRefused() async throws {
-        let harness = try Harness()
-        defer { harness.tearDown() }
-        try harness.startTurn()
-        harness.report(.needsApproval)
-
-        for position in 1...TaskSteerSender.maximumHeldMessages {
-            #expect(await harness.send("Message \(position)") == .success(.queued(position: position)))
-        }
-        #expect(await harness.send("One more") == .failure(.queueFull))
-        #expect(harness.typed.texts.isEmpty)
-        #expect(harness.waiting().count == TaskSteerSender.maximumHeldMessages)
     }
 
     @MainActor

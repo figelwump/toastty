@@ -19,7 +19,7 @@ final class LiveTaskSessions: TaskSessionProviding {
     /// picks a choice there.
     private let claudeHasNativeDialog: @MainActor (_ panelID: UUID) -> Bool
     private let replyReader = TaskAgentReplyReader()
-    /// Types for `deliverSteering`, and holds the messages that wait.
+    /// Types for `deliverSteering`.
     private(set) lazy var steerSender = TaskSteerSender { [weak self] panelID in
         guard let self, let session = self.activeSession(panelID: panelID) else { return nil }
         return TaskSteerAgentView(
@@ -30,8 +30,7 @@ final class LiveTaskSessions: TaskSessionProviding {
             showsDialog: session.agent == .claude && self.claudeHasNativeDialog(panelID)
         )
     }
-    /// Ends the follow of a panel whose agent ended, with the messages
-    /// that waited for it.
+    /// Ends the follow of a panel whose agent ended.
     private var endedAgentObservation: AnyCancellable?
     /// The conversations of the agents' panels, for checked sends and watches.
     weak var conversationAccess: (any LocalConversationAccess)? {
@@ -109,13 +108,11 @@ final class LiveTaskSessions: TaskSessionProviding {
         deliverText(text, panelID)
     }
 
-    func deliverSteering(_ text: String, panelID: UUID) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
+    func deliverSteering(
+        _ text: String, panelID: UUID, mayTypeAtPrompt: @escaping @MainActor () -> Bool
+    ) async -> Result<TaskSteerDelivery, TaskSteerFailure> {
         steerSender.releasePanels { activeSession(panelID: $0) == nil }
-        return await steerSender.send(text, panelID: panelID)
-    }
-
-    func hasHeldSteerMessages(panelID: UUID) -> Bool {
-        steerSender.heldTexts(panelID: panelID).isEmpty == false
+        return await steerSender.send(text, panelID: panelID, mayTypeAtPrompt: mayTypeAtPrompt)
     }
 
     func lastSteerTypedAt(panelID: UUID) -> Date? {

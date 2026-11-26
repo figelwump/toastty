@@ -1823,6 +1823,7 @@ struct TaskBoardTests {
         let idle = try item(parent.id)
         #expect(idle.stage == .idle, "\(idle.stage), agent \(idle.agent)")
         #expect(idle.finishedThroughChildren == false)
+        #expect(fixture.coordinator.finishedReason(try #require(fixture.record(parent.id))) == nil)
 
         // The last child merges, and the parent's agent reports on it. The
         // user has not read that turn, so the parent waits in Needs you.
@@ -1857,6 +1858,9 @@ struct TaskBoardTests {
         #expect(Set(fixture.coordinator.toShipTasks(projectRoot: fixture.projectRoot).map(\.id)) == [copy.id, email.id])
         // A watch on the parent sees the stage, with the children's merge.
         #expect(fixture.coordinator.stageConditionsByTaskID()[parent.id] == [.readyForReview, .merged, .toShip])
+        // So does the rule that drops queued messages for a finished task
+        // and refuses new ones.
+        #expect(fixture.coordinator.finishedReason(record) == "the task finished through its child tasks")
 
         // The children ship: the parent is Done.
         for child in [copy, email] {
