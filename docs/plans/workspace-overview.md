@@ -29,47 +29,20 @@ archived. The document stays on disk, but nothing leads back to it.
 | Selecting another workspace, a task space row, a session row, another tab, or the Tasks view | Leaves the page. The page is not saved: it shows until something else is selected, and a restart opens the workspace's tabs. |
 
 While the page shows, it covers the workspace content and the right panel, as
-the Tasks view does. The tab bar and the window title stay.
+the Tasks view does. On Linux the workspace's terminal tab bar is hidden
+until the page closes.
 
 ### What the page shows
-
-```
-┌ Bike Fabrication ─────────────────────── [Terminal] [+ New Task] ┐┌ WORKSPACE SCRATCHPADS   2 ┐
-│ ~/Code/bike · 4 tasks · 1 open · 2 Scratchpads                    ││ ▣ Frame jig plan     Live │
-│ ┌ ABOUT ─────────────────────────────────────────────────────────┐││   From Order the jig plate │
-│ │ Builds the steel jig that holds the swingarm for welding. …    │││ ▣ Weld sequence            │
-│ │ Written by an agent · 2h                                       │││   From Plan welds · 3d     │
-│ └────────────────────────────────────────────────────────────────┘│├──────────────────── ◫ 🗑 ─┤
-│ ┌ RECENTLY ──────────────────────────────────────────────────────┐││ (the selected Scratchpad, │
-│ │ ◌ Order the jig plate        Claude · working             now  │││  rendered read-only)      │
-│ │   Placed the order with OSH Cut; plate ships Friday. …         │││                           │
-│ │ ✓ Plan welds   PR #12        Done                          3d  │││                           │
-│ └────────────────────────────────────────────────────────────────┘││                           │
-│ ┌ TASKS ─────────────────────────────────────────────────────────┐││                           │
-│ │ RUNNING 1  … rows as in the Tasks view …                       │││                           │
-│ └────────────────────────────────────────────────────────────────┘││                           │
-└───────────────────────────────────────────────────────────────────┘└───────────────────────────┘
-```
 
 - **Header:** the workspace's title; its folder (with `~`), the task count,
   the open count and the Scratchpad count; **Terminal** (the workspace's own
   tabs) and **New Task** (quick entry, as the Tasks view's button).
-- **About:** the synopsis. An agent writes it with `workspace.synopsis.set`,
-  and the caption reads *Written by an agent · <age>*. Without one, Toastty
-  makes it from the tasks: *“<title> works in <folder>. It has had N tasks:
-  a open and b finished. Latest: “t1”, “t2”, “t3”.”*, with the caption *Made
-  from the tasks. Ask an agent to describe this workspace and it writes one
-  here.*
-- **Recently:** the five tasks with the latest activity, newest first. Each
-  row has the task's mark, title, PR tag and status line (as in the Tasks
-  view), and what the task did. That is the agent's latest reply as plain
-  text, cut to about 360 characters and three lines. Without a reply, it is
-  the task's request, prefixed *Asked:*. A click opens the task's space
-  when it is open, else the task in the Tasks view.
-- **Tasks:** every task of the workspace in the Tasks view's groups (Needs
-  you, Ready to review, Running, Idle, To ship, Done, Archived), with Done
-  and Archived expanded. Empty groups are left out. A click works as in
-  Recently.
+- **Recent:** the five tasks with the latest activity, newest first.
+- **Past Tasks:** the rest of the workspace's tasks, also newest first.
+  Both sections use the Tasks view's stage marks and status lines. A row's
+  disclosure shows the original task description inline, when it has one.
+  Clicking the title still opens its task space or the task in Tasks.
+  Completed tasks that can be continued have a green **Continue** button.
 - **Workspace Scratchpads** (right column, 380 points): the kept
   Scratchpads, newest kept first. Each row has the title, a green **Live**
   tag while its task is open, *From <task> · updated <age>*, and the
@@ -130,7 +103,8 @@ after its link ended makes a new copy.
 
 **Synopsis.** One text per top-level workspace (at most 4,000 characters),
 with `updatedAt`, the writing session and `projectRoot` (for the same
-reopen rule). Empty text clears it.
+reopen rule). Empty text clears it. This remains available through
+`workspace.overview`, even though Linux no longer shows an About card.
 
 **Synopsis shape.** The `toastty-task-start` skill has each task's agent
 rewrite the synopsis when its task finishes (*Record what the task did*):
@@ -147,7 +121,7 @@ session and the task's title.
 **Continue as New Task.** A finished task (stage group Done or To ship; not
 Archived) offers it in the Tasks view's detail pane (with a **Context** card
 that shows the saved context, or the last reply), in the task's menus, and
-as **Continue** on the workspace page's Recently rows. It opens quick entry
+as **Continue** in both sections on the workspace page. It opens quick entry
 in the task's top-level workspace with `continues-<slug>.md` attached
 (`TaskContinuation`): a heading, the task's link, branch and base, pull
 request and merge commit, project folder and kept Scratchpads, the request
@@ -156,8 +130,8 @@ The panel's hint reads *Continues “<title>”* while the file is attached.
 
 **Outcomes.** A task's latest agent reply is only readable while its agent
 session lives. When the page or `workspace.overview` reads a reply, Toastty
-saves the first 1,200 characters under the task ID. Recently can then still
-say what the task did after its session ends.
+saves the first 1,200 characters under the task ID so the context fallback
+and overview query still work after the task's session ends.
 
 **Storage.** `~/.toastty/workspace-overview.json` (the runtime home's config
 directory), written whole and atomically:
@@ -183,7 +157,7 @@ workspace's project folder.
 | `workspace.synopsis.set` | action | Sets or clears (`text=`) the synopsis. |
 | `workspace.task-context.set` | action | Sets or clears (`text=`) a task's context; without `taskID`, the caller's own task. |
 | `workspace.task-context` | query | The task's context (`text`, `updatedAt`, `sessionID`) and `continuation`, the file Continue as New Task attaches (`fileName`, `text`, `hasWrittenContext`). |
-| `workspace.overview` | query | The page's content: title, `projectRoot`, synopsis with its `source` (`agent` or `toastty`), counts, `recent` with `outcome` and `outcomeSource` (`reply` or `request`), `tasks`, and `scratchpads`. |
+| `workspace.overview` | query | Workspace data: title, `projectRoot`, synopsis with its `source` (`agent` or `toastty`), counts, `recent` with `outcome` and `outcomeSource` (`reply` or `request`), `tasks`, and `scratchpads`. |
 
 A workspace selector that names a task space means its top-level workspace.
 A managed agent that names none means its own workspace. Workspace-scoped
@@ -216,7 +190,7 @@ The Linux code splits so the Mac can take most of it:
     `SidebarView.swift:2037`) toggles the page instead of only calling
     `selectWorkspace`.
   - A `WorkspaceOverviewView` (SwiftUI) mirrors `WorkspaceOverviewPage`. It
-    reuses `TasksViewSections`, `TaskBoardPresentation.tasksViewStatusLine`,
+    reuses `TaskBoardPresentation.tasksViewStatusLine`,
     `TaskStageMark` and `TaskAge` for the rows, and a `ScratchpadPanelView`
     for the preview, given a `WebPanelState` for the copy with
     `sessionLink: nil`.

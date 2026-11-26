@@ -200,6 +200,13 @@ public enum LinuxTheme {
     .workspace-task-status { font-size: 0.9em; margin-end: 2px; }
     .workspace-task-status-dot { min-width: 8px; min-height: 8px; border-radius: 999px; background-color: var(--toastty-working); }
     .workspace-task-separator { margin: 8px 2px 8px 4px; }
+    /* Use the theme's success hue, dark enough for the small white label
+       even on hover. Keep the suggested-action button's native states. */
+    .task-success-action {
+      --accent-bg-color: color-mix(in srgb, var(--success-bg-color) 60%, black);
+      --accent-fg-color: var(--success-fg-color);
+      --accent-color: var(--success-color);
+    }
 
     .terminal-placeholder { font-family: monospace; font-size: 11pt; padding: 10px 12px; }
     .terminal-placeholder .prompt { color: #7ec2b2; }
@@ -302,11 +309,11 @@ public enum LinuxTheme {
     /* The workspace page (Tasks/WorkspaceOverviewPage.swift). */
     .workspace-overview-subtitle { font-size: 0.86em; opacity: 0.6; }
     .workspace-overview-main { padding: 4px 18px 18px 18px; }
-    .workspace-overview-card .tasks-card-body { padding: 10px 12px 12px 12px; }
-    .workspace-overview-synopsis { font-size: 1.02em; line-height: 1.4; }
-    .workspace-overview-outcome { font-size: 0.86em; opacity: 0.75; }
-    .workspace-overview-recent { padding: 6px 4px; border-radius: 6px; }
-    .workspace-overview-recent:hover, .workspace-overview .tasks-card .tasks-row:hover { background-color: alpha(currentColor, 0.05); }
+    .workspace-overview-card .tasks-card-body { padding: 5px 8px 7px; }
+    .workspace-overview-row { padding: 3px 4px 3px 0; }
+    .workspace-overview-open { min-width: 0; padding: 4px 7px; font-weight: normal; }
+    .workspace-overview-disclosure { min-width: 26px; min-height: 26px; padding: 0; }
+    .workspace-overview-description { margin: 3px 7px 7px 59px; }
     .workspace-overview-pads { background-color: var(--sidebar-bg-color); }
     .workspace-overview-pads-header { padding: 10px 12px 2px 6px; }
     .workspace-overview-pads-empty { padding: 4px 14px 10px 14px; }

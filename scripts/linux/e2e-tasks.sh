@@ -64,6 +64,10 @@ if [[ "$*" == *"Second task"* ]]; then
   printf '{"hook_event_name":"Stop","session_id":"native-%s"}' "$TOASTTY_SESSION_ID" \
     | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
 fi
+if [[ "$*" == *"Check the frame against the square"* ]]; then
+  printf '{"hook_event_name":"Stop","session_id":"native-%s"}' "$TOASTTY_SESSION_ID" \
+    | "$TOASTTY_CLI_PATH" session ingest-agent-event --source claude-hooks >> "$out" 2>&1
+fi
 sleep 600
 AGENT
 chmod +x $WORK/bin/claude
@@ -511,7 +515,7 @@ done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 
 # Phase W: the workspace page (Linux-first). Keep a Scratchpad with the
-# right panel's pin, open the page from the card's title, read the synopsis
+# right panel's pin, open the page from the card's title, query the synopsis
 # an agent sets, leave by Terminal and by a second title click, open the
 # kept Scratchpad in the right panel, then switch and delete tabs.
 cat > $WORK/workspace-page.script <<SCRIPT
@@ -525,12 +529,12 @@ wait 300
 expect keepButton=kept
 workspace-page card selected
 wait 500
-expect workspacePage=shown tasksView=hidden rightPanelMapped=false overviewScratchpads=1 overviewLiveScratchpads=1 overviewSynopsis=toastty tabs=1 tabBar=hidden
+expect workspacePage=shown tasksView=hidden rightPanelMapped=false overviewScratchpads=1 overviewLiveScratchpads=1 tabs=1 tabBar=hidden
 expect overviewScratchpadTabs=1 overviewSelectedScratchpad=0
 file-write $WORK/page-shown go
 wait-file $WORK/synopsis-set
 wait 500
-expect overviewSynopsis=agent
+expect workspacePage=shown
 screenshot $WORK/workspace-page.png
 click workspace.overview.terminal
 wait 300
@@ -611,20 +615,38 @@ grep 'FAIL' $WORK/app-workspace-page.log | head -8
 [ -s $WORK/workspace-page.png ] && cp $WORK/workspace-page.png $REPO/artifacts/manual/linux-tasks/workspace-page.png
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
 
-# Phase K: Continue as New Task. A task finishes with a saved context;
-# the workspace page's Continue and the Tasks view's detail button open
-# New Task with the context attached, and the new task keeps the file.
+# Phase K: five Recent tasks and one Past task. Both lists disclose the
+# original request in place and offer Continue for completed tasks.
 cat > $WORK/continue.script <<SCRIPT
 wait 800
+resize 1280 900
 expect taskCount=0
 file-write $WORK/k-ready go
 wait-file $WORK/k-done
 wait 800
-expect taskCount=1
+expect taskCount=6
 workspace-page card selected
 wait 500
-expect workspacePage=shown overviewContinuable=1
+expect workspacePage=shown tasksView=hidden overviewRecent=5 overviewPast=1 overviewContinuable=5 overviewExpanded=0
 screenshot $WORK/workspace-page-continue.png
+click workspace.overview.recent.0.expand
+wait 350
+expect workspacePage=shown tasksView=hidden overviewExpanded=1 overviewDescription=Clamp_the_crossbar_to_the_jig_before_drilling.
+click workspace.overview.past.0.expand
+wait 350
+expect workspacePage=shown tasksView=hidden overviewExpanded=2
+screenshot $WORK/workspace-page-expanded.png
+click workspace.overview.recent.0.expand
+wait 350
+expect workspacePage=shown tasksView=hidden overviewExpanded=1 overviewDescription=Fit_the_original_brackets_to_the_base.
+click workspace.overview.past.0.expand
+wait 350
+expect workspacePage=shown tasksView=hidden overviewExpanded=0
+click workspace.overview.past.0.continue
+wait 500
+expect workspacePage=shown tasksView=hidden quickEntry=open quickEntryContinues=true quickEntryAttachments=continues-fit-the-brackets.md
+quick-entry cancel
+wait 300
 click workspace.overview.recent.0.continue
 wait 500
 expect quickEntry=open quickEntryContinues=true quickEntryAttachments=continues-clamp-the-jig.md
@@ -632,24 +654,27 @@ quick-entry screenshot $WORK/quick-entry-continue.png
 quick-entry cancel
 wait 300
 expect quickEntry=closed
+click workspace.overview.recent.0.open
+wait 500
+expect workspacePage=hidden tasksView=hidden workspace=clamp-the-jig
 tasks show Clamp_the_jig
 wait 500
-expect tasksView=shown tasksDetail=Clamp_the_jig tasksDetailContext=agent
+expect tasksView=shown tasksDetail=Clamp_the_jig tasksDetailContext=agent tasksDetailDescription=Clamp_the_crossbar_to_the_jig_before_drilling.
 screenshot $WORK/tasks-detail-continue.png
 click tasks.view.detail.continue
 wait 500
 expect quickEntry=open quickEntryContinues=true quickEntryAttachments=continues-clamp-the-jig.md
 quick-entry cancel
 wait 300
-expect quickEntry=closed tasksRows=1
-tasks menu 0 Continue_as_New_Task
+expect quickEntry=closed tasksRows=6
+tasks menu 1 Continue_as_New_Task
 wait 500
 expect quickEntry=open quickEntryContinues=true quickEntryAttachments=continues-clamp-the-jig.md
 quick-entry type Order_the_bolts
 wait 200
 quick-entry submit
 wait 1500
-expect quickEntry=closed taskCount=2
+expect quickEntry=closed taskCount=7
 file-write $WORK/k-created go
 wait-file $WORK/k-checked
 quit
@@ -657,9 +682,29 @@ SCRIPT
 (cd $PROJECT && "${envs[@]}" PATH="$WORK/bin:/usr/local/bin:/usr/bin:/bin" TOASTTY_LINUX_SMOKE_SCRIPT=$WORK/continue.script $APP > $WORK/app-continue.log 2>&1) & APID=$!
 for i in $(seq 1 150); do [ -f $WORK/k-ready ] && break; kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 K_WS=$(cli query run workspace.list | python3 -c 'import json,sys; r=json.load(sys.stdin)["result"]; print([w["workspaceID"] for w in r["workspaces"] if w["isSelected"]][0])' 2>/dev/null)
-cli task create "Clamp the jig" --workspace "$K_WS" --agent claude > $WORK/k-create.json 2>&1
+for title in "Fit the brackets" "Cut the rails" "Sand the base" "Mark drill points" "Square the frame"; do
+  case "$title" in
+    "Fit the brackets") request="Fit the original brackets to the base." ;;
+    "Square the frame") request="Check the frame against the square." ;;
+    *) request="$title" ;;
+  esac
+  cli task create "$request" --title "$title" --workspace "$K_WS" --agent claude > "$WORK/k-seed.json" 2>&1
+  seed_task=$(json "$WORK/k-seed.json" 'r["taskID"]' 2>/dev/null)
+  for i in $(seq 1 100); do grep -lF "$request" $WORK/agent-*.log >/dev/null 2>&1 && break; sleep 0.1; done
+  if [[ "$title" == "Square the frame" ]]; then
+    # Wait for the fake agent's Stop hook so the task shows its ready mark.
+    for i in $(seq 1 100); do
+      cli task get "$seed_task" > "$WORK/k-seed-stage.json" 2>&1
+      [ "$(json "$WORK/k-seed-stage.json" 'r["agentState"]["state"]')" = idle ] && break
+      sleep 0.1
+    done
+  else
+    cli task mark-done "$seed_task" > "$WORK/k-seed-done.json" 2>&1
+  fi
+done
+cli task create "Clamp the crossbar to the jig before drilling." --title "Clamp the jig" --workspace "$K_WS" --agent claude > $WORK/k-create.json 2>&1
 K_TASK=$(json $WORK/k-create.json 'r["taskID"]' 2>/dev/null)
-for i in $(seq 1 100); do grep -l "Clamp the jig" $WORK/agent-*.log >/dev/null 2>&1 && break; sleep 0.2; done
+for i in $(seq 1 100); do grep -l "Clamp the crossbar" $WORK/agent-*.log >/dev/null 2>&1 && break; sleep 0.2; done
 cli action run workspace.task-context.set "taskID=$K_TASK" \
   "text=## What was done
 - Added the clamp to the jig.
@@ -688,10 +733,10 @@ touch $WORK/k-checked
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; KRC=$?
 check "workspace.task-context.set saves a finished task's context" "grep -q '\"ok\" : true' $WORK/k-context.json && grep -q '\"hasWrittenContext\" : true' $WORK/k-context-get.json"
-check "Continue as New Task: the workspace page's Continue, the Tasks view's button and the task's menu open New Task with the context attached" "[ $KRC = 0 ] && ! grep -q 'FAIL' $WORK/app-continue.log"
+check "Recent and Past Tasks disclose the Tasks view description in place, and both lists, task details and the task menu can continue with context" "[ $KRC = 0 ] && ! grep -q 'FAIL' $WORK/app-continue.log"
 check "the new task keeps the context file, with the facts and the agent's context" "[ -n '$K_FILE' ] && grep -q 'Continues' $WORK/k-continues.md && grep -q 'Context from its agent' $WORK/k-continues.md && grep -q 'Order the bolts' $WORK/k-continues.md"
 grep 'FAIL' $WORK/app-continue.log | head -8
-for shot in workspace-page-continue quick-entry-continue tasks-detail-continue; do
+for shot in workspace-page-continue workspace-page-expanded quick-entry-continue tasks-detail-continue; do
   [ -s $WORK/$shot.png ] && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 [ -s $WORK/k-continues.md ] && cp $WORK/k-continues.md $REPO/artifacts/manual/linux-tasks/continues-clamp-the-jig.md

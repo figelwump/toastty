@@ -579,6 +579,14 @@ final class TasksPage {
 
     // MARK: - Detail
 
+    /// The original description displayed in the task details and on the
+    /// workspace page. A title-only task has no separate description.
+    static func taskDescription(_ item: TaskBoardItem) -> String? {
+        guard let record = item.record else { return nil }
+        let text = item.stage.isBeforeStart && record.text.isEmpty ? (record.pinned.prompt ?? "") : record.text
+        return text.isEmpty || text == item.title ? nil : text
+    }
+
     /// What the detail pane shows; rebuilt when it changes.
     struct Detail: Equatable {
         var subject: TaskBoardItem.Subject
@@ -616,6 +624,7 @@ final class TasksPage {
             origin = TaskBoardPresentation.originLine(item, now: now)
             title = item.title
             self.error = error
+            text = TasksPage.taskDescription(item)
             isTriageConfigured = ui.coordinator.isTriageConfigured
             if let record = item.record, item.stage.isBeforeStart {
                 isSetup = true
@@ -623,7 +632,6 @@ final class TasksPage {
                 setupChoices = TaskSetupCardPresentation.isPickingWorkspace(record)
                     ? ui.coordinator.workspaceChoices(taskID: record.id) : nil
                 self.setupChoice = setupChoice
-                text = nil
                 status = []
                 source = nil
                 history = []
@@ -635,8 +643,6 @@ final class TasksPage {
             setupRecord = nil
             setupChoices = nil
             self.setupChoice = nil
-            let recordText = item.record?.text
-            text = recordText.flatMap { $0.isEmpty || $0 == item.title ? nil : $0 }
             let stage = TaskBoardPresentation.stageDescription(item, now: now)
             var status = [KeyValue(key: "Stage", value: stage.stage, why: stage.why)]
             if let pullRequest = TaskBoardPresentation.pullRequestLine(item) {
@@ -676,13 +682,13 @@ final class TasksPage {
             guard TaskBoardPresentation.canContinueAsNewTask(item), let record = item.record else { return nil }
             if let context = service.context(taskID: record.id) {
                 return ContextSummary(
-                    excerpt: WorkspaceOverviewPage.plainExcerpt(labeledHeadings(context.text)),
+                    excerpt: plainExcerpt(labeledHeadings(context.text)),
                     caption: "Written by the agent · \(TaskAge.label(since: context.at, now: now))"
                 )
             }
             if let outcome = service.outcome(taskID: record.id) {
                 return ContextSummary(
-                    excerpt: WorkspaceOverviewPage.plainExcerpt(outcome.text),
+                    excerpt: plainExcerpt(outcome.text),
                     caption: "Its agent wrote no context: Continue as New Task attaches the request and this last reply"
                 )
             }
@@ -690,6 +696,20 @@ final class TasksPage {
                 excerpt: "No context or reply was saved.",
                 caption: "Continue as New Task attaches the request, branch and pull request"
             )
+        }
+
+        /// The first lines of an agent's Markdown reply, as plain text.
+        static func plainExcerpt(_ text: String) -> String {
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { $0.isEmpty == false && $0.hasPrefix("```") == false && $0.hasPrefix("|") == false }
+                .map { line -> String in
+                    var line = line
+                    while let first = line.first, "#>-*".contains(first) { line.removeFirst() }
+                    return line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+                        .trimmingCharacters(in: .whitespaces)
+                }
+            return WorkspaceOverviewStore.clipped(lines.prefix(4).joined(separator: " "), to: 360)
         }
     }
 
@@ -857,6 +877,7 @@ final class TasksPage {
         }
         var classes = ["tasks-action"]
         if isPrimary { classes.append("suggested-action") }
+        if case .continueAsNewTask = menuItem { classes.append("task-success-action") }
         if menuItem.isDestructive { classes.append("destructive-action") }
         let button = Gtk.button(menuItem.title, classes: classes)
         if let help { gtk_widget_set_tooltip_text(button, help) }
@@ -878,6 +899,7 @@ final class TasksPage {
     var automationListModel: [ListItem] { listModel }
     var automationMarkWidths: [Int32] { TaskMarkWidget.slotWidths(in: listBox) }
     var automationDetailTitle: String? { detailModel?.title }
+    var automationDetailDescription: String? { detailModel?.text }
     var automationDetailError: String? { detailModel?.error }
     /// The Context card: `agent` for a written context, `fallback` for the
     /// last reply or the request, `none` without the card.
@@ -925,8 +947,7 @@ final class TasksPage {
     private func makeSetupCard(_ record: TaskRecord, detail: Detail) -> WidgetPtr {
         let card = Gtk.vbox(spacing: 12, classes: ["task-setup"])
         Gtk.setName(card, "task.setup")
-        let text = record.text.isEmpty ? (record.pinned.prompt ?? "") : record.text
-        if text.isEmpty == false, text != record.title {
+        if let text = detail.text {
             let label = Gtk.label(text, classes: ["task-setup-text"], ellipsize: false)
             gtk_label_set_wrap(cast(label), 1)
             gtk_label_set_selectable(cast(label), 1)

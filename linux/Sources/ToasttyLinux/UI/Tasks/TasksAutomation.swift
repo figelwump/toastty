@@ -226,6 +226,7 @@ extension TasksPage {
             "tasksRows": String(rows.count),
             "tasksGroups": groups.joined(separator: ","),
             "tasksSelected": rows.first(where: \.isSelected)?.title ?? "",
+            "tasksDetailDescription": automationDetailDescription ?? "",
             "tasksMarks": rows.map { TaskMarkWidget.cssClass($0.mark) }.joined(separator: ","),
             "tasksMarkWidths": automationMarkWidths.map(String.init).joined(separator: ","),
         ]
