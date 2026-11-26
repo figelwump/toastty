@@ -810,7 +810,7 @@ struct TaskCoordinationTests {
         // send that cannot type now is saved, ahead of the queued messages.
         fixture.sessions.steerResult = .success(.mustWait)
         let steered = try await coordinator.sendSteering(taskID: task.id, text: "Use the new name", from: "the coordinator")
-        guard case .saved(let saved, let position) = steered else {
+        guard case .saved(let saved, let position, _) = steered else {
             Issue.record("Expected a saved message, got \(steered)")
             return
         }
@@ -821,7 +821,7 @@ struct TaskCoordinationTests {
         #expect(mayTypeAtPrompt() == false)
         // A second one waits behind it, without a try to type it first.
         let behind = try await coordinator.sendSteering(taskID: task.id, text: "And the new path", from: "the coordinator")
-        guard case .saved(_, .some(2)) = behind else {
+        guard case .saved(_, .some(2), _) = behind else {
             Issue.record("Expected the second saved message, got \(behind)")
             return
         }
