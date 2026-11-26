@@ -14,17 +14,15 @@ public struct SessionStatus: Codable, Equatable, Sendable {
     public var summary: String
     public var detail: String?
     public var claudeFableQuota: ClaudeFableQuota?
-    public var claudePermissionMode: String?
 
     public init(
         kind: SessionStatusKind, summary: String, detail: String? = nil,
-        claudeFableQuota: ClaudeFableQuota? = nil, claudePermissionMode: String? = nil
+        claudeFableQuota: ClaudeFableQuota? = nil
     ) {
         self.kind = kind
         self.summary = summary
         self.detail = detail
         self.claudeFableQuota = claudeFableQuota
-        self.claudePermissionMode = claudePermissionMode
     }
 }
 

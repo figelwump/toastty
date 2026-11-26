@@ -195,7 +195,7 @@ struct AgentEventParsersTests {
                 "session_id": nativeSessionID,
                 "hook_event_name": "StopFailure",
                 "error": error,
-                "permission_mode": "default",
+                "permission_mode": "auto",
                 "last_assistant_message": message,
             ])
             let commands = try AgentEventIngestor.commands(
@@ -203,7 +203,7 @@ struct AgentEventParsersTests {
             )
             let envelope = try #require(commands.first).makeEventEnvelope(requestID: "test")
             #expect((envelope.payload["claudeFableQuotaSessionID"] == .string(nativeSessionID)) == expected)
-            #expect((envelope.payload["claudePermissionMode"] == .string("default")) == expected)
+            #expect(envelope.payload["claudePermissionMode"] == nil)
         }
     }
 

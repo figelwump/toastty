@@ -1093,8 +1093,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             sessionRuntimeStore.updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(
-                    kind: kind, summary: quota == nil ? summary : "Fable usage limit", detail: detail, claudeFableQuota: quota,
-                    claudePermissionMode: activeSession.agent == .claude ? event.payload.string("claudePermissionMode") : nil
+                    kind: kind, summary: quota == nil ? summary : "Fable usage limit", detail: detail, claudeFableQuota: quota
                 ),
                 at: now
             )

@@ -712,7 +712,7 @@ struct ToasttyCLITests {
 
         #expect(invocation.options.jsonOutput)
 
-        guard case .sessionStatus(let sessionID, let parsedPanelID, let kind, let summary, let detail, _, _) = invocation.command else {
+        guard case .sessionStatus(let sessionID, let parsedPanelID, let kind, let summary, let detail, _) = invocation.command else {
             Issue.record("expected session status command")
             return
         }
@@ -736,7 +736,7 @@ struct ToasttyCLITests {
             environment: [:]
         )
 
-        guard case .sessionStatus(_, _, let kind, let summary, let detail, _, _) = invocation.command else {
+        guard case .sessionStatus(_, _, let kind, let summary, let detail, _) = invocation.command else {
             Issue.record("expected session status command")
             return
         }
@@ -761,7 +761,7 @@ struct ToasttyCLITests {
             ]
         )
 
-        guard case .sessionStatus(let sessionID, let parsedPanelID, let kind, let summary, let detail, _, _) = invocation.command else {
+        guard case .sessionStatus(let sessionID, let parsedPanelID, let kind, let summary, let detail, _) = invocation.command else {
             Issue.record("expected session status command")
             return
         }

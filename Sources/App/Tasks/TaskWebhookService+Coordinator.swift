@@ -189,26 +189,24 @@ extension TaskWebhookService {
         if coordinatorWakeTurns.recoveringModel { return true }
         guard let coordinator, let source = coordinator.session, var wake = coordinatorWake,
               source.workspaceID == wake.workspaceID else { return false }
-        let selection: (nativeID: UUID, model: String, effort: String?, permissionMode: String, fallback: CoordinatorWakeState.FableFallback?)
+        let selection: (nativeID: UUID, model: String, effort: String?, fallback: CoordinatorWakeState.FableFallback?)
         if let quota = source.status?.claudeFableQuota {
             let attempted = coordinatorWakeTurns.attemptedFailure
             guard attempted?.sessionID != source.sessionID || attempted?.turnEndedAt != source.lastTurnEndedAt,
-                  let mode = source.status?.claudePermissionMode,
                   coordinator.canRecoverClaude(source) else { return true }
             let fallback = CoordinatorWakeState.FableFallback(
                 nativeSessionID: quota.nativeSessionID,
                 returnAt: quota.resetsAt,
                 preferredEffort: wake.fableFallback?.preferredEffort ?? coordinator.configuredFableEffort
             )
-            selection = (quota.nativeSessionID, ClaudeFableQuota.fallbackModel, ClaudeFableQuota.fallbackEffort, mode, fallback)
+            selection = (quota.nativeSessionID, ClaudeFableQuota.fallbackModel, ClaudeFableQuota.fallbackEffort, fallback)
             coordinatorWakeTurns.attemptedFailure = (source.sessionID, source.lastTurnEndedAt)
         } else {
             guard var fallback = wake.fableFallback, let returnAt = fallback.returnAt, at >= returnAt,
-                  let mode = source.status?.claudePermissionMode,
                   [.idle, .ready].contains(source.status?.kind),
                   coordinator.isRunningFallbackClaude(source, nativeID: fallback.nativeSessionID),
                   coordinator.canRecoverClaude(source) else { return false }
-            selection = (fallback.nativeSessionID, ClaudeFableQuota.preferredModel, fallback.preferredEffort, mode, nil)
+            selection = (fallback.nativeSessionID, ClaudeFableQuota.preferredModel, fallback.preferredEffort, nil)
             // Persist a bounded retry even if Toastty quits during the attempt.
             fallback.returnAt = at.addingTimeInterval(60 * 60)
             wake.fableFallback = fallback
@@ -226,7 +224,7 @@ extension TaskWebhookService {
             do {
                 try await coordinator.resumeClaudeAfterQuota(
                     source: source, nativeID: selection.nativeID, model: selection.model,
-                    effort: selection.effort, permissionMode: selection.permissionMode,
+                    effort: selection.effort,
                     beforeRetiring: {
                         if let fallback = selection.fallback {
                             self.coordinatorWake?.fableFallback = fallback

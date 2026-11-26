@@ -134,8 +134,7 @@ enum ClaudeHookEventParser {
                     panelID: panelID,
                     kind: .ready,
                     summary: "Ready",
-                    detail: normalizedSummaryText(object["last_assistant_message"]) ?? "Turn complete",
-                    claudePermissionMode: normalizedString(object["permission_mode"])
+                    detail: normalizedSummaryText(object["last_assistant_message"]) ?? "Turn complete"
                 )
             )
             if object["stop_hook_active"] as? Bool != true,
@@ -174,8 +173,7 @@ enum ClaudeHookEventParser {
                     detail: errorText
                         ?? normalizedSummaryText(object["error_details"])
                         ?? "Claude Code could not complete the turn",
-                    claudeFableQuotaSessionID: confirmedQuotaSessionID,
-                    claudePermissionMode: confirmedQuotaSessionID == nil ? nil : normalizedString(object["permission_mode"])
+                    claudeFableQuotaSessionID: confirmedQuotaSessionID
                 ),
             ]
             // The turn did not complete, so it ends as an aborted turn: the

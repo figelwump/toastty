@@ -375,7 +375,6 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         nativeID: UUID,
         model: String,
         effort: String?,
-        permissionMode: String,
         environment: [String: String] = [:],
         isStillEligible: @MainActor () -> Bool,
         adoptPanel: @MainActor (UUID, String) throws -> Void
@@ -391,6 +390,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
               binding.panelID == source.panelID, binding.sessionFilePath == resumeRecord.sessionFilePath,
               let cwd = try normalizedExplicitWorkingDirectory(resumeRecord.cwd),
               FileManager.default.fileExists(atPath: resumeRecord.sessionFilePath),
+              let permissionMode = claudeRecoveryPermissionMode(source: source),
               isStillEligible() else {
             throw TaskError("Claude's stopped conversation is not ready for model recovery.")
         }
@@ -450,6 +450,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
               let currentTab = store.state.workspacesByID[source.workspaceID]?.tab(id: tabID),
               case .terminal(let latest)? = currentTab.panels[source.panelID],
               latest.resumeRecord == resumeRecord, currentTab.panels[panelID] != nil,
+              claudeRecoveryPermissionMode(source: source) == permissionMode,
               isStillEligible() else {
             throw TaskError("Claude's session or prompt changed while preparing model recovery.")
         }
@@ -474,6 +475,12 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     /// A failed turn can be followed by a Claude dialog. Require the
     /// conversation and the terminal to agree that the composer is empty.
     func claudeRecoveryPromptIsFree(source: SessionRecord) -> Bool {
+        claudeRecoveryPermissionMode(source: source) != nil
+    }
+
+    private func claudeRecoveryPermissionMode(
+        source: SessionRecord
+    ) -> AgentLaunchArgumentOverrideAdapter.ClaudeQuotaRecoveryMode? {
         guard let runtime = sessionRuntimeStore,
               let session = runtime.sessionRegistry.activeSession(for: source.panelID),
               session.sessionID == source.sessionID,
@@ -487,26 +494,33 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
               case .openPrompt? = quotaRecoveryConversationAccess?.inputAvailability(
                   panelID: source.panelID, sessionID: source.sessionID
               ),
-              let screen = terminalCommandRouter?.readVisibleText(panelID: source.panelID) else { return false }
-        return Self.isEmptyClaudeComposer(screen)
+              let screen = terminalCommandRouter?.readVisibleText(panelID: source.panelID) else { return nil }
+        return Self.claudeRecoveryPermissionMode(screen: screen)
     }
 
-    nonisolated static func isEmptyClaudeComposer(_ screen: String) -> Bool {
+    nonisolated static func claudeRecoveryPermissionMode(
+        screen: String
+    ) -> AgentLaunchArgumentOverrideAdapter.ClaudeQuotaRecoveryMode? {
         let lines = TerminalVisibleTextSanitizer.sanitizedLines(screen)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
         guard let index = lines.lastIndex(where: { $0 == "❯" || $0 == ">" }),
-              lines.count - index <= 5, index > 0, index + 1 < lines.count else { return false }
+              lines.count - index <= 5, index > 0, index + 2 < lines.count else { return nil }
         let top = lines[index - 1], bottom = lines[index + 1]
         guard top.count >= 4, bottom.count >= 4,
               top.allSatisfy({ $0 == "─" || $0 == "━" }),
-              bottom.allSatisfy({ $0 == "─" || $0 == "━" }) else { return false }
-        return lines.dropFirst(index + 2).allSatisfy {
+              bottom.allSatisfy({ $0 == "─" || $0 == "━" }) else { return nil }
+        guard lines.dropFirst(index + 2).allSatisfy({
             !$0.localizedCaseInsensitiveContains("enter")
                 && !$0.localizedCaseInsensitiveContains("esc to")
                 && !$0.localizedCaseInsensitiveContains("background")
                 && !$0.localizedCaseInsensitiveContains("jump to bottom")
-        }
+        }) else { return nil }
+        // Hook payloads cannot select permissions. The live composer tells
+        // us when Plan must be carried forward. Every supported editing
+        // mode resumes in Manual, where Claude can still ask for approval.
+        let footer = lines[index + 2]
+        if footer.hasPrefix("⏸ plan mode on") { return .plan }
+        let manualOrEditingModes = ["⏸ manual mode on", "⏵⏵ accept edits on", "⏵⏵ auto mode on", "⏵⏵ don't ask on"]
+        return manualOrEditingModes.contains(where: { footer.hasPrefix($0) }) ? .manual : nil
     }
 
     func waitForRecoveredClaude(

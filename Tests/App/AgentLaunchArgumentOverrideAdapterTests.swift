@@ -6,10 +6,10 @@ import Testing
 
 struct AgentLaunchArgumentOverrideAdapterTests {
     @Test
-    func claudeQuotaResumeUsesTheExactConversationAndPreservesPermissionMode() throws {
+    func claudeQuotaResumeUsesTheExactConversationAndKeepsPlanMode() throws {
         let nativeID = UUID()
         let argv = try AgentLaunchArgumentOverrideAdapter.applyingClaudeQuotaResume(
-            nativeID: nativeID, permissionMode: "plan",
+            nativeID: nativeID, permissionMode: .plan,
             to: ["claude", "--permission-mode", "acceptEdits", "--disallowedTools", "Bash"]
         )
         #expect(argv == ["claude", "--resume", nativeID.uuidString.lowercased(),
@@ -18,24 +18,29 @@ struct AgentLaunchArgumentOverrideAdapterTests {
                         ["sh", "-c", "claude"], ["claude", "a different prompt"]] {
             #expect(throws: AgentLaunchError.self) {
                 try AgentLaunchArgumentOverrideAdapter.applyingClaudeQuotaResume(
-                    nativeID: nativeID, permissionMode: "default", to: profile
+                    nativeID: nativeID, permissionMode: .manual, to: profile
                 )
             }
         }
     }
 
     @Test
-    func claudeRecoveryRequiresAnEmptyComposerAtTheBottomOfTheTerminal() {
+    func claudeRecoveryRequiresAnEmptyComposerWithAKnownPermissionIndicator() {
         let line = "────────────────"
-        #expect(AgentLaunchService.isEmptyClaudeComposer("\(line)\n❯\n\(line)\n? for shortcuts"))
+        for footer in ["⏸ manual mode on", "⏵⏵ accept edits on", "⏵⏵ auto mode on", "⏵⏵ don't ask on"] {
+            #expect(AgentLaunchService.claudeRecoveryPermissionMode(screen: "\(line)\n❯\n\(line)\n\(footer) (shift+tab to cycle)") == .manual)
+        }
+        #expect(AgentLaunchService.claudeRecoveryPermissionMode(screen: "\(line)\n❯\n\(line)\n⏸ plan mode on") == .plan)
         for screen in [
-            "\(line)\n❯ draft\n\(line)\n? for shortcuts",
-            "\(line)\n❯\n\(line)\nenter to confirm · esc to cancel",
-            "\(line)\n❯\n\(line)\n1 background task",
-            "\(line)\n❯\n\(line)\nJump to bottom (click) ↓",
+            "\(line)\n❯ draft\n\(line)\n⏸ manual mode on",
+            "\(line)\n❯\n\(line)\n⏸ manual mode on\nenter to confirm · esc to cancel",
+            "\(line)\n❯\n\(line)\n⏸ manual mode on · 1 background task",
+            "\(line)\n❯\n\(line)\n⏸ manual mode on\nJump to bottom (click) ↓",
+            "\(line)\n❯\n\(line)\n⏵⏵ bypass permissions on",
+            "\(line)\n❯\n\(line)\n? for shortcuts",
             "❯",
         ] {
-            #expect(!AgentLaunchService.isEmptyClaudeComposer(screen))
+            #expect(AgentLaunchService.claudeRecoveryPermissionMode(screen: screen) == nil)
         }
     }
 

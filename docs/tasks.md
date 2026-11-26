@@ -2005,8 +2005,10 @@ and decides by your policy.
 
 When Claude Code reports that Fable's own quota ended its turn, the
 coordinator can ask Toastty to resume the task's saved conversation in its
-existing workspace on Opus 5.5 at high effort. Toastty checks the stopped
-session and leaves busy agents, occupied prompts, and drafts alone. If the
+existing workspace on Opus 5.5 at high effort. Recovery requires an empty
+prompt with a recognized permission indicator. It keeps Plan mode and
+otherwise resumes in Manual mode, where Claude can ask for approval. Toastty
+leaves busy agents, occupied prompts, and drafts alone. If the
 coordinator itself hits that limit, Toastty handles its recovery and holds
 wake digests until it can receive them again. Once the reported reset is due,
 Toastty can return the coordinator to Fable between turns. A shared account

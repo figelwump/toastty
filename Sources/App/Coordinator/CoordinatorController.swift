@@ -675,7 +675,7 @@ final class CoordinatorController: ObservableObject {
     /// Automatic recovery uses a native resume. Restart Coordinator is a
     /// separate user action that starts a fresh conversation.
     func resumeClaudeAfterQuota(
-        source: SessionRecord, nativeID: UUID, model: String, effort: String?, permissionMode: String,
+        source: SessionRecord, nativeID: UUID, model: String, effort: String?,
         beforeRetiring: @MainActor () -> Void
     ) async throws {
         guard let launcher = launcher as? AgentLaunchService, canRecoverClaude(source) else {
@@ -687,7 +687,7 @@ final class CoordinatorController: ObservableObject {
             drain()
         }
         let launch = try await launcher.resumeClaudeAfterQuota(
-            source: source, nativeID: nativeID, model: model, effort: effort, permissionMode: permissionMode,
+            source: source, nativeID: nativeID, model: model, effort: effort,
             environment: CoordinatorFolder.gitEnvironment(for: folder.directoryURL),
             isStillEligible: {
                 self.location?.workspaceID == source.workspaceID

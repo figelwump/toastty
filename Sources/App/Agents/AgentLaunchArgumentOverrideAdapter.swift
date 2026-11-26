@@ -5,21 +5,23 @@ import RemoteProtocol
 /// Applies action-local provider selections to a configured launch argv while
 /// leaving profile defaults untouched when no selection was requested.
 enum AgentLaunchArgumentOverrideAdapter {
+    enum ClaudeQuotaRecoveryMode: String {
+        case manual = "default"
+        case plan
+    }
+
     static func applyingClaudeQuotaResume(
-        nativeID: UUID, permissionMode: String, to argv: [String]
+        nativeID: UUID, permissionMode: ClaudeQuotaRecoveryMode, to argv: [String]
     ) throws -> [String] {
-        // Preserve the mode that Claude reported. A profile that can skip
-        // permissions on startup must never override it during recovery.
-        guard ["default", "plan", "acceptEdits", "dontAsk", "auto"].contains(permissionMode),
-              !argv.contains("--dangerously-skip-permissions") else {
+        guard !argv.contains("--dangerously-skip-permissions") else {
             throw AgentLaunchError.invalidLaunchOverride(
-                parameter: "permissionMode", message: "Claude's permission mode cannot be preserved automatically"
+                parameter: "permissionMode", message: "A Claude profile that bypasses permissions cannot recover automatically"
             )
         }
         var editor = try ProviderArgvEditor(argv: argv, agent: .claude, profileID: AgentKind.claude.rawValue)
         try editor.validateConversationOptions()
         try editor.removeValueFlags(longName: "--permission-mode", shortName: nil, parameter: "permissionMode")
-        return editor.inserting(["--resume", nativeID.uuidString.lowercased(), "--permission-mode", permissionMode])
+        return editor.inserting(["--resume", nativeID.uuidString.lowercased(), "--permission-mode", permissionMode.rawValue])
     }
 
     /// Structured forks deliberately accept only the small interactive flag

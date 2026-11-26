@@ -289,7 +289,7 @@ extension TaskCoordinator {
               [task.operation.taskSpace?.panelID, task.operation.worktreeSession?.panelID].contains(session.panelID),
               session.sessionID == expectedSessionID, !session.hasBackgroundWork,
               let source = launcher.claudeRecoverySource(sessionID: session.sessionID),
-              let quota = source.status?.claudeFableQuota, let permissionMode = source.status?.claudePermissionMode,
+              let quota = source.status?.claudeFableQuota,
               let access = launcher.quotaRecoveryConversationAccess else {
             throw TaskError("The selected task has no confirmed, recoverable Fable quota failure.")
         }
@@ -320,7 +320,6 @@ extension TaskCoordinator {
                 let launch = try await launcher.resumeClaudeAfterQuota(
                     source: source, nativeID: quota.nativeSessionID,
                     model: ClaudeFableQuota.fallbackModel, effort: ClaudeFableQuota.fallbackEffort,
-                    permissionMode: permissionMode,
                     isStillEligible: {
                         guard !self.isTerminating, let record = self.records.record(id: taskID),
                               record.doneAt == nil, record.archivedAt == nil, record.replyRequest == nil,

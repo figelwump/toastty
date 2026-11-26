@@ -98,7 +98,7 @@ enum CLICommand: Equatable {
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(
         sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?,
-        claudeFableQuotaSessionID: String? = nil, claudePermissionMode: String? = nil
+        claudeFableQuotaSessionID: String? = nil
     )
     case sessionBackgroundActivity(
         sessionID: String,
@@ -267,7 +267,7 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
-        case .sessionStatus(let sessionID, let panelID, let kind, let summary, let detail, let quotaSessionID, let permissionMode):
+        case .sessionStatus(let sessionID, let panelID, let kind, let summary, let detail, let quotaSessionID):
             var payload: [String: AutomationJSONValue] = [
                 "kind": .string(kind.rawValue),
                 "summary": .string(summary),
@@ -277,9 +277,6 @@ enum CLICommand: Equatable {
             }
             if let quotaSessionID {
                 payload["claudeFableQuotaSessionID"] = .string(quotaSessionID)
-            }
-            if let permissionMode {
-                payload["claudePermissionMode"] = .string(permissionMode)
             }
             return AutomationEventEnvelope(
                 eventType: "session.status",
@@ -684,7 +681,7 @@ enum CLICommand: Equatable {
         case .sessionStart(let sessionID, _, _, _, _):
             let resolvedSessionID = response.result?.string("sessionID") ?? sessionID
             return resolvedSessionID
-        case .sessionStatus(let sessionID, _, let kind, let summary, _, _, _):
+        case .sessionStatus(let sessionID, _, let kind, let summary, _, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
         case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _, _):
             return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
