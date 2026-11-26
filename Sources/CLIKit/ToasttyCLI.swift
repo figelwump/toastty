@@ -1183,7 +1183,9 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task cancel-merge [<task-id>]
       toastty [--json] [--socket-path <path>] task clean-up <task-id>
       toastty [--json] [--socket-path <path>] task ready-for-review [<task-id>]
-      toastty [--json] [--socket-path <path>] task needs-reply [<task-id>] [--question <text>]
+      toastty [--json] [--socket-path <path>] task needs-reply [<task-id>] [--question <text>] [--approval]
+      toastty [--json] [--socket-path <path>] task needs-reply --fleet-version <version> --fleet-targets <id,id>
+      toastty [--json] [--socket-path <path>] task answer <task-id> <question-id> <approve|decline> --webhook <id> < signature.txt
       toastty [--json] [--socket-path <path>] task waiting [<task-id>] (--on <text> [--wake <ISO time>] | --clear)
       toastty [--json] [--socket-path <path>] task mark-done <task-id>
       toastty [--json] [--socket-path <path>] task archive <task-id> [--close-pr] [--delete-unpushed] [--discard-changes] [--dry-run]
@@ -2620,10 +2622,12 @@ public enum ToasttyCLI {
         case "merge", "cancel-merge", "ready-for-review", "needs-reply":
             let valueOptions: Set<String> = switch verb {
             case "merge": ["--head"]
-            case "needs-reply": ["--question"]
+            case "needs-reply": ["--question", "--fleet-version", "--fleet-targets"]
             default: []
             }
-            let parsed = try parseCommandArguments(remaining, valueOptions: valueOptions)
+            let parsed = try parseCommandArguments(
+                remaining, valueOptions: valueOptions, flagOptions: verb == "needs-reply" ? ["--approval"] : []
+            )
             guard parsed.positionals.count <= 1 else {
                 throw ToasttyCLIError.usage("task \(verb) takes at most one task ID\n\n\(usage)")
             }
@@ -2640,7 +2644,28 @@ public enum ToasttyCLI {
             if let question = parsed.singleValue("--question") {
                 args["question"] = .string(question)
             }
+            if parsed.hasFlag("--approval") { args["approval"] = .bool(true) }
+            if let version = parsed.singleValue("--fleet-version") { args["fleetVersion"] = .string(version) }
+            if let targets = parsed.singleValue("--fleet-targets") { args["fleetTargets"] = .string(targets) }
             return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.\(verb)", args: args))
+
+        case "answer":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--webhook"])
+            guard parsed.positionals.count == 3,
+                  UUID(uuidString: parsed.positionals[0]) != nil, UUID(uuidString: parsed.positionals[1]) != nil,
+                  ["approve", "decline"].contains(parsed.positionals[2]),
+                  let webhook = parsed.singleValue("--webhook"), UUID(uuidString: webhook) != nil else {
+                throw ToasttyCLIError.usage("task answer requires a task ID, question ID, approve or decline, --webhook, and a signature on stdin\n\n\(usage)")
+            }
+            let data = FileHandle.standardInput.readDataToEndOfFile()
+            guard data.count <= 66, let signature = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .newlines), signature.utf8.count == 64 else {
+                throw ToasttyCLIError.usage("task answer requires a 64-character hex signature on stdin")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.answer", args: [
+                "taskID": .string(parsed.positionals[0]), "questionID": .string(parsed.positionals[1]),
+                "decision": .string(parsed.positionals[2]), "webhookID": .string(webhook), "signature": .string(signature),
+            ]))
 
         case "clean-up", "mark-done", "request-merge":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])

@@ -259,6 +259,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `task.clean-up`
 - `task.ready-for-review`
 - `task.needs-reply`
+- `task.answer`
 - `task.waiting`
 - `task.mark-done`
 - `task.archive`
@@ -526,6 +527,15 @@ Notable action-specific behavior:
     archive or a release. When the recorded worktree branch differs from the
     merged pull request's branch, cleanup keeps both remote branches and
     removes the local task branch only if it can verify its commits on origin.
+- `task.answer`
+  - requires `args.taskID`, `args.questionID`, `args.webhookID`,
+    `args.decision` (`approve` or `decline`), and `args.signature`.
+    Toastty checks the task's open question and the owner's grant for that
+    webhook, version, and fleet. Only the app's question card can grant
+    access. See [the signature format](tasks.md#answering-a-task-question-from-coordinator-chat).
+  - returns the answer's ID, question ID, decision, scope, source and
+    delivery state. The same receipt is available as `lastApprovalAnswer`
+    in `task.get`.
 - `task.ready-for-review`, `task.needs-reply`, `task.mark-done`
   - `task.ready-for-review` takes optional `taskID`, sets
     `readyForReviewAt`, and clears a reply request. `task.needs-reply` takes

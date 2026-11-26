@@ -71,6 +71,11 @@ struct CoordinatorChatView: View {
                     introduction
                 }
             }
+            if let coordinator = sessionRuntimeStore.taskCoordinator, let webhooks = coordinator.webhooks {
+                CoordinatorTaskApprovalCards(items: items, coordinator: coordinator, webhooks: webhooks)
+                    .frame(maxWidth: Self.maximumContentWidth)
+                    .padding(.horizontal, 16)
+            }
             composerArea(mentionCandidates: CoordinatorMentionCandidate.candidates(from: items))
         }
         // Files and images dropped anywhere on the chat are attached to the

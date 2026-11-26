@@ -42,10 +42,11 @@ settings unless they set their own values.
   same repository is open. If the command refuses, tell the user why. Then
   tell the user the release task as a link, with the agent, model and effort
   you passed, or "the default".
-- **Then follow the release task** like any other task. Its questions about
-  versions, approvals and production always go to the user. Pass the user's
-  answer on to the release task, as Send says; it needs no second yes in
-  the task. The release agent confirms completion after all approved lanes
-  and checks finish.
+- **Then follow the release task** like any other task. Relay the user's
+  existing approval for the versions, targets, and verification it covers.
+  Bring added scope to the user, including a read-only check that adds a
+  target, requires new access, or discloses additional data. Pass the user's
+  answer on as Send says. The release agent confirms completion after all
+  approved lanes and checks finish.
 - **A task whose `merged` line in the ledger says "by rule"** gets no
   release before the user's yes.

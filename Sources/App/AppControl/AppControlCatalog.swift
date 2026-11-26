@@ -90,6 +90,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case taskCleanUp = "task.clean-up"
     case taskReadyForReview = "task.ready-for-review"
     case taskNeedsReply = "task.needs-reply"
+    case taskAnswer = "task.answer"
     case taskWaiting = "task.waiting"
     case taskMarkDone = "task.mark-done"
     case taskArchive = "task.archive"
@@ -760,6 +761,23 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 parameters: [
                     .taskID(required: false),
                     .init(name: "question", summary: "The question in a few words; the task's row shows it.", valueType: .string, required: false),
+                    .init(name: "approval", summary: "Show Approve and Decline for this task's own question in Coordinator chat.", valueType: .boolean, required: false),
+                    .init(name: "fleetVersion", summary: "Website release version for the read-only fleet check. Requires fleetTargets.", valueType: .string, required: false),
+                    .init(name: "fleetTargets", summary: "Comma-separated fleet target IDs. Requires fleetVersion.", valueType: .string, required: false),
+                ]
+            )
+        case .taskAnswer:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Send a signed Approve or Decline for the exact open question. The user must first grant the approved HMAC webhook permission for this task, release version and fleet.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .init(name: "questionID", summary: "The open approval question's UUID from task.get.", valueType: .string, required: true),
+                    .init(name: "decision", summary: "approve or decline.", valueType: .string, required: true),
+                    .init(name: "webhookID", summary: "The granted webhook's UUID.", valueType: .string, required: true),
+                    .init(name: "signature", summary: "Hex HMAC-SHA256 for this answer. Read it from stdin.", valueType: .string, required: true),
                 ]
             )
         case .taskWaiting:
