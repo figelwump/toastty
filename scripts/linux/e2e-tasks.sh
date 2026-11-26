@@ -10,7 +10,7 @@
 #   5. the task survives a quit and restart;
 #   6. the Tasks view (Broadway, smoke script): open, rows, mark widths,
 #      selection with the arrows, Esc, the Show Tasks toggle, and the right
-#      panel, plus Merge and Complete Task directly in the workspace header;
+#      panel, plus task actions in the workspace header and Workspace Page;
 #   7. Continue as New Task from a finished task with a saved context.
 # Build first: scripts/linux/build.sh --product toastty-linux --product toastty
 # Usage: scripts/linux/e2e-tasks.sh   (exit status 0 when every check passes)
@@ -275,10 +275,10 @@ state $WORK/ui-state.json
 expect workspaceTaskControl=none
 file-write $WORK/test-complete go
 wait-file $WORK/complete-selected
-expect tasksView=hidden workspaceTaskControl=Archive_Task…
+expect tasksView=hidden workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
 file-write $WORK/finish-second go
 wait-file $WORK/review-ready
-expect tasksView=hidden workspaceTaskControl=Complete_Task workspaceTaskButtons=primary
+expect tasksView=hidden workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
 # A task space shows its tab row only while it has a second tab.
 expect tabs=1 tabBar=hidden
 action workspace.tab.create
@@ -287,14 +287,32 @@ expect tabs=2 tabBar=shown
 action workspace.tab.close
 wait 300
 expect tabs=1 tabBar=hidden dialog=none
+file-write $WORK/test-awaiting-reply go
+wait-file $WORK/awaiting-reply
+expect workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
 screenshot $WORK/workspace-complete.png
+workspace-page card selected
+wait 400
+expect workspacePage=shown tasksView=hidden
+workspace-page task-menu 0
+wait 300
+screenshot $WORK/workspace-page-task-actions.png
+workspace-page task-menu 0 markDone
+wait 400
+expect workspacePage=shown dialog=AdwAlertDialog
+dialog-respond cancel
+wait 400
+expect workspacePage=shown dialog=none
+file-write $WORK/overview-action-cancelled go
+wait-file $WORK/back-in-task-space
+expect workspacePage=hidden workspaceTaskControl=Mark_Done
 click workspace.task-control.primary
 wait 400
 expect dialog=AdwAlertDialog
 screenshot $WORK/workspace-complete-confirm.png
 dialog-respond cancel
 wait 400
-expect tasksView=hidden workspaceTaskControl=Complete_Task
+expect tasksView=hidden workspaceTaskControl=Mark_Done
 click workspace.task-control.primary
 wait 400
 dialog-respond confirm
@@ -315,6 +333,12 @@ click workspace.task-control.primary
 wait 400
 expect workspaceTaskControl=progress
 file-write $WORK/merge-clicked go
+wait-file $WORK/merge-recorded
+click workspace.task-control.options
+wait 250
+click workspace.task-control.cancelMerge
+wait 300
+file-write $WORK/merge-cancelled go
 wait-file $WORK/test-pending
 # Opening Tasks triggers a pull request refresh without waiting for the
 # board's periodic poll. Verify the result back in the workspace.
@@ -376,11 +400,23 @@ if wait_for_file "$WORK/test-complete" 900; then
   done
   touch "$WORK/review-ready"
 fi
+if wait_for_file "$WORK/test-awaiting-reply"; then
+  cli action run task.needs-reply taskID="$TASK2" question="Ready to finish?" > "$WORK/needs-reply.json"
+  cli task get "$TASK2" > "$WORK/needs-reply-get.json"
+  check "the no-PR fixture is awaiting a reply, not ready for review" "grep -q '"attention" : "awaitingReply"' '$WORK/needs-reply-get.json'"
+  touch "$WORK/awaiting-reply"
+fi
+if wait_for_file "$WORK/overview-action-cancelled"; then
+  cli task get "$TASK2" > "$WORK/after-overview-cancel.json"
+  check "cancelling Mark Done from the Workspace Page leaves the task awaiting a reply" +    "grep -q '"attention" : "awaitingReply"' '$WORK/after-overview-cancel.json'"
+  cli action run workspace.select --workspace "$SPACE2" > "$WORK/reselect2.json"
+  touch "$WORK/back-in-task-space"
+fi
 if wait_for_file "$WORK/complete-clicked"; then
   cli task get "$TASK2" > "$WORK/completed.json"
   cli query run workspace.list > "$WORK/after-complete.json"
   DONE_AT=$(json "$WORK/completed.json" 'r.get("doneAt")')
-  check "Complete Task marks the task done and closes its workspace" \
+  check "Mark Done completes the awaiting-reply task and closes its workspace" \
     "[ -n '$DONE_AT' ] && [ '$DONE_AT' != None ] && ! grep -qi '$SPACE2' '$WORK/after-complete.json'"
   cli action run workspace.set-annotation --workspace "$SPACE1" key=github-pr text="PR #42" \
     url=https://github.com/fixture/toastty/pull/42 > "$WORK/pr.json"
@@ -392,7 +428,11 @@ if wait_for_file "$WORK/merge-clicked"; then
   MERGE_REQUESTED_AT=$(json "$WORK/merge.json" 'r.get("mergeRequestedAt")')
   check "Merge from the header requests the task’s merge flow" \
     "[ -n '$MERGE_REQUESTED_AT' ] && [ '$MERGE_REQUESTED_AT' != None ]"
-  cli task cancel-merge "$TASK1" > "$WORK/cancel-merge.json"
+  touch "$WORK/merge-recorded"
+fi
+if wait_for_file "$WORK/merge-cancelled"; then
+  cli task get "$TASK1" > "$WORK/cancel-merge.json"
+  check "Cancel Merge from the header cancels the agent's merge check" +    "[ \"$(json "$WORK/cancel-merge.json" 'r.get("mergeRequestedAt")')\" = None ]"
   touch "$WORK/pending-pr" "$WORK/test-pending"
 fi
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
@@ -401,7 +441,7 @@ wait $APID; UIRC=$?
 check "the Tasks view and workspace header script passes" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
-for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-merge workspace-merge-wide workspace-open-pr workspace-open-pr-wide; do
+for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-page-task-actions workspace-merge workspace-merge-wide workspace-open-pr workspace-open-pr-wide; do
   [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
