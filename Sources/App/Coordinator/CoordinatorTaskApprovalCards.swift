@@ -98,8 +98,10 @@ struct CoordinatorTaskApprovalCards: View {
             ViewThatFits(in: .vertical) {
                 scopeText(request).fixedSize(horizontal: false, vertical: true)
                 ScrollView { scopeText(request).frame(maxWidth: .infinity, alignment: .leading) }
+                    .frame(height: 140 * textScale)
             }
-            .frame(maxHeight: 140 * textScale)
+            .frame(maxHeight: 140 * textScale, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
             if let answer = record.lastApprovalAnswer, answer.questionID == questionID, answer.delivery != .cancelled {
                 answerLabel(answer)

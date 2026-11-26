@@ -1694,7 +1694,7 @@ def checked_task_answer(run):
         ax('activate')
         button = 'coordinator.task-approval.approve'
         wait_for('Approve in Coordinator chat', lambda: ax('frame', button).returncode == 0, timeout=30)
-        frame = ax('frame', 'coordinator.chat')
+        frame = ax('frame', 'coordinator.task-approval')
         if frame.returncode == 0:
             rect = ','.join(frame.stdout.split())
             subprocess.run(['screencapture', '-x', '-R', rect, str(run.artifacts / 'question.png')],
@@ -1714,6 +1714,7 @@ def checked_task_answer(run):
               and receipt.get('delivery') == 'sent' and receipt.get('questionID') == question_id
               and receipt.get('sessionID') == task.session,
               dict(messages=messages, receipt=receipt))
+    run.wait_idle(timeout=180)
     commands = [command for turn in run.turns() for command in turn['commands']]
     run.check('the Coordinator agent makes no task send for the checked answer',
               not any(re.search(r'task\s+send\b', command) for command in commands), commands)
@@ -2646,7 +2647,7 @@ def signed_task_answer(run):
             ax('activate')
             button = 'coordinator.task-approval.allow-bot'
             wait_for('the bot menu on the fleet approval card', lambda: ax('frame', button).returncode == 0, timeout=30)
-            frame = ax('frame', 'coordinator.chat')
+            frame = ax('frame', 'coordinator.task-approval')
             if frame.returncode == 0:
                 rect = ','.join(frame.stdout.split())
                 subprocess.run(['screencapture', '-x', '-R', rect, str(run.artifacts / 'fleet-question.png')],
@@ -2663,6 +2664,7 @@ def signed_task_answer(run):
         run.check('the task receives the bot, decision and exact fleet', len(messages) == 1
                   and all(word in messages[0] for word in ('Approved via test-relay', '0.2.12', 'test-computer')), messages)
         run.check('a second submission of the same answer is refused', submit().returncode != 0)
+        run.wait_idle(timeout=180)
     finally:
         receiver.close()
 
