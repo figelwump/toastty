@@ -6,7 +6,7 @@ extension AppControlActionID {
     var isTaskAction: Bool {
         switch self {
         case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch, .taskUnwatch,
-             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskWaiting,
+             .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply, .taskAnswer, .taskWaiting,
              .taskMarkDone, .taskArchive, .taskRelease, .taskReleaseComplete, .taskAdopt, .windowTasksShow, .windowTasksHide, .windowSidebarSetSegment,
              .webhookAdd, .webhookSet, .webhookRemove, .webhookTest: true
         default: false
@@ -80,8 +80,43 @@ extension AppControlExecutor {
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
         case .taskNeedsReply:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
-            let updated = try perform { try coordinator.needsReply(taskID: record.id, question: args.taskString("question")) }
+            let version = args.taskString("fleetVersion")
+            let targets = args.taskString("fleetTargets")
+            let approval = try args.taskBool("approval") == true || version != nil || targets != nil
+            let fleetChecks: TaskFleetChecks?
+            if version != nil || targets != nil {
+                guard let version, let targets, args["question"] == nil,
+                      let scope = TaskFleetChecks(version: version, targets: targets.components(separatedBy: ",")) else {
+                    throw AutomationSocketError.invalidPayload("Supply a website version and comma-separated fleet target IDs without a custom question.")
+                }
+                fleetChecks = scope
+            } else {
+                fleetChecks = nil
+            }
+            if approval {
+                guard let session = callerManagedSession(),
+                      coordinator.liveAgentSession(of: record, ownAgentOnly: true)?.sessionID == session.sessionID else {
+                    throw AutomationSocketError.invalidPayload("Only the task's active agent can ask a checked approval question.")
+                }
+            }
+            let updated = try perform {
+                try coordinator.needsReply(taskID: record.id, question: args.taskString("question"), approval: approval, fleetChecks: fleetChecks)
+            }
             return .init(didMutateState: true, result: Self.taskSnapshot(updated))
+        case .taskAnswer:
+            let record = try visibleTask(args: args, coordinator: coordinator)
+            guard let questionID = args.taskString("questionID").flatMap(UUID.init(uuidString:)),
+                  let webhookID = args.taskString("webhookID").flatMap(UUID.init(uuidString:)),
+                  let decision = args.taskString("decision").flatMap(TaskApprovalAnswer.Decision.init(rawValue:)),
+                  let signature = args.taskString("signature") else {
+                throw AutomationSocketError.invalidPayload("Supply questionID, decision, webhookID and signature.")
+            }
+            let answer = try perform {
+                try coordinator.answerApproval(
+                    taskID: record.id, questionID: questionID, decision: decision, bot: (webhookID, signature)
+                )
+            }
+            return .init(didMutateState: true, result: Self.approvalAnswerSnapshot(answer))
         case .taskWaiting:
             let record = try ownOrVisibleTask(args: args, coordinator: coordinator)
             let reason = args.taskString("on")
@@ -939,6 +974,18 @@ extension AppControlExecutor {
         return result
     }
 
+    static func approvalAnswerSnapshot(_ answer: TaskApprovalAnswer) -> [String: AutomationJSONValue] {
+        [
+            "id": .string(answer.id.uuidString),
+            "questionID": .string(answer.questionID.uuidString),
+            "decision": .string(answer.decision.rawValue),
+            "question": .string(answer.question),
+            "delivery": .string(answer.delivery.rawValue),
+            "sessionID": answer.sessionID.map(AutomationJSONValue.string) ?? .null,
+            "webhookName": answer.grant.map { .string($0.webhookName) } ?? .null,
+        ]
+    }
+
     static func taskSnapshot(_ record: TaskRecord, stage: TaskStageSnapshot? = nil) -> [String: AutomationJSONValue] {
         func optional(_ value: String?) -> AutomationJSONValue { value.map(AutomationJSONValue.string) ?? .null }
         func date(_ value: Date?) -> AutomationJSONValue { optional(value.map { ISO8601DateFormatter().string(from: $0) }) }
@@ -999,8 +1046,15 @@ extension AppControlExecutor {
             "mergeCommit": optional(record.mergeCommit),
             "readyForReviewAt": date(record.readyForReviewAt),
             "replyRequest": record.replyRequest.map {
-                .object(["askedAt": date($0.askedAt), "question": optional($0.question)])
+                .object([
+                    "askedAt": date($0.askedAt), "question": optional($0.question),
+                    "approvalID": optional($0.approvalID?.uuidString),
+                    "fleetChecks": $0.fleetChecks.map {
+                        .object(["version": .string($0.version), "targets": .array($0.targets.map(AutomationJSONValue.string))])
+                    } ?? .null,
+                ])
             } ?? .null,
+            "lastApprovalAnswer": record.lastApprovalAnswer.map { .object(approvalAnswerSnapshot($0)) } ?? .null,
             "waiting": record.waiting.map {
                 .object(["on": .string($0.on), "since": date($0.since), "wakeAt": date($0.wakeAt), "wokenAt": date($0.wokenAt)])
             } ?? .null,

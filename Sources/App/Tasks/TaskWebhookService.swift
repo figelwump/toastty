@@ -409,6 +409,35 @@ final class TaskWebhookService: ObservableObject {
         webhook.settingsDigest + "|" + (keychainItems[webhook.id]?.secret.map { TaskWebhookSignature.header(secret: $0, timestamp: 0, body: Data()) } ?? "")
     }
 
+    func fleetAnswerGrant(for webhook: TaskWebhook, task: TaskRecord, scope: TaskFleetChecks) -> TaskFleetAnswerGrant? {
+        guard webhook.auth == .hmac, isActive(webhook), hasSecret(webhook.id),
+              webhook.events.contains(.needsYou),
+              webhook.matches(projectRoot: task.projectRoot, externalRefID: task.externalRef?.id) else { return nil }
+        return TaskFleetAnswerGrant(
+            webhookID: webhook.id, webhookName: webhook.name, credentialGeneration: configuration(of: webhook), scope: scope
+        )
+    }
+
+    func fleetAnswerGrantIsCurrent(_ grant: TaskFleetAnswerGrant, task: TaskRecord) -> Bool {
+        guard let webhook = webhook(id: grant.webhookID) else { return false }
+        return fleetAnswerGrant(for: webhook, task: task, scope: grant.scope) == grant
+    }
+
+    func fleetAnswerKeyIsUnavailable(_ grant: TaskFleetAnswerGrant) -> Bool {
+        unreadKeychainItems.contains(grant.webhookID)
+    }
+
+    func verifiesFleetAnswer(
+        _ signature: String, grant: TaskFleetAnswerGrant, task: TaskRecord,
+        questionID: UUID, decision: TaskApprovalAnswer.Decision
+    ) -> Bool {
+        guard fleetAnswerGrantIsCurrent(grant, task: task), let secret = keychainItems[grant.webhookID]?.secret else { return false }
+        return TaskApprovalAnswer.verifies(
+            signature: signature, secret: secret, webhookID: grant.webhookID,
+            taskID: task.id, questionID: questionID, decision: decision
+        )
+    }
+
     private func finishSend(webhookID: UUID, eventID: UUID, result: TaskWebhookSendResult) {
         let sentConfiguration = inFlightConfiguration[webhookID]
         if inFlight[webhookID] == eventID {

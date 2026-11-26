@@ -247,7 +247,7 @@ extension TaskCoordinator {
 
     /// Types `text` and presses Return, with image paths kept as text so
     /// that the Return submits it (`AgentPasteText`).
-    private func deliver(
+    func deliver(
         _ text: String, to session: TaskSessionInfo, taskID: UUID, automaticPromptTurnEnd: Date? = nil
     ) -> TerminalInputDeliveryResult {
         let text = AgentPasteText.keepingImagePathsAsText(text)
@@ -395,6 +395,7 @@ extension TaskCoordinator {
             sessions?.session($0.key)?.isActive == true
         }
         unconfirmedDeliveryTimes = unconfirmedDeliveryTimes.filter { sessions?.session($0.key)?.isActive == true }
+        deliverApprovalAnswers(at: at)
         // Building the board walks every task, so only a pass with a pending
         // watch that needs it does so, and only once. Archived is read from
         // the record.
@@ -529,7 +530,9 @@ extension TaskCoordinator {
     /// Whether a watch or a queued message still has a line to type.
     private var hasActiveWatches: Bool {
         waitWatches.isEmpty == false
-            || records.records.contains { $0.activeWatches.isEmpty == false || $0.waitingMessages.isEmpty == false }
+            || records.records.contains {
+                $0.activeWatches.isEmpty == false || $0.waitingMessages.isEmpty == false || $0.lastApprovalAnswer?.delivery == .queued
+            }
     }
 
     // MARK: - Wakes of waiting tasks
