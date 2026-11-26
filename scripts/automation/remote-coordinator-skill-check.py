@@ -2335,6 +2335,7 @@ def release_publish_now(run):
     run.check("Toastty's first line says that the coordinator's approvals and decisions count as the user's",
               text.split('\n')[0] == APPROVAL_LINE, text[:200])
     body = typed_text(text).lower()
+    run.check('the message answers the publish question', 'publish' in body, body)
     run.check('the message says that the user answered yes to "Publish now?"',
               'publish now' in body and re.search(r'\byes\b', body), body, required=False)
     run.check('the message asks for no second yes in the task', not SECOND_YES.search(body), body)

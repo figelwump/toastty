@@ -42,7 +42,7 @@ release the Mac app, then publish the website change.
    - Commit: `<RELEASE_GHOSTTY_COMMIT_SHORT>`
    - Build flags: `<RELEASE_GHOSTTY_BUILD_FLAGS>`
    ```
-4. Run `scripts/release/publish-github-release.sh --create-tag` to publish a draft by default. Keep the draft default when the user asked only for a draft or did not say. Use `--publish` when the user wants the release to go live and update the Sparkle appcast; a release approval that covers making the release live is that request. Before it, run `--publish --dry-run` and read `artifacts/release/<version>-<build>/appcast-dry-run.xml`. Then ask "publish now?" as [Publish now?](#publish-now) describes, and run `--create-tag --publish --confirm-publish` only after the user's plain yes.
+4. Run `scripts/release/publish-github-release.sh --create-tag` to publish a draft by default. Keep the draft default when the user asked only for a draft or did not say. Use `--publish` when the user wants the release to go live and update the Sparkle appcast; a release approval that covers making the release live is that request. Before it, run `--create-tag --publish --dry-run` and read `artifacts/release/<version>-<build>/appcast-dry-run.xml`. Then ask "publish now?" as [Publish now?](#publish-now) describes, and run `--create-tag --publish --confirm-publish` only after the user's plain yes.
 
 ## Publish now?
 
@@ -56,11 +56,12 @@ already covers publication, and also when the coordinator started the
 release.
 
 - **When.** After every check that comes before going live has passed: the
-  candidate receipt, the final release notes, the `--publish --dry-run` feed
-  item, and the relay and iPhone state checks. The next command is
-  `publish-github-release.sh --create-tag --publish --confirm-publish`. A
-  draft release, a dry run and a pushed tag do not reach users and need no
-  yes.
+  candidate receipt, the final release notes, the
+  `--create-tag --publish --dry-run` feed item, and the relay and iPhone
+  state checks. The next command is
+  `publish-github-release.sh --create-tag --publish --confirm-publish`. A dry
+  run needs no yes. Do not create a draft release first: the script cannot
+  publish over an existing release.
 - **How.** In a Toastty task, run
   `toastty task needs-reply --approval --question "<question>"` and end the
   turn. The user answers with the question's Approve or Decline card in the
@@ -82,8 +83,10 @@ release.
   answer to another question, such as one about a hold or a test; "looks
   fine", "testing passed" or "go ahead" said about something else; an
   approval given before you asked; a rule in the coordinator's policy; or a
-  decision of the coordinator. When an answer is not clearly a yes to this
-  question, ask it again.
+  decision of the coordinator. This narrows the general rule that the
+  coordinator's approvals and decisions count as the user's: for this
+  question, only the user's own answer counts. When an answer is not clearly
+  a yes to this question, ask it again.
 - **One yes, one publish.** The yes covers the build, commit and steps that
   the question named. If any of them changes after the yes, such as a new
   build, a failed step that you retry with other inputs, or another
@@ -103,7 +106,7 @@ release.
   - `RELEASE_GHOSTTY_COMMIT_SHORT`
   - `RELEASE_GHOSTTY_BUILD_FLAGS`
 - `scripts/release/publish-github-release.sh` expects the notes file to exist, be non-empty, have exactly one `## Highlights` section with content in the supported Markdown subset, have no `{{placeholder}}` tokens, and include exact canonical Ghostty commit and build-flags lines before publication.
-- With `--publish`, the update feed item's `description` is the Highlights as HTML, and the Sparkle update prompt shows it. To see the item before going live, run with `--publish --dry-run` and read `artifacts/release/<version>-<build>/appcast-dry-run.xml`.
+- With `--publish`, the update feed item's `description` is the Highlights as HTML, and the Sparkle update prompt shows it. To see the item before going live, run with `--create-tag --publish --dry-run` and read `artifacts/release/<version>-<build>/appcast-dry-run.xml`.
 - The release directory under `artifacts/release/<version>-<build>/` must remain intact from the earlier build phase.
 
 ## Validation
