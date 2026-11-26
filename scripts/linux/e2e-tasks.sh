@@ -403,12 +403,14 @@ fi
 if wait_for_file "$WORK/test-awaiting-reply"; then
   cli action run task.needs-reply taskID="$TASK2" question="Ready to finish?" > "$WORK/needs-reply.json"
   cli task get "$TASK2" > "$WORK/needs-reply-get.json"
-  check "the no-PR fixture is awaiting a reply, not ready for review" "grep -q '"attention" : "awaitingReply"' '$WORK/needs-reply-get.json'"
+  check "the no-PR fixture is awaiting a reply, not ready for review" \
+    "[ '$(json "$WORK/needs-reply-get.json" 'r["stage"]["attention"] == "awaitingReply" and r.get("pullRequest") is None')' = True ]"
   touch "$WORK/awaiting-reply"
 fi
 if wait_for_file "$WORK/overview-action-cancelled"; then
   cli task get "$TASK2" > "$WORK/after-overview-cancel.json"
-  check "cancelling Mark Done from the Workspace Page leaves the task awaiting a reply" +    "grep -q '"attention" : "awaitingReply"' '$WORK/after-overview-cancel.json'"
+  check "cancelling Mark Done from the Workspace Page leaves the task awaiting a reply" \
+    "[ '$(json "$WORK/after-overview-cancel.json" 'r["stage"]["attention"] == "awaitingReply" and r.get("doneAt") is None')' = True ]"
   cli action run workspace.select --workspace "$SPACE2" > "$WORK/reselect2.json"
   touch "$WORK/back-in-task-space"
 fi
@@ -432,7 +434,8 @@ if wait_for_file "$WORK/merge-clicked"; then
 fi
 if wait_for_file "$WORK/merge-cancelled"; then
   cli task get "$TASK1" > "$WORK/cancel-merge.json"
-  check "Cancel Merge from the header cancels the agent's merge check" +    "[ \"$(json "$WORK/cancel-merge.json" 'r.get("mergeRequestedAt")')\" = None ]"
+  check "Cancel Merge from the header cancels the agent's merge check" \
+    "[ '$(json "$WORK/cancel-merge.json" 'r.get("mergeRequestedAt") is None and r.get("mergeCancelledAt") is not None')' = True ]"
   touch "$WORK/pending-pr" "$WORK/test-pending"
 fi
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
