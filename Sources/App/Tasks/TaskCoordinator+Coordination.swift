@@ -277,6 +277,100 @@ extension TaskCoordinator {
 
     // MARK: - Watch
 
+    /// A single continuation on Opus, for the exact stopped task the
+    /// coordinator saw. Keep the provider conversation and worktree.
+    func recoverFableTask(taskID: UUID, expectedSessionID: String) throws {
+        guard let launcher = launcher as? AgentLaunchService,
+              let task = records.record(id: taskID), task.setup.isStarted,
+              task.doneAt == nil, task.archivedAt == nil, task.replyRequest == nil,
+              task.mergeFailure == nil, task.startWork?.state != .running,
+              let session = liveAgentSession(of: task, ownAgentOnly: true),
+              session.workspaceID == task.taskSpaceWorkspaceID,
+              [task.operation.taskSpace?.panelID, task.operation.worktreeSession?.panelID].contains(session.panelID),
+              session.sessionID == expectedSessionID, !session.hasBackgroundWork,
+              let source = launcher.claudeRecoverySource(sessionID: session.sessionID),
+              let quota = source.status?.claudeFableQuota, let permissionMode = source.status?.claudePermissionMode,
+              let access = launcher.quotaRecoveryConversationAccess else {
+            throw TaskError("The selected task has no confirmed, recoverable Fable quota failure.")
+        }
+        guard recoveringFableTasks.insert(taskID).inserted else {
+            throw TaskError("Toastty is already recovering this task.")
+        }
+        recoveringFableTaskPanels[taskID] = source.panelID
+        let oldSubscription = access.subscribeToConversation(inPanel: source.panelID)
+        Task { @MainActor [weak self, weak launcher] in
+            defer {
+                oldSubscription.cancel()
+                self?.recoveringFableTasks.remove(taskID)
+                self?.recoveringFableTaskPanels.removeValue(forKey: taskID)
+            }
+            guard let self, let launcher else { return }
+            do {
+                // Without a phone connection or an open chat, this may be
+                // the first follower of the task. Replaying its StopFailure
+                // opens the composer only after the provider settle window.
+                let clock = ContinuousClock()
+                let deadline = clock.now.advanced(by: .seconds(3))
+                while clock.now < deadline {
+                    let availability = access.inputAvailability(panelID: source.panelID, sessionID: source.sessionID)
+                    guard availability == nil || availability == .unavailable(reason: .interrupted)
+                            || availability == .unavailable(reason: .unknownProviderState) else { break }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                let launch = try await launcher.resumeClaudeAfterQuota(
+                    source: source, nativeID: quota.nativeSessionID,
+                    model: ClaudeFableQuota.fallbackModel, effort: ClaudeFableQuota.fallbackEffort,
+                    permissionMode: permissionMode,
+                    isStillEligible: {
+                        guard !self.isTerminating, let record = self.records.record(id: taskID),
+                              record.doneAt == nil, record.archivedAt == nil, record.replyRequest == nil,
+                              record.mergeFailure == nil, record.startWork?.state != .running,
+                              self.liveAgentSession(of: record, ownAgentOnly: true)?.sessionID == expectedSessionID,
+                              self.promptOccupant(of: session) == nil,
+                              self.sessions?.hasHeldSteerMessages(panelID: source.panelID) == false else { return false }
+                        return launcher.claudeRecoveryPromptIsFree(source: source)
+                    },
+                    adoptPanel: { panelID, sessionID in
+                        try self.records.save(id: taskID) { record in
+                            if record.operation.worktreeSession?.panelID == source.panelID {
+                                record.operation.worktreeSession?.panelID = panelID
+                                record.operation.worktreeSession?.sessionID = sessionID
+                            }
+                            if record.operation.taskSpace?.panelID == source.panelID {
+                                record.operation.taskSpace?.panelID = panelID
+                                record.operation.agentLaunch?.sessionID = sessionID
+                            }
+                        }
+                        self.recoveringFableTaskPanels[taskID] = panelID
+                    }
+                )
+                self.flushLayout()
+                let (subscription, summary) = try await launcher.waitForRecoveredClaude(
+                    launch, nativeID: quota.nativeSessionID, model: ClaudeFableQuota.fallbackModel
+                )
+                defer { subscription.cancel() }
+                guard let record = self.records.record(id: taskID), record.replyRequest == nil,
+                      record.doneAt == nil, record.archivedAt == nil,
+                      let current = self.liveAgentSession(of: record, ownAgentOnly: true),
+                      current.sessionID == launch.sessionID, current.lastTurnEndedAt == nil,
+                      case .openPrompt(let epoch) = summary.inputAvailability else { return }
+                self.saveOrDefer(taskID: taskID) { record in
+                    record.resolved?.model = ClaudeFableQuota.fallbackModel
+                    record.resolved?.effort = ClaudeFableQuota.fallbackEffort
+                }
+                _ = subscription.send(RemoteMessageSendRequest(
+                    conversationID: summary.conversationID, clientRequestID: UUID().uuidString,
+                    expectedInputEpoch: epoch,
+                    text: "Fable reached its usage limit. Continue the task on Opus 5.5 at high effort. Check the effects of any action already taken before retrying it."
+                ), byUser: false)
+            } catch {
+                ToasttyLog.warning("Fable task recovery stopped", category: .tasks, metadata: [
+                    "task_id": taskID.uuidString, "reason": error.localizedDescription,
+                ])
+            }
+        }
+    }
+
     /// Saves a watch on `notifyTaskID`'s record, or keeps it in memory for
     /// a caller that polls, when `notifyTaskID` is `nil`.
     func addWatch(targetTaskID: UUID, condition: TaskWatchCondition, notifyTaskID: UUID?) throws -> TaskWatch {
@@ -458,6 +552,7 @@ extension TaskCoordinator {
     /// typed there took it.
     func automaticPromptTurnEnd(for session: TaskSessionInfo) -> Date? {
         guard let sessions, let kind = session.status?.kind, kind == .idle || kind == .ready,
+              !recoveringFableTaskPanels.values.contains(session.panelID),
               promptOccupant(of: session) == nil,
               sessions.hasHeldSteerMessages(panelID: session.panelID) == false else { return nil }
         let turnEnd = session.lastTurnEndedAt ?? .distantPast

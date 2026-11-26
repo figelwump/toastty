@@ -6,6 +6,40 @@ import Testing
 
 struct AgentLaunchArgumentOverrideAdapterTests {
     @Test
+    func claudeQuotaResumeUsesTheExactConversationAndPreservesPermissionMode() throws {
+        let nativeID = UUID()
+        let argv = try AgentLaunchArgumentOverrideAdapter.applyingClaudeQuotaResume(
+            nativeID: nativeID, permissionMode: "plan",
+            to: ["claude", "--permission-mode", "acceptEdits", "--disallowedTools", "Bash"]
+        )
+        #expect(argv == ["claude", "--resume", nativeID.uuidString.lowercased(),
+                         "--permission-mode", "plan", "--disallowedTools", "Bash"])
+        for profile in [["claude", "--dangerously-skip-permissions"], ["claude", "--continue"],
+                        ["sh", "-c", "claude"], ["claude", "a different prompt"]] {
+            #expect(throws: AgentLaunchError.self) {
+                try AgentLaunchArgumentOverrideAdapter.applyingClaudeQuotaResume(
+                    nativeID: nativeID, permissionMode: "default", to: profile
+                )
+            }
+        }
+    }
+
+    @Test
+    func claudeRecoveryRequiresAnEmptyComposerAtTheBottomOfTheTerminal() {
+        let line = "────────────────"
+        #expect(AgentLaunchService.isEmptyClaudeComposer("\(line)\n❯\n\(line)\n? for shortcuts"))
+        for screen in [
+            "\(line)\n❯ draft\n\(line)\n? for shortcuts",
+            "\(line)\n❯\n\(line)\nenter to confirm · esc to cancel",
+            "\(line)\n❯\n\(line)\n1 background task",
+            "\(line)\n❯\n\(line)\nJump to bottom (click) ↓",
+            "❯",
+        ] {
+            #expect(!AgentLaunchService.isEmptyClaudeComposer(screen))
+        }
+    }
+
+    @Test
     func conversationForksUseExactNativeIdentityAndProviderWorkingDirectory() throws {
         let nativeID = UUID().uuidString
         for agent in [AgentKind.codex, .claude] {

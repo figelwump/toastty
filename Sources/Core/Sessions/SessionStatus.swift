@@ -13,11 +13,76 @@ public struct SessionStatus: Codable, Equatable, Sendable {
     public var kind: SessionStatusKind
     public var summary: String
     public var detail: String?
+    public var claudeFableQuota: ClaudeFableQuota?
+    public var claudePermissionMode: String?
 
-    public init(kind: SessionStatusKind, summary: String, detail: String? = nil) {
+    public init(
+        kind: SessionStatusKind, summary: String, detail: String? = nil,
+        claudeFableQuota: ClaudeFableQuota? = nil, claudePermissionMode: String? = nil
+    ) {
         self.kind = kind
         self.summary = summary
         self.detail = detail
+        self.claudeFableQuota = claudeFableQuota
+        self.claudePermissionMode = claudePermissionMode
+    }
+}
+
+public struct ClaudeFableQuota: Codable, Equatable, Sendable {
+    public static let preferredModel = "claude-fable-5-2"
+    public static let fallbackModel = "claude-opus-5-5"
+    public static let fallbackEffort = "high"
+    private static let rejection = "You've hit your Fable limit"
+
+    public let nativeSessionID: UUID
+    public let resetsAt: Date?
+
+    public init(nativeSessionID: UUID, resetsAt: Date?) {
+        self.nativeSessionID = nativeSessionID
+        self.resetsAt = resetsAt
+    }
+
+    public static func isRejection(_ text: String?) -> Bool {
+        guard let text else { return false }
+        return text == rejection || text.hasPrefix(rejection + " · ")
+    }
+
+    public static func resetDate(from text: String?, at reportedAt: Date) -> Date? {
+        guard let text, isRejection(text),
+              let reset = text.components(separatedBy: " · ").dropFirst().first,
+              reset.hasPrefix("resets ") else { return nil }
+        let value = String(reset.dropFirst("resets ".count))
+        if let date = ISO8601DateFormatter().date(from: value) {
+            return date > reportedAt && date.timeIntervalSince(reportedAt) <= 7 * 86_400 ? date : nil
+        }
+        // The CLI shows an English date or time and, when supplied, an
+        // IANA zone in parentheses. Treat unknown renderings as unknown.
+        let pieces = value.components(separatedBy: " (")
+        guard pieces.count == 1 || (pieces.count == 2 && value.hasSuffix(")")) else { return nil }
+        let timeZone = pieces.count == 1 ? TimeZone.current
+            : TimeZone(identifier: String(pieces[1].dropLast()))
+        guard let timeZone else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        let formats = ["MMM d 'at' h:mma", "MMM d, h:mma", "EEE h:mma", "h:mma",
+                       "MMM d 'at' HH:mm", "MMM d, HH:mm", "EEE HH:mm", "HH:mm"]
+        for format in formats {
+            formatter.dateFormat = format
+            for offset in 0...7 {
+                guard let day = calendar.date(byAdding: .day, value: offset, to: reportedAt) else { continue }
+                formatter.defaultDate = calendar.startOfDay(for: day)
+                guard let candidate = formatter.date(from: pieces[0]),
+                      formatter.string(from: candidate).lowercased() == pieces[0].lowercased().replacingOccurrences(of: " ", with: " "),
+                      calendar.isDate(candidate, inSameDayAs: day),
+                      candidate > reportedAt, candidate.timeIntervalSince(reportedAt) <= 7 * 86_400 else { continue }
+                return candidate
+            }
+        }
+        return nil
     }
 }
 

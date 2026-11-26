@@ -845,7 +845,7 @@ final class AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
             }
 
-        case .taskCreate, .taskRetry, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch,
+        case .taskCreate, .taskRetry, .taskRecoverFable, .taskDelete, .taskSetWorkspace, .taskSetRelease, .taskStartWork, .taskSend, .taskWatch,
              .taskUnwatch, .taskMerge, .taskRequestMerge, .taskCancelMerge, .taskCleanUp, .taskReadyForReview, .taskNeedsReply,
              .taskWaiting, .taskMarkDone, .taskArchive, .taskReleaseComplete:
             return try runTaskAction(action, args: args)

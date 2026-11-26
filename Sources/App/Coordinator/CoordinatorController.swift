@@ -653,6 +653,58 @@ final class CoordinatorController: ObservableObject {
         startingWorkspaceID != nil && startingWorkspaceID == location?.workspaceID
     }
 
+    var configuredFableEffort: String? {
+        guard let config = try? configLoader().coordinator, config.agent == AgentKind.claude.rawValue else { return nil }
+        return config.effort
+    }
+
+    func canRecoverClaude(_ source: SessionRecord) -> Bool {
+        guard !isStarting, let launcher = launcher as? AgentLaunchService,
+              session?.sessionID == source.sessionID else { return false }
+        _ = syncConversationSubscription()
+        return launcher.claudeRecoveryPromptIsFree(source: source)
+    }
+
+    func isRunningFallbackClaude(_ source: SessionRecord, nativeID: UUID) -> Bool {
+        guard let binding = sessionRuntimeStore.nativeSessionBindingConfirmation(for: source.sessionID),
+              UUID(uuidString: binding.nativeSessionID) == nativeID,
+              let summary = syncConversationSubscription()?.snapshot(at: now())?.summary else { return false }
+        return summary.executionProfile?.modelIdentifier == ClaudeFableQuota.fallbackModel
+    }
+
+    /// Automatic recovery uses a native resume. Restart Coordinator is a
+    /// separate user action that starts a fresh conversation.
+    func resumeClaudeAfterQuota(
+        source: SessionRecord, nativeID: UUID, model: String, effort: String?, permissionMode: String,
+        beforeRetiring: @MainActor () -> Void
+    ) async throws {
+        guard let launcher = launcher as? AgentLaunchService, canRecoverClaude(source) else {
+            throw CoordinatorError("The coordinator's Claude prompt is occupied or unavailable.")
+        }
+        startingWorkspaceID = source.workspaceID
+        defer {
+            if startingWorkspaceID == source.workspaceID { startingWorkspaceID = nil }
+            drain()
+        }
+        let launch = try await launcher.resumeClaudeAfterQuota(
+            source: source, nativeID: nativeID, model: model, effort: effort, permissionMode: permissionMode,
+            environment: CoordinatorFolder.gitEnvironment(for: folder.directoryURL),
+            isStillEligible: {
+                self.location?.workspaceID == source.workspaceID
+                    && self.session?.sessionID == source.sessionID
+                    && launcher.claudeRecoveryPromptIsFree(source: source)
+            },
+            adoptPanel: { panelID, _ in
+                guard self.store.send(.setCoordinatorPanel(panelID: panelID)) else {
+                    throw CoordinatorError("Toastty could not attach the recovered coordinator terminal.")
+                }
+                beforeRetiring()
+            }
+        )
+        let (subscription, _) = try await launcher.waitForRecoveredClaude(launch, nativeID: nativeID, model: model)
+        subscription.cancel()
+    }
+
     /// Why the last start of the current coordinator's agent did not work.
     var startFailure: String? {
         guard let failedStart, failedStart.workspaceID == location?.workspaceID else { return nil }
@@ -1939,6 +1991,9 @@ final class CoordinatorController: ObservableObject {
         // the queue when it ends.
         guard isStarting == false else {
             return .held(.agentStarting, recheckAt: nil)
+        }
+        if session?.status?.claudeFableQuota != nil, !entry.byUser {
+            return .held(.awaitingTurn, recheckAt: nil)
         }
         if let session, ProviderTranscriptSupport.isManagedProvider(session.agent),
            let subscription = syncConversationSubscription() {

@@ -96,7 +96,10 @@ enum CLICommand: Equatable {
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case setup(SetupCommand)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
-    case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
+    case sessionStatus(
+        sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?,
+        claudeFableQuotaSessionID: String? = nil, claudePermissionMode: String? = nil
+    )
     case sessionBackgroundActivity(
         sessionID: String,
         panelID: UUID?,
@@ -264,13 +267,19 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
-        case .sessionStatus(let sessionID, let panelID, let kind, let summary, let detail):
+        case .sessionStatus(let sessionID, let panelID, let kind, let summary, let detail, let quotaSessionID, let permissionMode):
             var payload: [String: AutomationJSONValue] = [
                 "kind": .string(kind.rawValue),
                 "summary": .string(summary),
             ]
             if let detail {
                 payload["detail"] = .string(detail)
+            }
+            if let quotaSessionID {
+                payload["claudeFableQuotaSessionID"] = .string(quotaSessionID)
+            }
+            if let permissionMode {
+                payload["claudePermissionMode"] = .string(permissionMode)
             }
             return AutomationEventEnvelope(
                 eventType: "session.status",
@@ -675,7 +684,7 @@ enum CLICommand: Equatable {
         case .sessionStart(let sessionID, _, _, _, _):
             let resolvedSessionID = response.result?.string("sessionID") ?? sessionID
             return resolvedSessionID
-        case .sessionStatus(let sessionID, _, let kind, let summary, _):
+        case .sessionStatus(let sessionID, _, let kind, let summary, _, _, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
         case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _, _):
             return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
@@ -1168,6 +1177,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] task start-work [--base <ref>] [--branch-prefix <prefix>] [--title <text>] [--slug <slug>]
       toastty [--json] [--socket-path <path>] task get [<task-id>]
       toastty [--json] [--socket-path <path>] task retry|delete <task-id>
+      toastty [--json] [--socket-path <path>] task recover-fable <task-id> --session <session-id>
       toastty [--json] [--socket-path <path>] task set-workspace <task-id> (--workspace <id> | --recent <id> | --root <dir>)
       toastty [--json] [--socket-path <path>] task set-release [<task-id>] (--after-merge | --clear)
       toastty [--json] [--socket-path <path>] task list [--changed-since <cursor>] [--include-reply] [--parent <task-id>]
@@ -2449,6 +2459,17 @@ public enum ToasttyCLI {
         case "get" where remaining.isEmpty:
             // A task's agent reads its own task.
             return CLIInvocation(options: options, command: .appControlRun(kind: .query, id: "task.get", args: [:]))
+
+        case "recover-fable":
+            let parsed = try parseCommandArguments(remaining, valueOptions: ["--session"])
+            guard parsed.positionals.count == 1, let taskID = parsed.positionals.first, UUID(uuidString: taskID) != nil,
+                  let sessionID = parsed.singleValue("--session"), !sessionID.isEmpty else {
+                throw ToasttyCLIError.usage("task recover-fable requires a task ID and --session <session-id>\n\n\(usage)")
+            }
+            return CLIInvocation(options: options, command: .appControlRun(kind: .action, id: "task.recover-fable", args: [
+                "taskID": .string(taskID),
+                "expectedSessionID": .string(sessionID),
+            ]))
 
         case "get", "retry", "delete":
             let parsed = try parseCommandArguments(remaining, valueOptions: [])

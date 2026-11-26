@@ -76,6 +76,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case sessionExitAfterTurn = "session.exit-after-turn"
     case taskCreate = "task.create"
     case taskRetry = "task.retry"
+    case taskRecoverFable = "task.recover-fable"
     case taskDelete = "task.delete"
     case taskSetWorkspace = "task.set-workspace"
     case taskSetRelease = "task.set-release"
@@ -564,6 +565,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Run setup again for a task whose setup failed, or a move into a worktree that failed. It continues from the last step that finished. A task that still needs a workspace or an agent fills them again: from triage when [triage] has a command, otherwise from [defaults], and without a workspace it waits for one.",
                 selectors: [],
                 parameters: [.taskID(required: true)]
+            )
+        case .taskRecoverFable:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "The coordinator requests one recovery of a stopped Fable task on Opus 5.5 at high effort.",
+                selectors: [],
+                parameters: [
+                    .taskID(required: true),
+                    .init(name: "expectedSessionID", summary: "The failed managed session ID from task.get.", valueType: .string, required: true),
+                ]
             )
         case .taskDelete:
             return .init(

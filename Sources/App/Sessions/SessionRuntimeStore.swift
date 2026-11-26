@@ -5923,7 +5923,8 @@ final class SessionRuntimeStore: ObservableObject {
         SessionStatus(
             kind: .idle,
             summary: Self.readyCollapsedIdleStatus.summary,
-            detail: normalizedNonEmpty(status.detail)
+            detail: normalizedNonEmpty(status.detail),
+            claudePermissionMode: status.claudePermissionMode
         )
     }
 
