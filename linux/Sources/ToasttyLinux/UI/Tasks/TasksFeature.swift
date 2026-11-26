@@ -151,6 +151,8 @@ final class TasksWindowFeature: LinuxWindowFeature {
         return overviewIsShown(state) ? Self.overviewPageName : nil
     }
 
+    func hidesWorkspaceTabBar(on page: String) -> Bool { page == Self.overviewPageName }
+
     // MARK: - Workspace page
 
     /// The page shows while its workspace stays selected on the tab it was

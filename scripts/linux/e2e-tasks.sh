@@ -525,7 +525,7 @@ wait 300
 expect keepButton=kept
 workspace-page card selected
 wait 500
-expect workspacePage=shown tasksView=hidden rightPanelMapped=false overviewScratchpads=1 overviewLiveScratchpads=1 overviewSynopsis=toastty
+expect workspacePage=shown tasksView=hidden rightPanelMapped=false overviewScratchpads=1 overviewLiveScratchpads=1 overviewSynopsis=toastty tabs=1 tabBar=hidden
 expect overviewScratchpadTabs=1 overviewSelectedScratchpad=0
 file-write $WORK/page-shown go
 wait-file $WORK/synopsis-set
@@ -534,7 +534,20 @@ expect overviewSynopsis=agent
 screenshot $WORK/workspace-page.png
 click workspace.overview.terminal
 wait 300
-expect workspacePage=hidden
+expect workspacePage=hidden tabs=1 tabIndex=0 tabBar=shown
+# The overview also hides the row when a workspace has multiple tabs.
+action workspace.tab.create
+wait 300
+expect workspacePage=hidden tabs=2 tabIndex=1 tabBar=shown
+workspace-page card selected
+wait 300
+expect workspacePage=shown tabs=2 tabIndex=1 tabBar=hidden
+click workspace.overview.terminal
+wait 300
+expect workspacePage=hidden tabs=2 tabIndex=1 tabBar=shown
+action workspace.tab.close
+wait 300
+expect workspacePage=hidden tabs=1 tabIndex=0 tabBar=shown dialog=none
 workspace-page card selected
 wait 300
 expect workspacePage=shown
@@ -592,7 +605,7 @@ cli query run workspace.overview --workspace "$PAGE_WS" > $WORK/overview.json 2>
 touch $WORK/synopsis-set
 for i in $(seq 1 600); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; PRC=$?
-check "the workspace page: keep, switch, open and delete Scratchpad tabs, navigate and set the synopsis" "[ $PRC = 0 ] && ! grep -q 'FAIL' $WORK/app-workspace-page.log"
+check "the workspace page: hide terminal tabs, return to the selected terminal, manage Scratchpad tabs and set the synopsis" "[ $PRC = 0 ] && ! grep -q 'FAIL' $WORK/app-workspace-page.log"
 check "workspace.overview reads the synopsis and the kept Scratchpad" "grep -q '\"agent\"' $WORK/overview.json && grep -q 'E2E: the project' $WORK/overview.json && grep -q '\"linked\" : true' $WORK/overview.json"
 grep 'FAIL' $WORK/app-workspace-page.log | head -8
 [ -s $WORK/workspace-page.png ] && cp $WORK/workspace-page.png $REPO/artifacts/manual/linux-tasks/workspace-page.png

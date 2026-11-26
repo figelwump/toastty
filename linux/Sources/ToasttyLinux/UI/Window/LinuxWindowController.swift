@@ -14,8 +14,8 @@ import Foundation
 ///         ├ sidebar: RightPanelController
 ///         └ AdwToolbarView
 ///           ├ AdwHeaderBar (sidebar toggle, new tab, title, feature controls, agents, zoom pill, menu, right panel)
-///           ├ AdwTabBar (the selected workspace's tabs; only with 2+ tabs in a task space)
-///           └ GtkStack: workspace content | empty state | feature pages (Tasks)
+///           ├ AdwTabBar (the selected workspace's tabs; hidden on its overview page)
+///           └ GtkStack: workspace content | empty state | feature pages (Tasks, workspace overview)
 /// ```
 ///
 /// Features (`LinuxWindowFeature`, from `PanelHostRegistry`) add the pages,
@@ -285,6 +285,12 @@ public final class LinuxWindowController {
         if previousPage != page {
             gtk_stack_set_visible_child_name(cast(mainStack), page)
         }
+        // Hide the row itself without detaching its tab view or changing the
+        // selected tab. Leaving a covering page restores the usual autohide rule.
+        let hidesWorkspaceTabs = coveringPage.map { page in
+            features.contains { $0.hidesWorkspaceTabBar(on: page) }
+        } ?? false
+        Gtk.setVisible(tabBar, !hidesWorkspaceTabs)
         sidebar.render(state)
         let workspaceIsActive = isActive && page == "workspaces"
         content.render(state, windowIsActive: workspaceIsActive)
