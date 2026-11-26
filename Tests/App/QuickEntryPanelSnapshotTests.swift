@@ -524,7 +524,9 @@ final class QuickEntryPanelSnapshotTests: XCTestCase {
         let bitmap = try XCTUnwrap(contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds))
         contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
         XCTAssertEqual(bitmap.size.width, QuickEntryPanel.width)
-        XCTAssertEqual(bitmap.size.height, panel.frame.height, "The panel fits its content")
+        // The panel rounds its content's height up to whole points, so on a
+        // 2x display a content height such as 314.5 gives a 315-point panel.
+        XCTAssertEqual(bitmap.size.height.rounded(.up), panel.frame.height, "The panel fits its content")
         guard attach else { return bitmap }
 
         let attachment = XCTAttachment(
