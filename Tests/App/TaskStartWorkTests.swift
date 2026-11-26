@@ -902,7 +902,7 @@ struct TaskStartWorkTests {
             """)
         #expect(projectFork.prompt.contains("You are in the git worktree") == false)
         #expect(projectFork.prompt.hasSuffix(
-            "`toastty task send \(parent.id.uuidString) \"<message>\"`.\n\nSplit the lexer\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
+            "\(TaskPrompt.parentLine(.init(id: parent.id, title: parent.title)))\n\nSplit the lexer\n\n\(TaskPrompt.coordinatorLine)\n\n\(TaskPrompt.replyLine)"
         ))
 
         // Setup ends only once each fork reports its own conversation.
