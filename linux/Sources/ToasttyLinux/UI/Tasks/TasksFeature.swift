@@ -77,6 +77,44 @@ final class TasksUI {
             sessionRuntimeStore: sessionRuntimeStore
         )
     }
+
+    /// Workspace actions use the Tasks menu's checks and coordinator. Keep
+    /// completion nonblocking and recheck the action after the dialog.
+    func runWorkspaceTaskMenuItem(
+        _ menuItem: TaskBoardPresentation.MenuItem,
+        windowID: UUID,
+        parent: WidgetPtr,
+        isCurrent: @escaping @MainActor () -> Bool = { true }
+    ) {
+        guard isCurrent() else { return }
+        guard case .action(.markDone, let taskID, _) = menuItem else {
+            TaskActions.runFromMenu(menuItem, coordinator: coordinator) { workspaceID in
+                self.openTaskSpace(workspaceID, windowID: windowID)
+            }
+            return
+        }
+
+        func canMarkDone() -> Bool {
+            guard isCurrent(), let item = board.items().first(where: { $0.taskID == taskID }) else { return false }
+            return TaskBoardPresentation.detailActions(item).contains(.markDone)
+        }
+        guard canMarkDone(), let record = coordinator.records.record(id: taskID) else { return }
+        let failureTitle = TaskBoardPresentation.DetailAction.markDone.failureTitle
+        TaskActions.perform(failureTitle) {
+            let check = try coordinator.completeCheck(taskID: taskID)
+            guard check.unsavedDocuments == 0 else {
+                throw TaskError("The task space has unsaved documents. Save or close them, then complete the task.")
+            }
+            Dialogs.confirm(
+                parent: parent, heading: "Complete “\(record.title)”?",
+                body: TaskActions.completeSummary(check).joined(separator: "\n"),
+                confirmLabel: "Complete Task", destructive: false, confirmIsDefault: true
+            ) {
+                guard canMarkDone() else { return }
+                TaskActions.perform(failureTitle) { try self.coordinator.complete(taskID: taskID) }
+            }
+        }
+    }
 }
 
 /// One window's tasks UI (see `TasksUI`).

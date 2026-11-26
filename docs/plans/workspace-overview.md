@@ -42,6 +42,7 @@ until the page closes.
   Both sections use the Tasks view's stage marks and status lines. A row's
   disclosure shows the original task description inline, when it has one.
   Clicking the title still opens its task space or the task in Tasks.
+  The row's actions menu offers the same actions as Tasks.
   Completed tasks that can be continued have a green **Continue** button.
 - **Workspace Scratchpads** (right column, 380 points): the kept
   Scratchpads, newest kept first. Each row has the title, a green **Live**

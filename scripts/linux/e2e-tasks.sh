@@ -10,7 +10,7 @@
 #   5. the task survives a quit and restart;
 #   6. the Tasks view (Broadway, smoke script): open, rows, mark widths,
 #      selection with the arrows, Esc, the Show Tasks toggle, and the right
-#      panel, plus Merge and Complete Task directly in the workspace header;
+#      panel, plus task actions in the workspace header and Workspace Page;
 #   7. Continue as New Task from a finished task with a saved context.
 # Build first: scripts/linux/build.sh --product toastty-linux --product toastty
 # Usage: scripts/linux/e2e-tasks.sh   (exit status 0 when every check passes)
@@ -279,10 +279,10 @@ state $WORK/ui-state.json
 expect workspaceTaskControl=none
 file-write $WORK/test-complete go
 wait-file $WORK/complete-selected
-expect tasksView=hidden workspaceTaskControl=Archive_Task…
+expect tasksView=hidden workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
 file-write $WORK/finish-second go
 wait-file $WORK/review-ready
-expect tasksView=hidden workspaceTaskControl=Complete_Task workspaceTaskButtons=primary
+expect tasksView=hidden workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
 # A task space shows its tab row only while it has a second tab.
 expect tabs=1 tabBar=hidden
 action workspace.tab.create
@@ -291,14 +291,33 @@ expect tabs=2 tabBar=shown
 action workspace.tab.close
 wait 300
 expect tabs=1 tabBar=hidden dialog=none
+file-write $WORK/test-awaiting-reply go
+wait-file $WORK/awaiting-reply
+expect workspaceTaskControl=Mark_Done workspaceTaskButtons=primary,options
 screenshot $WORK/workspace-complete.png
+workspace-page card selected
+wait 400
+expect workspacePage=shown tasksView=hidden
+workspace-page task-menu 0
+wait 300
+screenshot $WORK/workspace-page-task-actions.png
+workspace-page task-menu 0 markDone
+wait 400
+expect workspacePage=shown dialog=AdwAlertDialog
+screenshot $WORK/workspace-page-mark-done-confirm.png
+dialog-respond cancel
+wait 400
+expect workspacePage=shown dialog=none
+file-write $WORK/overview-action-cancelled go
+wait-file $WORK/back-in-task-space
+expect workspacePage=hidden workspaceTaskControl=Mark_Done
 click workspace.task-control.primary
 wait 400
 expect dialog=AdwAlertDialog
 screenshot $WORK/workspace-complete-confirm.png
 dialog-respond cancel
 wait 400
-expect tasksView=hidden workspaceTaskControl=Complete_Task
+expect tasksView=hidden workspaceTaskControl=Mark_Done
 click workspace.task-control.primary
 wait 400
 dialog-respond confirm
@@ -319,6 +338,12 @@ click workspace.task-control.primary
 wait 400
 expect workspaceTaskControl=progress
 file-write $WORK/merge-clicked go
+wait-file $WORK/merge-recorded
+click workspace.task-control.options
+wait 250
+click workspace.task-control.cancelMerge
+wait 300
+file-write $WORK/merge-cancelled go
 wait-file $WORK/test-pending
 # Opening Tasks triggers a pull request refresh without waiting for the
 # board's periodic poll. Verify the result back in the workspace.
@@ -380,11 +405,25 @@ if wait_for_file "$WORK/test-complete" 900; then
   done
   touch "$WORK/review-ready"
 fi
+if wait_for_file "$WORK/test-awaiting-reply"; then
+  cli action run task.needs-reply taskID="$TASK2" question="Ready to finish?" > "$WORK/needs-reply.json"
+  cli task get "$TASK2" > "$WORK/needs-reply-get.json"
+  check "the no-PR fixture is awaiting a reply, not ready for review" \
+    "[ '$(json "$WORK/needs-reply-get.json" 'r["stage"]["attention"] == "awaitingReply" and r.get("pullRequest") is None')' = True ]"
+  touch "$WORK/awaiting-reply"
+fi
+if wait_for_file "$WORK/overview-action-cancelled"; then
+  cli task get "$TASK2" > "$WORK/after-overview-cancel.json"
+  check "cancelling Mark Done from the Workspace Page leaves the task awaiting a reply" \
+    "[ '$(json "$WORK/after-overview-cancel.json" 'r["stage"]["attention"] == "awaitingReply" and r.get("doneAt") is None')' = True ]"
+  cli action run workspace.select --workspace "$SPACE2" > "$WORK/reselect2.json"
+  touch "$WORK/back-in-task-space"
+fi
 if wait_for_file "$WORK/complete-clicked"; then
   cli task get "$TASK2" > "$WORK/completed.json"
   cli query run workspace.list > "$WORK/after-complete.json"
   DONE_AT=$(json "$WORK/completed.json" 'r.get("doneAt")')
-  check "Complete Task marks the task done and closes its workspace" \
+  check "Mark Done completes the awaiting-reply task and closes its workspace" \
     "[ -n '$DONE_AT' ] && [ '$DONE_AT' != None ] && ! grep -qi '$SPACE2' '$WORK/after-complete.json'"
   cli action run workspace.set-annotation --workspace "$SPACE1" key=github-pr text="PR #42" \
     url=https://github.com/fixture/toastty/pull/42 > "$WORK/pr.json"
@@ -396,7 +435,12 @@ if wait_for_file "$WORK/merge-clicked"; then
   MERGE_REQUESTED_AT=$(json "$WORK/merge.json" 'r.get("mergeRequestedAt")')
   check "Merge from the header requests the task’s merge flow" \
     "[ -n '$MERGE_REQUESTED_AT' ] && [ '$MERGE_REQUESTED_AT' != None ]"
-  cli task cancel-merge "$TASK1" > "$WORK/cancel-merge.json"
+  touch "$WORK/merge-recorded"
+fi
+if wait_for_file "$WORK/merge-cancelled"; then
+  cli task get "$TASK1" > "$WORK/cancel-merge.json"
+  check "Cancel Merge from the header cancels the agent's merge check" \
+    "[ '$(json "$WORK/cancel-merge.json" 'r.get("mergeRequestedAt") is None and r.get("mergeCancelledAt") is not None')' = True ]"
   touch "$WORK/pending-pr" "$WORK/test-pending"
 fi
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
@@ -405,7 +449,7 @@ wait $APID; UIRC=$?
 check "the Tasks view and workspace header script passes" "[ $UIRC = 0 ] && ! grep -q '^.*FAIL' $WORK/app-ui.log"
 grep 'FAIL' $WORK/app-ui.log | head -5
 check "the Tasks view screenshot is written" "[ -s $WORK/tasks-view.png ]"
-for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-merge workspace-merge-wide workspace-open-pr workspace-open-pr-wide; do
+for shot in tasks-view tasks-right-panel-restored sidebar workspace-complete workspace-complete-confirm workspace-page-task-actions workspace-page-mark-done-confirm workspace-merge workspace-merge-wide workspace-open-pr workspace-open-pr-wide; do
   [ -s $WORK/$shot.png ] && mkdir -p $REPO/artifacts/manual/linux-tasks && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 pkill -f "$WORK/bin/claude" 2>/dev/null; rm -f $SOCK
@@ -629,6 +673,16 @@ workspace-page card selected
 wait 500
 expect workspacePage=shown tasksView=hidden overviewRecent=5 overviewPast=1 overviewContinuable=5 overviewExpanded=0
 screenshot $WORK/workspace-page-continue.png
+workspace-page task-menu 0
+wait 300
+workspace-page task-menu 0 close
+wait 300
+workspace-page task-menu 5
+wait 300
+screenshot $WORK/workspace-page-past-actions.png
+workspace-page task-menu 5 close
+wait 300
+expect workspacePage=shown tasksView=hidden overviewExpanded=0
 click workspace.overview.recent.0.expand
 wait 350
 expect workspacePage=shown tasksView=hidden overviewExpanded=1 overviewDescription=Clamp_the_crossbar_to_the_jig_before_drilling.
@@ -733,10 +787,10 @@ touch $WORK/k-checked
 for i in $(seq 1 300); do kill -0 $APID 2>/dev/null || break; sleep 0.1; done
 kill -9 $APID 2>/dev/null; wait $APID; KRC=$?
 check "workspace.task-context.set saves a finished task's context" "grep -q '\"ok\" : true' $WORK/k-context.json && grep -q '\"hasWrittenContext\" : true' $WORK/k-context-get.json"
-check "Recent and Past Tasks disclose the Tasks view description in place, and both lists, task details and the task menu can continue with context" "[ $KRC = 0 ] && ! grep -q 'FAIL' $WORK/app-continue.log"
+check "Recent and Past Tasks show row menus and disclose descriptions in place, and Continue keeps the previous context" "[ $KRC = 0 ] && ! grep -q 'FAIL' $WORK/app-continue.log"
 check "the new task keeps the context file, with the facts and the agent's context" "[ -n '$K_FILE' ] && grep -q 'Continues' $WORK/k-continues.md && grep -q 'Context from its agent' $WORK/k-continues.md && grep -q 'Order the bolts' $WORK/k-continues.md"
 grep 'FAIL' $WORK/app-continue.log | head -8
-for shot in workspace-page-continue workspace-page-expanded quick-entry-continue tasks-detail-continue; do
+for shot in workspace-page-continue workspace-page-expanded workspace-page-past-actions quick-entry-continue tasks-detail-continue; do
   [ -s $WORK/$shot.png ] && cp $WORK/$shot.png $REPO/artifacts/manual/linux-tasks/$shot.png
 done
 [ -s $WORK/k-continues.md ] && cp $WORK/k-continues.md $REPO/artifacts/manual/linux-tasks/continues-clamp-the-jig.md
